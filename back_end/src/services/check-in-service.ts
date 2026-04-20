@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, HandoffState, HandoffType, InventoryClaimState, RoomPhysicalState, Stage } from "@prisma/client";
 import {
+  MissingConfigurationError,
   NotFoundError,
   OptimisticLockError,
   StageGateBlockedError,
@@ -96,6 +97,9 @@ export async function completeCheckInToS7(
 
   const vipTier = entry.guestProfile.vipTier?.trim();
   const routingCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "vipNotification.routingPerTier" } });
+  if (vipTier && !routingCfg) {
+    throw new MissingConfigurationError("vipNotification.routingPerTier");
+  }
   const routing = (routingCfg?.value as Record<string, string[]> | undefined) ?? {};
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {

@@ -18,7 +18,10 @@ export async function convertToLive(db: DbClient, entryId: string, folioId: stri
   }
 
   const billingCfg = await db.configurationEntry.findUnique({ where: { configKey: "billingModel.availablePerSource" } });
-  const cfg = (billingCfg?.value as Record<string, string[]> | undefined) ?? {};
+  if (!billingCfg) {
+    throw new MissingConfigurationError("billingModel.availablePerSource");
+  }
+  const cfg = (billingCfg.value as Record<string, string[]> | undefined) ?? {};
   const allowed = Object.values(cfg).flat();
   if (allowed.length > 0 && !allowed.includes(folio.billingModel)) {
     throw new MissingConfigurationError("billingModel.availablePerSource");
