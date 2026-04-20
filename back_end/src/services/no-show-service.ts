@@ -1,6 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, FolioState, Stage } from "@prisma/client";
-import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../lib/errors.js";
+import {
+  MissingConfigurationError,
+  NotFoundError,
+  PolicyGateBlockedError,
+  StateTransitionError,
+  ValidationError,
+} from "../lib/errors.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
 
@@ -22,6 +28,11 @@ export async function determineNoShow(
     awaitingConfirmationWindowMinutes?: number;
   },
 ) {
+  const cutoffCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "noShow.cutoffWindowMinutes" } });
+  if (!cutoffCfg) {
+    throw new MissingConfigurationError("noShow.cutoffWindowMinutes");
+  }
+
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: { folio: true, reservation: true, noShowDetermination: true },

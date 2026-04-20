@@ -1,6 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import { HandoffState, HandoffType } from "@prisma/client";
-import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../lib/errors.js";
+import {
+  MissingConfigurationError,
+  NotFoundError,
+  PolicyGateBlockedError,
+  StateTransitionError,
+  ValidationError,
+} from "../lib/errors.js";
 
 type ChecklistItem = { code: string; mandatory: boolean };
 
@@ -36,7 +42,11 @@ export async function acceptHandoff(
   }
 
   const config = await prisma.configurationEntry.findUnique({ where: { configKey: key } });
-  const items = (config?.value as ChecklistItem[] | undefined) ?? [];
+  if (!config) {
+    throw new MissingConfigurationError(key);
+  }
+
+  const items = (config.value as ChecklistItem[] | undefined) ?? [];
   const mandatory = items.filter((i) => i.mandatory);
 
   if (!checklistCompletion || typeof checklistCompletion !== "object") {
