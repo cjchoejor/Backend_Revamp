@@ -41,8 +41,8 @@ export class PolicyGateBlockedError extends AppError {
 }
 
 export class StateTransitionError extends AppError {
-  constructor(message: string) {
-    super(409, { error: "StateTransitionError", message });
+  constructor(message: string, blockingCondition?: string, details?: unknown) {
+    super(409, { error: "StateTransitionError", message, blockingCondition, details });
   }
 }
 

@@ -1,8 +1,42 @@
-import { PrismaClient, Stage, EntryStatus, HoldState, HandoffType, HandoffState, FolioState, InventoryClaimState, TaskStatus, TaskCategory, PreArrivalTaskType, RoomPhysicalState, PaymentDirection, EntryUseType } from "@prisma/client";
+import {
+  PrismaClient,
+  Stage,
+  EntryStatus,
+  HoldState,
+  HandoffType,
+  HandoffState,
+  FolioState,
+  InventoryClaimState,
+  TaskStatus,
+  TaskCategory,
+  PreArrivalTaskType,
+  RoomPhysicalState,
+  PaymentDirection,
+  EntryUseType,
+  FolioLineType,
+} from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  await prisma.workOrderAmendmentEvent.deleteMany();
+  await prisma.workOrderConsumptionRecord.deleteMany();
+  await prisma.workOrderToDoItem.deleteMany();
+  await prisma.workOrder.deleteMany();
+  await prisma.communicationRecord.deleteMany();
+  await prisma.followUpTaskRecord.deleteMany();
+  await prisma.writeOffRecord.deleteMany();
+  await prisma.creditCeilingThresholdEvent.deleteMany();
+  await prisma.timerRecord.deleteMany();
+  await prisma.keyReturnRecord.deleteMany();
+  await prisma.roomInspectionRecord.deleteMany();
+  await prisma.invoice.deleteMany();
+  await prisma.nightAuditAnomaly.deleteMany();
+  await prisma.nightAuditRecord.deleteMany();
+  await prisma.folioLine.deleteMany();
+  await prisma.disputeGateOverrideRecord.deleteMany();
+  await prisma.disputeRecord.deleteMany();
+  await prisma.amendmentEventRecord.deleteMany();
   await prisma.vIPArrivalNotificationEvent.deleteMany();
   await prisma.roomClaimStateEvent.deleteMany();
   await prisma.guestIdentityDocument.deleteMany();
@@ -76,6 +110,34 @@ async function main() {
         configKey: "creditCeiling.proximityThresholds",
         value: { tier1Percent: 75, tier2Percent: 90 },
       },
+      {
+        configKey: "nightAudit.expectedDailyFAndBCharge",
+        value: { amount: 50, currency: "BTN" },
+      },
+      {
+        configKey: "housekeeping.sla.windowMinutes",
+        value: 180,
+      },
+      {
+        configKey: "inspection.postCheckout.windowDays",
+        value: 2,
+      },
+      {
+        configKey: "invoice.templates.final",
+        value: [{ templateKey: "final-v1", isActive: true }],
+      },
+      {
+        configKey: "feedback.solicitation.delaySeconds",
+        value: 3600,
+      },
+      {
+        configKey: "followUp.deadlineDays",
+        value: 7,
+      },
+      {
+        configKey: "writeOff.authority.thresholds",
+        value: { L3: 5000 },
+      },
     ],
   });
 
@@ -86,6 +148,17 @@ async function main() {
   const roomClean = await prisma.room.create({
     data: {
       roomNumber: "501",
+      roomTypeId: roomType.id,
+      floorNumber: 5,
+      capacity: 2,
+      currentClaimState: InventoryClaimState.CONFIRMED,
+      physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+    },
+  });
+
+  const roomS9DirectBill = await prisma.room.create({
+    data: {
+      roomNumber: "503",
       roomTypeId: roomType.id,
       floorNumber: 5,
       capacity: 2,
@@ -401,12 +474,284 @@ async function main() {
     data: { entryId: entryCredit.id, stage: Stage.S5, enteredAt: new Date() },
   });
 
+  // --- Third entry: seeded directly into S7 for stage-7 flows ---
+  const checkInS7 = new Date("2026-04-20T09:00:00.000Z");
+  const checkOutS7 = new Date("2026-04-22T09:00:00.000Z");
+
+  const guestProfileS7 = await prisma.guestProfile.create({
+    data: {
+      firstName: "Pema",
+      lastName: "Wangchuk",
+      email: "pema.wangchuk@example.com",
+      clientTier: "STANDARD",
+      createdBy: "actor-seed-system",
+      identityVerifiedAt: new Date(),
+      identityVerifiedBy: "actor-seed-system",
+      identityVerificationPath: "RETURNING_VALID",
+    },
+  });
+
+  const entryS7 = await prisma.entry.create({
+    data: {
+      inquiryId: inquiry.id,
+      guestProfileId: guestProfileS7.id,
+      segmentNumber: 1,
+      useType: EntryUseType.LEISURE,
+      status: EntryStatus.ACTIVE,
+      currentStage: Stage.S7,
+      checkInDate: checkInS7,
+      checkOutDate: checkOutS7,
+      guestCount: 2,
+      createdBy: "actor-seed-system",
+      version: 1,
+      keysIssuedAt: new Date(),
+      keysIssuedCount: 2,
+      keysIssuedBy: "actor-seed-system",
+      registrationCompletedAt: new Date(),
+      registrationCompletedBy: "actor-seed-system",
+    },
+  });
+
+  // Dedicated deterministic S9 test entry (DIRECT_BILL) for S9 write-off + invoice matching.
+  const entryS7DirectBill = await prisma.entry.create({
+    data: {
+      id: "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+      inquiryId: inquiry.id,
+      guestProfileId: guestProfileS7.id,
+      segmentNumber: 1,
+      useType: EntryUseType.GROUP,
+      status: EntryStatus.ACTIVE,
+      currentStage: Stage.S7,
+      checkInDate: checkInS7,
+      checkOutDate: checkOutS7,
+      guestCount: 10,
+      createdBy: "actor-seed-system",
+      version: 1,
+      keysIssuedAt: new Date(),
+      keysIssuedCount: 2,
+      keysIssuedBy: "actor-seed-system",
+      registrationCompletedAt: new Date(),
+      registrationCompletedBy: "actor-seed-system",
+    },
+  });
+
+  const segS7 = await prisma.segment.create({
+    data: { entryId: entryS7.id, segmentNumber: 1 },
+  });
+
+  const segS7DirectBill = await prisma.segment.create({
+    data: { entryId: entryS7DirectBill.id, segmentNumber: 1 },
+  });
+
+  await prisma.cancellationDisclosureRecord.create({
+    data: {
+      entryId: entryS7.id,
+      segmentId: segS7.id,
+      noShowTreatmentStatement: "Seeded S7 entry.",
+      disclosedTerms: {},
+    },
+  });
+
+  await prisma.reservation.create({
+    data: {
+      entryId: entryS7.id,
+      segmentId: segS7.id,
+      frozenRate: 350,
+      frozenRatePlanId: "rp-dlx-weekday",
+      frozenInclusions: { dailyFAndBExpected: true },
+      frozenCancellationTerms: { sameDayPenaltyAmount: 100 },
+      frozenBillingModel: "GUEST_PAY",
+      frozenCheckInDate: checkInS7,
+      frozenCheckOutDate: checkOutS7,
+      frozenGuestCount: 2,
+      creditCeilingIfExtended: 1000,
+      confirmedAt: new Date(),
+      confirmedBy: "actor-seed-res",
+      confirmationVoucherSent: true,
+    },
+  });
+
+  await prisma.reservation.create({
+    data: {
+      entryId: entryS7DirectBill.id,
+      segmentId: segS7DirectBill.id,
+      frozenRate: 500,
+      frozenRatePlanId: "rp-corp-directbill",
+      frozenInclusions: { dailyFAndBExpected: false },
+      frozenCancellationTerms: { sameDayPenaltyAmount: 0 },
+      frozenBillingModel: "DIRECT_BILL",
+      frozenCheckInDate: checkInS7,
+      frozenCheckOutDate: checkOutS7,
+      frozenGuestCount: 10,
+      creditCeilingIfExtended: 5000,
+      confirmedAt: new Date(),
+      confirmedBy: "actor-seed-res",
+      confirmationVoucherSent: true,
+    },
+  });
+
+  const folioS7 = await prisma.folio.create({
+    data: {
+      entryId: entryS7.id,
+      state: FolioState.LIVE,
+      billingModel: "GUEST_PAY",
+      createdBy: "actor-seed-system",
+      convertedToLiveAt: new Date(),
+      convertedBy: "actor-seed-system",
+      outstandingBalance: 350,
+      advancePaymentReconciliationComplete: true,
+    },
+  });
+
+  const folioS7DirectBill = await prisma.folio.create({
+    data: {
+      entryId: entryS7DirectBill.id,
+      state: FolioState.LIVE,
+      billingModel: "DIRECT_BILL",
+      createdBy: "actor-seed-system",
+      convertedToLiveAt: new Date(),
+      convertedBy: "actor-seed-system",
+      outstandingBalance: 1200,
+      advancePaymentReconciliationComplete: true,
+    },
+  });
+
+  await prisma.room.update({
+    where: { id: roomClean.id },
+    data: { currentClaimState: InventoryClaimState.OCCUPIED },
+  });
+
+  await prisma.room.update({
+    where: { id: roomS9DirectBill.id },
+    data: { currentClaimState: InventoryClaimState.OCCUPIED },
+  });
+
+  await prisma.roomAssignment.create({
+    data: {
+      entryId: entryS7.id,
+      roomId: roomClean.id,
+      assignedBy: "actor-seed-system",
+      deficientAtAssignment: false,
+    },
+  });
+
+  await prisma.roomAssignment.create({
+    data: {
+      entryId: entryS7DirectBill.id,
+      roomId: roomS9DirectBill.id,
+      assignedBy: "actor-seed-system",
+      deficientAtAssignment: false,
+    },
+  });
+
+  await prisma.handoffRecord.createMany({
+    data: [
+      {
+        entryId: entryS7.id,
+        handoffType: HandoffType.H1,
+        state: HandoffState.CLOSED,
+        fromRole: "RESERVATIONS",
+        fromActorId: "actor-seed-res",
+        toRole: "FRONT_DESK",
+        checklistContent: {},
+        createdBy: "actor-seed-system",
+        stageContext: Stage.S4,
+        acceptedAt: new Date(),
+        acceptedBy: "actor-seed-system",
+        fulfilledAt: new Date(),
+        fulfilledBy: "actor-seed-system",
+        closedAt: new Date(),
+      },
+      {
+        entryId: entryS7.id,
+        handoffType: HandoffType.H4,
+        state: HandoffState.CREATED,
+        fromRole: "FRONT_DESK",
+        fromActorId: "actor-seed-system",
+        toRole: "HOUSEKEEPING",
+        checklistContent: { roomNumber: "501", expectedCheckoutDate: checkOutS7.toISOString() },
+        createdBy: "actor-seed-system",
+        stageContext: Stage.S7,
+      },
+    ],
+  });
+
+  await prisma.handoffRecord.createMany({
+    data: [
+      {
+        entryId: entryS7DirectBill.id,
+        handoffType: HandoffType.H1,
+        state: HandoffState.CLOSED,
+        fromRole: "RESERVATIONS",
+        fromActorId: "actor-seed-res",
+        toRole: "FRONT_DESK",
+        checklistContent: {},
+        createdBy: "actor-seed-system",
+        stageContext: Stage.S4,
+        acceptedAt: new Date(),
+        acceptedBy: "actor-seed-system",
+        fulfilledAt: new Date(),
+        fulfilledBy: "actor-seed-system",
+        closedAt: new Date(),
+      },
+      {
+        entryId: entryS7DirectBill.id,
+        handoffType: HandoffType.H4,
+        state: HandoffState.CREATED,
+        fromRole: "FRONT_DESK",
+        fromActorId: "actor-seed-system",
+        toRole: "HOUSEKEEPING",
+        checklistContent: { roomNumber: "503", expectedCheckoutDate: checkOutS7.toISOString() },
+        createdBy: "actor-seed-system",
+        stageContext: Stage.S7,
+      },
+    ],
+  });
+
+  // Seed one non-room charge to support dispute flows
+  await prisma.folioLine.create({
+    data: {
+      folioId: folioS7.id,
+      lineType: FolioLineType.F_AND_B,
+      description: "Seeded F&B charge",
+      amount: 50,
+      currency: "BTN",
+      chargeDate: new Date("2026-04-20T12:00:00.000Z"),
+      stage: Stage.S7,
+      postedBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.folioLine.create({
+    data: {
+      folioId: folioS7DirectBill.id,
+      lineType: FolioLineType.SERVICE,
+      description: "Seeded direct-bill service charge",
+      amount: 200,
+      currency: "BTN",
+      chargeDate: new Date("2026-04-20T13:00:00.000Z"),
+      stage: Stage.S7,
+      postedBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.stageDwellRecord.create({
+    data: { entryId: entryS7.id, stage: Stage.S7, enteredAt: new Date() },
+  });
+
+  await prisma.stageDwellRecord.create({
+    data: { entryId: entryS7DirectBill.id, stage: Stage.S7, enteredAt: new Date() },
+  });
+
   console.log("Seed complete.");
   console.log("Primary S5 test entry id:", entry.id);
   console.log("Guest profile id (verify-identity):", guestProfile.id);
   console.log("Room 501 (clean) id:", roomClean.id);
+  console.log("Room 503 (S9 direct-bill) id:", roomS9DirectBill.id);
   console.log("Room 502-DEF (DEFICIENT) id:", deficientRoom.id);
   console.log("Credit Tier-2 scenario entry id:", entryCredit.id, "(needs creditCeilingTier2Ack before S6)");
+  console.log("Seeded S7 entry id:", entryS7.id);
+  console.log("Seeded S7 DIRECT_BILL entry id (for S9):", entryS7DirectBill.id);
 }
 
 main()

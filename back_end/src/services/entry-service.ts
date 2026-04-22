@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { FolioState, HandoffState, HandoffType, RoomPhysicalState, Stage, TaskStatus } from "@prisma/client";
-import { NotFoundError, OptimisticLockError, StageGateBlockedError } from "../lib/errors.js";
+import { FolioState, HandoffState, HandoffType, NightAuditRunStatus, RoomPhysicalState, Stage, TaskStatus } from "@prisma/client";
+import { NotFoundError, OptimisticLockError, PolicyGateBlockedError, StageGateBlockedError } from "../lib/errors.js";
 import * as checkInService from "./check-in-service.js";
+import * as disputeService from "./s7-dispute-service.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
@@ -140,4 +141,66 @@ export async function progressStageS6ToS7(
   registrationConfirmed: boolean | undefined,
 ) {
   return checkInService.completeCheckInToS7(prisma, entryId, actorId, clientVersion, keyCount, registrationConfirmed);
+}
+
+/** SIG-S7 — S7 → S8 (exit stay to checkout prep). */
+export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string, _actorId: string, clientVersion: number | undefined) {
+  if (clientVersion == null || clientVersion === undefined) throw new OptimisticLockError();
+
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: {
+      reservation: true,
+      roomAssignments: { orderBy: { createdAt: "desc" }, take: 1, include: { room: true } },
+      handoffs: { where: { handoffType: HandoffType.H4 }, orderBy: { createdAt: "desc" }, take: 1 },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== Stage.S7) throw new StageGateBlockedError("Entry is not at S7", "NOT_AT_S7");
+  if (entry.version !== clientVersion) throw new OptimisticLockError();
+
+  const assignment = entry.roomAssignments[0];
+  if (!assignment) throw new StageGateBlockedError("Occupied room is required to exit S7", "NO_OCCUPIED_ROOM");
+
+  const deficient = await prisma.deficientConditionRecord.findMany({ where: { roomId: assignment.roomId } });
+  const bad = deficient.find((d) => d.status !== "RESOLVED" && d.status !== "UNRESOLVED");
+  if (bad) {
+    throw new StageGateBlockedError("DEFICIENT condition missing final status", "DEFICIENT_NO_FINAL_STATUS");
+  }
+
+  const h4 = entry.handoffs[0];
+  if (!h4 || !["CREATED", "ACCEPTED", "FULFILLED"].includes(h4.state) || h4.rejectedAt) {
+    throw new StageGateBlockedError("H4 must be initiated before S7→S8", "H4_NOT_INITIATED");
+  }
+
+  // Night audit must have sealed the last operating date before checkout.
+  const checkout = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+  if (!checkout) throw new StageGateBlockedError("checkOutDate missing", "MISSING_CHECKOUT_DATE");
+  const lastNight = new Date(Date.UTC(checkout.getUTCFullYear(), checkout.getUTCMonth(), checkout.getUTCDate() - 1, 0, 0, 0, 0));
+  const audit = await prisma.nightAuditRecord.findUnique({ where: { operatingDate: lastNight } });
+  if (!audit || audit.runStatus !== NightAuditRunStatus.COMPLETE) {
+    throw new StageGateBlockedError("Night audit must be COMPLETE for last operating date before checkout", "NIGHT_AUDIT_NOT_COMPLETE");
+  }
+
+  const disputeGate = await disputeService.canProgressToS8(prisma, entryId);
+  if (disputeGate === "BLOCKED_WITH_OVERRIDE_AVAILABLE") {
+    throw new PolicyGateBlockedError("DISPUTE_GATE_BLOCKED", "Dispute gate blocks S7→S8 until GM override is recorded");
+  }
+
+  const now = new Date();
+  const s7Dwell = await prisma.stageDwellRecord.findFirst({
+    where: { entryId, stage: Stage.S7, exitedAt: null },
+    orderBy: { enteredAt: "desc" },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    if (s7Dwell) await tx.stageDwellRecord.update({ where: { id: s7Dwell.id }, data: { exitedAt: now } });
+    await tx.stageDwellRecord.create({ data: { entryId, stage: Stage.S8, enteredAt: now } });
+    await tx.entry.update({
+      where: { id: entryId },
+      data: { currentStage: Stage.S8, version: { increment: 1 }, updatedAt: now },
+    });
+  });
+
+  return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
 }

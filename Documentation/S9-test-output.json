@@ -1,0 +1,814 @@
+{
+  "baseUrl": "http://localhost:4000/api",
+  "results": [
+    {
+      "step": {
+        "id": "S9-setup-get-entry",
+        "title": "Get entry snapshot (ids for folio/invoices/handoffs)",
+        "method": "GET",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "expectStatus": 200,
+        "explanation": "We need the folioId and current stage before executing S9 actions.",
+        "dbImpact": "Read-only (Entry/Folio/Handoff related joins)."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
+        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "segmentNumber": 1,
+        "useType": "GROUP",
+        "status": "ACTIVE",
+        "currentStage": "S7",
+        "checkInDate": "2026-04-20T09:00:00.000Z",
+        "checkOutDate": "2026-04-22T09:00:00.000Z",
+        "guestCount": 10,
+        "otaSource": false,
+        "createdAt": "2026-04-22T09:43:27.560Z",
+        "updatedAt": "2026-04-22T09:43:27.560Z",
+        "createdBy": "actor-seed-system",
+        "version": 1,
+        "closedAt": null,
+        "closedBy": null,
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedCount": 2,
+        "keysIssuedBy": "actor-seed-system",
+        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedBy": "actor-seed-system",
+        "reservation": {
+          "id": "031058e4-5ca5-485e-b8af-087d8d3adb49",
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "segmentId": "cf8b7e62-d959-46c1-86e3-1bf8dfbd2079",
+          "frozenRate": "500",
+          "frozenRatePlanId": "rp-corp-directbill",
+          "frozenInclusions": {
+            "dailyFAndBExpected": false
+          },
+          "frozenCancellationTerms": {
+            "sameDayPenaltyAmount": 0
+          },
+          "frozenBillingModel": "DIRECT_BILL",
+          "frozenCheckInDate": "2026-04-20T09:00:00.000Z",
+          "frozenCheckOutDate": "2026-04-22T09:00:00.000Z",
+          "frozenGuestCount": 10,
+          "creditCeilingIfExtended": "5000",
+          "confirmedAt": "2026-04-22T09:43:27.567Z",
+          "confirmedBy": "actor-seed-res",
+          "confirmationVoucherSent": true,
+          "sealedAt": null,
+          "createdAt": "2026-04-22T09:43:27.569Z"
+        },
+        "folio": {
+          "id": "3769cc04-915e-47af-b626-dd9d68c2becc",
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "state": "LIVE",
+          "billingModel": "DIRECT_BILL",
+          "createdAt": "2026-04-22T09:43:27.573Z",
+          "createdBy": "actor-seed-system",
+          "convertedToLiveAt": "2026-04-22T09:43:27.572Z",
+          "convertedBy": "actor-seed-system",
+          "closedAt": null,
+          "closedBy": null,
+          "noShowPenaltyAmount": null,
+          "noShowAdvancePaymentAmount": null,
+          "noShowNetPosition": null,
+          "noShowFomDetermination": null,
+          "outstandingBalance": "1200",
+          "advancePaymentReconciliationComplete": true
+        },
+        "guestProfile": {
+          "id": "d46f6614-73dc-45ef-9495-e4116693e989",
+          "firstName": "Pema",
+          "lastName": "Wangchuk",
+          "email": "pema.wangchuk@example.com",
+          "phone": null,
+          "nationality": null,
+          "vipTier": null,
+          "clientTier": "STANDARD",
+          "preferences": null,
+          "identityVerifiedAt": "2026-04-22T09:43:27.556Z",
+          "identityVerifiedBy": "actor-seed-system",
+          "identityVerificationPath": "RETURNING_VALID",
+          "createdAt": "2026-04-22T09:43:27.557Z",
+          "updatedAt": "2026-04-22T09:43:27.557Z",
+          "createdBy": "actor-seed-system"
+        },
+        "handoffs": [
+          {
+            "id": "22c3a20c-3115-4948-b70d-0937f2b7a885",
+            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+            "handoffType": "H1",
+            "state": "CLOSED",
+            "fromRole": "RESERVATIONS",
+            "fromActorId": "actor-seed-res",
+            "toRole": "FRONT_DESK",
+            "toActorId": null,
+            "checklistContent": {},
+            "deficientConditionStatus": null,
+            "fulfilmentEvidence": null,
+            "assignedAt": null,
+            "acceptedAt": "2026-04-22T09:43:27.581Z",
+            "acceptedBy": "actor-seed-system",
+            "fulfilledAt": "2026-04-22T09:43:27.581Z",
+            "fulfilledBy": "actor-seed-system",
+            "closedAt": "2026-04-22T09:43:27.581Z",
+            "rejectedAt": null,
+            "rejectedBy": null,
+            "rejectionReason": null,
+            "escalatedAt": null,
+            "slaDeadlineAt": null,
+            "isAutoFulfilled": false,
+            "createdAt": "2026-04-22T09:43:27.583Z",
+            "createdBy": "actor-seed-system",
+            "stageContext": "S4"
+          },
+          {
+            "id": "07a0a86c-c086-4398-8322-50542c70edf8",
+            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+            "handoffType": "H4",
+            "state": "CREATED",
+            "fromRole": "FRONT_DESK",
+            "fromActorId": "actor-seed-system",
+            "toRole": "HOUSEKEEPING",
+            "toActorId": null,
+            "checklistContent": {
+              "roomNumber": "503",
+              "expectedCheckoutDate": "2026-04-22T09:00:00.000Z"
+            },
+            "deficientConditionStatus": null,
+            "fulfilmentEvidence": null,
+            "assignedAt": null,
+            "acceptedAt": null,
+            "acceptedBy": null,
+            "fulfilledAt": null,
+            "fulfilledBy": null,
+            "closedAt": null,
+            "rejectedAt": null,
+            "rejectedBy": null,
+            "rejectionReason": null,
+            "escalatedAt": null,
+            "slaDeadlineAt": null,
+            "isAutoFulfilled": false,
+            "createdAt": "2026-04-22T09:43:27.583Z",
+            "createdBy": "actor-seed-system",
+            "stageContext": "S7"
+          }
+        ],
+        "preArrivalTasks": [],
+        "roomAssignments": [
+          {
+            "id": "2304bf45-2e56-46df-9914-0a70b7a1f27e",
+            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+            "roomId": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
+            "assignedAt": "2026-04-22T09:43:27.579Z",
+            "assignedBy": "actor-seed-system",
+            "deficientAtAssignment": false,
+            "deficientConditionRecordId": null,
+            "acknowledgementActorId": null,
+            "acknowledgementAt": null,
+            "notes": null,
+            "createdAt": "2026-04-22T09:43:27.579Z",
+            "room": {
+              "id": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
+              "roomNumber": "503",
+              "roomTypeId": "485160aa-cd09-49ba-b1b6-1c27950fcb35",
+              "floorNumber": 5,
+              "capacity": 2,
+              "currentClaimState": "OCCUPIED",
+              "physicalState": "AVAILABLE_CLEAN",
+              "expectedReadyAt": null,
+              "createdAt": "2026-04-22T09:43:27.516Z",
+              "updatedAt": "2026-04-22T09:43:27.576Z"
+            }
+          }
+        ],
+        "committedHold": null,
+        "vipArrivalNotifications": []
+      }
+    },
+    {
+      "step": {
+        "id": "S9-setup-night-audit",
+        "title": "Run night audit (required for S7→S8 gate)",
+        "method": "POST",
+        "path": "/night-audit/run",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {
+          "operatingDate": "2026-04-21"
+        },
+        "expectStatus": 200,
+        "explanation": "S7→S8 progression blocks unless night audit is complete for the last operating date.",
+        "dbImpact": "Creates NightAuditRecord + FolioLines (room charge) idempotently for the operating date."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "fe47160a-f8ae-4bf0-9971-ccc24892a1b7",
+        "operatingDate": "2026-04-21T00:00:00.000Z",
+        "runStatus": "COMPLETE",
+        "entriesProcessedCount": 2,
+        "entriesNotProcessed": [],
+        "createdAt": "2026-04-22T09:43:28.849Z",
+        "createdBy": "fom-1"
+      }
+    },
+    {
+      "step": {
+        "id": "S9-setup-progress-to-s8",
+        "title": "Progress stage to S8",
+        "method": "POST",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/progress-stage",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "body": {
+          "targetStage": "S8",
+          "version": 1
+        },
+        "expectStatus": 200,
+        "explanation": "Moves entry into S8 so key return, inspection, and settlement can be recorded.",
+        "dbImpact": "Updates Entry.currentStage to S8 and creates/updates required handoffs/gates."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
+        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "segmentNumber": 1,
+        "useType": "GROUP",
+        "status": "ACTIVE",
+        "currentStage": "S8",
+        "checkInDate": "2026-04-20T09:00:00.000Z",
+        "checkOutDate": "2026-04-22T09:00:00.000Z",
+        "guestCount": 10,
+        "otaSource": false,
+        "createdAt": "2026-04-22T09:43:27.560Z",
+        "updatedAt": "2026-04-22T09:43:28.869Z",
+        "createdBy": "actor-seed-system",
+        "version": 2,
+        "closedAt": null,
+        "closedBy": null,
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedCount": 2,
+        "keysIssuedBy": "actor-seed-system",
+        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedBy": "actor-seed-system"
+      }
+    },
+    {
+      "step": {
+        "id": "S9-setup-key-return",
+        "title": "Record key return (S8 prerequisite for S9)",
+        "method": "POST",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/key-return",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "body": {
+          "keyCountReturned": 2
+        },
+        "expectStatus": 200,
+        "explanation": "S8→S9 requires key-return record and reconciliation.",
+        "dbImpact": "Creates KeyReturnRecord linked to entry/room."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "86e49ca2-59c1-4251-80e1-6185375d8f2d",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "roomId": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
+        "receivedBy": "frontdesk-1",
+        "returnedAt": "2026-04-22T09:43:28.882Z",
+        "keyCountIssued": 2,
+        "keyCountReturned": 2,
+        "countReconciled": true,
+        "reconciliationNote": null,
+        "createdAt": "2026-04-22T09:43:28.884Z"
+      }
+    },
+    {
+      "step": {
+        "id": "S9-setup-inspection",
+        "title": "Record room inspection complete (S8 prerequisite for S9)",
+        "method": "POST",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/room-inspection",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "body": {
+          "isDeferred": false,
+          "deficientFlagStatus": "NOT_APPLICABLE",
+          "damageFound": false,
+          "notes": "ok"
+        },
+        "expectStatus": 200,
+        "explanation": "S8→S9 requires inspection completed or deferred+governed.",
+        "dbImpact": "Creates RoomInspectionRecord linked to entry/room."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "5bc7db9f-d536-4bab-858e-af2663267f6f",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "roomId": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
+        "segmentId": "cf8b7e62-d959-46c1-86e3-1bf8dfbd2079",
+        "inspectedBy": "frontdesk-1",
+        "inspectedAt": "2026-04-22T09:43:28.898Z",
+        "isDeferred": false,
+        "deficientFlagStatus": "NOT_APPLICABLE",
+        "deficientConditionId": null,
+        "inspectorAssessment": null,
+        "damageFound": false,
+        "damageNotes": null,
+        "createdAt": "2026-04-22T09:43:28.900Z"
+      }
+    },
+    {
+      "step": {
+        "id": "S9-setup-settle-outstanding",
+        "title": "Settle folio to OUTSTANDING via DIRECT_BILL (S8) to create invoice + H5",
+        "method": "POST",
+        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/settle",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "body": {
+          "settlementMethod": "DIRECT_BILL",
+          "billingModelConfirmation": "DIRECT_BILL"
+        },
+        "expectStatus": 200,
+        "explanation": "We want an OUTSTANDING folio at S9 to exercise write-off and invoice payment matching.",
+        "dbImpact": "Transitions Folio state LIVE→OUTSTANDING, creates Invoice (FINAL) and PaymentRecord as needed, ensures H5 exists."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "3769cc04-915e-47af-b626-dd9d68c2becc",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "state": "OUTSTANDING",
+        "billingModel": "DIRECT_BILL",
+        "createdAt": "2026-04-22T09:43:27.573Z",
+        "createdBy": "actor-seed-system",
+        "convertedToLiveAt": "2026-04-22T09:43:27.572Z",
+        "convertedBy": "actor-seed-system",
+        "closedAt": "2026-04-22T09:43:28.911Z",
+        "closedBy": "frontdesk-1",
+        "noShowPenaltyAmount": null,
+        "noShowAdvancePaymentAmount": null,
+        "noShowNetPosition": null,
+        "noShowFomDetermination": null,
+        "outstandingBalance": "1700",
+        "advancePaymentReconciliationComplete": true
+      }
+    },
+    {
+      "step": {
+        "id": "S9-setup-fulfil-h4",
+        "title": "Fulfil H4 (required for S8→S9)",
+        "method": "POST",
+        "path": "/handoffs/07a0a86c-c086-4398-8322-50542c70edf8/fulfil",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {
+          "fulfilmentEvidence": {
+            "chargesPostedConfirmation": true,
+            "roomInspectionStatus": "COMPLETE",
+            "damageAssessmentStatus": "NONE",
+            "deficientFlagFinalStatus": "NOT_APPLICABLE"
+          }
+        },
+        "expectStatus": 200,
+        "explanation": "S8→S9 progression is blocked until H4 is fulfilled in this slice.",
+        "dbImpact": "Updates HandoffRecord(H4).state → FULFILLED and writes fulfilmentEvidence."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "07a0a86c-c086-4398-8322-50542c70edf8",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "handoffType": "H4",
+        "state": "FULFILLED",
+        "fromRole": "FRONT_DESK",
+        "fromActorId": "actor-seed-system",
+        "toRole": "HOUSEKEEPING",
+        "toActorId": null,
+        "checklistContent": {
+          "roomNumber": "503",
+          "expectedCheckoutDate": "2026-04-22T09:00:00.000Z"
+        },
+        "deficientConditionStatus": null,
+        "fulfilmentEvidence": {
+          "roomInspectionStatus": "COMPLETE",
+          "damageAssessmentStatus": "NONE",
+          "deficientFlagFinalStatus": "NOT_APPLICABLE",
+          "chargesPostedConfirmation": true
+        },
+        "assignedAt": null,
+        "acceptedAt": null,
+        "acceptedBy": null,
+        "fulfilledAt": "2026-04-22T09:43:28.946Z",
+        "fulfilledBy": "fom-1",
+        "closedAt": null,
+        "rejectedAt": null,
+        "rejectedBy": null,
+        "rejectionReason": null,
+        "escalatedAt": null,
+        "slaDeadlineAt": null,
+        "isAutoFulfilled": false,
+        "createdAt": "2026-04-22T09:43:27.583Z",
+        "createdBy": "actor-seed-system",
+        "stageContext": "S7"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-045",
+        "title": "Progress stage to S9 with required version field",
+        "method": "POST",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/progress-stage",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "body": {
+          "targetStage": "S9",
+          "version": 2
+        },
+        "expectStatus": 200,
+        "explanation": "Moves the entry into S9 so terminal closure can be executed.",
+        "dbImpact": "Updates Entry.currentStage to S9; ensures H5 exists/auto-fulfilled per S8 logic."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
+        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "segmentNumber": 1,
+        "useType": "GROUP",
+        "status": "ACTIVE",
+        "currentStage": "S9",
+        "checkInDate": "2026-04-20T09:00:00.000Z",
+        "checkOutDate": "2026-04-22T09:00:00.000Z",
+        "guestCount": 10,
+        "otaSource": false,
+        "createdAt": "2026-04-22T09:43:27.560Z",
+        "updatedAt": "2026-04-22T09:43:28.985Z",
+        "createdBy": "actor-seed-system",
+        "version": 3,
+        "closedAt": null,
+        "closedBy": null,
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedCount": 2,
+        "keysIssuedBy": "actor-seed-system",
+        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedBy": "actor-seed-system"
+      }
+    },
+    {
+      "step": {
+        "id": "S9-list-invoices",
+        "title": "List invoices for folio",
+        "method": "GET",
+        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/invoices",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "frontdesk-1",
+          "X-Actor-Level": "L1"
+        },
+        "expectStatus": 200,
+        "explanation": "S9 needs invoice payment matching, so we retrieve the invoiceId.",
+        "dbImpact": "Read-only (Invoice table)."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": [
+        {
+          "id": "a549de6e-7a9d-43e5-bd5a-691ce94eb533",
+          "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "invoiceType": "FINAL",
+          "state": "DISPATCHED",
+          "templateKey": "final-v1",
+          "issuedAt": "2026-04-22T09:43:28.908Z",
+          "issuedBy": "frontdesk-1",
+          "dispatchedAt": "2026-04-22T09:43:28.908Z",
+          "dispatchedBy": "frontdesk-1",
+          "metadata": {
+            "billingModel": "DIRECT_BILL",
+            "settlementMethod": "DIRECT_BILL",
+            "outstandingBalance": "1700"
+          },
+          "createdAt": "2026-04-22T09:43:28.910Z"
+        }
+      ]
+    },
+    {
+      "step": {
+        "id": "AC-S9-010",
+        "title": "Closing blocks when Loop Closure invariant unsatisfied (invoice not dispatched / H5 open / outstanding without W8)",
+        "method": "POST",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/close",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {},
+        "expectStatus": 409,
+        "explanation": "S9 closure should fail with StageGateBlockedError until invariants are met.",
+        "dbImpact": "No writes when blocked."
+      },
+      "actualStatus": 409,
+      "ok": true,
+      "response": {
+        "error": "StageGateBlockedError",
+        "message": "H5 must be fulfilled/closed before entry closure",
+        "blockingCondition": "H5_NOT_FULFILLED"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-032-1",
+        "title": "Record invoice payment event: DISPATCHED → PAYMENT_TRACKED",
+        "method": "POST",
+        "path": "/invoices/a549de6e-7a9d-43e5-bd5a-691ce94eb533/record-payment-event",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {
+          "nextState": "PAYMENT_TRACKED",
+          "paymentRef": "bank-slip-001"
+        },
+        "expectStatus": 200,
+        "explanation": "Matches a received payment against an invoice (S9 payment matching).",
+        "dbImpact": "Updates Invoice.state to PAYMENT_TRACKED; stores paymentRef in metadata."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "a549de6e-7a9d-43e5-bd5a-691ce94eb533",
+        "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "invoiceType": "FINAL",
+        "state": "PAYMENT_TRACKED",
+        "templateKey": "final-v1",
+        "issuedAt": "2026-04-22T09:43:28.908Z",
+        "issuedBy": "frontdesk-1",
+        "dispatchedAt": "2026-04-22T09:43:28.908Z",
+        "dispatchedBy": "frontdesk-1",
+        "metadata": {
+          "updatedAt": "2026-04-22T09:43:29.008Z",
+          "updatedBy": "fom-1",
+          "paymentRef": "bank-slip-001",
+          "billingModel": "DIRECT_BILL",
+          "settlementMethod": "DIRECT_BILL",
+          "outstandingBalance": "1700"
+        },
+        "createdAt": "2026-04-22T09:43:28.910Z"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-032-2",
+        "title": "Record invoice payment event: PAYMENT_TRACKED → RECONCILED",
+        "method": "POST",
+        "path": "/invoices/a549de6e-7a9d-43e5-bd5a-691ce94eb533/record-payment-event",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {
+          "nextState": "RECONCILED",
+          "paymentRef": "statement-2026-04-22"
+        },
+        "expectStatus": 200,
+        "explanation": "Post-closure accounting action; should not reopen entry.",
+        "dbImpact": "Updates Invoice.state to RECONCILED; stores reconciliation reference in metadata."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "a549de6e-7a9d-43e5-bd5a-691ce94eb533",
+        "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "invoiceType": "FINAL",
+        "state": "RECONCILED",
+        "templateKey": "final-v1",
+        "issuedAt": "2026-04-22T09:43:28.908Z",
+        "issuedBy": "frontdesk-1",
+        "dispatchedAt": "2026-04-22T09:43:28.908Z",
+        "dispatchedBy": "frontdesk-1",
+        "metadata": {
+          "updatedAt": "2026-04-22T09:43:29.014Z",
+          "updatedBy": "fom-1",
+          "paymentRef": "statement-2026-04-22",
+          "billingModel": "DIRECT_BILL",
+          "settlementMethod": "DIRECT_BILL",
+          "outstandingBalance": "1700"
+        },
+        "createdAt": "2026-04-22T09:43:28.910Z"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-039",
+        "title": "Write-off blocks if reason missing",
+        "method": "POST",
+        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/write-off",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "gm-1",
+          "X-Actor-Level": "L3"
+        },
+        "body": {
+          "amount": 100,
+          "reason": ""
+        },
+        "expectStatus": 409,
+        "explanation": "Policy requires recorded reason for write-off.",
+        "dbImpact": "No writes when blocked."
+      },
+      "actualStatus": 409,
+      "ok": true,
+      "response": {
+        "error": "PolicyGateBlockedError",
+        "message": "reason is required",
+        "blockingCondition": "WRITE_OFF_REASON_REQUIRED"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-041",
+        "title": "Write-off OUTSTANDING balance (GM authority) transitions folio to WRITTEN_OFF",
+        "method": "POST",
+        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/write-off",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "gm-1",
+          "X-Actor-Level": "L3"
+        },
+        "body": {
+          "amount": 100,
+          "reason": "uncollectable small balance"
+        },
+        "expectStatus": 200,
+        "explanation": "Creates WriteOffRecord and transitions FolioState OUTSTANDING → WRITTEN_OFF.",
+        "dbImpact": "Creates WriteOffRecord; updates Folio.state."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "8989c0b1-d166-47cc-b991-a5676afd9af3",
+        "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "writtenOffAmount": "100",
+        "currency": "BTN",
+        "reason": "uncollectable small balance",
+        "createdAt": "2026-04-22T09:43:29.024Z",
+        "createdBy": "gm-1"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-046-setup",
+        "title": "Fulfil H5 residual-obligation handoff",
+        "method": "POST",
+        "path": "/handoffs/44f2e722-96c1-453f-bcd9-1a00c648d928/fulfil",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {
+          "fulfilmentEvidence": {
+            "resolutionBasis": "write-off completed"
+          }
+        },
+        "expectStatus": 200,
+        "explanation": "S9 closure requires no open H5 handoff.",
+        "dbImpact": "Transitions HandoffRecord.state to FULFILLED/CLOSED per service implementation."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "44f2e722-96c1-453f-bcd9-1a00c648d928",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "handoffType": "H5",
+        "state": "FULFILLED",
+        "fromRole": "FRONT_DESK",
+        "fromActorId": "frontdesk-1",
+        "toRole": "FINANCE",
+        "toActorId": null,
+        "checklistContent": {
+          "basis": "Checkout governed outstanding",
+          "outstandingBalance": "1700"
+        },
+        "deficientConditionStatus": null,
+        "fulfilmentEvidence": {
+          "resolutionBasis": "write-off completed"
+        },
+        "assignedAt": null,
+        "acceptedAt": null,
+        "acceptedBy": null,
+        "fulfilledAt": "2026-04-22T09:43:29.033Z",
+        "fulfilledBy": "fom-1",
+        "closedAt": null,
+        "rejectedAt": null,
+        "rejectedBy": null,
+        "rejectionReason": null,
+        "escalatedAt": null,
+        "slaDeadlineAt": null,
+        "isAutoFulfilled": false,
+        "createdAt": "2026-04-22T09:43:28.985Z",
+        "createdBy": "frontdesk-1",
+        "stageContext": "S8"
+      }
+    },
+    {
+      "step": {
+        "id": "AC-S9-011",
+        "title": "Close entry at S9 (terminal close)",
+        "method": "POST",
+        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/close",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Actor-Id": "fom-1",
+          "X-Actor-Level": "L2"
+        },
+        "body": {},
+        "expectStatus": 200,
+        "explanation": "Once loop closure invariant is satisfied, entry transitions to EntryStatus.CLOSED, room claim released, and timers registered.",
+        "dbImpact": "Updates Entry.status=CLOSED + closedAt; sets Room.currentClaimState=FREE; creates TimerRecord W28 + retention timer; creates FollowUpTaskRecord for conference/group entries."
+      },
+      "actualStatus": 200,
+      "ok": true,
+      "response": {
+        "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
+        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "segmentNumber": 1,
+        "useType": "GROUP",
+        "status": "CLOSED",
+        "currentStage": "S9",
+        "checkInDate": "2026-04-20T09:00:00.000Z",
+        "checkOutDate": "2026-04-22T09:00:00.000Z",
+        "guestCount": 10,
+        "otaSource": false,
+        "createdAt": "2026-04-22T09:43:27.560Z",
+        "updatedAt": "2026-04-22T09:43:29.048Z",
+        "createdBy": "actor-seed-system",
+        "version": 4,
+        "closedAt": "2026-04-22T09:43:29.047Z",
+        "closedBy": "fom-1",
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedCount": 2,
+        "keysIssuedBy": "actor-seed-system",
+        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedBy": "actor-seed-system"
+      }
+    }
+  ]
+}

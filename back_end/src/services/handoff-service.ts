@@ -81,27 +81,45 @@ export async function fulfilHandoff(
   const handoff = await prisma.handoffRecord.findUnique({ where: { id: handoffId } });
   if (!handoff) throw new NotFoundError("Handoff");
 
-  if (handoff.handoffType !== HandoffType.H1) {
-    throw new StateTransitionError("fulfil() is only implemented for H1 in this slice");
+  if (handoff.handoffType !== HandoffType.H1 && handoff.handoffType !== HandoffType.H4 && handoff.handoffType !== HandoffType.H5) {
+    throw new StateTransitionError("fulfil() is only implemented for H1, H4, and H5 in this slice");
   }
 
-  if (handoff.state === HandoffState.CREATED) {
+  if (handoff.handoffType === HandoffType.H1 && handoff.state === HandoffState.CREATED) {
     throw new StateTransitionError("H1 cannot move to FULFILLED from CREATED — accept first");
   }
 
-  if (handoff.state !== HandoffState.ACCEPTED) {
+  if (handoff.handoffType === HandoffType.H1 && handoff.state !== HandoffState.ACCEPTED) {
     throw new StateTransitionError(`H1 must be in ACCEPTED state to fulfil (current: ${handoff.state})`);
+  }
+  if (handoff.handoffType === HandoffType.H4 && (handoff.state === HandoffState.REJECTED || handoff.state === HandoffState.CLOSED)) {
+    throw new StateTransitionError(`H4 cannot be fulfilled from state ${handoff.state}`);
+  }
+  if (handoff.handoffType === HandoffType.H5 && (handoff.state === HandoffState.REJECTED || handoff.state === HandoffState.CLOSED)) {
+    throw new StateTransitionError(`H5 cannot be fulfilled from state ${handoff.state}`);
   }
 
   const ev = fulfilmentEvidence ?? {};
-  const requiredKeys = ["roomAssignmentId", "readinessConfirmed", "paymentStatusConfirmed", "ceilingProximityAddressed"];
+  const requiredKeys =
+    handoff.handoffType === HandoffType.H4
+      ? ["chargesPostedConfirmation", "roomInspectionStatus", "damageAssessmentStatus", "deficientFlagFinalStatus"]
+      : handoff.handoffType === HandoffType.H5
+        ? ["resolutionBasis"]
+        : ["roomAssignmentId", "readinessConfirmed", "paymentStatusConfirmed", "ceilingProximityAddressed"];
   for (const key of requiredKeys) {
     if (ev[key] === undefined || ev[key] === null) {
-      throw new PolicyGateBlockedError("FULFILMENT_EVIDENCE_INCOMPLETE", `fulfilmentEvidence.${key} is required`);
+      throw new PolicyGateBlockedError(
+        handoff.handoffType === HandoffType.H4
+          ? "H4_FULFILMENT_EVIDENCE_INCOMPLETE"
+          : handoff.handoffType === HandoffType.H5
+            ? "H5_FULFILMENT_EVIDENCE_INCOMPLETE"
+            : "FULFILMENT_EVIDENCE_INCOMPLETE",
+        `fulfilmentEvidence.${key} is required`,
+      );
     }
   }
 
-  if (ev.readinessConfirmed !== true) {
+  if (handoff.handoffType === HandoffType.H1 && ev.readinessConfirmed !== true) {
     throw new PolicyGateBlockedError("ROOM_NOT_READY", "readinessConfirmed must be true when room is ready");
   }
 

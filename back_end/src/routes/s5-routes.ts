@@ -9,6 +9,15 @@ import * as entryService from "../services/entry-service.js";
 import * as noShowService from "../services/no-show-service.js";
 import * as cancellationService from "../services/cancellation-service.js";
 import * as guestProfileService from "../services/guest-profile-service.js";
+import * as s7FolioLinesService from "../services/s7-folio-lines-service.js";
+import * as s7NightAuditService from "../services/s7-night-audit-service.js";
+import * as s7DisputeService from "../services/s7-dispute-service.js";
+import * as s7AmendmentService from "../services/s7-amendment-service.js";
+import * as s7WorkOrderService from "../services/s7-work-order-service.js";
+import * as s8SettlementService from "../services/s8-settlement-service.js";
+import * as s8CheckoutService from "../services/s8-checkout-service.js";
+import * as s9Service from "../services/s9-service.js";
+import { Stage, WorkOrderToDoStatus } from "@prisma/client";
 
 export const s5Router = Router();
 
@@ -179,7 +188,307 @@ s5Router.post("/entries/:id/progress-stage", requireActorLevel("L1"), async (req
       return;
     }
 
-    next(new AppError(400, { error: "ValidationError", message: 'targetStage must be "S6" (S5→S6) or "S7" (S6→S7 check-in completion)' }));
+    if (targetStage === "S8") {
+      const updated = await entryService.progressStageS7ToS8(
+        prisma,
+        req.params.id,
+        req.actor!.actorId,
+        typeof version === "number" ? version : undefined,
+      );
+      res.json(updated);
+      return;
+    }
+
+    if (targetStage === "S9") {
+      const updated = await s8CheckoutService.progressStageS8ToS9(
+        prisma,
+        req.params.id,
+        req.actor!.actorId,
+        typeof version === "number" ? version : undefined,
+      );
+      res.json(updated);
+      return;
+    }
+
+    next(
+      new AppError(400, {
+        error: "ValidationError",
+        message: 'targetStage must be "S6" (S5→S6), "S7" (S6→S7 check-in completion), "S8" (S7→S8 stay exit), or "S9" (S8→S9 closure)',
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ------------------------- S7 routes -------------------------
+
+s5Router.post("/folios/:id/charges", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { entryId, lineType, description, amount, currency, chargeDate } = req.body ?? {};
+    const allowSoftGateBypass = req.actor!.level === "L2" || req.actor!.level === "L3";
+    const created = await s7FolioLinesService.postCharge(prisma, req.params.id, req.actor!.actorId, {
+      entryId,
+      lineType,
+      description,
+      amount,
+      currency,
+      chargeDate,
+      allowSoftGateBypass,
+    });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/folios/:id/corrections", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { entryId, originalFolioLineId, reason, correctionAmount, correctionDate } = req.body ?? {};
+    const created = await s7FolioLinesService.correctCharge(prisma, req.params.id, req.actor!.actorId, {
+      entryId,
+      originalFolioLineId,
+      reason,
+      correctionAmount,
+      correctionDate,
+    });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/folios/:id/credit-notes", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const { entryId, description, amount, currency, creditDate } = req.body ?? {};
+    const created = await s7FolioLinesService.postCreditNote(prisma, req.params.id, req.actor!.actorId, {
+      entryId,
+      description,
+      amount,
+      currency,
+      creditDate,
+    });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/night-audit/run", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const record = await s7NightAuditService.runNightAudit(prisma, req.actor!.actorId, req.body ?? {});
+    res.json(record);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/disputes/open", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const created = await s7DisputeService.openDispute(prisma, req.actor!.actorId, req.body ?? {});
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/disputes/:id/close", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const updated = await s7DisputeService.closeDispute(prisma, req.params.id, req.actor!.actorId, req.body ?? {});
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/disputes/:id/gate-override", requireActorLevel("L3"), async (req, res, next) => {
+  try {
+    const { targetStage, freeTextReason } = req.body ?? {};
+    if (targetStage !== "S8" && targetStage !== "S9") {
+      next(new AppError(400, { error: "ValidationError", message: 'targetStage must be "S8" or "S9"' }));
+      return;
+    }
+    const created = await s7DisputeService.createGateOverride(prisma, req.params.id, req.actor!.actorId, {
+      targetStage: targetStage === "S9" ? Stage.S9 : Stage.S8,
+      freeTextReason,
+    });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ------------------------- S8 routes -------------------------
+
+s5Router.get("/folios/:id", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const folio = await s8SettlementService.getFolio(prisma, req.params.id);
+    res.json(folio);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/folios/:id/settle", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const updated = await s8SettlementService.initiateSettlement(prisma, req.params.id, req.actor!.actorId, req.body ?? {});
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/entries/:id/key-return", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { keyCountReturned, reconciliationNote } = req.body ?? {};
+    const created = await s8CheckoutService.recordKeyReturn(prisma, req.params.id, req.actor!.actorId, { keyCountReturned, reconciliationNote });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/entries/:id/room-inspection", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const created = await s8CheckoutService.recordInspection(prisma, req.params.id, req.actor!.actorId, req.body ?? {});
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ------------------------- S9 routes -------------------------
+
+s5Router.post("/entries/:id/close", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const updated = await s9Service.closeEntryAtS9(prisma, req.params.id, req.actor!.actorId);
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.get("/folios/:id/invoices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const inv = await s9Service.listInvoices(prisma, req.params.id);
+    res.json(inv);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/invoices/:id/record-payment-event", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const updated = await s9Service.recordInvoicePaymentEvent(prisma, req.params.id, req.actor!.actorId, req.body ?? {});
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/folios/:id/write-off", requireActorLevel("L3"), async (req, res, next) => {
+  try {
+    const created = await s9Service.writeOffOutstandingBalance(prisma, req.params.id, req.actor!.actorId, req.body ?? {});
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/folios/:id/post-stay-charges", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const created = await s9Service.postStayCharge(prisma, req.params.id, req.actor!.actorId, req.body ?? {});
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/entries/:id/amend", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const { amendmentType } = req.body ?? {};
+    if (amendmentType === "ROOM_CHANGE") {
+      const { newRoomId, reason } = req.body ?? {};
+      const updated = await s7AmendmentService.roomChangeReEntryToS1(prisma, req.actor!.actorId, {
+        entryId: req.params.id,
+        newRoomId,
+        reason,
+      });
+      res.json(updated);
+      return;
+    }
+
+    const { segmentId, amendmentPath, requestedBy, authorisedBy, authorityBasis, reason, priorTermsRef, newTermsSummary, folioLineId, stageAtAmendment } =
+      req.body ?? {};
+    const created = await s7AmendmentService.createAmendmentEvent(prisma, req.actor!.actorId, {
+      entryId: req.params.id,
+      segmentId,
+      amendmentPath,
+      amendmentType,
+      requestedBy,
+      authorisedBy,
+      authorityBasis,
+      reason,
+      priorTermsRef,
+      newTermsSummary,
+      folioLineId,
+      stageAtAmendment: stageAtAmendment === "S7" ? Stage.S7 : Stage.S7,
+    });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/work-orders", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const created = await s7WorkOrderService.createWorkOrder(prisma, req.actor!.actorId, req.body ?? {});
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/work-orders/:id/todos", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const created = await s7WorkOrderService.addToDoItem(prisma, req.actor!.actorId, { workOrderId: req.params.id, ...(req.body ?? {}) });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/work-order-todos/:id/status", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { status, cancelReason } = req.body ?? {};
+    if (!status || typeof status !== "string") {
+      next(new AppError(400, { error: "ValidationError", message: "status is required" }));
+      return;
+    }
+    if (!Object.values(WorkOrderToDoStatus).includes(status as WorkOrderToDoStatus)) {
+      next(new AppError(400, { error: "ValidationError", message: `status must be one of: ${Object.values(WorkOrderToDoStatus).join(", ")}` }));
+      return;
+    }
+    const updated = await s7WorkOrderService.updateToDoStatus(prisma, req.actor!.actorId, req.params.id, { status: status as WorkOrderToDoStatus, cancelReason });
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/work-orders/:id/consumption", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const created = await s7WorkOrderService.recordConsumption(prisma, req.actor!.actorId, { workOrderId: req.params.id, ...(req.body ?? {}) });
+    res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+s5Router.post("/work-orders/:id/close", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const updated = await s7WorkOrderService.closeWorkOrder(prisma, req.params.id);
+    res.json(updated);
   } catch (e) {
     next(e);
   }

@@ -1,0 +1,288 @@
+# S8 test report
+
+- **Ran at**: 2026-04-22T09:18:03.669Z
+- **Base URL**: `http://localhost:4000/api`
+- **Pass**: 15
+- **Fail**: 0
+
+## Cases
+
+### ✅ SETUP-S7->S8 — Setup: progress S7->S8 (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "inquiryId": "c31cb302-2f1a-499e-9118-777c9de05dea",
+  "guestProfileId": "e6b57217-b91a-4d0d-a68d-3c868a3b78a0",
+  "segmentNumber": 1,
+  "useType": "LEISURE",
+  "status": "ACTIVE",
+  "currentStage": "S8",
+  "checkInDate": "2026-04-20T09:00:00.000Z",
+  "checkOutDate": "2026-04-22T09:00:00.000Z",
+  "guestCount": 2,
+  "otaSource": false,
+  "createdAt": "2026-04-22T09:18:02.024Z",
+  "updatedAt": "2026-04-22T09:18:03.497Z",
+  "createdBy": "actor-seed-system",
+  "version": 2,
+  "closedAt": null,
+  "closedBy": null,
+  "noShowCutoffReachedAt": null,
+  "creditCeilingTier2AcknowledgedAt": null,
+  "creditCeilingTier2AcknowledgedBy": null,
+  "awaitingWrittenConfirmationActive": false,
+  "keysIssuedAt": "2026-04-22T09:18:02.023Z",
+  "keysIssuedCount": 2,
+  "keysIssuedBy": "actor-seed-system",
+  "registrationCompletedAt": "2026-04-22T09:18:02.023Z",
+  "registrationCompletedBy": "actor-seed-system"
+}
+```
+### ✅ AC-S8-25 — Key return discrepancy requires reconciliationNote (HTTP 400)
+
+**API response**
+
+```json
+{
+  "error": "ValidationError",
+  "message": "reconciliationNote is required when keyCountReturned differs from keysIssuedCount"
+}
+```
+### ✅ AC-S8-26 — KeyReturnRecord with discrepancy satisfies key-return condition (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "f53cefe9-7dfd-4514-a3fb-80482bdd042e",
+  "entryId": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "roomId": "44fd6dd2-1200-4b6a-9d22-385c12613e72",
+  "receivedBy": "test-fd-1",
+  "returnedAt": "2026-04-22T09:18:03.533Z",
+  "keyCountIssued": 2,
+  "keyCountReturned": 0,
+  "countReconciled": false,
+  "reconciliationNote": "Guest lost key; governed resolution recorded",
+  "createdAt": "2026-04-22T09:18:03.534Z"
+}
+```
+### ✅ AC-S8-15 — Inspection NOT_APPLICABLE rejected when unresolved deficient exists (HTTP 409)
+
+**API response**
+
+```json
+{
+  "error": "PolicyGateBlockedError",
+  "message": "Active DEFICIENT flag exists — inspection must carry final deficient status",
+  "blockingCondition": "DEFICIENT_REQUIRES_FLAG_STATUS"
+}
+```
+### ✅ AC-S8-14 — RoomInspectionRecord always carries deficientFlagStatus and can schedule deferral (W9) (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "a36c40bb-8f07-441d-9b08-b314e2b01ecc",
+  "entryId": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "roomId": "44fd6dd2-1200-4b6a-9d22-385c12613e72",
+  "segmentId": "72c571ec-9202-42cc-be27-1e110275ff67",
+  "inspectedBy": "test-fd-1",
+  "inspectedAt": "2026-04-22T09:18:03.562Z",
+  "isDeferred": true,
+  "deficientFlagStatus": "UNRESOLVED_AT_CHECKOUT",
+  "deficientConditionId": "16e8bebc-6cad-422c-917f-156a6b5de858",
+  "inspectorAssessment": "Condition present; governed service recovery",
+  "damageFound": false,
+  "damageNotes": null,
+  "createdAt": "2026-04-22T09:18:03.563Z"
+}
+```
+### ✅ AC-S8-23 — Inspection deferral registers W9 timer in same workflow
+
+**API response**
+
+```json
+{
+  "id": "a01da84f-ed96-4e40-865b-c5b40a43bbff",
+  "dueAt": "2026-04-24T09:18:03.566Z",
+  "timerCode": "POST_CHECKOUT_INSPECTION_W9"
+}
+```
+### ✅ AC-S8-06 — Guest-pay CASH settlement transitions folio to SETTLED and creates payment record (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "044202b1-3a5b-4233-8b2a-e13fef2d3863",
+  "entryId": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "state": "SETTLED",
+  "billingModel": "GUEST_PAY",
+  "createdAt": "2026-04-22T09:18:02.031Z",
+  "createdBy": "actor-seed-system",
+  "convertedToLiveAt": "2026-04-22T09:18:02.030Z",
+  "convertedBy": "actor-seed-system",
+  "closedAt": "2026-04-22T09:18:03.590Z",
+  "closedBy": "test-fd-1",
+  "noShowPenaltyAmount": null,
+  "noShowAdvancePaymentAmount": null,
+  "noShowNetPosition": null,
+  "noShowFomDetermination": null,
+  "outstandingBalance": "700",
+  "advancePaymentReconciliationComplete": true
+}
+```
+### ✅ AC-S8-01 — Checkout completion moves room OCCUPIED -> DEPARTED_DIRTY
+
+**API response**
+
+```json
+{
+  "before": "OCCUPIED",
+  "after": "DEPARTED_DIRTY"
+}
+```
+### ✅ AC-S8-03 — DEPARTED_DIRTY write registers W24 timer
+
+**API response**
+
+```json
+{
+  "id": "0fd71923-efa2-47ce-81a0-735639cfb964",
+  "dueAt": "2026-04-22T12:18:03.595Z"
+}
+```
+### ✅ AC-S8-17 — H4 fulfilment evidence must be complete (HTTP 409)
+
+**API response**
+
+```json
+{
+  "error": "PolicyGateBlockedError",
+  "message": "fulfilmentEvidence.roomInspectionStatus is required",
+  "blockingCondition": "H4_FULFILMENT_EVIDENCE_INCOMPLETE"
+}
+```
+### ✅ SETUP-H4-FULFIL — Setup: fulfil H4 with complete evidence (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "26ea0fac-02b6-495f-ad88-dbfa4c8e5483",
+  "entryId": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "handoffType": "H4",
+  "state": "FULFILLED",
+  "fromRole": "FRONT_DESK",
+  "fromActorId": "actor-seed-system",
+  "toRole": "HOUSEKEEPING",
+  "toActorId": null,
+  "checklistContent": {
+    "roomNumber": "501",
+    "expectedCheckoutDate": "2026-04-22T09:00:00.000Z"
+  },
+  "deficientConditionStatus": null,
+  "fulfilmentEvidence": {
+    "roomInspectionStatus": "RECORDED_OR_DEFERRED",
+    "damageAssessmentStatus": "COMPLETE_OR_DEFERRED",
+    "deficientFlagFinalStatus": "RECORDED",
+    "chargesPostedConfirmation": true
+  },
+  "assignedAt": null,
+  "acceptedAt": null,
+  "acceptedBy": null,
+  "fulfilledAt": "2026-04-22T09:18:03.611Z",
+  "fulfilledBy": "test-fd-1",
+  "closedAt": null,
+  "rejectedAt": null,
+  "rejectedBy": null,
+  "rejectionReason": null,
+  "escalatedAt": null,
+  "slaDeadlineAt": null,
+  "isAutoFulfilled": false,
+  "createdAt": "2026-04-22T09:18:02.034Z",
+  "createdBy": "actor-seed-system",
+  "stageContext": "S7"
+}
+```
+### ✅ AC-S8-11 — S8->S9 blocked when dispute gate BLOCKED (no override) (HTTP 409)
+
+**API response**
+
+```json
+{
+  "error": "StageGateBlockedError",
+  "message": "Dispute gate blocks S8→S9 — disputes must be RESOLVED or CLOSED (no override at this transition)",
+  "blockingCondition": "DISPUTE_GATE_BLOCKED"
+}
+```
+### ✅ AC-S8-12 — Dispute gate override endpoint rejects targetStage S9 (HTTP 409)
+
+**API response**
+
+```json
+{
+  "error": "PolicyGateBlockedError",
+  "message": "Dispute gate override is not available for S8→S9",
+  "blockingCondition": "DISPUTE_OVERRIDE_NOT_AVAILABLE"
+}
+```
+### ✅ AC-S8-13-setup — GM closes dispute (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "5bab6bb9-5115-47c4-94a5-e34959721b00",
+  "entryId": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "folioId": "044202b1-3a5b-4233-8b2a-e13fef2d3863",
+  "status": "CLOSED",
+  "title": "Checkout dispute",
+  "description": null,
+  "openedAt": "2026-04-22T09:18:03.618Z",
+  "openedBy": "test-fd-1",
+  "updatedAt": "2026-04-22T09:18:03.646Z",
+  "updatedBy": "test-gm-1",
+  "closedAt": "2026-04-22T09:18:03.643Z",
+  "closedBy": "test-gm-1",
+  "closureReason": "GM closed at checkout"
+}
+```
+### ✅ S8->S9 — Progress S8->S9 after settlement + key return + inspection + dispute clear (HTTP 200)
+
+**API response**
+
+```json
+{
+  "id": "8b862017-38a8-4da9-94f9-f295ff0ac3da",
+  "inquiryId": "c31cb302-2f1a-499e-9118-777c9de05dea",
+  "guestProfileId": "e6b57217-b91a-4d0d-a68d-3c868a3b78a0",
+  "segmentNumber": 1,
+  "useType": "LEISURE",
+  "status": "ACTIVE",
+  "currentStage": "S9",
+  "checkInDate": "2026-04-20T09:00:00.000Z",
+  "checkOutDate": "2026-04-22T09:00:00.000Z",
+  "guestCount": 2,
+  "otaSource": false,
+  "createdAt": "2026-04-22T09:18:02.024Z",
+  "updatedAt": "2026-04-22T09:18:03.663Z",
+  "createdBy": "actor-seed-system",
+  "version": 3,
+  "closedAt": null,
+  "closedBy": null,
+  "noShowCutoffReachedAt": null,
+  "creditCeilingTier2AcknowledgedAt": null,
+  "creditCeilingTier2AcknowledgedBy": null,
+  "awaitingWrittenConfirmationActive": false,
+  "keysIssuedAt": "2026-04-22T09:18:02.023Z",
+  "keysIssuedCount": 2,
+  "keysIssuedBy": "actor-seed-system",
+  "registrationCompletedAt": "2026-04-22T09:18:02.023Z",
+  "registrationCompletedBy": "actor-seed-system"
+}
+```
