@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../lib/errors.js";
+import { computeReEntryConsequences } from "../engines/re-entry-consequence-engine.js";
 
 export async function createAmendmentEvent(
   prisma: PrismaClient,
@@ -67,6 +68,15 @@ export async function roomChangeReEntryToS1(
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
+    // AC-S7-22: compute consequences before any commit.
+    await computeReEntryConsequences(tx as any, {
+      entryId: input.entryId,
+      fromStage: Stage.S7,
+      toStage: Stage.S1,
+      reason: input.reason,
+      actorId,
+    });
+
     const oldSeg = await tx.segment.findFirst({
       where: { entryId: input.entryId },
       orderBy: { segmentNumber: "desc" },
@@ -74,9 +84,9 @@ export async function roomChangeReEntryToS1(
     if (!oldSeg) throw new NotFoundError("Segment");
 
     // Seal prior segment and create new segment atomically.
-    await tx.segment.update({ where: { id: oldSeg.id }, data: { sealedAt: now } });
+    await tx.segment.update({ where: { id: oldSeg.id }, data: { sealedAt: now, sealedBy: actorId } });
     const newSeg = await tx.segment.create({
-      data: { entryId: input.entryId, segmentNumber: entry.segmentNumber + 1 },
+      data: { entryId: input.entryId, segmentNumber: entry.segmentNumber + 1, stage: Stage.S7, createdBy: actorId },
     });
 
     // Reservation is single-row per entry; link it to the new segment.
@@ -92,9 +102,11 @@ export async function roomChangeReEntryToS1(
     await tx.roomClaimStateEvent.create({
       data: {
         roomId: currentAssignment.roomId,
+        entryId: input.entryId,
         fromState: InventoryClaimState.OCCUPIED,
         toState: InventoryClaimState.DEPARTED_DIRTY,
         actorId,
+        reason: "S7 room change re-entry",
       },
     });
 
@@ -102,9 +114,11 @@ export async function roomChangeReEntryToS1(
     await tx.roomClaimStateEvent.create({
       data: {
         roomId: input.newRoomId,
+        entryId: input.entryId,
         fromState: InventoryClaimState.CONFIRMED,
         toState: InventoryClaimState.OCCUPIED,
         actorId,
+        reason: "S7 room change re-entry",
       },
     });
 

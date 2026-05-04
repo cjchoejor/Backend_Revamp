@@ -1,6 +1,9 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, StateTransitionError, ValidationError } from "../lib/errors.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+import { randomUUID } from "node:crypto";
+import { recalculateNextDayTimers } from "./next-day-timer-service.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -23,9 +26,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
     return existing;
   }
 
-  const cfg = await prisma.configurationEntry.findUnique({ where: { configKey: "nightAudit.expectedDailyFAndBCharge" } });
-  if (!cfg) throw new MissingConfigurationError("nightAudit.expectedDailyFAndBCharge");
-  const expected = (cfg.value as { amount?: number; currency?: string } | undefined) ?? {};
+  const expected = (await requireActiveConfigValue<{ amount?: number; currency?: string } | undefined>(prisma, "nightAudit.expectedDailyFAndBCharge")) ?? {};
   const expectedAmount = typeof expected.amount === "number" ? expected.amount : 0;
 
   const entries = await prisma.entry.findMany({
@@ -33,80 +34,108 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
     include: { reservation: true, folio: true },
   });
 
+  // Pre-compute processing decisions outside transaction so the NightAuditRecord can be created in its final (immutable) form.
   const notProcessed: string[] = [];
-  let processedCount = 0;
+  const plan: Array<{
+    entryId: string;
+    folioId: string;
+    shouldPostRoomCharge: boolean;
+    roomChargeAmount: number;
+    shouldWriteFnbMissingAnomaly: boolean;
+  }> = [];
+
+  for (const entry of entries) {
+    try {
+      if (!entry.folio) throw new NotFoundError("Folio");
+      if (entry.folio.state !== "LIVE") throw new StateTransitionError("Folio must be LIVE for night audit processing");
+
+      const alreadyRoom = await prisma.folioLine.findFirst({
+        where: { folioId: entry.folio.id, lineType: FolioLineType.ROOM_CHARGE, chargeDate: operatingDate },
+      });
+      const shouldPostRoomCharge = !alreadyRoom;
+      const roomChargeAmount = num(entry.reservation?.frozenRate ?? null);
+
+      const expectsFnb = expectedAmount > 0 && (entry.reservation?.frozenInclusions as Record<string, unknown> | null | undefined)?.dailyFAndBExpected === true;
+      const hasFnb = expectsFnb
+        ? await prisma.folioLine.findFirst({ where: { folioId: entry.folio.id, lineType: FolioLineType.F_AND_B, chargeDate: operatingDate } })
+        : null;
+      const shouldWriteFnbMissingAnomaly = expectsFnb && !hasFnb;
+
+      plan.push({ entryId: entry.id, folioId: entry.folio.id, shouldPostRoomCharge, roomChargeAmount, shouldWriteFnbMissingAnomaly });
+    } catch {
+      notProcessed.push(entry.id);
+    }
+  }
+
+  const processedCount = plan.length;
+  const recordId = randomUUID();
 
   await prisma.$transaction(async (tx) => {
-    // Create record up-front, then update counts at end (PARTIAL/COMPLETE).
-    const record = await tx.nightAuditRecord.create({
+    await tx.nightAuditRecord.create({
       data: {
+        id: recordId,
         operatingDate,
-        runStatus: NightAuditRunStatus.PARTIAL,
-        entriesProcessedCount: 0,
-        entriesNotProcessed: [],
+        runStatus: notProcessed.length === 0 ? NightAuditRunStatus.COMPLETE : NightAuditRunStatus.PARTIAL,
+        entriesProcessedCount: processedCount,
+        entriesNotProcessed: notProcessed,
         createdBy: actorId,
       },
     });
 
-    for (const entry of entries) {
-      try {
-        if (!entry.folio) throw new NotFoundError("Folio");
-        if (entry.folio.state !== "LIVE") throw new StateTransitionError("Folio must be LIVE for night audit processing");
-
-        // Idempotency per-entry: if a ROOM_CHARGE exists for this operating date, treat as already processed.
-        const already = await tx.folioLine.findFirst({
-          where: { folioId: entry.folio.id, lineType: FolioLineType.ROOM_CHARGE, chargeDate: operatingDate },
+    for (const p of plan) {
+      if (p.shouldPostRoomCharge) {
+        await tx.folioLine.create({
+          data: {
+            folioId: p.folioId,
+            lineType: FolioLineType.ROOM_CHARGE,
+            description: "Night audit room charge",
+            amount: p.roomChargeAmount,
+            currency: "BTN",
+            chargeDate: operatingDate,
+            stage: Stage.S7,
+            postedBy: actorId,
+            nightAuditRecordId: recordId,
+          },
         });
-        if (!already) {
-          const rate = num(entry.reservation?.frozenRate ?? null);
-          await tx.folioLine.create({
-            data: {
-              folioId: entry.folio.id,
-              lineType: FolioLineType.ROOM_CHARGE,
-              description: "Night audit room charge",
-              amount: rate,
-              currency: "BTN",
-              chargeDate: operatingDate,
-              stage: Stage.S7,
-              postedBy: actorId,
-              nightAuditRecordId: record.id,
-            },
-          });
-          await tx.folio.update({ where: { id: entry.folio.id }, data: { outstandingBalance: { increment: rate } } });
-        }
-
-        // Expected daily F&B charge anomaly (do not auto-post)
-        if (expectedAmount > 0 && (entry.reservation?.frozenInclusions as Record<string, unknown> | null | undefined)?.dailyFAndBExpected === true) {
-          const hasFnb = await tx.folioLine.findFirst({
-            where: { folioId: entry.folio.id, lineType: FolioLineType.F_AND_B, chargeDate: operatingDate },
-          });
-          if (!hasFnb) {
-            await tx.nightAuditAnomaly.create({
-              data: {
-                nightAuditRecordId: record.id,
-                entryId: entry.id,
-                anomalyType: NightAuditAnomalyType.MISSING_EXPECTED_CHARGE,
-                description: "Expected daily F&B charge missing for operating date",
-              },
-            });
-          }
-        }
-
-        processedCount += 1;
-      } catch (_e) {
-        notProcessed.push(entry.id);
+        await tx.folio.update({ where: { id: p.folioId }, data: { outstandingBalance: { increment: p.roomChargeAmount } } });
+      }
+      if (p.shouldWriteFnbMissingAnomaly) {
+        await tx.nightAuditAnomaly.create({
+          data: {
+            nightAuditRecordId: recordId,
+            entryId: p.entryId,
+            anomalyType: NightAuditAnomalyType.MISSING_EXPECTED_CHARGE,
+            description: "Expected daily F&B charge missing for operating date",
+          },
+        });
       }
     }
 
-    await tx.nightAuditRecord.update({
-      where: { id: record.id },
-      data: {
-        runStatus: notProcessed.length === 0 ? NightAuditRunStatus.COMPLETE : NightAuditRunStatus.PARTIAL,
-        entriesProcessedCount: processedCount,
-        entriesNotProcessed: notProcessed,
-      },
-    });
+    // AC-S7-06: PARTIAL run escalates to FOM (modelled as an immutable TraceEvent).
+    if (notProcessed.length > 0) {
+      await (tx as any).traceEvent.create({
+        data: {
+          eventType: "NIGHT_AUDIT.PARTIAL_FOM_ESCALATED",
+          actorId: "SYSTEM",
+          actorLevel: "SYSTEM",
+          entityType: "NightAuditRecord",
+          entityId: recordId,
+          operation: "ALERT",
+          timestamp: new Date(),
+          stageContext: Stage.S7,
+          inquiryId: null,
+          entryId: null,
+          payload: { operatingDate: operatingDate.toISOString(), entriesNotProcessed: notProcessed },
+          createdBy: "SYSTEM",
+        },
+      });
+    }
   });
+
+  // AC-S7-07: after COMPLETE run, next-day timers are recalculated.
+  if (notProcessed.length === 0) {
+    await recalculateNextDayTimers(prisma, "SYSTEM", { operatingDate });
+  }
 
   return prisma.nightAuditRecord.findUniqueOrThrow({ where: { operatingDate } });
 }

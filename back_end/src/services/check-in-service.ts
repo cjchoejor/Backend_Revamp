@@ -8,6 +8,9 @@ import {
   ValidationError,
 } from "../lib/errors.js";
 import * as folioService from "./folio-service.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getTimerEngine } from "./timer-management-service.js";
+import * as preArrivalService from "./pre-arrival-service.js";
 
 export async function completeCheckInToS7(
   prisma: PrismaClient,
@@ -33,6 +36,7 @@ export async function completeCheckInToS7(
       folio: true,
       guestProfile: true,
       reservation: true,
+      preArrivalTasks: true,
       roomAssignments: {
         include: { room: { include: { deficientConditionRecords: { where: { status: "UNRESOLVED" } } } } },
         orderBy: { createdAt: "desc" },
@@ -75,8 +79,11 @@ export async function completeCheckInToS7(
   }
 
   const h1 = entry.handoffs.find((h) => h.handoffType === HandoffType.H1);
-  if (!h1 || (h1.state !== HandoffState.FULFILLED && h1.state !== HandoffState.CLOSED)) {
-    throw new StageGateBlockedError("H1 must be FULFILLED or CLOSED", "H1_INVALID");
+  const isWalkIn = entry.walkInCompressed === true || !h1;
+  if (!isWalkIn) {
+    if (!h1 || (h1.state !== HandoffState.FULFILLED && h1.state !== HandoffState.CLOSED)) {
+      throw new StageGateBlockedError("H1 must be FULFILLED or CLOSED", "H1_INVALID");
+    }
   }
 
   const h2Latest = entry.handoffs.find((h) => h.handoffType === HandoffType.H2 && h.stageContext === Stage.S6);
@@ -96,13 +103,79 @@ export async function completeCheckInToS7(
   });
 
   const vipTier = entry.guestProfile.vipTier?.trim();
-  const routingCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "vipNotification.routingPerTier" } });
-  if (vipTier && !routingCfg) {
-    throw new MissingConfigurationError("vipNotification.routingPerTier");
+  const routing = vipTier ? ((await requireActiveConfigValue<Record<string, string[]> | undefined>(prisma, "vipNotification.routingPerTier")) ?? {}) : {};
+  const ackWindows = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType")) ?? {};
+  const h2WindowSeconds = ackWindows.h2 ?? ackWindows.H2 ?? ackWindows.handoffH2 ?? null;
+  const h3WindowSeconds = ackWindows.h3 ?? ackWindows.H3 ?? ackWindows.handoffH3 ?? null;
+  if ((h2WindowSeconds == null || h3WindowSeconds == null) && (vipTier || true)) {
+    // SIG-S6: key must include H2 and H3 windows; treat missing as configuration failure for S6 readiness.
+    throw new MissingConfigurationError("acknowledgement.windowPerType");
   }
-  const routing = (routingCfg?.value as Record<string, string[]> | undefined) ?? {};
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    if (isWalkIn) {
+      // Walk-in compressed path: seed tasks if missing, waive time-dependent ones, record no-H1 path and S5 auto-fulfilment.
+      await preArrivalService.initialiseTasks(tx as any, entryId, actorId);
+
+      const tasks = await tx.preArrivalTask.findMany({ where: { entryId } });
+      const waiveTypes = new Set([
+        "PRE_ARRIVAL_COMMUNICATION",
+        "BED_CONFIGURATION_CHANGE",
+        "SPECIAL_REQUEST_FULFILMENT",
+        "LATE_ARRIVAL_MEAL_COORDINATION",
+        "SITE_VISIT",
+      ]);
+
+      for (const t of tasks) {
+        if (t.status !== "PENDING") continue;
+        if (waiveTypes.has(t.taskType as any)) {
+          await tx.preArrivalTask.update({
+            where: { id: t.id },
+            data: { status: "WAIVED", waivedReason: "WALK_IN_COMPRESSED", waivedBy: actorId },
+          });
+        }
+        if ((t.taskType as any) === "UNIT_READINESS_VERIFICATION") {
+          await tx.preArrivalTask.update({
+            where: { id: t.id },
+            data: { status: "COMPLETE", completedAt: now, completedBy: actorId },
+          });
+        }
+      }
+
+      await tx.traceEvent.create({
+        data: {
+          eventType: "WALK_IN.NO_H1_PATH",
+          actorId,
+          actorLevel: "L1",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "INFO",
+          timestamp: now,
+          stageContext: Stage.S6,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { entryId, reason: "WALK_IN_COMPRESSED" },
+          createdBy: actorId,
+        },
+      });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "WALK_IN.S5_AUTO_FULFILLED",
+          actorId,
+          actorLevel: "L1",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "TRANSITION",
+          timestamp: now,
+          stageContext: Stage.S6,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { entryId, waivedReason: "WALK_IN_COMPRESSED" },
+          createdBy: actorId,
+        },
+      });
+    }
+
     if (vipTier) {
       const existingVip = await tx.vIPArrivalNotificationEvent.findFirst({ where: { entryId } });
       if (!existingVip) {
@@ -123,6 +196,26 @@ export async function completeCheckInToS7(
             createdBy: actorId,
           },
         });
+        await tx.traceEvent.create({
+          data: {
+            eventType: "VIP_ARRIVAL_NOTIFICATION_ISSUED",
+            actorId,
+            actorLevel: "L1",
+            entityType: "Entry",
+            entityId: entryId,
+            operation: "ALERT",
+            timestamp: now,
+            stageContext: Stage.S6,
+            inquiryId: entry.inquiryId,
+            entryId,
+            payload: { entryId, guestProfileId: entry.guestProfileId, vipTier, recipientRoles: roles, checkInInitiatedAt: now.toISOString() },
+            createdBy: actorId,
+          },
+        });
+      }
+      const vipRow = await tx.vIPArrivalNotificationEvent.findFirst({ where: { entryId } });
+      if (!vipRow) {
+        throw new StageGateBlockedError("VIP Arrival notification must be issued for VIP check-in", "VIP_NOTIFICATION_NOT_ISSUED");
       }
     }
 
@@ -131,6 +224,7 @@ export async function completeCheckInToS7(
       orderBy: { createdAt: "desc" },
     });
     if (!h2Existing) {
+      const slaDeadlineAt = new Date(now.getTime() + Number(h2WindowSeconds) * 1000);
       await tx.handoffRecord.create({
         data: {
           entryId,
@@ -154,6 +248,7 @@ export async function completeCheckInToS7(
           deficientConditionStatus: deficientNote,
           createdBy: actorId,
           stageContext: Stage.S6,
+          slaDeadlineAt,
         },
       });
     }
@@ -163,6 +258,7 @@ export async function completeCheckInToS7(
       orderBy: { createdAt: "desc" },
     });
     if (!h3Existing) {
+      const slaDeadlineAt = new Date(now.getTime() + Number(h3WindowSeconds) * 1000);
       await tx.handoffRecord.create({
         data: {
           entryId,
@@ -176,19 +272,43 @@ export async function completeCheckInToS7(
             roomNumber: room.roomNumber,
             guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
             mealPlan: "per reservation inclusions",
+            dietaryRequirements: (entry.guestProfile?.preferences as any)?.dietaryRequirements ?? null,
+            packageInclusions: (entry.reservation?.frozenInclusions as any) ?? {},
+            stayDuration: {
+              checkInDate: (entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? now).toISOString(),
+              checkOutDate: (entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? now).toISOString(),
+            },
+            cuisinePreferences: (entry.guestProfile?.preferences as any)?.cuisinePreferences ?? null,
           },
           createdBy: actorId,
           stageContext: Stage.S6,
+          slaDeadlineAt,
         },
       });
     }
 
     await folioService.convertToLive(tx, entryId, folio.id, actorId);
 
-    if (h1.state === HandoffState.FULFILLED) {
+    if (h1 && h1.state === HandoffState.FULFILLED) {
       await tx.handoffRecord.update({
         where: { id: h1.id },
         data: { state: HandoffState.CLOSED, closedAt: now },
+      });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "HANDOFF.H1_CLOSED",
+          actorId,
+          actorLevel: "L1",
+          entityType: "HandoffRecord",
+          entityId: h1.id,
+          operation: "TRANSITION",
+          timestamp: now,
+          stageContext: Stage.S6,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { handoffId: h1.id, entryId },
+          createdBy: actorId,
+        },
       });
     }
 
@@ -211,9 +331,11 @@ export async function completeCheckInToS7(
     }
 
     if (s6Dwell) {
+      const dwellMs = now.getTime() - s6Dwell.enteredAt.getTime();
+      const dwellSeconds = Math.max(0, Math.floor(dwellMs / 1000));
       await tx.stageDwellRecord.update({
         where: { id: s6Dwell.id },
-        data: { exitedAt: now },
+        data: { exitedAt: now, dwellSeconds },
       });
     }
     await tx.stageDwellRecord.create({
@@ -233,7 +355,91 @@ export async function completeCheckInToS7(
         updatedAt: now,
       },
     });
+
+    if (!vipTier) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "CHECK_IN.ESCORT_COMPLETE",
+          actorId,
+          actorLevel: "L1",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "ALERT",
+          timestamp: now,
+          stageContext: Stage.S6,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { entryId, roomNumber: room.roomNumber, note: "non_VIP_arrival escort" },
+          createdBy: actorId,
+        },
+      });
+    }
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: "CHECK_IN.KEYS_ISSUED",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "ALERT",
+        timestamp: now,
+        stageContext: Stage.S6,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, keyCount, afterIdentityVerified: true },
+        createdBy: actorId,
+      },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "CHECK_IN_COMPLETE",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S6,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, toStage: "S7", keyCount, afterKeysIssued: true },
+        createdBy: actorId,
+      },
+    });
   });
+
+  // Register W25 acceptance timers (best-effort) for latest H2/H3 created during this check-in.
+  const engine = await getTimerEngine();
+  const created = await prisma.handoffRecord.findMany({
+    where: { entryId, stageContext: Stage.S6, handoffType: { in: [HandoffType.H2, HandoffType.H3] } },
+    orderBy: { createdAt: "desc" },
+    take: 2,
+  });
+  for (const h of created) {
+    if (!h.slaDeadlineAt) continue;
+    const existingTimer = await prisma.timerRecord.findFirst({
+      where: { entityType: "HandoffRecord", entityId: h.id, timerCode: "H2_H3_ACCEPTANCE_W25", status: "SCHEDULED" },
+    });
+    if (existingTimer) continue;
+    const jobId = await engine.schedule("H2_H3_ACCEPTANCE_W25", { handoffId: h.id }, { startAfter: h.slaDeadlineAt });
+    await prisma.timerRecord.create({
+      data: {
+        entryId,
+        entityType: "HandoffRecord",
+        entityId: h.id,
+        timerType: "H2_H3_ACCEPTANCE_W25",
+        timerCode: "H2_H3_ACCEPTANCE_W25",
+        stageContext: Stage.S6,
+        firesAt: h.slaDeadlineAt,
+        dueAt: h.slaDeadlineAt,
+        status: "SCHEDULED",
+        payload: { handoffId: h.id, entryId },
+        pgBossJobId: jobId,
+        createdBy: "SYSTEM",
+      },
+    });
+  }
 
   return prisma.entry.findUniqueOrThrow({
     where: { id: entryId },

@@ -1,4 +1,10 @@
 import { PrismaClient, Stage } from "@prisma/client";
+import { RoomPhysicalState } from "@prisma/client";
+import { runPreArrivalWindowActivationWorker } from "../src/workers/w4-pre-arrival-window-activation-worker.js";
+import { runNoShowCutoffWorker } from "../src/workers/w5-no-show-cutoff-worker.js";
+import { runRoomReadinessSlaWorker } from "../src/workers/w23-room-readiness-sla-worker.js";
+import * as preArrivalService from "../src/services/pre-arrival-service.js";
+import { createTimerEngine } from "../src/lib/timer-engine.js";
 
 type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
@@ -456,16 +462,32 @@ async function run() {
     });
 
     // remove config key
-    await prisma.configurationEntry.delete({ where: { configKey: "handoff.H1.checklist" } });
+    await prisma.configurationEntry.deleteMany({ where: { configKey: "handoff.H1.checklist" } });
     const r = await http("POST", `/handoffs/${h.id}/accept`, L1, { checklistCompletion: { VOUCHER_VERIFIED: true, PAYMENT_STATUS_REVIEWED: true } });
     const pass = r.status === 422 && (r.json as any)?.error === "MissingConfigurationError";
     results.push({ id: "AC-S5-036", title: "Missing handoff.H1.checklist blocks accept", pass, status: r.status, body: r.json });
+
+    // restore config for subsequent cases
+    await prisma.configurationEntry.create({
+      data: {
+        configKey: "handoff.H1.checklist",
+        configValue: [
+          { code: "VOUCHER_VERIFIED", mandatory: true, description: "Confirmation voucher on file" },
+          { code: "PAYMENT_STATUS_REVIEWED", mandatory: true, description: "Advance payment status reviewed" },
+        ],
+        effectiveFrom: new Date(),
+        effectiveTo: null,
+        setBy: "test-system",
+        setAt: new Date(),
+        notes: "Restored by acceptance test",
+      },
+    });
   }
 
   // --- AC-S5-035: missing noShow.cutoffWindowMinutes blocks no-show ---
   {
     // remove config key
-    await prisma.configurationEntry.delete({ where: { configKey: "noShow.cutoffWindowMinutes" } });
+    await prisma.configurationEntry.deleteMany({ where: { configKey: "noShow.cutoffWindowMinutes" } });
 
     // create an entry where cutoff is reached, so failure is config-driven
     const ns2 = await prisma.entry.create({
@@ -494,6 +516,429 @@ async function run() {
     });
     const pass = r.status === 422 && (r.json as any)?.error === "MissingConfigurationError";
     results.push({ id: "AC-S5-035", title: "Missing noShow.cutoffWindowMinutes blocks no-show", pass, status: r.status, body: r.json });
+
+    // restore config for subsequent cases
+    await prisma.configurationEntry.create({
+      data: {
+        configKey: "noShow.cutoffWindowMinutes",
+        configValue: 120,
+        effectiveFrom: new Date(),
+        effectiveTo: null,
+        setBy: "test-system",
+        setAt: new Date(),
+        notes: "Restored by acceptance test",
+      },
+    });
+  }
+
+  // --- AC-S5-020: CREDIT_CEILING_CHECK task only when creditCeilingIfExtended exists ---
+  {
+    const tasks = await prisma.preArrivalTask.findMany({ where: { entryId } });
+    const has = tasks.some((t) => t.taskType === "CREDIT_CEILING_CHECK");
+    results.push({
+      id: "AC-S5-020",
+      title: "CREDIT_CEILING_CHECK task absent when no credit extension",
+      pass: has === false,
+      body: { taskTypes: tasks.map((t) => t.taskType) },
+    });
+  }
+
+  // --- AC-S5-021: Tier 1 (75%) ambient notice writes CreditCeilingThresholdEvent ---
+  {
+    // Create a credit-ceiling entry at exactly 75%.
+    const e = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "CORPORATE",
+        status: "ACTIVE",
+        currentStage: Stage.S5,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+      },
+    });
+    const seg = await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg.id,
+        frozenRate: 1,
+        frozenRatePlanId: "rp",
+        frozenInclusions: {},
+        frozenCancellationTerms: { sameDayPenaltyAmount: 10 },
+        frozenBillingModel: "DIRECT_BILL",
+        frozenCheckInDate: leisure.checkInDate!,
+        frozenCheckOutDate: leisure.checkOutDate!,
+        frozenGuestCount: 1,
+        creditCeilingIfExtended: 1000,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      },
+    });
+    await prisma.folio.create({
+      data: { entryId: e.id, billingModel: "DIRECT_BILL", createdBy: "test", outstandingBalance: 750, advancePaymentReconciliationComplete: true },
+    });
+    await preArrivalService.evaluateCreditCeiling(prisma, e.id, L2.id);
+    const ev = await prisma.creditCeilingThresholdEvent.findFirst({ where: { entryId: e.id }, orderBy: { createdAt: "desc" } });
+    results.push({
+      id: "AC-S5-021",
+      title: "Credit ceiling Tier1 writes CreditCeilingThresholdEvent",
+      pass: !!ev && ev.thresholdPercent === 75,
+      body: ev,
+    });
+  }
+
+  // --- AC-S5-030: OTA entries set otaNotificationRequired/open loop on no-show determination ---
+  {
+    const ota = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S5,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+        otaSource: true,
+        noShowCutoffReachedAt: new Date(),
+      },
+    });
+    const seg = await prisma.segment.create({ data: { entryId: ota.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: ota.id,
+        segmentId: seg.id,
+        frozenRate: 1,
+        frozenRatePlanId: "rp",
+        frozenInclusions: {},
+        frozenCancellationTerms: { sameDayPenaltyAmount: 9999 },
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: leisure.checkInDate!,
+        frozenCheckOutDate: leisure.checkOutDate!,
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      },
+    });
+    const folio = await prisma.folio.create({ data: { entryId: ota.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
+    await prisma.paymentRecord.create({ data: { folioId: folio.id, amount: 50, paymentDirection: "IN" } });
+    await http("POST", `/entries/${ota.id}/no-show`, L2, {
+      determinationPath: "SUB_PATH_1",
+      contactAttemptLog: [{ channel: "PHONE", attemptedAt: new Date().toISOString(), outcome: "NO_ANSWER" }],
+      decisionReason: "ota no-show",
+    });
+    const det = await prisma.noShowDeterminationRecord.findUnique({ where: { entryId: ota.id } });
+    results.push({
+      id: "AC-S5-030",
+      title: "OTA no-show registers OTA notification open loop",
+      pass: det?.otaNotificationRequired === true && det?.otaNotificationStatus === "OPEN",
+      body: det,
+    });
+  }
+
+  // --- AC-S5-008: AWAITING_WRITTEN_CONFIRMATION sub-state does not update Entry fields at entry ---
+  {
+    const e = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S5,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+        noShowCutoffReachedAt: new Date(),
+      },
+    });
+    await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1 } });
+    await prisma.folio.create({ data: { entryId: e.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
+    const before = await prisma.entry.findUniqueOrThrow({ where: { id: e.id } });
+    const r = await http("POST", `/entries/${e.id}/no-show`, L2, {
+      determinationPath: "DEFER",
+      contactAttemptLog: [{ channel: "PHONE", attemptedAt: new Date().toISOString(), outcome: "LATE_ARRIVAL_CLAIM" }],
+      decisionReason: "defer",
+      awaitingConfirmationWindowMinutes: 5,
+    });
+    const after = await prisma.entry.findUniqueOrThrow({ where: { id: e.id } });
+    const pass = r.status === 200 && after.version === before.version;
+    results.push({ id: "AC-S5-008", title: "Awaiting written confirmation does not mutate Entry at entry", pass, body: { before, after, res: r } });
+  }
+
+  // --- AC-S5-032: W4 idempotency (second fire skips; no double task seeding) ---
+  {
+    const now = new Date();
+    const entryS4 = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S4,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+      },
+    });
+    await prisma.segment.create({ data: { entryId: entryS4.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: entryS4.id,
+        segmentId: (await prisma.segment.findFirstOrThrow({ where: { entryId: entryS4.id } })).id,
+        frozenRate: 1,
+        frozenRatePlanId: "rp",
+        frozenInclusions: {},
+        frozenCancellationTerms: {},
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: now,
+        frozenCheckOutDate: now,
+        frozenGuestCount: 1,
+        confirmedAt: now,
+        confirmedBy: "test",
+      },
+    });
+    await prisma.folio.create({ data: { entryId: entryS4.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
+    await prisma.handoffRecord.create({
+      data: {
+        entryId: entryS4.id,
+        handoffType: "H1",
+        state: "CREATED",
+        fromRole: "RESERVATIONS",
+        fromActorId: "test",
+        toRole: "FRONT_DESK",
+        checklistContent: {},
+        createdBy: "test",
+        stageContext: Stage.S4,
+      },
+    });
+    const engine = createTimerEngine(process.env.DATABASE_URL!);
+    await engine.start();
+    const first = await runPreArrivalWindowActivationWorker(prisma, engine as any, { entryId: entryS4.id });
+    const taskCount1 = await prisma.preArrivalTask.count({ where: { entryId: entryS4.id } });
+    const second = await runPreArrivalWindowActivationWorker(prisma, engine as any, { entryId: entryS4.id });
+    const taskCount2 = await prisma.preArrivalTask.count({ where: { entryId: entryS4.id } });
+    await engine.stop();
+    results.push({
+      id: "AC-S5-032",
+      title: "W4 idempotency skips second fire",
+      pass: (first as any).skipped === false && (second as any).skipped === true && taskCount1 === taskCount2,
+      body: { first, second, taskCount1, taskCount2 },
+    });
+  }
+
+  // --- AC-S5-007: NO_SHOW_CUTOFF worker does not change stage (stays S5) ---
+  {
+    const e = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S5,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+      },
+    });
+    await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1 } });
+    const engine = createTimerEngine(process.env.DATABASE_URL!);
+    await engine.start();
+    await runNoShowCutoffWorker(prisma, engine as any, { entryId: e.id, timerType: "NO_SHOW_CUTOFF_W5" });
+    await engine.stop();
+    const after = await prisma.entry.findUniqueOrThrow({ where: { id: e.id } });
+    results.push({ id: "AC-S5-007", title: "No-show cutoff keeps Entry at S5", pass: after.currentStage === "S5", body: after });
+  }
+
+  // --- AC-S5-012: H1 auto-fulfilment records acceptance event ---
+  {
+    await prisma.configurationEntry.updateMany({ where: { configKey: "handoff.H1.autoFulfil.enabled" }, data: { effectiveTo: new Date() } });
+    await prisma.configurationEntry.create({
+      data: {
+        configKey: "handoff.H1.autoFulfil.enabled",
+        configValue: true,
+        effectiveFrom: new Date(),
+        effectiveTo: null,
+        setBy: "test-system",
+        setAt: new Date(),
+        notes: "Enabled for AC-S5-012",
+      },
+    });
+
+    const entryS4 = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S4,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+      },
+    });
+    await prisma.segment.create({ data: { entryId: entryS4.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: entryS4.id,
+        segmentId: (await prisma.segment.findFirstOrThrow({ where: { entryId: entryS4.id } })).id,
+        frozenRate: 1,
+        frozenRatePlanId: "rp",
+        frozenInclusions: {},
+        frozenCancellationTerms: {},
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: leisure.checkInDate!,
+        frozenCheckOutDate: leisure.checkOutDate!,
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      },
+    });
+    await prisma.folio.create({ data: { entryId: entryS4.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
+    await prisma.handoffRecord.create({
+      data: {
+        entryId: entryS4.id,
+        handoffType: "H1",
+        state: "CREATED",
+        fromRole: "RESERVATIONS",
+        fromActorId: "test",
+        toRole: "FRONT_DESK",
+        checklistContent: {},
+        createdBy: "test",
+        stageContext: Stage.S4,
+      },
+    });
+    const engine = createTimerEngine(process.env.DATABASE_URL!);
+    await engine.start();
+    await runPreArrivalWindowActivationWorker(prisma, engine as any, { entryId: entryS4.id });
+    await engine.stop();
+
+    const h1After = await prisma.handoffRecord.findFirstOrThrow({ where: { entryId: entryS4.id, handoffType: "H1" }, orderBy: { createdAt: "desc" } });
+    const pass = h1After.isAutoFulfilled === true && !!h1After.acceptedAt;
+    results.push({ id: "AC-S5-012", title: "H1 auto-fulfilment records acceptance event", pass, body: h1After });
+
+    // restore config to false
+    await prisma.configurationEntry.updateMany({ where: { configKey: "handoff.H1.autoFulfil.enabled", effectiveTo: null }, data: { effectiveTo: new Date() } });
+    await prisma.configurationEntry.create({
+      data: {
+        configKey: "handoff.H1.autoFulfil.enabled",
+        configValue: false,
+        effectiveFrom: new Date(),
+        effectiveTo: null,
+        setBy: "test-system",
+        setAt: new Date(),
+        notes: "Restored by acceptance test",
+      },
+    });
+  }
+
+  // --- AC-S5-033: W5 idempotency skips when determination exists ---
+  {
+    const e = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S5,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+      },
+    });
+    await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1 } });
+    await prisma.noShowDeterminationRecord.create({
+      data: {
+        entryId: e.id,
+        determinationPath: "SUB_PATH_1",
+        fomActorId: "test-fom-1",
+        contactAttemptLog: [],
+        decisionReason: "test",
+        createdBy: "test-fom-1",
+      },
+    });
+    const engine = createTimerEngine(process.env.DATABASE_URL!);
+    await engine.start();
+    const out = await runNoShowCutoffWorker(prisma, engine as any, { entryId: e.id, timerType: "NO_SHOW_CUTOFF_W5" });
+    await engine.stop();
+    results.push({ id: "AC-S5-033", title: "W5 skips when determination already exists", pass: (out as any).skipped === true, body: out });
+  }
+
+  // --- AC-S5-034: W23 breach surfaces suggestions and does not create a new RoomAssignment ---
+  {
+    const dirtyRoom = await prisma.room.create({
+      data: {
+        roomNumber: `DIRTY-${Date.now()}`,
+        roomTypeId: roomClean.roomTypeId,
+        floorNumber: 5,
+        capacity: 2,
+        currentClaimState: "CONFIRMED",
+        physicalState: RoomPhysicalState.DIRTY,
+      },
+    });
+
+    const e = await prisma.entry.create({
+      data: {
+        inquiryId: leisure.inquiryId,
+        guestProfileId: leisure.guestProfileId,
+        useType: "LEISURE",
+        status: "ACTIVE",
+        currentStage: Stage.S5,
+        checkInDate: leisure.checkInDate,
+        checkOutDate: leisure.checkOutDate,
+        guestCount: 1,
+        createdBy: "test-system",
+      },
+    });
+    const seg = await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg.id,
+        frozenRate: 1,
+        frozenRatePlanId: "rp",
+        frozenInclusions: {},
+        frozenCancellationTerms: {},
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: leisure.checkInDate!,
+        frozenCheckOutDate: leisure.checkOutDate!,
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      },
+    });
+    await prisma.folio.create({ data: { entryId: e.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
+    await prisma.committedHold.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg.id,
+        roomTypeId: roomClean.roomTypeId,
+        state: "CONFIRMED",
+        placedBy: "test-system",
+        expiresAt: new Date(Date.now() + 3600_000),
+      },
+    });
+    await prisma.roomAssignment.create({ data: { entryId: e.id, roomId: dirtyRoom.id, assignedBy: "test-system" } });
+    const before = await prisma.roomAssignment.count({ where: { entryId: e.id } });
+
+    const engine = createTimerEngine(process.env.DATABASE_URL!);
+    await engine.start();
+    await runRoomReadinessSlaWorker(prisma, engine as any, { entryId: e.id, roomId: dirtyRoom.id, phase: "BREACH" });
+    await engine.stop();
+
+    const after = await prisma.roomAssignment.count({ where: { entryId: e.id } });
+    const trace = await prisma.traceEvent.findFirst({ where: { entryId: e.id, eventType: "ROOM_READINESS_SLA.BREACHED" }, orderBy: { timestamp: "desc" } });
+    const suggestions = (trace?.payload as any)?.suggestions as unknown[] | undefined;
+    const pass = before === after && Array.isArray(suggestions) && suggestions.length > 0;
+    results.push({ id: "AC-S5-034", title: "W23 breach surfaces suggestions without assignment", pass, body: { before, after, trace } });
   }
 
   return { startedAt, baseUrl, results };

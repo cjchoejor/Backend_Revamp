@@ -24,6 +24,7 @@ export async function initiateSettlement(
     paymentVerificationRef?: string;
     partialAmount?: number;
     fomAcknowledgementRef?: string;
+    voucherAmount?: number;
   },
 ) {
   if (!input.settlementMethod?.trim()) throw new ValidationError("settlementMethod is required");
@@ -56,7 +57,17 @@ export async function initiateSettlement(
   const partial = input.partialAmount == null ? undefined : Number(input.partialAmount);
   if (partial != null && (!Number.isFinite(partial) || partial <= 0)) throw new ValidationError("partialAmount must be a positive number");
 
-  const settleAmount = partial != null ? Math.min(partial, outstanding) : outstanding;
+  const voucherAmount = input.voucherAmount == null ? undefined : Number(input.voucherAmount);
+  if (method === "VOUCHER" && (voucherAmount == null || !Number.isFinite(voucherAmount) || voucherAmount < 0)) {
+    throw new ValidationError("voucherAmount is required for VOUCHER and must be non-negative");
+  }
+
+  const settleAmount =
+    method === "VOUCHER"
+      ? Math.min(voucherAmount ?? 0, outstanding)
+      : partial != null
+        ? Math.min(partial, outstanding)
+        : outstanding;
   const remaining = Math.max(0, outstanding - settleAmount);
 
   const nextState = remaining === 0 ? FolioState.SETTLED : FolioState.OUTSTANDING;
@@ -94,13 +105,49 @@ export async function initiateSettlement(
       });
     }
 
+    // Voucher path: settle up to voucher coverage; if remainder exists, create agent billing invoice for difference.
+    if (method === "VOUCHER") {
+      await tx.paymentRecord.create({
+        data: {
+          folioId,
+          amount: settleAmount,
+          paymentDirection: PaymentDirection.IN,
+          notes: `VOUCHER:${settleAmount}`,
+        },
+      });
+      if (remaining > 0) {
+        await tx.invoice.create({
+          data: {
+            folioId,
+            entryId: folio.entryId,
+            invoiceType: InvoiceType.FINAL,
+            state: InvoiceState.DISPATCHED,
+            templateKey: "agent-billing-v1",
+            issuedAt: new Date(),
+            issuedBy: actorId,
+            dispatchedAt: new Date(),
+            dispatchedBy: actorId,
+            metadata: { settlementMethod: method, voucherCovered: settleAmount, remaining, billingModel: billing },
+          },
+        });
+      }
+    }
+
     const updated = await tx.folio.update({
       where: { id: folioId },
       data: {
-        state: billing === "DIRECT_BILL" || method === "DIRECT_BILL" ? FolioState.OUTSTANDING : nextState,
+        state:
+          billing === "DIRECT_BILL" || method === "DIRECT_BILL"
+            ? FolioState.OUTSTANDING
+            : method === "VOUCHER"
+              ? remaining === 0
+                ? FolioState.SETTLED
+                : FolioState.OUTSTANDING
+              : nextState,
         closedAt: new Date(),
         closedBy: actorId,
-        // keep outstandingBalance as-is (snapshot); settlement state expresses governance
+        // Align outstandingBalance with settlement outcome so SETTLED invariants hold.
+        outstandingBalance: billing === "DIRECT_BILL" || method === "DIRECT_BILL" ? folio.outstandingBalance : (remaining as any),
       },
     });
 

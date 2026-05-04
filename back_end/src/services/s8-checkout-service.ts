@@ -1,6 +1,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, HandoffType, InventoryClaimState, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, StageGateBlockedError, StateTransitionError, ValidationError } from "../lib/errors.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+import * as disputeGateEngine from "../engines/dispute-gate-engine.js";
+import { getTimerEngine } from "./timer-management-service.js";
+import { randomUUID } from "node:crypto";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -67,8 +71,12 @@ export async function recordInspection(
   const { entry, room } = await getEntryWithRoom(prisma, entryId);
   if (entry.currentStage !== Stage.S8) throw new StateTransitionError("Room inspection is only valid at S8", "NOT_AT_S8");
 
-  // If there is any active UNRESOLVED deficient record for the room, NOT_APPLICABLE is forbidden.
-  const deficient = await prisma.deficientConditionRecord.findFirst({ where: { roomId: room.id, status: "UNRESOLVED" } });
+  // If there is any active deficient record for the room, NOT_APPLICABLE is forbidden.
+  // AC-S7-14: UNRESOLVED at S7 exit becomes DEFICIENT_UNRESOLVED_AT_CHECKOUT at S8 entry.
+  const deficient = await prisma.deficientConditionRecord.findFirst({
+    where: { roomId: room.id, status: { in: ["UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"] } as any },
+    orderBy: { detectedAt: "desc" },
+  });
   if (deficient && input.deficientFlagStatus === "NOT_APPLICABLE") {
     throw new PolicyGateBlockedError("DEFICIENT_REQUIRES_FLAG_STATUS", "Active DEFICIENT flag exists — inspection must carry final deficient status");
   }
@@ -93,13 +101,27 @@ export async function recordInspection(
   });
 
   if (input.isDeferred) {
-    const cfg = await prisma.configurationEntry.findUnique({ where: { configKey: "inspection.postCheckout.windowDays" } });
-    if (!cfg) throw new MissingConfigurationError("inspection.postCheckout.windowDays");
-    const windowDays = Number(cfg.value);
+    const windowDays = Number(await requireActiveConfigValue<number>(prisma, "inspection.postCheckout.windowDays"));
     if (!Number.isFinite(windowDays) || windowDays < 1) throw new MissingConfigurationError("inspection.postCheckout.windowDays");
     const dueAt = new Date(Date.now() + windowDays * 86400_000);
+    const timerRecordId = randomUUID();
+    const engine = await getTimerEngine();
+    const pgBossJobId = await engine.schedule("POST_CHECKOUT_INSPECTION_W9", { entryId, timerRecordId }, { startAfter: dueAt });
     await prisma.timerRecord.create({
-      data: { entryId, timerCode: "POST_CHECKOUT_INSPECTION_W9", dueAt, status: "SCHEDULED", createdBy: actorId, payload: { roomId: room.id } },
+      data: {
+        id: timerRecordId,
+        entryId,
+        entityType: "Entry",
+        entityId: entryId,
+        timerType: "POST_CHECKOUT_INSPECTION_W9",
+        timerCode: "POST_CHECKOUT_INSPECTION_W9",
+        dueAt,
+        firesAt: dueAt,
+        status: "SCHEDULED",
+        pgBossJobId,
+        createdBy: actorId,
+        payload: { roomId: room.id },
+      },
     });
   }
 
@@ -114,9 +136,7 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
     throw new StateTransitionError("Room must be OCCUPIED to check out", "INVALID_ROOM_STATE_TRANSITION");
   }
 
-  const hkCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "housekeeping.sla.windowMinutes" } });
-  if (!hkCfg) throw new MissingConfigurationError("housekeeping.sla.windowMinutes");
-  const windowMinutes = Number(hkCfg.value);
+  const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as any, "housekeeping.sla.windowMinutes"));
   if (!Number.isFinite(windowMinutes) || windowMinutes < 1) throw new MissingConfigurationError("housekeeping.sla.windowMinutes");
 
   const now = new Date();
@@ -126,16 +146,35 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   await prisma.roomClaimStateEvent.create({
     data: { roomId: room.id, entryId, fromState: InventoryClaimState.OCCUPIED, toState: InventoryClaimState.DEPARTED_DIRTY, actorId, reason: "S8 checkout completion" },
   });
+  const timerRecordId = randomUUID();
+  const engine = await getTimerEngine();
+  const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId, roomId: room.id, timerRecordId }, { startAfter: dueAt });
   await prisma.timerRecord.create({
-    data: { entryId, timerCode: "HOUSEKEEPING_SLA_W24", dueAt, status: "SCHEDULED", createdBy: actorId, payload: { roomId: room.id } },
+    data: {
+      id: timerRecordId,
+      entryId,
+      entityType: "Room",
+      entityId: room.id,
+      timerType: "HOUSEKEEPING_SLA_W24",
+      timerCode: "HOUSEKEEPING_SLA_W24",
+      dueAt,
+      firesAt: dueAt,
+      status: "SCHEDULED",
+      pgBossJobId,
+      createdBy: actorId,
+      payload: { roomId: room.id, entryId, timerRecordId },
+    },
   });
   return prisma.room.findUniqueOrThrow({ where: { id: room.id } });
 }
 
 export async function ensureDisputeGateClearForS9(prisma: PrismaClient, entryId: string) {
-  const open = await prisma.disputeRecord.findMany({ where: { entryId, status: { in: ["OPEN", "IN_PROGRESS", "REOPENED"] } }, orderBy: { openedAt: "desc" } });
-  if (open.length > 0) {
-    throw new StageGateBlockedError("Dispute gate blocks S8→S9 — disputes must be RESOLVED or CLOSED (no override at this transition)", "DISPUTE_GATE_BLOCKED");
+  const gate = await disputeGateEngine.canProgressStage(prisma, entryId, Stage.S9);
+  if (gate.result !== "CLEAR") {
+    throw new StageGateBlockedError(
+      "Dispute gate blocks S8→S9 — disputes must be RESOLVED or CLOSED (no override at this transition)",
+      "DISPUTE_GATE_BLOCKED",
+    );
   }
 }
 
@@ -173,7 +212,8 @@ export async function buildOrAutoFulfilH5(prisma: PrismaClient, entryId: string,
   }
 
   // SETTLED with no residual obligations → auto fulfil
-  return prisma.handoffRecord.create({
+  const now = new Date();
+  const created = await prisma.handoffRecord.create({
     data: {
       entryId,
       handoffType: HandoffType.H5,
@@ -185,10 +225,27 @@ export async function buildOrAutoFulfilH5(prisma: PrismaClient, entryId: string,
       createdBy: "system",
       stageContext: Stage.S8,
       isAutoFulfilled: true,
-      fulfilledAt: new Date(),
+      fulfilledAt: now,
       fulfilledBy: "system",
     },
   });
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "HANDOFF.AUTO_FULFILLED",
+      actorId: "SYSTEM",
+      actorLevel: "SYSTEM",
+      entityType: "HandoffRecord",
+      entityId: created.id,
+      operation: "TRANSITION",
+      timestamp: now,
+      stageContext: Stage.S8,
+      inquiryId: entry.inquiryId,
+      entryId,
+      payload: { handoffId: created.id, entryId, handoffType: "H5" },
+      createdBy: "SYSTEM",
+    },
+  });
+  return created;
 }
 
 export async function progressStageS8ToS9(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {

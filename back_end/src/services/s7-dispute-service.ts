@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../lib/errors.js";
+import { getTimerEngine } from "./timer-management-service.js";
 
 export async function openDispute(
   prisma: PrismaClient,
@@ -50,9 +51,17 @@ export async function createGateOverride(
   if (input.targetStage === Stage.S9) {
     throw new PolicyGateBlockedError("DISPUTE_OVERRIDE_NOT_AVAILABLE", "Dispute gate override is not available for S8→S9");
   }
-  return prisma.disputeGateOverrideRecord.create({
+  const created = await prisma.disputeGateOverrideRecord.create({
     data: { disputeId, targetStage: input.targetStage, freeTextReason: input.freeTextReason, createdBy: actorId },
   });
+  // Cross-stage escalation monitor (docs: W32; code: existing worker implementation).
+  try {
+    const engine = await getTimerEngine();
+    await engine.schedule("FOM_OVERRIDE_FREQUENCY_W32", { now: new Date() }, { startAfter: new Date() });
+  } catch {
+    // Best-effort.
+  }
+  return created;
 }
 
 export async function canProgressToS8(prisma: PrismaClient, entryId: string): Promise<"CLEAR" | "BLOCKED_WITH_OVERRIDE_AVAILABLE" | "BLOCKED"> {

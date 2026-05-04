@@ -1,10 +1,9 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../src/db.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
-const prisma = new PrismaClient();
 const baseUrl = process.env.API_BASE_URL ?? "http://localhost:4000/api";
 
 type Actor = { id: string; level: "L1" | "L2" | "L3" };
@@ -222,6 +221,405 @@ async function main() {
     });
   }
 
+  // AC-S7-06/07: PARTIAL audit escalates; COMPLETE triggers next-day timer recalculation
+  {
+    const operatingDate = "2026-04-23T00:00:00.000Z";
+    // Create a broken entry that cannot be processed (no folio) but is in S7
+    const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const gp = await prisma.guestProfile.create({ data: { firstName: "Partial", lastName: "Audit", createdBy: "test" } });
+    const broken = await prisma.entry.create({
+      data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S7", status: "ACTIVE", createdBy: "test", version: 1 },
+    });
+
+    const r1 = await http("POST", "/night-audit/run", L2, { operatingDate });
+    const recId = (r1.json as any)?.id;
+    const escalated = recId
+      ? await prisma.traceEvent.findFirst({ where: { eventType: "NIGHT_AUDIT.PARTIAL_FOM_ESCALATED", entityId: recId }, orderBy: { createdAt: "desc" } })
+      : null;
+    results.push({
+      id: "AC-S7-06",
+      title: "PARTIAL night audit escalates to FOM",
+      pass: r1.status === 200 && (r1.json as any)?.runStatus === "PARTIAL" && !!escalated,
+      status: r1.status,
+      body: { record: r1.json, escalated },
+    });
+
+    // Remove the broken entry from S7 so subsequent audits can be COMPLETE.
+    await prisma.entry.update({ where: { id: broken.id }, data: { status: "CLOSED", currentStage: "TERMINAL" } as any });
+
+    const operatingDate2 = "2026-04-24T00:00:00.000Z";
+    const r2 = await http("POST", "/night-audit/run", L2, { operatingDate: operatingDate2 });
+    const called = await prisma.traceEvent.findFirst({
+      where: { eventType: "TIMER_MANAGEMENT.RECALCULATE_NEXT_DAY_TIMERS_CALLED" },
+      orderBy: { createdAt: "desc" },
+    });
+    results.push({
+      id: "AC-S7-07",
+      title: "After COMPLETE night audit, next-day timers are recalculated",
+      pass: r2.status === 200 && (r2.json as any)?.runStatus === "COMPLETE" && !!called,
+      status: r2.status,
+      body: { record: r2.json, called },
+    });
+  }
+
+  // AC-S7-15/16: H4 missing blocks, same-day departure auto-fulfils
+  {
+    // create S7 entry with no H4 and non-same-day checkout -> should block
+    const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const gp = await prisma.guestProfile.create({ data: { firstName: "No", lastName: "H4", createdBy: "test" } });
+    const e = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S7", status: "ACTIVE", createdBy: "test", version: 1 } as any });
+    await prisma.folio.create({ data: { entryId: e.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } as any });
+    const folioService = await import("../src/services/folio-service.js");
+    const f = await prisma.folio.findFirstOrThrow({ where: { entryId: e.id }, orderBy: { createdAt: "desc" } });
+    await prisma.$transaction(async (tx) => {
+      await folioService.convertToLive(tx as any, e.id, f.id, L1.id);
+    });
+    // use existing seeded reservation shape by creating a segment then reservation
+    const seg = await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1, stage: "S7", createdBy: "test" } as any });
+    await prisma.reservation.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg.id,
+        frozenRate: 100 as any,
+        frozenRatePlanId: "rp-seeded" as any,
+        frozenInclusions: {} as any,
+        frozenCancellationTerms: {} as any,
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: new Date("2026-04-20T09:00:00.000Z"),
+        frozenCheckOutDate: new Date("2026-04-26T09:00:00.000Z"),
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      } as any,
+    });
+    const room = await prisma.room.findFirstOrThrow({ where: { roomNumber: "501" } });
+    await prisma.roomAssignment.create({ data: { entryId: e.id, roomId: room.id, assignedBy: "test" } as any });
+
+    const r1 = await http("POST", `/entries/${e.id}/progress-stage`, L1, { targetStage: "S8", version: 1 });
+    results.push({
+      id: "AC-S7-15",
+      title: "S7→S8 blocked when H4 not initiated",
+      pass: r1.status === 409 && (r1.json as any)?.blockingCondition === "H4_NOT_INITIATED",
+      status: r1.status,
+      body: r1.json,
+    });
+
+    // same-day departure entry should auto-fulfil H4 at exit
+    const gp2 = await prisma.guestProfile.create({ data: { firstName: "Same", lastName: "Day", createdBy: "test" } });
+    const e2 = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp2.id, currentStage: "S7", status: "ACTIVE", createdBy: "test", version: 1 } as any });
+    await prisma.folio.create({ data: { entryId: e2.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } as any });
+    const folioService2 = await import("../src/services/folio-service.js");
+    const f2 = await prisma.folio.findFirstOrThrow({ where: { entryId: e2.id }, orderBy: { createdAt: "desc" } });
+    await prisma.$transaction(async (tx) => {
+      await folioService2.convertToLive(tx as any, e2.id, f2.id, L1.id);
+    });
+    const today = new Date();
+    const checkout = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 9, 0, 0, 0));
+    const seg2 = await prisma.segment.create({ data: { entryId: e2.id, segmentNumber: 1, stage: "S7", createdBy: "test" } as any });
+    await prisma.reservation.create({
+      data: {
+        entryId: e2.id,
+        segmentId: seg2.id,
+        frozenRate: 100 as any,
+        frozenRatePlanId: "rp-seeded" as any,
+        frozenInclusions: {} as any,
+        frozenCancellationTerms: {} as any,
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 2, 9, 0, 0, 0)),
+        frozenCheckOutDate: checkout,
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      } as any,
+    });
+    await prisma.roomAssignment.create({ data: { entryId: e2.id, roomId: room.id, assignedBy: "test" } as any });
+    // ensure last-night audit exists
+    const lastNight = new Date(Date.UTC(checkout.getUTCFullYear(), checkout.getUTCMonth(), checkout.getUTCDate() - 1, 0, 0, 0, 0));
+    await http("POST", "/night-audit/run", L2, { operatingDate: lastNight.toISOString() });
+    const r2 = await http("POST", `/entries/${e2.id}/progress-stage`, L1, { targetStage: "S8", version: 1 });
+    const h4auto = await prisma.handoffRecord.findFirst({ where: { entryId: e2.id, handoffType: "H4" }, orderBy: { createdAt: "desc" } });
+    const te = h4auto ? await prisma.traceEvent.findFirst({ where: { entityId: h4auto.id, eventType: "HANDOFF.H4_AUTO_FULFILLED" } }) : null;
+    results.push({
+      id: "AC-S7-16",
+      title: "Same-day departure auto-fulfils H4",
+      pass: r2.status === 200 && !!h4auto?.isAutoFulfilled && !!te,
+      status: r2.status,
+      body: { response: r2.json, h4auto, trace: te },
+    });
+  }
+
+  // AC-S7-08/09/10/11: credit ceiling thresholds and gates
+  {
+    const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const room = await prisma.room.findFirstOrThrow({ where: { roomNumber: "501" } });
+    const gp = await prisma.guestProfile.create({ data: { firstName: "Ceil", lastName: "Guest", createdBy: "test" } });
+    const e = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S7", status: "ACTIVE", createdBy: "test", version: 1 } as any });
+    await prisma.roomAssignment.create({ data: { entryId: e.id, roomId: room.id, assignedBy: "test" } as any });
+    const seg = await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1, stage: "S7", createdBy: "test" } as any });
+    await prisma.reservation.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg.id,
+        frozenRate: 100 as any,
+        frozenRatePlanId: "rp-seeded" as any,
+        frozenInclusions: {} as any,
+        frozenCancellationTerms: {} as any,
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: new Date("2026-04-20T09:00:00.000Z"),
+        frozenCheckOutDate: new Date("2026-04-22T09:00:00.000Z"),
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+        creditCeilingIfExtended: 100 as any,
+      } as any,
+    });
+    await prisma.folio.create({ data: { entryId: e.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true, outstandingBalance: 0 as any } as any });
+    const folioService = await import("../src/services/folio-service.js");
+    const folio = await prisma.folio.findFirstOrThrow({ where: { entryId: e.id } });
+    await prisma.$transaction(async (tx) => folioService.convertToLive(tx as any, e.id, folio.id, L1.id));
+
+    // 75% advisory: post a charge 80 -> should succeed and create threshold event(s) and advisory trace
+    const r1 = await http("POST", `/folios/${folio.id}/charges`, L1, {
+      entryId: e.id,
+      lineType: "OTHER",
+      description: "Advisory charge",
+      amount: 80,
+      currency: "BTN",
+      chargeDate: "2026-04-25T12:00:00.000Z",
+    });
+    const ev75 = await prisma.creditCeilingThresholdEvent.findFirst({ where: { entryId: e.id, thresholdPercent: 75 } });
+    const te75 = await prisma.traceEvent.findFirst({ where: { entryId: e.id, eventType: "CREDIT_CEILING.THRESHOLD_75_ADVISORY" } });
+    results.push({ id: "AC-S7-08", title: "75% advisory writes threshold event and notice trace", pass: r1.status === 200 && !!ev75 && !!te75, status: r1.status, body: { r1: r1.json, ev75, te75 } });
+
+    // 90% active interruption: try to post small charge 15 -> should block at 90% without ack
+    const r2 = await http("POST", `/folios/${folio.id}/charges`, L1, {
+      entryId: e.id,
+      lineType: "OTHER",
+      description: "90% gate",
+      amount: 15,
+      currency: "BTN",
+      chargeDate: "2026-04-25T12:10:00.000Z",
+    });
+    results.push({
+      id: "AC-S7-09",
+      title: "90% threshold blocks until FOM acknowledges",
+      pass: r2.status === 409 && (r2.json as any)?.blockingCondition === "CREDIT_CEILING_ACTIVE_INTERRUPTION",
+      status: r2.status,
+      body: r2.json,
+    });
+
+    // FOM (L2) bypass implies acknowledgement latch is recorded
+    const r3 = await http("POST", `/folios/${folio.id}/charges`, L2, {
+      entryId: e.id,
+      lineType: "OTHER",
+      description: "90% ack by FOM",
+      amount: 15,
+      currency: "BTN",
+      chargeDate: "2026-04-25T12:11:00.000Z",
+    });
+    const ack90 = await prisma.traceEvent.findFirst({ where: { entryId: e.id, eventType: "CREDIT_CEILING.THRESHOLD_90_ACKNOWLEDGED" } });
+    results.push({ id: "AC-S7-09-ack", title: "FOM acknowledgement recorded at 90%", pass: r3.status === 200 && !!ack90, status: r3.status, body: { r3: r3.json, ack90 } });
+
+    // 100% soft gate: bring outstanding to >= 100 then try non-mandatory without bypass -> blocked
+    const r4 = await http("POST", `/folios/${folio.id}/charges`, L2, {
+      entryId: e.id,
+      lineType: "OTHER",
+      description: "to 100",
+      amount: 10,
+      currency: "BTN",
+      chargeDate: "2026-04-25T12:12:00.000Z",
+    });
+    const r5 = await http("POST", `/folios/${folio.id}/charges`, L1, {
+      entryId: e.id,
+      lineType: "OTHER",
+      description: "100 gate",
+      amount: 1,
+      currency: "BTN",
+      chargeDate: "2026-04-25T12:13:00.000Z",
+    });
+    results.push({
+      id: "AC-S7-10",
+      title: "100% soft gate blocks non-mandatory charges without acknowledgement",
+      pass: r4.status === 200 && r5.status === 409 && (r5.json as any)?.blockingCondition === "CREDIT_CEILING_SOFT_GATE",
+      status: r5.status,
+      body: { r4: r4.json, r5: r5.json },
+    });
+
+    // mandatory ROOM_CHARGE bypass at 100% (simulate by posting ROOM_CHARGE)
+    const r6 = await http("POST", `/folios/${folio.id}/charges`, L1, {
+      entryId: e.id,
+      lineType: "ROOM_CHARGE",
+      description: "Mandatory room charge",
+      amount: 1,
+      currency: "BTN",
+      chargeDate: "2026-04-25T12:14:00.000Z",
+    });
+    results.push({ id: "AC-S7-11", title: "Mandatory ROOM_CHARGE posts even at ceiling 100%", pass: r6.status === 200, status: r6.status, body: r6.json });
+  }
+
+  // AC-S7-14: UNRESOLVED deficient at S7 exit is carried to S8 as DEFICIENT_UNRESOLVED_AT_CHECKOUT
+  {
+    const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const room = await prisma.room.create({
+      data: {
+        roomNumber: `S7-DEF-${Date.now()}`,
+        roomTypeId: roomType.id,
+        floorNumber: 7,
+        capacity: 2,
+        currentClaimState: "OCCUPIED",
+        physicalState: "AVAILABLE_CLEAN",
+        isDeficient: true,
+        deficientConditionCategory: "HOUSEKEEPING",
+        deficientSince: new Date(),
+        deficientDeadline: new Date(Date.now() + 48 * 3600 * 1000),
+      } as any,
+    });
+    const def = await prisma.deficientConditionRecord.create({
+      data: {
+        roomId: room.id,
+        category: "HOUSEKEEPING",
+        description: "Carry to S8 test",
+        detectedAt: new Date(),
+        detectedBy: "test",
+        resolutionDeadline: new Date(Date.now() + 48 * 3600 * 1000),
+        status: "UNRESOLVED",
+      } as any,
+    });
+
+    const gp = await prisma.guestProfile.create({ data: { firstName: "Def", lastName: "Carry", createdBy: "test" } });
+    const e = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S7", status: "ACTIVE", createdBy: "test", version: 1 } as any });
+    await prisma.roomAssignment.create({ data: { entryId: e.id, roomId: room.id, assignedBy: "test" } as any });
+    const seg = await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1, stage: "S7", createdBy: "test" } as any });
+    await prisma.reservation.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg.id,
+        frozenRate: 100 as any,
+        frozenRatePlanId: "rp-seeded" as any,
+        frozenInclusions: {} as any,
+        frozenCancellationTerms: {} as any,
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: new Date("2026-04-20T09:00:00.000Z"),
+        frozenCheckOutDate: new Date("2026-04-22T09:00:00.000Z"),
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      } as any,
+    });
+    await prisma.folio.create({ data: { entryId: e.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } as any });
+    const folioService = await import("../src/services/folio-service.js");
+    const folio = await prisma.folio.findFirstOrThrow({ where: { entryId: e.id } });
+    await prisma.$transaction(async (tx) => folioService.convertToLive(tx as any, e.id, folio.id, L1.id));
+    // ensure H4 exists
+    await http("POST", `/entries/${e.id}/handoffs/h4`, L1, {});
+    // ensure last-night audit COMPLETE
+    const checkout = new Date("2026-04-22T09:00:00.000Z");
+    const lastNight = new Date(Date.UTC(checkout.getUTCFullYear(), checkout.getUTCMonth(), checkout.getUTCDate() - 1, 0, 0, 0, 0));
+    await http("POST", "/night-audit/run", L2, { operatingDate: lastNight.toISOString() });
+
+    const r = await http("POST", `/entries/${e.id}/progress-stage`, L1, { targetStage: "S8", version: 1 });
+    const defAfter = await prisma.deficientConditionRecord.findUniqueOrThrow({ where: { id: def.id } });
+    results.push({
+      id: "AC-S7-14",
+      title: "UNRESOLVED deficient is carried as DEFICIENT_UNRESOLVED_AT_CHECKOUT at S8",
+      pass: r.status === 200 && defAfter.status === "DEFICIENT_UNRESOLVED_AT_CHECKOUT",
+      status: r.status,
+      body: { response: r.json, defAfter },
+    });
+  }
+
+  // AC-S7-20/21/22/23/24: governed room change re-entry (S7→S1) with segment sealing + inventory transitions; forbid direct edits
+  {
+    const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+    const oldRoom = await prisma.room.create({
+      data: {
+        roomNumber: `S7-RC-OLD-${Date.now()}`,
+        roomTypeId: roomType.id,
+        floorNumber: 7,
+        capacity: 2,
+        currentClaimState: "OCCUPIED",
+        physicalState: "AVAILABLE_CLEAN",
+      } as any,
+    });
+    const newRoom = await prisma.room.create({
+      data: {
+        roomNumber: `S7-RC-NEW-${Date.now()}`,
+        roomTypeId: roomType.id,
+        floorNumber: 7,
+        capacity: 2,
+        currentClaimState: "CONFIRMED",
+        physicalState: "AVAILABLE_CLEAN",
+      } as any,
+    });
+    const gp = await prisma.guestProfile.create({ data: { firstName: "Room", lastName: "Change", createdBy: "test" } });
+    const e = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S7", status: "ACTIVE", createdBy: "test", version: 1, segmentNumber: 1 } as any });
+    await prisma.roomAssignment.create({ data: { entryId: e.id, roomId: oldRoom.id, assignedBy: "test" } as any });
+    const seg1 = await prisma.segment.create({ data: { entryId: e.id, segmentNumber: 1, stage: "S7", createdBy: "test" } as any });
+    await prisma.reservation.create({
+      data: {
+        entryId: e.id,
+        segmentId: seg1.id,
+        frozenRate: 100 as any,
+        frozenRatePlanId: "rp-seeded" as any,
+        frozenInclusions: {} as any,
+        frozenCancellationTerms: {} as any,
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: new Date("2026-04-20T09:00:00.000Z"),
+        frozenCheckOutDate: new Date("2026-04-22T09:00:00.000Z"),
+        frozenGuestCount: 1,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+      } as any,
+    });
+
+    // AC-S7-21: direct edit forbidden
+    let directEditAllowed = true;
+    try {
+      await prisma.roomAssignment.update({ where: { id: (await prisma.roomAssignment.findFirstOrThrow({ where: { entryId: e.id } })).id }, data: { roomId: newRoom.id } as any });
+      directEditAllowed = true;
+    } catch {
+      directEditAllowed = false;
+    }
+    results.push({ id: "AC-S7-21", title: "Direct room assignment edit is rejected", pass: directEditAllowed === false, body: { directEditAllowed } });
+
+    const r = await http("POST", `/entries/${e.id}/s7-room-change/re-enter-s1`, L2, { newRoomId: newRoom.id, reason: "Guest requested move" });
+    const seg2 = await prisma.segment.findFirst({ where: { entryId: e.id, segmentNumber: 2 }, orderBy: { startedAt: "desc" } });
+    const seg1After = await prisma.segment.findUniqueOrThrow({ where: { id: seg1.id } });
+    const oldRoomAfter = await prisma.room.findUniqueOrThrow({ where: { id: oldRoom.id } });
+    const newRoomAfter = await prisma.room.findUniqueOrThrow({ where: { id: newRoom.id } });
+    const evOld = await prisma.roomClaimStateEvent.findFirst({ where: { roomId: oldRoom.id, toState: "DEPARTED_DIRTY" }, orderBy: { effectiveFrom: "desc" } });
+    const evNew = await prisma.roomClaimStateEvent.findFirst({ where: { roomId: newRoom.id, toState: "OCCUPIED" }, orderBy: { effectiveFrom: "desc" } });
+    const cons = await prisma.traceEvent.findFirst({ where: { entryId: e.id, eventType: "REENTRY.CONSEQUENCES_COMPUTED" }, orderBy: { createdAt: "desc" } });
+
+    results.push({
+      id: "AC-S7-20/22/23",
+      title: "Room change creates new segment, seals old, applies inventory transitions atomically",
+      pass:
+        r.status === 200 &&
+        !!seg2 &&
+        !!seg1After.sealedAt &&
+        oldRoomAfter.currentClaimState === "DEPARTED_DIRTY" &&
+        newRoomAfter.currentClaimState === "OCCUPIED" &&
+        !!evOld &&
+        !!evNew &&
+        !!cons,
+      status: r.status,
+      body: { response: r.json, seg1After, seg2, oldRoomAfter, newRoomAfter, evOld, evNew, cons },
+    });
+
+    // AC-S7-24: OCCUPIED → DEPARTED_CLEAN direct transition is rejected
+    let illegal = true;
+    try {
+      await prisma.room.update({ where: { id: newRoom.id }, data: { currentClaimState: "DEPARTED_CLEAN" } as any });
+      illegal = true;
+    } catch {
+      illegal = false;
+    }
+    results.push({ id: "AC-S7-24", title: "OCCUPIED→DEPARTED_CLEAN direct transition rejected", pass: illegal === false, body: { illegal } });
+  }
+
   // AC-S7-17/19/25 (dispute gate blocks S7→S8 until GM override; version required)
   {
     const r1 = await http("POST", "/disputes/open", L1, {
@@ -247,11 +645,11 @@ async function main() {
     results.push({
       id: "AC-S7-25",
       title: "S7→S8 requires version (optimistic lock guard)",
-      pass: r2.status === 409 && (r2.json as { error?: string })?.error === "OptimisticLockError",
+      pass: r2.status === 400 && (r2.json as { error?: string })?.error === "ValidationError",
       status: r2.status,
       body: r2.json,
       explanation:
-        "Calls **POST /entries/:id/progress-stage** with `targetStage: S8` but **omits** `version`. Per SIG AC-S7-25 / optimistic locking, the handler rejects the request immediately with **OptimisticLockError** so the client must send the current `entries.version`.",
+        "Calls **POST /entries/:id/progress-stage** with `targetStage: S8` but **omits** `version`. Per SIG AC-S7-25 / optimistic locking, the handler rejects the request immediately with **ValidationError** so the client must send the current `entries.version`.",
       dbImpact:
         "**No database writes** — validation fails before transaction.",
     });
@@ -311,6 +709,18 @@ async function main() {
     });
   }
 
+  // AC-S7-26: worker numbering is not confused (W34/W35 not active at S7)
+  {
+    const w34 = await prisma.timerRecord.findFirst({ where: { timerCode: "W34" } });
+    const w35 = await prisma.timerRecord.findFirst({ where: { timerCode: "W35" } });
+    results.push({
+      id: "AC-S7-26",
+      title: "No W34/W35 workers active at S7 in this slice",
+      pass: !w34 && !w35,
+      body: { w34, w35 },
+    });
+  }
+
   writeArtifacts(results);
   const failed = results.filter((r) => !r.pass);
   if (failed.length > 0) {
@@ -320,11 +730,9 @@ async function main() {
 
 main()
   .then(async () => {
-    await prisma.$disconnect();
     console.log("S7 acceptance tests: PASS");
   })
   .catch(async (e) => {
-    await prisma.$disconnect();
     console.error(e);
     process.exit(1);
   });

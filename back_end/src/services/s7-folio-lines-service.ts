@@ -1,6 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioLineType, FolioState, NightAuditRunStatus, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../lib/errors.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getTimerEngine } from "./timer-management-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -17,6 +19,26 @@ function isMandatoryNightAuditLine(lineType: FolioLineType): boolean {
   return lineType === FolioLineType.ROOM_CHARGE;
 }
 
+async function writeCeilingTrace(db: DbClient, args: { entryId: string; actorId: string; eventType: string; payload: Record<string, unknown> }) {
+  const now = new Date();
+  await (db as any).traceEvent.create({
+    data: {
+      eventType: args.eventType,
+      actorId: args.actorId,
+      actorLevel: "SYSTEM",
+      entityType: "Entry",
+      entityId: args.entryId,
+      operation: "ALERT",
+      timestamp: now,
+      stageContext: Stage.S7,
+      inquiryId: null,
+      entryId: args.entryId,
+      payload: args.payload,
+      createdBy: args.actorId,
+    },
+  });
+}
+
 async function ensureChargeDateNotSealed(db: DbClient, chargeDate: Date) {
   const op = operatingDateUtc(chargeDate);
   const sealed = await db.nightAuditRecord.findUnique({ where: { operatingDate: op } });
@@ -26,9 +48,7 @@ async function ensureChargeDateNotSealed(db: DbClient, chargeDate: Date) {
 }
 
 async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryId: string; folioId: string; ceilingAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; actorId: string }) {
-  const cfg = await db.configurationEntry.findUnique({ where: { configKey: "creditCeiling.proximityThresholds" } });
-  if (!cfg) throw new MissingConfigurationError("creditCeiling.proximityThresholds");
-  const v = (cfg.value as { tier1Percent?: number; tier2Percent?: number } | undefined) ?? {};
+  const v = (await requireActiveConfigValue<{ tier1Percent?: number; tier2Percent?: number } | undefined>(db as any, "creditCeiling.proximityThresholds")) ?? {};
   const tier1 = typeof v.tier1Percent === "number" ? v.tier1Percent : 75;
   const tier2 = typeof v.tier2Percent === "number" ? v.tier2Percent : 90;
 
@@ -50,6 +70,13 @@ async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryId: stri
         createdBy: args.actorId,
       },
     });
+    // SIG-S7: W12 dispatch for monitoring/notification on threshold crossing.
+    try {
+      const engine = await getTimerEngine();
+      await engine.schedule("CREDIT_CEILING_MONITORING_W12", { entryId: args.entryId, folioId: args.folioId, thresholdPercent }, { startAfter: now });
+    } catch {
+      // Notification dispatch is best-effort; policy enforcement remains in-band.
+    }
   };
 
   if (ratio >= tier1 / 100) await write(tier1);
@@ -94,8 +121,16 @@ export async function postCharge(
   const ceiling = entry.reservation?.creditCeilingIfExtended;
   const isMandatory = isMandatoryNightAuditLine(input.lineType);
   const projectedOutstanding = num(folio.outstandingBalance) + input.amount;
-  if (ceiling != null && num(ceiling) > 0 && projectedOutstanding / num(ceiling) >= 1 && !isMandatory && input.allowSoftGateBypass !== true) {
-    throw new PolicyGateBlockedError("CREDIT_CEILING_SOFT_GATE", "Credit ceiling reached — FOM acknowledgement required for non-mandatory charges");
+  if (ceiling != null && num(ceiling) > 0) {
+    const ratio = projectedOutstanding / num(ceiling);
+    // AC-S7-09: 90% threshold interruption until acknowledged by FOM (use entry.creditCeilingTier2AcknowledgedAt as ack latch)
+    if (ratio >= 0.9 && !entry.creditCeilingTier2AcknowledgedAt && input.allowSoftGateBypass !== true) {
+      throw new PolicyGateBlockedError("CREDIT_CEILING_ACTIVE_INTERRUPTION", "Credit ceiling 90% threshold reached — FOM acknowledgement required");
+    }
+    // AC-S7-10/11: 100% soft gate blocks non-mandatory charges until FOM acknowledgement; mandatory ROOM_CHARGE bypasses.
+    if (ratio >= 1 && !isMandatory && input.allowSoftGateBypass !== true) {
+      throw new PolicyGateBlockedError("CREDIT_CEILING_SOFT_GATE", "Credit ceiling reached — FOM acknowledgement required for non-mandatory charges");
+    }
   }
 
   const created = await prisma.$transaction(async (tx) => {
@@ -125,6 +160,41 @@ export async function postCharge(
         outstandingBalance: updatedFolio.outstandingBalance,
         actorId,
       });
+
+      const ceilingN = num(ceiling);
+      if (ceilingN > 0) {
+        const ratio = (num(updatedFolio.outstandingBalance) as number) / ceilingN;
+        if (ratio >= 0.75) {
+          await writeCeilingTrace(tx, {
+            entryId: input.entryId,
+            actorId,
+            eventType: "CREDIT_CEILING.THRESHOLD_75_ADVISORY",
+            payload: { entryId: input.entryId, ratio, threshold: 0.75 },
+          });
+        }
+        if (ratio >= 0.9) {
+          if (!entry.creditCeilingTier2AcknowledgedAt && input.allowSoftGateBypass === true) {
+            await tx.entry.update({
+              where: { id: input.entryId },
+              data: { creditCeilingTier2AcknowledgedAt: new Date() },
+            });
+            await writeCeilingTrace(tx, {
+              entryId: input.entryId,
+              actorId,
+              eventType: "CREDIT_CEILING.THRESHOLD_90_ACKNOWLEDGED",
+              payload: { entryId: input.entryId, ratio, threshold: 0.9 },
+            });
+          }
+        }
+        if (ratio >= 1 && !isMandatory && input.allowSoftGateBypass === true) {
+          await writeCeilingTrace(tx, {
+            entryId: input.entryId,
+            actorId,
+            eventType: "CREDIT_CEILING.SOFT_GATE_ACKNOWLEDGED",
+            payload: { entryId: input.entryId, ratio, threshold: 1 },
+          });
+        }
+      }
     }
     return line;
   });

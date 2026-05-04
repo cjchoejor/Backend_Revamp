@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { AppError } from "./lib/errors.js";
 import { s5Router } from "./routes/s5-routes.js";
+import { startWorkers } from "./workers/runner.js";
 
 const app = express();
 app.use(cors());
@@ -22,3 +23,10 @@ const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
   console.log(`PMS API (S5 + S6) listening on http://localhost:${port}/api`);
 });
+
+if (process.env.RUN_WORKERS === "true") {
+  startWorkers().then(
+    () => console.log("Workers started (pg-boss)."),
+    (e) => console.error("Failed to start workers", e),
+  );
+}

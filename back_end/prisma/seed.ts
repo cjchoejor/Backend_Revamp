@@ -15,16 +15,32 @@ import {
   EntryUseType,
   FolioLineType,
 } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  await prisma.sessionEventRecord.deleteMany();
+  await prisma.sessionRecord.deleteMany();
+  await prisma.staffUser.deleteMany();
   await prisma.workOrderAmendmentEvent.deleteMany();
   await prisma.workOrderConsumptionRecord.deleteMany();
   await prisma.workOrderToDoItem.deleteMany();
   await prisma.workOrder.deleteMany();
+  await prisma.spaceAllocation.deleteMany();
+  await prisma.space.deleteMany();
+  await prisma.traceEvent.deleteMany();
+  await prisma.revalidationDeltaRecord.deleteMany();
+  await prisma.processingLockRecord.deleteMany();
+  await prisma.availabilityConfiguration.deleteMany();
+  await prisma.speculativeHold.deleteMany();
+  await prisma.quotation.deleteMany();
+  await prisma.billingModelTransitionRecord.deleteMany();
   await prisma.communicationRecord.deleteMany();
   await prisma.followUpTaskRecord.deleteMany();
+  await prisma.equipmentAllocation.deleteMany();
+  await prisma.commissionDueRecord.deleteMany();
+  await prisma.agentProfile.deleteMany();
   await prisma.writeOffRecord.deleteMany();
   await prisma.creditCeilingThresholdEvent.deleteMany();
   await prisma.timerRecord.deleteMany();
@@ -54,95 +70,223 @@ async function main() {
   await prisma.stageDwellRecord.deleteMany();
   await prisma.segment.deleteMany();
   await prisma.entry.deleteMany();
-  await prisma.guestProfile.deleteMany();
   await prisma.room.deleteMany();
   await prisma.roomType.deleteMany();
   await prisma.inquiry.deleteMany();
+  await prisma.guestProfile.deleteMany();
+
+  const now = new Date();
+  const configRows: Array<{ configKey: string; configValue: any; notes?: string }> = [
+    // --- SIG-S1 required keys (Section 9) ---
+    {
+      configKey: "ownership.assignmentRules",
+      configValue: [
+        { channel: "DIRECT", strategy: "DEFAULT", custodianActorId: "staff-frontdesk-1" },
+        { channel: "OTA", strategy: "DEFAULT", custodianActorId: "staff-frontdesk-1" },
+        { channel: "CORPORATE", strategy: "DEFAULT", custodianActorId: "staff-fom-1" },
+        { channel: "WALK_IN", strategy: "DEFAULT", custodianActorId: "staff-frontdesk-1" },
+        { channel: "AGENT", strategy: "DEFAULT", custodianActorId: "staff-frontdesk-1" },
+      ],
+      notes: "Seeded ownership assignment rules for S1 Policy 3",
+    },
+    {
+      configKey: "expiry.s1.defaultTtlSeconds",
+      configValue: { DEFAULT: 3600 },
+      notes: "Seeded S1 entry expiry TTL seconds (W20 registration)",
+    },
+    {
+      configKey: "processingLock.ttl.perChannel",
+      configValue: { EMAIL_AI: 300, WHATSAPP_AI: 300, FRONT_DESK: 600, PHONE: 600 },
+    },
+    {
+      configKey: "availability.shadowInventory.visibilityRules",
+      configValue: [{ actorLevel: "L1", visible: true }, { actorLevel: "L2", visible: true }, { actorLevel: "L3", visible: true }, { actorLevel: "L4", visible: true }],
+    },
+    { configKey: "availability.bookablePhysicalStates", configValue: ["FREE"] },
+    { configKey: "availability.staleness.ttlSeconds", configValue: 900 },
+    {
+      configKey: "stageDwell.thresholds",
+      configValue: {
+        S1: { ACTIVE: { warning: 600, critical: 1200, escalation: 1800 }, IDLE: { warning: 900, critical: 1800, escalation: 2700 }, PARKED: { warning: 1800, critical: 3600, escalation: 5400 } },
+      },
+    },
+    {
+      configKey: "deficientCondition.categories",
+      configValue: [
+        { code: "HOUSEKEEPING", label: "Housekeeping", isActive: true },
+        { code: "MAINTENANCE", label: "Maintenance", isActive: true },
+        { code: "SOFT_FURNISHING", label: "Soft furnishing", isActive: true },
+        { code: "OTHER", label: "Other", isActive: true },
+      ],
+    },
+    { configKey: "ota.sourceFlagConfig", configValue: { OTA: true } },
+    { configKey: "availability.walkIn.ratePlanId", configValue: "rp-walkin" },
+
+    // --- SIG-S2 required keys (Section 9) ---
+    { configKey: "expiry.s2.quotationValidityDays", configValue: 2, notes: "S2 quotation validity (days)" },
+    { configKey: "expiry.s2.speculativeHoldTtlSeconds", configValue: 900, notes: "S2 speculative hold default TTL seconds" },
+    { configKey: "discount.fom.maxPercentage", configValue: 10, notes: "Front desk discount threshold (percent)" },
+    { configKey: "discount.gm.maxPercentage", configValue: 25, notes: "FOM discount threshold; above requires GM (percent)" },
+    {
+      configKey: "speculativeHold.placementThresholds",
+      configValue: { thresholds: [{ maxRooms: 5, authorityRequired: "FRONT_DESK", maxConcurrentHolds: 3 }, { maxRooms: 15, authorityRequired: "FOM", maxConcurrentHolds: 10 }, { maxRooms: null, authorityRequired: "GM", maxConcurrentHolds: null }] },
+      notes: "Speculative hold placement thresholds",
+    },
+    {
+      configKey: "acknowledgement.windowPerType",
+      configValue: {
+        quotation: 86400,
+        pi: 86400,
+        voucher: 172800,
+        preArrival: 86400,
+        amendment: 43200,
+        cancellation: 43200,
+        invoice: 604800,
+        h2: 3600,
+        h3: 3600,
+      },
+      notes: "Acknowledgement windows per communication type (seconds)",
+    },
+
+    // Minimal pricing surface for S2 rate plan resolution.
+    {
+      configKey: "pricing.ratePlans",
+      configValue: [{ id: "rp-dlx-default", type: "INDIVIDUAL", rateAmount: 500, currency: "BTN" }],
+      notes: "Seeded rate plans for PricingPipelineEngine (S2 Policy 19)",
+    },
+
+    // --- SIG-S3 required keys (Section 9) ---
+    { configKey: "advancePayment.thresholds", configValue: { DEFAULT: { amount: 1 } }, notes: "Minimal S3 advance payment thresholds (amount in BTN)" },
+    { configKey: "expiry.s3.committedHoldTtlSeconds", configValue: 3600, notes: "Committed hold TTL seconds (S3)" },
+    { configKey: "creditCeiling.clientTier.thresholds", configValue: { STANDARD: 5000, DEFAULT: 5000 }, notes: "Credit ceiling thresholds per tier (minimal)" },
+    { configKey: "proformaInvoice.templates", configValue: { DEFAULT: "proforma-v1" }, notes: "PI templates per billing model (minimal)" },
+    { configKey: "advancePayment.followUpWindowSeconds", configValue: 3600, notes: "W34 tier-1 follow-up window" },
+    { configKey: "advancePayment.escalationWindowSeconds", configValue: 7200, notes: "W34 tier-2 escalation window" },
+    { configKey: "paymentMilestone.scheduleTemplates", configValue: {}, notes: "Milestone templates (placeholder)" },
+    { configKey: "foc.configuration", configValue: { enabled: false }, notes: "FOC config (placeholder)" },
+
+    // --- SIG-S4 required keys (Section 9) ---
+    { configKey: "overbooking.maxAllowedRooms", configValue: 0, notes: "Overbooking limit (0 = no overbooking allowed)"},
+    { configKey: "confirmation.authorityThresholds", configValue: { highValueAmount: 5000 }, notes: "Confirmation authority thresholds (minimal)" },
+    { configKey: "overbooking.otaConflictRules", configValue: { enabled: true }, notes: "OTA conflict trigger rules (minimal)" },
+    { configKey: "preArrival.windowDays", configValue: 1, notes: "Pre-arrival countdown window days" },
+
+    // --- Existing stage keys kept for S5–S9 tests (compat seed) ---
+    {
+      configKey: "handoff.H1.checklist",
+      configValue: [
+        { code: "VOUCHER_VERIFIED", mandatory: true, description: "Confirmation voucher on file" },
+        { code: "PAYMENT_STATUS_REVIEWED", mandatory: true, description: "Advance payment status reviewed" },
+        { code: "SPECIAL_REQUESTS_NOTED", mandatory: false, description: "Special requests noted" },
+      ],
+    },
+    { configKey: "handoff.H1.autoFulfil.enabled", configValue: false, notes: "If true, H1 is auto-accepted on S5 activation (same-team mode)" },
+    { configKey: "handoff.H2.checklist", configValue: [{ code: "ROOM_DETAILS_CONFIRMED", mandatory: true, description: "Room and stay details confirmed for HK" }] },
+    { configKey: "handoff.H3.checklist", configValue: [{ code: "F_B_BRIEF_CONFIRMED", mandatory: true, description: "F&B briefing items confirmed" }] },
+    { configKey: "handoff.H4.checklist", configValue: [{ code: "PRE_CHECKOUT_COORDINATION_STARTED", mandatory: true, description: "Pre-checkout coordination started" }] },
+    {
+      configKey: "identity.documentTypes",
+      configValue: [
+        { documentTypeCode: "PASSPORT", documentTypeName: "Passport", isActive: true },
+        { documentTypeCode: "CID", documentTypeName: "National ID", isActive: true },
+      ],
+    },
+    { configKey: "identity.retentionPeriodDays", configValue: { PASSPORT: 2555, CID: 2555, DEFAULT: 2555 } },
+    { configKey: "billingModel.availablePerSource", configValue: { LEISURE: ["GUEST_PAY"], CORPORATE: ["GUEST_PAY", "DIRECT_BILL"], GOVERNMENT: ["GOVERNMENT"] } },
+    { configKey: "vipNotification.routingPerTier", configValue: { PLATINUM: ["FOM", "GM"], GOLD: ["FOM"], DEFAULT: ["FOM"] } },
+    { configKey: "noShow.cutoffWindowMinutes", configValue: 120 },
+    { configKey: "noShow.awaitingConfirmationWindowMinutes", configValue: 180, notes: "Minutes to await written confirmation after no-show cutoff (S5)" },
+    { configKey: "cancellation.policyTiers", configValue: { sameDayPenaltyAmount: 100 } },
+    { configKey: "creditCeiling.proximityThresholds", configValue: { tier1Percent: 75, tier2Percent: 90 } },
+    { configKey: "nightAudit.expectedDailyFAndBCharge", configValue: { amount: 50, currency: "BTN" } },
+    { configKey: "housekeeping.sla.windowMinutes", configValue: 180 },
+    { configKey: "housekeeping.sla.readinessWindowMinutes", configValue: 180, notes: "S5 readiness SLA window from assignment (S5)" },
+    { configKey: "room.readiness.slaWindow", configValue: 10800, notes: "Room readiness SLA window (seconds) for W23 at S5–S6 (S6)" },
+    { configKey: "inspection.postCheckout.windowDays", configValue: 2 },
+    { configKey: "payment.followUp.ttlDays", configValue: 7, notes: "W8 follow-up timer default TTL (days)" },
+    { configKey: "fomOverride.frequency", configValue: { rollingWindowDays: 7, maxFrequency: 1 }, notes: "W33 override frequency threshold" },
+    { configKey: "invoice.templates.final", configValue: [{ templateKey: "final-v1", isActive: true }] },
+    { configKey: "feedback.solicitation.delaySeconds", configValue: 3600 },
+    { configKey: "commission.rateMissing.resolutionSeconds", configValue: 60, notes: "W11 resolution window (seconds) for tests" },
+    { configKey: "followUp.deadlineDays", configValue: 7 },
+    { configKey: "writeOff.authority.thresholds", configValue: { L3: 5000 } },
+    { configKey: "invoice.templates.proforma", configValue: [{ templateKey: "proforma-v1", isActive: true }] },
+  ];
 
   await prisma.configurationEntry.createMany({
+    data: configRows.map((r) => ({
+      configKey: r.configKey,
+      configValue: r.configValue,
+      effectiveFrom: now,
+      effectiveTo: null,
+      setBy: "actor-seed-system",
+      setAt: now,
+      notes: r.notes ?? null,
+    })),
+  });
+
+  // Seed staff users for auth/session flows (SIG-S1 §8.1).
+  const pinHashL1 = await bcrypt.hash("1111", 10);
+  const pinHashL2 = await bcrypt.hash("2222", 10);
+  const pinHashL3 = await bcrypt.hash("3333", 10);
+  const pinHashL4 = await bcrypt.hash("4444", 10);
+  await prisma.staffUser.createMany({
     data: [
-      {
-        configKey: "handoff.H1.checklist",
-        value: [
-          { code: "VOUCHER_VERIFIED", mandatory: true, description: "Confirmation voucher on file" },
-          { code: "PAYMENT_STATUS_REVIEWED", mandatory: true, description: "Advance payment status reviewed" },
-          { code: "SPECIAL_REQUESTS_NOTED", mandatory: false, description: "Special requests noted" },
-        ],
-      },
-      {
-        configKey: "handoff.H2.checklist",
-        value: [{ code: "ROOM_DETAILS_CONFIRMED", mandatory: true, description: "Room and stay details confirmed for HK" }],
-      },
-      {
-        configKey: "handoff.H3.checklist",
-        value: [{ code: "F_B_BRIEF_CONFIRMED", mandatory: true, description: "F&B briefing items confirmed" }],
-      },
-      {
-        configKey: "identity.documentTypes",
-        value: [
-          { documentTypeCode: "PASSPORT", documentTypeName: "Passport", isActive: true },
-          { documentTypeCode: "CID", documentTypeName: "National ID", isActive: true },
-        ],
-      },
-      {
-        configKey: "identity.retentionPeriodDays",
-        value: { PASSPORT: 2555, CID: 2555, DEFAULT: 2555 },
-      },
-      {
-        configKey: "billingModel.availablePerSource",
-        value: { LEISURE: ["GUEST_PAY"], CORPORATE: ["GUEST_PAY", "DIRECT_BILL"] },
-      },
-      {
-        configKey: "vipNotification.routingPerTier",
-        value: { PLATINUM: ["FOM", "GM"], GOLD: ["FOM"], DEFAULT: ["FOM"] },
-      },
-      {
-        configKey: "noShow.cutoffWindowMinutes",
-        value: 120,
-      },
-      {
-        configKey: "cancellation.policyTiers",
-        value: {
-          sameDayPenaltyAmount: 100,
-        },
-      },
-      {
-        configKey: "creditCeiling.proximityThresholds",
-        value: { tier1Percent: 75, tier2Percent: 90 },
-      },
-      {
-        configKey: "nightAudit.expectedDailyFAndBCharge",
-        value: { amount: 50, currency: "BTN" },
-      },
-      {
-        configKey: "housekeeping.sla.windowMinutes",
-        value: 180,
-      },
-      {
-        configKey: "inspection.postCheckout.windowDays",
-        value: 2,
-      },
-      {
-        configKey: "invoice.templates.final",
-        value: [{ templateKey: "final-v1", isActive: true }],
-      },
-      {
-        configKey: "feedback.solicitation.delaySeconds",
-        value: 3600,
-      },
-      {
-        configKey: "followUp.deadlineDays",
-        value: 7,
-      },
-      {
-        configKey: "writeOff.authority.thresholds",
-        value: { L3: 5000 },
-      },
+      { id: "staff-frontdesk-1", fullName: "Front Desk 1", actorLevel: "L1", role: "FRONT_DESK", pinHash: pinHashL1, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
+      { id: "staff-fom-1", fullName: "FOM 1", actorLevel: "L2", role: "FOM", pinHash: pinHashL2, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
+      { id: "staff-gm-1", fullName: "GM 1", actorLevel: "L3", role: "GM", pinHash: pinHashL3, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
+      { id: "staff-admin-1", fullName: "Admin 1", actorLevel: "L4", role: "ADMIN", pinHash: pinHashL4, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
     ],
+  });
+
+  // Seed one space for S1 conference/catering search.
+  await prisma.space.create({
+    data: { code: "HALL-A", name: "Hall A", capacity: 200 },
   });
 
   const roomType = await prisma.roomType.create({
     data: { code: "DLX", name: "Deluxe King" },
+  });
+
+  // Rooms for S1 availability (must include at least one FREE and one DEFICIENT-FREE).
+  await prisma.room.create({
+    data: {
+      roomNumber: "401",
+      roomTypeId: roomType.id,
+      floorNumber: 4,
+      capacity: 2,
+      currentClaimState: InventoryClaimState.FREE,
+      physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+      isDeficient: false,
+    },
+  });
+
+  await prisma.room.create({
+    data: {
+      roomNumber: "402-DEF",
+      roomTypeId: roomType.id,
+      floorNumber: 4,
+      capacity: 2,
+      currentClaimState: InventoryClaimState.FREE,
+      physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+      isDeficient: true,
+      deficientConditionCategory: "HOUSEKEEPING",
+      deficientSince: new Date(),
+      deficientDeadline: new Date(Date.now() + 48 * 3600 * 1000),
+    },
+  });
+
+  const deficientRoomS1 = await prisma.room.findFirstOrThrow({ where: { roomNumber: "402-DEF" } });
+  await prisma.deficientConditionRecord.create({
+    data: {
+      roomId: deficientRoomS1.id,
+      category: "HOUSEKEEPING",
+      description: "Minor stain on carpet — guest to be informed",
+      detectedAt: new Date(),
+      detectedBy: "actor-seed-hk",
+      resolutionDeadline: new Date(Date.now() + 48 * 3600 * 1000),
+      status: "UNRESOLVED",
+    },
   });
 
   const roomClean = await prisma.room.create({
@@ -167,7 +311,8 @@ async function main() {
     },
   });
 
-  await prisma.room.create({
+  // Keep legacy DEFICIENT room for older stage tests (occupied path), but not for S1 availability.
+  const deficientRoom = await prisma.room.create({
     data: {
       roomNumber: "502-DEF",
       roomTypeId: roomType.id,
@@ -175,13 +320,12 @@ async function main() {
       capacity: 2,
       currentClaimState: InventoryClaimState.CONFIRMED,
       physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+      isDeficient: true,
+      deficientConditionCategory: "HOUSEKEEPING",
+      deficientSince: new Date(),
+      deficientDeadline: new Date(Date.now() + 48 * 3600 * 1000),
     },
   });
-
-  const deficientRoom = await prisma.room.findFirstOrThrow({
-    where: { roomNumber: "502-DEF" },
-  });
-
   await prisma.deficientConditionRecord.create({
     data: {
       roomId: deficientRoom.id,
@@ -193,8 +337,6 @@ async function main() {
       status: "UNRESOLVED",
     },
   });
-
-  const inquiry = await prisma.inquiry.create({ data: {} });
 
   const guestProfile = await prisma.guestProfile.create({
     data: {
@@ -213,6 +355,49 @@ async function main() {
       lastName: "Coordinator",
       email: "corp@example.com",
       vipTier: null,
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  const inquiry = await prisma.inquiry.create({
+    data: {
+      referenceNumber: `INQ-SEED-${Date.now()}`,
+      guestProfileId: guestProfile.id,
+      agentProfileId: null,
+      sourceChannel: "DIRECT",
+      defaultCustodianId: "staff-frontdesk-1",
+      notes: "Seed inquiry for tests",
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  // --- S9: Agent commission scenarios ---
+  const agentWithRate = await prisma.agentProfile.create({
+    data: { displayName: "Seed Agent (rate)", commissionRate: 0.1 as any, commissionBasis: "TOTAL_FOLIO" as any, createdBy: "actor-seed-system" } as any,
+  });
+  const agentNoRate = await prisma.agentProfile.create({
+    data: { displayName: "Seed Agent (no-rate)", commissionRate: null, commissionBasis: null, createdBy: "actor-seed-system" } as any,
+  });
+
+  const inquiryAgentWithRate = await prisma.inquiry.create({
+    data: {
+      referenceNumber: `INQ-AGENT-RATE-${Date.now()}`,
+      guestProfileId: guestProfile.id,
+      agentProfileId: agentWithRate.id,
+      sourceChannel: "AGENT",
+      defaultCustodianId: "staff-frontdesk-1",
+      notes: "Seed inquiry (agent with commission rate) for S9 tests",
+      createdBy: "actor-seed-system",
+    },
+  });
+  const inquiryAgentNoRate = await prisma.inquiry.create({
+    data: {
+      referenceNumber: `INQ-AGENT-NORATE-${Date.now()}`,
+      guestProfileId: guestProfile.id,
+      agentProfileId: agentNoRate.id,
+      sourceChannel: "AGENT",
+      defaultCustodianId: "staff-frontdesk-1",
+      notes: "Seed inquiry (agent without commission rate) for S9 tests",
       createdBy: "actor-seed-system",
     },
   });

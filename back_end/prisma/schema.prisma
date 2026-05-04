@@ -1,4 +1,4 @@
-// Schema slice for SIG-S5 (Pre-Arrival) + SIG-S6 (Check-In). S1–S4 flows are seeded, not implemented.
+// Schema reconciled to SIG-S1 §2 (S1 authoritative) — keeps S2–S9 model surface for stage-by-stage roll-forward.
 
 generator client {
   provider = "prisma-client-js"
@@ -27,6 +27,7 @@ enum EntryStatus {
   PARKED
   CANCELLED
   CLOSED
+  EXPIRED
 }
 
 enum EntryUseType {
@@ -36,12 +37,28 @@ enum EntryUseType {
   GROUP
   APARTMENT
   CATERING
+  ACCOMMODATION
+}
+
+enum GroupBillingMode {
+  GROUP_MASTER
+  INDIVIDUAL_FOLIO
 }
 
 enum HoldState {
   PLACED
   CONFIRMED
   RELEASED
+  UPGRADED
+  EXPIRED
+}
+
+enum QuotationState {
+  DRAFT
+  SENT
+  ACCEPTED
+  SUPERSEDED
+  EXPIRED
 }
 
 enum InventoryClaimState {
@@ -68,6 +85,7 @@ enum HandoffState {
   FULFILLED
   REJECTED
   ESCALATED
+  CANCELLED
   CLOSED
 }
 
@@ -81,6 +99,7 @@ enum FolioState {
 }
 
 enum InvoiceType {
+  PROFORMA
   FINAL
 }
 
@@ -96,6 +115,27 @@ enum TimerStatus {
   SCHEDULED
   FIRED
   CANCELLED
+}
+
+enum OverbookingTriggerType {
+  DELIBERATE
+  OTA_CONFLICT
+}
+
+model OtaConflictOverbookingRecord {
+  id                      String               @id @default(uuid())
+  entryId                 String               @unique
+  triggerType             OverbookingTriggerType
+  otaNotificationStatus   String               @default("OPEN")
+  otaNotificationClosedAt DateTime?
+  mitigationPlanStatus    String               @default("OPEN")
+  mitigationPlanClosedAt  DateTime?
+  gmApprovalActorId       String
+  gmApprovalAt            DateTime
+  createdAt               DateTime             @default(now())
+  createdBy               String
+
+  @@map("ota_conflict_overbooking_records")
 }
 
 enum FolioLineType {
@@ -119,6 +159,8 @@ enum CommunicationChannel {
 enum CommunicationType {
   FEEDBACK_SOLICITATION
   POST_STAY_CHARGE_NOTICE
+  CONFIRMATION_VOUCHER
+  INVOICE_SUPERSEDED_NOTICE
 }
 
 enum NightAuditRunStatus {
@@ -196,15 +238,110 @@ enum PaymentDirection {
   OUT
 }
 
-model ConfigurationEntry {
-  id        String   @id @default(uuid())
-  configKey String   @unique
-  value     Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// SIG-S1 §6.6 SessionService / Policy 69
+enum ActorLevel {
+  L1
+  L2
+  L3
+  L4
+  SYSTEM
+}
 
+enum SessionStatus {
+  ACTIVE
+  IDLE_LOCKED
+  MANUALLY_LOCKED
+  HARD_LOGGED_OUT
+}
+
+enum SessionEventType {
+  LOGIN
+  PIN_SWITCH
+  IDLE_AUTO_LOCK
+  MANUAL_LOCK
+  HARD_LOGOUT
+}
+
+enum StageDwellMode {
+  ACTIVE
+  IDLE
+  PARKED
+}
+
+// --- Configuration ------------------------------------------------------
+
+// SIG-S1 §2.12 — ConfigurationEntry with date-range semantics. Admin writes only.
+model ConfigurationEntry {
+  id            String    @id @default(uuid())
+  configKey     String
+  configValue   Json
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  setBy         String    @default("actor-seed-system")
+  setAt         DateTime  @default(now())
+  notes         String?
+  createdAt     DateTime  @default(now())
+
+  @@index([configKey, effectiveFrom])
   @@map("configuration_entries")
 }
+
+// --- Staff & Sessions (SIG-S1 §6.6 SessionService / Policy 69) ---------
+
+model StaffUser {
+  id                          String     @id @default(uuid())
+  fullName                    String
+  email                       String?    @unique
+  actorLevel                  ActorLevel
+  pinHash                     String
+  role                        String
+  idleThresholdSeconds        Int        @default(600)
+  hardLogoutThresholdSeconds  Int        @default(28800)
+  isActive                    Boolean    @default(true)
+  createdAt                   DateTime   @default(now())
+  updatedAt                   DateTime   @updatedAt
+
+  sessions SessionRecord[]
+
+  @@map("staff_users")
+}
+
+model SessionRecord {
+  id                String         @id @default(uuid())
+  userId            String
+  terminalId        String
+  status            SessionStatus  @default(ACTIVE)
+  authenticatedAt   DateTime       @default(now())
+  idleLockedAt      DateTime?
+  manuallyLockedAt  DateTime?
+  hardLoggedOutAt   DateTime?
+  lastActiveAt      DateTime       @default(now())
+  jwtToken          String?        @db.Text
+  createdAt         DateTime       @default(now())
+
+  user   StaffUser           @relation(fields: [userId], references: [id])
+  events SessionEventRecord[]
+
+  @@index([userId, status])
+  @@map("session_records")
+}
+
+model SessionEventRecord {
+  id                 String           @id @default(uuid())
+  sessionId          String
+  eventType          SessionEventType
+  outgoingActorId    String?
+  incomingActorId    String?
+  terminalId         String
+  occurredAt         DateTime         @default(now())
+
+  session SessionRecord @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId, eventType])
+  @@map("session_event_records")
+}
+
+// --- Guest Profiles -----------------------------------------------------
 
 model GuestProfile {
   id                         String    @id @default(uuid())
@@ -214,24 +351,29 @@ model GuestProfile {
   phone                      String?
   nationality                String?
   vipTier                    String?
-  clientTier                 String?
+  clientTier                 String?   @default("STANDARD")
   preferences                Json?
+  behaviouralFlags           Json?
+  observationQueue           Json?
+  stayHistorySummary         Json?
+  isActive                   Boolean   @default(true)
   identityVerifiedAt         DateTime?
   identityVerifiedBy         String?
   identityVerificationPath   String?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
-  createdBy                  String
+  createdBy                  String    @default("actor-seed-system")
 
   entries                 Entry[]
   identityDocuments       GuestIdentityDocument[]
   vipArrivalNotifications VIPArrivalNotificationEvent[]
+  inquiries               Inquiry[]
 
   @@map("guest_profiles")
 }
 
 model GuestIdentityDocument {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   guestProfileId     String
   documentType       String
   documentNumber     String
@@ -241,7 +383,7 @@ model GuestIdentityDocument {
   capturedBy         String
   retentionPeriod    Int
   retentionExpiresAt DateTime
-  createdAt          DateTime @default(now())
+  createdAt          DateTime  @default(now())
 
   guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
 
@@ -268,62 +410,53 @@ model VIPArrivalNotificationEvent {
   @@map("vip_arrival_notification_events")
 }
 
-model RoomClaimStateEvent {
-  id            String                @id @default(uuid())
-  roomId        String
-  entryId       String?
-  fromState     InventoryClaimState
-  toState       InventoryClaimState
-  actorId       String
-  reason        String?
-  effectiveFrom DateTime              @default(now())
-  effectiveTo   DateTime?
-  createdAt     DateTime              @default(now())
-
-  room Room @relation(fields: [roomId], references: [id])
-
-  @@map("room_claim_state_events")
-}
+// --- Inquiry & Entry ----------------------------------------------------
 
 model Inquiry {
-  id        String   @id @default(uuid())
-  createdAt DateTime @default(now())
+  id                 String    @id @default(uuid())
+  referenceNumber    String    @unique
+  guestProfileId     String
+  agentProfileId     String?
+  sourceChannel      String    @default("DIRECT")
+  defaultCustodianId String
+  notes              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  createdBy          String    @default("actor-seed-system")
+  parkedAt           DateTime?
+  parkedBy           String?
 
-  entries Entry[]
+  entries      Entry[]
+  guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
+  agentProfile AgentProfile? @relation(fields: [agentProfileId], references: [id])
 
+  @@index([guestProfileId])
   @@map("inquiries")
 }
 
-model Segment {
-  id            String    @id @default(uuid())
-  entryId       String
-  segmentNumber Int
-  sealedAt      DateTime?
-  startedAt     DateTime  @default(now())
-
-  entry Entry @relation(fields: [entryId], references: [id])
-
-  amendmentEventRecords AmendmentEventRecord[]
-
-  @@map("segments")
-}
-
 model Entry {
-  id                   String        @id @default(uuid())
+  id                   String         @id @default(uuid())
   inquiryId            String
   guestProfileId       String?
-  segmentNumber        Int           @default(1)
-  useType              EntryUseType  @default(LEISURE)
-  status               EntryStatus   @default(ACTIVE)
-  currentStage         Stage         @default(S1)
+  segmentNumber        Int            @default(1)
+  useType              EntryUseType   @default(LEISURE)
+  status               EntryStatus    @default(ACTIVE)
+  currentStage         Stage          @default(S1)
+  /// SIG-S6 — walk-in compressed flow indicator (no prior reservations/H1).
+  walkInCompressed     Boolean        @default(false)
   checkInDate          DateTime?
   checkOutDate         DateTime?
   guestCount           Int?
-  otaSource            Boolean       @default(false)
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  otaSource            Boolean        @default(false)
+  otaReference         String?
+  groupBillingMode     GroupBillingMode?
+  parkedAt             DateTime?
+  parkedBy             String?
+  parkedIndividually   Boolean        @default(false)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
   createdBy            String
-  version              Int           @default(1)
+  version              Int            @default(1)
   closedAt             DateTime?
   closedBy             String?
 
@@ -357,6 +490,12 @@ model Entry {
   roomAssignments    RoomAssignment[]
   noShowDetermination NoShowDeterminationRecord?
   stageDwellRecords  StageDwellRecord[]
+  availabilityConfigs AvailabilityConfiguration[]
+  processingLocks     ProcessingLockRecord[]
+  traceEvents         TraceEvent[]
+  spaceAllocations    SpaceAllocation[]
+  quotations          Quotation[]
+  speculativeHolds    SpeculativeHold[]
   cancellationDisclosure CancellationDisclosureRecord?
   vipArrivalNotifications VIPArrivalNotificationEvent[]
   disputes DisputeRecord[]
@@ -368,28 +507,441 @@ model Entry {
   writeOffRecords       WriteOffRecord[]
   followUpTasks         FollowUpTaskRecord[]
   communications        CommunicationRecord[]
+  equipmentAllocations  EquipmentAllocation[]
+  commissionDueRecords  CommissionDueRecord[]
 
+  @@index([inquiryId])
+  @@index([currentStage, status])
   @@map("entries")
 }
 
+// --- S9: Agent commissions ------------------------------------------------
+
+model AgentProfile {
+  id             String   @id @default(uuid())
+  displayName    String
+  commissionRate Decimal? @db.Decimal(5, 4)
+  commissionBasis CommissionBasis? // optional; if missing while rate exists => RATE_MISSING path
+  createdAt      DateTime @default(now())
+  createdBy      String
+
+  inquiries       Inquiry[]
+  commissionDues  CommissionDueRecord[]
+
+  @@map("agent_profiles")
+}
+
+enum CommissionBasis {
+  NET_ROOM_RATE
+  GROSS_ROOM_RATE
+  TOTAL_FOLIO
+}
+
+enum CommissionDueStatus {
+  PENDING
+  RATE_MISSING
+  SETTLED
+}
+
+model CommissionDueRecord {
+  id               String            @id @default(uuid())
+  entryId          String
+  agentProfileId   String
+  commissionRate   Decimal           @db.Decimal(5, 4)
+  commissionBasis  CommissionBasis?
+  calculatedAmount Decimal?          @db.Decimal(15, 2)
+  currency         String            @default("BTN")
+  status           CommissionDueStatus @default(PENDING)
+  createdAt        DateTime          @default(now())
+  createdBy        String
+
+  entry        Entry        @relation(fields: [entryId], references: [id])
+  agentProfile AgentProfile @relation(fields: [agentProfileId], references: [id])
+
+  @@index([entryId])
+  @@index([agentProfileId])
+  @@map("commission_due_records")
+}
+
+// --- S9: Catering equipment return ---------------------------------------
+
+model EquipmentAllocation {
+  id                String   @id @default(uuid())
+  entryId            String
+  equipmentCode      String
+  allocatedAt        DateTime @default(now())
+  allocatedBy        String
+  returnDeadlineAt   DateTime
+  returnConfirmedAt  DateTime?
+  returnConfirmedBy  String?
+  createdAt          DateTime @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId])
+  @@map("equipment_allocations")
+}
+
+model Segment {
+  id            String    @id @default(uuid())
+  entryId       String
+  segmentNumber Int
+  stage         Stage     @default(S1)
+  startedAt     DateTime  @default(now())
+  sealedAt      DateTime?
+  sealedBy      String?
+  notes         String?
+  createdBy     String    @default("actor-seed-system")
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  amendmentEventRecords  AmendmentEventRecord[]
+  quotations             Quotation[]
+  speculativeHolds       SpeculativeHold[]
+  billingModelTransitions BillingModelTransitionRecord[]
+
+  @@unique([entryId, segmentNumber])
+  @@map("segments")
+}
+
+// --- S1 primary artefacts ----------------------------------------------
+
+model AvailabilityConfiguration {
+  id                        String    @id @default(uuid())
+  entryId                   String
+  segmentId                 String?
+  searchCriteria            Json
+  resultSet                 Json
+  optionSelected            Json?
+  isStale                   Boolean   @default(false)
+  stalenessAt               DateTime?
+  deficientAcknowledgements Json?
+  sealedAt                  DateTime?
+  createdAt                 DateTime  @default(now())
+  createdBy                 String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId, segmentId])
+  @@map("availability_configurations")
+}
+
+enum ProcessingLockStatus {
+  ACTIVE
+  EXPIRED
+  RELEASED
+}
+
+model ProcessingLockRecord {
+  id                 String               @id @default(uuid())
+  actorId            String
+  channel            String
+  inventoryReference String
+  entryId            String?
+  segmentId          String?
+  placedAt           DateTime             @default(now())
+  ttlSeconds         Int
+  expiresAt          DateTime
+  status             ProcessingLockStatus @default(ACTIVE)
+  expiredAt          DateTime?
+  releasedAt         DateTime?
+  revalidationCount  Int                  @default(0)
+  pgBossJobId        String?
+  createdAt          DateTime             @default(now())
+
+  entry              Entry?                    @relation(fields: [entryId], references: [id])
+  revalidationDeltas RevalidationDeltaRecord[]
+
+  @@index([inventoryReference, status])
+  @@index([status, expiresAt])
+  @@map("processing_lock_records")
+}
+
+model RevalidationDeltaRecord {
+  id                     String   @id @default(uuid())
+  processingLockId       String
+  availabilityChanged    Boolean  @default(false)
+  deficientStatusChanged Boolean  @default(false)
+  pricingChanged         Boolean  @default(false)
+  availabilityDelta      Json?
+  deficientDelta         Json?
+  pricingDelta           Json?
+  createdAt              DateTime @default(now())
+  createdBy              String
+
+  processingLock ProcessingLockRecord @relation(fields: [processingLockId], references: [id])
+
+  @@map("revalidation_delta_records")
+}
+
+// --- Trace events (append-only, free-form event type per SIG §2.11) -----
+
+model TraceEvent {
+  id             String     @id @default(uuid())
+  eventType      String
+  actorId        String     @default("actor-seed-system")
+  actorLevel     ActorLevel @default(L1)
+  entityType     String     @default("Entry")
+  entityId       String     @default("")
+  operation      String     @default("UPDATE")
+  payload        Json       @default("{}")
+  timestamp      DateTime   @default(now())
+  stageContext   Stage?
+  segmentContext String?
+  correlationId  String?
+  inquiryId      String?
+  entryId        String?
+  createdAt      DateTime   @default(now())
+  createdBy      String     @default("actor-seed-system")
+
+  entry Entry? @relation(fields: [entryId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([correlationId])
+  @@index([actorId])
+  @@index([timestamp])
+  @@index([inquiryId])
+  @@index([entryId, eventType])
+  @@map("trace_events")
+}
+
+// --- Spaces & Allocations ---------------------------------------------
+
+model Space {
+  id                    String   @id @default(uuid())
+  code                  String   @unique
+  name                  String
+  spaceType             String   @default("HALL")
+  defaultCapacity       Int      @default(0)
+  capacity              Int      @default(0)
+  seatingConfigurations Json     @default("[]")
+  expansionLinks        Json?
+  isAvailable           Boolean  @default(true)
+  isEventInProgress     Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @default(now()) @updatedAt
+
+  allocations      SpaceAllocation[]
+  speculativeHolds SpeculativeHold[]
+
+  @@map("spaces")
+}
+
+enum SpaceAllocationState {
+  QUOTED
+  HELD
+  CONFIRMED
+  RELEASED
+}
+
+model SpaceAllocation {
+  id         String               @id @default(uuid())
+  spaceId    String
+  entryId    String
+  segmentId  String?
+  state      SpaceAllocationState @default(QUOTED)
+  eventBlock Json
+  createdAt  DateTime             @default(now())
+  createdBy  String
+
+  space Space @relation(fields: [spaceId], references: [id])
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([spaceId, state])
+  @@map("space_allocations")
+}
+
+// --- Room inventory (Model 1 + Model 2) --------------------------------
+
+model RoomType {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+
+  rooms          Room[]
+  committedHolds CommittedHold[]
+
+  @@map("room_types")
+}
+
+model Room {
+  id                         String                     @id @default(uuid())
+  roomNumber                 String                     @unique
+  roomTypeId                 String
+  floorNumber                Int?
+  capacity                   Int                        @default(2)
+  currentClaimState          InventoryClaimState        @default(FREE)
+  physicalState              RoomPhysicalState          @default(AVAILABLE_CLEAN)
+  expectedReadyAt            DateTime?
+
+  // Model 2 — Physical state fields per SIG §2.6
+  isDeficient                Boolean                    @default(false)
+  deficientConditionCategory DeficientConditionCategory?
+  deficientSince             DateTime?
+  deficientDeadline          DateTime?
+  isUnderMaintenance         Boolean                    @default(false)
+  maintenanceDeadline        DateTime?
+  cleansingRitualCompleted   Boolean                    @default(false)
+  isBlocked                  Boolean                    @default(false)
+  blockedReason              String?
+
+  createdAt                  DateTime                   @default(now())
+  updatedAt                  DateTime                   @updatedAt
+
+  roomType                  RoomType                  @relation(fields: [roomTypeId], references: [id])
+  deficientConditionRecords DeficientConditionRecord[]
+  speculativeHolds          SpeculativeHold[]
+  roomAssignments           RoomAssignment[]
+  claimStateEvents          RoomClaimStateEvent[]
+  roomInspectionRecords     RoomInspectionRecord[]
+  keyReturnRecords          KeyReturnRecord[]
+
+  @@map("rooms")
+}
+
+model RoomClaimStateEvent {
+  id            String              @id @default(uuid())
+  roomId        String
+  entryId       String?
+  fromState     InventoryClaimState
+  toState       InventoryClaimState
+  actorId       String
+  reason        String?
+  effectiveFrom DateTime            @default(now())
+  effectiveTo   DateTime?
+  createdAt     DateTime            @default(now())
+
+  room Room @relation(fields: [roomId], references: [id])
+
+  @@map("room_claim_state_events")
+}
+
+model DeficientConditionRecord {
+  id                 String                     @id @default(uuid())
+  roomId             String
+  category           DeficientConditionCategory
+  description        String
+  detectedAt         DateTime
+  detectedBy         String
+  resolutionDeadline DateTime
+  resolvedAt         DateTime?
+  resolvedBy         String?
+  resolutionNotes    String?
+  status             String                     @default("UNRESOLVED")
+
+  room Room @relation(fields: [roomId], references: [id])
+
+  @@map("deficient_condition_records")
+}
+
+// --- Holds, Quotations -------------------------------------------------
+
+model Quotation {
+  id              String         @id @default(uuid())
+  entryId         String
+  segmentId       String
+  versionNumber   Int            @default(1)
+  referenceNumber String
+  state           QuotationState @default(DRAFT)
+  commercialTerms Json
+  totalAmount     Decimal        @db.Decimal(15, 2)
+  currency        String         @default("BTN")
+  validUntil      DateTime?
+  sentAt          DateTime?
+  sentTo          String?
+  /// Link to the outbound communication that carried this quotation (S2).
+  communicationRecordId String?
+  supersededById  String?
+  supersededAt    DateTime?
+  expiredAt       DateTime?
+  acceptedAt      DateTime?
+  acceptedBy      String?
+  folioId         String?
+  /// Populated when S2 exits; versions become immutable beyond this point.
+  sealedAt        DateTime?
+  createdAt       DateTime       @default(now())
+  createdBy       String
+
+  entry   Entry   @relation(fields: [entryId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+
+  @@index([entryId, segmentId, state])
+  @@map("quotations")
+}
+
+model SpeculativeHold {
+  id            String    @id @default(uuid())
+  entryId       String
+  segmentId     String
+  roomId        String?
+  spaceId       String?
+  state         HoldState @default(PLACED)
+  placedAt      DateTime  @default(now())
+  placedBy      String
+  ttlSeconds    Int
+  expiresAt     DateTime
+  releasedAt    DateTime?
+  releasedBy    String?
+  releaseReason String?
+  upgradedToId  String?
+  notes         String?
+  createdAt     DateTime  @default(now())
+
+  entry   Entry   @relation(fields: [entryId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+  room    Room?   @relation(fields: [roomId], references: [id])
+  space   Space?  @relation(fields: [spaceId], references: [id])
+
+  @@index([entryId, segmentId, state])
+  @@map("speculative_holds")
+}
+
+model CommittedHold {
+  id                      String    @id @default(uuid())
+  entryId                 String    @unique
+  segmentId               String
+  roomId                  String?
+  spaceId                 String?
+  roomTypeId              String
+  state                   HoldState @default(PLACED)
+  placedAt                DateTime  @default(now())
+  placedBy                String
+  confirmedAt             DateTime?
+  confirmedBy             String?
+  releasedAt              DateTime?
+  releasedBy              String?
+  releaseReason           String?
+  commercialJustification String    @default("seed")
+  ttlSeconds              Int       @default(86400)
+  expiresAt               DateTime
+
+  entry    Entry    @relation(fields: [entryId], references: [id])
+  roomType RoomType @relation(fields: [roomTypeId], references: [id])
+
+  @@map("committed_holds")
+}
+
+// --- Reservation, Folios ------------------------------------------------
+
 model Reservation {
-  id                       String   @id @default(uuid())
-  entryId                  String   @unique
-  segmentId                String
-  frozenRate               Decimal  @db.Decimal(15, 2)
-  frozenRatePlanId         String
-  frozenInclusions         Json     @default("{}")
-  frozenCancellationTerms  Json     @default("{}")
-  frozenBillingModel       String
-  frozenCheckInDate        DateTime
-  frozenCheckOutDate       DateTime
-  frozenGuestCount         Int
-  creditCeilingIfExtended  Decimal? @db.Decimal(15, 2)
-  confirmedAt              DateTime
-  confirmedBy              String
-  confirmationVoucherSent  Boolean  @default(false)
-  sealedAt                 DateTime?
-  createdAt                DateTime @default(now())
+  id                      String    @id @default(uuid())
+  entryId                 String    @unique
+  segmentId               String
+  frozenRate              Decimal   @db.Decimal(15, 2)
+  frozenRatePlanId        String
+  frozenInclusions        Json      @default("{}")
+  frozenCancellationTerms Json      @default("{}")
+  frozenBillingModel      String
+  frozenCheckInDate       DateTime
+  frozenCheckOutDate      DateTime
+  frozenGuestCount        Int
+  creditCeilingIfExtended Decimal?  @db.Decimal(15, 2)
+  confirmedAt             DateTime
+  confirmedBy             String
+  confirmationVoucherSent Boolean   @default(false)
+  sealedAt                DateTime?
+  createdAt               DateTime  @default(now())
 
   entry Entry @relation(fields: [entryId], references: [id])
 
@@ -397,45 +949,61 @@ model Reservation {
 }
 
 model CancellationDisclosureRecord {
-  id                       String  @id @default(uuid())
-  entryId                  String  @unique
+  id                       String @id @default(uuid())
+  entryId                  String @unique
   segmentId                String
   noShowTreatmentStatement String
-  disclosedTerms           Json    @default("{}")
+  disclosedTerms           Json   @default("{}")
+  disclosedAt              DateTime @default(now())
+  disclosedBy              String   @default("actor-seed-system")
 
   entry Entry @relation(fields: [entryId], references: [id])
 
   @@map("cancellation_disclosure_records")
 }
 
+model BillingModelTransitionRecord {
+  id        String   @id @default(uuid())
+  folioId   String
+  segmentId String
+  fromModel String?
+  toModel   String
+  createdAt DateTime @default(now())
+  createdBy String
+
+  folio   Folio   @relation(fields: [folioId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+
+  @@index([folioId, segmentId])
+  @@map("billing_model_transition_records")
+}
+
 model Folio {
-  id                         String      @id @default(uuid())
-  entryId                    String      @unique
-  state                      FolioState  @default(PROVISIONAL)
+  id                         String     @id @default(uuid())
+  entryId                    String     @unique
+  state                      FolioState @default(PROVISIONAL)
   billingModel               String?
-  createdAt                  DateTime    @default(now())
+  createdAt                  DateTime   @default(now())
   createdBy                  String
   convertedToLiveAt          DateTime?
   convertedBy                String?
   closedAt                   DateTime?
   closedBy                   String?
-  noShowPenaltyAmount        Decimal?    @db.Decimal(15, 2)
-  noShowAdvancePaymentAmount Decimal?    @db.Decimal(15, 2)
-  noShowNetPosition          Decimal?    @db.Decimal(15, 2)
+  noShowPenaltyAmount        Decimal?   @db.Decimal(15, 2)
+  noShowAdvancePaymentAmount Decimal?   @db.Decimal(15, 2)
+  noShowNetPosition          Decimal?   @db.Decimal(15, 2)
   noShowFomDetermination     String?
 
-  /// Sum of posted advance IN minus OUT for ceiling / reconciliation helpers.
-  outstandingBalance Decimal @default(0) @db.Decimal(15, 2)
-
-  /// When true, Policy 28 gate for S5→S6 is satisfied.
+  outstandingBalance                   Decimal @default(0) @db.Decimal(15, 2)
   advancePaymentReconciliationComplete Boolean @default(false)
 
-  entry    Entry           @relation(fields: [entryId], references: [id])
-  payments PaymentRecord[]
-  lines    FolioLine[]
-  disputes DisputeRecord[]
-  invoices Invoice[]
-  writeOffRecords WriteOffRecord[]
+  entry                   Entry                           @relation(fields: [entryId], references: [id])
+  payments                PaymentRecord[]
+  lines                   FolioLine[]
+  disputes                DisputeRecord[]
+  invoices                Invoice[]
+  writeOffRecords         WriteOffRecord[]
+  billingModelTransitions BillingModelTransitionRecord[]
 
   @@map("folios")
 }
@@ -446,11 +1014,16 @@ model Invoice {
   entryId      String
   invoiceType  InvoiceType
   state        InvoiceState @default(DRAFT)
+  invoiceNumber String?     @unique
+  totalAmount   Decimal?    @db.Decimal(15, 2)
   templateKey  String?
   issuedAt     DateTime?
   issuedBy     String?
   dispatchedAt DateTime?
   dispatchedBy String?
+  dispatchedTo String?
+  supersededById String?
+  versionNumber Int @default(1)
   metadata     Json?
   createdAt    DateTime     @default(now())
 
@@ -461,28 +1034,28 @@ model Invoice {
 }
 
 model FolioLine {
-  id             String       @id @default(uuid())
-  folioId        String
-  lineType       FolioLineType
-  description    String
-  amount         Decimal      @db.Decimal(15, 2)
-  currency       String       @default("BTN")
-  chargeDate     DateTime
-  stage          Stage
-  postedBy       String
+  id                 String        @id @default(uuid())
+  folioId            String
+  lineType           FolioLineType
+  description        String
+  amount             Decimal       @db.Decimal(15, 2)
+  currency           String        @default("BTN")
+  chargeDate         DateTime
+  stage              Stage
+  postedBy           String
   nightAuditRecordId String?
-  isPostStay     Boolean      @default(false)
-  postedAt       DateTime     @default(now())
-  createdAt      DateTime     @default(now())
+  isPostStay         Boolean       @default(false)
+  postedAt           DateTime      @default(now())
+  createdAt          DateTime      @default(now())
 
-  folio           Folio             @relation(fields: [folioId], references: [id])
+  folio            Folio             @relation(fields: [folioId], references: [id])
   nightAuditRecord NightAuditRecord? @relation(fields: [nightAuditRecordId], references: [id])
 
   @@map("folio_lines")
 }
 
 model WriteOffRecord {
-  id              String   @id @default(uuid())
+  id               String   @id @default(uuid())
   folioId          String
   entryId          String
   writtenOffAmount Decimal  @db.Decimal(15, 2)
@@ -497,233 +1070,44 @@ model WriteOffRecord {
   @@map("write_off_records")
 }
 
-model FollowUpTaskRecord {
-  id          String   @id @default(uuid())
-  entryId     String
-  status      FollowUpTaskStatus @default(PENDING)
-  assignedTo  String?
-  dueAt       DateTime
-  completedAt DateTime?
-  completedBy String?
-  notes       String?
-  createdAt   DateTime @default(now())
-  createdBy   String
-
-  entry Entry @relation(fields: [entryId], references: [id])
-
-  @@map("follow_up_task_records")
-}
-
-model CommunicationRecord {
-  id         String               @id @default(uuid())
-  entryId    String
-  channel    CommunicationChannel
-  commType   CommunicationType
-  payload    Json?
-  createdAt  DateTime             @default(now())
-  createdBy  String
-
-  entry Entry @relation(fields: [entryId], references: [id])
-
-  @@index([entryId, commType, channel])
-  @@map("communication_records")
-}
-
-model NightAuditRecord {
-  id              String             @id @default(uuid())
-  operatingDate   DateTime           @unique
-  runStatus       NightAuditRunStatus
-  entriesProcessedCount Int          @default(0)
-  entriesNotProcessed Json?          // list of entryIds
-  createdAt       DateTime           @default(now())
-  createdBy       String
-
-  folioLines      FolioLine[]
-  anomalies       NightAuditAnomaly[]
-
-  @@map("night_audit_records")
-}
-
-model NightAuditAnomaly {
-  id             String              @id @default(uuid())
-  nightAuditRecordId String
-  entryId        String?
-  anomalyType    NightAuditAnomalyType
-  description    String
-  createdAt      DateTime            @default(now())
-  resolvedAt     DateTime?
-  resolvedBy     String?
-
-  nightAuditRecord NightAuditRecord @relation(fields: [nightAuditRecordId], references: [id])
-
-  @@map("night_audit_anomalies")
-}
-
-model CreditCeilingThresholdEvent {
-  id          String   @id @default(uuid())
-  entryId     String
-  folioId     String
-  ceilingAmount Decimal @db.Decimal(15, 2)
-  outstandingBalance Decimal @db.Decimal(15, 2)
-  thresholdPercent Int
-  createdAt   DateTime @default(now())
-  createdBy   String
-
-  @@map("credit_ceiling_threshold_events")
-}
-
-model WorkOrder {
-  id         String   @id @default(uuid())
-  entryId    String
-  status     String   @default("OPEN") // OPEN | CLOSED
-  createdAt  DateTime @default(now())
-  createdBy  String
-
-  todoItems  WorkOrderToDoItem[]
-  amendments WorkOrderAmendmentEvent[]
-  consumptions WorkOrderConsumptionRecord[]
-
-  @@map("work_orders")
-}
-
-model WorkOrderToDoItem {
-  id          String           @id @default(uuid())
-  workOrderId String
-  title       String
-  status      WorkOrderToDoStatus @default(PENDING)
-  dueAt       DateTime?
-  createdAt   DateTime @default(now())
-  createdBy   String
-  updatedAt   DateTime @updatedAt
-  updatedBy   String?
-  cancelReason String?
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
-
-  @@map("work_order_todo_items")
-}
-
-model WorkOrderConsumptionRecord {
-  id          String   @id @default(uuid())
-  workOrderId String
-  itemCode    String
-  quantity    Int
-  notes       String?
-  isOverAllocation Boolean @default(false)
-  overAllocationAcknowledgedBy String?
-  overAllocationAcknowledgedAt DateTime?
-  createdAt   DateTime @default(now())
-  createdBy   String
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
-
-  @@map("work_order_consumption_records")
-}
-
-model WorkOrderAmendmentEvent {
-  id          String   @id @default(uuid())
-  workOrderId String
-  amendmentType String
-  reason      String
-  payload     Json?
-  createdAt   DateTime @default(now())
-  createdBy   String
-
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
-
-  @@map("work_order_amendment_events")
-}
-
-model DisputeRecord {
-  id           String        @id @default(uuid())
-  entryId      String
-  folioId      String
-  status       DisputeStatus @default(OPEN)
-  title        String
-  description  String?
-  openedAt     DateTime      @default(now())
-  openedBy     String
-  updatedAt    DateTime      @updatedAt
-  updatedBy    String?
-  closedAt     DateTime?
-  closedBy     String?
-  closureReason String?
-
-  entry Entry @relation(fields: [entryId], references: [id])
-  folio Folio @relation(fields: [folioId], references: [id])
-  gateOverrides DisputeGateOverrideRecord[]
-
-  @@map("dispute_records")
-}
-
-model DisputeGateOverrideRecord {
-  id            String   @id @default(uuid())
-  disputeId     String
-  targetStage   Stage
-  freeTextReason String
-  createdAt     DateTime @default(now())
-  createdBy     String
-
-  dispute DisputeRecord @relation(fields: [disputeId], references: [id])
-
-  @@map("dispute_gate_override_records")
-}
-
-model AmendmentEventRecord {
-  id              String        @id @default(uuid())
-  entryId         String
-  segmentId       String
-  amendmentPath   AmendmentPath
-  amendmentType   String
-  requestedBy     String
-  authorisedBy    String
-  authorityBasis  String
-  reason          String
-  priorTermsRef   String?
-  newTermsSummary String
-  folioLineId     String?
-  stageAtAmendment Stage
-  createdAt       DateTime      @default(now())
-
-  entry   Entry   @relation(fields: [entryId], references: [id])
-  segment Segment @relation(fields: [segmentId], references: [id])
-
-  @@map("amendment_event_records")
-}
-
 model PaymentRecord {
-  id              String          @id @default(uuid())
-  folioId         String
-  amount          Decimal         @db.Decimal(15, 2)
+  id               String           @id @default(uuid())
+  folioId          String
+  invoiceId        String?
+  entryId          String?
+  amount           Decimal          @db.Decimal(15, 2)
+  currency         String           @default("BTN")
+  foreignCurrencyAmount Decimal?    @db.Decimal(15, 2)
+  btnEquivalent    Decimal?         @db.Decimal(15, 2)
+  exchangeRate     Decimal?         @db.Decimal(10, 6)
+  paymentMethod    String?          @default("CASH")
   paymentDirection PaymentDirection
-  createdAt       DateTime        @default(now())
-  notes           String?
+  createdAt        DateTime         @default(now())
+  receivedAt       DateTime? 
+  recordedBy       String?
+  stage            Stage?
+  notes            String?
 
   folio Folio @relation(fields: [folioId], references: [id])
 
   @@map("payment_records")
 }
 
-model CommittedHold {
-  id                    String    @id @default(uuid())
-  entryId               String    @unique
-  segmentId             String
-  roomId                String?
-  roomTypeId            String
-  state                 HoldState @default(PLACED)
-  placedAt              DateTime  @default(now())
-  placedBy              String
-  confirmedAt           DateTime?
-  confirmedBy           String?
-  commercialJustification String  @default("seed")
-  ttlSeconds            Int       @default(86400)
-  expiresAt             DateTime
+model CreditExtensionCeilingRecord {
+  id            String   @id @default(uuid())
+  folioId       String   @unique
+  entryId       String
+  ceilingAmount Decimal  @db.Decimal(15, 2)
+  currency      String   @default("BTN")
+  approvedBy    String
+  approvedAt    DateTime @default(now())
+  reason        String
+  createdAt     DateTime @default(now())
 
-  entry   Entry    @relation(fields: [entryId], references: [id])
-  roomType RoomType @relation(fields: [roomTypeId], references: [id])
-
-  @@map("committed_holds")
+  @@map("credit_extension_ceiling_records")
 }
+
+// --- Operational artefacts (S5–S9) --------------------------------------
 
 model HandoffRecord {
   id                       String       @id @default(uuid())
@@ -747,6 +1131,9 @@ model HandoffRecord {
   rejectedBy               String?
   rejectionReason          String?
   escalatedAt              DateTime?
+  cancelledAt              DateTime?
+  cancelledBy              String?
+  cancelledReason          String?
   slaDeadlineAt            DateTime?
   isAutoFulfilled          Boolean      @default(false)
   createdAt                DateTime     @default(now())
@@ -756,113 +1143,6 @@ model HandoffRecord {
   entry Entry @relation(fields: [entryId], references: [id])
 
   @@map("handoff_records")
-}
-
-model RoomType {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  name      String
-  createdAt DateTime @default(now())
-
-  rooms           Room[]
-  committedHolds  CommittedHold[]
-
-  @@map("room_types")
-}
-
-model Room {
-  id                    String                @id @default(uuid())
-  roomNumber            String                @unique
-  roomTypeId            String
-  floorNumber           Int?
-  capacity              Int                   @default(2)
-  currentClaimState     InventoryClaimState   @default(FREE)
-  physicalState         RoomPhysicalState     @default(AVAILABLE_CLEAN)
-  expectedReadyAt       DateTime?
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-
-  roomType                 RoomType                  @relation(fields: [roomTypeId], references: [id])
-  deficientConditionRecords DeficientConditionRecord[]
-  roomAssignments          RoomAssignment[]
-  claimStateEvents         RoomClaimStateEvent[]
-  roomInspectionRecords    RoomInspectionRecord[]
-  keyReturnRecords         KeyReturnRecord[]
-
-  @@map("rooms")
-}
-
-model RoomInspectionRecord {
-  id                  String   @id @default(uuid())
-  entryId             String
-  roomId              String
-  segmentId           String
-  inspectedBy         String
-  inspectedAt         DateTime
-  isDeferred          Boolean  @default(false)
-  deficientFlagStatus String
-  deficientConditionId String?
-  inspectorAssessment String?
-  damageFound         Boolean  @default(false)
-  damageNotes         String?
-  createdAt           DateTime @default(now())
-
-  entry Entry @relation(fields: [entryId], references: [id])
-  room  Room  @relation(fields: [roomId], references: [id])
-
-  @@map("room_inspection_records")
-}
-
-model KeyReturnRecord {
-  id                 String   @id @default(uuid())
-  entryId            String
-  roomId             String
-  receivedBy         String
-  returnedAt         DateTime
-  keyCountIssued     Int
-  keyCountReturned   Int
-  countReconciled    Boolean
-  reconciliationNote String?
-  createdAt          DateTime @default(now())
-
-  entry Entry @relation(fields: [entryId], references: [id])
-  room  Room  @relation(fields: [roomId], references: [id])
-
-  @@map("key_return_records")
-}
-
-model TimerRecord {
-  id        String      @id @default(uuid())
-  entryId   String
-  timerCode String
-  dueAt     DateTime
-  status    TimerStatus @default(SCHEDULED)
-  payload   Json?
-  createdAt DateTime    @default(now())
-  createdBy String
-
-  entry Entry @relation(fields: [entryId], references: [id])
-
-  @@index([timerCode, status, dueAt])
-  @@map("timer_records")
-}
-
-model DeficientConditionRecord {
-  id                 String                     @id @default(uuid())
-  roomId             String
-  category           DeficientConditionCategory
-  description        String
-  detectedAt         DateTime
-  detectedBy         String
-  resolutionDeadline DateTime
-  resolvedAt         DateTime?
-  resolvedBy         String?
-  resolutionNotes    String?
-  status             String                     @default("UNRESOLVED")
-
-  room Room @relation(fields: [roomId], references: [id])
-
-  @@map("deficient_condition_records")
 }
 
 model PreArrivalTask {
@@ -909,7 +1189,7 @@ model RoomAssignment {
 
 model NoShowDeterminationRecord {
   id                      String   @id @default(uuid())
-  entryId                 String     @unique
+  entryId                 String   @unique
   determinationPath       String
   fomActorId              String
   contactAttemptLog       Json
@@ -925,14 +1205,300 @@ model NoShowDeterminationRecord {
   @@map("no_show_determination_records")
 }
 
+model RoomInspectionRecord {
+  id                  String   @id @default(uuid())
+  entryId             String
+  roomId              String
+  segmentId           String
+  inspectedBy         String
+  inspectedAt         DateTime
+  isDeferred          Boolean  @default(false)
+  deficientFlagStatus String
+  deficientConditionId String?
+  inspectorAssessment String?
+  damageFound         Boolean  @default(false)
+  damageNotes         String?
+  createdAt           DateTime @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+  room  Room  @relation(fields: [roomId], references: [id])
+
+  @@map("room_inspection_records")
+}
+
+model KeyReturnRecord {
+  id                 String   @id @default(uuid())
+  entryId            String
+  roomId             String
+  receivedBy         String
+  returnedAt         DateTime
+  keyCountIssued     Int
+  keyCountReturned   Int
+  countReconciled    Boolean
+  reconciliationNote String?
+  createdAt          DateTime @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+  room  Room  @relation(fields: [roomId], references: [id])
+
+  @@map("key_return_records")
+}
+
+// --- Timers, Dwell ------------------------------------------------------
+
+model TimerRecord {
+  id              String      @id @default(uuid())
+  entryId         String?
+  entityType      String      @default("Entry")
+  entityId        String      @default("")
+  timerType       String
+  timerCode       String      @default("")
+  stageContext    Stage?
+  firesAt         DateTime    @default(now())
+  dueAt           DateTime    @default(now())
+  warningAt       DateTime?
+  criticalAt      DateTime?
+  status          TimerStatus @default(SCHEDULED)
+  payload         Json?
+  pgBossJobId     String?
+  cancelledAt     DateTime?
+  cancelledBy     String?
+  cancelledReason String?
+  firedAt         DateTime?
+  createdAt       DateTime    @default(now())
+  createdBy       String
+
+  entry Entry? @relation(fields: [entryId], references: [id])
+
+  @@index([timerType, status, firesAt])
+  @@index([timerCode, status, dueAt])
+  @@index([entityType, entityId])
+  @@map("timer_records")
+}
+
 model StageDwellRecord {
-  id        String    @id @default(uuid())
-  entryId   String
-  stage     Stage
-  enteredAt DateTime  @default(now())
-  exitedAt  DateTime?
+  id              String          @id @default(uuid())
+  entryId         String
+  stage           Stage
+  enteredAt       DateTime        @default(now())
+  lastActiveAt    DateTime        @default(now())
+  exitedAt        DateTime?
+  dwellSeconds    Int?
+  mode            StageDwellMode  @default(ACTIVE)
+  warningFiredAt  DateTime?
+  criticalFiredAt DateTime?
+  escalatedAt     DateTime?
+  createdAt       DateTime        @default(now())
 
   entry Entry @relation(fields: [entryId], references: [id])
 
+  @@index([entryId, stage])
   @@map("stage_dwell_records")
+}
+
+// --- S7+ records (kept for stage-by-stage roll-forward) ----------------
+
+model CreditCeilingThresholdEvent {
+  id                 String   @id @default(uuid())
+  entryId            String
+  folioId            String
+  ceilingAmount      Decimal  @db.Decimal(15, 2)
+  outstandingBalance Decimal  @db.Decimal(15, 2)
+  thresholdPercent   Int
+  createdAt          DateTime @default(now())
+  createdBy          String
+
+  @@map("credit_ceiling_threshold_events")
+}
+
+model NightAuditRecord {
+  id                    String              @id @default(uuid())
+  operatingDate         DateTime            @unique
+  runStatus             NightAuditRunStatus
+  entriesProcessedCount Int                 @default(0)
+  entriesNotProcessed   Json?
+  createdAt             DateTime            @default(now())
+  createdBy             String
+
+  folioLines FolioLine[]
+  anomalies  NightAuditAnomaly[]
+
+  @@map("night_audit_records")
+}
+
+model NightAuditAnomaly {
+  id                 String                @id @default(uuid())
+  nightAuditRecordId String
+  entryId            String?
+  anomalyType        NightAuditAnomalyType
+  description        String
+  createdAt          DateTime              @default(now())
+  resolvedAt         DateTime?
+  resolvedBy         String?
+
+  nightAuditRecord NightAuditRecord @relation(fields: [nightAuditRecordId], references: [id])
+
+  @@map("night_audit_anomalies")
+}
+
+model WorkOrder {
+  id        String   @id @default(uuid())
+  entryId   String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  createdBy String
+
+  todoItems    WorkOrderToDoItem[]
+  amendments   WorkOrderAmendmentEvent[]
+  consumptions WorkOrderConsumptionRecord[]
+
+  @@map("work_orders")
+}
+
+model WorkOrderToDoItem {
+  id           String              @id @default(uuid())
+  workOrderId  String
+  title        String
+  status       WorkOrderToDoStatus @default(PENDING)
+  dueAt        DateTime?
+  createdAt    DateTime            @default(now())
+  createdBy    String
+  updatedAt    DateTime            @updatedAt
+  updatedBy    String?
+  cancelReason String?
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  @@map("work_order_todo_items")
+}
+
+model WorkOrderConsumptionRecord {
+  id                           String    @id @default(uuid())
+  workOrderId                  String
+  itemCode                     String
+  quantity                     Int
+  notes                        String?
+  isOverAllocation             Boolean   @default(false)
+  overAllocationAcknowledgedBy String?
+  overAllocationAcknowledgedAt DateTime?
+  createdAt                    DateTime  @default(now())
+  createdBy                    String
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  @@map("work_order_consumption_records")
+}
+
+model WorkOrderAmendmentEvent {
+  id            String   @id @default(uuid())
+  workOrderId   String
+  amendmentType String
+  reason        String
+  payload       Json?
+  createdAt     DateTime @default(now())
+  createdBy     String
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  @@map("work_order_amendment_events")
+}
+
+model DisputeRecord {
+  id            String        @id @default(uuid())
+  entryId       String
+  folioId       String
+  status        DisputeStatus @default(OPEN)
+  title         String
+  description   String?
+  openedAt      DateTime      @default(now())
+  openedBy      String
+  updatedAt     DateTime      @updatedAt
+  updatedBy     String?
+  closedAt      DateTime?
+  closedBy      String?
+  closureReason String?
+
+  entry         Entry                       @relation(fields: [entryId], references: [id])
+  folio         Folio                       @relation(fields: [folioId], references: [id])
+  gateOverrides DisputeGateOverrideRecord[]
+
+  @@map("dispute_records")
+}
+
+model DisputeGateOverrideRecord {
+  id             String   @id @default(uuid())
+  disputeId      String
+  targetStage    Stage
+  freeTextReason String
+  createdAt      DateTime @default(now())
+  createdBy      String
+
+  dispute DisputeRecord @relation(fields: [disputeId], references: [id])
+
+  @@map("dispute_gate_override_records")
+}
+
+model AmendmentEventRecord {
+  id               String        @id @default(uuid())
+  entryId          String
+  segmentId        String
+  amendmentPath    AmendmentPath
+  amendmentType    String
+  requestedBy      String
+  authorisedBy     String
+  authorityBasis   String
+  reason           String
+  priorTermsRef    String?
+  newTermsSummary  String
+  folioLineId      String?
+  stageAtAmendment Stage
+  createdAt        DateTime      @default(now())
+
+  entry   Entry   @relation(fields: [entryId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+
+  @@map("amendment_event_records")
+}
+
+model FollowUpTaskRecord {
+  id          String             @id @default(uuid())
+  entryId     String
+  status      FollowUpTaskStatus @default(PENDING)
+  assignedTo  String?
+  dueAt       DateTime
+  completedAt DateTime?
+  completedBy String?
+  notes       String?
+  createdAt   DateTime           @default(now())
+  createdBy   String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@map("follow_up_task_records")
+}
+
+model CommunicationRecord {
+  id                    String               @id @default(uuid())
+  entryId               String
+  channel               CommunicationChannel
+  commType              CommunicationType
+  stageContext          Stage?
+  direction             String?              @default("OUTBOUND")
+  messageId             String?              @unique
+  sendStatus            String?              @default("PENDING")
+  acknowledgementStatus String?              @default("PENDING")
+  acknowledgementReceivedAt DateTime?
+  acknowledgementTimeoutAt  DateTime?
+  threadId                 String?
+  inReplyToId              String?
+  contentSummary           String?
+  actorId                  String?
+  payload               Json?
+  createdAt             DateTime             @default(now())
+  createdBy             String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId, commType, channel])
+  @@map("communication_records")
 }

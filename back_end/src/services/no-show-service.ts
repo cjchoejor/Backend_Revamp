@@ -7,6 +7,8 @@ import {
   StateTransitionError,
   ValidationError,
 } from "../lib/errors.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getTimerEngine } from "./timer-management-service.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
 
@@ -28,10 +30,7 @@ export async function determineNoShow(
     awaitingConfirmationWindowMinutes?: number;
   },
 ) {
-  const cutoffCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "noShow.cutoffWindowMinutes" } });
-  if (!cutoffCfg) {
-    throw new MissingConfigurationError("noShow.cutoffWindowMinutes");
-  }
+  await requireActiveConfigValue<number>(prisma, "noShow.cutoffWindowMinutes");
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -56,27 +55,95 @@ export async function determineNoShow(
   }
 
   if (body.determinationPath === "DEFER") {
-    if (body.awaitingConfirmationWindowMinutes == null || body.awaitingConfirmationWindowMinutes < 1) {
-      throw new ValidationError("awaitingConfirmationWindowMinutes is required when determinationPath is DEFER");
-    }
-    return prisma.entry.update({
-      where: { id: entryId },
-      data: {
-        awaitingWrittenConfirmationActive: true,
-        version: { increment: 1 },
-      },
+    const now = new Date();
+    const minutes =
+      body.awaitingConfirmationWindowMinutes ??
+      (await requireActiveConfigValue<number>(prisma, "noShow.awaitingConfirmationWindowMinutes", { now }));
+    if (minutes < 1) throw new ValidationError("awaitingConfirmationWindowMinutes must be >= 1");
+
+    const engine = await getTimerEngine();
+    const firesAt = new Date(now.getTime() + minutes * 60_000);
+    const jobId = await engine.schedule("AWAITING_WRITTEN_CONFIRMATION_W5", { entryId }, { startAfter: firesAt });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.timerRecord.create({
+        data: {
+          entryId,
+          entityType: "Entry",
+          entityId: entryId,
+          timerType: "AWAITING_WRITTEN_CONFIRMATION_W5",
+          timerCode: "AWAITING_WRITTEN_CONFIRMATION_W5",
+          stageContext: Stage.S5,
+          firesAt,
+          dueAt: firesAt,
+          status: "SCHEDULED",
+          payload: { entryId, firesAt: firesAt.toISOString() },
+          pgBossJobId: jobId,
+          createdBy: fomActorId,
+        },
+      });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "NO_SHOW.DEFERRAL_AWAITING_WRITTEN_CONFIRMATION",
+          actorId: fomActorId,
+          actorLevel: "L2",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S5,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { entryId, firesAt: firesAt.toISOString(), minutes },
+          createdBy: fomActorId,
+        },
+      });
     });
+
+    // SIG-S5 AC-S5-008: sub-state is not expressed via Entry field changes.
+    return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
   }
 
   if (body.determinationPath === "REACTIVATE") {
-    return prisma.entry.update({
-      where: { id: entryId },
-      data: {
-        awaitingWrittenConfirmationActive: false,
-        noShowCutoffReachedAt: null,
-        version: { increment: 1 },
-      },
+    const now = new Date();
+    const timers = await prisma.timerRecord.findMany({
+      where: { entryId, status: "SCHEDULED", timerCode: "AWAITING_WRITTEN_CONFIRMATION_W5" },
+      orderBy: { createdAt: "desc" },
+      take: 25,
     });
+    const engine = await getTimerEngine();
+    for (const t of timers) {
+      if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.timerRecord.updateMany({
+        where: { id: { in: timers.map((t) => t.id) }, status: "SCHEDULED" },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: fomActorId, cancelledReason: "FOM reactivated S5" },
+      });
+      await tx.entry.update({
+        where: { id: entryId },
+        data: { awaitingWrittenConfirmationActive: false, noShowCutoffReachedAt: null, version: { increment: 1 } },
+      });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "NO_SHOW.REACTIVATED",
+          actorId: fomActorId,
+          actorLevel: "L2",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S5,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { entryId },
+          createdBy: fomActorId,
+        },
+      });
+    });
+
+    return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
   }
 
   // SUB_PATH_1

@@ -1,0 +1,123 @@
+import type { PrismaClient } from "@prisma/client";
+import { Stage } from "@prisma/client";
+import type { TimerEngine } from "../lib/timer-engine.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+import * as preArrivalService from "../services/pre-arrival-service.js";
+
+export async function runPreArrivalWindowActivationWorker(
+  prisma: PrismaClient,
+  engine: TimerEngine,
+  input: { entryId?: string; timerRecordId?: string },
+) {
+  const now = new Date();
+  const entryId = typeof input.entryId === "string" ? input.entryId : undefined;
+  if (!entryId) return { skipped: true, reason: "MISSING_ENTRY_ID" } as const;
+
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
+  if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
+  if (entry.currentStage !== Stage.S4) return { skipped: true, reason: "NOT_AT_S4" } as const;
+
+  const alreadyFired = await prisma.traceEvent.findFirst({
+    where: { entryId, eventType: "PRE_ARRIVAL.ACTIVATION_FIRED" },
+    orderBy: { timestamp: "desc" },
+  });
+  if (alreadyFired) return { skipped: true, reason: "ALREADY_FIRED" } as const;
+
+  const s4Dwell = await prisma.stageDwellRecord.findFirst({ where: { entryId, stage: Stage.S4, exitedAt: null }, orderBy: { enteredAt: "desc" } });
+  const cutoffWindowMinutes = await requireActiveConfigValue<number>(prisma, "noShow.cutoffWindowMinutes", { now });
+  const expectedArrival = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
+  const cutoffAt = expectedArrival ? new Date(expectedArrival.getTime() + cutoffWindowMinutes * 60_000) : null;
+
+  await prisma.$transaction(async (tx) => {
+    if (s4Dwell) await tx.stageDwellRecord.update({ where: { id: s4Dwell.id }, data: { exitedAt: now, dwellSeconds: Math.floor((now.getTime() - s4Dwell.enteredAt.getTime()) / 1000) } as any });
+    await tx.stageDwellRecord.create({ data: { entryId, stage: Stage.S5, enteredAt: now } });
+    await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S5, version: { increment: 1 }, updatedAt: now } });
+
+    if (typeof input.timerRecordId === "string") {
+      await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });
+    }
+
+    // Cancel any pending W34 follow-up timers (responsibility transfers to S5 readiness).
+    const w34Timers = await tx.timerRecord.findMany({
+      where: { entryId, timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34", status: "SCHEDULED" },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+    });
+    await tx.timerRecord.updateMany({
+      where: { id: { in: w34Timers.map((t) => t.id) }, status: "SCHEDULED" },
+      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "S4→S5 activation transfers follow-up to S5 readiness" },
+    });
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: "PRE_ARRIVAL.ACTIVATION_FIRED",
+        actorId: "SYSTEM",
+        actorLevel: "SYSTEM",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S4,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, from: "S4", to: "S5" },
+        createdBy: "SYSTEM",
+      },
+    });
+  });
+
+  // Best-effort cancel scheduled jobs for W34.
+  const w34ToCancel = await prisma.timerRecord.findMany({
+    where: { entryId, timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34", status: "CANCELLED", cancelledAt: { gte: new Date(now.getTime() - 60_000) } },
+    orderBy: { createdAt: "desc" },
+    take: 25,
+  });
+  for (const t of w34ToCancel) {
+    if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
+  }
+
+  // Seed pre-arrival task checklist (idempotent).
+  await preArrivalService.initialiseTasks(prisma, entryId, "SYSTEM");
+
+  // Optional H1 auto-accept when configured as "same team" (SIG-S5 AC-S5-012).
+  const auto = await requireActiveConfigValue<boolean | null>(prisma, "handoff.H1.autoFulfil.enabled", { now }).catch(() => null);
+  if (auto) {
+    const h1 = await prisma.handoffRecord.findFirst({ where: { entryId, handoffType: "H1" }, orderBy: { createdAt: "desc" } });
+    if (h1 && h1.state === "CREATED") {
+      await prisma.handoffRecord.update({
+        where: { id: h1.id },
+        data: { state: "ACCEPTED", acceptedAt: now, acceptedBy: "SYSTEM", isAutoFulfilled: true },
+      });
+    }
+  }
+
+  // Register no-show cutoff timer (idempotent on TimerRecord; schedule is best-effort).
+  if (cutoffAt) {
+    const existing = await prisma.timerRecord.findFirst({
+      where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!existing) {
+      const jobId = await engine.schedule("NO_SHOW_CUTOFF_W5", { entryId }, { startAfter: cutoffAt });
+      await prisma.timerRecord.create({
+        data: {
+          entryId,
+          entityType: "Entry",
+          entityId: entryId,
+          timerType: "NO_SHOW_CUTOFF_W5",
+          timerCode: "NO_SHOW_CUTOFF_W5",
+          stageContext: Stage.S5,
+          firesAt: cutoffAt,
+          dueAt: cutoffAt,
+          status: "SCHEDULED",
+          payload: { entryId, cutoffAt: cutoffAt.toISOString() },
+          pgBossJobId: jobId,
+          createdBy: "SYSTEM",
+        },
+      });
+    }
+  }
+
+  return { skipped: false, entryId } as const;
+}
+

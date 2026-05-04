@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, HandoffState, HandoffType, NightAuditRunStatus, RoomPhysicalState, Stage, TaskStatus } from "@prisma/client";
-import { NotFoundError, OptimisticLockError, PolicyGateBlockedError, StageGateBlockedError } from "../lib/errors.js";
+import { NotFoundError, OptimisticLockError, PolicyGateBlockedError, StageGateBlockedError, ValidationError } from "../lib/errors.js";
 import * as checkInService from "./check-in-service.js";
 import * as disputeService from "./s7-dispute-service.js";
 
@@ -45,7 +45,11 @@ export async function progressStageS5ToS6(
     throw new StageGateBlockedError("Guest physical presence is required for S5→S6", "GUEST_NOT_PRESENT");
   }
 
-  if (entry.awaitingWrittenConfirmationActive) {
+  const awaitingTimer = await prisma.timerRecord.findFirst({
+    where: { entryId, timerCode: "AWAITING_WRITTEN_CONFIRMATION_W5", status: "SCHEDULED" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (awaitingTimer) {
     throw new StageGateBlockedError("Awaiting written confirmation — cannot progress", "AWAITING_WRITTEN_CONFIRMATION");
   }
 
@@ -143,9 +147,78 @@ export async function progressStageS6ToS7(
   return checkInService.completeCheckInToS7(prisma, entryId, actorId, clientVersion, keyCount, registrationConfirmed);
 }
 
+/** SIG-S6 §5.2 / AC-S6-036 — S6→S1 re-entry (room change at check-in). */
+export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actorId: string) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: {
+      roomAssignments: { orderBy: { createdAt: "desc" }, take: 1, include: { room: true } },
+      handoffs: { where: { handoffType: { in: [HandoffType.H2, HandoffType.H3] }, stageContext: Stage.S6 }, orderBy: { createdAt: "desc" } },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== Stage.S6) throw new StageGateBlockedError("Entry must be at S6 for re-entry", "NOT_AT_S6");
+
+  const now = new Date();
+  const nextSegmentNumber = entry.segmentNumber + 1;
+  const handoffIds = entry.handoffs.map((h) => h.id);
+  const room = entry.roomAssignments[0]?.room;
+
+  await prisma.$transaction(async (tx) => {
+    // Cancel H2/H3 for original assignment context.
+    if (handoffIds.length > 0) {
+      await tx.handoffRecord.updateMany({
+        where: { id: { in: handoffIds }, state: { in: [HandoffState.CREATED, HandoffState.ACCEPTED, HandoffState.ESCALATED, HandoffState.REJECTED, HandoffState.FULFILLED] } },
+        data: { state: HandoffState.CANCELLED, cancelledAt: now, cancelledBy: actorId, cancelledReason: "REENTRY_S6_TO_S1" },
+      });
+      await tx.timerRecord.updateMany({
+        where: { entityType: "HandoffRecord", entityId: { in: handoffIds }, timerCode: "H2_H3_ACCEPTANCE_W25", status: "SCHEDULED" },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "REENTRY_S6_TO_S1" },
+      });
+    }
+
+    // Release original room claim (CONFIRMED/OCCUPIED → FREE).
+    if (room && room.currentClaimState !== "FREE") {
+      const fromState = room.currentClaimState;
+      await tx.room.update({ where: { id: room.id }, data: { currentClaimState: "FREE", updatedAt: now } });
+      await tx.roomClaimStateEvent.create({
+        data: { roomId: room.id, entryId, fromState: fromState as any, toState: "FREE", actorId, reason: "REENTRY_S6_TO_S1", effectiveFrom: now },
+      });
+    }
+
+    await tx.segment.create({
+      data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S1, startedAt: now, createdBy: actorId, notes: "REENTRY_S6_TO_S1" },
+    });
+    await tx.entry.update({
+      where: { id: entryId },
+      data: { currentStage: Stage.S1, segmentNumber: nextSegmentNumber, version: { increment: 1 }, updatedAt: now },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ENTRY.REENTRY_S6_TO_S1",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S6,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, toStage: "S1", segmentNumber: nextSegmentNumber, cancelledHandoffIds: handoffIds },
+        createdBy: actorId,
+      },
+    });
+  });
+
+  return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+}
+
 /** SIG-S7 — S7 → S8 (exit stay to checkout prep). */
 export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string, _actorId: string, clientVersion: number | undefined) {
-  if (clientVersion == null || clientVersion === undefined) throw new OptimisticLockError();
+  if (clientVersion == null) {
+    throw new ValidationError("version is required for S7→S8 progression");
+  }
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -170,7 +243,13 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
 
   const h4 = entry.handoffs[0];
   if (!h4 || !["CREATED", "ACCEPTED", "FULFILLED"].includes(h4.state) || h4.rejectedAt) {
-    throw new StageGateBlockedError("H4 must be initiated before S7→S8", "H4_NOT_INITIATED");
+    // Same-day departures can auto-fulfil H4 at exit time (AC-S7-16).
+    const checkout = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+    const now = new Date();
+    const isSameDayDeparture = checkout ? checkout.toISOString().slice(0, 10) === now.toISOString().slice(0, 10) : false;
+    if (!isSameDayDeparture) {
+      throw new StageGateBlockedError("H4 must be initiated before S7→S8", "H4_NOT_INITIATED");
+    }
   }
 
   // Night audit must have sealed the last operating date before checkout.
@@ -194,11 +273,58 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   });
 
   await prisma.$transaction(async (tx) => {
+    // If H4 missing but same-day departure, auto-create + auto-fulfil (AC-S7-16).
+    if (!h4 || !["CREATED", "ACCEPTED", "FULFILLED"].includes(h4.state) || h4.rejectedAt) {
+      const checkout = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+      const today = now.toISOString().slice(0, 10);
+      const isSameDayDeparture = checkout ? checkout.toISOString().slice(0, 10) === today : false;
+      if (isSameDayDeparture) {
+        const created = await tx.handoffRecord.create({
+          data: {
+            entryId,
+            handoffType: HandoffType.H4,
+            state: "FULFILLED",
+            fromRole: "FRONT_DESK",
+            fromActorId: _actorId ?? "SYSTEM",
+            toRole: "HOUSEKEEPING",
+            checklistContent: { auto: true } as any,
+            fulfilmentEvidence: { autoFulfilled: true, basis: "SAME_DAY_DEPARTURE" } as any,
+            fulfilledAt: now,
+            fulfilledBy: "SYSTEM",
+            isAutoFulfilled: true,
+            createdBy: _actorId ?? "SYSTEM",
+            stageContext: Stage.S7,
+          } as any,
+        });
+        await tx.traceEvent.create({
+          data: {
+            eventType: "HANDOFF.H4_AUTO_FULFILLED",
+            actorId: "SYSTEM",
+            actorLevel: "SYSTEM",
+            entityType: "HandoffRecord",
+            entityId: created.id,
+            operation: "TRANSITION",
+            timestamp: now,
+            stageContext: Stage.S7,
+            inquiryId: entry.inquiryId,
+            entryId,
+            payload: { handoffId: created.id, entryId, basis: "SAME_DAY_DEPARTURE" },
+            createdBy: "SYSTEM",
+          },
+        });
+      }
+    }
     if (s7Dwell) await tx.stageDwellRecord.update({ where: { id: s7Dwell.id }, data: { exitedAt: now } });
     await tx.stageDwellRecord.create({ data: { entryId, stage: Stage.S8, enteredAt: now } });
     await tx.entry.update({
       where: { id: entryId },
       data: { currentStage: Stage.S8, version: { increment: 1 }, updatedAt: now },
+    });
+
+    // AC-S7-14: if exiting S7 with an unresolved deficient condition, mark it as unresolved-at-checkout.
+    await tx.deficientConditionRecord.updateMany({
+      where: { roomId: assignment.roomId, status: "UNRESOLVED" },
+      data: { status: "DEFICIENT_UNRESOLVED_AT_CHECKOUT" },
     });
   });
 

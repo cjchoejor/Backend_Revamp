@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../lib/errors.js";
+import { requireActiveConfigValue } from "../lib/config-store.js";
 
 type VerificationPath = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";
 
@@ -27,20 +28,12 @@ export async function recordVerification(
   const profile = await prisma.guestProfile.findUnique({ where: { id: guestProfileId } });
   if (!profile) throw new NotFoundError("GuestProfile");
 
-  const docTypesCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "identity.documentTypes" } });
-  if (!docTypesCfg) {
-    throw new MissingConfigurationError("identity.documentTypes");
-  }
-  const docTypes = (docTypesCfg.value as DocTypeConfig[] | undefined) ?? [];
+  const docTypes = (await requireActiveConfigValue<DocTypeConfig[] | undefined>(prisma, "identity.documentTypes")) ?? [];
   const activeCodes = new Set(
     docTypes.filter((d) => d.isActive !== false).map((d) => d.documentTypeCode),
   );
 
-  const retentionCfg = await prisma.configurationEntry.findUnique({ where: { configKey: "identity.retentionPeriodDays" } });
-  if (!retentionCfg) {
-    throw new MissingConfigurationError("identity.retentionPeriodDays");
-  }
-  const retentionMap = (retentionCfg?.value as Record<string, number> | undefined) ?? {};
+  const retentionMap = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "identity.retentionPeriodDays")) ?? {};
 
   const now = new Date();
 

@@ -1,266 +1,32 @@
 {
   "baseUrl": "http://localhost:4000/api",
+  "ranAt": "2026-04-25T10:27:54.350Z",
   "results": [
     {
-      "step": {
-        "id": "S9-setup-get-entry",
-        "title": "Get entry snapshot (ids for folio/invoices/handoffs)",
-        "method": "GET",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
-        },
-        "expectStatus": 200,
-        "explanation": "We need the folioId and current stage before executing S9 actions.",
-        "dbImpact": "Read-only (Entry/Folio/Handoff related joins)."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
+      "id": "SETUP-S7->S8",
+      "title": "Setup progress S7->S8",
+      "pass": true,
+      "status": 200,
+      "body": {
         "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
-        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
-        "segmentNumber": 1,
-        "useType": "GROUP",
-        "status": "ACTIVE",
-        "currentStage": "S7",
-        "checkInDate": "2026-04-20T09:00:00.000Z",
-        "checkOutDate": "2026-04-22T09:00:00.000Z",
-        "guestCount": 10,
-        "otaSource": false,
-        "createdAt": "2026-04-22T09:43:27.560Z",
-        "updatedAt": "2026-04-22T09:43:27.560Z",
-        "createdBy": "actor-seed-system",
-        "version": 1,
-        "closedAt": null,
-        "closedBy": null,
-        "noShowCutoffReachedAt": null,
-        "creditCeilingTier2AcknowledgedAt": null,
-        "creditCeilingTier2AcknowledgedBy": null,
-        "awaitingWrittenConfirmationActive": false,
-        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
-        "keysIssuedCount": 2,
-        "keysIssuedBy": "actor-seed-system",
-        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
-        "registrationCompletedBy": "actor-seed-system",
-        "reservation": {
-          "id": "031058e4-5ca5-485e-b8af-087d8d3adb49",
-          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-          "segmentId": "cf8b7e62-d959-46c1-86e3-1bf8dfbd2079",
-          "frozenRate": "500",
-          "frozenRatePlanId": "rp-corp-directbill",
-          "frozenInclusions": {
-            "dailyFAndBExpected": false
-          },
-          "frozenCancellationTerms": {
-            "sameDayPenaltyAmount": 0
-          },
-          "frozenBillingModel": "DIRECT_BILL",
-          "frozenCheckInDate": "2026-04-20T09:00:00.000Z",
-          "frozenCheckOutDate": "2026-04-22T09:00:00.000Z",
-          "frozenGuestCount": 10,
-          "creditCeilingIfExtended": "5000",
-          "confirmedAt": "2026-04-22T09:43:27.567Z",
-          "confirmedBy": "actor-seed-res",
-          "confirmationVoucherSent": true,
-          "sealedAt": null,
-          "createdAt": "2026-04-22T09:43:27.569Z"
-        },
-        "folio": {
-          "id": "3769cc04-915e-47af-b626-dd9d68c2becc",
-          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-          "state": "LIVE",
-          "billingModel": "DIRECT_BILL",
-          "createdAt": "2026-04-22T09:43:27.573Z",
-          "createdBy": "actor-seed-system",
-          "convertedToLiveAt": "2026-04-22T09:43:27.572Z",
-          "convertedBy": "actor-seed-system",
-          "closedAt": null,
-          "closedBy": null,
-          "noShowPenaltyAmount": null,
-          "noShowAdvancePaymentAmount": null,
-          "noShowNetPosition": null,
-          "noShowFomDetermination": null,
-          "outstandingBalance": "1200",
-          "advancePaymentReconciliationComplete": true
-        },
-        "guestProfile": {
-          "id": "d46f6614-73dc-45ef-9495-e4116693e989",
-          "firstName": "Pema",
-          "lastName": "Wangchuk",
-          "email": "pema.wangchuk@example.com",
-          "phone": null,
-          "nationality": null,
-          "vipTier": null,
-          "clientTier": "STANDARD",
-          "preferences": null,
-          "identityVerifiedAt": "2026-04-22T09:43:27.556Z",
-          "identityVerifiedBy": "actor-seed-system",
-          "identityVerificationPath": "RETURNING_VALID",
-          "createdAt": "2026-04-22T09:43:27.557Z",
-          "updatedAt": "2026-04-22T09:43:27.557Z",
-          "createdBy": "actor-seed-system"
-        },
-        "handoffs": [
-          {
-            "id": "22c3a20c-3115-4948-b70d-0937f2b7a885",
-            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-            "handoffType": "H1",
-            "state": "CLOSED",
-            "fromRole": "RESERVATIONS",
-            "fromActorId": "actor-seed-res",
-            "toRole": "FRONT_DESK",
-            "toActorId": null,
-            "checklistContent": {},
-            "deficientConditionStatus": null,
-            "fulfilmentEvidence": null,
-            "assignedAt": null,
-            "acceptedAt": "2026-04-22T09:43:27.581Z",
-            "acceptedBy": "actor-seed-system",
-            "fulfilledAt": "2026-04-22T09:43:27.581Z",
-            "fulfilledBy": "actor-seed-system",
-            "closedAt": "2026-04-22T09:43:27.581Z",
-            "rejectedAt": null,
-            "rejectedBy": null,
-            "rejectionReason": null,
-            "escalatedAt": null,
-            "slaDeadlineAt": null,
-            "isAutoFulfilled": false,
-            "createdAt": "2026-04-22T09:43:27.583Z",
-            "createdBy": "actor-seed-system",
-            "stageContext": "S4"
-          },
-          {
-            "id": "07a0a86c-c086-4398-8322-50542c70edf8",
-            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-            "handoffType": "H4",
-            "state": "CREATED",
-            "fromRole": "FRONT_DESK",
-            "fromActorId": "actor-seed-system",
-            "toRole": "HOUSEKEEPING",
-            "toActorId": null,
-            "checklistContent": {
-              "roomNumber": "503",
-              "expectedCheckoutDate": "2026-04-22T09:00:00.000Z"
-            },
-            "deficientConditionStatus": null,
-            "fulfilmentEvidence": null,
-            "assignedAt": null,
-            "acceptedAt": null,
-            "acceptedBy": null,
-            "fulfilledAt": null,
-            "fulfilledBy": null,
-            "closedAt": null,
-            "rejectedAt": null,
-            "rejectedBy": null,
-            "rejectionReason": null,
-            "escalatedAt": null,
-            "slaDeadlineAt": null,
-            "isAutoFulfilled": false,
-            "createdAt": "2026-04-22T09:43:27.583Z",
-            "createdBy": "actor-seed-system",
-            "stageContext": "S7"
-          }
-        ],
-        "preArrivalTasks": [],
-        "roomAssignments": [
-          {
-            "id": "2304bf45-2e56-46df-9914-0a70b7a1f27e",
-            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-            "roomId": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
-            "assignedAt": "2026-04-22T09:43:27.579Z",
-            "assignedBy": "actor-seed-system",
-            "deficientAtAssignment": false,
-            "deficientConditionRecordId": null,
-            "acknowledgementActorId": null,
-            "acknowledgementAt": null,
-            "notes": null,
-            "createdAt": "2026-04-22T09:43:27.579Z",
-            "room": {
-              "id": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
-              "roomNumber": "503",
-              "roomTypeId": "485160aa-cd09-49ba-b1b6-1c27950fcb35",
-              "floorNumber": 5,
-              "capacity": 2,
-              "currentClaimState": "OCCUPIED",
-              "physicalState": "AVAILABLE_CLEAN",
-              "expectedReadyAt": null,
-              "createdAt": "2026-04-22T09:43:27.516Z",
-              "updatedAt": "2026-04-22T09:43:27.576Z"
-            }
-          }
-        ],
-        "committedHold": null,
-        "vipArrivalNotifications": []
-      }
-    },
-    {
-      "step": {
-        "id": "S9-setup-night-audit",
-        "title": "Run night audit (required for S7→S8 gate)",
-        "method": "POST",
-        "path": "/night-audit/run",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
-        },
-        "body": {
-          "operatingDate": "2026-04-21"
-        },
-        "expectStatus": 200,
-        "explanation": "S7→S8 progression blocks unless night audit is complete for the last operating date.",
-        "dbImpact": "Creates NightAuditRecord + FolioLines (room charge) idempotently for the operating date."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "fe47160a-f8ae-4bf0-9971-ccc24892a1b7",
-        "operatingDate": "2026-04-21T00:00:00.000Z",
-        "runStatus": "COMPLETE",
-        "entriesProcessedCount": 2,
-        "entriesNotProcessed": [],
-        "createdAt": "2026-04-22T09:43:28.849Z",
-        "createdBy": "fom-1"
-      }
-    },
-    {
-      "step": {
-        "id": "S9-setup-progress-to-s8",
-        "title": "Progress stage to S8",
-        "method": "POST",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/progress-stage",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
-        },
-        "body": {
-          "targetStage": "S8",
-          "version": 1
-        },
-        "expectStatus": 200,
-        "explanation": "Moves entry into S8 so key return, inspection, and settlement can be recorded.",
-        "dbImpact": "Updates Entry.currentStage to S8 and creates/updates required handoffs/gates."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
-        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
+        "guestProfileId": "bba8fc67-2510-42e7-b4c2-74d775309c52",
         "segmentNumber": 1,
         "useType": "GROUP",
         "status": "ACTIVE",
         "currentStage": "S8",
+        "walkInCompressed": false,
         "checkInDate": "2026-04-20T09:00:00.000Z",
         "checkOutDate": "2026-04-22T09:00:00.000Z",
         "guestCount": 10,
         "otaSource": false,
-        "createdAt": "2026-04-22T09:43:27.560Z",
-        "updatedAt": "2026-04-22T09:43:28.869Z",
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-04-25T10:27:51.477Z",
+        "updatedAt": "2026-04-25T10:27:53.120Z",
         "createdBy": "actor-seed-system",
         "version": 2,
         "closedAt": null,
@@ -269,222 +35,62 @@
         "creditCeilingTier2AcknowledgedAt": null,
         "creditCeilingTier2AcknowledgedBy": null,
         "awaitingWrittenConfirmationActive": false,
-        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedAt": "2026-04-25T10:27:51.475Z",
         "keysIssuedCount": 2,
         "keysIssuedBy": "actor-seed-system",
-        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedAt": "2026-04-25T10:27:51.475Z",
         "registrationCompletedBy": "actor-seed-system"
       }
     },
     {
-      "step": {
-        "id": "S9-setup-key-return",
-        "title": "Record key return (S8 prerequisite for S9)",
-        "method": "POST",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/key-return",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
-        },
-        "body": {
-          "keyCountReturned": 2
-        },
-        "expectStatus": 200,
-        "explanation": "S8→S9 requires key-return record and reconciliation.",
-        "dbImpact": "Creates KeyReturnRecord linked to entry/room."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "86e49ca2-59c1-4251-80e1-6185375d8f2d",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "roomId": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
-        "receivedBy": "frontdesk-1",
-        "returnedAt": "2026-04-22T09:43:28.882Z",
-        "keyCountIssued": 2,
-        "keyCountReturned": 2,
-        "countReconciled": true,
-        "reconciliationNote": null,
-        "createdAt": "2026-04-22T09:43:28.884Z"
-      }
-    },
-    {
-      "step": {
-        "id": "S9-setup-inspection",
-        "title": "Record room inspection complete (S8 prerequisite for S9)",
-        "method": "POST",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/room-inspection",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
-        },
-        "body": {
-          "isDeferred": false,
-          "deficientFlagStatus": "NOT_APPLICABLE",
-          "damageFound": false,
-          "notes": "ok"
-        },
-        "expectStatus": 200,
-        "explanation": "S8→S9 requires inspection completed or deferred+governed.",
-        "dbImpact": "Creates RoomInspectionRecord linked to entry/room."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "5bc7db9f-d536-4bab-858e-af2663267f6f",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "roomId": "ddb4de9c-5579-48df-8be3-75219fb3c0cc",
-        "segmentId": "cf8b7e62-d959-46c1-86e3-1bf8dfbd2079",
-        "inspectedBy": "frontdesk-1",
-        "inspectedAt": "2026-04-22T09:43:28.898Z",
-        "isDeferred": false,
-        "deficientFlagStatus": "NOT_APPLICABLE",
-        "deficientConditionId": null,
-        "inspectorAssessment": null,
-        "damageFound": false,
-        "damageNotes": null,
-        "createdAt": "2026-04-22T09:43:28.900Z"
-      }
-    },
-    {
-      "step": {
-        "id": "S9-setup-settle-outstanding",
-        "title": "Settle folio to OUTSTANDING via DIRECT_BILL (S8) to create invoice + H5",
-        "method": "POST",
-        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/settle",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
-        },
-        "body": {
-          "settlementMethod": "DIRECT_BILL",
-          "billingModelConfirmation": "DIRECT_BILL"
-        },
-        "expectStatus": 200,
-        "explanation": "We want an OUTSTANDING folio at S9 to exercise write-off and invoice payment matching.",
-        "dbImpact": "Transitions Folio state LIVE→OUTSTANDING, creates Invoice (FINAL) and PaymentRecord as needed, ensures H5 exists."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "3769cc04-915e-47af-b626-dd9d68c2becc",
+      "id": "SETUP-S8-SETTLE",
+      "title": "Setup settle to OUTSTANDING",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "id": "92638d4c-edb8-4d4e-977d-383659536a1f",
         "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
         "state": "OUTSTANDING",
         "billingModel": "DIRECT_BILL",
-        "createdAt": "2026-04-22T09:43:27.573Z",
+        "createdAt": "2026-04-25T10:27:51.486Z",
         "createdBy": "actor-seed-system",
-        "convertedToLiveAt": "2026-04-22T09:43:27.572Z",
+        "convertedToLiveAt": "2026-04-25T10:27:51.485Z",
         "convertedBy": "actor-seed-system",
-        "closedAt": "2026-04-22T09:43:28.911Z",
-        "closedBy": "frontdesk-1",
+        "closedAt": "2026-04-25T10:27:53.215Z",
+        "closedBy": "test-fd-1",
         "noShowPenaltyAmount": null,
         "noShowAdvancePaymentAmount": null,
         "noShowNetPosition": null,
         "noShowFomDetermination": null,
-        "outstandingBalance": "1700",
+        "outstandingBalance": "50",
         "advancePaymentReconciliationComplete": true
       }
     },
     {
-      "step": {
-        "id": "S9-setup-fulfil-h4",
-        "title": "Fulfil H4 (required for S8→S9)",
-        "method": "POST",
-        "path": "/handoffs/07a0a86c-c086-4398-8322-50542c70edf8/fulfil",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
-        },
-        "body": {
-          "fulfilmentEvidence": {
-            "chargesPostedConfirmation": true,
-            "roomInspectionStatus": "COMPLETE",
-            "damageAssessmentStatus": "NONE",
-            "deficientFlagFinalStatus": "NOT_APPLICABLE"
-          }
-        },
-        "expectStatus": 200,
-        "explanation": "S8→S9 progression is blocked until H4 is fulfilled in this slice.",
-        "dbImpact": "Updates HandoffRecord(H4).state → FULFILLED and writes fulfilmentEvidence."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "07a0a86c-c086-4398-8322-50542c70edf8",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "handoffType": "H4",
-        "state": "FULFILLED",
-        "fromRole": "FRONT_DESK",
-        "fromActorId": "actor-seed-system",
-        "toRole": "HOUSEKEEPING",
-        "toActorId": null,
-        "checklistContent": {
-          "roomNumber": "503",
-          "expectedCheckoutDate": "2026-04-22T09:00:00.000Z"
-        },
-        "deficientConditionStatus": null,
-        "fulfilmentEvidence": {
-          "roomInspectionStatus": "COMPLETE",
-          "damageAssessmentStatus": "NONE",
-          "deficientFlagFinalStatus": "NOT_APPLICABLE",
-          "chargesPostedConfirmation": true
-        },
-        "assignedAt": null,
-        "acceptedAt": null,
-        "acceptedBy": null,
-        "fulfilledAt": "2026-04-22T09:43:28.946Z",
-        "fulfilledBy": "fom-1",
-        "closedAt": null,
-        "rejectedAt": null,
-        "rejectedBy": null,
-        "rejectionReason": null,
-        "escalatedAt": null,
-        "slaDeadlineAt": null,
-        "isAutoFulfilled": false,
-        "createdAt": "2026-04-22T09:43:27.583Z",
-        "createdBy": "actor-seed-system",
-        "stageContext": "S7"
-      }
-    },
-    {
-      "step": {
-        "id": "AC-S9-045",
-        "title": "Progress stage to S9 with required version field",
-        "method": "POST",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/progress-stage",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
-        },
-        "body": {
-          "targetStage": "S9",
-          "version": 2
-        },
-        "expectStatus": 200,
-        "explanation": "Moves the entry into S9 so terminal closure can be executed.",
-        "dbImpact": "Updates Entry.currentStage to S9; ensures H5 exists/auto-fulfilled per S8 logic."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
+      "id": "SETUP-S8->S9",
+      "title": "Setup progress S8->S9",
+      "pass": true,
+      "status": 200,
+      "body": {
         "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
-        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
+        "guestProfileId": "bba8fc67-2510-42e7-b4c2-74d775309c52",
         "segmentNumber": 1,
         "useType": "GROUP",
         "status": "ACTIVE",
         "currentStage": "S9",
+        "walkInCompressed": false,
         "checkInDate": "2026-04-20T09:00:00.000Z",
         "checkOutDate": "2026-04-22T09:00:00.000Z",
         "guestCount": 10,
         "otaSource": false,
-        "createdAt": "2026-04-22T09:43:27.560Z",
-        "updatedAt": "2026-04-22T09:43:28.985Z",
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-04-25T10:27:51.477Z",
+        "updatedAt": "2026-04-25T10:27:53.270Z",
         "createdBy": "actor-seed-system",
         "version": 3,
         "closedAt": null,
@@ -493,321 +99,1096 @@
         "creditCeilingTier2AcknowledgedAt": null,
         "creditCeilingTier2AcknowledgedBy": null,
         "awaitingWrittenConfirmationActive": false,
-        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedAt": "2026-04-25T10:27:51.475Z",
         "keysIssuedCount": 2,
         "keysIssuedBy": "actor-seed-system",
-        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedAt": "2026-04-25T10:27:51.475Z",
         "registrationCompletedBy": "actor-seed-system"
       }
     },
     {
-      "step": {
-        "id": "S9-list-invoices",
-        "title": "List invoices for folio",
-        "method": "GET",
-        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/invoices",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "frontdesk-1",
-          "X-Actor-Level": "L1"
+      "id": "AC-S9-036",
+      "title": "post-stay charges require isPostStay=true",
+      "pass": true,
+      "status": 400,
+      "body": {
+        "error": "ValidationError",
+        "message": "isPostStay must be true for S9 post-stay charge"
+      }
+    },
+    {
+      "id": "AC-S9-037",
+      "title": "post-stay charge creates guest notification CommunicationRecord",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "ok": {
+          "id": "b05e43ca-da56-464f-8a2a-29dc90b6cb9d",
+          "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+          "lineType": "OTHER",
+          "description": "Post stay minibar",
+          "amount": "10",
+          "currency": "BTN",
+          "chargeDate": "2026-04-25T10:27:53.285Z",
+          "stage": "S9",
+          "postedBy": "test-fom-1",
+          "nightAuditRecordId": null,
+          "isPostStay": true,
+          "postedAt": "2026-04-25T10:27:53.285Z",
+          "createdAt": "2026-04-25T10:27:53.294Z"
         },
-        "expectStatus": 200,
-        "explanation": "S9 needs invoice payment matching, so we retrieve the invoiceId.",
-        "dbImpact": "Read-only (Invoice table)."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": [
-        {
-          "id": "a549de6e-7a9d-43e5-bd5a-691ce94eb533",
-          "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
+        "comm": {
+          "id": "258e722e-fb08-46dc-908d-c51dc5814c1e",
           "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-          "invoiceType": "FINAL",
-          "state": "DISPATCHED",
-          "templateKey": "final-v1",
-          "issuedAt": "2026-04-22T09:43:28.908Z",
-          "issuedBy": "frontdesk-1",
-          "dispatchedAt": "2026-04-22T09:43:28.908Z",
-          "dispatchedBy": "frontdesk-1",
-          "metadata": {
-            "billingModel": "DIRECT_BILL",
-            "settlementMethod": "DIRECT_BILL",
-            "outstandingBalance": "1700"
+          "channel": "EMAIL",
+          "commType": "POST_STAY_CHARGE_NOTICE",
+          "stageContext": null,
+          "direction": "OUTBOUND",
+          "messageId": null,
+          "sendStatus": "PENDING",
+          "acknowledgementStatus": "PENDING",
+          "acknowledgementReceivedAt": null,
+          "acknowledgementTimeoutAt": null,
+          "threadId": null,
+          "inReplyToId": null,
+          "contentSummary": null,
+          "actorId": null,
+          "payload": {
+            "amount": 10,
+            "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+            "currency": "BTN",
+            "folioLineId": "b05e43ca-da56-464f-8a2a-29dc90b6cb9d"
           },
-          "createdAt": "2026-04-22T09:43:28.910Z"
+          "createdAt": "2026-04-25T10:27:53.295Z",
+          "createdBy": "test-fom-1"
         }
-      ]
-    },
-    {
-      "step": {
-        "id": "AC-S9-010",
-        "title": "Closing blocks when Loop Closure invariant unsatisfied (invoice not dispatched / H5 open / outstanding without W8)",
-        "method": "POST",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/close",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
-        },
-        "body": {},
-        "expectStatus": 409,
-        "explanation": "S9 closure should fail with StageGateBlockedError until invariants are met.",
-        "dbImpact": "No writes when blocked."
-      },
-      "actualStatus": 409,
-      "ok": true,
-      "response": {
-        "error": "StageGateBlockedError",
-        "message": "H5 must be fulfilled/closed before entry closure",
-        "blockingCondition": "H5_NOT_FULFILLED"
       }
     },
     {
-      "step": {
-        "id": "AC-S9-032-1",
-        "title": "Record invoice payment event: DISPATCHED → PAYMENT_TRACKED",
-        "method": "POST",
-        "path": "/invoices/a549de6e-7a9d-43e5-bd5a-691ce94eb533/record-payment-event",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
-        },
-        "body": {
-          "nextState": "PAYMENT_TRACKED",
-          "paymentRef": "bank-slip-001"
-        },
-        "expectStatus": 200,
-        "explanation": "Matches a received payment against an invoice (S9 payment matching).",
-        "dbImpact": "Updates Invoice.state to PAYMENT_TRACKED; stores paymentRef in metadata."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "a549de6e-7a9d-43e5-bd5a-691ce94eb533",
-        "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "invoiceType": "FINAL",
-        "state": "PAYMENT_TRACKED",
-        "templateKey": "final-v1",
-        "issuedAt": "2026-04-22T09:43:28.908Z",
-        "issuedBy": "frontdesk-1",
-        "dispatchedAt": "2026-04-22T09:43:28.908Z",
-        "dispatchedBy": "frontdesk-1",
-        "metadata": {
-          "updatedAt": "2026-04-22T09:43:29.008Z",
-          "updatedBy": "fom-1",
-          "paymentRef": "bank-slip-001",
-          "billingModel": "DIRECT_BILL",
-          "settlementMethod": "DIRECT_BILL",
-          "outstandingBalance": "1700"
-        },
-        "createdAt": "2026-04-22T09:43:28.910Z"
+      "id": "AC-S9-003",
+      "title": "S9 FolioLine isPostStay=true and postedAt is transaction date",
+      "pass": true,
+      "body": {
+        "id": "b05e43ca-da56-464f-8a2a-29dc90b6cb9d",
+        "isPostStay": true,
+        "postedAt": "2026-04-25T10:27:53.285Z"
       }
     },
     {
-      "step": {
-        "id": "AC-S9-032-2",
-        "title": "Record invoice payment event: PAYMENT_TRACKED → RECONCILED",
-        "method": "POST",
-        "path": "/invoices/a549de6e-7a9d-43e5-bd5a-691ce94eb533/record-payment-event",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
-        },
-        "body": {
-          "nextState": "RECONCILED",
-          "paymentRef": "statement-2026-04-22"
-        },
-        "expectStatus": 200,
-        "explanation": "Post-closure accounting action; should not reopen entry.",
-        "dbImpact": "Updates Invoice.state to RECONCILED; stores reconciliation reference in metadata."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "a549de6e-7a9d-43e5-bd5a-691ce94eb533",
-        "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "invoiceType": "FINAL",
-        "state": "RECONCILED",
-        "templateKey": "final-v1",
-        "issuedAt": "2026-04-22T09:43:28.908Z",
-        "issuedBy": "frontdesk-1",
-        "dispatchedAt": "2026-04-22T09:43:28.908Z",
-        "dispatchedBy": "frontdesk-1",
-        "metadata": {
-          "updatedAt": "2026-04-22T09:43:29.014Z",
-          "updatedBy": "fom-1",
-          "paymentRef": "statement-2026-04-22",
-          "billingModel": "DIRECT_BILL",
-          "settlementMethod": "DIRECT_BILL",
-          "outstandingBalance": "1700"
-        },
-        "createdAt": "2026-04-22T09:43:28.910Z"
+      "id": "AC-S9-004",
+      "title": "S9 FolioLine not backdated into stay window",
+      "pass": true,
+      "body": {
+        "postedAt": "2026-04-25T10:27:53.285Z",
+        "checkInDate": "2026-04-20T09:00:00.000Z",
+        "checkOutDate": "2026-04-22T09:00:00.000Z"
       }
     },
     {
-      "step": {
-        "id": "AC-S9-039",
-        "title": "Write-off blocks if reason missing",
-        "method": "POST",
-        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/write-off",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "gm-1",
-          "X-Actor-Level": "L3"
-        },
-        "body": {
-          "amount": 100,
-          "reason": ""
-        },
-        "expectStatus": 409,
-        "explanation": "Policy requires recorded reason for write-off.",
-        "dbImpact": "No writes when blocked."
-      },
-      "actualStatus": 409,
-      "ok": true,
-      "response": {
+      "id": "AC-S9-038",
+      "title": "write-off below L3 rejected",
+      "pass": true,
+      "status": 403,
+      "body": {
+        "error": "AuthorizationError",
+        "message": "Insufficient authority"
+      }
+    },
+    {
+      "id": "AC-S9-039",
+      "title": "write-off requires reason",
+      "pass": true,
+      "status": 409,
+      "body": {
         "error": "PolicyGateBlockedError",
         "message": "reason is required",
         "blockingCondition": "WRITE_OFF_REASON_REQUIRED"
       }
     },
     {
-      "step": {
-        "id": "AC-S9-041",
-        "title": "Write-off OUTSTANDING balance (GM authority) transitions folio to WRITTEN_OFF",
-        "method": "POST",
-        "path": "/folios/3769cc04-915e-47af-b626-dd9d68c2becc/write-off",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "gm-1",
-          "X-Actor-Level": "L3"
-        },
-        "body": {
-          "amount": 100,
-          "reason": "uncollectable small balance"
-        },
-        "expectStatus": 200,
-        "explanation": "Creates WriteOffRecord and transitions FolioState OUTSTANDING → WRITTEN_OFF.",
-        "dbImpact": "Creates WriteOffRecord; updates Folio.state."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "8989c0b1-d166-47cc-b991-a5676afd9af3",
-        "folioId": "3769cc04-915e-47af-b626-dd9d68c2becc",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "writtenOffAmount": "100",
-        "currency": "BTN",
-        "reason": "uncollectable small balance",
-        "createdAt": "2026-04-22T09:43:29.024Z",
-        "createdBy": "gm-1"
+      "id": "AC-S9-009",
+      "title": "close blocked when dispute OPEN/IN_PROGRESS/REOPENED",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Cannot close entry with an open dispute",
+        "blockingCondition": "DISPUTE_NOT_TERMINAL"
       }
     },
     {
-      "step": {
-        "id": "AC-S9-046-setup",
-        "title": "Fulfil H5 residual-obligation handoff",
-        "method": "POST",
-        "path": "/handoffs/44f2e722-96c1-453f-bcd9-1a00c648d928/fulfil",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
-        },
-        "body": {
-          "fulfilmentEvidence": {
-            "resolutionBasis": "write-off completed"
-          }
-        },
-        "expectStatus": 200,
-        "explanation": "S9 closure requires no open H5 handoff.",
-        "dbImpact": "Transitions HandoffRecord.state to FULFILLED/CLOSED per service implementation."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
-        "id": "44f2e722-96c1-453f-bcd9-1a00c648d928",
-        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "handoffType": "H5",
-        "state": "FULFILLED",
-        "fromRole": "FRONT_DESK",
-        "fromActorId": "frontdesk-1",
-        "toRole": "FINANCE",
-        "toActorId": null,
-        "checklistContent": {
-          "basis": "Checkout governed outstanding",
-          "outstandingBalance": "1700"
-        },
-        "deficientConditionStatus": null,
-        "fulfilmentEvidence": {
-          "resolutionBasis": "write-off completed"
-        },
-        "assignedAt": null,
-        "acceptedAt": null,
-        "acceptedBy": null,
-        "fulfilledAt": "2026-04-22T09:43:29.033Z",
-        "fulfilledBy": "fom-1",
-        "closedAt": null,
-        "rejectedAt": null,
-        "rejectedBy": null,
-        "rejectionReason": null,
-        "escalatedAt": null,
-        "slaDeadlineAt": null,
-        "isAutoFulfilled": false,
-        "createdAt": "2026-04-22T09:43:28.985Z",
-        "createdBy": "frontdesk-1",
-        "stageContext": "S8"
+      "id": "AC-S9-017",
+      "title": "undispatched invoice blocks closure",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Undispatched invoice blocks closure",
+        "blockingCondition": "INVOICE_NOT_DISPATCHED"
       }
     },
     {
-      "step": {
-        "id": "AC-S9-011",
-        "title": "Close entry at S9 (terminal close)",
-        "method": "POST",
-        "path": "/entries/9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a/close",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Actor-Id": "fom-1",
-          "X-Actor-Level": "L2"
+      "id": "AC-S9-018",
+      "title": "unmatched payment blocks closure",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Unmatched payment blocks closure",
+        "blockingCondition": "PAYMENT_NOT_MATCHED"
+      }
+    },
+    {
+      "id": "AC-S9-012",
+      "title": "OUTSTANDING with zero balance blocks closure",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "OUTSTANDING folio cannot have zero balance",
+        "blockingCondition": "OUTSTANDING_ZERO_BALANCE"
+      }
+    },
+    {
+      "id": "AC-S9-019",
+      "title": "OUTSTANDING closure schedules W8 follow-up (no CLOSED without W8/write-off)",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "r": {
+          "id": "534a7c65-27a5-43a7-b769-3c888cd23f5f",
+          "inquiryId": "12e9fa75-c6a7-4c7d-a642-0af5f0bf5f16",
+          "guestProfileId": "41437dca-5838-47cf-9a58-38bd3b5aba8a",
+          "segmentNumber": 1,
+          "useType": "LEISURE",
+          "status": "CLOSED",
+          "currentStage": "S9",
+          "walkInCompressed": false,
+          "checkInDate": null,
+          "checkOutDate": null,
+          "guestCount": null,
+          "otaSource": false,
+          "otaReference": null,
+          "groupBillingMode": null,
+          "parkedAt": null,
+          "parkedBy": null,
+          "parkedIndividually": false,
+          "createdAt": "2026-04-25T10:27:53.443Z",
+          "updatedAt": "2026-04-25T10:27:53.513Z",
+          "createdBy": "test",
+          "version": 2,
+          "closedAt": "2026-04-25T10:27:53.511Z",
+          "closedBy": "test-fom-1",
+          "noShowCutoffReachedAt": null,
+          "creditCeilingTier2AcknowledgedAt": null,
+          "creditCeilingTier2AcknowledgedBy": null,
+          "awaitingWrittenConfirmationActive": false,
+          "keysIssuedAt": null,
+          "keysIssuedCount": null,
+          "keysIssuedBy": null,
+          "registrationCompletedAt": null,
+          "registrationCompletedBy": null
         },
-        "body": {},
-        "expectStatus": 200,
-        "explanation": "Once loop closure invariant is satisfied, entry transitions to EntryStatus.CLOSED, room claim released, and timers registered.",
-        "dbImpact": "Updates Entry.status=CLOSED + closedAt; sets Room.currentClaimState=FREE; creates TimerRecord W28 + retention timer; creates FollowUpTaskRecord for conference/group entries."
-      },
-      "actualStatus": 200,
-      "ok": true,
-      "response": {
+        "w8": {
+          "id": "75e4dcfd-3eb4-430a-8ce2-2ccbf77520bf",
+          "dueAt": "2026-05-02T10:27:53.496Z"
+        }
+      }
+    },
+    {
+      "id": "AC-S9-020",
+      "title": "deferred inspection unresolved blocks closure",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Deferred inspection window not resolved",
+        "blockingCondition": "INSPECTION_DEFERRED_UNRESOLVED"
+      }
+    },
+    {
+      "id": "AC-S9-046",
+      "title": "H5 open blocks closure",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "H5 must be fulfilled/closed before entry closure",
+        "blockingCondition": "H5_NOT_FULFILLED"
+      }
+    },
+    {
+      "id": "AC-S9-045",
+      "title": "progress-stage S8->S9 requires version",
+      "pass": true,
+      "status": 400,
+      "body": {
+        "error": "ValidationError",
+        "message": "version is required"
+      }
+    },
+    {
+      "id": "AC-S9-011",
+      "title": "close succeeds when loop closure satisfied",
+      "pass": true,
+      "status": 200,
+      "body": {
         "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-        "inquiryId": "f143f930-7db2-4f43-8c44-c577e5ace588",
-        "guestProfileId": "d46f6614-73dc-45ef-9495-e4116693e989",
+        "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
+        "guestProfileId": "bba8fc67-2510-42e7-b4c2-74d775309c52",
         "segmentNumber": 1,
         "useType": "GROUP",
         "status": "CLOSED",
         "currentStage": "S9",
+        "walkInCompressed": false,
         "checkInDate": "2026-04-20T09:00:00.000Z",
         "checkOutDate": "2026-04-22T09:00:00.000Z",
         "guestCount": 10,
         "otaSource": false,
-        "createdAt": "2026-04-22T09:43:27.560Z",
-        "updatedAt": "2026-04-22T09:43:29.048Z",
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-04-25T10:27:51.477Z",
+        "updatedAt": "2026-04-25T10:27:53.611Z",
         "createdBy": "actor-seed-system",
         "version": 4,
-        "closedAt": "2026-04-22T09:43:29.047Z",
-        "closedBy": "fom-1",
+        "closedAt": "2026-04-25T10:27:53.610Z",
+        "closedBy": "test-fom-1",
         "noShowCutoffReachedAt": null,
         "creditCeilingTier2AcknowledgedAt": null,
         "creditCeilingTier2AcknowledgedBy": null,
         "awaitingWrittenConfirmationActive": false,
-        "keysIssuedAt": "2026-04-22T09:43:27.559Z",
+        "keysIssuedAt": "2026-04-25T10:27:51.475Z",
         "keysIssuedCount": 2,
         "keysIssuedBy": "actor-seed-system",
-        "registrationCompletedAt": "2026-04-22T09:43:27.559Z",
+        "registrationCompletedAt": "2026-04-25T10:27:51.475Z",
         "registrationCompletedBy": "actor-seed-system"
+      }
+    },
+    {
+      "id": "AC-S9-007",
+      "title": "closedAt populated only for CLOSED",
+      "pass": true,
+      "body": {
+        "status": "CLOSED",
+        "closedAt": "2026-04-25T10:27:53.610Z"
+      }
+    },
+    {
+      "id": "AC-S9-044",
+      "title": "ENTRY_CLOSED and FOLIO_SEALED trace events exist",
+      "pass": true,
+      "body": {
+        "entryClosed": "d21cc2fa-d606-4071-88f7-d585387306de",
+        "folioSealed": "038ef35a-b682-4873-9e81-7c5cf13d23cc"
+      }
+    },
+    {
+      "id": "AC-S9-015",
+      "title": "progress-stage rejected for CLOSED entry",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StateTransitionError",
+        "message": "Cannot progress stage for CLOSED entry",
+        "blockingCondition": "ENTRY_ALREADY_CLOSED"
+      }
+    },
+    {
+      "id": "AC-S9-026",
+      "title": "W28 timer is scheduled after delay (not immediate)",
+      "pass": true,
+      "body": {
+        "dueAt": "2026-04-25T11:27:53.602Z"
+      }
+    },
+    {
+      "id": "AC-S9-027",
+      "title": "W28 writes exactly two CommunicationRecords (EMAIL + WHATSAPP)",
+      "pass": true,
+      "body": [
+        {
+          "id": "6c1eb7d6-069f-40b5-938c-cbc5ac1929ae",
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "channel": "EMAIL",
+          "commType": "FEEDBACK_SOLICITATION",
+          "stageContext": "S9",
+          "direction": "OUTBOUND",
+          "messageId": null,
+          "sendStatus": "PENDING",
+          "acknowledgementStatus": "PENDING",
+          "acknowledgementReceivedAt": null,
+          "acknowledgementTimeoutAt": null,
+          "threadId": null,
+          "inReplyToId": null,
+          "contentSummary": null,
+          "actorId": null,
+          "payload": {
+            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a"
+          },
+          "createdAt": "2026-04-25T10:27:53.636Z",
+          "createdBy": "SYSTEM"
+        },
+        {
+          "id": "66c3799b-8606-49e8-8822-f280adab01fd",
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "channel": "WHATSAPP",
+          "commType": "FEEDBACK_SOLICITATION",
+          "stageContext": "S9",
+          "direction": "OUTBOUND",
+          "messageId": null,
+          "sendStatus": "PENDING",
+          "acknowledgementStatus": "PENDING",
+          "acknowledgementReceivedAt": null,
+          "acknowledgementTimeoutAt": null,
+          "threadId": null,
+          "inReplyToId": null,
+          "contentSummary": null,
+          "actorId": null,
+          "payload": {
+            "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a"
+          },
+          "createdAt": "2026-04-25T10:27:53.636Z",
+          "createdBy": "SYSTEM"
+        }
+      ]
+    },
+    {
+      "id": "AC-S9-028",
+      "title": "FEEDBACK.SOLICITATION_SENT trace lists both channels",
+      "pass": true,
+      "body": {
+        "id": "995dc78e-8644-459a-9683-d48a475e300b",
+        "eventType": "FEEDBACK.SOLICITATION_SENT",
+        "actorId": "SYSTEM",
+        "actorLevel": "SYSTEM",
+        "entityType": "Entry",
+        "entityId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "operation": "ALERT",
+        "payload": {
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "channelsDispatched": [
+            "EMAIL",
+            "WHATSAPP"
+          ]
+        },
+        "timestamp": "2026-04-25T10:27:53.632Z",
+        "stageContext": "S9",
+        "segmentContext": null,
+        "correlationId": null,
+        "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
+        "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+        "createdAt": "2026-04-25T10:27:53.638Z",
+        "createdBy": "SYSTEM"
+      }
+    },
+    {
+      "id": "AC-S9-030",
+      "title": "W28 idempotent (no duplicates when trace exists)",
+      "pass": true,
+      "body": {
+        "r1": {
+          "skipped": false,
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "timerId": "4a68efb1-89f6-485a-a76d-810600deaff2"
+        },
+        "r2": {
+          "skipped": true,
+          "reason": "IDEMPOTENT_TRACE_EXISTS"
+        },
+        "comms2": 2
+      }
+    },
+    {
+      "id": "AC-S9-013",
+      "title": "SETTLED while balance remains is forbidden",
+      "pass": true,
+      "body": {
+        "ok": false
+      }
+    },
+    {
+      "id": "AC-S9-016",
+      "title": "Room claim transitions to FREE at closure",
+      "pass": true,
+      "body": {
+        "roomId": "ef0a3811-7b60-4133-b72e-c9c1c5eda398",
+        "currentClaimState": "FREE"
+      }
+    },
+    {
+      "id": "AC-S9-032",
+      "title": "Invoice reconciliation post-closure does not change EntryStatus",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "invoice": {
+          "id": "68a6a5e9-45f3-4f0c-8d1e-e62c776fc1de",
+          "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+          "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
+          "invoiceType": "FINAL",
+          "state": "RECONCILED",
+          "invoiceNumber": null,
+          "totalAmount": null,
+          "templateKey": "final-v1",
+          "issuedAt": "2026-04-25T10:27:53.204Z",
+          "issuedBy": "test-fd-1",
+          "dispatchedAt": "2026-04-25T10:27:53.204Z",
+          "dispatchedBy": "test-fd-1",
+          "dispatchedTo": null,
+          "supersededById": null,
+          "versionNumber": 1,
+          "metadata": {
+            "updatedAt": "2026-04-25T10:27:53.652Z",
+            "updatedBy": "test-fom-1",
+            "paymentRef": "bank-123",
+            "billingModel": "DIRECT_BILL",
+            "settlementMethod": "DIRECT_BILL",
+            "outstandingBalance": "50"
+          },
+          "createdAt": "2026-04-25T10:27:53.205Z"
+        },
+        "entryStatus": "CLOSED"
+      }
+    },
+    {
+      "id": "AC-S9-042",
+      "title": "Cannot modify existing FolioLine after closure",
+      "pass": true,
+      "body": {
+        "updated": false
+      }
+    },
+    {
+      "id": "AC-S9-043",
+      "title": "L2 can add post-closure FolioLine via /charges at S9",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "id": "0b4e2653-840b-4916-bc40-47ed401dfa0f",
+        "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+        "lineType": "OTHER",
+        "description": "After close adjustment",
+        "amount": "1",
+        "currency": "BTN",
+        "chargeDate": "2026-04-25T10:27:53.656Z",
+        "stage": "S9",
+        "postedBy": "test-fom-1",
+        "nightAuditRecordId": null,
+        "isPostStay": true,
+        "postedAt": "2026-04-25T10:27:53.656Z",
+        "createdAt": "2026-04-25T10:27:53.664Z"
+      }
+    },
+    {
+      "id": "AC-S9-002",
+      "title": "No CommissionDueRecord when agent has no commissionRate",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "rec": null
+      }
+    },
+    {
+      "id": "AC-S9-021",
+      "title": "Closure not blocked when agent commissionRate absent",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "id": "d227aee6-2fc8-4bc5-adb5-77d04b50b932",
+        "inquiryId": "a166647b-e7c0-4faf-be8c-96677f26636a",
+        "guestProfileId": "196222a5-e6b6-4a6b-be36-be3248dfbf52",
+        "segmentNumber": 1,
+        "useType": "LEISURE",
+        "status": "CLOSED",
+        "currentStage": "S9",
+        "walkInCompressed": false,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "guestCount": null,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-04-25T10:27:53.678Z",
+        "updatedAt": "2026-04-25T10:27:53.711Z",
+        "createdBy": "test",
+        "version": 2,
+        "closedAt": "2026-04-25T10:27:53.710Z",
+        "closedBy": "test-fom-1",
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null
+      }
+    },
+    {
+      "id": "AC-S9-001",
+      "title": "CommissionDueRecord exists when commissionRate configured",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "id": "bbf650cc-44c8-45f5-bdc2-a842ea0400e8",
+        "entryId": "f5f97b60-864a-48fe-92ed-5d361028032d",
+        "agentProfileId": "fb994138-5580-4bc7-b139-54a10639eea4",
+        "commissionRate": "0.1",
+        "commissionBasis": "TOTAL_FOLIO",
+        "calculatedAmount": "10",
+        "currency": "BTN",
+        "status": "PENDING",
+        "createdAt": "2026-04-25T10:27:53.760Z",
+        "createdBy": "SYSTEM"
+      }
+    },
+    {
+      "id": "AC-S9-022",
+      "title": "CommissionDueRecord created with status PENDING when basis configured",
+      "pass": true,
+      "body": {
+        "id": "bbf650cc-44c8-45f5-bdc2-a842ea0400e8",
+        "entryId": "f5f97b60-864a-48fe-92ed-5d361028032d",
+        "agentProfileId": "fb994138-5580-4bc7-b139-54a10639eea4",
+        "commissionRate": "0.1",
+        "commissionBasis": "TOTAL_FOLIO",
+        "calculatedAmount": "10",
+        "currency": "BTN",
+        "status": "PENDING",
+        "createdAt": "2026-04-25T10:27:53.760Z",
+        "createdBy": "SYSTEM"
+      }
+    },
+    {
+      "id": "AC-S9-023",
+      "title": "RATE_MISSING CommissionDueRecord schedules W11",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "rec": {
+          "id": "776e7e9e-500e-4a7f-ac98-1d3899185787",
+          "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
+          "agentProfileId": "0a8d3a12-9676-4f78-9ed1-c3ec33fd73b1",
+          "commissionRate": "0.1",
+          "commissionBasis": null,
+          "calculatedAmount": null,
+          "currency": "BTN",
+          "status": "RATE_MISSING",
+          "createdAt": "2026-04-25T10:27:53.804Z",
+          "createdBy": "SYSTEM"
+        },
+        "w11": {
+          "id": "ca5f14f4-dd56-439c-a691-93fa277eff9a",
+          "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
+          "entityType": "CommissionDueRecord",
+          "entityId": "776e7e9e-500e-4a7f-ac98-1d3899185787",
+          "timerType": "COMMISSION_RATE_MISSING_W11",
+          "timerCode": "COMMISSION_RATE_MISSING_W11",
+          "stageContext": null,
+          "firesAt": "2026-04-25T10:28:53.803Z",
+          "dueAt": "2026-04-25T10:28:53.803Z",
+          "warningAt": null,
+          "criticalAt": null,
+          "status": "SCHEDULED",
+          "payload": {
+            "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
+            "commissionDueId": "776e7e9e-500e-4a7f-ac98-1d3899185787"
+          },
+          "pgBossJobId": null,
+          "cancelledAt": null,
+          "cancelledBy": null,
+          "cancelledReason": null,
+          "firedAt": null,
+          "createdAt": "2026-04-25T10:27:53.808Z",
+          "createdBy": "SYSTEM"
+        }
+      }
+    },
+    {
+      "id": "AC-S9-024",
+      "title": "W11 emits COMMISSION_DUE.RATE_MISSING_ESCALATION_FIRED",
+      "pass": true,
+      "body": {
+        "out": {
+          "skipped": false,
+          "commissionDueId": "776e7e9e-500e-4a7f-ac98-1d3899185787"
+        },
+        "te": {
+          "id": "3ba50776-f1da-4e1b-b6e0-3882d28e672a",
+          "eventType": "COMMISSION_DUE.RATE_MISSING_ESCALATION_FIRED",
+          "actorId": "SYSTEM",
+          "actorLevel": "SYSTEM",
+          "entityType": "CommissionDueRecord",
+          "entityId": "776e7e9e-500e-4a7f-ac98-1d3899185787",
+          "operation": "ALERT",
+          "payload": {
+            "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
+            "commissionDueId": "776e7e9e-500e-4a7f-ac98-1d3899185787"
+          },
+          "timestamp": "2026-04-25T10:27:53.822Z",
+          "stageContext": "S9",
+          "segmentContext": null,
+          "correlationId": null,
+          "inquiryId": null,
+          "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
+          "createdAt": "2026-04-25T10:27:53.825Z",
+          "createdBy": "SYSTEM"
+        }
+      }
+    },
+    {
+      "id": "AC-S9-025",
+      "title": "W11 does not fire when no CommissionDueRecord exists",
+      "pass": true,
+      "body": {
+        "skipped": true,
+        "reason": "COMMISSION_DUE_NOT_FOUND"
+      }
+    },
+    {
+      "id": "AC-S9-048",
+      "title": "FollowUpTaskRecord exists for CONFERENCE closure and dueAt is set",
+      "pass": true,
+      "body": {
+        "id": "57362e1c-cd63-4654-b572-c0231152e31e",
+        "entryId": "c2e9d909-6323-4e53-857f-17d4191d055b",
+        "status": "PENDING",
+        "assignedTo": null,
+        "dueAt": "2026-05-02T10:27:53.862Z",
+        "completedAt": null,
+        "completedBy": null,
+        "notes": null,
+        "createdAt": "2026-04-25T10:27:53.863Z",
+        "createdBy": "system"
+      }
+    },
+    {
+      "id": "AC-S9-005",
+      "title": "FollowUpTaskRecord exists for GROUP closure",
+      "pass": true,
+      "body": {
+        "id": "b565163d-a835-4267-b6c4-4b0d76490204",
+        "entryId": "7021c8fe-370f-4d26-9e9a-5253780d6692",
+        "status": "PENDING",
+        "assignedTo": null,
+        "dueAt": "2026-05-02T10:27:53.908Z",
+        "completedAt": null,
+        "completedBy": null,
+        "notes": null,
+        "createdAt": "2026-04-25T10:27:53.909Z",
+        "createdBy": "system"
+      }
+    },
+    {
+      "id": "AC-S9-005b",
+      "title": "No FollowUpTaskRecord for non GROUP/CONFERENCE",
+      "pass": true,
+      "body": {
+        "fu3": null
+      }
+    },
+    {
+      "id": "AC-S9-031a",
+      "title": "Government DISPATCHED blocks closure until PAYMENT_TRACKED",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Government invoice must be PAYMENT_TRACKED before closure",
+        "blockingCondition": "GOV_PAYMENT_NOT_TRACKED"
+      }
+    },
+    {
+      "id": "AC-S9-031",
+      "title": "Government closure succeeds at PAYMENT_TRACKED (no RECONCILED required)",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "id": "9a09f7f4-66fd-4f6e-a0d0-54b75fe94910",
+        "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
+        "guestProfileId": "7b0318f3-a707-481b-b993-7d0b4fe36fd5",
+        "segmentNumber": 1,
+        "useType": "LEISURE",
+        "status": "CLOSED",
+        "currentStage": "S9",
+        "walkInCompressed": false,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "guestCount": null,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-04-25T10:27:53.977Z",
+        "updatedAt": "2026-04-25T10:27:54.030Z",
+        "createdBy": "test",
+        "version": 2,
+        "closedAt": "2026-04-25T10:27:54.028Z",
+        "closedBy": "test-fom-1",
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null
+      }
+    },
+    {
+      "id": "AC-S9-029",
+      "title": "No-show closure does not schedule W28",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "r": {
+          "id": "640d2ca4-9c62-4072-8fc6-e6196159fc60",
+          "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
+          "guestProfileId": "31896c76-ca34-41ee-94ec-fa1dbede5e3a",
+          "segmentNumber": 1,
+          "useType": "LEISURE",
+          "status": "CLOSED",
+          "currentStage": "S9",
+          "walkInCompressed": false,
+          "checkInDate": null,
+          "checkOutDate": null,
+          "guestCount": null,
+          "otaSource": false,
+          "otaReference": null,
+          "groupBillingMode": null,
+          "parkedAt": null,
+          "parkedBy": null,
+          "parkedIndividually": false,
+          "createdAt": "2026-04-25T10:27:54.038Z",
+          "updatedAt": "2026-04-25T10:27:54.074Z",
+          "createdBy": "test",
+          "version": 2,
+          "closedAt": "2026-04-25T10:27:54.073Z",
+          "closedBy": "test-fom-1",
+          "noShowCutoffReachedAt": null,
+          "creditCeilingTier2AcknowledgedAt": null,
+          "creditCeilingTier2AcknowledgedBy": null,
+          "awaitingWrittenConfirmationActive": false,
+          "keysIssuedAt": null,
+          "keysIssuedCount": null,
+          "keysIssuedBy": null,
+          "registrationCompletedAt": null,
+          "registrationCompletedBy": null
+        },
+        "w28": null
+      }
+    },
+    {
+      "id": "AC-S9-033",
+      "title": "No-show retained penalty creates penalty invoice before closure",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "inv": {
+          "id": "2b1ef824-52d6-40fc-9827-82d6a423b58a",
+          "folioId": "6f1dbf4f-c871-4cc7-8a3c-3a3289860305",
+          "entryId": "d0f62bc4-2175-401a-8aa4-dcc486648c70",
+          "invoiceType": "FINAL",
+          "state": "DISPATCHED",
+          "invoiceNumber": null,
+          "totalAmount": null,
+          "templateKey": null,
+          "issuedAt": "2026-04-25T10:27:54.086Z",
+          "issuedBy": "test-fd-1",
+          "dispatchedAt": "2026-04-25T10:27:54.086Z",
+          "dispatchedBy": "test-fd-1",
+          "dispatchedTo": null,
+          "supersededById": null,
+          "versionNumber": 1,
+          "metadata": {
+            "noShowDeterminationId": "dfebab67-271a-438e-b00b-b22d0a4d0bb4"
+          },
+          "createdAt": "2026-04-25T10:27:54.088Z"
+        }
+      }
+    },
+    {
+      "id": "AC-S9-035a",
+      "title": "No-show S9 invoice carries NoShowDeterminationRecord reference",
+      "pass": true,
+      "body": {
+        "id": "2b1ef824-52d6-40fc-9827-82d6a423b58a",
+        "folioId": "6f1dbf4f-c871-4cc7-8a3c-3a3289860305",
+        "entryId": "d0f62bc4-2175-401a-8aa4-dcc486648c70",
+        "invoiceType": "FINAL",
+        "state": "DISPATCHED",
+        "invoiceNumber": null,
+        "totalAmount": null,
+        "templateKey": null,
+        "issuedAt": "2026-04-25T10:27:54.086Z",
+        "issuedBy": "test-fd-1",
+        "dispatchedAt": "2026-04-25T10:27:54.086Z",
+        "dispatchedBy": "test-fd-1",
+        "dispatchedTo": null,
+        "supersededById": null,
+        "versionNumber": 1,
+        "metadata": {
+          "noShowDeterminationId": "dfebab67-271a-438e-b00b-b22d0a4d0bb4"
+        },
+        "createdAt": "2026-04-25T10:27:54.088Z"
+      }
+    },
+    {
+      "id": "AC-S9-034",
+      "title": "No-show refund obligation confirms outgoing PaymentRecord before closure",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "pay": {
+          "id": "103fc4ef-150c-405c-b26f-b6581bf987cf",
+          "folioId": "eecc7590-b986-45bd-98cc-82de5d221707",
+          "invoiceId": null,
+          "entryId": "886ccc65-fcfa-4da7-8f55-5ed5961d2aff",
+          "amount": "15",
+          "currency": "BTN",
+          "foreignCurrencyAmount": null,
+          "btnEquivalent": null,
+          "exchangeRate": null,
+          "paymentMethod": "CASH",
+          "paymentDirection": "OUT",
+          "createdAt": "2026-04-25T10:27:54.137Z",
+          "receivedAt": null,
+          "recordedBy": "test-fom-1",
+          "stage": "S9",
+          "notes": "NO_SHOW_REFUND:31d93a35-5924-405b-98e7-14fa2a0ab5f5"
+        }
+      }
+    },
+    {
+      "id": "AC-S9-035b",
+      "title": "No-show refund PaymentRecord carries NoShowDeterminationRecord reference",
+      "pass": true,
+      "body": {
+        "id": "103fc4ef-150c-405c-b26f-b6581bf987cf",
+        "folioId": "eecc7590-b986-45bd-98cc-82de5d221707",
+        "invoiceId": null,
+        "entryId": "886ccc65-fcfa-4da7-8f55-5ed5961d2aff",
+        "amount": "15",
+        "currency": "BTN",
+        "foreignCurrencyAmount": null,
+        "btnEquivalent": null,
+        "exchangeRate": null,
+        "paymentMethod": "CASH",
+        "paymentDirection": "OUT",
+        "createdAt": "2026-04-25T10:27:54.137Z",
+        "receivedAt": null,
+        "recordedBy": "test-fom-1",
+        "stage": "S9",
+        "notes": "NO_SHOW_REFUND:31d93a35-5924-405b-98e7-14fa2a0ab5f5"
+      }
+    },
+    {
+      "id": "AC-S9-040",
+      "title": "write-off exceeding authority band is blocked",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "PolicyGateBlockedError",
+        "message": "write-off amount exceeds GM authority band",
+        "blockingCondition": "WRITE_OFF_EXCEEDS_AUTHORITY_BAND"
+      }
+    },
+    {
+      "id": "AC-S9-006",
+      "title": "WriteOffRecord exists with non-empty reason when folio WRITTEN_OFF",
+      "pass": true,
+      "body": {
+        "id": "0c00cc87-2ba6-4863-ad70-bacb8af4be00",
+        "folioId": "88c51ac9-455b-48a0-a8a5-b17650f8ff7e",
+        "entryId": "4eb10624-4655-48ec-b19c-7b311c5b81f9",
+        "writtenOffAmount": "4000",
+        "currency": "BTN",
+        "reason": "uncollectable",
+        "createdAt": "2026-04-25T10:27:54.178Z",
+        "createdBy": "test-gm-1"
+      }
+    },
+    {
+      "id": "AC-S9-041",
+      "title": "After write-off, folio is WRITTEN_OFF and record preserves amount",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "folio": {
+          "id": "88c51ac9-455b-48a0-a8a5-b17650f8ff7e",
+          "entryId": "4eb10624-4655-48ec-b19c-7b311c5b81f9",
+          "state": "WRITTEN_OFF",
+          "billingModel": "GUEST_PAY",
+          "createdAt": "2026-04-25T10:27:54.163Z",
+          "createdBy": "test",
+          "convertedToLiveAt": "2026-04-25T10:27:54.164Z",
+          "convertedBy": "test",
+          "closedAt": null,
+          "closedBy": null,
+          "noShowPenaltyAmount": null,
+          "noShowAdvancePaymentAmount": null,
+          "noShowNetPosition": null,
+          "noShowFomDetermination": null,
+          "outstandingBalance": "6000",
+          "advancePaymentReconciliationComplete": false
+        },
+        "rec": {
+          "id": "0c00cc87-2ba6-4863-ad70-bacb8af4be00",
+          "folioId": "88c51ac9-455b-48a0-a8a5-b17650f8ff7e",
+          "entryId": "4eb10624-4655-48ec-b19c-7b311c5b81f9",
+          "writtenOffAmount": "4000",
+          "currency": "BTN",
+          "reason": "uncollectable",
+          "createdAt": "2026-04-25T10:27:54.178Z",
+          "createdBy": "test-gm-1"
+        }
+      }
+    },
+    {
+      "id": "AC-S9-014",
+      "title": "Dispute gate override rejected for targetStage S9",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "PolicyGateBlockedError",
+        "message": "Dispute gate override is not available for S8→S9",
+        "blockingCondition": "DISPUTE_OVERRIDE_NOT_AVAILABLE"
+      }
+    },
+    {
+      "id": "AC-S9-049a",
+      "title": "Apartment closure blocked when deposit not resolved",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Apartment security deposit not resolved",
+        "blockingCondition": "SECURITY_DEPOSIT_NOT_RESOLVED"
+      }
+    },
+    {
+      "id": "AC-S9-049",
+      "title": "Apartment closure succeeds when deposit return recorded",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "id": "dbaaf71c-cfcf-4bb4-a445-351c54d2b672",
+        "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
+        "guestProfileId": "0054e851-a889-4100-b2b3-12f7ca0dcd0a",
+        "segmentNumber": 1,
+        "useType": "APARTMENT",
+        "status": "CLOSED",
+        "currentStage": "S9",
+        "walkInCompressed": false,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "guestCount": null,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-04-25T10:27:54.210Z",
+        "updatedAt": "2026-04-25T10:27:54.274Z",
+        "createdBy": "test",
+        "version": 2,
+        "closedAt": "2026-04-25T10:27:54.272Z",
+        "closedBy": "test-fom-1",
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null
+      }
+    },
+    {
+      "id": "AC-S9-050a",
+      "title": "Catering closure blocked when equipment return unresolved",
+      "pass": true,
+      "status": 409,
+      "body": {
+        "error": "StageGateBlockedError",
+        "message": "Equipment return not resolved",
+        "blockingCondition": "EQUIPMENT_RETURN_NOT_RESOLVED"
+      }
+    },
+    {
+      "id": "AC-S9-050",
+      "title": "Equipment breach surfaces + resolution event allows closure",
+      "pass": true,
+      "status": 200,
+      "body": {
+        "ok": {
+          "id": "86e67196-b13f-4790-b9c7-d2c02c7b2ec6",
+          "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
+          "guestProfileId": "565eb1e3-800c-4b91-9cd9-2aceacd441c7",
+          "segmentNumber": 1,
+          "useType": "CATERING",
+          "status": "CLOSED",
+          "currentStage": "S9",
+          "walkInCompressed": false,
+          "checkInDate": null,
+          "checkOutDate": null,
+          "guestCount": null,
+          "otaSource": false,
+          "otaReference": null,
+          "groupBillingMode": null,
+          "parkedAt": null,
+          "parkedBy": null,
+          "parkedIndividually": false,
+          "createdAt": "2026-04-25T10:27:54.282Z",
+          "updatedAt": "2026-04-25T10:27:54.344Z",
+          "createdBy": "test",
+          "version": 2,
+          "closedAt": "2026-04-25T10:27:54.343Z",
+          "closedBy": "test-fom-1",
+          "noShowCutoffReachedAt": null,
+          "creditCeilingTier2AcknowledgedAt": null,
+          "creditCeilingTier2AcknowledgedBy": null,
+          "awaitingWrittenConfirmationActive": false,
+          "keysIssuedAt": null,
+          "keysIssuedCount": null,
+          "keysIssuedBy": null,
+          "registrationCompletedAt": null,
+          "registrationCompletedBy": null
+        },
+        "breach": {
+          "id": "53c83e05-c6eb-4dbe-8506-e6d742ee13fd",
+          "eventType": "EQUIPMENT_RETURN.DEADLINE_BREACHED",
+          "actorId": "SYSTEM",
+          "actorLevel": "SYSTEM",
+          "entityType": "EquipmentAllocation",
+          "entityId": "c429a252-c174-430d-aff2-fb374c7b1214",
+          "operation": "ALERT",
+          "payload": {
+            "entryId": "86e67196-b13f-4790-b9c7-d2c02c7b2ec6",
+            "equipmentCode": "CHAIR_10",
+            "equipmentAllocationId": "c429a252-c174-430d-aff2-fb374c7b1214"
+          },
+          "timestamp": "2026-04-25T10:27:54.312Z",
+          "stageContext": "S9",
+          "segmentContext": null,
+          "correlationId": null,
+          "inquiryId": null,
+          "entryId": "86e67196-b13f-4790-b9c7-d2c02c7b2ec6",
+          "createdAt": "2026-04-25T10:27:54.314Z",
+          "createdBy": "SYSTEM"
+        }
       }
     }
   ]
