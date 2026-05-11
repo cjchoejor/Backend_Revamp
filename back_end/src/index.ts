@@ -1,14 +1,14 @@
 import cors from "cors";
 import express from "express";
 import { AppError } from "./lib/errors.js";
-import { s5Router } from "./routes/s5-routes.js";
+import { apiRouter } from "./routes/api-router.js";
 import { startWorkers } from "./workers/runner.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use("/api", s5Router);
+app.use("/api", apiRouter);
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof AppError) {

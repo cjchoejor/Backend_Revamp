@@ -159,6 +159,8 @@ enum CommunicationChannel {
 enum CommunicationType {
   FEEDBACK_SOLICITATION
   POST_STAY_CHARGE_NOTICE
+  QUOTATION
+  PROFORMA_INVOICE
   CONFIRMATION_VOUCHER
   INVOICE_SUPERSEDED_NOTICE
 }
@@ -420,6 +422,11 @@ model Inquiry {
   sourceChannel      String    @default("DIRECT")
   defaultCustodianId String
   notes              String?
+  /// SIG-S1 corporate/government context (required for CORP/GOV at S1→S2 exit)
+  corporateClientRef String?
+  corporateCoordinator String?
+  corporateContextCapturedAt DateTime?
+  corporateContextCapturedBy String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   createdBy          String    @default("actor-seed-system")
@@ -427,11 +434,41 @@ model Inquiry {
   parkedBy           String?
 
   entries      Entry[]
+  duplicateFlags DuplicateDetectionFlag[]
   guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
   agentProfile AgentProfile? @relation(fields: [agentProfileId], references: [id])
 
   @@index([guestProfileId])
   @@map("inquiries")
+}
+
+enum DuplicateFlagStatus {
+  OPEN
+  RESOLVED
+}
+
+enum DuplicateResolutionType {
+  MERGE
+  ACKNOWLEDGE
+  DISMISS
+}
+
+model DuplicateDetectionFlag {
+  id                 String                 @id @default(uuid())
+  inquiryId           String
+  status             DuplicateFlagStatus    @default(OPEN)
+  resolutionType     DuplicateResolutionType?
+  resolutionReason   String?
+  mergedIntoInquiryId String?
+  createdAt          DateTime               @default(now())
+  createdBy          String
+  resolvedAt         DateTime?
+  resolvedBy         String?
+
+  inquiry Inquiry @relation(fields: [inquiryId], references: [id])
+
+  @@index([inquiryId, status])
+  @@map("duplicate_detection_flags")
 }
 
 model Entry {
@@ -478,6 +515,10 @@ model Entry {
   /// SIG-S6 — registration snapshot at check-in completion.
   registrationCompletedAt DateTime?
   registrationCompletedBy String?
+
+  /// SIG-S1 apartment context (required for APARTMENT at S1→S2 exit)
+  apartmentDurationNights Int?
+  apartmentRateTierCode   String?
 
   inquiry            Inquiry             @relation(fields: [inquiryId], references: [id])
   guestProfile       GuestProfile?       @relation(fields: [guestProfileId], references: [id])
@@ -774,6 +815,8 @@ model Room {
   currentClaimState          InventoryClaimState        @default(FREE)
   physicalState              RoomPhysicalState          @default(AVAILABLE_CLEAN)
   expectedReadyAt            DateTime?
+  /// SIG-S1 shadow inventory surface for Policy 14 filtering at availability query time.
+  isShadowInventory          Boolean                    @default(false)
 
   // Model 2 — Physical state fields per SIG §2.6
   isDeficient                Boolean                    @default(false)

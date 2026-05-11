@@ -72,6 +72,7 @@ async function main() {
   await prisma.entry.deleteMany();
   await prisma.room.deleteMany();
   await prisma.roomType.deleteMany();
+  await prisma.duplicateDetectionFlag.deleteMany();
   await prisma.inquiry.deleteMany();
   await prisma.guestProfile.deleteMany();
 
@@ -100,7 +101,12 @@ async function main() {
     },
     {
       configKey: "availability.shadowInventory.visibilityRules",
-      configValue: [{ actorLevel: "L1", visible: true }, { actorLevel: "L2", visible: true }, { actorLevel: "L3", visible: true }, { actorLevel: "L4", visible: true }],
+      configValue: [
+        { actorLevel: "L1", visible: false },
+        { actorLevel: "L2", visible: true },
+        { actorLevel: "L3", visible: true },
+        { actorLevel: "L4", visible: true },
+      ],
     },
     { configKey: "availability.bookablePhysicalStates", configValue: ["FREE"] },
     { configKey: "availability.staleness.ttlSeconds", configValue: 900 },
@@ -258,6 +264,21 @@ async function main() {
       currentClaimState: InventoryClaimState.FREE,
       physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
       isDeficient: false,
+      isShadowInventory: true,
+    },
+  });
+
+  // Non-shadow FREE room to keep S1 availability working for L1.
+  await prisma.room.create({
+    data: {
+      roomNumber: "403",
+      roomTypeId: roomType.id,
+      floorNumber: 4,
+      capacity: 2,
+      currentClaimState: InventoryClaimState.FREE,
+      physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+      isDeficient: false,
+      isShadowInventory: false,
     },
   });
 

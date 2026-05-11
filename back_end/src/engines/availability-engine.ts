@@ -11,6 +11,7 @@ export type RoomAvailabilityRecord = {
   roomTypeId: string;
   capacity: number;
   currentClaimState: InventoryClaimState;
+  isShadowInventory?: boolean;
   isDeficient: boolean;
   deficientConditionCategory?: string | null;
   isUnderMaintenance: boolean;
@@ -36,6 +37,7 @@ export type AvailabilityInput = {
   useType: EntryUseType;
   otaSource: boolean;
   guestTier: string;
+  actorLevel?: string;
   agentTier?: string;
   shadowInventoryRules: ShadowInventoryRule[];
   bookablePhysicalStates: InventoryClaimState[];
@@ -91,7 +93,24 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
 
   const rooms = input.roomTypeId ? input.rooms.filter((r) => r.roomTypeId === input.roomTypeId) : input.rooms;
 
+  // Policy 14 (Shadow inventory visibility): if room is shadow, visibility depends on rules for actor level.
+  const actorLevel = input.actorLevel ?? "L1";
+  const shadowRule = (input.shadowInventoryRules ?? []).find((r) => String(r.actorLevel ?? "").toUpperCase() === String(actorLevel).toUpperCase());
+  const showShadow = shadowRule ? shadowRule.visible === true : true;
+
   for (const room of rooms) {
+    if (room.isShadowInventory === true && !showShadow) {
+      continue;
+    }
+
+    // Policy 1: only configured bookable physical states can be returned as available candidates.
+    if (Array.isArray(input.bookablePhysicalStates) && input.bookablePhysicalStates.length > 0) {
+      if (!input.bookablePhysicalStates.includes(room.currentClaimState)) {
+        unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, unavailabilityReason: "PHYSICAL_NOT_READY" });
+        continue;
+      }
+    }
+
     // Model 1 claim state
     if (room.currentClaimState !== "FREE") {
       unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, unavailabilityReason: "CLAIMED" });

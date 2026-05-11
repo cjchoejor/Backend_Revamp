@@ -292,8 +292,8 @@ async function run() {
       folioAudit: !!after.folio?.convertedToLiveAt && !!after.folio?.convertedBy,
       roomOccupied: room?.currentClaimState === "OCCUPIED",
       claimEvent:
-        claimEvent?.fromState === "CONFIRMED" &&
-        claimEvent?.toState === "OCCUPIED" &&
+      claimEvent?.fromState === "CONFIRMED" &&
+      claimEvent?.toState === "OCCUPIED" &&
         (claimEvent as any)?.entryId === after.id,
       h1Closed: h1?.state === "CLOSED" && !!h1?.closedAt,
       h1BeforeS7: !!(h1Te && s7te && new Date((h1Te as any).timestamp) <= new Date((s7te as any).timestamp)),

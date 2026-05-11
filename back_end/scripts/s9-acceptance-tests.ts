@@ -629,7 +629,7 @@ main()
     console.log("S9 acceptance tests: PASS");
   })
   .catch((e) => {
-    console.error(e);
+  console.error(e);
     process.exit(1);
-  });
+});
 

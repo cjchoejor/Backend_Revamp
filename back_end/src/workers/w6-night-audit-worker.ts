@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
-import { runNightAudit } from "../services/s7-night-audit-service.js";
+import { runNightAudit } from "../services/application/s7-night-audit-service.js";
 
 export async function runNightAuditWorker(prisma: PrismaClient, input: { operatingDate?: string; actorId?: string }) {
   const actorId = typeof input.actorId === "string" ? input.actorId : "SYSTEM";

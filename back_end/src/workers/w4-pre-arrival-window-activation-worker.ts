@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
-import * as preArrivalService from "../services/pre-arrival-service.js";
+import * as preArrivalService from "../services/domain/pre-arrival-service.js";
 
 export async function runPreArrivalWindowActivationWorker(
   prisma: PrismaClient,

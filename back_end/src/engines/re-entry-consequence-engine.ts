@@ -10,6 +10,15 @@ export async function computeReEntryConsequences(
   input: { entryId: string; fromStage: Stage; toStage: Stage; reason: string; actorId: string },
 ) {
   const now = new Date();
+  const consequences: string[] = [];
+
+  if (input.fromStage === Stage.S3 && input.toStage === Stage.S2) {
+    consequences.push("HOLD_RETAINED", "FOLIO_CONTINUES", "INVOICES_NOT_SUPERSEDED");
+  }
+  if (input.fromStage === Stage.S3 && input.toStage === Stage.S1) {
+    consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_SUPERSEDED", "CANCEL_W22_W34_TIMERS");
+  }
+
   await (prisma as any).traceEvent.create({
     data: {
       eventType: "REENTRY.CONSEQUENCES_COMPUTED",
@@ -22,10 +31,10 @@ export async function computeReEntryConsequences(
       stageContext: input.fromStage,
       inquiryId: null,
       entryId: input.entryId,
-      payload: { entryId: input.entryId, fromStage: input.fromStage, toStage: input.toStage, reason: input.reason },
+      payload: { entryId: input.entryId, fromStage: input.fromStage, toStage: input.toStage, reason: input.reason, consequences },
       createdBy: input.actorId,
     },
   });
-  return { ok: true, consequences: [] as Array<unknown> } as const;
+  return { ok: true, consequences } as const;
 }
 

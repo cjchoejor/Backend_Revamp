@@ -21,7 +21,7 @@ export async function runPaymentMilestoneWorker(prisma: PrismaClient, input: { e
         entityId: typeof input.entryId === "string" ? input.entryId : "UNKNOWN",
         operation: "ALERT",
         timestamp: now,
-        stageContext: Stage.S7,
+        stageContext: Stage.S3,
         inquiryId: null,
         entryId: typeof input.entryId === "string" ? input.entryId : null,
         payload: { milestone: typeof input.milestone === "string" ? input.milestone : null },
