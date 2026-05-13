@@ -1,6 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 import { StageDwellMode } from "@prisma/client";
 import { requireActiveConfigValue } from "../lib/config-store.js";
+import * as notificationService from "../services/infrastructure/notification-service.js";
+import * as auditService from "../services/infrastructure/audit-service.js";
 
 type ThresholdConfig = Record<
   string,
@@ -43,59 +45,47 @@ export async function runStageDwellMonitor(prisma: PrismaClient, input: { entryI
   await prisma.$transaction(async (tx) => {
     if (shouldWarn) {
       await tx.stageDwellRecord.update({ where: { id: dwell.id }, data: { warningFiredAt: now, lastActiveAt: now } });
-      await tx.traceEvent.create({
-        data: {
-          eventType: "STAGE_DWELL.WARNING_FIRED",
-          actorId: "SYSTEM",
-          actorLevel: "SYSTEM",
-          entityType: "Entry",
-          entityId: entry.id,
-          operation: "UPDATE",
-          timestamp: now,
-          stageContext: stage,
-          inquiryId: entry.inquiryId,
-          entryId: entry.id,
-          payload: { entryId: entry.id, stage, secondsInStage, mode: dwell.mode },
-          createdBy: "SYSTEM",
-        },
+      await auditService.emit(tx as any, auditService.systemActor(), {
+        eventType: "STAGE_DWELL.WARNING_FIRED",
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: stage as any,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: { entryId: entry.id, stage, secondsInStage, mode: dwell.mode },
+        createdBy: "SYSTEM",
       });
     }
     if (shouldCritical) {
       await tx.stageDwellRecord.update({ where: { id: dwell.id }, data: { criticalFiredAt: now, lastActiveAt: now } });
-      await tx.traceEvent.create({
-        data: {
-          eventType: "STAGE_DWELL.CRITICAL_FIRED",
-          actorId: "SYSTEM",
-          actorLevel: "SYSTEM",
-          entityType: "Entry",
-          entityId: entry.id,
-          operation: "UPDATE",
-          timestamp: now,
-          stageContext: stage,
-          inquiryId: entry.inquiryId,
-          entryId: entry.id,
-          payload: { entryId: entry.id, stage, secondsInStage, mode: dwell.mode },
-          createdBy: "SYSTEM",
-        },
+      await auditService.emit(tx as any, auditService.systemActor(), {
+        eventType: "STAGE_DWELL.CRITICAL_FIRED",
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: stage as any,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: { entryId: entry.id, stage, secondsInStage, mode: dwell.mode },
+        createdBy: "SYSTEM",
       });
     }
     if (shouldEscalate) {
       await tx.stageDwellRecord.update({ where: { id: dwell.id }, data: { escalatedAt: now, lastActiveAt: now } });
-      await tx.traceEvent.create({
-        data: {
-          eventType: "STAGE_DWELL.FOM_ESCALATED",
-          actorId: "SYSTEM",
-          actorLevel: "SYSTEM",
-          entityType: "Entry",
-          entityId: entry.id,
-          operation: "UPDATE",
-          timestamp: now,
-          stageContext: stage,
-          inquiryId: entry.inquiryId,
-          entryId: entry.id,
-          payload: { entryId: entry.id, stage, secondsInStage, mode: dwell.mode },
-          createdBy: "SYSTEM",
-        },
+      await auditService.emit(tx as any, auditService.systemActor(), {
+        eventType: "STAGE_DWELL.FOM_ESCALATED",
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: stage as any,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: { entryId: entry.id, stage, secondsInStage, mode: dwell.mode },
+        createdBy: "SYSTEM",
       });
     }
 
@@ -104,24 +94,48 @@ export async function runStageDwellMonitor(prisma: PrismaClient, input: { entryI
         where: { id: cfg.id },
         data: { isStale: true, stalenessAt: now },
       });
-      await tx.traceEvent.create({
-        data: {
-          eventType: "STAGE_DWELL.AVAILABILITY_STALENESS_MARKED",
-          actorId: "SYSTEM",
-          actorLevel: "SYSTEM",
-          entityType: "AvailabilityConfiguration",
-          entityId: cfg.id,
-          operation: "UPDATE",
-          timestamp: now,
-          stageContext: stage,
-          inquiryId: entry.inquiryId,
-          entryId: entry.id,
-          payload: { entryId: entry.id, configurationId: cfg.id, stalenessAt: now.toISOString() },
-          createdBy: "SYSTEM",
-        },
+      await auditService.emit(tx as any, auditService.systemActor(), {
+        eventType: "STAGE_DWELL.AVAILABILITY_STALENESS_MARKED",
+        entityType: "AvailabilityConfiguration",
+        entityId: cfg.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: stage as any,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: { entryId: entry.id, configurationId: cfg.id, stalenessAt: now.toISOString() },
+        createdBy: "SYSTEM",
       });
     }
   });
+
+  if (shouldWarn) {
+    await notificationService.dispatchStageDwell(prisma, {
+      entryId: entry.id,
+      stage: String(stage),
+      severity: "WARNING",
+      secondsInStage,
+      mode: String(dwell.mode),
+    });
+  }
+  if (shouldCritical) {
+    await notificationService.dispatchStageDwell(prisma, {
+      entryId: entry.id,
+      stage: String(stage),
+      severity: "CRITICAL",
+      secondsInStage,
+      mode: String(dwell.mode),
+    });
+  }
+  if (shouldEscalate) {
+    await notificationService.dispatchStageDwell(prisma, {
+      entryId: entry.id,
+      stage: String(stage),
+      severity: "ESCALATION",
+      secondsInStage,
+      mode: String(dwell.mode),
+    });
+  }
 
   return { skipped: false, phases: { warned: shouldWarn, critical: shouldCritical, escalated: shouldEscalate }, staleMarked: staleCfgs.length } as const;
 }

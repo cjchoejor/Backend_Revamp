@@ -1,5 +1,5 @@
 import { TaskStatus } from "@prisma/client";
-import { PolicyGateBlockedError, StageGateBlockedError } from "../../lib/errors.js";
+import { PolicyGateBlockedError, StageGateBlockedError, StateTransitionError } from "../../lib/errors.js";
 
 /**
  * Policy 9 — Pre-Arrival Period Policy (S5→S6 normal exit slice).
@@ -17,5 +17,11 @@ export function enforcePreArrivalTaskWaiveRequiresReason(input: { action: "COMPL
   if (!input.waivedReason?.trim()) {
     throw new PolicyGateBlockedError("WAIVED_REASON_REQUIRED", "waivedReason is required when action is WAIVE");
   }
+}
+
+/** Pre-arrival task update (COMPLETE/WAIVE) requires PENDING status. */
+export function enforcePreArrivalTaskPendingForUpdate(input: { status: TaskStatus }) {
+  if (input.status === TaskStatus.PENDING) return;
+  throw new StateTransitionError("Task is already in a terminal status");
 }
 

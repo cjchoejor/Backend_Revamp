@@ -15,9 +15,13 @@ export type TimerJobName =
   | "NO_SHOW_CUTOFF_W5"
   | "AWAITING_WRITTEN_CONFIRMATION_W5"
   | "ROOM_READINESS_SLA_W23"
+  /// SIG-S6 — async staff ping / observability after VIP commencement record (idempotent).
+  | "VIP_ARRIVAL_NOTIFICATION_W14"
   | "H2_H3_ACCEPTANCE_W25"
   | "H4_ACCEPTANCE_W25"
   | "NIGHT_AUDIT_W6"
+  /// SIG-S5 Policy 59 — per stay-night registration fired during pre-arrival (informational / trace).
+  | "NIGHT_AUDIT_STAY_NIGHT_W37"
   // S8/S9 timers (documented pg-boss-backed workers)
   | "PAYMENT_FOLLOW_UP_W8"
   | "POST_CHECKOUT_INSPECTION_W9"
@@ -32,6 +36,7 @@ export type TimerJobName =
   | "FEEDBACK_SOLICITATION_W28"
   | "EQUIPMENT_RETURN_W29"
   | "GUEST_DATA_RETENTION_P18"
+  | "LOST_FOUND_RETENTION_W30"
   | "FOM_OVERRIDE_FREQUENCY_W32";
 
 export type TimerEngine = {
@@ -72,9 +77,11 @@ export function createTimerEngine(connectionString: string): TimerEngine {
         "NO_SHOW_CUTOFF_W5",
         "AWAITING_WRITTEN_CONFIRMATION_W5",
         "ROOM_READINESS_SLA_W23",
+        "VIP_ARRIVAL_NOTIFICATION_W14",
         "H2_H3_ACCEPTANCE_W25",
         "H4_ACCEPTANCE_W25",
         "NIGHT_AUDIT_W6",
+        "NIGHT_AUDIT_STAY_NIGHT_W37",
         "PAYMENT_FOLLOW_UP_W8",
         "POST_CHECKOUT_INSPECTION_W9",
         "DEFICIENT_RESOLUTION_DEADLINE_W10",
@@ -88,6 +95,7 @@ export function createTimerEngine(connectionString: string): TimerEngine {
         "FEEDBACK_SOLICITATION_W28",
         "EQUIPMENT_RETURN_W29",
         "GUEST_DATA_RETENTION_P18",
+        "LOST_FOUND_RETENTION_W30",
         "FOM_OVERRIDE_FREQUENCY_W32",
       ] as const) {
         await (boss as any).createQueue(q);

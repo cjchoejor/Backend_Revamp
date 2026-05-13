@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "stage": "S1",
+    "scenarioName": "additional-entry-existing-inquiry",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s1-deep · Layer 03a (S1 inquiry & configuration)",
+    "generatedAt": "2026-05-13T10:50:05.395Z",
+    "apiBaseUrl": "http://localhost:4000/api",
+    "apiAvailable": false
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S1-ADDITIONAL-ENTRY",
+      "title": "Second entry on same inquiry is created",
+      "pass": true,
+      "httpStatus": 201,
+      "response": {
+        "id": "b8fcba6b-e7a8-4d78-af97-d1ddefeb79fb",
+        "inquiryId": "2e442bdd-bae5-44aa-ad31-d216f5068f8a",
+        "guestProfileId": "4126f2dd-5eb0-4e61-afa3-fc296e1b2276",
+        "segmentNumber": 1,
+        "useType": "LEISURE",
+        "status": "ACTIVE",
+        "currentStage": "S1",
+        "walkInCompressed": false,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "guestCount": null,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-05-13T10:50:05.387Z",
+        "updatedAt": "2026-05-13T10:50:05.387Z",
+        "createdBy": "s1-fd-1",
+        "version": 1,
+        "closedAt": null,
+        "closedBy": null,
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null,
+        "apartmentDurationNights": null,
+        "apartmentRateTierCode": null
+      },
+      "explanation": "Validates multi-entry pattern (reference: Additional entry · existing inquiry).",
+      "dbImpact": "INSERT entries + segment for second entry."
+    }
+  ]
+}

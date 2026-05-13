@@ -1,14 +1,20 @@
-import type { PrismaClient } from "@prisma/client";
-import { EntryStatus, HandoffState, HandoffType, Stage } from "@prisma/client";
-import {
-  MissingConfigurationError,
-  NotFoundError,
-  StateTransitionError,
-  ValidationError,
-} from "../../lib/errors.js";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { HandoffState, HandoffType, Stage } from "@prisma/client";
+import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceDeficientCarryIntoH2 } from "../../policies/19-deficient-condition/p49-deficient-carry-into-h2.js";
 import { enforceHandoffFulfilmentEvidence, enforceMandatoryChecklistItemsCompleted } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
+import {
+  enforceHandoffAcceptTypeSupported,
+  enforceHandoffConfigKeyPresentForH4,
+  enforceHandoffFulfilStateH1,
+  enforceHandoffFulfilStateH4,
+  enforceHandoffFulfilStateH5,
+  enforceHandoffFulfilTypeSupported,
+  enforceHandoffInCreatedStateForAccept,
+  enforceHandoffRejectTypeSupported,
+  enforceHandoffRejectableState,
+} from "../../policies/25-handoff/p63-handoff-service-state-guards.js";
 import {
   enforceEntryActiveForH4Initiation,
   enforceEntryAtS6AndActiveForCreateH2,
@@ -36,19 +42,8 @@ export async function acceptHandoff(
   if (!handoff) throw new NotFoundError("Handoff");
 
   const key = configKeyForHandoff(handoff.handoffType);
-  if (!key) {
-    throw new StateTransitionError("Unsupported handoff type for accept");
-  }
-
-  if (handoff.handoffType === HandoffType.H1) {
-    if (handoff.state !== HandoffState.CREATED) {
-      throw new StateTransitionError(`H1 must be in CREATED state to accept (current: ${handoff.state})`);
-    }
-  } else if (handoff.handoffType === HandoffType.H2 || handoff.handoffType === HandoffType.H3) {
-    if (handoff.state !== HandoffState.CREATED) {
-      throw new StateTransitionError(`Handoff must be in CREATED state to accept (current: ${handoff.state})`);
-    }
-  }
+  enforceHandoffAcceptTypeSupported(key);
+  enforceHandoffInCreatedStateForAccept({ handoffType: handoff.handoffType, state: handoff.state });
 
   const items = (await requireActiveConfigValue<ChecklistItem[] | undefined>(prisma, key)) ?? [];
   const mandatory = items.filter((i) => i.mandatory);
@@ -97,27 +92,15 @@ export async function fulfilHandoff(
   const handoff = await prisma.handoffRecord.findUnique({ where: { id: handoffId } });
   if (!handoff) throw new NotFoundError("Handoff");
 
-  if (handoff.handoffType !== HandoffType.H1 && handoff.handoffType !== HandoffType.H4 && handoff.handoffType !== HandoffType.H5) {
-    throw new StateTransitionError("fulfil() is only implemented for H1, H4, and H5 in this slice");
-  }
-
-  if (handoff.handoffType === HandoffType.H1 && handoff.state === HandoffState.CREATED) {
-    throw new StateTransitionError("H1 cannot move to FULFILLED from CREATED — accept first");
-  }
-
-  if (handoff.handoffType === HandoffType.H1 && handoff.state !== HandoffState.ACCEPTED) {
-    throw new StateTransitionError(`H1 must be in ACCEPTED state to fulfil (current: ${handoff.state})`);
-  }
-  if (handoff.handoffType === HandoffType.H4 && (handoff.state === HandoffState.REJECTED || handoff.state === HandoffState.CLOSED)) {
-    throw new StateTransitionError(`H4 cannot be fulfilled from state ${handoff.state}`);
-  }
-  if (handoff.handoffType === HandoffType.H5 && (handoff.state === HandoffState.REJECTED || handoff.state === HandoffState.CLOSED)) {
-    throw new StateTransitionError(`H5 cannot be fulfilled from state ${handoff.state}`);
-  }
+  const handoffType = handoff.handoffType;
+  enforceHandoffFulfilTypeSupported(handoffType);
+  enforceHandoffFulfilStateH1({ handoffType, state: handoff.state });
+  enforceHandoffFulfilStateH4({ handoffType, state: handoff.state });
+  enforceHandoffFulfilStateH5({ handoffType, state: handoff.state });
 
   const ev = fulfilmentEvidence ?? {};
   const enforcedEvidence = enforceHandoffFulfilmentEvidence({
-    handoffType: handoff.handoffType,
+    handoffType,
     fulfilmentEvidence: ev,
   });
 
@@ -135,15 +118,11 @@ export async function fulfilHandoff(
 export async function rejectHandoff(prisma: PrismaClient, handoffId: string, actorId: string, rejectionReason: string) {
   const handoff = await prisma.handoffRecord.findUnique({ where: { id: handoffId } });
   if (!handoff) throw new NotFoundError("Handoff");
-  if (handoff.handoffType !== HandoffType.H2 && handoff.handoffType !== HandoffType.H3) {
-    throw new StateTransitionError("reject() is only implemented for H2 and H3 in this slice");
-  }
+  enforceHandoffRejectTypeSupported({ handoffType: handoff.handoffType });
   if (!rejectionReason?.trim()) {
     throw new ValidationError("rejectionReason is required");
   }
-  if (handoff.state === HandoffState.REJECTED || handoff.state === HandoffState.CLOSED) {
-    throw new StateTransitionError(`Cannot reject handoff in state ${handoff.state}`);
-  }
+  enforceHandoffRejectableState({ state: handoff.state });
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
@@ -209,7 +188,7 @@ export async function createH4(
   enforceEntryActiveForH4Initiation({ status: entry.status });
 
   const key = configKeyForHandoff(HandoffType.H4);
-  if (!key) throw new StateTransitionError("Unsupported handoff type for createH4");
+  enforceHandoffConfigKeyPresentForH4(key);
   // S7 readiness: checklist must exist (even if empty list)
   await requireActiveConfigValue<ChecklistItem[] | undefined>(prisma, key);
 
@@ -366,4 +345,25 @@ export async function createH2(
   }
 
   return created;
+}
+
+/** SIG-S4 D-01 — H1 created inside the confirmation transaction (`stageContext` **S4**). */
+export async function createH1AtS4ConfirmationTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; actorId: string; checklistContent: unknown; isAutoFulfilled?: boolean },
+) {
+  return tx.handoffRecord.create({
+    data: {
+      entryId: input.entryId,
+      handoffType: HandoffType.H1,
+      state: HandoffState.CREATED,
+      fromRole: "RESERVATIONS",
+      fromActorId: input.actorId,
+      toRole: "FRONT_DESK",
+      checklistContent: (input.checklistContent ?? {}) as object,
+      createdBy: input.actorId,
+      stageContext: Stage.S4,
+      isAutoFulfilled: input.isAutoFulfilled === true,
+    },
+  });
 }

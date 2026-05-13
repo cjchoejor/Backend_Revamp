@@ -3,6 +3,8 @@ import { Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
 import * as preArrivalService from "../services/domain/pre-arrival-service.js";
+import { enforceReservationSnapshotPresentForS5Activation } from "../policies/01-availability/p01-reservation-snapshot-required-for-s5-activation.js";
+import { scheduleS5StageDwellWarningMonitor } from "../lib/schedule-s5-dwell-warning-monitor.js";
 
 export async function runPreArrivalWindowActivationWorker(
   prisma: PrismaClient,
@@ -16,6 +18,7 @@ export async function runPreArrivalWindowActivationWorker(
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
   if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
   if (entry.currentStage !== Stage.S4) return { skipped: true, reason: "NOT_AT_S4" } as const;
+  enforceReservationSnapshotPresentForS5Activation({ reservation: entry.reservation });
 
   const alreadyFired = await prisma.traceEvent.findFirst({
     where: { entryId, eventType: "PRE_ARRIVAL.ACTIVATION_FIRED" },
@@ -78,6 +81,8 @@ export async function runPreArrivalWindowActivationWorker(
 
   // Seed pre-arrival task checklist (idempotent).
   await preArrivalService.initialiseTasks(prisma, entryId, "SYSTEM");
+
+  await scheduleS5StageDwellWarningMonitor(prisma, entryId, "SYSTEM");
 
   // Optional H1 auto-accept when configured as "same team" (SIG-S5 AC-S5-012).
   const auto = await requireActiveConfigValue<boolean | null>(prisma, "handoff.H1.autoFulfil.enabled", { now }).catch(() => null);

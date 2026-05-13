@@ -1,30 +1,24 @@
-import type { PrismaClient } from "@prisma/client";
+import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
 import { EntryStatus, Stage } from "@prisma/client";
-import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
-import { enforceEntryAtS1ForAutoFulfilS2ToS3 } from "../../policies/01-availability/p01-entry-at-s1-for-auto-fulfil-s2-to-s3.js";
+export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
+import * as auditService from "../infrastructure/audit-service.js";
+import * as notificationService from "../infrastructure/notification-service.js";
+import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
+import { resolveGroupBillingModeFromGuestCount } from "../../policies/12-multi-booking/p64-group-detection-at-entry-creation.js";
 import {
-  enforceDeficientAcknowledgementsWhenRequiredForS1Exit,
-  enforcePreferredAvailabilityConfigurationNotStaleForS1Exit,
-  enforcePreferredAvailabilityConfigurationSelectedForS1Exit,
-  enforceSelectedRoomNotMaintenanceOrBlockedForS1Exit,
-} from "../../policies/01-availability/p01-s1-exit-preferred-configuration-and-room-eligibility.js";
-import { enforceNoOpenDuplicateFlagsForS1Exit } from "../../policies/04-duplicate-detection/p12-open-duplicate-flag-blocks-s1-exit.js";
-import {
-  enforceGuestCountPresentForS1Exit,
-  enforceGuestProfileLinkedForS1Exit,
-  enforceGuestProfilePrimaryContactForS1Exit,
-  enforceStayDatesPresentForS1Exit,
-  enforceUseTypePresentForS1Exit,
-} from "../../policies/06-guest-identity/p16-s1-exit-entry-and-contact-gates.js";
-import { enforceCorporateOrGovernmentInquiryContextForS1Exit } from "../../policies/07-guest-data-governance/p17-corporate-government-inquiry-context-s1-exit.js";
-import { enforceApartmentCommercialFieldsForS1Exit } from "../../policies/13-billing-model/p33-apartment-commercial-fields-s1-exit.js";
-import { enforceConferenceSpaceAllocationForS1Exit } from "../../policies/27-work-order/p67-conference-s1-exit-space-gates.js";
+  enforceEntryActiveForPark,
+  enforceEntryNotExpiredForS1Lifecycle,
+  enforceEntryParkedForUnpark,
+} from "../../policies/01-availability/p01-s1-entry-status-and-stage-gates.js";
+import { enforceEntryParkAllowedForCurrentStage } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 
 export async function createEntry(
   prisma: PrismaClient,
   actorId: string,
+  actorLevel: ActorLevel,
   input: {
     inquiryId: string;
     guestProfileId?: string;
@@ -40,6 +34,19 @@ export async function createEntry(
   if (!input.useType?.trim()) throw new ValidationError("useType is required");
   const inquiry = await prisma.inquiry.findUnique({ where: { id: input.inquiryId } });
   if (!inquiry) throw new NotFoundError("Inquiry");
+
+  const thresholdEntry = await getActiveConfigEntry(prisma, "groupDetection.guestCountThreshold");
+  const thresholdRaw = thresholdEntry?.configValue;
+  const threshold =
+    typeof thresholdRaw === "number"
+      ? thresholdRaw
+      : typeof thresholdRaw === "string"
+        ? Number(thresholdRaw)
+        : Number.MAX_SAFE_INTEGER;
+  const groupBillingMode = resolveGroupBillingModeFromGuestCount({
+    guestCount: input.guestCount,
+    threshold: Number.isFinite(threshold) ? threshold : Number.MAX_SAFE_INTEGER,
+  });
 
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : null;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
@@ -57,6 +64,7 @@ export async function createEntry(
         checkOutDate: checkOutDate && !Number.isNaN(checkOutDate.getTime()) ? checkOutDate : null,
         guestCount: input.guestCount ?? null,
         otaSource: input.otaSource === true,
+        ...(groupBillingMode != null ? { groupBillingMode } : {}),
         createdBy: actorId,
       },
     });
@@ -65,22 +73,39 @@ export async function createEntry(
     });
     const now = new Date();
     await tx.stageDwellRecord.create({ data: { entryId: entry.id, stage: Stage.S1, enteredAt: now, lastActiveAt: now, mode: "ACTIVE" } as any });
-    await tx.traceEvent.create({
+    await auditService.emit(tx as any, { actorId, actorLevel }, {
+      eventType: "ENTRY.CREATED",
+      entityType: "Entry",
+      entityId: entry.id,
+      operation: "CREATE",
+      timestamp: now,
+      stageContext: Stage.S1,
+      inquiryId: entry.inquiryId,
+      entryId: entry.id,
+      payload: { entryId: entry.id, stage: "S1" },
+      createdBy: actorId,
+    });
+
+    const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
+    const dueAt = new Date(Date.now() + Number(ttl.DEFAULT ?? 3600) * 1000);
+    const engine = await getTimerEngine();
+    const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId: entry.id }, { startAfter: dueAt });
+    await tx.timerRecord.create({
       data: {
-        eventType: "ENTRY.CREATED",
-        actorId,
-        actorLevel: "L1",
+        entryId: entry.id,
         entityType: "Entry",
         entityId: entry.id,
-        operation: "CREATE",
-        timestamp: now,
+        timerType: "ENTRY_EXPIRY",
         stageContext: Stage.S1,
-        inquiryId: entry.inquiryId,
-        entryId: entry.id,
-        payload: { entryId: entry.id, stage: "S1" },
+        firesAt: dueAt,
+        dueAt,
+        status: "SCHEDULED",
+        payload: { entryId: entry.id },
+        pgBossJobId: jobId,
         createdBy: actorId,
       },
     });
+
     return entry;
   });
 }
@@ -88,29 +113,26 @@ export async function createEntry(
 export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: string, _reason?: string) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
-  if ((entry.status as any) === "EXPIRED") throw new StateTransitionError("Entry is EXPIRED");
-  if (entry.status !== EntryStatus.ACTIVE) throw new StateTransitionError("Entry must be ACTIVE to park");
+  enforceEntryNotExpiredForS1Lifecycle({ status: entry.status });
+  enforceEntryActiveForPark({ status: entry.status });
+  enforceEntryParkAllowedForCurrentStage({ currentStage: entry.currentStage });
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.entry.update({
       where: { id: entryId },
       data: { status: EntryStatus.PARKED, parkedAt: new Date(), parkedBy: actorId, parkedIndividually: true, version: { increment: 1 } },
     });
-    await tx.traceEvent.create({
-      data: {
-        eventType: "ENTRY.PARKED",
-        actorId,
-        actorLevel: "L1",
-        entityType: "Entry",
-        entityId: entryId,
-        operation: "UPDATE",
-        timestamp: new Date(),
-        stageContext: updated.currentStage,
-        inquiryId: updated.inquiryId,
-        entryId,
-        payload: {},
-        createdBy: actorId,
-      },
+    await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
+      eventType: "ENTRY.PARKED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: updated.currentStage as any,
+      inquiryId: updated.inquiryId,
+      entryId,
+      payload: {},
+      createdBy: actorId,
     });
     return updated;
   });
@@ -119,29 +141,25 @@ export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: 
 export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId: string) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
-  if ((entry.status as any) === "EXPIRED") throw new StateTransitionError("Entry is EXPIRED");
-  if (entry.status !== EntryStatus.PARKED) throw new StateTransitionError("Entry must be PARKED to unpark");
+  enforceEntryNotExpiredForS1Lifecycle({ status: entry.status });
+  enforceEntryParkedForUnpark({ status: entry.status });
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.entry.update({
       where: { id: entryId },
       data: { status: EntryStatus.ACTIVE, parkedAt: null, parkedBy: null, parkedIndividually: false, version: { increment: 1 } },
     });
-    await tx.traceEvent.create({
-      data: {
-        eventType: "ENTRY.UNPARKED",
-        actorId,
-        actorLevel: "L1",
-        entityType: "Entry",
-        entityId: entryId,
-        operation: "UPDATE",
-        timestamp: new Date(),
-        stageContext: updated.currentStage,
-        inquiryId: updated.inquiryId,
-        entryId,
-        payload: {},
-        createdBy: actorId,
-      },
+    await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
+      eventType: "ENTRY.UNPARKED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: updated.currentStage as any,
+      inquiryId: updated.inquiryId,
+      entryId,
+      payload: {},
+      createdBy: actorId,
     });
 
     // (Re-)register expiry timer on unpark (SIG-S1 §6.6 TimerManagementService).
@@ -168,123 +186,129 @@ export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId
   });
 }
 
-export async function progressS1ToS2(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
+export async function expireEntry(prisma: PrismaClient, entryId: string) {
+  if (!entryId?.trim()) throw new ValidationError("entryId is required");
+  const entry = await prisma.entry.findUnique({ where: { id: entryId } });
+  if (!entry) throw new NotFoundError("Entry");
+
+  if (entry.status === EntryStatus.EXPIRED || entry.status === EntryStatus.CANCELLED || entry.status === EntryStatus.CLOSED) {
+    return { skipped: true, reason: "ALREADY_TERMINAL" } as const;
+  }
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.entry.update({
+      where: { id: entry.id },
+      data: { status: EntryStatus.EXPIRED, closedAt: now, closedBy: "SYSTEM", version: { increment: 1 } },
+    });
+    await auditService.emit(tx as any, auditService.systemActor(), {
+      eventType: "ENTRY.EXPIRED",
+      entityType: "Entry",
+      entityId: entry.id,
+      operation: "TRANSITION",
+      timestamp: now,
+      stageContext: entry.currentStage as any,
+      payload: { entryId: entry.id, fromStatus: entry.status, toStatus: "EXPIRED" },
+      inquiryId: entry.inquiryId,
+      entryId: entry.id,
+      createdBy: "SYSTEM",
+    });
+  });
+
+  await notificationService.dispatchOperatorExpiry(prisma, {
+    entityType: "Entry",
+    entityId: entry.id,
+    entryId: entry.id,
+    reason: "ENTRY_STAGE_TTL_EXPIRED",
+  });
+
+  return { skipped: false } as const;
+}
+
+export async function reassignCustodianByEntryId(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  actorLevel: ActorLevel,
+  newCustodianId: string,
+  _reason: string,
+) {
+  if (!newCustodianId?.trim()) throw new ValidationError("newCustodianId is required");
+  const staff = await prisma.staffUser.findUnique({ where: { id: newCustodianId.trim() } });
+  if (!staff) throw new NotFoundError("StaffUser");
+
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
-      inquiry: { include: { duplicateFlags: true } as any },
-      availabilityConfigs: { orderBy: { createdAt: "desc" } },
-      guestProfile: true,
-      spaceAllocations: { include: { space: true } } as any,
+      inquiry: {
+        include: { entries: { select: { useType: true, guestCount: true } } },
+      },
     },
   });
-  if (!entry) throw new NotFoundError("Entry");
-  if ((entry.status as any) === "EXPIRED") throw new StateTransitionError("Entry is EXPIRED");
-  if (entry.currentStage !== Stage.S1) throw new StateTransitionError("Entry is not at S1");
-  if (clientVersion == null) throw new ValidationError("version is required");
-  if (entry.version !== clientVersion) throw new ValidationError("version mismatch");
+  if (!entry?.inquiry) throw new NotFoundError("Entry");
 
-  // Exit guard (partial, schema-backed): mandatory entry fields.
-  enforceGuestProfileLinkedForS1Exit({ guestProfileId: entry.guestProfileId });
-  enforceUseTypePresentForS1Exit({ useType: entry.useType });
-  enforceGuestCountPresentForS1Exit({ guestCount: entry.guestCount });
-  enforceStayDatesPresentForS1Exit({ checkInDate: entry.checkInDate, checkOutDate: entry.checkOutDate });
+  const useTypes = entry.inquiry.entries.map((e) => e.useType);
+  const maxGuests = entry.inquiry.entries.reduce((m, e) => (typeof e.guestCount === "number" && e.guestCount > m ? e.guestCount! : m), 0);
 
-  const gp = entry.guestProfile;
-  enforceGuestProfilePrimaryContactForS1Exit({ email: gp?.email, phone: gp?.phone });
-
-  enforceNoOpenDuplicateFlagsForS1Exit({ duplicateFlags: (entry.inquiry as any)?.duplicateFlags });
-
-  const inq: any = entry.inquiry;
-  enforceCorporateOrGovernmentInquiryContextForS1Exit({
-    sourceChannel: inq?.sourceChannel,
-    corporateClientRef: inq?.corporateClientRef,
-    corporateCoordinator: inq?.corporateCoordinator,
+  enforceCustodianReassignmentAuthority({
+    actorLevel,
+    useTypes,
+    guestCount: maxGuests > 0 ? maxGuests : undefined,
   });
-
-  enforceApartmentCommercialFieldsForS1Exit({
-    useType: String(entry.useType),
-    apartmentDurationNights: entry.apartmentDurationNights,
-    apartmentRateTierCode: entry.apartmentRateTierCode,
-  });
-
-  const preferredCfg = entry.availabilityConfigs.find((c) => c.optionSelected != null);
-  enforcePreferredAvailabilityConfigurationSelectedForS1Exit({ preferred: preferredCfg });
-  const preferred = preferredCfg!;
-  enforcePreferredAvailabilityConfigurationNotStaleForS1Exit({ isStale: preferred.isStale });
-  enforceDeficientAcknowledgementsWhenRequiredForS1Exit({
-    optionSelected: preferred.optionSelected,
-    deficientAcknowledgements: preferred.deficientAcknowledgements,
-  });
-
-  const selected = preferred.optionSelected as any;
-  const rs: any = preferred.resultSet ?? {};
-  enforceSelectedRoomNotMaintenanceOrBlockedForS1Exit({ selectedRoomId: selected?.roomId, resultSet: rs });
-
-  enforceConferenceSpaceAllocationForS1Exit({
-    useType: String(entry.useType),
-    spaceAllocations: (entry.spaceAllocations as any[]) ?? [],
-  });
-
-  return prisma.$transaction(async (tx) => {
-    await tx.availabilityConfiguration.update({ where: { id: preferred.id }, data: { sealedAt: new Date() } });
-    const updated = await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S2, version: { increment: 1 } } });
-    await tx.traceEvent.create({
-      data: {
-        eventType: "ENTRY.STAGE_TRANSITION",
-        actorId,
-        actorLevel: "L1",
-        entityType: "Entry",
-        entityId: entryId,
-        operation: "TRANSITION",
-        timestamp: new Date(),
-        stageContext: Stage.S1,
-        inquiryId: updated.inquiryId,
-        entryId,
-        payload: { from: "S1", to: "S2" },
-        createdBy: actorId,
-      },
-    });
-    return updated;
-  });
-}
-
-// SIG-S2: S2 auto-fulfilment (compressed S1→S3 with evidence).
-export async function autoFulfilS2ToS3(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
-  const entry = await prisma.entry.findUnique({
-    where: { id: entryId },
-    include: { availabilityConfigs: true },
-  });
-  if (!entry) throw new NotFoundError("Entry");
-  enforceEntryAtS1ForAutoFulfilS2ToS3({ currentStage: entry.currentStage });
-  if (clientVersion == null) throw new ValidationError("version is required");
-  if (entry.version !== clientVersion) throw new ValidationError("version mismatch");
-
-  const preferredCfg = entry.availabilityConfigs.find((c) => c.optionSelected != null);
-  enforcePreferredAvailabilityConfigurationSelectedForS1Exit({ preferred: preferredCfg });
-  const preferred = preferredCfg!;
-  enforcePreferredAvailabilityConfigurationNotStaleForS1Exit({ isStale: preferred.isStale });
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    const updated = await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S3, version: { increment: 1 } } });
+    await tx.inquiry.update({
+      where: { id: entry.inquiryId },
+      data: { defaultCustodianId: newCustodianId.trim() },
+    });
     await tx.traceEvent.create({
       data: {
-        eventType: "S2.AUTO_FULFILLED",
+        eventType: "ENTRY.CUSTODIAN_REASSIGNED_VIA_INQUIRY",
         actorId,
-        actorLevel: "L1",
+        actorLevel,
         entityType: "Entry",
         entityId: entryId,
-        operation: "TRANSITION",
+        operation: "UPDATE",
         timestamp: now,
-        stageContext: Stage.S2,
-        inquiryId: updated.inquiryId,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, from: "S1", to: "S3", mode: "AUTO_FULFILLED", availabilityConfigurationId: preferred.id },
+        payload: { inquiryId: entry.inquiryId, newCustodianId: newCustodianId.trim() },
         createdBy: actorId,
       },
     });
-    return updated;
+    return tx.inquiry.findUniqueOrThrow({ where: { id: entry.inquiryId } });
+  });
+}
+
+export async function listEntries(
+  prisma: PrismaClient,
+  query: { limit: number; inquiryId?: string; status?: EntryStatus; currentStage?: Stage },
+) {
+  const where: Prisma.EntryWhereInput = {};
+  if (query.inquiryId?.trim()) where.inquiryId = query.inquiryId.trim();
+  if (query.status) where.status = query.status;
+  if (query.currentStage) where.currentStage = query.currentStage;
+
+  return prisma.entry.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    take: query.limit,
+    select: {
+      id: true,
+      inquiryId: true,
+      segmentNumber: true,
+      useType: true,
+      status: true,
+      currentStage: true,
+      guestCount: true,
+      checkInDate: true,
+      checkOutDate: true,
+      walkInCompressed: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
 }
 

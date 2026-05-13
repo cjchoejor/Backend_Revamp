@@ -1,0 +1,33 @@
+{
+  "stage": "S8",
+  "scenarioFiles": [
+    "setup-s7-s8.json",
+    "ac-s8-25.json",
+    "ac-s8-26.json",
+    "ac-s8-15.json",
+    "ac-s8-14.json",
+    "ac-s8-23.json",
+    "ac-s8-06.json",
+    "ac-s8-01.json",
+    "ac-s8-04.json",
+    "ac-s8-03.json",
+    "ac-s8-02.json",
+    "ac-s8-05.json",
+    "ac-s8-17.json",
+    "setup-h4-fulfil.json",
+    "ac-s8-18.json",
+    "ac-s8-11.json",
+    "ac-s8-12.json",
+    "ac-s8-13-setup.json",
+    "s8-s9.json",
+    "ac-s8-07.json",
+    "ac-s8-08.json",
+    "ac-s8-09.json",
+    "ac-s8-10.json",
+    "ac-s8-19.json",
+    "ac-s8-20.json",
+    "ac-s8-21-22.json",
+    "ac-s8-24.json"
+  ],
+  "note": "One JSON file per acceptance case (`id`). Produced after delegated script run."
+}

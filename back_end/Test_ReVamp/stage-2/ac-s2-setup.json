@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "stage": "S2",
+    "scenarioName": "ac-s2-setup",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s2-deep · Layer 03a (S2 negotiation & quotation)",
+    "generatedAt": "2026-05-13T11:04:34.179Z",
+    "apiBaseUrl": "http://127.0.0.1:4022/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S2-setup",
+      "title": "Entry progressed to S2",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "da55c9ab-ca2f-407a-98b0-6dc1305681cd",
+        "inquiryId": "ddc0cdc9-694c-460a-8682-ff81d297b08b",
+        "guestProfileId": "86cc2248-dc42-446f-9d11-db729ec5fd1c",
+        "segmentNumber": 1,
+        "useType": "LEISURE",
+        "status": "ACTIVE",
+        "currentStage": "S2",
+        "walkInCompressed": false,
+        "checkInDate": "2026-05-14T11:04:33.845Z",
+        "checkOutDate": "2026-05-15T11:04:33.846Z",
+        "guestCount": 1,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-05-13T11:04:33.856Z",
+        "updatedAt": "2026-05-13T11:04:34.042Z",
+        "createdBy": "s2-fd-1",
+        "version": 2,
+        "closedAt": null,
+        "closedBy": null,
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null,
+        "apartmentDurationNights": null,
+        "apartmentRateTierCode": null
+      },
+      "explanation": "Bring a fresh entry into S2 with preferred configuration selected.",
+      "dbImpact": "Entry.currentStage updated to S2; preferred AvailabilityConfiguration sealedAt set; TraceEvent written."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "stage": "S9",
+    "scenarioName": "ac-s9-049",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s9-deep · Layer 03c (S9 post-stay & closure)",
+    "generatedAt": "2026-05-13T12:18:44.816Z",
+    "apiBaseUrl": "http://127.0.0.1:4069/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S9-049",
+      "title": "Apartment closure succeeds when deposit return recorded",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "6e09ecc4-3a31-477c-bc0a-4ef544e015e8",
+        "inquiryId": "27567ebc-1138-423f-9185-570dddb6b53f",
+        "guestProfileId": "cc5a3e8f-5809-4d9c-8e1d-87ae8ef724e7",
+        "segmentNumber": 1,
+        "useType": "APARTMENT",
+        "status": "CLOSED",
+        "currentStage": "S9",
+        "walkInCompressed": false,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "guestCount": null,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-05-13T12:18:44.624Z",
+        "updatedAt": "2026-05-13T12:18:44.675Z",
+        "createdBy": "test",
+        "version": 2,
+        "closedAt": "2026-05-13T12:18:44.673Z",
+        "closedBy": "test-fom-1",
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null,
+        "apartmentDurationNights": null,
+        "apartmentRateTierCode": null
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

@@ -36,6 +36,9 @@ async function main() {
   await prisma.speculativeHold.deleteMany();
   await prisma.quotation.deleteMany();
   await prisma.billingModelTransitionRecord.deleteMany();
+  // AI draft management tables reference CommunicationRecord (FK), so must be cleared first.
+  await (prisma as any).humanDecisionRecord?.deleteMany?.();
+  await (prisma as any).aiDraftRecord?.deleteMany?.();
   await prisma.communicationRecord.deleteMany();
   await prisma.followUpTaskRecord.deleteMany();
   await prisma.equipmentAllocation.deleteMany();
@@ -91,6 +94,11 @@ async function main() {
       notes: "Seeded ownership assignment rules for S1 Policy 3",
     },
     {
+      configKey: "groupDetection.guestCountThreshold",
+      configValue: 50,
+      notes: "SIG-S1 Policy 64 — guest count at or above this value sets group billing mode on entry create",
+    },
+    {
       configKey: "expiry.s1.defaultTtlSeconds",
       configValue: { DEFAULT: 3600 },
       notes: "Seeded S1 entry expiry TTL seconds (W20 registration)",
@@ -111,9 +119,20 @@ async function main() {
     { configKey: "availability.bookablePhysicalStates", configValue: ["FREE"] },
     { configKey: "availability.staleness.ttlSeconds", configValue: 900 },
     {
+      configKey: "availability.conferenceSpace.turnaroundBufferMinutes",
+      configValue: 120,
+      notes: "SIG-S1 §6.5 — buffer expanded on both sides when testing conference/catering space conflicts at availability query",
+    },
+    {
       configKey: "stageDwell.thresholds",
       configValue: {
         S1: { ACTIVE: { warning: 600, critical: 1200, escalation: 1800 }, IDLE: { warning: 900, critical: 1800, escalation: 2700 }, PARKED: { warning: 1800, critical: 3600, escalation: 5400 } },
+        S2: { ACTIVE: { warning: 1200, critical: 2400, escalation: 3600 }, IDLE: { warning: 1800, critical: 3600, escalation: 5400 }, PARKED: { warning: 3600, critical: 7200, escalation: 10800 } },
+        S3: { ACTIVE: { warning: 1800, critical: 3600, escalation: 5400 }, IDLE: { warning: 2700, critical: 5400, escalation: 8100 }, PARKED: { warning: 5400, critical: 10800, escalation: 16200 } },
+        S4: { ACTIVE: { warning: 1200, critical: 2400, escalation: 3600 }, IDLE: { warning: 1800, critical: 3600, escalation: 5400 }, PARKED: { warning: 3600, critical: 7200, escalation: 10800 } },
+        S5: { ACTIVE: { warning: 1800, critical: 3600, escalation: 5400 }, IDLE: { warning: 2700, critical: 5400, escalation: 8100 }, PARKED: { warning: 5400, critical: 10800, escalation: 16200 } },
+        S6: { ACTIVE: { warning: 1800, critical: 3600, escalation: 5400 }, IDLE: { warning: 2700, critical: 5400, escalation: 8100 }, PARKED: { warning: 5400, critical: 10800, escalation: 16200 } },
+        S7: { ACTIVE: { warning: 1800, critical: 3600, escalation: 5400 }, IDLE: { warning: 2700, critical: 5400, escalation: 8100 }, PARKED: { warning: 5400, critical: 10800, escalation: 16200 } },
       },
     },
     {
@@ -127,6 +146,22 @@ async function main() {
     },
     { configKey: "ota.sourceFlagConfig", configValue: { OTA: true } },
     { configKey: "availability.walkIn.ratePlanId", configValue: "rp-walkin" },
+    {
+      configKey: "notification.routing.operatorExpiry",
+      configValue: { DEFAULT: ["OPERATOR"] },
+      notes: "S1 NotificationService — routing tiers/recipients (placeholder; audit-backed notifications only)",
+    },
+    {
+      configKey: "notification.routing.stageDwell",
+      configValue: { WARNING: ["OPERATOR"], CRITICAL: ["FOM"], ESCALATION: ["FOM"] },
+      notes: "S1 NotificationService — stage dwell routing by severity (placeholder)",
+    },
+    { configKey: "ota_email_poll_interval_seconds", configValue: 300, notes: "SIG-S1 W7 — default 5 minutes poll interval" },
+    {
+      configKey: "ai.confidence.thresholds.perIntent",
+      configValue: { DEFAULT: 0.7 },
+      notes: "SIG-S1 W7 — confidence threshold per intent category (placeholder)",
+    },
 
     // --- SIG-S2 required keys (Section 9) ---
     { configKey: "expiry.s2.quotationValidityDays", configValue: 2, notes: "S2 quotation validity (days)" },
@@ -150,6 +185,7 @@ async function main() {
         invoice: 604800,
         h2: 3600,
         h3: 3600,
+        vipArrival: 3600,
       },
       notes: "Acknowledgement windows per communication type (seconds)",
     },
@@ -157,9 +193,10 @@ async function main() {
     // Minimal pricing surface for S2 rate plan resolution.
     {
       configKey: "pricing.ratePlans",
-      configValue: [{ id: "rp-dlx-default", type: "INDIVIDUAL", rateAmount: 500, currency: "BTN" }],
-      notes: "Seeded rate plans for PricingPipelineEngine (S2 Policy 19)",
+      configValue: [{ id: "rp-dlx-default", type: "INDIVIDUAL", rateAmount: 500, currency: "BTN", msr: 200 }],
+      notes: "Seeded rate plans for PricingPipelineEngine (S2 Policy 19); msr optional per plan",
     },
+    { configKey: "quotation.document.templateKey", configValue: "quotation-v1", notes: "SIG-S2 document generation template key" },
 
     // --- SIG-S3 required keys (Section 9) ---
     { configKey: "advancePayment.thresholds", configValue: { DEFAULT: { amount: 1 } }, notes: "Minimal S3 advance payment thresholds (amount in BTN)" },
@@ -176,6 +213,8 @@ async function main() {
     { configKey: "confirmation.authorityThresholds", configValue: { highValueAmount: 5000 }, notes: "Confirmation authority thresholds (minimal)" },
     { configKey: "overbooking.otaConflictRules", configValue: { enabled: true }, notes: "OTA conflict trigger rules (minimal)" },
     { configKey: "preArrival.windowDays", configValue: 1, notes: "Pre-arrival countdown window days" },
+    { configKey: "confirmation.document.templateKey", configValue: "confirmation-v1", notes: "SIG-S4 confirmation voucher template key" },
+    { configKey: "ownership.s4.sameTeamAutoFulfilH1", configValue: false, notes: "SIG-S4 D-01 — set H1.isAutoFulfilled at confirmation when same-team" },
 
     // --- Existing stage keys kept for S5–S9 tests (compat seed) ---
     {
@@ -202,9 +241,16 @@ async function main() {
     { configKey: "vipNotification.routingPerTier", configValue: { PLATINUM: ["FOM", "GM"], GOLD: ["FOM"], DEFAULT: ["FOM"] } },
     { configKey: "noShow.cutoffWindowMinutes", configValue: 120 },
     { configKey: "noShow.awaitingConfirmationWindowMinutes", configValue: 180, notes: "Minutes to await written confirmation after no-show cutoff (S5)" },
-    { configKey: "cancellation.policyTiers", configValue: { sameDayPenaltyAmount: 100 } },
+    { configKey: "cancellation.policyTiers", configValue: { sameDayPenaltyAmount: 100, postCheckInEarlyDeparturePenaltyAmount: 150 } },
     { configKey: "creditCeiling.proximityThresholds", configValue: { tier1Percent: 75, tier2Percent: 90 } },
     { configKey: "nightAudit.expectedDailyFAndBCharge", configValue: { amount: 50, currency: "BTN" } },
+    { configKey: "billing.salesTaxRate", configValue: 0, notes: "S7 charge posting — optional decimal rate (e.g. 0.05); 0 disables automatic tax lines" },
+    {
+      configKey: "dispute.sla",
+      configValue: { firstResponseDueMinutes: 240, resolutionReminderMinutes: 1440 },
+      notes: "W27 — offsets from dispute openedAt; second timer only if resolutionReminderMinutes > firstResponseDueMinutes",
+    },
+    { configKey: "nightAudit.schedule", configValue: { stayNightReminderHourUtc: 14 }, notes: "SIG-S5 Policy 59 — UTC hour for per stay-night W37 countdown jobs" },
     { configKey: "housekeeping.sla.windowMinutes", configValue: 180 },
     { configKey: "housekeeping.sla.readinessWindowMinutes", configValue: 180, notes: "S5 readiness SLA window from assignment (S5)" },
     { configKey: "room.readiness.slaWindow", configValue: 10800, notes: "Room readiness SLA window (seconds) for W23 at S5–S6 (S6)" },
@@ -770,7 +816,7 @@ async function main() {
       frozenCheckInDate: checkInS7,
       frozenCheckOutDate: checkOutS7,
       frozenGuestCount: 2,
-      creditCeilingIfExtended: 1000,
+      creditCeilingIfExtended: 5000,
       confirmedAt: new Date(),
       confirmedBy: "actor-seed-res",
       confirmationVoucherSent: true,
@@ -804,7 +850,8 @@ async function main() {
       createdBy: "actor-seed-system",
       convertedToLiveAt: new Date(),
       convertedBy: "actor-seed-system",
-      outstandingBalance: 350,
+      // Must match sum(folio_lines): 2×350 room + 2×50 F&B (recompute after payment uses lines).
+      outstandingBalance: 800,
       advancePaymentReconciliationComplete: true,
     },
   });
@@ -922,10 +969,48 @@ async function main() {
       description: "Seeded F&B charge",
       amount: 50,
       currency: "BTN",
-      chargeDate: new Date("2026-04-20T12:00:00.000Z"),
+      chargeDate: new Date(Date.UTC(2026, 3, 20, 0, 0, 0, 0)),
       stage: Stage.S7,
       postedBy: "actor-seed-system",
     },
+  });
+
+  await prisma.folioLine.create({
+    data: {
+      folioId: folioS7.id,
+      lineType: FolioLineType.F_AND_B,
+      description: "Seeded F&B charge night 2",
+      amount: 50,
+      currency: "BTN",
+      chargeDate: new Date(Date.UTC(2026, 3, 21, 0, 0, 0, 0)),
+      stage: Stage.S7,
+      postedBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.folioLine.createMany({
+    data: [
+      {
+        folioId: folioS7.id,
+        lineType: FolioLineType.ROOM_CHARGE,
+        description: "Seeded room night 1",
+        amount: 350,
+        currency: "BTN",
+        chargeDate: new Date(Date.UTC(2026, 3, 20, 0, 0, 0, 0)),
+        stage: Stage.S7,
+        postedBy: "actor-seed-system",
+      },
+      {
+        folioId: folioS7.id,
+        lineType: FolioLineType.ROOM_CHARGE,
+        description: "Seeded room night 2",
+        amount: 350,
+        currency: "BTN",
+        chargeDate: new Date(Date.UTC(2026, 3, 21, 0, 0, 0, 0)),
+        stage: Stage.S7,
+        postedBy: "actor-seed-system",
+      },
+    ],
   });
 
   await prisma.folioLine.create({

@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-09",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.683Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-09",
+      "title": "Voucher path invoices difference and sets OUTSTANDING",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "f3": {
+          "id": "96d36066-2284-47b9-bcc4-154f2d0c613b",
+          "entryId": "3492097e-ca05-431b-b25b-c175cdbf991c",
+          "state": "OUTSTANDING",
+          "billingModel": "GUEST_PAY",
+          "createdAt": "2026-05-13T12:18:28.524Z",
+          "createdBy": "test",
+          "convertedToLiveAt": "2026-05-13T12:18:28.524Z",
+          "convertedBy": "test",
+          "closedAt": "2026-05-13T12:18:28.544Z",
+          "closedBy": "test-fd-1",
+          "noShowPenaltyAmount": null,
+          "noShowAdvancePaymentAmount": null,
+          "noShowNetPosition": null,
+          "noShowFomDetermination": null,
+          "outstandingBalance": "40",
+          "advancePaymentReconciliationComplete": false
+        },
+        "inv2": {
+          "id": "80ffd207-ab51-4db1-9305-18013550fd49",
+          "folioId": "96d36066-2284-47b9-bcc4-154f2d0c613b",
+          "entryId": "3492097e-ca05-431b-b25b-c175cdbf991c",
+          "invoiceType": "FINAL",
+          "state": "DISPATCHED",
+          "invoiceNumber": null,
+          "totalAmount": null,
+          "templateKey": "agent-billing-v1",
+          "issuedAt": "2026-05-13T12:18:28.543Z",
+          "issuedBy": "test-fd-1",
+          "dispatchedAt": "2026-05-13T12:18:28.543Z",
+          "dispatchedBy": "test-fd-1",
+          "dispatchedTo": null,
+          "supersededById": null,
+          "versionNumber": 1,
+          "metadata": {
+            "remaining": 40,
+            "billingModel": "GUEST_PAY",
+            "voucherCovered": 60,
+            "settlementMethod": "VOUCHER"
+          },
+          "createdAt": "2026-05-13T12:18:28.544Z"
+        }
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

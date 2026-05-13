@@ -1,5 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
+import { requireActiveConfigValue } from "../lib/config-store.js";
+
+function toNumber(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") return Number(v);
+  return NaN;
+}
 
 export async function runAdvancePaymentFollowUpWorker(prisma: PrismaClient, input: { entryId?: string; invoiceId?: string; tier?: 1 | 2; timerRecordId?: string }) {
   const now = new Date();
@@ -15,7 +22,11 @@ export async function runAdvancePaymentFollowUpWorker(prisma: PrismaClient, inpu
 
   const totalIn = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN").reduce((sum, p) => sum + Number(p.amount.toString()), 0);
   const credit = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } }).catch(() => null);
-  if (credit || totalIn > 0) {
+  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds").catch(() => ({ DEFAULT: { amount: 0 } }));
+  const requiredAmount = toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
+  const satisfied =
+    !!credit || (Number.isFinite(requiredAmount) ? totalIn >= requiredAmount : totalIn > 0);
+  if (satisfied) {
     await prisma.traceEvent.create({
       data: {
         eventType: "ADVANCE_PAYMENT.FOLLOW_UP_SKIPPED_CONDITION_MET",

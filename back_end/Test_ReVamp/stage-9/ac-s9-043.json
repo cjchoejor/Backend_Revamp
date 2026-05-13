@@ -1,0 +1,40 @@
+{
+  "meta": {
+    "stage": "S9",
+    "scenarioName": "ac-s9-043",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s9-deep · Layer 03c (S9 post-stay & closure)",
+    "generatedAt": "2026-05-13T12:18:44.803Z",
+    "apiBaseUrl": "http://127.0.0.1:4069/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S9-043",
+      "title": "L2 can add post-closure FolioLine via /charges at S9",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "0fedb9d5-a45c-4b3e-89b4-5f63757adb94",
+        "folioId": "4fbe2bd8-c162-40f3-b17d-54cd60abc9e4",
+        "lineType": "OTHER",
+        "description": "After close adjustment",
+        "amount": "1",
+        "currency": "BTN",
+        "chargeDate": "2026-05-13T12:18:44.075Z",
+        "stage": "S9",
+        "postedBy": "test-fom-1",
+        "nightAuditRecordId": null,
+        "isPostStay": true,
+        "postedAt": "2026-05-13T12:18:44.075Z",
+        "createdAt": "2026-05-13T12:18:44.081Z"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

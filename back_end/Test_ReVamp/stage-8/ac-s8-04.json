@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-04",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.679Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-04",
+      "title": "S8 does not release inventory claim (room is not FREE at checkout)",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "claimState": "DEPARTED_DIRTY"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

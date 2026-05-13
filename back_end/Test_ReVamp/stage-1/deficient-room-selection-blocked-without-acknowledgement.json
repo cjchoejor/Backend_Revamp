@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "stage": "S1",
+    "scenarioName": "deficient-room-selection-blocked-without-acknowledgement",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s1-deep · Layer 03a (S1 inquiry & configuration)",
+    "generatedAt": "2026-05-13T10:50:05.435Z",
+    "apiBaseUrl": "http://localhost:4000/api",
+    "apiAvailable": false
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S1-009",
+      "title": "Selecting DEFICIENT room without deficientAcknowledgements is rejected",
+      "pass": true,
+      "httpStatus": 400,
+      "response": {
+        "error": "Error",
+        "message": "deficientAcknowledgements is required when selecting a DEFICIENT room"
+      },
+      "explanation": "Reference S1 deep-dive: acknowledgement mandatory on DEFICIENT path.",
+      "dbImpact": "No write on rejection."
+    }
+  ]
+}

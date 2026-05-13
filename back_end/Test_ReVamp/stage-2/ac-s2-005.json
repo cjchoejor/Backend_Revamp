@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "stage": "S2",
+    "scenarioName": "ac-s2-005",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s2-deep · Layer 03a (S2 negotiation & quotation)",
+    "generatedAt": "2026-05-13T11:04:34.182Z",
+    "apiBaseUrl": "http://127.0.0.1:4022/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S2-005",
+      "title": "Release speculative hold requires L2+",
+      "pass": true,
+      "httpStatus": 403,
+      "response": {
+        "error": "AuthorizationError",
+        "message": "Insufficient authority"
+      },
+      "explanation": "Release route is gated at L2+; L1 must be blocked.",
+      "dbImpact": "No state change."
+    }
+  ]
+}

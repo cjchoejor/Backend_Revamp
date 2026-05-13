@@ -1,9 +1,11 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
+import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
+import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
+import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -47,7 +49,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
   for (const entry of entries) {
     try {
       if (!entry.folio) throw new NotFoundError("Folio");
-      if (entry.folio.state !== "LIVE") throw new StateTransitionError("Folio must be LIVE for night audit processing");
+      enforceFolioLiveForNightAuditProcessing({ folioState: entry.folio.state });
 
       const alreadyRoom = await prisma.folioLine.findFirst({
         where: { folioId: entry.folio.id, lineType: FolioLineType.ROOM_CHARGE, chargeDate: operatingDate },
@@ -97,7 +99,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
             nightAuditRecordId: recordId,
           },
         });
-        await tx.folio.update({ where: { id: p.folioId }, data: { outstandingBalance: { increment: p.roomChargeAmount } } });
+        await recomputeFolioOutstandingBalance(tx, p.folioId);
       }
       if (p.shouldWriteFnbMissingAnomaly) {
         await tx.nightAuditAnomaly.create({
@@ -138,5 +140,18 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
   }
 
   return prisma.nightAuditRecord.findUniqueOrThrow({ where: { operatingDate } });
+}
+
+/** GET snapshot for an operating date (UTC calendar day). */
+export async function getNightAuditRecordByOperatingDate(prisma: PrismaClient, operatingDateIsoDay: string) {
+  const d = new Date(operatingDateIsoDay);
+  if (Number.isNaN(d.getTime())) throw new ValidationError("operatingDate must be a valid YYYY-MM-DD");
+  const operatingDate = operatingDateUtc(d);
+  const rec = await prisma.nightAuditRecord.findUnique({
+    where: { operatingDate },
+    include: { anomalies: true, folioLines: { take: 500, orderBy: { postedAt: "desc" } } },
+  });
+  if (!rec) throw new NotFoundError("NightAuditRecord");
+  return rec;
 }
 

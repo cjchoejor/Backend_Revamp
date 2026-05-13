@@ -363,7 +363,7 @@ async function run() {
       data: { entryId: e.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } as any,
     });
     try {
-      const folioService = await import("../src/services/folio-service.js");
+      const folioService = await import("../src/services/domain/folio-service.js");
       await prisma.$transaction(async (tx) => {
         await folioService.convertToLive(tx as any, e.id, f.id, L1.id);
         throw new Error("simulated failure");
@@ -421,7 +421,7 @@ async function run() {
     results.push({ id: "AC-S6-022", title: "VIPArrivalNotificationEvent update rejected (immutable)", pass: updated === false, body: { updated } });
   }
 
-  // AC-S6-034/021/023: VIP notification created with fields; issued before CHECK_IN_COMPLETE
+  // AC-S6-034/021/023: VIP notification at S5→S6 commencement; still before CHECK_IN_COMPLETE at S6→S7
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
@@ -429,25 +429,106 @@ async function run() {
       data: { roomNumber: `VIP-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 6, capacity: 2, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" },
     });
     const gpVip = await prisma.guestProfile.create({ data: { firstName: "VIP", lastName: "Guest", vipTier: "PLATINUM", createdBy: "test" } });
-    const entryVip = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gpVip.id, currentStage: "S6", status: "ACTIVE", createdBy: "test", version: 1, guestCount: 1 } });
-    await prisma.folio.create({ data: { entryId: entryVip.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
+    const ci = new Date();
+    const co = new Date(ci);
+    co.setDate(co.getDate() + 2);
+    const entryVip = await prisma.entry.create({
+      data: {
+        inquiryId: inquiry.id,
+        guestProfileId: gpVip.id,
+        currentStage: Stage.S5,
+        status: "ACTIVE",
+        createdBy: "test",
+        version: 1,
+        guestCount: 1,
+        checkInDate: ci,
+        checkOutDate: co,
+      },
+    });
+    const segment = await prisma.segment.create({ data: { entryId: entryVip.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: entryVip.id,
+        segmentId: segment.id,
+        frozenRate: 100,
+        frozenRatePlanId: "rp-dlx-default",
+        frozenInclusions: {},
+        frozenCancellationTerms: { sameDayPenaltyAmount: 50 },
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: ci,
+        frozenCheckOutDate: co,
+        frozenGuestCount: 1,
+        creditCeilingIfExtended: null,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+        confirmationVoucherSent: true,
+      },
+    });
+    await prisma.folio.create({
+      data: { entryId: entryVip.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true },
+    });
     await prisma.roomAssignment.create({ data: { entryId: entryVip.id, roomId: room.id, assignedBy: "test", deficientAtAssignment: false } });
-    await prisma.handoffRecord.create({ data: { entryId: entryVip.id, handoffType: "H1", state: "FULFILLED", fromRole: "RES", fromActorId: "test", toRole: "FD", checklistContent: {}, createdBy: "test", stageContext: Stage.S4 } });
-    await prisma.guestProfile.update({ where: { id: gpVip.id }, data: { identityVerifiedAt: new Date(), identityVerifiedBy: "test", identityVerificationPath: "VIP" } });
+    await prisma.handoffRecord.create({
+      data: {
+        entryId: entryVip.id,
+        handoffType: "H1",
+        state: "FULFILLED",
+        fromRole: "RES",
+        fromActorId: "test",
+        toRole: "FD",
+        checklistContent: {},
+        createdBy: "test",
+        stageContext: Stage.S4,
+      },
+    });
+    await prisma.guestProfile.update({
+      where: { id: gpVip.id },
+      data: { identityVerifiedAt: new Date(), identityVerifiedBy: "test", identityVerificationPath: "VIP" },
+    });
 
-    const r = await http("POST", `/entries/${entryVip.id}/progress-stage`, L1, { targetStage: "S7", version: 1, transitionData: { keyCount: 1, registrationConfirmed: true } });
-    const vipEvent = await prisma.vIPArrivalNotificationEvent.findFirst({ where: { entryId: entryVip.id }, orderBy: { createdAt: "desc" } });
-    const checkInComplete = await prisma.traceEvent.findFirst({ where: { entryId: entryVip.id, eventType: "CHECK_IN_COMPLETE" }, orderBy: { createdAt: "desc" } });
-    const pass =
-      r.status === 200 &&
-      !!vipEvent &&
-      vipEvent.guestProfileId === gpVip.id &&
-      !!vipEvent.roomNumber &&
-      vipEvent.vipTier === "PLATINUM" &&
-      Array.isArray(vipEvent.recipientRoles as any) &&
-      !!checkInComplete &&
-      vipEvent.checkInInitiatedAt.getTime() <= new Date((checkInComplete as any).timestamp).getTime();
-    results.push({ id: "AC-S6-021/023", title: "VIP notification created and issued before CHECK_IN_COMPLETE", pass, status: r.status, body: { vipEvent, checkInComplete } });
+    const r6 = await http("POST", `/entries/${entryVip.id}/progress-stage`, L1, {
+      targetStage: "S6",
+      version: 1,
+      transitionData: { guestPresentConfirmation: true },
+    });
+    if (r6.status !== 200) {
+      results.push({
+        id: "AC-S6-021/023",
+        title: "VIP notification created and issued before CHECK_IN_COMPLETE",
+        pass: false,
+        status: r6.status,
+        body: r6.json,
+        notes: "S5→S6 failed",
+      });
+    } else {
+      const eAfter = await prisma.entry.findUniqueOrThrow({ where: { id: entryVip.id } });
+      const r = await http("POST", `/entries/${entryVip.id}/progress-stage`, L1, {
+        targetStage: "S7",
+        version: eAfter.version,
+        transitionData: { keyCount: 1, registrationConfirmed: true },
+      });
+      const vipEvent = await prisma.vIPArrivalNotificationEvent.findFirst({ where: { entryId: entryVip.id }, orderBy: { createdAt: "desc" } });
+      const checkInComplete = await prisma.traceEvent.findFirst({
+        where: { entryId: entryVip.id, eventType: "CHECK_IN_COMPLETE" },
+        orderBy: { createdAt: "desc" },
+      });
+      const pass =
+        r.status === 200 &&
+        !!vipEvent &&
+        vipEvent.guestProfileId === gpVip.id &&
+        !!vipEvent.roomNumber &&
+        vipEvent.vipTier === "PLATINUM" &&
+        Array.isArray(vipEvent.recipientRoles as any) &&
+        !!checkInComplete &&
+        vipEvent.checkInInitiatedAt.getTime() <= new Date((checkInComplete as any).timestamp).getTime();
+      results.push({
+        id: "AC-S6-021/023",
+        title: "VIP notification created and issued before CHECK_IN_COMPLETE",
+        pass,
+        status: r.status,
+        body: { vipEvent, checkInComplete, r6status: r6.status },
+      });
+    }
   }
 
   // AC-S6-033: missing identity.documentTypes -> MissingConfigurationError
@@ -483,7 +564,7 @@ async function run() {
     });
   }
 
-  // AC-S6-034: VIP guest missing vipNotification.routingPerTier blocks completion
+  // AC-S6-034: VIP guest missing vipNotification.routingPerTier blocks **S5→S6** (commencement)
   {
     // ensure identity configs exist (may already from seed)
     await prisma.configurationEntry.createMany({
@@ -511,24 +592,56 @@ async function run() {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const room = await prisma.room.findFirstOrThrow({ where: { roomNumber: "501" } });
     const gpVip = await prisma.guestProfile.create({ data: { firstName: "VIP", lastName: "Guest", vipTier: "PLATINUM", createdBy: "test" } });
+    const ci = new Date();
+    const co = new Date(ci);
+    co.setDate(co.getDate() + 1);
     const vipEntry = await prisma.entry.create({
-      data: { inquiryId: inquiry.id, guestProfileId: gpVip.id, currentStage: "S6", status: "ACTIVE", createdBy: "test", version: 1, guestCount: 1 },
+      data: {
+        inquiryId: inquiry.id,
+        guestProfileId: gpVip.id,
+        currentStage: "S5",
+        status: "ACTIVE",
+        createdBy: "test",
+        version: 1,
+        guestCount: 1,
+        checkInDate: ci,
+        checkOutDate: co,
+      },
+    });
+    const seg = await prisma.segment.create({ data: { entryId: vipEntry.id, segmentNumber: 1 } });
+    await prisma.reservation.create({
+      data: {
+        entryId: vipEntry.id,
+        segmentId: seg.id,
+        frozenRate: 100,
+        frozenRatePlanId: "rp-dlx-default",
+        frozenInclusions: {},
+        frozenCancellationTerms: { sameDayPenaltyAmount: 50 },
+        frozenBillingModel: "GUEST_PAY",
+        frozenCheckInDate: ci,
+        frozenCheckOutDate: co,
+        frozenGuestCount: 1,
+        creditCeilingIfExtended: null,
+        confirmedAt: new Date(),
+        confirmedBy: "test",
+        confirmationVoucherSent: true,
+      },
     });
     await prisma.folio.create({ data: { entryId: vipEntry.id, billingModel: "GUEST_PAY", createdBy: "test", advancePaymentReconciliationComplete: true } });
     await prisma.roomAssignment.create({ data: { entryId: vipEntry.id, roomId: room.id, assignedBy: "test", deficientAtAssignment: false } });
     await prisma.handoffRecord.create({
-      data: { entryId: vipEntry.id, handoffType: "H1", state: "FULFILLED", fromRole: "RES", fromActorId: "test", toRole: "FD", checklistContent: {}, createdBy: "test", stageContext: "S4" },
+      data: { entryId: vipEntry.id, handoffType: "H1", state: "FULFILLED", fromRole: "RES", fromActorId: "test", toRole: "FD", checklistContent: {}, createdBy: "test", stageContext: Stage.S4 },
     });
     await prisma.guestProfile.update({ where: { id: gpVip.id }, data: { identityVerifiedAt: new Date(), identityVerifiedBy: "test", identityVerificationPath: "VIP" } });
 
     await prisma.configurationEntry.deleteMany({ where: { configKey: "vipNotification.routingPerTier" } });
     const r = await http("POST", `/entries/${vipEntry.id}/progress-stage`, L1, {
-      targetStage: "S7",
+      targetStage: "S6",
       version: 1,
-      transitionData: { keyCount: 1, registrationConfirmed: true },
+      transitionData: { guestPresentConfirmation: true },
     });
     const pass = r.status === 422 && (r.json as any)?.error === "MissingConfigurationError";
-    results.push({ id: "AC-S6-034", title: "Missing vipNotification.routingPerTier blocks VIP completion", pass, status: r.status, body: r.json });
+    results.push({ id: "AC-S6-034", title: "Missing vipNotification.routingPerTier blocks VIP S5→S6 commencement", pass, status: r.status, body: r.json });
 
     // restore vip routing config for other tests
     await prisma.configurationEntry.create({

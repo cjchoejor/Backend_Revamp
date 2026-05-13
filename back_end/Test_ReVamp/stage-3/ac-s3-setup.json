@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "stage": "S3",
+    "scenarioName": "ac-s3-setup",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s3-deep · Layer 03a (S3 reservation setup)",
+    "generatedAt": "2026-05-13T11:35:03.904Z",
+    "apiBaseUrl": "http://127.0.0.1:4044/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S3-setup",
+      "title": "Progress S2→S3 requires accepted quotation",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "62a6f0a2-13be-4296-9ed5-7e4d34b8fe74",
+        "inquiryId": "dec0c5c0-397c-4f8c-8f6b-bc0db5d26cd8",
+        "guestProfileId": "d84954c4-e78f-4623-8e96-c279bbbd94dc",
+        "segmentNumber": 1,
+        "useType": "LEISURE",
+        "status": "ACTIVE",
+        "currentStage": "S3",
+        "walkInCompressed": false,
+        "checkInDate": "2026-05-14T11:35:03.452Z",
+        "checkOutDate": "2026-05-15T11:35:03.452Z",
+        "guestCount": 1,
+        "otaSource": false,
+        "otaReference": null,
+        "groupBillingMode": null,
+        "parkedAt": null,
+        "parkedBy": null,
+        "parkedIndividually": false,
+        "createdAt": "2026-05-13T11:35:03.462Z",
+        "updatedAt": "2026-05-13T11:35:03.728Z",
+        "createdBy": "s3-fd-1",
+        "version": 3,
+        "closedAt": null,
+        "closedBy": null,
+        "noShowCutoffReachedAt": null,
+        "creditCeilingTier2AcknowledgedAt": null,
+        "creditCeilingTier2AcknowledgedBy": null,
+        "awaitingWrittenConfirmationActive": false,
+        "keysIssuedAt": null,
+        "keysIssuedCount": null,
+        "keysIssuedBy": null,
+        "registrationCompletedAt": null,
+        "registrationCompletedBy": null,
+        "apartmentDurationNights": null,
+        "apartmentRateTierCode": null
+      },
+      "explanation": "S3 entry requires accepted quotation from S2.",
+      "dbImpact": "Updates Entry.currentStage to S3."
+    }
+  ]
+}

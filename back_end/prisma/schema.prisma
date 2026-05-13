@@ -151,6 +151,12 @@ enum FollowUpTaskStatus {
   COMPLETED
 }
 
+enum LostFoundReturnStatus {
+  HELD
+  RETURNED
+  DISPOSED
+}
+
 enum CommunicationChannel {
   EMAIL
   WHATSAPP
@@ -163,6 +169,9 @@ enum CommunicationType {
   PROFORMA_INVOICE
   CONFIRMATION_VOUCHER
   INVOICE_SUPERSEDED_NOTICE
+  PRE_ARRIVAL_REMINDER
+  /// SIG-S6 — staff VIP arrival notification (per recipient role); acknowledgement via W22.
+  VIP_ARRIVAL_NOTIFICATION
 }
 
 enum NightAuditRunStatus {
@@ -1520,9 +1529,24 @@ model FollowUpTaskRecord {
   @@map("follow_up_task_records")
 }
 
+model LostAndFoundRecord {
+  id                String               @id @default(uuid())
+  entryId            String?
+  guestProfileId     String?
+  description        String
+  returnStatus       LostFoundReturnStatus @default(HELD)
+  retentionExpiresAt DateTime
+  returnedAt         DateTime?
+  disposedAt         DateTime?
+  createdAt          DateTime             @default(now())
+  createdBy          String
+
+  @@map("lost_and_found_records")
+}
+
 model CommunicationRecord {
   id                    String               @id @default(uuid())
-  entryId               String
+  entryId               String?
   channel               CommunicationChannel
   commType              CommunicationType
   stageContext          Stage?
@@ -1540,8 +1564,61 @@ model CommunicationRecord {
   createdAt             DateTime             @default(now())
   createdBy             String
 
-  entry Entry @relation(fields: [entryId], references: [id])
+  entry     Entry?        @relation(fields: [entryId], references: [id])
+  aiDrafts  AiDraftRecord[]
+  decisions HumanDecisionRecord[]
 
   @@index([entryId, commType, channel])
   @@map("communication_records")
+}
+
+enum AiDraftStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model AiDraftRecord {
+  id                String        @id @default(uuid())
+  communicationId   String
+  intentCategory    String
+  confidenceScore   Float
+  draftContent      String
+  status            AiDraftStatus @default(PENDING_REVIEW)
+  reviewTtlExpiresAt DateTime?
+  createdAt         DateTime      @default(now())
+  createdBy         String
+
+  communication CommunicationRecord @relation(fields: [communicationId], references: [id])
+  decisions     HumanDecisionRecord[]
+
+  @@index([communicationId])
+  @@index([status, reviewTtlExpiresAt])
+  @@map("ai_draft_records")
+}
+
+enum HumanDecisionType {
+  APPROVE
+  REJECT
+  ESCALATE
+}
+
+model HumanDecisionRecord {
+  id             String           @id @default(uuid())
+  aiDraftId      String?
+  communicationId String?
+  decisionType   HumanDecisionType
+  decisionReason String?
+  decidedAt      DateTime         @default(now())
+  decidedBy      String
+  createdAt      DateTime         @default(now())
+  createdBy      String
+
+  aiDraft        AiDraftRecord?        @relation(fields: [aiDraftId], references: [id])
+  communication  CommunicationRecord?  @relation(fields: [communicationId], references: [id])
+
+  @@index([aiDraftId])
+  @@index([communicationId])
+  @@map("human_decision_records")
 }

@@ -1,56 +1,37 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { FolioState } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
+import type { Prisma } from "@prisma/client";
+import { FolioState, Stage } from "@prisma/client";
 
-type DbClient = PrismaClient | Prisma.TransactionClient;
-
-export async function convertToLive(db: DbClient, entryId: string, folioId: string, actorId: string) {
-  const folio = await db.folio.findUnique({ where: { id: folioId } });
-  if (!folio) throw new NotFoundError("Folio");
-  if (folio.entryId !== entryId) {
-    throw new ValidationError("Folio does not belong to this entry");
-  }
-  if (folio.state !== FolioState.PROVISIONAL) {
-    throw new StateTransitionError(`Folio must be PROVISIONAL to convert (current: ${folio.state})`);
-  }
-  if (!folio.billingModel?.trim()) {
-    throw new MissingConfigurationError("Folio.billingModel");
-  }
-
-  const cfg = (await requireActiveConfigValue<Record<string, string[]> | undefined>(db as any, "billingModel.availablePerSource")) ?? {};
-  const allowed = Object.values(cfg).flat();
-  if (allowed.length > 0 && !allowed.includes(folio.billingModel)) {
-    throw new MissingConfigurationError("billingModel.availablePerSource");
-  }
-
+/**
+ * S6 check-in completion — provisional folio becomes LIVE (single governed write path).
+ */
+export async function convertToLive(tx: Prisma.TransactionClient, entryId: string, folioId: string, actorId: string) {
   const now = new Date();
-  const updated = await db.folio.update({
+  await tx.folio.update({
     where: { id: folioId },
-    data: {
-      state: FolioState.LIVE,
-      convertedToLiveAt: now,
-      convertedBy: actorId,
-    },
+    data: { state: FolioState.LIVE, convertedToLiveAt: now, convertedBy: actorId },
   });
-
-  // SIG-S6 AC-S6-005: audited conversion event (must be atomic with conversion in transaction context).
-  await (db as any).traceEvent.create({
+  await tx.traceEvent.create({
     data: {
       eventType: "FOLIO_CONVERTED_TO_LIVE",
       actorId,
-      actorLevel: actorId === "SYSTEM" ? "SYSTEM" : "L1",
+      actorLevel: "L1",
       entityType: "Folio",
       entityId: folioId,
-      operation: "TRANSITION",
+      operation: "UPDATE",
       timestamp: now,
-      stageContext: null,
-      inquiryId: null,
+      stageContext: Stage.S6,
       entryId,
-      payload: { entryId, folioId, convertedAt: now.toISOString(), billingModel: updated.billingModel },
+      payload: { folioId, entryId },
       createdBy: actorId,
     },
   });
-
-  return updated;
 }
+
+/**
+ * SIG-S3 FolioService façade — provisional folio lifecycle at S3.
+ * Implementations: `s3-folio-service.ts` (get/create), `s3-reservation-setup-service.ts` (billing + PI seed).
+ */
+export { getOrCreateProvisionalFolio, recordPayment, issueInvoice, supersedePendingInvoices } from "./s3-folio-service.js";
+export { ensureProvisionalFolioAndBillingModel } from "./s3-reservation-setup-service.js";
+export { getFolio } from "./s8-settlement-service.js";
+export { listInvoices } from "./s9-service.js";

@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "stage": "S4",
+    "scenarioName": "ac-s4-002",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s4-deep · Layer 03b (S4 confirmation & ownership)",
+    "generatedAt": "2026-05-13T11:37:19.989Z",
+    "apiBaseUrl": "http://127.0.0.1:4055/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S4-002",
+      "title": "Confirm rejected without committed hold (readiness gate)",
+      "pass": true,
+      "httpStatus": 409,
+      "response": {
+        "error": "StageGateBlockedError",
+        "message": "CommittedHold required before confirmation",
+        "blockingCondition": "MISSING_COMMITTED_HOLD"
+      },
+      "explanation": "p40-s4-confirmation-readiness-gates: enforceCommittedHoldReadyForS4Confirmation before transaction.",
+      "dbImpact": "No reservation row; entry remains S3."
+    }
+  ]
+}

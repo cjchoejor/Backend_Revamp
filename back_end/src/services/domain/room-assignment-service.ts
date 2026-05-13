@@ -19,8 +19,6 @@ export type DeficientAck = {
   decisionTaken: string;
 };
 
-// Policy 48 owns the datetime parsing/validation for the acknowledgement payload.
-
 export async function assignRoom(
   prisma: PrismaClient,
   entryId: string,
@@ -150,4 +148,32 @@ async function maybeRegisterRoomReadinessSla(
       createdBy: actorId,
     },
   });
+}
+
+/** SIG-S6 §5.1 — guest arrived at S6; cancel pending room-readiness SLA timers for this entry. */
+export async function cancelScheduledRoomReadinessSlaForEntry(
+  prisma: PrismaClient,
+  entryId: string,
+  cancelledBy: string,
+  cancelledReason: string,
+) {
+  const timers = await prisma.timerRecord.findMany({
+    where: { entryId, timerCode: "ROOM_READINESS_SLA_W23", status: "SCHEDULED" },
+    select: { id: true, pgBossJobId: true },
+  });
+  if (timers.length === 0) return { cancelled: 0 } as const;
+  const now = new Date();
+  await prisma.timerRecord.updateMany({
+    where: { id: { in: timers.map((t) => t.id) } },
+    data: { status: "CANCELLED", cancelledAt: now, cancelledBy, cancelledReason } as any,
+  });
+  Promise.resolve().then(async () => {
+    try {
+      const engine = await getTimerEngine();
+      await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+    } catch {
+      // best-effort pg-boss cancel
+    }
+  });
+  return { cancelled: timers.length } as const;
 }

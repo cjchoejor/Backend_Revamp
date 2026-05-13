@@ -13,6 +13,7 @@ import { runAdvancePaymentFollowUpWorker } from "./w34-advance-payment-follow-up
 import { runPreArrivalWindowActivationWorker } from "./w4-pre-arrival-window-activation-worker.js";
 import { runNoShowCutoffWorker } from "./w5-no-show-cutoff-worker.js";
 import { runRoomReadinessSlaWorker } from "./w23-room-readiness-sla-worker.js";
+import { runNightAuditStayNightWorker } from "./w37-night-audit-stay-night-worker.js";
 import { runHandoffAcceptanceWorker } from "./w25-handoff-acceptance-worker.js";
 import { runNightAuditWorker } from "./w6-night-audit-worker.js";
 import { runPaymentFollowUpWorker } from "./w8-payment-follow-up-worker.js";
@@ -28,7 +29,9 @@ import { runDisputeSlaWorker } from "./w27-dispute-sla-worker.js";
 import { runFeedbackSolicitationWorker } from "./w28-feedback-solicitation-worker.js";
 import { runEquipmentReturnWorker } from "./w29-equipment-return-worker.js";
 import { runGuestDataRetentionWorker } from "./w30-guest-data-retention-worker.js";
+import { runLostFoundRetentionWorker } from "./w30-lost-found-retention-worker.js";
 import { runFomOverrideFrequencyWorkerW32 } from "./w32-fom-override-frequency-worker.js";
+import { runVipArrivalNotificationWorker } from "./w14-vip-arrival-notification-worker.js";
 
 export async function startWorkers() {
   const connectionString = process.env.DATABASE_URL;
@@ -68,9 +71,11 @@ export async function startWorkers() {
       runNoShowCutoffWorker(prisma, engine, { ...(unwrapJobData(job) as any), timerType: "AWAITING_WRITTEN_CONFIRMATION_W5" }),
   );
   await (engine.boss as any).work("ROOM_READINESS_SLA_W23", async (job: any) => runRoomReadinessSlaWorker(prisma, engine, unwrapJobData(job)));
+  await (engine.boss as any).work("VIP_ARRIVAL_NOTIFICATION_W14", async (job: any) => runVipArrivalNotificationWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("H2_H3_ACCEPTANCE_W25", async (job: any) => runHandoffAcceptanceWorker(prisma, engine, unwrapJobData(job)));
   await (engine.boss as any).work("H4_ACCEPTANCE_W25", async (job: any) => runHandoffAcceptanceWorker(prisma, engine, unwrapJobData(job)));
   await (engine.boss as any).work("NIGHT_AUDIT_W6", async (job: any) => runNightAuditWorker(prisma, unwrapJobData(job)));
+  await (engine.boss as any).work("NIGHT_AUDIT_STAY_NIGHT_W37", async (job: any) => runNightAuditStayNightWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("PAYMENT_FOLLOW_UP_W8", async (job: any) => runPaymentFollowUpWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("POST_CHECKOUT_INSPECTION_W9", async (job: any) => runPostCheckoutInspectionWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("DEFICIENT_RESOLUTION_DEADLINE_W10", async (job: any) => runDeficientResolutionDeadlineWorker(prisma, unwrapJobData(job)));
@@ -84,6 +89,7 @@ export async function startWorkers() {
   await (engine.boss as any).work("FEEDBACK_SOLICITATION_W28", async (job: any) => runFeedbackSolicitationWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("EQUIPMENT_RETURN_W29", async (job: any) => runEquipmentReturnWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("GUEST_DATA_RETENTION_P18", async (job: any) => runGuestDataRetentionWorker(prisma, unwrapJobData(job)));
+  await (engine.boss as any).work("LOST_FOUND_RETENTION_W30", async (job: any) => runLostFoundRetentionWorker(prisma as any, unwrapJobData(job)));
   await (engine.boss as any).work("FOM_OVERRIDE_FREQUENCY_W32", async (job: any) => runFomOverrideFrequencyWorkerW32(prisma, unwrapJobData(job)));
 
   return engine;

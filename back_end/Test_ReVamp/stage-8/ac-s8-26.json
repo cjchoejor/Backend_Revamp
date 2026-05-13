@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-26",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.677Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-26",
+      "title": "KeyReturnRecord with discrepancy satisfies key-return condition",
+      "pass": true,
+      "httpStatus": 201,
+      "response": {
+        "id": "02c81178-d6b1-4a55-b729-c7d00b40ea86",
+        "entryId": "a5b2f94d-4e16-41fe-acb2-0ad245e8523a",
+        "roomId": "fdfb7ffc-cd78-4b9c-9712-5fd0365cedf1",
+        "receivedBy": "test-fd-1",
+        "returnedAt": "2026-05-13T12:18:27.761Z",
+        "keyCountIssued": 2,
+        "keyCountReturned": 0,
+        "countReconciled": false,
+        "reconciliationNote": "Guest lost key; governed resolution recorded",
+        "createdAt": "2026-05-13T12:18:27.762Z"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "stage": "S9",
+    "scenarioName": "ac-s9-016",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s9-deep · Layer 03c (S9 post-stay & closure)",
+    "generatedAt": "2026-05-13T12:18:44.802Z",
+    "apiBaseUrl": "http://127.0.0.1:4069/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S9-016",
+      "title": "Room claim transitions to FREE at closure",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "roomId": "9bd9b29e-ccea-4c85-8d99-dec069ff1541",
+        "currentClaimState": "FREE"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

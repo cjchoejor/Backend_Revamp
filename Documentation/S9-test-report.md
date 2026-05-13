@@ -1,7 +1,7 @@
 # S9 test report
 
-- **Ran at**: 2026-04-25T10:27:54.351Z
-- **Base URL**: `http://localhost:4000/api`
+- **Ran at**: 2026-05-13T12:18:44.747Z
+- **Base URL**: `http://127.0.0.1:4069/api`
 - **Pass**: 55
 - **Fail**: 0
 
@@ -10,8 +10,8 @@
 ```json
 {
   "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-  "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
-  "guestProfileId": "bba8fc67-2510-42e7-b4c2-74d775309c52",
+  "inquiryId": "36a9c520-b09a-4e4e-97b3-0ae4891d1a88",
+  "guestProfileId": "e88e311d-490b-4e08-bd4a-096dcb87fc01",
   "segmentNumber": 1,
   "useType": "GROUP",
   "status": "ACTIVE",
@@ -26,8 +26,8 @@
   "parkedAt": null,
   "parkedBy": null,
   "parkedIndividually": false,
-  "createdAt": "2026-04-25T10:27:51.477Z",
-  "updatedAt": "2026-04-25T10:27:53.120Z",
+  "createdAt": "2026-05-13T12:18:40.918Z",
+  "updatedAt": "2026-05-13T12:18:43.361Z",
   "createdBy": "actor-seed-system",
   "version": 2,
   "closedAt": null,
@@ -36,32 +36,34 @@
   "creditCeilingTier2AcknowledgedAt": null,
   "creditCeilingTier2AcknowledgedBy": null,
   "awaitingWrittenConfirmationActive": false,
-  "keysIssuedAt": "2026-04-25T10:27:51.475Z",
+  "keysIssuedAt": "2026-05-13T12:18:40.916Z",
   "keysIssuedCount": 2,
   "keysIssuedBy": "actor-seed-system",
-  "registrationCompletedAt": "2026-04-25T10:27:51.475Z",
-  "registrationCompletedBy": "actor-seed-system"
+  "registrationCompletedAt": "2026-05-13T12:18:40.916Z",
+  "registrationCompletedBy": "actor-seed-system",
+  "apartmentDurationNights": null,
+  "apartmentRateTierCode": null
 }
 ```
 ### ✅ SETUP-S8-SETTLE — Setup settle to OUTSTANDING (HTTP 200)
 
 ```json
 {
-  "id": "92638d4c-edb8-4d4e-977d-383659536a1f",
+  "id": "4fbe2bd8-c162-40f3-b17d-54cd60abc9e4",
   "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
   "state": "OUTSTANDING",
   "billingModel": "DIRECT_BILL",
-  "createdAt": "2026-04-25T10:27:51.486Z",
+  "createdAt": "2026-05-13T12:18:40.926Z",
   "createdBy": "actor-seed-system",
-  "convertedToLiveAt": "2026-04-25T10:27:51.485Z",
+  "convertedToLiveAt": "2026-05-13T12:18:40.924Z",
   "convertedBy": "actor-seed-system",
-  "closedAt": "2026-04-25T10:27:53.215Z",
+  "closedAt": "2026-05-13T12:18:43.423Z",
   "closedBy": "test-fd-1",
   "noShowPenaltyAmount": null,
   "noShowAdvancePaymentAmount": null,
   "noShowNetPosition": null,
   "noShowFomDetermination": null,
-  "outstandingBalance": "50",
+  "outstandingBalance": "1200",
   "advancePaymentReconciliationComplete": true
 }
 ```
@@ -70,8 +72,8 @@
 ```json
 {
   "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-  "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
-  "guestProfileId": "bba8fc67-2510-42e7-b4c2-74d775309c52",
+  "inquiryId": "36a9c520-b09a-4e4e-97b3-0ae4891d1a88",
+  "guestProfileId": "e88e311d-490b-4e08-bd4a-096dcb87fc01",
   "segmentNumber": 1,
   "useType": "GROUP",
   "status": "ACTIVE",
@@ -86,8 +88,8 @@
   "parkedAt": null,
   "parkedBy": null,
   "parkedIndividually": false,
-  "createdAt": "2026-04-25T10:27:51.477Z",
-  "updatedAt": "2026-04-25T10:27:53.270Z",
+  "createdAt": "2026-05-13T12:18:40.918Z",
+  "updatedAt": "2026-05-13T12:18:43.559Z",
   "createdBy": "actor-seed-system",
   "version": 3,
   "closedAt": null,
@@ -96,11 +98,13 @@
   "creditCeilingTier2AcknowledgedAt": null,
   "creditCeilingTier2AcknowledgedBy": null,
   "awaitingWrittenConfirmationActive": false,
-  "keysIssuedAt": "2026-04-25T10:27:51.475Z",
+  "keysIssuedAt": "2026-05-13T12:18:40.916Z",
   "keysIssuedCount": 2,
   "keysIssuedBy": "actor-seed-system",
-  "registrationCompletedAt": "2026-04-25T10:27:51.475Z",
-  "registrationCompletedBy": "actor-seed-system"
+  "registrationCompletedAt": "2026-05-13T12:18:40.916Z",
+  "registrationCompletedBy": "actor-seed-system",
+  "apartmentDurationNights": null,
+  "apartmentRateTierCode": null
 }
 ```
 ### ✅ AC-S9-036 — post-stay charges require isPostStay=true (HTTP 400)
@@ -116,22 +120,22 @@
 ```json
 {
   "ok": {
-    "id": "b05e43ca-da56-464f-8a2a-29dc90b6cb9d",
-    "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+    "id": "3f3e2cce-9aff-4e64-9212-5e4d2ed1a48a",
+    "folioId": "4fbe2bd8-c162-40f3-b17d-54cd60abc9e4",
     "lineType": "OTHER",
     "description": "Post stay minibar",
     "amount": "10",
     "currency": "BTN",
-    "chargeDate": "2026-04-25T10:27:53.285Z",
+    "chargeDate": "2026-05-13T12:18:43.578Z",
     "stage": "S9",
     "postedBy": "test-fom-1",
     "nightAuditRecordId": null,
     "isPostStay": true,
-    "postedAt": "2026-04-25T10:27:53.285Z",
-    "createdAt": "2026-04-25T10:27:53.294Z"
+    "postedAt": "2026-05-13T12:18:43.578Z",
+    "createdAt": "2026-05-13T12:18:43.584Z"
   },
   "comm": {
-    "id": "258e722e-fb08-46dc-908d-c51dc5814c1e",
+    "id": "311bdc2b-45fe-48c5-a331-7f9159a35eea",
     "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
     "channel": "EMAIL",
     "commType": "POST_STAY_CHARGE_NOTICE",
@@ -148,11 +152,11 @@
     "actorId": null,
     "payload": {
       "amount": 10,
-      "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+      "folioId": "4fbe2bd8-c162-40f3-b17d-54cd60abc9e4",
       "currency": "BTN",
-      "folioLineId": "b05e43ca-da56-464f-8a2a-29dc90b6cb9d"
+      "folioLineId": "3f3e2cce-9aff-4e64-9212-5e4d2ed1a48a"
     },
-    "createdAt": "2026-04-25T10:27:53.295Z",
+    "createdAt": "2026-05-13T12:18:43.585Z",
     "createdBy": "test-fom-1"
   }
 }
@@ -161,16 +165,16 @@
 
 ```json
 {
-  "id": "b05e43ca-da56-464f-8a2a-29dc90b6cb9d",
+  "id": "3f3e2cce-9aff-4e64-9212-5e4d2ed1a48a",
   "isPostStay": true,
-  "postedAt": "2026-04-25T10:27:53.285Z"
+  "postedAt": "2026-05-13T12:18:43.578Z"
 }
 ```
 ### ✅ AC-S9-004 — S9 FolioLine not backdated into stay window
 
 ```json
 {
-  "postedAt": "2026-04-25T10:27:53.285Z",
+  "postedAt": "2026-05-13T12:18:43.578Z",
   "checkInDate": "2026-04-20T09:00:00.000Z",
   "checkOutDate": "2026-04-22T09:00:00.000Z"
 }
@@ -233,9 +237,9 @@
 ```json
 {
   "r": {
-    "id": "534a7c65-27a5-43a7-b769-3c888cd23f5f",
-    "inquiryId": "12e9fa75-c6a7-4c7d-a642-0af5f0bf5f16",
-    "guestProfileId": "41437dca-5838-47cf-9a58-38bd3b5aba8a",
+    "id": "48691f72-a6c6-48e6-9501-d8e233acfbe9",
+    "inquiryId": "f68fa80d-81a3-42d0-b4fd-4df0c7c2d2f3",
+    "guestProfileId": "30ee3855-4794-408b-9987-72fe51ecd277",
     "segmentNumber": 1,
     "useType": "LEISURE",
     "status": "CLOSED",
@@ -250,11 +254,11 @@
     "parkedAt": null,
     "parkedBy": null,
     "parkedIndividually": false,
-    "createdAt": "2026-04-25T10:27:53.443Z",
-    "updatedAt": "2026-04-25T10:27:53.513Z",
+    "createdAt": "2026-05-13T12:18:43.864Z",
+    "updatedAt": "2026-05-13T12:18:43.933Z",
     "createdBy": "test",
     "version": 2,
-    "closedAt": "2026-04-25T10:27:53.511Z",
+    "closedAt": "2026-05-13T12:18:43.932Z",
     "closedBy": "test-fom-1",
     "noShowCutoffReachedAt": null,
     "creditCeilingTier2AcknowledgedAt": null,
@@ -264,11 +268,13 @@
     "keysIssuedCount": null,
     "keysIssuedBy": null,
     "registrationCompletedAt": null,
-    "registrationCompletedBy": null
+    "registrationCompletedBy": null,
+    "apartmentDurationNights": null,
+    "apartmentRateTierCode": null
   },
   "w8": {
-    "id": "75e4dcfd-3eb4-430a-8ce2-2ccbf77520bf",
-    "dueAt": "2026-05-02T10:27:53.496Z"
+    "id": "acaaddb8-ef63-4296-b02b-6d8b76a907d0",
+    "dueAt": "2026-05-20T12:18:43.914Z"
   }
 }
 ```
@@ -303,8 +309,8 @@
 ```json
 {
   "id": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-  "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
-  "guestProfileId": "bba8fc67-2510-42e7-b4c2-74d775309c52",
+  "inquiryId": "36a9c520-b09a-4e4e-97b3-0ae4891d1a88",
+  "guestProfileId": "e88e311d-490b-4e08-bd4a-096dcb87fc01",
   "segmentNumber": 1,
   "useType": "GROUP",
   "status": "CLOSED",
@@ -319,21 +325,23 @@
   "parkedAt": null,
   "parkedBy": null,
   "parkedIndividually": false,
-  "createdAt": "2026-04-25T10:27:51.477Z",
-  "updatedAt": "2026-04-25T10:27:53.611Z",
+  "createdAt": "2026-05-13T12:18:40.918Z",
+  "updatedAt": "2026-05-13T12:18:44.020Z",
   "createdBy": "actor-seed-system",
   "version": 4,
-  "closedAt": "2026-04-25T10:27:53.610Z",
+  "closedAt": "2026-05-13T12:18:44.018Z",
   "closedBy": "test-fom-1",
   "noShowCutoffReachedAt": null,
   "creditCeilingTier2AcknowledgedAt": null,
   "creditCeilingTier2AcknowledgedBy": null,
   "awaitingWrittenConfirmationActive": false,
-  "keysIssuedAt": "2026-04-25T10:27:51.475Z",
+  "keysIssuedAt": "2026-05-13T12:18:40.916Z",
   "keysIssuedCount": 2,
   "keysIssuedBy": "actor-seed-system",
-  "registrationCompletedAt": "2026-04-25T10:27:51.475Z",
-  "registrationCompletedBy": "actor-seed-system"
+  "registrationCompletedAt": "2026-05-13T12:18:40.916Z",
+  "registrationCompletedBy": "actor-seed-system",
+  "apartmentDurationNights": null,
+  "apartmentRateTierCode": null
 }
 ```
 ### ✅ AC-S9-007 — closedAt populated only for CLOSED
@@ -341,15 +349,15 @@
 ```json
 {
   "status": "CLOSED",
-  "closedAt": "2026-04-25T10:27:53.610Z"
+  "closedAt": "2026-05-13T12:18:44.018Z"
 }
 ```
 ### ✅ AC-S9-044 — ENTRY_CLOSED and FOLIO_SEALED trace events exist
 
 ```json
 {
-  "entryClosed": "d21cc2fa-d606-4071-88f7-d585387306de",
-  "folioSealed": "038ef35a-b682-4873-9e81-7c5cf13d23cc"
+  "entryClosed": "dc5edd39-2c1c-45cd-b57e-2c540dac1f9b",
+  "folioSealed": "713967a2-c839-4ad0-8e01-7244eca6e6ef"
 }
 ```
 ### ✅ AC-S9-015 — progress-stage rejected for CLOSED entry (HTTP 409)
@@ -365,7 +373,7 @@
 
 ```json
 {
-  "dueAt": "2026-04-25T11:27:53.602Z"
+  "dueAt": "2026-05-13T13:18:44.008Z"
 }
 ```
 ### ✅ AC-S9-027 — W28 writes exactly two CommunicationRecords (EMAIL + WHATSAPP)
@@ -373,7 +381,7 @@
 ```json
 [
   {
-    "id": "6c1eb7d6-069f-40b5-938c-cbc5ac1929ae",
+    "id": "a551ba72-19d5-44f3-b699-9daa4e3dbe6f",
     "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
     "channel": "EMAIL",
     "commType": "FEEDBACK_SOLICITATION",
@@ -391,11 +399,11 @@
     "payload": {
       "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a"
     },
-    "createdAt": "2026-04-25T10:27:53.636Z",
+    "createdAt": "2026-05-13T12:18:44.054Z",
     "createdBy": "SYSTEM"
   },
   {
-    "id": "66c3799b-8606-49e8-8822-f280adab01fd",
+    "id": "97e972ad-735a-4416-8d50-96c2f11198a7",
     "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
     "channel": "WHATSAPP",
     "commType": "FEEDBACK_SOLICITATION",
@@ -413,7 +421,7 @@
     "payload": {
       "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a"
     },
-    "createdAt": "2026-04-25T10:27:53.636Z",
+    "createdAt": "2026-05-13T12:18:44.054Z",
     "createdBy": "SYSTEM"
   }
 ]
@@ -422,7 +430,7 @@
 
 ```json
 {
-  "id": "995dc78e-8644-459a-9683-d48a475e300b",
+  "id": "41800eb2-7781-41c2-be0e-306153bd8532",
   "eventType": "FEEDBACK.SOLICITATION_SENT",
   "actorId": "SYSTEM",
   "actorLevel": "SYSTEM",
@@ -436,13 +444,13 @@
       "WHATSAPP"
     ]
   },
-  "timestamp": "2026-04-25T10:27:53.632Z",
+  "timestamp": "2026-05-13T12:18:44.050Z",
   "stageContext": "S9",
   "segmentContext": null,
   "correlationId": null,
-  "inquiryId": "408d0088-fe21-4b6c-ba3b-d396437a2222",
+  "inquiryId": "36a9c520-b09a-4e4e-97b3-0ae4891d1a88",
   "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-  "createdAt": "2026-04-25T10:27:53.638Z",
+  "createdAt": "2026-05-13T12:18:44.055Z",
   "createdBy": "SYSTEM"
 }
 ```
@@ -453,7 +461,7 @@
   "r1": {
     "skipped": false,
     "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
-    "timerId": "4a68efb1-89f6-485a-a76d-810600deaff2"
+    "timerId": "5f79fcaf-a10b-41df-96d9-52b1ae7dbd4b"
   },
   "r2": {
     "skipped": true,
@@ -473,7 +481,7 @@
 
 ```json
 {
-  "roomId": "ef0a3811-7b60-4133-b72e-c9c1c5eda398",
+  "roomId": "9bd9b29e-ccea-4c85-8d99-dec069ff1541",
   "currentClaimState": "FREE"
 }
 ```
@@ -482,30 +490,32 @@
 ```json
 {
   "invoice": {
-    "id": "68a6a5e9-45f3-4f0c-8d1e-e62c776fc1de",
-    "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+    "id": "42f5a2b4-fa35-4dc6-a630-344d36769119",
+    "folioId": "4fbe2bd8-c162-40f3-b17d-54cd60abc9e4",
     "entryId": "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a",
     "invoiceType": "FINAL",
     "state": "RECONCILED",
     "invoiceNumber": null,
     "totalAmount": null,
     "templateKey": "final-v1",
-    "issuedAt": "2026-04-25T10:27:53.204Z",
+    "issuedAt": "2026-05-13T12:18:43.421Z",
     "issuedBy": "test-fd-1",
-    "dispatchedAt": "2026-04-25T10:27:53.204Z",
+    "dispatchedAt": "2026-05-13T12:18:43.421Z",
     "dispatchedBy": "test-fd-1",
     "dispatchedTo": null,
     "supersededById": null,
     "versionNumber": 1,
     "metadata": {
-      "updatedAt": "2026-04-25T10:27:53.652Z",
+      "updatedAt": "2026-05-13T12:18:44.069Z",
       "updatedBy": "test-fom-1",
       "paymentRef": "bank-123",
       "billingModel": "DIRECT_BILL",
+      "referenceNumber": null,
       "settlementMethod": "DIRECT_BILL",
-      "outstandingBalance": "50"
+      "proofAttachmentId": null,
+      "outstandingBalance": "1200"
     },
-    "createdAt": "2026-04-25T10:27:53.205Z"
+    "createdAt": "2026-05-13T12:18:43.422Z"
   },
   "entryStatus": "CLOSED"
 }
@@ -521,19 +531,19 @@
 
 ```json
 {
-  "id": "0b4e2653-840b-4916-bc40-47ed401dfa0f",
-  "folioId": "92638d4c-edb8-4d4e-977d-383659536a1f",
+  "id": "0fedb9d5-a45c-4b3e-89b4-5f63757adb94",
+  "folioId": "4fbe2bd8-c162-40f3-b17d-54cd60abc9e4",
   "lineType": "OTHER",
   "description": "After close adjustment",
   "amount": "1",
   "currency": "BTN",
-  "chargeDate": "2026-04-25T10:27:53.656Z",
+  "chargeDate": "2026-05-13T12:18:44.075Z",
   "stage": "S9",
   "postedBy": "test-fom-1",
   "nightAuditRecordId": null,
   "isPostStay": true,
-  "postedAt": "2026-04-25T10:27:53.656Z",
-  "createdAt": "2026-04-25T10:27:53.664Z"
+  "postedAt": "2026-05-13T12:18:44.075Z",
+  "createdAt": "2026-05-13T12:18:44.081Z"
 }
 ```
 ### ✅ AC-S9-002 — No CommissionDueRecord when agent has no commissionRate (HTTP 200)
@@ -547,9 +557,9 @@
 
 ```json
 {
-  "id": "d227aee6-2fc8-4bc5-adb5-77d04b50b932",
-  "inquiryId": "a166647b-e7c0-4faf-be8c-96677f26636a",
-  "guestProfileId": "196222a5-e6b6-4a6b-be36-be3248dfbf52",
+  "id": "b8feac84-1b4e-4a21-a82a-3f07dcce0d8e",
+  "inquiryId": "28596aab-b73d-43aa-a9c6-e5911717e27a",
+  "guestProfileId": "d8912a14-b9af-44cc-b33d-aa3c0c3a6f52",
   "segmentNumber": 1,
   "useType": "LEISURE",
   "status": "CLOSED",
@@ -564,11 +574,11 @@
   "parkedAt": null,
   "parkedBy": null,
   "parkedIndividually": false,
-  "createdAt": "2026-04-25T10:27:53.678Z",
-  "updatedAt": "2026-04-25T10:27:53.711Z",
+  "createdAt": "2026-05-13T12:18:44.092Z",
+  "updatedAt": "2026-05-13T12:18:44.125Z",
   "createdBy": "test",
   "version": 2,
-  "closedAt": "2026-04-25T10:27:53.710Z",
+  "closedAt": "2026-05-13T12:18:44.124Z",
   "closedBy": "test-fom-1",
   "noShowCutoffReachedAt": null,
   "creditCeilingTier2AcknowledgedAt": null,
@@ -578,22 +588,24 @@
   "keysIssuedCount": null,
   "keysIssuedBy": null,
   "registrationCompletedAt": null,
-  "registrationCompletedBy": null
+  "registrationCompletedBy": null,
+  "apartmentDurationNights": null,
+  "apartmentRateTierCode": null
 }
 ```
 ### ✅ AC-S9-001 — CommissionDueRecord exists when commissionRate configured (HTTP 200)
 
 ```json
 {
-  "id": "bbf650cc-44c8-45f5-bdc2-a842ea0400e8",
-  "entryId": "f5f97b60-864a-48fe-92ed-5d361028032d",
-  "agentProfileId": "fb994138-5580-4bc7-b139-54a10639eea4",
+  "id": "6416fc7f-2a1b-43f7-8d34-b11595e594dd",
+  "entryId": "1adfa48d-375a-4000-bead-155a058f40d9",
+  "agentProfileId": "42a14bd7-ea7f-4058-bfb7-661f8ae44d6c",
   "commissionRate": "0.1",
   "commissionBasis": "TOTAL_FOLIO",
   "calculatedAmount": "10",
   "currency": "BTN",
   "status": "PENDING",
-  "createdAt": "2026-04-25T10:27:53.760Z",
+  "createdAt": "2026-05-13T12:18:44.169Z",
   "createdBy": "SYSTEM"
 }
 ```
@@ -601,15 +613,15 @@
 
 ```json
 {
-  "id": "bbf650cc-44c8-45f5-bdc2-a842ea0400e8",
-  "entryId": "f5f97b60-864a-48fe-92ed-5d361028032d",
-  "agentProfileId": "fb994138-5580-4bc7-b139-54a10639eea4",
+  "id": "6416fc7f-2a1b-43f7-8d34-b11595e594dd",
+  "entryId": "1adfa48d-375a-4000-bead-155a058f40d9",
+  "agentProfileId": "42a14bd7-ea7f-4058-bfb7-661f8ae44d6c",
   "commissionRate": "0.1",
   "commissionBasis": "TOTAL_FOLIO",
   "calculatedAmount": "10",
   "currency": "BTN",
   "status": "PENDING",
-  "createdAt": "2026-04-25T10:27:53.760Z",
+  "createdAt": "2026-05-13T12:18:44.169Z",
   "createdBy": "SYSTEM"
 }
 ```
@@ -618,40 +630,41 @@
 ```json
 {
   "rec": {
-    "id": "776e7e9e-500e-4a7f-ac98-1d3899185787",
-    "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
-    "agentProfileId": "0a8d3a12-9676-4f78-9ed1-c3ec33fd73b1",
+    "id": "ba7a7faa-6818-4639-88a8-16abfabdca4b",
+    "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
+    "agentProfileId": "5c5703bb-8e39-4bc1-a9ce-f66398282a9f",
     "commissionRate": "0.1",
     "commissionBasis": null,
     "calculatedAmount": null,
     "currency": "BTN",
     "status": "RATE_MISSING",
-    "createdAt": "2026-04-25T10:27:53.804Z",
+    "createdAt": "2026-05-13T12:18:44.220Z",
     "createdBy": "SYSTEM"
   },
   "w11": {
-    "id": "ca5f14f4-dd56-439c-a691-93fa277eff9a",
-    "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
+    "id": "1626937f-e502-448e-8464-56711c6b7e83",
+    "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
     "entityType": "CommissionDueRecord",
-    "entityId": "776e7e9e-500e-4a7f-ac98-1d3899185787",
+    "entityId": "ba7a7faa-6818-4639-88a8-16abfabdca4b",
     "timerType": "COMMISSION_RATE_MISSING_W11",
     "timerCode": "COMMISSION_RATE_MISSING_W11",
     "stageContext": null,
-    "firesAt": "2026-04-25T10:28:53.803Z",
-    "dueAt": "2026-04-25T10:28:53.803Z",
+    "firesAt": "2026-05-13T12:19:44.218Z",
+    "dueAt": "2026-05-13T12:19:44.218Z",
     "warningAt": null,
     "criticalAt": null,
     "status": "SCHEDULED",
     "payload": {
-      "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
-      "commissionDueId": "776e7e9e-500e-4a7f-ac98-1d3899185787"
+      "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
+      "timerRecordId": "1626937f-e502-448e-8464-56711c6b7e83",
+      "commissionDueId": "ba7a7faa-6818-4639-88a8-16abfabdca4b"
     },
-    "pgBossJobId": null,
+    "pgBossJobId": "18a5eab8-8cad-47df-9cf6-9b5fcb542873",
     "cancelledAt": null,
     "cancelledBy": null,
     "cancelledReason": null,
     "firedAt": null,
-    "createdAt": "2026-04-25T10:27:53.808Z",
+    "createdAt": "2026-05-13T12:18:44.225Z",
     "createdBy": "SYSTEM"
   }
 }
@@ -662,27 +675,27 @@
 {
   "out": {
     "skipped": false,
-    "commissionDueId": "776e7e9e-500e-4a7f-ac98-1d3899185787"
+    "commissionDueId": "ba7a7faa-6818-4639-88a8-16abfabdca4b"
   },
   "te": {
-    "id": "3ba50776-f1da-4e1b-b6e0-3882d28e672a",
+    "id": "8293c5e4-baf2-40e7-a5eb-1b89bf7921ef",
     "eventType": "COMMISSION_DUE.RATE_MISSING_ESCALATION_FIRED",
     "actorId": "SYSTEM",
     "actorLevel": "SYSTEM",
     "entityType": "CommissionDueRecord",
-    "entityId": "776e7e9e-500e-4a7f-ac98-1d3899185787",
+    "entityId": "ba7a7faa-6818-4639-88a8-16abfabdca4b",
     "operation": "ALERT",
     "payload": {
-      "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
-      "commissionDueId": "776e7e9e-500e-4a7f-ac98-1d3899185787"
+      "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
+      "commissionDueId": "ba7a7faa-6818-4639-88a8-16abfabdca4b"
     },
-    "timestamp": "2026-04-25T10:27:53.822Z",
+    "timestamp": "2026-05-13T12:18:44.242Z",
     "stageContext": "S9",
     "segmentContext": null,
     "correlationId": null,
     "inquiryId": null,
-    "entryId": "80130067-845d-41bd-8eaa-cf8599221cf9",
-    "createdAt": "2026-04-25T10:27:53.825Z",
+    "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
+    "createdAt": "2026-05-13T12:18:44.243Z",
     "createdBy": "SYSTEM"
   }
 }
@@ -699,15 +712,15 @@
 
 ```json
 {
-  "id": "57362e1c-cd63-4654-b572-c0231152e31e",
-  "entryId": "c2e9d909-6323-4e53-857f-17d4191d055b",
+  "id": "70671fde-9080-48b2-9afb-05c5764642c9",
+  "entryId": "cd4c66e3-c669-416f-978b-65780784003c",
   "status": "PENDING",
   "assignedTo": null,
-  "dueAt": "2026-05-02T10:27:53.862Z",
+  "dueAt": "2026-05-20T12:18:44.277Z",
   "completedAt": null,
   "completedBy": null,
   "notes": null,
-  "createdAt": "2026-04-25T10:27:53.863Z",
+  "createdAt": "2026-05-13T12:18:44.278Z",
   "createdBy": "system"
 }
 ```
@@ -715,15 +728,15 @@
 
 ```json
 {
-  "id": "b565163d-a835-4267-b6c4-4b0d76490204",
-  "entryId": "7021c8fe-370f-4d26-9e9a-5253780d6692",
+  "id": "37c44c4b-61ba-4491-9b25-f26edd616116",
+  "entryId": "47916efc-6ef6-4246-a80c-2d549b088a0d",
   "status": "PENDING",
   "assignedTo": null,
-  "dueAt": "2026-05-02T10:27:53.908Z",
+  "dueAt": "2026-05-20T12:18:44.324Z",
   "completedAt": null,
   "completedBy": null,
   "notes": null,
-  "createdAt": "2026-04-25T10:27:53.909Z",
+  "createdAt": "2026-05-13T12:18:44.326Z",
   "createdBy": "system"
 }
 ```
@@ -747,9 +760,9 @@
 
 ```json
 {
-  "id": "9a09f7f4-66fd-4f6e-a0d0-54b75fe94910",
-  "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
-  "guestProfileId": "7b0318f3-a707-481b-b993-7d0b4fe36fd5",
+  "id": "7177bf84-2756-4f9d-a27c-c0bff6662153",
+  "inquiryId": "27567ebc-1138-423f-9185-570dddb6b53f",
+  "guestProfileId": "dbfb35bc-d4d3-4b52-a859-0e75806b91ec",
   "segmentNumber": 1,
   "useType": "LEISURE",
   "status": "CLOSED",
@@ -764,11 +777,11 @@
   "parkedAt": null,
   "parkedBy": null,
   "parkedIndividually": false,
-  "createdAt": "2026-04-25T10:27:53.977Z",
-  "updatedAt": "2026-04-25T10:27:54.030Z",
+  "createdAt": "2026-05-13T12:18:44.394Z",
+  "updatedAt": "2026-05-13T12:18:44.439Z",
   "createdBy": "test",
   "version": 2,
-  "closedAt": "2026-04-25T10:27:54.028Z",
+  "closedAt": "2026-05-13T12:18:44.437Z",
   "closedBy": "test-fom-1",
   "noShowCutoffReachedAt": null,
   "creditCeilingTier2AcknowledgedAt": null,
@@ -778,7 +791,9 @@
   "keysIssuedCount": null,
   "keysIssuedBy": null,
   "registrationCompletedAt": null,
-  "registrationCompletedBy": null
+  "registrationCompletedBy": null,
+  "apartmentDurationNights": null,
+  "apartmentRateTierCode": null
 }
 ```
 ### ✅ AC-S9-029 — No-show closure does not schedule W28 (HTTP 200)
@@ -786,9 +801,9 @@
 ```json
 {
   "r": {
-    "id": "640d2ca4-9c62-4072-8fc6-e6196159fc60",
-    "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
-    "guestProfileId": "31896c76-ca34-41ee-94ec-fa1dbede5e3a",
+    "id": "9cfc871c-9704-492b-8a40-342843196aff",
+    "inquiryId": "27567ebc-1138-423f-9185-570dddb6b53f",
+    "guestProfileId": "bedd2712-dae6-4629-b29b-51bd49e2a83a",
     "segmentNumber": 1,
     "useType": "LEISURE",
     "status": "CLOSED",
@@ -803,11 +818,11 @@
     "parkedAt": null,
     "parkedBy": null,
     "parkedIndividually": false,
-    "createdAt": "2026-04-25T10:27:54.038Z",
-    "updatedAt": "2026-04-25T10:27:54.074Z",
+    "createdAt": "2026-05-13T12:18:44.447Z",
+    "updatedAt": "2026-05-13T12:18:44.482Z",
     "createdBy": "test",
     "version": 2,
-    "closedAt": "2026-04-25T10:27:54.073Z",
+    "closedAt": "2026-05-13T12:18:44.481Z",
     "closedBy": "test-fom-1",
     "noShowCutoffReachedAt": null,
     "creditCeilingTier2AcknowledgedAt": null,
@@ -817,7 +832,9 @@
     "keysIssuedCount": null,
     "keysIssuedBy": null,
     "registrationCompletedAt": null,
-    "registrationCompletedBy": null
+    "registrationCompletedBy": null,
+    "apartmentDurationNights": null,
+    "apartmentRateTierCode": null
   },
   "w28": null
 }
@@ -827,25 +844,25 @@
 ```json
 {
   "inv": {
-    "id": "2b1ef824-52d6-40fc-9827-82d6a423b58a",
-    "folioId": "6f1dbf4f-c871-4cc7-8a3c-3a3289860305",
-    "entryId": "d0f62bc4-2175-401a-8aa4-dcc486648c70",
+    "id": "6e8a69d5-645a-420a-bca2-817811965143",
+    "folioId": "4d5b5e86-8521-412d-9e63-6e4f745de7bb",
+    "entryId": "5b77a415-a265-4e98-bebc-9a21dc302342",
     "invoiceType": "FINAL",
     "state": "DISPATCHED",
     "invoiceNumber": null,
     "totalAmount": null,
     "templateKey": null,
-    "issuedAt": "2026-04-25T10:27:54.086Z",
+    "issuedAt": "2026-05-13T12:18:44.498Z",
     "issuedBy": "test-fd-1",
-    "dispatchedAt": "2026-04-25T10:27:54.086Z",
+    "dispatchedAt": "2026-05-13T12:18:44.498Z",
     "dispatchedBy": "test-fd-1",
     "dispatchedTo": null,
     "supersededById": null,
     "versionNumber": 1,
     "metadata": {
-      "noShowDeterminationId": "dfebab67-271a-438e-b00b-b22d0a4d0bb4"
+      "noShowDeterminationId": "e51e5b93-2852-4a22-a33d-8c3eb32e8689"
     },
-    "createdAt": "2026-04-25T10:27:54.088Z"
+    "createdAt": "2026-05-13T12:18:44.499Z"
   }
 }
 ```
@@ -853,25 +870,25 @@
 
 ```json
 {
-  "id": "2b1ef824-52d6-40fc-9827-82d6a423b58a",
-  "folioId": "6f1dbf4f-c871-4cc7-8a3c-3a3289860305",
-  "entryId": "d0f62bc4-2175-401a-8aa4-dcc486648c70",
+  "id": "6e8a69d5-645a-420a-bca2-817811965143",
+  "folioId": "4d5b5e86-8521-412d-9e63-6e4f745de7bb",
+  "entryId": "5b77a415-a265-4e98-bebc-9a21dc302342",
   "invoiceType": "FINAL",
   "state": "DISPATCHED",
   "invoiceNumber": null,
   "totalAmount": null,
   "templateKey": null,
-  "issuedAt": "2026-04-25T10:27:54.086Z",
+  "issuedAt": "2026-05-13T12:18:44.498Z",
   "issuedBy": "test-fd-1",
-  "dispatchedAt": "2026-04-25T10:27:54.086Z",
+  "dispatchedAt": "2026-05-13T12:18:44.498Z",
   "dispatchedBy": "test-fd-1",
   "dispatchedTo": null,
   "supersededById": null,
   "versionNumber": 1,
   "metadata": {
-    "noShowDeterminationId": "dfebab67-271a-438e-b00b-b22d0a4d0bb4"
+    "noShowDeterminationId": "e51e5b93-2852-4a22-a33d-8c3eb32e8689"
   },
-  "createdAt": "2026-04-25T10:27:54.088Z"
+  "createdAt": "2026-05-13T12:18:44.499Z"
 }
 ```
 ### ✅ AC-S9-034 — No-show refund obligation confirms outgoing PaymentRecord before closure (HTTP 200)
@@ -879,10 +896,10 @@
 ```json
 {
   "pay": {
-    "id": "103fc4ef-150c-405c-b26f-b6581bf987cf",
-    "folioId": "eecc7590-b986-45bd-98cc-82de5d221707",
+    "id": "c73b94b6-344f-4b1b-931f-d1c0fae326c3",
+    "folioId": "5f573810-19c6-4b27-a175-433806a6b959",
     "invoiceId": null,
-    "entryId": "886ccc65-fcfa-4da7-8f55-5ed5961d2aff",
+    "entryId": "1aa77e99-41df-4ada-9932-3c4caac36927",
     "amount": "15",
     "currency": "BTN",
     "foreignCurrencyAmount": null,
@@ -890,11 +907,11 @@
     "exchangeRate": null,
     "paymentMethod": "CASH",
     "paymentDirection": "OUT",
-    "createdAt": "2026-04-25T10:27:54.137Z",
+    "createdAt": "2026-05-13T12:18:44.550Z",
     "receivedAt": null,
     "recordedBy": "test-fom-1",
     "stage": "S9",
-    "notes": "NO_SHOW_REFUND:31d93a35-5924-405b-98e7-14fa2a0ab5f5"
+    "notes": "NO_SHOW_REFUND:16ac8aa5-9e6e-4f2c-b679-8e76a3e7e4d6"
   }
 }
 ```
@@ -902,10 +919,10 @@
 
 ```json
 {
-  "id": "103fc4ef-150c-405c-b26f-b6581bf987cf",
-  "folioId": "eecc7590-b986-45bd-98cc-82de5d221707",
+  "id": "c73b94b6-344f-4b1b-931f-d1c0fae326c3",
+  "folioId": "5f573810-19c6-4b27-a175-433806a6b959",
   "invoiceId": null,
-  "entryId": "886ccc65-fcfa-4da7-8f55-5ed5961d2aff",
+  "entryId": "1aa77e99-41df-4ada-9932-3c4caac36927",
   "amount": "15",
   "currency": "BTN",
   "foreignCurrencyAmount": null,
@@ -913,11 +930,11 @@
   "exchangeRate": null,
   "paymentMethod": "CASH",
   "paymentDirection": "OUT",
-  "createdAt": "2026-04-25T10:27:54.137Z",
+  "createdAt": "2026-05-13T12:18:44.550Z",
   "receivedAt": null,
   "recordedBy": "test-fom-1",
   "stage": "S9",
-  "notes": "NO_SHOW_REFUND:31d93a35-5924-405b-98e7-14fa2a0ab5f5"
+  "notes": "NO_SHOW_REFUND:16ac8aa5-9e6e-4f2c-b679-8e76a3e7e4d6"
 }
 ```
 ### ✅ AC-S9-040 — write-off exceeding authority band is blocked (HTTP 409)
@@ -933,13 +950,13 @@
 
 ```json
 {
-  "id": "0c00cc87-2ba6-4863-ad70-bacb8af4be00",
-  "folioId": "88c51ac9-455b-48a0-a8a5-b17650f8ff7e",
-  "entryId": "4eb10624-4655-48ec-b19c-7b311c5b81f9",
+  "id": "f4f8658a-e36d-4f90-b9c8-d2540b5192af",
+  "folioId": "c5864016-d438-425d-aad0-3bb9f309f1b3",
+  "entryId": "3e880fe5-8d2d-499e-94a9-847fe3d7f43d",
   "writtenOffAmount": "4000",
   "currency": "BTN",
   "reason": "uncollectable",
-  "createdAt": "2026-04-25T10:27:54.178Z",
+  "createdAt": "2026-05-13T12:18:44.589Z",
   "createdBy": "test-gm-1"
 }
 ```
@@ -948,13 +965,13 @@
 ```json
 {
   "folio": {
-    "id": "88c51ac9-455b-48a0-a8a5-b17650f8ff7e",
-    "entryId": "4eb10624-4655-48ec-b19c-7b311c5b81f9",
+    "id": "c5864016-d438-425d-aad0-3bb9f309f1b3",
+    "entryId": "3e880fe5-8d2d-499e-94a9-847fe3d7f43d",
     "state": "WRITTEN_OFF",
     "billingModel": "GUEST_PAY",
-    "createdAt": "2026-04-25T10:27:54.163Z",
+    "createdAt": "2026-05-13T12:18:44.579Z",
     "createdBy": "test",
-    "convertedToLiveAt": "2026-04-25T10:27:54.164Z",
+    "convertedToLiveAt": "2026-05-13T12:18:44.579Z",
     "convertedBy": "test",
     "closedAt": null,
     "closedBy": null,
@@ -962,17 +979,17 @@
     "noShowAdvancePaymentAmount": null,
     "noShowNetPosition": null,
     "noShowFomDetermination": null,
-    "outstandingBalance": "6000",
+    "outstandingBalance": "0",
     "advancePaymentReconciliationComplete": false
   },
   "rec": {
-    "id": "0c00cc87-2ba6-4863-ad70-bacb8af4be00",
-    "folioId": "88c51ac9-455b-48a0-a8a5-b17650f8ff7e",
-    "entryId": "4eb10624-4655-48ec-b19c-7b311c5b81f9",
+    "id": "f4f8658a-e36d-4f90-b9c8-d2540b5192af",
+    "folioId": "c5864016-d438-425d-aad0-3bb9f309f1b3",
+    "entryId": "3e880fe5-8d2d-499e-94a9-847fe3d7f43d",
     "writtenOffAmount": "4000",
     "currency": "BTN",
     "reason": "uncollectable",
-    "createdAt": "2026-04-25T10:27:54.178Z",
+    "createdAt": "2026-05-13T12:18:44.589Z",
     "createdBy": "test-gm-1"
   }
 }
@@ -999,9 +1016,9 @@
 
 ```json
 {
-  "id": "dbaaf71c-cfcf-4bb4-a445-351c54d2b672",
-  "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
-  "guestProfileId": "0054e851-a889-4100-b2b3-12f7ca0dcd0a",
+  "id": "6e09ecc4-3a31-477c-bc0a-4ef544e015e8",
+  "inquiryId": "27567ebc-1138-423f-9185-570dddb6b53f",
+  "guestProfileId": "cc5a3e8f-5809-4d9c-8e1d-87ae8ef724e7",
   "segmentNumber": 1,
   "useType": "APARTMENT",
   "status": "CLOSED",
@@ -1016,11 +1033,11 @@
   "parkedAt": null,
   "parkedBy": null,
   "parkedIndividually": false,
-  "createdAt": "2026-04-25T10:27:54.210Z",
-  "updatedAt": "2026-04-25T10:27:54.274Z",
+  "createdAt": "2026-05-13T12:18:44.624Z",
+  "updatedAt": "2026-05-13T12:18:44.675Z",
   "createdBy": "test",
   "version": 2,
-  "closedAt": "2026-04-25T10:27:54.272Z",
+  "closedAt": "2026-05-13T12:18:44.673Z",
   "closedBy": "test-fom-1",
   "noShowCutoffReachedAt": null,
   "creditCeilingTier2AcknowledgedAt": null,
@@ -1030,7 +1047,9 @@
   "keysIssuedCount": null,
   "keysIssuedBy": null,
   "registrationCompletedAt": null,
-  "registrationCompletedBy": null
+  "registrationCompletedBy": null,
+  "apartmentDurationNights": null,
+  "apartmentRateTierCode": null
 }
 ```
 ### ✅ AC-S9-050a — Catering closure blocked when equipment return unresolved (HTTP 409)
@@ -1047,9 +1066,9 @@
 ```json
 {
   "ok": {
-    "id": "86e67196-b13f-4790-b9c7-d2c02c7b2ec6",
-    "inquiryId": "08443d65-75bd-4d96-b7c7-ce603370dd1b",
-    "guestProfileId": "565eb1e3-800c-4b91-9cd9-2aceacd441c7",
+    "id": "1918b5fb-a1a3-4bd2-97de-a775be49365e",
+    "inquiryId": "27567ebc-1138-423f-9185-570dddb6b53f",
+    "guestProfileId": "0173e8a0-714d-4b79-b056-f8a55d64768d",
     "segmentNumber": 1,
     "useType": "CATERING",
     "status": "CLOSED",
@@ -1064,11 +1083,11 @@
     "parkedAt": null,
     "parkedBy": null,
     "parkedIndividually": false,
-    "createdAt": "2026-04-25T10:27:54.282Z",
-    "updatedAt": "2026-04-25T10:27:54.344Z",
+    "createdAt": "2026-05-13T12:18:44.685Z",
+    "updatedAt": "2026-05-13T12:18:44.739Z",
     "createdBy": "test",
     "version": 2,
-    "closedAt": "2026-04-25T10:27:54.343Z",
+    "closedAt": "2026-05-13T12:18:44.737Z",
     "closedBy": "test-fom-1",
     "noShowCutoffReachedAt": null,
     "creditCeilingTier2AcknowledgedAt": null,
@@ -1078,28 +1097,30 @@
     "keysIssuedCount": null,
     "keysIssuedBy": null,
     "registrationCompletedAt": null,
-    "registrationCompletedBy": null
+    "registrationCompletedBy": null,
+    "apartmentDurationNights": null,
+    "apartmentRateTierCode": null
   },
   "breach": {
-    "id": "53c83e05-c6eb-4dbe-8506-e6d742ee13fd",
+    "id": "24d9e46d-217b-4952-ba41-d963a8d9e0ef",
     "eventType": "EQUIPMENT_RETURN.DEADLINE_BREACHED",
     "actorId": "SYSTEM",
     "actorLevel": "SYSTEM",
     "entityType": "EquipmentAllocation",
-    "entityId": "c429a252-c174-430d-aff2-fb374c7b1214",
+    "entityId": "a287e06c-b4ff-4c79-8aeb-bc90577af02f",
     "operation": "ALERT",
     "payload": {
-      "entryId": "86e67196-b13f-4790-b9c7-d2c02c7b2ec6",
+      "entryId": "1918b5fb-a1a3-4bd2-97de-a775be49365e",
       "equipmentCode": "CHAIR_10",
-      "equipmentAllocationId": "c429a252-c174-430d-aff2-fb374c7b1214"
+      "equipmentAllocationId": "a287e06c-b4ff-4c79-8aeb-bc90577af02f"
     },
-    "timestamp": "2026-04-25T10:27:54.312Z",
+    "timestamp": "2026-05-13T12:18:44.708Z",
     "stageContext": "S9",
     "segmentContext": null,
     "correlationId": null,
     "inquiryId": null,
-    "entryId": "86e67196-b13f-4790-b9c7-d2c02c7b2ec6",
-    "createdAt": "2026-04-25T10:27:54.314Z",
+    "entryId": "1918b5fb-a1a3-4bd2-97de-a775be49365e",
+    "createdAt": "2026-05-13T12:18:44.710Z",
     "createdBy": "SYSTEM"
   }
 }

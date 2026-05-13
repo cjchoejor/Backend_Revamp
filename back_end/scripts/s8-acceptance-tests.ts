@@ -62,14 +62,22 @@ function writeArtifacts(results: CaseResult[]) {
 async function main() {
   const results: CaseResult[] = [];
 
-  // Create a fresh entry in S8 by using an S7 seeded entry and progressing S7->S8 with required setup
-  const seeded = await prisma.entry.findFirstOrThrow({ where: { currentStage: "S7" }, include: { folio: true, handoffs: true } });
+  // Primary seeded S7 entry (exclude fixed-id DIRECT_BILL S9 harness row)
+  const seeded = await prisma.entry.findFirstOrThrow({
+    where: { currentStage: "S7", id: { not: "9a9a9a9a-9a9a-4a9a-9a9a-9a9a9a9a9a9a" } },
+    include: { folio: true, handoffs: true, reservation: true },
+  });
   assert(seeded.folio, "Seeded S7 entry missing folio");
+  assert(seeded.reservation, "Seeded S7 entry missing reservation");
 
-  // Ensure a COMPLETE night audit for last night before checkout for S7->S8
-  const checkout = seeded.checkOutDate!;
-  const lastNight = new Date(Date.UTC(checkout.getUTCFullYear(), checkout.getUTCMonth(), checkout.getUTCDate() - 1, 0, 0, 0, 0));
-  await http("POST", "/night-audit/run", L2, { operatingDate: lastNight.toISOString() });
+  // COMPLETE night audit for every stay night (settlement Policy 61 + S8→S9 p62)
+  const { listStayNightOperatingDatesUtc } = await import("../src/policies/24-night-audit/p61-night-audits-complete-for-stay-before-settlement.js");
+  const checkIn = seeded.reservation.frozenCheckInDate;
+  const checkOut = seeded.reservation.frozenCheckOutDate;
+  for (const op of listStayNightOperatingDatesUtc(checkIn, checkOut)) {
+    const rAudit = await http("POST", "/night-audit/run", L2, { operatingDate: op.toISOString() });
+    assert(rAudit.status === 200, `Night audit setup failed for ${op.toISOString().slice(0, 10)}: ${JSON.stringify(rAudit.json)}`);
+  }
 
   // Ensure no disputes block S7->S8
   const openDispute = await prisma.disputeRecord.findFirst({ where: { entryId: seeded.id, status: { in: ["OPEN", "IN_PROGRESS", "REOPENED"] } } });
@@ -101,7 +109,7 @@ async function main() {
     results.push({
       id: "AC-S8-26",
       title: "KeyReturnRecord with discrepancy satisfies key-return condition",
-      pass: r2.status === 200 && (r2.json as any)?.countReconciled === false && !!(r2.json as any)?.reconciliationNote,
+      pass: r2.status === 201 && (r2.json as any)?.countReconciled === false && !!(r2.json as any)?.reconciliationNote,
       status: r2.status,
       body: r2.json,
     });
@@ -143,7 +151,7 @@ async function main() {
     results.push({
       id: "AC-S8-14",
       title: "RoomInspectionRecord always carries deficientFlagStatus and can schedule deferral (W9)",
-      pass: r2.status === 200 && (r2.json as any)?.deficientFlagStatus === "UNRESOLVED_AT_CHECKOUT" && (r2.json as any)?.isDeferred === true,
+      pass: r2.status === 201 && (r2.json as any)?.deficientFlagStatus === "UNRESOLVED_AT_CHECKOUT" && (r2.json as any)?.isDeferred === true,
       status: r2.status,
       body: r2.json,
     });
@@ -253,9 +261,9 @@ async function main() {
     const gp = await prisma.guestProfile.create({ data: { firstName: "H4", lastName: "Block", createdBy: "test" } });
     const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S8", status: "ACTIVE", createdBy: "test", version: 1 } as any });
     const provisional = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const folioService = await import("../src/services/folio-service.js");
-    const live = await folioService.convertToLive(prisma as any, entry.id, provisional.id, "test");
-    await prisma.folio.update({ where: { id: live.id }, data: { state: "SETTLED", outstandingBalance: 0 as any } as any });
+    const folioService = await import("../src/services/domain/folio-service.js");
+    await folioService.convertToLive(prisma as any, entry.id, provisional.id, "test");
+    await prisma.folio.update({ where: { id: provisional.id }, data: { state: "SETTLED", outstandingBalance: 0 as any } as any });
 
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const room = await prisma.room.create({
@@ -285,7 +293,12 @@ async function main() {
     results.push({
       id: "AC-S8-18",
       title: "S8->S9 blocked when H4 is not fulfilled/auto-fulfilled",
-      pass: r.status === 409 && (r.json as any)?.error === "StageGateBlockedError" && (r.json as any)?.blockingCondition === "H4_NOT_FULFILLED",
+      pass:
+        r.status === 409 &&
+        ["StageGateBlockedError", "StageGatesBlockedError"].includes((r.json as any)?.error) &&
+        ((r.json as any)?.blockingCondition === "H4_NOT_FULFILLED" ||
+          (Array.isArray((r.json as any)?.details?.failures) &&
+            (r.json as any).details.failures.some((f: { blockingCondition?: string }) => f.blockingCondition === "H4_NOT_FULFILLED"))),
       status: r.status,
       body: r.json,
     });
@@ -301,7 +314,12 @@ async function main() {
     results.push({
       id: "AC-S8-11",
       title: "S8->S9 blocked when dispute gate BLOCKED (no override)",
-      pass: r1.status === 409 && (r1.json as any)?.error === "StageGateBlockedError" && (r1.json as any)?.blockingCondition === "DISPUTE_GATE_BLOCKED",
+      pass:
+        r1.status === 409 &&
+        ["StageGateBlockedError", "StageGatesBlockedError"].includes((r1.json as any)?.error) &&
+        ((r1.json as any)?.blockingCondition === "DISPUTE_GATE_BLOCKED" ||
+          (Array.isArray((r1.json as any)?.details?.failures) &&
+            (r1.json as any).details.failures.some((f: { blockingCondition?: string }) => f.blockingCondition === "DISPUTE_GATE_BLOCKED"))),
       status: r1.status,
       body: r1.json,
     });
@@ -338,7 +356,8 @@ async function main() {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const mk = async (billingModel: "GUEST_PAY" | "DIRECT_BILL", outstandingBalance: number) => {
-      const folioService = await import("../src/services/folio-service.js");
+      const folioService = await import("../src/services/domain/folio-service.js");
+      const { recomputeFolioOutstandingBalance } = await import("../src/lib/folio-outstanding-from-payment.js");
       const gp = await prisma.guestProfile.create({ data: { firstName: "Settle", lastName: "Variant", createdBy: "test" } });
       const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S8", status: "ACTIVE", createdBy: "test", version: 1 } as any });
       const room = await prisma.room.create({
@@ -354,9 +373,23 @@ async function main() {
       const provisional = await prisma.folio.create({
         data: { entryId: entry.id, state: "PROVISIONAL", billingModel, outstandingBalance: 0 as any, createdBy: "test" } as any,
       });
-      const folio = await folioService.convertToLive(prisma as any, entry.id, provisional.id, "test");
-      await prisma.folio.update({ where: { id: folio.id }, data: { outstandingBalance: outstandingBalance as any } as any });
-      return { entry, room, folio };
+      await folioService.convertToLive(prisma as any, entry.id, provisional.id, "test");
+      const folio = await prisma.folio.findUniqueOrThrow({ where: { id: provisional.id } });
+      await prisma.folioLine.create({
+        data: {
+          folioId: folio.id,
+          lineType: "OTHER",
+          description: "S8 settlement harness charge",
+          amount: outstandingBalance,
+          currency: "BTN",
+          chargeDate: new Date(),
+          stage: "S8",
+          postedBy: "test",
+        } as any,
+      });
+      await recomputeFolioOutstandingBalance(prisma as any, folio.id);
+      const folioAfter = await prisma.folio.findUniqueOrThrow({ where: { id: folio.id } });
+      return { entry, room, folio: folioAfter };
     };
 
     // AC-S8-07
@@ -391,13 +424,14 @@ async function main() {
 
   // AC-S8-19/20: H5 created vs auto + trace
   {
-    const svc = await import("../src/services/s8-checkout-service.js");
+    const svc = await import("../src/services/domain/s8-checkout-service.js");
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const gp = await prisma.guestProfile.create({ data: { firstName: "H5", lastName: "Test", createdBy: "test" } });
     const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S8", status: "ACTIVE", createdBy: "test", version: 1 } as any });
     const provisional = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const folioService = await import("../src/services/folio-service.js");
-    const live = await folioService.convertToLive(prisma as any, entry.id, provisional.id, "test");
+    const folioService = await import("../src/services/domain/folio-service.js");
+    await folioService.convertToLive(prisma as any, entry.id, provisional.id, "test");
+    const live = await prisma.folio.findUniqueOrThrow({ where: { id: provisional.id } });
 
     await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any } as any });
     const h5 = await svc.buildOrAutoFulfilH5(prisma as any, entry.id, L1.id);
@@ -406,7 +440,8 @@ async function main() {
     const gp2 = await prisma.guestProfile.create({ data: { firstName: "H5", lastName: "Auto", createdBy: "test" } });
     const entry2 = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp2.id, currentStage: "S8", status: "ACTIVE", createdBy: "test", version: 1 } as any });
     const p2 = await prisma.folio.create({ data: { entryId: entry2.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const live2 = await folioService.convertToLive(prisma as any, entry2.id, p2.id, "test");
+    await folioService.convertToLive(prisma as any, entry2.id, p2.id, "test");
+    const live2 = await prisma.folio.findUniqueOrThrow({ where: { id: p2.id } });
     await prisma.folio.update({ where: { id: live2.id }, data: { state: "SETTLED", outstandingBalance: 0 as any } as any });
     const h5a = await svc.buildOrAutoFulfilH5(prisma as any, entry2.id, L1.id);
     const te = await prisma.traceEvent.findFirst({ where: { entryId: entry2.id, eventType: "HANDOFF.AUTO_FULFILLED" }, orderBy: { createdAt: "desc" } });

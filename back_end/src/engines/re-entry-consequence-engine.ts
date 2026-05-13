@@ -18,6 +18,12 @@ export async function computeReEntryConsequences(
   if (input.fromStage === Stage.S3 && input.toStage === Stage.S1) {
     consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_SUPERSEDED", "CANCEL_W22_W34_TIMERS");
   }
+  if (input.fromStage === Stage.S8 && input.toStage === Stage.S7) {
+    consequences.push("CANCEL_CHECKOUT_TIME", "H4_REOPEN", "RETURN_TO_CHARGE_POSTING");
+  }
+  if (input.fromStage === Stage.S8 && input.toStage === Stage.S2) {
+    consequences.push("CANCEL_CHECKOUT_TIME", "NEW_SEGMENT", "H4_REOPEN", "RATE_RENEGOTIATION");
+  }
 
   await (prisma as any).traceEvent.create({
     data: {

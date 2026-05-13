@@ -1,0 +1,102 @@
+{
+  "meta": {
+    "stage": "S1",
+    "scenarioName": "preferred-configuration-selection-clean-room",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s1-deep · Layer 03a (S1 inquiry & configuration)",
+    "generatedAt": "2026-05-13T10:50:05.443Z",
+    "apiBaseUrl": "http://localhost:4000/api",
+    "apiAvailable": false
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S1-001-part",
+      "title": "Select preferred configuration (clean room)",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "9a9fdaf3-401e-4291-be0f-3f3fc10f3546",
+        "entryId": "3e84564f-e553-44a7-ab53-20634020f3b0",
+        "segmentId": "5b9fa8df-c71e-4e46-a76c-e6f8c05511e9",
+        "searchCriteria": {
+          "checkInDate": "2026-05-14T10:50:05.396Z",
+          "checkOutDate": "2026-05-15T10:50:05.396Z"
+        },
+        "resultSet": {
+          "availableRooms": [
+            {
+              "claimState": "FREE",
+              "roomNumber": "403",
+              "inventoryId": "4698c784-1c8e-4ea8-9d1e-1399e5422666",
+              "isDeficient": false,
+              "pricingIndicative": {
+                "currency": "BTN",
+                "disclaimer": "INDICATIVE_ONLY_NO_QUOTATION",
+                "rateAmount": 500,
+                "stayNights": 1,
+                "selectedRatePlanId": "rp-dlx-default",
+                "lineTotalIndicative": 500,
+                "selectedRatePlanType": "INDIVIDUAL",
+                "isDeterrentRateApplied": false
+              },
+              "deficientConditionCategory": null
+            }
+          ],
+          "deficientRooms": [
+            {
+              "claimState": "FREE",
+              "roomNumber": "402-DEF",
+              "inventoryId": "8fffc50b-55d5-4f47-a426-c393fbea0063",
+              "isDeficient": false,
+              "deficientCategory": "HOUSEKEEPING",
+              "deficientDescription": null,
+              "deficientConditionCategory": null
+            }
+          ],
+          "searchTimestamp": "2026-05-13T10:50:05.408Z",
+          "unavailableRooms": [
+            {
+              "roomNumber": "501",
+              "inventoryId": "a0cdb3b7-1b55-4e02-84c1-087ee30c4fe2",
+              "isDeficient": false,
+              "unavailabilityReason": "PHYSICAL_NOT_READY",
+              "deficientConditionCategory": null
+            },
+            {
+              "roomNumber": "502-DEF",
+              "inventoryId": "56078680-455d-4d3b-afab-5f1667ac0815",
+              "isDeficient": false,
+              "unavailabilityReason": "PHYSICAL_NOT_READY",
+              "deficientConditionCategory": null
+            },
+            {
+              "roomNumber": "503",
+              "inventoryId": "e81cede5-b593-433b-bc66-1443d0fe9d29",
+              "isDeficient": false,
+              "unavailabilityReason": "PHYSICAL_NOT_READY",
+              "deficientConditionCategory": null
+            }
+          ],
+          "maintenanceConflicts": [],
+          "isRevalidationRequired": false
+        },
+        "optionSelected": {
+          "roomId": "4698c784-1c8e-4ea8-9d1e-1399e5422666",
+          "isDeficient": false
+        },
+        "isStale": false,
+        "stalenessAt": null,
+        "deficientAcknowledgements": null,
+        "sealedAt": null,
+        "createdAt": "2026-05-13T10:50:05.412Z",
+        "createdBy": "s1-fd-1"
+      },
+      "explanation": "Reference OP 4: optionSelected set; CONFIGURATION_SELECTED trace.",
+      "dbImpact": "UPDATE availability_configurations; trace CONFIGURATION_SELECTED."
+    }
+  ]
+}

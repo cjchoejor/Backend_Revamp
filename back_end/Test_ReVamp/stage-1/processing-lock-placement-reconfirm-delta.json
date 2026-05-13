@@ -1,0 +1,108 @@
+{
+  "meta": {
+    "stage": "S1",
+    "scenarioName": "processing-lock-placement-reconfirm-delta",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s1-deep · Layer 03a (S1 inquiry & configuration)",
+    "generatedAt": "2026-05-13T10:50:05.495Z",
+    "apiBaseUrl": "http://localhost:4000/api",
+    "apiAvailable": false
+  },
+  "summary": {
+    "passed": 2,
+    "total": 2,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S1-021",
+      "title": "Place processing lock (concurrent editing / awareness slice)",
+      "pass": true,
+      "httpStatus": 201,
+      "response": {
+        "lock": {
+          "id": "87fc0186-7ca7-4be9-b22c-f6d74c15759b",
+          "actorId": "s1-fd-1",
+          "channel": "FRONT_DESK",
+          "inventoryReference": "4698c784-1c8e-4ea8-9d1e-1399e5422666",
+          "entryId": "3e84564f-e553-44a7-ab53-20634020f3b0",
+          "segmentId": null,
+          "placedAt": "2026-05-13T10:50:05.456Z",
+          "ttlSeconds": 600,
+          "expiresAt": "2026-05-13T11:00:05.456Z",
+          "status": "ACTIVE",
+          "expiredAt": null,
+          "releasedAt": null,
+          "revalidationCount": 0,
+          "pgBossJobId": "1d3275d1-4cba-41c5-817a-7e1a924e3557",
+          "createdAt": "2026-05-13T10:50:05.461Z"
+        },
+        "meta": {
+          "priorityNotice": "Existing active lock detected: 0113ebb1-c5d4-448e-b4f5-a3b5cacd76ca"
+        }
+      },
+      "explanation": "Processing lock placement + TTL (reference side paths).",
+      "dbImpact": "INSERT processing_lock_records; TTL timer."
+    },
+    {
+      "id": "AC-S1-LOCK-RECONFIRM-DELTA",
+      "title": "Reconfirm expired lock returns revalidationDelta JSON",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "newLock": {
+          "id": "b154dbf5-9c99-4528-a235-7c07b15c352b",
+          "actorId": "s1-fd-1",
+          "channel": "FRONT_DESK",
+          "inventoryReference": "4698c784-1c8e-4ea8-9d1e-1399e5422666",
+          "entryId": "3e84564f-e553-44a7-ab53-20634020f3b0",
+          "segmentId": null,
+          "placedAt": "2026-05-13T10:50:05.482Z",
+          "ttlSeconds": 600,
+          "expiresAt": "2026-05-13T11:00:05.482Z",
+          "status": "ACTIVE",
+          "expiredAt": null,
+          "releasedAt": null,
+          "revalidationCount": 1,
+          "pgBossJobId": null,
+          "createdAt": "2026-05-13T10:50:05.488Z"
+        },
+        "previousLockId": "87fc0186-7ca7-4be9-b22c-f6d74c15759b",
+        "revalidationDelta": {
+          "id": "3955fd3a-47a5-4e1f-897a-31de858c48e1",
+          "processingLockId": "b154dbf5-9c99-4528-a235-7c07b15c352b",
+          "availabilityChanged": false,
+          "deficientStatusChanged": false,
+          "pricingChanged": true,
+          "availabilityDelta": {
+            "bucket": "AVAILABLE",
+            "nowSelectable": true,
+            "selectedRoomId": "4698c784-1c8e-4ea8-9d1e-1399e5422666",
+            "unavailabilityReason": null
+          },
+          "deficientDelta": {
+            "isDeficient": false,
+            "wasDeficient": false,
+            "selectedRoomId": "4698c784-1c8e-4ea8-9d1e-1399e5422666"
+          },
+          "pricingDelta": {
+            "currentIndicative": {
+              "currency": "BTN",
+              "disclaimer": "INDICATIVE_ONLY_NO_QUOTATION",
+              "rateAmount": 500,
+              "stayNights": 1,
+              "selectedRatePlanId": "rp-dlx-default",
+              "lineTotalIndicative": 500,
+              "selectedRatePlanType": "INDIVIDUAL",
+              "isDeterrentRateApplied": false
+            },
+            "previousIndicative": null
+          },
+          "createdAt": "2026-05-13T10:50:05.492Z",
+          "createdBy": "s1-fd-1"
+        }
+      },
+      "explanation": "Reconfirm returns structured delta (availability/deficient/pricing flags).",
+      "dbImpact": "INSERT revalidation_delta_records; trace PROCESSING_LOCK.RECONFIRMED."
+    }
+  ]
+}

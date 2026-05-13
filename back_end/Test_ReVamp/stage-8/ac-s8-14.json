@@ -1,0 +1,40 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-14",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.678Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-14",
+      "title": "RoomInspectionRecord always carries deficientFlagStatus and can schedule deferral (W9)",
+      "pass": true,
+      "httpStatus": 201,
+      "response": {
+        "id": "4230bc39-0d08-41c0-9790-8a1c3f8f7c37",
+        "entryId": "a5b2f94d-4e16-41fe-acb2-0ad245e8523a",
+        "roomId": "fdfb7ffc-cd78-4b9c-9712-5fd0365cedf1",
+        "segmentId": "ce4290ef-f10d-4482-9f16-befa06cae633",
+        "inspectedBy": "test-fd-1",
+        "inspectedAt": "2026-05-13T12:18:27.789Z",
+        "isDeferred": true,
+        "deficientFlagStatus": "UNRESOLVED_AT_CHECKOUT",
+        "deficientConditionId": "8035a12c-c1e2-49c9-bcfd-3175ffc4701b",
+        "inspectorAssessment": "Condition present; governed service recovery",
+        "damageFound": false,
+        "damageNotes": null,
+        "createdAt": "2026-05-13T12:18:27.790Z"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

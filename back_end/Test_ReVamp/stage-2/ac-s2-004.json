@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "stage": "S2",
+    "scenarioName": "ac-s2-004",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s2-deep · Layer 03a (S2 negotiation & quotation)",
+    "generatedAt": "2026-05-13T11:04:34.182Z",
+    "apiBaseUrl": "http://127.0.0.1:4022/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S2-004",
+      "title": "Place speculative hold creates hold + updates room claim state",
+      "pass": true,
+      "httpStatus": 201,
+      "response": {
+        "id": "c92d7999-b48f-4842-99bc-cc0c797f0002",
+        "entryId": "da55c9ab-ca2f-407a-98b0-6dc1305681cd",
+        "segmentId": "07ceb685-370a-4823-98b7-d1e6ad85502d",
+        "roomId": "8b38f698-3951-4fea-83ff-45ff36d595e1",
+        "spaceId": null,
+        "state": "PLACED",
+        "placedAt": "2026-05-13T11:04:34.126Z",
+        "placedBy": "s2-fd-1",
+        "ttlSeconds": 120,
+        "expiresAt": "2026-05-13T11:06:34.126Z",
+        "releasedAt": null,
+        "releasedBy": null,
+        "releaseReason": null,
+        "upgradedToId": null,
+        "notes": "SIG-S2 acceptance: speculative hold",
+        "createdAt": "2026-05-13T11:04:34.131Z"
+      },
+      "explanation": "HoldService.placeSpeculativeHold places a PLACED hold and marks inventory SPECULATIVELY_HELD.",
+      "dbImpact": "Inserts speculative_holds; updates room.currentClaimState; inserts RoomClaimStateEvent; registers SPECULATIVE_HOLD_EXPIRY timer."
+    }
+  ]
+}

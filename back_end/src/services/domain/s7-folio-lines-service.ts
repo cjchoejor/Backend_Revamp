@@ -1,8 +1,14 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { FolioLineType, FolioState, NightAuditRunStatus, Stage } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
+import { FolioLineType, FolioState, Prisma, Stage, type PrismaClient } from "@prisma/client";
+import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
+import { calculateTax } from "../../engines/tax-engine.js";
 import { enforceCreditCeilingChargePostingGate } from "../../policies/18-credit-extension-ceiling/p45-credit-ceiling-charge-posting-gate.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { enforceChargeDateNotSealedByCompleteNightAudit } from "../../policies/24-night-audit/p61-charge-date-not-sealed-by-complete-night-audit.js";
+import {
+  enforceEntryAtS7ForChargePosting,
+  enforceFolioLiveForS7ChargePosting,
+} from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
+import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -43,9 +49,10 @@ async function writeCeilingTrace(db: DbClient, args: { entryId: string; actorId:
 async function ensureChargeDateNotSealed(db: DbClient, chargeDate: Date) {
   const op = operatingDateUtc(chargeDate);
   const sealed = await db.nightAuditRecord.findUnique({ where: { operatingDate: op } });
-  if (sealed?.runStatus === NightAuditRunStatus.COMPLETE) {
-    throw new StateTransitionError("Charge date is sealed by completed night audit", "SEALED_AUDIT_DATE", { operatingDate: op.toISOString() });
-  }
+  enforceChargeDateNotSealedByCompleteNightAudit({
+    nightAuditRecord: sealed ?? undefined,
+    operatingDateIso: op.toISOString(),
+  });
 }
 
 async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryId: string; folioId: string; ceilingAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; actorId: string }) {
@@ -110,11 +117,11 @@ export async function postCharge(
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
   if (folio.entryId !== input.entryId) throw new ValidationError("Folio does not belong to this entry");
-  if (folio.state !== FolioState.LIVE) throw new StateTransitionError(`Folio must be LIVE at S7 (current: ${folio.state})`);
+  enforceFolioLiveForS7ChargePosting({ folioState: folio.state });
 
   const entry = await prisma.entry.findUnique({ where: { id: input.entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
-  if (entry.currentStage !== Stage.S7) throw new StateTransitionError("Entry must be at S7 to post charges", "NOT_AT_S7");
+  enforceEntryAtS7ForChargePosting({ currentStage: entry.currentStage });
 
   await ensureChargeDateNotSealed(prisma, chargeDate);
 
@@ -143,10 +150,37 @@ export async function postCharge(
         postedBy: actorId,
       },
     });
-    const updatedFolio = await tx.folio.update({
-      where: { id: folioId },
-      data: { outstandingBalance: { increment: input.amount } },
-    });
+
+    if (input.lineType !== FolioLineType.CREDIT_NOTE && input.amount > 0) {
+      const taxRow = await getActiveConfigEntry(tx as unknown as PrismaClient, "billing.salesTaxRate");
+      const raw = taxRow?.configValue;
+      const rate =
+        typeof raw === "number" && Number.isFinite(raw)
+          ? raw
+          : typeof raw === "string" && raw.trim()
+            ? Number(raw)
+            : 0;
+      if (typeof rate === "number" && rate > 0) {
+        const { taxAmount } = calculateTax({ taxableAmount: input.amount, rate });
+        if (taxAmount > 0) {
+          await tx.folioLine.create({
+            data: {
+              folioId,
+              lineType: FolioLineType.OTHER,
+              description: `Sales tax (${(rate * 100).toFixed(2)}%) on: ${input.description}`,
+              amount: new Prisma.Decimal(taxAmount.toFixed(2)),
+              currency: input.currency?.trim() ? input.currency.trim() : "BTN",
+              chargeDate,
+              stage: Stage.S7,
+              postedBy: actorId,
+            },
+          });
+        }
+      }
+    }
+
+    await recomputeFolioOutstandingBalance(tx, folioId);
+    const updatedFolio = await tx.folio.findUniqueOrThrow({ where: { id: folioId } });
 
     if (ceiling != null) {
       await maybeWriteCreditCeilingEvents(tx, {

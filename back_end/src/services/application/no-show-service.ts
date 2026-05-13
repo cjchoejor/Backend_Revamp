@@ -9,15 +9,13 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceNoShowDeterminationPrereqs, enforceNoShowDeterminationNotAlreadyRecorded } from "../../policies/22-no-show/p56-no-show-determination-prereqs.js";
 import { enforceEntryAtS5ForNoShowActions } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import {
+  capCancellationPenaltyAtAdvancePayment,
+  sumAdvancePaymentInTotalForFolio,
+} from "../../policies/14-cancellation/p35-cancellation-penalty-from-commitment.js";
+import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
-
-function sumAdvancePayments(prisma: PrismaClient, folioId: string) {
-  return prisma.paymentRecord.aggregate({
-    where: { folioId, paymentDirection: "IN" },
-    _sum: { amount: true },
-  });
-}
 
 export async function determineNoShow(
   prisma: PrismaClient,
@@ -147,12 +145,10 @@ export async function determineNoShow(
   const folio = entry.folio;
   if (!folio) throw new NotFoundError("Folio");
 
-  const terms = (entry.reservation?.frozenCancellationTerms as { sameDayPenaltyAmount?: number } | null) ?? {};
-  const penaltyRaw = terms.sameDayPenaltyAmount ?? 0;
-
-  const paid = await sumAdvancePayments(prisma, folio.id);
-  const advanceTotal = Number(paid._sum.amount?.toString() ?? "0");
-  const penalty = Math.min(penaltyRaw, advanceTotal);
+  const terms = (entry.reservation?.frozenCancellationTerms as { sameDayPenaltyAmount?: unknown } | null) ?? {};
+  const penaltyRaw = Number(terms.sameDayPenaltyAmount ?? 0);
+  const advanceTotal = await sumAdvancePaymentInTotalForFolio(prisma, folio.id);
+  const penalty = capCancellationPenaltyAtAdvancePayment(Number.isFinite(penaltyRaw) ? penaltyRaw : 0, advanceTotal);
 
   const net = advanceTotal - penalty;
 
@@ -194,13 +190,16 @@ export async function determineNoShow(
   ]);
 
   if (net > 0) {
-    await prisma.paymentRecord.create({
-      data: {
-        folioId: folio.id,
-        amount: net,
-        paymentDirection: "OUT",
-        notes: "Refund obligation after no-show penalty (seed S5 slice)",
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.paymentRecord.create({
+        data: {
+          folioId: folio.id,
+          amount: net,
+          paymentDirection: "OUT",
+          notes: "Refund obligation after no-show penalty (seed S5 slice)",
+        },
+      });
+      await recomputeFolioOutstandingBalance(tx, folio.id);
     });
   }
 

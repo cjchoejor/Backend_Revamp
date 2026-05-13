@@ -53,9 +53,13 @@ async function main() {
   const seeded = await prisma.entry.findFirstOrThrow({ where: { currentStage: "S7" }, orderBy: { createdAt: "desc" }, include: { folio: true } });
   assert(seeded.folio, "Need seeded S7 entry with folio");
 
-  const checkout = seeded.checkOutDate!;
-  const lastNight = new Date(Date.UTC(checkout.getUTCFullYear(), checkout.getUTCMonth(), checkout.getUTCDate() - 1, 0, 0, 0, 0));
-  await http("POST", "/night-audit/run", L2, { operatingDate: lastNight.toISOString() });
+  // COMPLETE night audit for every stay night (required for settlement gates).
+  const { listStayNightOperatingDatesUtc } = await import("../src/policies/24-night-audit/p61-night-audits-complete-for-stay-before-settlement.js");
+  const checkIn = seeded.checkInDate!;
+  const checkOut = seeded.checkOutDate!;
+  for (const op of listStayNightOperatingDatesUtc(checkIn, checkOut)) {
+    await http("POST", "/night-audit/run", L2, { operatingDate: op.toISOString() });
+  }
 
   const freshS7 = await prisma.entry.findUniqueOrThrow({ where: { id: seeded.id } });
   const toS8 = await http("POST", `/entries/${seeded.id}/progress-stage`, L1, { targetStage: "S8", version: freshS7.version });
@@ -110,12 +114,31 @@ async function main() {
 
   // AC-S9-003/004: post-stay FolioLine has isPostStay=true + no stay-window backdating
   {
-    const line = await prisma.folioLine.findFirstOrThrow({ where: { folioId: s8.folio.id, stage: "S9", isPostStay: true }, orderBy: { createdAt: "desc" } });
+    const last = await prisma.folioLine.findFirst({
+      where: { folioId: s8.folio.id, stage: "S9", isPostStay: true },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!last) {
+      results.push({
+        id: "AC-S9-003",
+        title: "S9 FolioLine isPostStay=true and postedAt is transaction date",
+        pass: false,
+        body: { note: "No S9 isPostStay folio line found; verify /folios/:id/charges S9 branch" } as any,
+      });
+      results.push({
+        id: "AC-S9-004",
+        title: "S9 FolioLine not backdated into stay window",
+        pass: false,
+        body: { note: "No S9 isPostStay folio line found; cannot evaluate stay-window backdating" } as any,
+      });
+    } else {
+      const line = last;
     const entry = await prisma.entry.findUniqueOrThrow({ where: { id: s8.id } });
     const postedAt = new Date(line.postedAt);
     const inStay = entry.checkInDate && entry.checkOutDate ? postedAt >= entry.checkInDate && postedAt <= entry.checkOutDate : false;
     results.push({ id: "AC-S9-003", title: "S9 FolioLine isPostStay=true and postedAt is transaction date", pass: line.isPostStay === true, body: { id: line.id, isPostStay: line.isPostStay, postedAt: line.postedAt } as any });
     results.push({ id: "AC-S9-004", title: "S9 FolioLine not backdated into stay window", pass: inStay === false, body: { postedAt: line.postedAt, checkInDate: entry.checkInDate, checkOutDate: entry.checkOutDate } as any });
+    }
   }
 
   // AC-S9-038/39/40/41: write-off authority and record
@@ -130,7 +153,7 @@ async function main() {
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
-    const folioService = await import("../src/services/folio-service.js");
+    const folioService = await import("../src/services/domain/folio-service.js");
 
     const mkS9Ready = async (useType: any = "LEISURE") => {
       const gp = await prisma.guestProfile.create({ data: { firstName: "S9", lastName: "Gate", createdBy: "test" } });
@@ -139,14 +162,14 @@ async function main() {
       const room = await prisma.room.create({ data: { roomNumber: `G${Math.floor(Math.random() * 10000)}`, floorNumber: 6, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
       await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
       const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-      const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-      await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
+      await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+      await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
       await prisma.roomInspectionRecord.create({
         data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any,
       });
-      await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+      await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
       await prisma.timerRecord.create({ data: { entryId: entry.id, entityType: "Entry", entityId: entry.id, timerType: "PAYMENT_FOLLOW_UP_W8", timerCode: "PAYMENT_FOLLOW_UP_W8", dueAt: new Date(Date.now() + 86400_000), firesAt: new Date(Date.now() + 86400_000), status: "SCHEDULED", createdBy: "system" } as any });
-      return { entry, room, folioId: live.id, segId: seg.id };
+      return { entry, room, folioId: prov.id, segId: seg.id };
     };
 
     // AC-S9-009 dispute blocks close
@@ -252,18 +275,33 @@ async function main() {
   // AC-S9-026/027/028/030: W28 dual-channel + trace payload + idempotency
   {
     const w = await import("../src/workers/w28-feedback-solicitation-worker.js");
-    const timer = await prisma.timerRecord.findFirstOrThrow({ where: { entryId: s8.id, timerCode: "FEEDBACK_SOLICITATION_W28", status: "SCHEDULED" }, orderBy: { createdAt: "desc" } });
-    // AC-S9-026: dueAt is in future (not immediate)
-    results.push({ id: "AC-S9-026", title: "W28 timer is scheduled after delay (not immediate)", pass: timer.dueAt.getTime() > Date.now(), body: { dueAt: timer.dueAt } as any });
-    const r1 = await w.runFeedbackSolicitationWorker(prisma as any, { entryId: s8.id });
-    const comms = await prisma.communicationRecord.findMany({ where: { entryId: s8.id, commType: "FEEDBACK_SOLICITATION" as any }, orderBy: { createdAt: "desc" } });
-    const trace = await prisma.traceEvent.findFirst({ where: { entryId: s8.id, eventType: "FEEDBACK.SOLICITATION_SENT" }, orderBy: { createdAt: "desc" } });
-    const channels = (trace?.payload as any)?.channelsDispatched ?? [];
-    results.push({ id: "AC-S9-027", title: "W28 writes exactly two CommunicationRecords (EMAIL + WHATSAPP)", pass: comms.length === 2 && new Set(comms.map((c) => c.channel)).size === 2, body: comms as any });
-    results.push({ id: "AC-S9-028", title: "FEEDBACK.SOLICITATION_SENT trace lists both channels", pass: Array.isArray(channels) && channels.includes("EMAIL") && channels.includes("WHATSAPP"), body: trace as any });
-    const r2 = await w.runFeedbackSolicitationWorker(prisma as any, { entryId: s8.id });
-    const comms2 = await prisma.communicationRecord.findMany({ where: { entryId: s8.id, commType: "FEEDBACK_SOLICITATION" as any } });
-    results.push({ id: "AC-S9-030", title: "W28 idempotent (no duplicates when trace exists)", pass: (r2 as any).skipped === true && comms2.length === 2, body: { r1, r2, comms2: comms2.length } as any });
+    const timer = await prisma.timerRecord.findFirst({
+      where: { entryId: s8.id, timerCode: "FEEDBACK_SOLICITATION_W28", status: "SCHEDULED" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!timer) {
+      results.push({
+        id: "AC-S9-026",
+        title: "W28 timer is scheduled after delay (not immediate)",
+        pass: false,
+        body: { note: "Missing FEEDBACK_SOLICITATION_W28 timer; verify closeEntryAtS9 registered it and config feedback.solicitation.delaySeconds exists" } as any,
+      });
+      results.push({ id: "AC-S9-027", title: "W28 writes exactly two CommunicationRecords (EMAIL + WHATSAPP)", pass: false, body: { note: "Missing W28 timer" } as any });
+      results.push({ id: "AC-S9-028", title: "FEEDBACK.SOLICITATION_SENT trace lists both channels", pass: false, body: { note: "Missing W28 timer" } as any });
+      results.push({ id: "AC-S9-030", title: "W28 idempotent (no duplicates when trace exists)", pass: false, body: { note: "Missing W28 timer" } as any });
+    } else {
+      // AC-S9-026: dueAt is in future (not immediate)
+      results.push({ id: "AC-S9-026", title: "W28 timer is scheduled after delay (not immediate)", pass: timer.dueAt.getTime() > Date.now(), body: { dueAt: timer.dueAt } as any });
+      const r1 = await w.runFeedbackSolicitationWorker(prisma as any, { entryId: s8.id });
+      const comms = await prisma.communicationRecord.findMany({ where: { entryId: s8.id, commType: "FEEDBACK_SOLICITATION" as any }, orderBy: { createdAt: "desc" } });
+      const trace = await prisma.traceEvent.findFirst({ where: { entryId: s8.id, eventType: "FEEDBACK.SOLICITATION_SENT" }, orderBy: { createdAt: "desc" } });
+      const channels = (trace?.payload as any)?.channelsDispatched ?? [];
+      results.push({ id: "AC-S9-027", title: "W28 writes exactly two CommunicationRecords (EMAIL + WHATSAPP)", pass: comms.length === 2 && new Set(comms.map((c) => c.channel)).size === 2, body: comms as any });
+      results.push({ id: "AC-S9-028", title: "FEEDBACK.SOLICITATION_SENT trace lists both channels", pass: Array.isArray(channels) && channels.includes("EMAIL") && channels.includes("WHATSAPP"), body: trace as any });
+      const r2 = await w.runFeedbackSolicitationWorker(prisma as any, { entryId: s8.id });
+      const comms2 = await prisma.communicationRecord.findMany({ where: { entryId: s8.id, commType: "FEEDBACK_SOLICITATION" as any } });
+      results.push({ id: "AC-S9-030", title: "W28 idempotent (no duplicates when trace exists)", pass: (r2 as any).skipped === true && comms2.length === 2, body: { r1, r2, comms2: comms2.length } as any });
+    }
   }
 
   // AC-S9-013: SETTLED cannot be set while balance remains
@@ -336,13 +374,13 @@ async function main() {
       const room = await prisma.room.create({ data: { roomNumber: `C${Math.floor(Math.random() * 10000)}`, floorNumber: 5, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
       await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
       const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-      const folioService = await import("../src/services/folio-service.js");
-      const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-      await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: outstanding as any, billingModel: "GUEST_PAY" } as any });
+      const folioService = await import("../src/services/domain/folio-service.js");
+      await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+      await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: outstanding as any, billingModel: "GUEST_PAY" } as any });
       await prisma.roomInspectionRecord.create({ data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any });
-      await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+      await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
       await prisma.timerRecord.create({ data: { entryId: entry.id, entityType: "Entry", entityId: entry.id, timerType: "PAYMENT_FOLLOW_UP_W8", timerCode: "PAYMENT_FOLLOW_UP_W8", dueAt: new Date(Date.now() + 86400_000), firesAt: new Date(Date.now() + 86400_000), status: "SCHEDULED", createdBy: "system" } as any });
-      return { entry, folioId: live.id };
+      return { entry, folioId: prov.id };
     };
 
     // no commission rate => no CommissionDueRecord (AC-S9-002/021)
@@ -393,7 +431,7 @@ async function main() {
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
-    const folioService = await import("../src/services/folio-service.js");
+    const folioService = await import("../src/services/domain/folio-service.js");
 
     const mk = async (useType: any) => {
       const gp = await prisma.guestProfile.create({ data: { firstName: "FU", lastName: useType, createdBy: "test" } });
@@ -402,12 +440,12 @@ async function main() {
       const room = await prisma.room.create({ data: { roomNumber: `F${Math.floor(Math.random() * 10000)}`, floorNumber: 4, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
       await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
       const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-      const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-      await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
+      await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+      await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
       await prisma.roomInspectionRecord.create({ data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any });
-      await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+      await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
       await prisma.timerRecord.create({ data: { entryId: entry.id, entityType: "Entry", entityId: entry.id, timerType: "PAYMENT_FOLLOW_UP_W8", timerCode: "PAYMENT_FOLLOW_UP_W8", dueAt: new Date(Date.now() + 86400_000), firesAt: new Date(Date.now() + 86400_000), status: "SCHEDULED", createdBy: "system" } as any });
-      return { entry, folioId: live.id };
+      return { entry, folioId: prov.id };
     };
 
     const conf = await mk("CONFERENCE");
@@ -430,17 +468,17 @@ async function main() {
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
-    const folioService = await import("../src/services/folio-service.js");
+    const folioService = await import("../src/services/domain/folio-service.js");
     const gp = await prisma.guestProfile.create({ data: { firstName: "Gov", lastName: "Bill", createdBy: "test" } });
     const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S9", status: "ACTIVE", createdBy: "test", version: 1 } as any });
     const seg = await prisma.segment.create({ data: { entryId: entry.id, segmentNumber: 1, stage: "S9", createdBy: "test" } as any });
     const room = await prisma.room.create({ data: { roomNumber: `GOV${Math.floor(Math.random() * 10000)}`, floorNumber: 3, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
     await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
     const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GOVERNMENT", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-    await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GOVERNMENT" } as any });
+    await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+    await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GOVERNMENT" } as any });
     await prisma.roomInspectionRecord.create({ data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any });
-    const inv = await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+    const inv = await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
     await prisma.timerRecord.create({ data: { entryId: entry.id, entityType: "Entry", entityId: entry.id, timerType: "PAYMENT_FOLLOW_UP_W8", timerCode: "PAYMENT_FOLLOW_UP_W8", dueAt: new Date(Date.now() + 86400_000), firesAt: new Date(Date.now() + 86400_000), status: "SCHEDULED", createdBy: "system" } as any });
 
     // should block when DISPATCHED
@@ -530,25 +568,25 @@ async function main() {
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
-    const folioService = await import("../src/services/folio-service.js");
+    const folioService = await import("../src/services/domain/folio-service.js");
     const gp = await prisma.guestProfile.create({ data: { firstName: "Write", lastName: "Off", createdBy: "test" } });
     const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S9", status: "ACTIVE", createdBy: "test", version: 1 } as any });
     const seg = await prisma.segment.create({ data: { entryId: entry.id, segmentNumber: 1, stage: "S9", createdBy: "test" } as any });
     const room = await prisma.room.create({ data: { roomNumber: `WO${Math.floor(Math.random() * 10000)}`, floorNumber: 2, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
     await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
     const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-    await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 6000 as any, billingModel: "GUEST_PAY" } as any });
+    await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+    await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: 6000 as any, billingModel: "GUEST_PAY" } as any });
     await prisma.roomInspectionRecord.create({ data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any });
-    await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+    await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
 
     // AC-S9-040: amount exceeds authority band => blocked
-    const over = await http("POST", `/folios/${live.id}/write-off`, L3, { amount: 6000, reason: "too high" } as any);
+    const over = await http("POST", `/folios/${prov.id}/write-off`, L3, { amount: 6000, reason: "too high" } as any);
     results.push({ id: "AC-S9-040", title: "write-off exceeding authority band is blocked", pass: over.status === 409, status: over.status, body: over.json });
 
     // within band => WRITTEN_OFF and WriteOffRecord has non-empty reason + preserves original amount
-    const ok = await http("POST", `/folios/${live.id}/write-off`, L3, { amount: 4000, reason: "uncollectable" } as any);
-    const folio = await prisma.folio.findUniqueOrThrow({ where: { id: live.id } });
+    const ok = await http("POST", `/folios/${prov.id}/write-off`, L3, { amount: 4000, reason: "uncollectable" } as any);
+    const folio = await prisma.folio.findUniqueOrThrow({ where: { id: prov.id } });
     const rec = await prisma.writeOffRecord.findFirst({ where: { entryId: entry.id }, orderBy: { createdAt: "desc" } });
     results.push({ id: "AC-S9-006", title: "WriteOffRecord exists with non-empty reason when folio WRITTEN_OFF", pass: !!rec && !!rec.reason?.trim(), body: rec as any });
     results.push({ id: "AC-S9-041", title: "After write-off, folio is WRITTEN_OFF and record preserves amount", pass: ok.status === 200 && folio.state === "WRITTEN_OFF" && !!rec && Number(rec.writtenOffAmount.toString()) === 4000, status: ok.status, body: { folio, rec } as any });
@@ -568,24 +606,24 @@ async function main() {
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
-    const folioService = await import("../src/services/folio-service.js");
+    const folioService = await import("../src/services/domain/folio-service.js");
     const gp = await prisma.guestProfile.create({ data: { firstName: "Apt", lastName: "Deposit", createdBy: "test" } });
     const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S9", status: "ACTIVE", useType: "APARTMENT", createdBy: "test", version: 1 } as any });
     const seg = await prisma.segment.create({ data: { entryId: entry.id, segmentNumber: 1, stage: "S9", createdBy: "test" } as any });
     const room = await prisma.room.create({ data: { roomNumber: `AP${Math.floor(Math.random() * 10000)}`, floorNumber: 1, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
     await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
     const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-    await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
+    await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+    await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
     await prisma.roomInspectionRecord.create({ data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any });
-    await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+    await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
     await prisma.timerRecord.create({ data: { entryId: entry.id, entityType: "Entry", entityId: entry.id, timerType: "PAYMENT_FOLLOW_UP_W8", timerCode: "PAYMENT_FOLLOW_UP_W8", dueAt: new Date(Date.now() + 86400_000), firesAt: new Date(Date.now() + 86400_000), status: "SCHEDULED", createdBy: "system" } as any });
     // deposit held
-    await prisma.paymentRecord.create({ data: { folioId: live.id, entryId: entry.id, amount: 100 as any, paymentDirection: "IN", notes: "SECURITY_DEPOSIT_HELD" } as any });
+    await prisma.paymentRecord.create({ data: { folioId: prov.id, entryId: entry.id, amount: 100 as any, paymentDirection: "IN", notes: "SECURITY_DEPOSIT_HELD" } as any });
     const blocked = await http("POST", `/entries/${entry.id}/close`, L2, {});
     results.push({ id: "AC-S9-049a", title: "Apartment closure blocked when deposit not resolved", pass: blocked.status === 409 && (blocked.json as any)?.blockingCondition === "SECURITY_DEPOSIT_NOT_RESOLVED", status: blocked.status, body: blocked.json });
     // deposit returned
-    await prisma.paymentRecord.create({ data: { folioId: live.id, entryId: entry.id, amount: 100 as any, paymentDirection: "OUT", notes: "SECURITY_DEPOSIT_RETURN" } as any });
+    await prisma.paymentRecord.create({ data: { folioId: prov.id, entryId: entry.id, amount: 100 as any, paymentDirection: "OUT", notes: "SECURITY_DEPOSIT_RETURN" } as any });
     const ok = await http("POST", `/entries/${entry.id}/close`, L2, {});
     results.push({ id: "AC-S9-049", title: "Apartment closure succeeds when deposit return recorded", pass: ok.status === 200 && (ok.json as any)?.status === "CLOSED", status: ok.status, body: ok.json });
   }
@@ -594,17 +632,17 @@ async function main() {
   {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
-    const folioService = await import("../src/services/folio-service.js");
+    const folioService = await import("../src/services/domain/folio-service.js");
     const gp = await prisma.guestProfile.create({ data: { firstName: "Cat", lastName: "Equip", createdBy: "test" } });
     const entry = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S9", status: "ACTIVE", useType: "CATERING", createdBy: "test", version: 1 } as any });
     const seg = await prisma.segment.create({ data: { entryId: entry.id, segmentNumber: 1, stage: "S9", createdBy: "test" } as any });
     const room = await prisma.room.create({ data: { roomNumber: `EQ${Math.floor(Math.random() * 10000)}`, floorNumber: 1, roomType: { connect: { id: roomType.id } }, currentClaimState: "DEPARTED_DIRTY" } as any });
     await prisma.roomAssignment.create({ data: { entryId: entry.id, roomId: room.id, assignedAt: new Date(), assignedBy: "test" } as any });
     const prov = await prisma.folio.create({ data: { entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", outstandingBalance: 0 as any, createdBy: "test" } as any });
-    const live = await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
-    await prisma.folio.update({ where: { id: live.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
+    await folioService.convertToLive(prisma as any, entry.id, prov.id, "test");
+    await prisma.folio.update({ where: { id: prov.id }, data: { state: "OUTSTANDING", outstandingBalance: 10 as any, billingModel: "GUEST_PAY" } as any });
     await prisma.roomInspectionRecord.create({ data: { entryId: entry.id, roomId: room.id, segmentId: seg.id, inspectedBy: L1.id, inspectedAt: new Date(), isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false } as any });
-    await prisma.invoice.create({ data: { folioId: live.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
+    await prisma.invoice.create({ data: { folioId: prov.id, entryId: entry.id, invoiceType: "FINAL", state: "DISPATCHED", issuedAt: new Date(), issuedBy: L1.id, dispatchedAt: new Date(), dispatchedBy: L1.id } as any });
     await prisma.timerRecord.create({ data: { entryId: entry.id, entityType: "Entry", entityId: entry.id, timerType: "PAYMENT_FOLLOW_UP_W8", timerCode: "PAYMENT_FOLLOW_UP_W8", dueAt: new Date(Date.now() + 86400_000), firesAt: new Date(Date.now() + 86400_000), status: "SCHEDULED", createdBy: "system" } as any });
 
     await prisma.equipmentAllocation.create({ data: { entryId: entry.id, equipmentCode: "CHAIR_10", allocatedBy: L2.id, returnDeadlineAt: new Date(Date.now() - 60_000) } as any });

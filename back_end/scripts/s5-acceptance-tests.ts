@@ -3,7 +3,7 @@ import { RoomPhysicalState } from "@prisma/client";
 import { runPreArrivalWindowActivationWorker } from "../src/workers/w4-pre-arrival-window-activation-worker.js";
 import { runNoShowCutoffWorker } from "../src/workers/w5-no-show-cutoff-worker.js";
 import { runRoomReadinessSlaWorker } from "../src/workers/w23-room-readiness-sla-worker.js";
-import * as preArrivalService from "../src/services/pre-arrival-service.js";
+import * as preArrivalService from "../src/services/domain/pre-arrival-service.js";
 import { createTimerEngine } from "../src/lib/timer-engine.js";
 
 type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;

@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-20",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.687Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-20",
+      "title": "SETTLED auto-fulfils H5 with HANDOFF.AUTO_FULFILLED trace",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "h5a": {
+          "id": "8a7f528b-b6d0-4a94-a27d-9f1822aceae9",
+          "entryId": "28fb00ca-cfdd-4486-8c69-9d8e0eec6ef7",
+          "handoffType": "H5",
+          "state": "FULFILLED",
+          "fromRole": "SYSTEM",
+          "fromActorId": "system",
+          "toRole": "FINANCE",
+          "toActorId": null,
+          "checklistContent": {
+            "autoFulfilled": true
+          },
+          "deficientConditionStatus": null,
+          "fulfilmentEvidence": null,
+          "assignedAt": null,
+          "acceptedAt": null,
+          "acceptedBy": null,
+          "fulfilledAt": "2026-05-13T12:18:28.592Z",
+          "fulfilledBy": "system",
+          "closedAt": null,
+          "rejectedAt": null,
+          "rejectedBy": null,
+          "rejectionReason": null,
+          "escalatedAt": null,
+          "cancelledAt": null,
+          "cancelledBy": null,
+          "cancelledReason": null,
+          "slaDeadlineAt": null,
+          "isAutoFulfilled": true,
+          "createdAt": "2026-05-13T12:18:28.593Z",
+          "createdBy": "system",
+          "stageContext": "S8"
+        },
+        "te": {
+          "id": "06963c3f-037c-4b67-882d-8d5342a4bbfe",
+          "eventType": "HANDOFF.AUTO_FULFILLED",
+          "actorId": "SYSTEM",
+          "actorLevel": "SYSTEM",
+          "entityType": "HandoffRecord",
+          "entityId": "8a7f528b-b6d0-4a94-a27d-9f1822aceae9",
+          "operation": "TRANSITION",
+          "payload": {
+            "entryId": "28fb00ca-cfdd-4486-8c69-9d8e0eec6ef7",
+            "handoffId": "8a7f528b-b6d0-4a94-a27d-9f1822aceae9",
+            "handoffType": "H5"
+          },
+          "timestamp": "2026-05-13T12:18:28.592Z",
+          "stageContext": "S8",
+          "segmentContext": null,
+          "correlationId": null,
+          "inquiryId": "bd52b248-f023-4939-afdb-9825d5ea25ba",
+          "entryId": "28fb00ca-cfdd-4486-8c69-9d8e0eec6ef7",
+          "createdAt": "2026-05-13T12:18:28.595Z",
+          "createdBy": "SYSTEM"
+        }
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

@@ -1,7 +1,9 @@
-import type { PrismaClient } from "@prisma/client";
-import { ValidationError } from "../../lib/errors.js";
+import type { ActorLevel, PrismaClient } from "@prisma/client";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
 import { resolveInitialCustodianActorId } from "../../policies/02-ownership-custodian-assignment/p03-initial-custodian-assignment.js";
-import { recordDuplicateDetectionFlagIfPresent } from "../../policies/04-duplicate-detection/p12-duplicate-flag-create-on-inquiry.js";
+import * as duplicateDetectionService from "./duplicate-detection-service.js";
+import * as auditService from "../infrastructure/audit-service.js";
 
 function randomRef() {
   return `INQ-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -10,17 +12,25 @@ function randomRef() {
 export async function createInquiry(
   prisma: PrismaClient,
   actorId: string,
+  actorLevel: ActorLevel,
   input: {
     guestProfileId: string;
     sourceChannel: string;
     notes?: string;
+    proposedCheckIn?: string;
+    proposedCheckOut?: string;
     duplicateCheck?: { isDuplicate: boolean; conflictingInquiryId?: string };
   },
 ) {
   if (!input.guestProfileId?.trim()) throw new ValidationError("guestProfileId is required");
   if (!input.sourceChannel?.trim()) throw new ValidationError("sourceChannel is required");
 
-  // Policy 3 — initial custodian assignment.
+  await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
+    guestProfileId: input.guestProfileId.trim(),
+    proposedCheckIn: input.proposedCheckIn,
+    proposedCheckOut: input.proposedCheckOut,
+  });
+
   const custodian = await resolveInitialCustodianActorId(prisma, { sourceChannel: input.sourceChannel });
 
   const now = new Date();
@@ -37,30 +47,71 @@ export async function createInquiry(
     });
 
     if (input.duplicateCheck?.isDuplicate) {
-      // Policy 12 — duplicate detection flag creation.
-      await recordDuplicateDetectionFlagIfPresent(tx as any, {
+      await duplicateDetectionService.maybeCreateDuplicateFlag(tx as any, {
         inquiryId: created.id,
         actorId,
         conflictingInquiryId: input.duplicateCheck.conflictingInquiryId ?? null,
       });
     }
 
-    await tx.traceEvent.create({
-      data: {
-        eventType: "INQUIRY.CREATED",
-        actorId,
-        actorLevel: "L1",
-        entityType: "Inquiry",
-        entityId: created.id,
-        operation: "CREATE",
-        timestamp: now,
-        inquiryId: created.id,
-        payload: { inquiryId: created.id, sourceChannel: created.sourceChannel, guestProfileId: created.guestProfileId },
-        createdBy: actorId,
-      },
+    await auditService.emit(tx as any, { actorId, actorLevel }, {
+      eventType: "INQUIRY.CREATED",
+      entityType: "Inquiry",
+      entityId: created.id,
+      operation: "CREATE",
+      timestamp: now,
+      inquiryId: created.id,
+      payload: { inquiryId: created.id, sourceChannel: created.sourceChannel, guestProfileId: created.guestProfileId },
+      createdBy: actorId,
     });
 
     return created;
+  });
+}
+
+export async function assignInquiryCustodian(
+  prisma: PrismaClient,
+  inquiryId: string,
+  actorId: string,
+  actorLevel: ActorLevel,
+  newCustodianId: string,
+) {
+  if (!newCustodianId?.trim()) throw new ValidationError("newCustodianId is required");
+  const staff = await prisma.staffUser.findUnique({ where: { id: newCustodianId.trim() } });
+  if (!staff) throw new NotFoundError("StaffUser");
+
+  const inquiry = await prisma.inquiry.findUnique({
+    where: { id: inquiryId },
+    include: { entries: { select: { useType: true, guestCount: true } } },
+  });
+  if (!inquiry) throw new NotFoundError("Inquiry");
+
+  const useTypes = inquiry.entries.map((e) => e.useType);
+  const maxGuests = inquiry.entries.reduce((m, e) => (typeof e.guestCount === "number" && e.guestCount > m ? e.guestCount! : m), 0);
+
+  enforceCustodianReassignmentAuthority({
+    actorLevel,
+    useTypes,
+    guestCount: maxGuests > 0 ? maxGuests : undefined,
+  });
+
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.inquiry.update({
+      where: { id: inquiryId },
+      data: { defaultCustodianId: newCustodianId.trim() },
+    });
+    await auditService.emit(tx as any, { actorId, actorLevel }, {
+      eventType: "INQUIRY.CUSTODIAN_REASSIGNED",
+      entityType: "Inquiry",
+      entityId: inquiryId,
+      operation: "UPDATE",
+      timestamp: now,
+      inquiryId,
+      payload: { newCustodianId: newCustodianId.trim() },
+      createdBy: actorId,
+    });
+    return updated;
   });
 }
 
@@ -82,19 +133,15 @@ export async function captureCorporateContext(
       corporateContextCapturedBy: actorId,
     } as any,
   });
-  await prisma.traceEvent.create({
-    data: {
-      eventType: "INQUIRY.CORPORATE_CONTEXT_CAPTURED",
-      actorId,
-      actorLevel: "L1",
-      entityType: "Inquiry",
-      entityId: inquiryId,
-      operation: "UPDATE",
-      timestamp: now,
-      inquiryId,
-      payload: { corporateClientRef: updated.corporateClientRef, corporateCoordinator: updated.corporateCoordinator },
-      createdBy: actorId,
-    },
+  await auditService.emit(prisma, { actorId, actorLevel: "L1" }, {
+    eventType: "INQUIRY.CORPORATE_CONTEXT_CAPTURED",
+    entityType: "Inquiry",
+    entityId: inquiryId,
+    operation: "UPDATE",
+    timestamp: now,
+    inquiryId,
+    payload: { corporateClientRef: updated.corporateClientRef, corporateCoordinator: updated.corporateCoordinator },
+    createdBy: actorId,
   });
   return updated;
 }
@@ -105,38 +152,7 @@ export async function resolveDuplicateFlag(
   actorId: string,
   input: { resolutionType: "MERGE" | "ACKNOWLEDGE" | "DISMISS"; resolutionReason?: string; mergedIntoInquiryId?: string },
 ) {
-  if (!input.resolutionType) throw new ValidationError("resolutionType is required");
-  const now = new Date();
-  const flag = await (prisma as any).duplicateDetectionFlag.findUnique({ where: { id: flagId } });
-  if (!flag) throw new ValidationError("DuplicateDetectionFlag not found");
-  if (flag.status !== "OPEN") throw new ValidationError("DuplicateDetectionFlag is not OPEN");
-
-  const updated = await (prisma as any).duplicateDetectionFlag.update({
-    where: { id: flagId },
-    data: {
-      status: "RESOLVED",
-      resolutionType: input.resolutionType,
-      resolutionReason: input.resolutionReason?.trim?.() || null,
-      mergedIntoInquiryId: input.mergedIntoInquiryId?.trim?.() || flag.mergedIntoInquiryId || null,
-      resolvedAt: now,
-      resolvedBy: actorId,
-    },
-  });
-  await prisma.traceEvent.create({
-    data: {
-      eventType: "INQUIRY.DUPLICATE_RESOLVED",
-      actorId,
-      actorLevel: "L1",
-      entityType: "DuplicateDetectionFlag",
-      entityId: flagId,
-      operation: "UPDATE",
-      timestamp: now,
-      inquiryId: updated.inquiryId,
-      payload: { resolutionType: updated.resolutionType, resolutionReason: updated.resolutionReason, mergedIntoInquiryId: updated.mergedIntoInquiryId },
-      createdBy: actorId,
-    },
-  });
-  return updated;
+  return duplicateDetectionService.resolveDuplicateFlag(prisma, flagId, actorId, input);
 }
 
 export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actorId: string, reason?: string) {
@@ -148,20 +164,16 @@ export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actor
       where: { inquiryId, status: "ACTIVE" },
       data: { status: "PARKED", parkedAt: now, parkedBy: actorId, parkedIndividually: false, version: { increment: 1 } } as any,
     });
-    await tx.traceEvent.create({
-      data: {
-        eventType: "INQUIRY.PARKED",
-        actorId,
-        actorLevel: "L1",
-        entityType: "Inquiry",
-        entityId: inquiryId,
-        operation: "UPDATE",
-        timestamp: now,
-        inquiryId,
-        entryId: null,
-        payload: { reason: typeof reason === "string" ? reason : null },
-        createdBy: actorId,
-      },
+    await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
+      eventType: "INQUIRY.PARKED",
+      entityType: "Inquiry",
+      entityId: inquiryId,
+      operation: "UPDATE",
+      timestamp: now,
+      inquiryId,
+      entryId: null,
+      payload: { reason: typeof reason === "string" ? reason : null },
+      createdBy: actorId,
     });
   });
   return { ok: true } as const;
@@ -177,22 +189,55 @@ export async function unparkInquiry(prisma: PrismaClient, inquiryId: string, act
       where: { inquiryId, status: "PARKED", parkedIndividually: false },
       data: { status: "ACTIVE", parkedAt: null, parkedBy: null, version: { increment: 1 } } as any,
     });
-    await tx.traceEvent.create({
-      data: {
-        eventType: "INQUIRY.UNPARKED",
-        actorId,
-        actorLevel: "L1",
-        entityType: "Inquiry",
-        entityId: inquiryId,
-        operation: "UPDATE",
-        timestamp: now,
-        inquiryId,
-        entryId: null,
-        payload: {},
-        createdBy: actorId,
-      },
+    await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
+      eventType: "INQUIRY.UNPARKED",
+      entityType: "Inquiry",
+      entityId: inquiryId,
+      operation: "UPDATE",
+      timestamp: now,
+      inquiryId,
+      entryId: null,
+      payload: {},
+      createdBy: actorId,
     });
   });
   return { ok: true } as const;
 }
 
+const inquiryEntrySummarySelect = {
+  id: true,
+  currentStage: true,
+  status: true,
+  useType: true,
+  guestCount: true,
+  checkInDate: true,
+  checkOutDate: true,
+  segmentNumber: true,
+  otaSource: true,
+  createdAt: true,
+} as const;
+
+export async function listInquiries(prisma: PrismaClient, query: { limit: number; guestProfileId?: string }) {
+  const where = query.guestProfileId?.trim() ? { guestProfileId: query.guestProfileId.trim() } : {};
+  return prisma.inquiry.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    take: query.limit,
+    include: {
+      entries: { select: inquiryEntrySummarySelect },
+    },
+  });
+}
+
+export async function getInquiryById(prisma: PrismaClient, inquiryId: string) {
+  const inquiry = await prisma.inquiry.findUnique({
+    where: { id: inquiryId },
+    include: {
+      entries: { select: inquiryEntrySummarySelect },
+      guestProfile: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+      duplicateFlags: { where: { status: "OPEN" }, orderBy: { createdAt: "desc" } },
+    },
+  });
+  if (!inquiry) throw new NotFoundError("Inquiry");
+  return inquiry;
+}

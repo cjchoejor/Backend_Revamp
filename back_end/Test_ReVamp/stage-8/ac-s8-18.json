@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-18",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.681Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-18",
+      "title": "S8->S9 blocked when H4 is not fulfilled/auto-fulfilled",
+      "pass": true,
+      "httpStatus": 409,
+      "response": {
+        "error": "StageGatesBlockedError",
+        "message": "H4 must be fulfilled before S8 exit",
+        "blockingCondition": "H4_NOT_FULFILLED",
+        "details": {
+          "failures": [
+            {
+              "blockingCondition": "H4_NOT_FULFILLED",
+              "message": "H4 must be fulfilled before S8 exit"
+            }
+          ]
+        }
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

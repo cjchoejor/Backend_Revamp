@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
+import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { randomUUID } from "node:crypto";
@@ -10,12 +10,11 @@ import {
   enforceSpeculativeHoldReleaseAuthority,
 } from "../../policies/10-speculative-hold/p25-speculative-hold-placement.js";
 import { enforceEntryAtS2ForSpeculativeHoldPlacement } from "../../policies/10-speculative-hold/p25-s2-stage-for-speculative-hold-placement.js";
+import { enforceSpeculativeHoldPlacedForRelease } from "../../policies/10-speculative-hold/p25-speculative-hold-placed-for-release.js";
 
 type PlacementThresholds = {
   thresholds: Array<{ maxRooms: number | null; authorityRequired: "FRONT_DESK" | "FOM" | "GM"; maxConcurrentHolds: number | null }>;
 };
-
-// Policy 25 owns authority rules for placement/release.
 
 export async function placeSpeculativeHold(
   prisma: PrismaClient,
@@ -146,7 +145,7 @@ export async function releaseSpeculativeHold(
 
   const hold = await prisma.speculativeHold.findUnique({ where: { id: holdId } });
   if (!hold || hold.entryId !== entryId) throw new NotFoundError("SpeculativeHold");
-  if (hold.state !== HoldState.PLACED) throw new StateTransitionError("Hold is not in PLACED state", "HOLD_NOT_PLACED");
+  enforceSpeculativeHoldPlacedForRelease({ state: hold.state });
 
   const now = new Date();
 

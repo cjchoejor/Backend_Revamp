@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "stage": "S9",
+    "scenarioName": "ac-s9-024",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s9-deep · Layer 03c (S9 post-stay & closure)",
+    "generatedAt": "2026-05-13T12:18:44.810Z",
+    "apiBaseUrl": "http://127.0.0.1:4069/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S9-024",
+      "title": "W11 emits COMMISSION_DUE.RATE_MISSING_ESCALATION_FIRED",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "out": {
+          "skipped": false,
+          "commissionDueId": "ba7a7faa-6818-4639-88a8-16abfabdca4b"
+        },
+        "te": {
+          "id": "8293c5e4-baf2-40e7-a5eb-1b89bf7921ef",
+          "eventType": "COMMISSION_DUE.RATE_MISSING_ESCALATION_FIRED",
+          "actorId": "SYSTEM",
+          "actorLevel": "SYSTEM",
+          "entityType": "CommissionDueRecord",
+          "entityId": "ba7a7faa-6818-4639-88a8-16abfabdca4b",
+          "operation": "ALERT",
+          "payload": {
+            "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
+            "commissionDueId": "ba7a7faa-6818-4639-88a8-16abfabdca4b"
+          },
+          "timestamp": "2026-05-13T12:18:44.242Z",
+          "stageContext": "S9",
+          "segmentContext": null,
+          "correlationId": null,
+          "inquiryId": null,
+          "entryId": "64bb08b7-d3b9-4e3c-8041-ff752d9e4f04",
+          "createdAt": "2026-05-13T12:18:44.243Z",
+          "createdBy": "SYSTEM"
+        }
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

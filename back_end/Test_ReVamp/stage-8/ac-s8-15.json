@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-15",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.677Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-15",
+      "title": "Inspection NOT_APPLICABLE rejected when unresolved deficient exists",
+      "pass": true,
+      "httpStatus": 409,
+      "response": {
+        "error": "PolicyGateBlockedError",
+        "message": "Active DEFICIENT flag exists — inspection must carry final deficient status",
+        "blockingCondition": "DEFICIENT_REQUIRES_FLAG_STATUS"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

@@ -19,6 +19,7 @@ import { enforceFolioProvisionalBeforeCheckInCompletion } from "../../policies/1
 import { enforceVipArrivalNotificationRecordedForCheckInCompletion } from "../../policies/20-communication-acknowledgement-tracking/p52-vip-arrival-notification-recorded-for-checkin.js";
 import { enforceH2H3NotRejectedAtS6CheckIn } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceEntryAtS6ForCheckInCompletionToS7 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { scheduleS7StageDwellWarningMonitor } from "../../lib/schedule-s7-dwell-warning-monitor.js";
 
 export async function completeCheckInToS7(
   prisma: PrismaClient,
@@ -47,7 +48,6 @@ export async function completeCheckInToS7(
         take: 1,
       },
       handoffs: { where: { handoffType: { in: [HandoffType.H1, HandoffType.H2, HandoffType.H3] } }, orderBy: { createdAt: "desc" } },
-      vipArrivalNotifications: true,
     },
   });
 
@@ -89,12 +89,10 @@ export async function completeCheckInToS7(
   });
 
   const vipTier = entry.guestProfile?.vipTier?.trim();
-  const routing = vipTier ? ((await requireActiveConfigValue<Record<string, string[]> | undefined>(prisma, "vipNotification.routingPerTier")) ?? {}) : {};
   const ackWindows = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType")) ?? {};
   const h2WindowSeconds = ackWindows.h2 ?? ackWindows.H2 ?? ackWindows.handoffH2 ?? null;
   const h3WindowSeconds = ackWindows.h3 ?? ackWindows.H3 ?? ackWindows.handoffH3 ?? null;
-  if ((h2WindowSeconds == null || h3WindowSeconds == null) && (vipTier || true)) {
-    // SIG-S6: key must include H2 and H3 windows; treat missing as configuration failure for S6 readiness.
+  if (h2WindowSeconds == null || h3WindowSeconds == null) {
     throw new MissingConfigurationError("acknowledgement.windowPerType");
   }
 
@@ -163,42 +161,6 @@ export async function completeCheckInToS7(
     }
 
     if (vipTier) {
-      const existingVip = await tx.vIPArrivalNotificationEvent.findFirst({ where: { entryId } });
-      if (!existingVip) {
-        const roles = routing[vipTier] ?? routing.DEFAULT ?? ["FOM", "GM"];
-        if (roles.length === 0) {
-          throw new ValidationError("vipNotification.routingPerTier has no roles for this VIP tier");
-        }
-        await tx.vIPArrivalNotificationEvent.create({
-          data: {
-            entryId,
-            guestProfileId: entry.guestProfileId!,
-            roomNumber: room.roomNumber,
-            vipTier,
-            preferences: entry.guestProfile?.preferences ?? undefined,
-            specialNotes: null,
-            checkInInitiatedAt: now,
-            recipientRoles: roles,
-            createdBy: actorId,
-          },
-        });
-        await tx.traceEvent.create({
-          data: {
-            eventType: "VIP_ARRIVAL_NOTIFICATION_ISSUED",
-            actorId,
-            actorLevel: "L1",
-            entityType: "Entry",
-            entityId: entryId,
-            operation: "ALERT",
-            timestamp: now,
-            stageContext: Stage.S6,
-            inquiryId: entry.inquiryId,
-            entryId,
-            payload: { entryId, guestProfileId: entry.guestProfileId, vipTier, recipientRoles: roles, checkInInitiatedAt: now.toISOString() },
-            createdBy: actorId,
-          },
-        });
-      }
       const vipRow = await tx.vIPArrivalNotificationEvent.findFirst({ where: { entryId } });
       enforceVipArrivalNotificationRecordedForCheckInCompletion({ vipTier, hasVipArrivalNotification: !!vipRow });
     }
@@ -423,6 +385,12 @@ export async function completeCheckInToS7(
         createdBy: "SYSTEM",
       },
     });
+  }
+
+  try {
+    await scheduleS7StageDwellWarningMonitor(prisma, entryId, actorId);
+  } catch {
+    // Best-effort dwell monitor scheduling.
   }
 
   return prisma.entry.findUniqueOrThrow({

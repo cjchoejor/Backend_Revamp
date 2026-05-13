@@ -1,9 +1,11 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, Stage } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
+import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { schedulePaymentFollowUpW8IfOutstanding } from "../../lib/schedule-payment-followup-w8.js";
 import { enforceWriteOffConstraints } from "../../policies/13-billing-model/write-off-policy-constraints.js";
 import {
   enforceApartmentSecurityDepositResolvedForS9Closure,
@@ -19,13 +21,39 @@ import { enforceInspectionResolvedForS9Closure } from "../../policies/19-deficie
 import { enforceNoOpenDisputesForS9Closure } from "../../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { enforceH5NotBlockingS9Closure } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceNoShowDeterminationPresentForS9Closure } from "../../policies/22-no-show/p56-no-show-determination-required-for-s9-closure.js";
-import { enforceEntryAtS9ForS9Closure } from "../../policies/01-availability/p01-entry-at-s9-for-closure.js";
+import { enforceEntryAtS9ForS9Closure, enforceEntryNotAlreadyClosed } from "../../policies/01-availability/p01-entry-at-s9-for-closure.js";
+import {
+  enforceInvoiceStateForPaymentTracked,
+  enforceInvoiceStateForReconciled,
+} from "../../policies/13-billing-model/p33-invoice-payment-state-transitions.js";
+import { enforceFolioOutstandingForWriteOff } from "../../policies/13-billing-model/p33-folio-outstanding-for-write-off.js";
+import { shouldCreateCommissionDueRecord } from "../../policies/13-billing-model/p68-commission-due-record-creation.js";
+import { computeGuestDataRetentionDueAt } from "../../policies/18-guest-data-retention/p18-guest-data-retention.js";
+import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
   return Number(d.toString());
+}
+
+async function resolveGuestDataRetentionPeriodDays(db: DbClient): Promise<number> {
+  try {
+    const v = await requireActiveConfigValue<number>(db as any, "identity.document.retentionPeriodDays");
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch {
+    /* use fallbacks below */
+  }
+  try {
+    const map = await requireActiveConfigValue<Record<string, number>>(db as any, "identity.retentionPeriodDays");
+    const n = Number(map?.DEFAULT);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch {
+    /* ignore */
+  }
+  return 365;
 }
 
 export async function listInvoices(prisma: PrismaClient, folioId: string) {
@@ -159,25 +187,79 @@ export async function recordInvoicePaymentEvent(
   prisma: PrismaClient,
   invoiceId: string,
   actorId: string,
-  input: { nextState: "PAYMENT_TRACKED" | "RECONCILED"; paymentRef?: string },
+  input: {
+    nextState: "PAYMENT_TRACKED" | "RECONCILED";
+    paymentRef?: string;
+    amount?: number;
+    paymentMethod?: string;
+    receivedAt?: string;
+    referenceNumber?: string;
+    proofAttachmentId?: string;
+  },
 ) {
   if (input.nextState !== "PAYMENT_TRACKED" && input.nextState !== "RECONCILED") throw new ValidationError("nextState must be PAYMENT_TRACKED or RECONCILED");
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new NotFoundError("Invoice");
 
-  if (input.nextState === "PAYMENT_TRACKED" && invoice.state !== InvoiceState.DISPATCHED) {
-    throw new StateTransitionError(`Invoice must be DISPATCHED to mark PAYMENT_TRACKED (current: ${invoice.state})`);
+  if (input.nextState === "PAYMENT_TRACKED") {
+    enforceInvoiceStateForPaymentTracked({ currentState: invoice.state });
   }
-  if (input.nextState === "RECONCILED" && invoice.state !== InvoiceState.PAYMENT_TRACKED) {
-    throw new StateTransitionError(`Invoice must be PAYMENT_TRACKED to mark RECONCILED (current: ${invoice.state})`);
+  if (input.nextState === "RECONCILED") {
+    enforceInvoiceStateForReconciled({ currentState: invoice.state });
   }
 
-  return prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      state: input.nextState,
-      metadata: { ...(invoice.metadata as object | null), paymentRef: input.paymentRef ?? null, updatedBy: actorId, updatedAt: new Date().toISOString() } as object,
-    },
+  const now = new Date();
+  const receivedAt = input.receivedAt?.trim() ? new Date(input.receivedAt) : null;
+  if (receivedAt && Number.isNaN(receivedAt.getTime())) throw new ValidationError("receivedAt must be a valid ISO date");
+  const amount = input.amount == null ? null : Number(input.amount);
+  if (amount != null && (!Number.isFinite(amount) || amount <= 0)) throw new ValidationError("amount must be a positive number when provided");
+
+  return prisma.$transaction(async (tx) => {
+    // SIG-S9 §8.6: record a payment event (optional in this repo for backwards compatibility).
+    if (amount != null) {
+      await tx.paymentRecord.create({
+        data: {
+          folioId: invoice.folioId,
+          invoiceId: invoice.id,
+          entryId: invoice.entryId,
+          amount: amount as any,
+          paymentDirection: "IN",
+          paymentMethod: input.paymentMethod?.trim() ? input.paymentMethod.trim() : "CASH",
+          receivedAt: receivedAt ?? now,
+          recordedBy: actorId,
+          stage: Stage.S9,
+          notes: input.referenceNumber?.trim()
+            ? `POST_STAY_PAYMENT:${input.referenceNumber.trim()}`
+            : input.paymentRef?.trim()
+              ? `POST_STAY_PAYMENT:${input.paymentRef.trim()}`
+              : "POST_STAY_PAYMENT",
+        } as any,
+      });
+      await recomputeFolioOutstandingBalance(tx, invoice.folioId);
+      const folio = await tx.folio.findUniqueOrThrow({ where: { id: invoice.folioId } });
+      const out = num(folio.outstandingBalance);
+      if (out === 0 && folio.state === FolioState.OUTSTANDING) {
+        await tx.folio.update({
+          where: { id: folio.id },
+          data: { state: FolioState.SETTLED, outstandingBalance: 0 } as any,
+        });
+      }
+    }
+
+    return tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        state: input.nextState,
+        metadata: {
+          ...(invoice.metadata as object | null),
+          paymentRef: input.paymentRef ?? null,
+          referenceNumber: input.referenceNumber ?? null,
+          proofAttachmentId: input.proofAttachmentId ?? null,
+          updatedBy: actorId,
+          updatedAt: now.toISOString(),
+        } as object,
+      },
+    });
   });
 }
 
@@ -192,7 +274,7 @@ export async function writeOffOutstandingBalance(
 
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
-  if (folio.state !== FolioState.OUTSTANDING) throw new StateTransitionError("Folio must be OUTSTANDING to write off");
+  enforceFolioOutstandingForWriteOff({ folioState: folio.state });
 
   return prisma.$transaction(async (tx) => {
     const rec = await tx.writeOffRecord.create({
@@ -204,6 +286,7 @@ export async function writeOffOutstandingBalance(
         createdBy: actorId,
       },
     });
+    await recomputeFolioOutstandingBalance(tx, folioId);
     await tx.folio.update({ where: { id: folioId }, data: { state: FolioState.WRITTEN_OFF } });
     return rec;
   });
@@ -351,20 +434,25 @@ async function maybeCreateCommissionDue(db: DbClient, entryId: string, actorId: 
   const entry = await db.entry.findUnique({ where: { id: entryId }, include: { inquiry: { include: { agentProfile: true } }, folio: true } });
   if (!entry) throw new NotFoundError("Entry");
   const agent = entry.inquiry.agentProfile;
-  if (!agent || agent.commissionRate == null) return { created: false as const };
+  const commissionRateNum = agent?.commissionRate != null ? Number(agent.commissionRate) : null;
+  if (!shouldCreateCommissionDueRecord({ hasAgentProfile: !!agent, commissionRate: commissionRateNum })) {
+    return { created: false as const };
+  }
+
+  const profile = agent!;
 
   const existing = await db.commissionDueRecord.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
   if (existing) return { created: false as const, existing };
 
   // If commission basis not configured, create RATE_MISSING and schedule W11.
   const now = new Date();
-  const isBasisMissing = agent.commissionBasis == null;
+  const isBasisMissing = profile.commissionBasis == null;
   const created = await db.commissionDueRecord.create({
     data: {
       entryId,
-      agentProfileId: agent.id,
-      commissionRate: agent.commissionRate,
-      commissionBasis: agent.commissionBasis ?? null,
+      agentProfileId: profile.id,
+      commissionRate: profile.commissionRate!,
+      commissionBasis: profile.commissionBasis ?? null,
       calculatedAmount: isBasisMissing ? null : (entry.folio ? entry.folio.outstandingBalance : null),
       currency: "BTN",
       status: isBasisMissing ? CommissionDueStatus.RATE_MISSING : CommissionDueStatus.PENDING,
@@ -414,6 +502,7 @@ async function processNoShowS9IfNeeded(db: DbClient, entryId: string, actorId: s
   const determinationId = noShowDetermination.id;
   const penalty = num(entry.folio.noShowPenaltyAmount);
   const net = num(entry.folio.noShowNetPosition);
+  enforceNoShowFinancialAmountsNonNegative({ penalty, net });
 
   if (penalty > 0) {
     const existing = await db.invoice.findFirst({
@@ -455,6 +544,7 @@ async function processNoShowS9IfNeeded(db: DbClient, entryId: string, actorId: s
           recordedBy: actorId,
         } as any,
       });
+      await recomputeFolioOutstandingBalance(db, entry.folio.id);
     }
   }
 
@@ -464,7 +554,7 @@ async function processNoShowS9IfNeeded(db: DbClient, entryId: string, actorId: s
 export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, actorId: string) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { folio: true } });
   if (!entry) throw new NotFoundError("Entry");
-  if (entry.status === EntryStatus.CLOSED) throw new StateTransitionError("Entry is already CLOSED");
+  enforceEntryNotAlreadyClosed({ status: entry.status });
   enforceEntryAtS9ForS9Closure({ currentStage: entry.currentStage });
   if (!entry.folio) throw new NotFoundError("Folio");
 
@@ -480,32 +570,14 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
   return prisma.$transaction(async (tx) => {
     await processNoShowS9IfNeeded(tx, entryId, actorId);
 
-    // AC-S8-07: OUTSTANDING folios schedule payment follow-up W8 at S9 closure.
-    if (entry.folio?.state === FolioState.OUTSTANDING) {
-      const ttl = Number(await requireActiveConfigValue<number>(tx as any, "payment.followUp.ttlDays").catch(() => 7));
-      const dueAt = new Date(Date.now() + ttl * 86400_000);
-      const existing = await tx.timerRecord.findFirst({ where: { entryId, timerCode: "PAYMENT_FOLLOW_UP_W8", status: "SCHEDULED" } });
-      if (!existing) {
-        const timerRecordId = randomUUID();
-        const engine = await getTimerEngine();
-        const pgBossJobId = await engine.schedule("PAYMENT_FOLLOW_UP_W8", { entryId, timerRecordId }, { startAfter: dueAt });
-        await tx.timerRecord.create({
-          data: {
-            id: timerRecordId,
-            entryId,
-            entityType: "Entry",
-            entityId: entryId,
-            timerType: "PAYMENT_FOLLOW_UP_W8",
-            timerCode: "PAYMENT_FOLLOW_UP_W8",
-            dueAt,
-            firesAt: dueAt,
-            status: "SCHEDULED",
-            createdBy: "system",
-            pgBossJobId,
-            payload: { entryId, folioId: entry.folio.id, outstandingBalance: entry.folio.outstandingBalance.toString(), timerRecordId },
-          },
-        });
-      }
+    // AC-S8-07: OUTSTANDING folios schedule payment follow-up W8 at S9 closure (may already exist from S8→S9).
+    if (entry.folio) {
+      await schedulePaymentFollowUpW8IfOutstanding(tx, {
+        entryId,
+        folioId: entry.folio.id,
+        folioState: entry.folio.state,
+        outstandingBalance: entry.folio.outstandingBalance,
+      });
     }
 
     if (entry.folio) {
@@ -516,7 +588,21 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
     if (entry.folio?.state !== FolioState.NO_SHOW_CLOSED) {
       await registerW28FeedbackTimer(tx, entryId, actorId);
     }
-    const retentionDueAt = new Date(Date.now() + 365 * 86400_000);
+    await maybeCreateFollowUpTask(tx, { id: entryId, useType: entry.useType }, "system");
+    await maybeCreateCommissionDue(tx, entryId, "SYSTEM");
+
+    // Release room inventory claim at closure (AC-S9-016). In this slice, claim is on Room.currentClaimState.
+    const ra = await tx.roomAssignment.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
+    if (ra) await tx.room.update({ where: { id: ra.roomId }, data: { currentClaimState: "FREE" } });
+
+    const retentionPeriodDays = await resolveGuestDataRetentionPeriodDays(tx);
+    const closedAtInstant = new Date();
+    const updated = await tx.entry.update({
+      where: { id: entryId },
+      data: { status: EntryStatus.CLOSED, closedAt: closedAtInstant, closedBy: actorId, version: { increment: 1 } },
+    });
+
+    const retentionDueAt = computeGuestDataRetentionDueAt({ closedAt: closedAtInstant, retentionPeriodDays });
     const retentionTimerId = randomUUID();
     const retentionEngine = await getTimerEngine();
     const retentionPgBossJobId = await retentionEngine.schedule(
@@ -540,19 +626,8 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
         payload: { entryId, timerRecordId: retentionTimerId },
       },
     });
-    await maybeCreateFollowUpTask(tx, { id: entryId, useType: entry.useType }, "system");
-    await maybeCreateCommissionDue(tx, entryId, "SYSTEM");
 
-    // Release room inventory claim at closure (AC-S9-016). In this slice, claim is on Room.currentClaimState.
-    const ra = await tx.roomAssignment.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
-    if (ra) await tx.room.update({ where: { id: ra.roomId }, data: { currentClaimState: "FREE" } });
-
-    const updated = await tx.entry.update({
-      where: { id: entryId },
-      data: { status: EntryStatus.CLOSED, closedAt: new Date(), closedBy: actorId, version: { increment: 1 } },
-    });
-
-    const now = new Date();
+    const now = closedAtInstant;
     await (tx as any).traceEvent.create({
       data: {
         eventType: "ENTRY_CLOSED",
@@ -565,7 +640,7 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
         stageContext: Stage.S9,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, closedAt: now.toISOString() },
+        payload: { entryId, closedAt: closedAtInstant.toISOString() },
         createdBy: actorId,
       },
     });

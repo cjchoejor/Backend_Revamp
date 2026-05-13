@@ -1,11 +1,23 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { FolioState, InvoiceState, InvoiceType, PaymentDirection } from "@prisma/client";
+import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s8CheckoutService from "./s8-checkout-service.js";
 import { enforceBillingModelConfirmationMatches } from "../../policies/13-billing-model/p33-billing-model-confirmation-match.js";
 import { enforceSettlementMethodCompatibility } from "../../policies/13-billing-model/p33-billing-model-settlement-method-compatibility.js";
 import { enforceFolioLiveForS8Settlement } from "../../policies/13-billing-model/p31-folio-live-required-for-s8-settlement.js";
 import { enforceEntryAtS8ForSettlementOperations } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
+import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { enforceCreditCeilingFinalBalanceForSettlement } from "../../policies/13-billing-model/p46-credit-ceiling-final-settlement.js";
+import {
+  enforceNightAuditsCompleteForStayBeforeSettlement,
+  findIncompleteStayNightAuditDatesUtc,
+  listStayNightOperatingDatesUtc,
+} from "../../policies/24-night-audit/p61-night-audits-complete-for-stay-before-settlement.js";
+import {
+  enforceApprovedAmendmentChainForSettlement,
+  enforceRoomChargeSumMatchesFrozenRateBasis,
+  sumRoomChargesInStayWindowUtc,
+} from "../../policies/13-billing-model/p22-settlement-rate-basis.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
@@ -28,6 +40,7 @@ export async function initiateSettlement(
     paymentVerificationRef?: string;
     partialAmount?: number;
     fomAcknowledgementRef?: string;
+    nightAuditFomAcknowledgementRef?: string;
     voucherAmount?: number;
   },
 ) {
@@ -46,6 +59,75 @@ export async function initiateSettlement(
 
   const outstanding = num(folio.outstandingBalance);
   if (outstanding < 0) throw new ValidationError("Folio outstandingBalance cannot be negative at settlement");
+
+  let incompleteNightAuditDates: string[] = [];
+  if (entry.reservation) {
+    incompleteNightAuditDates = await findIncompleteStayNightAuditDatesUtc(
+      prisma,
+      entry.reservation.frozenCheckInDate,
+      entry.reservation.frozenCheckOutDate,
+    );
+  }
+  enforceNightAuditsCompleteForStayBeforeSettlement({
+    incompleteOperatingDateIsoList: incompleteNightAuditDates,
+    fomNightAuditAcknowledgementRef: input.nightAuditFomAcknowledgementRef,
+  });
+
+  enforceCreditCeilingFinalBalanceForSettlement({
+    outstanding,
+    ceilingAmount: entry.reservation?.creditCeilingIfExtended != null ? num(entry.reservation.creditCeilingIfExtended) : null,
+    fomAcknowledgementRef: input.fomAcknowledgementRef,
+    creditCeilingTier2AcknowledgedAt: entry.creditCeilingTier2AcknowledgedAt,
+  });
+
+  const amendments = await prisma.amendmentEventRecord.findMany({
+    where: { entryId: folio.entryId },
+    orderBy: { createdAt: "asc" },
+  });
+  enforceApprovedAmendmentChainForSettlement(amendments);
+
+  const folioLines = await prisma.folioLine.findMany({
+    where: { folioId },
+    select: { chargeDate: true, lineType: true, amount: true },
+  });
+  if (entry.reservation) {
+    const stayNights = listStayNightOperatingDatesUtc(entry.reservation.frozenCheckInDate, entry.reservation.frozenCheckOutDate);
+    enforceRoomChargeSumMatchesFrozenRateBasis({
+      frozenRatePerNight: num(entry.reservation.frozenRate),
+      stayNightCount: stayNights.length,
+      totalRoomChargesInStayWindow: sumRoomChargesInStayWindowUtc(
+        folioLines,
+        entry.reservation.frozenCheckInDate,
+        entry.reservation.frozenCheckOutDate,
+      ),
+      skipNumericReconciliation: amendments.length > 0,
+      relativeTolerance: 0.02,
+    });
+  }
+
+  if (input.nightAuditFomAcknowledgementRef?.trim() && incompleteNightAuditDates.length) {
+    const now = new Date();
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "SETTLEMENT.NIGHT_AUDIT_FOM_ACK_USED",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Folio",
+        entityId: folioId,
+        operation: "ACK",
+        timestamp: now,
+        stageContext: Stage.S8,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: {
+          folioId,
+          incompleteOperatingDates: incompleteNightAuditDates,
+          nightAuditFomAcknowledgementRef: input.nightAuditFomAcknowledgementRef.trim(),
+        },
+        createdBy: actorId,
+      },
+    });
+  }
 
   // Settlement method compatibility (minimal policy gate)
   const method = input.settlementMethod.trim();
@@ -70,13 +152,21 @@ export async function initiateSettlement(
       : partial != null
         ? Math.min(partial, outstanding)
         : outstanding;
-  const remaining = Math.max(0, outstanding - settleAmount);
-
-  const nextState = remaining === 0 ? FolioState.SETTLED : FolioState.OUTSTANDING;
 
   const out = await prisma.$transaction(async (tx) => {
-    // Guest pay → record payment
-    if (billing === "GUEST_PAY") {
+    // Voucher settlement IN (mutually exclusive with generic GUEST_PAY below — same settleAmount must not post twice).
+    if (method === "VOUCHER") {
+      if (settleAmount > 0) {
+        await tx.paymentRecord.create({
+          data: {
+            folioId,
+            amount: settleAmount,
+            paymentDirection: PaymentDirection.IN,
+            notes: `VOUCHER:${settleAmount}`,
+          },
+        });
+      }
+    } else if (billing === "GUEST_PAY") {
       if (settleAmount > 0) {
         await tx.paymentRecord.create({
           data: {
@@ -88,6 +178,12 @@ export async function initiateSettlement(
         });
       }
     }
+
+    // Ledger at issuance: standard pattern — invoice metadata snapshots **after** payments, **without** invoice rows in recompute.
+    await recomputeFolioOutstandingBalance(tx, folioId);
+    const ledgerAtIssuance = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { outstandingBalance: true } });
+    const outstandingAtIssuance = num(ledgerAtIssuance.outstandingBalance);
+    const balanceClosed = outstandingAtIssuance === 0;
 
     // Direct bill → always OUTSTANDING and issue invoice
     if (billing === "DIRECT_BILL" || method === "DIRECT_BILL") {
@@ -102,54 +198,53 @@ export async function initiateSettlement(
           issuedBy: actorId,
           dispatchedAt: new Date(),
           dispatchedBy: actorId,
-          metadata: { settlementMethod: method, billingModel: billing, outstandingBalance: folio.outstandingBalance.toString() },
+          metadata: {
+            settlementMethod: method,
+            billingModel: billing,
+            outstandingBalance: ledgerAtIssuance.outstandingBalance.toString(),
+          },
         },
       });
     }
 
-    // Voucher path: settle up to voucher coverage; if remainder exists, create agent billing invoice for difference.
-    if (method === "VOUCHER") {
-      await tx.paymentRecord.create({
+    if (method === "VOUCHER" && outstandingAtIssuance > 0) {
+      await tx.invoice.create({
         data: {
           folioId,
-          amount: settleAmount,
-          paymentDirection: PaymentDirection.IN,
-          notes: `VOUCHER:${settleAmount}`,
+          entryId: folio.entryId,
+          invoiceType: InvoiceType.FINAL,
+          state: InvoiceState.DISPATCHED,
+          templateKey: "agent-billing-v1",
+          issuedAt: new Date(),
+          issuedBy: actorId,
+          dispatchedAt: new Date(),
+          dispatchedBy: actorId,
+          metadata: {
+            settlementMethod: method,
+            voucherCovered: settleAmount,
+            remaining: outstandingAtIssuance,
+            billingModel: billing,
+          },
         },
       });
-      if (remaining > 0) {
-        await tx.invoice.create({
-          data: {
-            folioId,
-            entryId: folio.entryId,
-            invoiceType: InvoiceType.FINAL,
-            state: InvoiceState.DISPATCHED,
-            templateKey: "agent-billing-v1",
-            issuedAt: new Date(),
-            issuedBy: actorId,
-            dispatchedAt: new Date(),
-            dispatchedBy: actorId,
-            metadata: { settlementMethod: method, voucherCovered: settleAmount, remaining, billingModel: billing },
-          },
-        });
-      }
     }
 
+    const isDirectBillPath = billing === "DIRECT_BILL" || method === "DIRECT_BILL";
+    const nextState = isDirectBillPath
+      ? FolioState.OUTSTANDING
+      : balanceClosed
+        ? FolioState.SETTLED
+        : FolioState.OUTSTANDING;
+    // Prisma extension `enforceFolioSettledOutstandingGuard` reads `_base` (non-interactive client),
+    // so it does not see `recomputeFolioOutstandingBalance` writes on `tx`. Passing explicit zero
+    // lets the guard use `data.outstandingBalance` when closing to SETTLED.
     const updated = await tx.folio.update({
       where: { id: folioId },
       data: {
-        state:
-          billing === "DIRECT_BILL" || method === "DIRECT_BILL"
-            ? FolioState.OUTSTANDING
-            : method === "VOUCHER"
-              ? remaining === 0
-                ? FolioState.SETTLED
-                : FolioState.OUTSTANDING
-              : nextState,
+        state: nextState,
+        ...(nextState === FolioState.SETTLED ? { outstandingBalance: 0 } : {}),
         closedAt: new Date(),
         closedBy: actorId,
-        // Align outstandingBalance with settlement outcome so SETTLED invariants hold.
-        outstandingBalance: billing === "DIRECT_BILL" || method === "DIRECT_BILL" ? folio.outstandingBalance : (remaining as any),
       },
     });
 

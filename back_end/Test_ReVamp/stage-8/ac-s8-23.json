@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-23",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.678Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-23",
+      "title": "Inspection deferral registers W9 timer in same workflow",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "44bc4fcc-0584-4f43-8e44-88078c70b1dc",
+        "dueAt": "2026-05-15T12:18:27.800Z",
+        "timerCode": "POST_CHECKOUT_INSPECTION_W9"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

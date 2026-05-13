@@ -41,23 +41,37 @@ async function main() {
 
   const guestProfileId = (await prisma.guestProfile.findFirst({ orderBy: { createdAt: "desc" }, select: { id: true } }))?.id;
   if (!guestProfileId) throw new Error("No guest profile found");
+  await prisma.guestProfile.update({
+    where: { id: guestProfileId },
+    data: { email: `s4-acceptance-guest-${Date.now()}@example.com`, phone: "+97517000004" },
+  });
 
   const inq = await http<any>("POST", "/inquiries", L1, { guestProfileId, sourceChannel: "DIRECT" });
   const inquiryId = inq.json?.id as string | undefined;
   if (!inquiryId) throw new Error("Missing inquiryId");
 
-  const entry = await http<any>("POST", "/entries", L1, { inquiryId, useType: "LEISURE" });
+  const checkInDate = new Date(Date.now() + 86400_000).toISOString();
+  const checkOutDate = new Date(Date.now() + 2 * 86400_000).toISOString();
+
+  const entry = await http<any>("POST", "/entries", L1, {
+    inquiryId,
+    useType: "LEISURE",
+    guestCount: 1,
+    checkInDate,
+    checkOutDate,
+  });
   const entryId = entry.json?.id as string | undefined;
   if (!entryId) throw new Error("Missing entryId");
 
   const avail = await http<any>("POST", `/entries/${entryId}/availability/query`, L1, {
-    checkInDate: new Date(Date.now() + 86400_000).toISOString(),
-    checkOutDate: new Date(Date.now() + 2 * 86400_000).toISOString(),
+    checkInDate,
+    checkOutDate,
   });
   const cfgId = avail.json?.configuration?.id as string | undefined;
-  const firstOk = (avail.json?.result?.availableRooms ?? [])[0];
-  if (!cfgId || !firstOk?.roomId) throw new Error("Missing configuration/room");
-  await http("PATCH", `/availability/configurations/${cfgId}/select`, L1, { roomId: firstOk.roomId });
+  const roomsList = (avail.json?.result?.availableRooms ?? []) as { roomId?: string; inventoryId?: string }[];
+  const selectRoomId = (roomsList[0]?.roomId ?? roomsList[0]?.inventoryId) as string | undefined;
+  if (!cfgId || !selectRoomId) throw new Error("Missing configuration/room");
+  await http("PATCH", `/availability/configurations/${cfgId}/select`, L1, { roomId: selectRoomId });
 
   const e1 = await prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
   await http("POST", `/entries/${entryId}/progress-stage`, L1, { targetStage: "S2", version: e1.version, guestPhysicallyPresent: true });
@@ -73,21 +87,67 @@ async function main() {
 
   await http("POST", `/entries/${entryId}/folio/provisional`, L1, { billingModel: "GUEST_PAY" });
 
-  const seg = await prisma.segment.findFirstOrThrow({ where: { entryId }, orderBy: { segmentNumber: "desc" } });
-  await http("POST", `/entries/${entryId}/disclosures/cancellation`, L1, { noShowTreatmentStatement: "No-show: charge 1 night", disclosedTerms: { noShow: true } });
-  await http("POST", `/folios/${(await prisma.folio.findUniqueOrThrow({ where: { entryId } })).id}/payments`, L1, { entryId, amount: 100, notes: "Advance deposit" });
-  await http("POST", `/entries/${entryId}/holds/committed`, L1, { roomId: firstOk.roomId, commercialJustification: "Ready to confirm" });
+  await http("POST", `/entries/${entryId}/disclosures/cancellation`, L1, {
+    noShowTreatmentStatement: "No-show: charge 1 night",
+    disclosedTerms: { noShow: true },
+  });
+  const folioId = (await prisma.folio.findUniqueOrThrow({ where: { entryId } })).id;
+  await http("POST", `/folios/${folioId}/payments`, L1, { entryId, amount: 100, notes: "Advance deposit" });
 
-  const e3 = await prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
-  const conf = await http<any>("POST", `/entries/${entryId}/confirm`, L1, { version: e3.version });
+  const eS3 = await prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  const noHoldConfirm = await http<any>("POST", `/entries/${entryId}/confirm`, L1, { version: eS3.version });
+  steps.push({
+    id: "AC-S4-002",
+    title: "Confirm rejected without committed hold (readiness gate)",
+    pass: noHoldConfirm.status === 409 && noHoldConfirm.json?.blockingCondition === "MISSING_COMMITTED_HOLD",
+    status: noHoldConfirm.status,
+    body: noHoldConfirm.json,
+    explanation: "p40-s4-confirmation-readiness-gates: enforceCommittedHoldReadyForS4Confirmation before transaction.",
+    dbImpact: "No reservation row; entry remains S3.",
+  });
+
+  const payStatus = await http<any>("GET", `/entries/${entryId}/payment-status`, L1);
+  steps.push({
+    id: "AC-S4-003",
+    title: "GET payment-status at S3 (advance evaluation)",
+    pass: payStatus.status === 200 && payStatus.json?.satisfied === true,
+    status: payStatus.status,
+    body: payStatus.json,
+    explanation: "Folio advance threshold evaluation exposed for S3 confirmation readiness (Policy 42 slice).",
+    dbImpact: "Read-only; no writes.",
+  });
+
+  await http("POST", `/entries/${entryId}/holds/committed`, L1, {
+    roomId: selectRoomId,
+    commercialJustification: "Ready to confirm",
+  });
+
+  const eProg = await prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  const viaProgress = await http<any>("POST", `/entries/${entryId}/progress-stage`, L1, {
+    targetStage: "S4",
+    version: eProg.version,
+    guestPhysicallyPresent: true,
+  });
   steps.push({
     id: "AC-S4-001-ish",
-    title: "Confirm reservation creates snapshot, confirms hold, creates H1 + ownership trace",
-    pass: conf.status === 200 && !!conf.json?.reservation?.id && conf.json?.entry?.currentStage === "S4",
-    status: conf.status,
-    body: conf.json,
-    explanation: "S4 confirm creates Reservation snapshot from S2/S3 evidence, confirms committed hold, creates H1, and records ownership assignment trace event.",
-    dbImpact: "Creates Reservation; updates CommittedHold to CONFIRMED; inserts CommunicationRecord + TimerRecord(ACK window); inserts HandoffRecord(H1); inserts TraceEvent(OWNERSHIP_ASSIGNED).",
+    title: "POST progress-stage target S4 confirms reservation (delegated confirm path)",
+    pass: viaProgress.status === 200 && !!viaProgress.json?.reservation?.id && viaProgress.json?.entry?.currentStage === "S4",
+    status: viaProgress.status,
+    body: viaProgress.json,
+    explanation: "reservationsRouter: targetStage S4 calls reservationService.confirmReservation — primary happy-path confirm for this slice.",
+    dbImpact: "Creates Reservation; confirms hold; H1 + comms slice per s4-confirmation-service.",
+  });
+
+  const eDup = await prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  const dupConfirm = await http<any>("POST", `/entries/${entryId}/confirm`, L1, { version: eDup.version });
+  steps.push({
+    id: "AC-S4-004",
+    title: "Second confirm when already at S4 is rejected",
+    pass: dupConfirm.status === 409 && (dupConfirm.json?.blockingCondition === "NOT_AT_S3" || dupConfirm.json?.error === "StageGateBlockedError"),
+    status: dupConfirm.status,
+    body: dupConfirm.json,
+    explanation: "Idempotency / stage guard: confirmReservation requires entry at S3.",
+    dbImpact: "No second reservation.",
   });
 
   fs.writeFileSync(OUT_JSON, JSON.stringify({ baseUrl, steps }, null, 2), "utf8");
@@ -121,4 +181,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-

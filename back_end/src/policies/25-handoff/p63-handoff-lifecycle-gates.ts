@@ -27,16 +27,25 @@ export function enforceH5NotBlockingS9Closure(input: {
   }
 }
 
+/** Non-throwing probe for aggregate S8→S9 gate collection. */
+export function peekH4S8ExitFailure(input: {
+  h4: { state: HandoffState | string; isAutoFulfilled?: boolean | null } | null | undefined;
+}): { blockingCondition: string; message: string } | null {
+  if (!input.h4) {
+    return { blockingCondition: "H4_NOT_PRESENT", message: "H4 is required at checkout" };
+  }
+  if (input.h4.isAutoFulfilled) return null;
+  if (input.h4.state === HandoffState.FULFILLED) return null;
+  return { blockingCondition: "H4_NOT_FULFILLED", message: "H4 must be fulfilled before S8 exit" };
+}
+
 /** S8→S9: H4 must exist and be fulfilled (or auto-fulfilled). */
 export function enforceH4FulfilledOrAutoBeforeS8Exit(input: {
   h4: { state: HandoffState | string; isAutoFulfilled?: boolean | null } | null | undefined;
 }) {
-  if (!input.h4) {
-    throw new StageGateBlockedError("H4 is required at checkout", "H4_NOT_PRESENT");
-  }
-  if (input.h4.isAutoFulfilled) return;
-  if (input.h4.state === HandoffState.FULFILLED) return;
-  throw new StageGateBlockedError("H4 must be fulfilled before S8 exit", "H4_NOT_FULFILLED");
+  const peek = peekH4S8ExitFailure(input);
+  if (!peek) return;
+  throw new StageGateBlockedError(peek.message, peek.blockingCondition);
 }
 
 /** S8→S9: H5 record must exist after checkout handoff build. */

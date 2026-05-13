@@ -1,0 +1,10 @@
+{
+  "stage": "S4",
+  "scenarioFiles": [
+    "ac-s4-002.json",
+    "ac-s4-003.json",
+    "ac-s4-001-ish.json",
+    "ac-s4-004.json"
+  ],
+  "note": "One JSON file per acceptance case (`id`). Produced after delegated script run."
+}

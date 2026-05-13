@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "stage": "S9",
+    "scenarioName": "ac-s9-038",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s9-deep · Layer 03c (S9 post-stay & closure)",
+    "generatedAt": "2026-05-13T12:18:44.794Z",
+    "apiBaseUrl": "http://127.0.0.1:4069/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S9-038",
+      "title": "write-off below L3 rejected",
+      "pass": true,
+      "httpStatus": 403,
+      "response": {
+        "error": "AuthorizationError",
+        "message": "Insufficient authority"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

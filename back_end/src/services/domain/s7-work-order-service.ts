@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { WorkOrderToDoStatus } from "@prisma/client";
+import { Prisma, WorkOrderToDoStatus } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 
 export async function createWorkOrder(prisma: PrismaClient, actorId: string, input: { entryId: string }) {
@@ -79,4 +79,36 @@ export async function closeWorkOrder(prisma: PrismaClient, workOrderId: string) 
 
   return prisma.workOrder.update({ where: { id: workOrderId }, data: { status: "CLOSED" } });
 }
+
+export async function amendWorkOrder(
+  prisma: PrismaClient,
+  workOrderId: string,
+  actorId: string,
+  input: { amendmentType: string; reason: string; payload?: Record<string, unknown> },
+) {
+  if (!input.amendmentType?.trim()) throw new ValidationError("amendmentType is required");
+  if (!input.reason?.trim()) throw new ValidationError("reason is required");
+
+  const wo = await prisma.workOrder.findUnique({ where: { id: workOrderId } });
+  if (!wo) throw new NotFoundError("WorkOrder");
+  if (wo.status !== "OPEN") throw new ValidationError("Work order can only be amended while OPEN");
+
+  const amendment = await prisma.workOrderAmendmentEvent.create({
+    data: {
+      workOrderId,
+      amendmentType: input.amendmentType.trim(),
+      reason: input.reason.trim(),
+      payload: input.payload !== undefined ? (input.payload as Prisma.InputJsonValue) : undefined,
+      createdBy: actorId,
+    },
+  });
+
+  const workOrder = await prisma.workOrder.findUniqueOrThrow({
+    where: { id: workOrderId },
+    include: { todoItems: true, amendments: { orderBy: { createdAt: "desc" }, take: 20 } },
+  });
+
+  return { workOrder, amendment };
+}
+
 

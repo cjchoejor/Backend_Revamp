@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "stage": "S4",
+    "scenarioName": "ac-s4-004",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s4-deep · Layer 03b (S4 confirmation & ownership)",
+    "generatedAt": "2026-05-13T11:37:19.992Z",
+    "apiBaseUrl": "http://127.0.0.1:4055/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S4-004",
+      "title": "Second confirm when already at S4 is rejected",
+      "pass": true,
+      "httpStatus": 409,
+      "response": {
+        "error": "StageGateBlockedError",
+        "message": "Entry must be at S3 to confirm",
+        "blockingCondition": "NOT_AT_S3"
+      },
+      "explanation": "Idempotency / stage guard: confirmReservation requires entry at S3.",
+      "dbImpact": "No second reservation."
+    }
+  ]
+}

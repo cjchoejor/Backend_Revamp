@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
+import { enforceCommittedHoldEligibleForExpiryTransition } from "../policies/11-committed-hold/p08-committed-hold-expiry-policy-slice.js";
 
 export async function runCommittedHoldExpiryWorker(prisma: PrismaClient, input: { committedHoldId?: string; timerRecordId?: string }) {
   const now = new Date();
@@ -8,7 +9,8 @@ export async function runCommittedHoldExpiryWorker(prisma: PrismaClient, input: 
 
   const hold = await prisma.committedHold.findUnique({ where: { id: committedHoldId } });
   if (!hold) return { skipped: true, reason: "HOLD_NOT_FOUND" } as const;
-  if (hold.state === HoldState.RELEASED || hold.state === HoldState.CONFIRMED) return { skipped: true, reason: "ALREADY_RESOLVED" } as const;
+  const { eligible } = enforceCommittedHoldEligibleForExpiryTransition({ state: hold.state });
+  if (!eligible) return { skipped: true, reason: "ALREADY_RESOLVED" } as const;
 
   await prisma.$transaction(async (tx) => {
     await tx.committedHold.update({

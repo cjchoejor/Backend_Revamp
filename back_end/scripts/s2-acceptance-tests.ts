@@ -41,24 +41,39 @@ async function main() {
 
   const guestProfileId = (await prisma.guestProfile.findFirst({ orderBy: { createdAt: "desc" }, select: { id: true } }))?.id;
   if (!guestProfileId) throw new Error("No guest profile found");
+  // S1→S2 exit gate requires primary contact (email or phone).
+  await prisma.guestProfile.update({
+    where: { id: guestProfileId },
+    data: { email: `s2-acceptance-guest-${Date.now()}@example.com`, phone: "+97517000002" },
+  });
 
   const inq = await http<any>("POST", "/inquiries", L1, { guestProfileId, sourceChannel: "DIRECT" });
   const inquiryId = inq.json?.id as string | undefined;
   if (!inquiryId) throw new Error("Missing inquiryId");
 
-  const entry = await http<any>("POST", "/entries", L1, { inquiryId, useType: "LEISURE" });
+  const checkInDate = new Date(Date.now() + 86400_000).toISOString();
+  const checkOutDate = new Date(Date.now() + 2 * 86400_000).toISOString();
+
+  const entry = await http<any>("POST", "/entries", L1, {
+    inquiryId,
+    useType: "LEISURE",
+    guestCount: 1,
+    checkInDate,
+    checkOutDate,
+  });
   const entryId = entry.json?.id as string | undefined;
   if (!entryId) throw new Error("Missing entryId");
 
   // availability search + select + progress to S2
   const q = await http<any>("POST", `/entries/${entryId}/availability/query`, L1, {
-    checkInDate: new Date(Date.now() + 86400_000).toISOString(),
-    checkOutDate: new Date(Date.now() + 2 * 86400_000).toISOString(),
+    checkInDate,
+    checkOutDate,
   });
   const cfgId = q.json?.configuration?.id as string | undefined;
-  const firstOk = (q.json?.result?.availableRooms ?? [])[0];
-  if (!cfgId || !firstOk?.roomId) throw new Error("Missing availability configuration/room");
-  await http("PATCH", `/availability/configurations/${cfgId}/select`, L1, { roomId: firstOk.roomId });
+  const firstOk = (q.json?.result?.availableRooms ?? [])[0] as { roomId?: string; inventoryId?: string } | undefined;
+  const selectRoomId = firstOk?.roomId ?? firstOk?.inventoryId;
+  if (!cfgId || !selectRoomId) throw new Error("Missing availability configuration/room");
+  await http("PATCH", `/availability/configurations/${cfgId}/select`, L1, { roomId: selectRoomId });
 
   const entrySnap = await prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
   const toS2 = await http<any>("POST", `/entries/${entryId}/progress-stage`, L1, { targetStage: "S2", version: entrySnap.version, guestPhysicallyPresent: true });
@@ -71,6 +86,12 @@ async function main() {
     explanation: "Bring a fresh entry into S2 with preferred configuration selected.",
     dbImpact: "Entry.currentStage updated to S2; preferred AvailabilityConfiguration sealedAt set; TraceEvent written.",
   });
+
+  if (toS2.status !== 200) {
+    fs.writeFileSync(OUT_JSON, JSON.stringify({ baseUrl, steps }, null, 2), "utf8");
+    process.exitCode = 1;
+    return;
+  }
 
   const draft = await http<any>("POST", `/entries/${entryId}/quotations`, L1, {
     notes: "SIG-S2 acceptance: draft quotation",
@@ -115,7 +136,7 @@ async function main() {
   });
 
   const hold = await http<any>("POST", `/entries/${entryId}/holds/speculative`, L1, {
-    roomId: firstOk.roomId,
+    roomId: selectRoomId,
     ttlSeconds: 120,
     commercialBasis: "Guest requested short hold while deciding",
     notes: "SIG-S2 acceptance: speculative hold",

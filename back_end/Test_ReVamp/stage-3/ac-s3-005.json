@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "stage": "S3",
+    "scenarioName": "ac-s3-005",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s3-deep · Layer 03a (S3 reservation setup)",
+    "generatedAt": "2026-05-13T11:35:03.906Z",
+    "apiBaseUrl": "http://127.0.0.1:4044/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S3-005",
+      "title": "GET payment-status reflects folio advance evaluation",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "satisfied": true,
+        "totalReceived": 100,
+        "requiredAmount": 1,
+        "shortfall": 0,
+        "creditExtensionActive": false,
+        "ceilingAmount": null
+      },
+      "explanation": "Payment status endpoint exposes evaluateAdvancePaymentCondition for UI / downstream gates.",
+      "dbImpact": "Read-only evaluation; no row writes."
+    }
+  ]
+}

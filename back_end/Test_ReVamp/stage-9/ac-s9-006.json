@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "stage": "S9",
+    "scenarioName": "ac-s9-006",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s9-deep · Layer 03c (S9 post-stay & closure)",
+    "generatedAt": "2026-05-13T12:18:44.814Z",
+    "apiBaseUrl": "http://127.0.0.1:4069/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S9-006",
+      "title": "WriteOffRecord exists with non-empty reason when folio WRITTEN_OFF",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "f4f8658a-e36d-4f90-b9c8-d2540b5192af",
+        "folioId": "c5864016-d438-425d-aad0-3bb9f309f1b3",
+        "entryId": "3e880fe5-8d2d-499e-94a9-847fe3d7f43d",
+        "writtenOffAmount": "4000",
+        "currency": "BTN",
+        "reason": "uncollectable",
+        "createdAt": "2026-05-13T12:18:44.589Z",
+        "createdBy": "test-gm-1"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}

@@ -161,6 +161,75 @@ export async function placeCommittedHold(
   });
 }
 
+/**
+ * SIG-S4 / HoldService — `confirmCommittedHold`: PLACED→CONFIRMED, inventory COMMITTED_HELD→CONFIRMED, cancel **W3** expiry in the same transaction.
+ */
+export async function confirmCommittedHoldTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; holdId: string; actorId: string; inquiryId: string | null },
+) {
+  const hold = await tx.committedHold.findUnique({ where: { id: input.holdId } });
+  if (!hold || hold.entryId !== input.entryId) throw new NotFoundError("CommittedHold");
+  if (hold.state !== HoldState.PLACED) {
+    throw new ValidationError("CommittedHold must be PLACED to confirm");
+  }
+  if (!hold.roomId) throw new ValidationError("CommittedHold.roomId is required");
+
+  const now = new Date();
+  const room = await tx.room.findUnique({ where: { id: hold.roomId } });
+  if (!room) throw new NotFoundError("Room");
+
+  await tx.committedHold.update({
+    where: { id: hold.id },
+    data: { state: HoldState.CONFIRMED, confirmedAt: now, confirmedBy: input.actorId },
+  });
+  await tx.room.update({
+    where: { id: hold.roomId },
+    data: { currentClaimState: InventoryClaimState.CONFIRMED },
+  });
+  await tx.roomClaimStateEvent.create({
+    data: {
+      roomId: hold.roomId,
+      entryId: input.entryId,
+      fromState: InventoryClaimState.COMMITTED_HELD,
+      toState: InventoryClaimState.CONFIRMED,
+      actorId: input.actorId,
+      reason: "S4_CONFIRMATION",
+      effectiveFrom: now,
+    },
+  });
+
+  const engine = await getTimerEngine();
+  const timers = await tx.timerRecord.findMany({
+    where: { entryId: input.entryId, timerCode: "COMMITTED_HOLD_EXPIRY_W3", status: "SCHEDULED" },
+    select: { id: true, pgBossJobId: true },
+  });
+  await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+  await tx.timerRecord.updateMany({
+    where: { id: { in: timers.map((t) => t.id) }, status: "SCHEDULED" },
+    data: { status: "CANCELLED", cancelledAt: now, cancelledBy: input.actorId, cancelledReason: "S4_CONFIRMATION" } as any,
+  });
+
+  await tx.traceEvent.create({
+    data: {
+      eventType: "COMMITTED_HOLD.CONFIRMED",
+      actorId: input.actorId,
+      actorLevel: "L1",
+      entityType: "CommittedHold",
+      entityId: hold.id,
+      operation: "UPDATE",
+      timestamp: now,
+      stageContext: Stage.S4,
+      inquiryId: input.inquiryId,
+      entryId: input.entryId,
+      payload: { entryId: input.entryId, committedHoldId: hold.id },
+      createdBy: input.actorId,
+    },
+  });
+
+  return tx.committedHold.findUniqueOrThrow({ where: { id: hold.id } });
+}
+
 export async function releaseOnReEntry(
   prisma: PrismaClient | Prisma.TransactionClient,
   entryId: string,

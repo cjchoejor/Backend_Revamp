@@ -35,8 +35,13 @@ export class NotFoundError extends AppError {
 }
 
 export class PolicyGateBlockedError extends AppError {
-  constructor(blockingCondition: string, message: string) {
-    super(409, { error: "PolicyGateBlockedError", message, blockingCondition });
+  constructor(blockingCondition: string, message: string, details?: unknown) {
+    super(409, {
+      error: "PolicyGateBlockedError",
+      message,
+      blockingCondition,
+      ...(details !== undefined ? { details } : {}),
+    });
   }
 }
 
@@ -49,6 +54,25 @@ export class StateTransitionError extends AppError {
 export class StageGateBlockedError extends AppError {
   constructor(message: string, blockingCondition?: string) {
     super(409, { error: "StageGateBlockedError", message, blockingCondition });
+  }
+}
+
+export type StageGateFailureItem = { blockingCondition: string; message: string };
+
+/** Multiple S8→S9 (or similar) stage gates failed — `details.failures` lists each blocker. */
+export class StageGatesBlockedError extends AppError {
+  constructor(failures: StageGateFailureItem[]) {
+    const list = failures.length ? failures : [{ blockingCondition: "UNKNOWN", message: "Stage transition blocked" }];
+    const body: ErrorBody = {
+      error: "StageGatesBlockedError",
+      message:
+        list.length === 1
+          ? list[0].message
+          : `S8→S9 blocked by ${list.length} stage gates — see details.failures`,
+      blockingCondition: list.length === 1 ? list[0].blockingCondition : "MULTIPLE_STAGE_GATES",
+      details: { failures: list },
+    };
+    super(409, body);
   }
 }
 

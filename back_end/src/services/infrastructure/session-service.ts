@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { AuthorizationError, ValidationError } from "../../lib/errors.js";
+import { enforceValidPin } from "../../policies/01-availability/p69-session-management-and-pin-authentication.js";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-jwt-secret";
 
@@ -15,8 +16,9 @@ export async function authenticate(prisma: PrismaClient, input: { pin: string; t
 
   const users = await prisma.staffUser.findMany({ where: { isActive: true } });
   const matched = await Promise.all(users.map(async (u) => ({ u, ok: await bcrypt.compare(input.pin, u.pinHash) })));
-  const user = matched.find((m) => m.ok)?.u;
-  if (!user) throw new AuthorizationError("Invalid PIN");
+  const matchedUser = matched.find((m) => m.ok)?.u;
+  enforceValidPin({ isPinValid: !!matchedUser });
+  const user = matchedUser!;
 
   const session = await prisma.sessionRecord.create({
     data: { userId: user.id, terminalId: input.terminalId, status: "ACTIVE", authenticatedAt: new Date(), lastActiveAt: new Date() },

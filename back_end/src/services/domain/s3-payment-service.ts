@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { PaymentDirection, Stage } from "@prisma/client";
 import { MissingConfigurationError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -12,29 +12,21 @@ function toNumber(v: any): number {
   return NaN;
 }
 
-export async function evaluateAdvancePaymentCondition(
-  prisma: PrismaClient,
-  input: { entryId: string; folioId: string; now?: Date },
+async function computeAdvancePaymentEvaluation(
+  db: PrismaClient | Prisma.TransactionClient,
+  input: { entryId: string; folioId: string },
+  thresholds: any,
 ) {
-  const now = input.now ?? new Date();
-
-  const entry = await prisma.entry.findUnique({ where: { id: input.entryId }, include: { inquiry: true } as any });
-  if (!entry) throw new ValidationError("entryId invalid");
-
-  const folio = await prisma.folio.findUnique({ where: { id: input.folioId }, include: { payments: true } });
+  const folio = await db.folio.findUnique({ where: { id: input.folioId }, include: { payments: true } });
   if (!folio) throw new ValidationError("folioId invalid");
+  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
 
-  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds", { now }).catch(() => {
-    throw new MissingConfigurationError("advancePayment.thresholds");
-  });
-
-  // This codebase does not yet model source channel/client tier precisely; treat all as DEFAULT.
   const requiredAmount = toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
   const totalReceived = (folio.payments ?? [])
     .filter((p) => p.paymentDirection === PaymentDirection.IN)
     .reduce((sum, p) => sum + Number(p.amount.toString()), 0);
 
-  const credit = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } }).catch(() => null);
+  const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } }).catch(() => null);
   const creditExtensionActive = !!credit;
 
   const satisfied = creditExtensionActive || (Number.isFinite(requiredAmount) ? totalReceived >= requiredAmount : totalReceived > 0);
@@ -48,6 +40,56 @@ export async function evaluateAdvancePaymentCondition(
     creditExtensionActive,
     ceilingAmount: credit ? Number(credit.ceilingAmount.toString()) : null,
   };
+}
+
+export async function evaluateAdvancePaymentCondition(
+  prisma: PrismaClient,
+  input: { entryId: string; folioId: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds", { now }).catch(() => {
+    throw new MissingConfigurationError("advancePayment.thresholds");
+  });
+  return computeAdvancePaymentEvaluation(prisma, input, thresholds);
+}
+
+/** Reads folio/payments on `tx` (including uncommitted rows) while loading thresholds from the root client. */
+export async function evaluateAdvancePaymentConditionTx(
+  prisma: PrismaClient,
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds", { now }).catch(() => {
+    throw new MissingConfigurationError("advancePayment.thresholds");
+  });
+  return computeAdvancePaymentEvaluation(tx, input, thresholds);
+}
+
+/** SIG §6.4 — façade name for API / callers. */
+export async function getPaymentStatus(prisma: PrismaClient, input: { entryId: string; folioId: string; now?: Date }) {
+  return evaluateAdvancePaymentCondition(prisma, input);
+}
+
+export async function cancelScheduledAdvancePaymentFollowUpForEntry(
+  tx: Prisma.TransactionClient,
+  entryId: string,
+  cancelledBy: string,
+  reason: string,
+) {
+  const now = new Date();
+  const timers = await tx.timerRecord.findMany({
+    where: { entryId, timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34", status: "SCHEDULED" },
+    select: { id: true, pgBossJobId: true },
+  });
+  if (timers.length === 0) return { cancelled: 0 } as const;
+  const engine = await getTimerEngine();
+  await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+  await tx.timerRecord.updateMany({
+    where: { id: { in: timers.map((t) => t.id) } },
+    data: { status: "CANCELLED", cancelledAt: now, cancelledBy, cancelledReason: reason },
+  });
+  return { cancelled: timers.length } as const;
 }
 
 export async function recordCreditExtensionApproval(
@@ -78,17 +120,7 @@ export async function recordCreditExtensionApproval(
       },
     });
 
-    // Cancel any advance payment follow-up timers linked to this entry/folio.
-    const timers = await tx.timerRecord.findMany({
-      where: { entryId: input.entryId, timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34", status: "SCHEDULED" },
-      select: { id: true, pgBossJobId: true },
-    });
-    const engine = await getTimerEngine();
-    await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
-    await tx.timerRecord.updateMany({
-      where: { id: { in: timers.map((t) => t.id) } },
-      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: "CREDIT_EXTENSION_APPROVED" },
-    });
+    await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actor.actorId, "CREDIT_EXTENSION_APPROVED");
 
     await tx.traceEvent.create({
       data: {
@@ -149,17 +181,7 @@ export async function markAdvancePaymentReconciled(
       },
     });
 
-    // Cancel follow-up timer(s) (best-effort), since reconciliation is complete.
-    const timers = await tx.timerRecord.findMany({
-      where: { entryId: input.entryId, timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34", status: "SCHEDULED" },
-      select: { id: true, pgBossJobId: true },
-    });
-    const engine = await getTimerEngine();
-    await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
-    await tx.timerRecord.updateMany({
-      where: { id: { in: timers.map((t) => t.id) } },
-      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: "ADVANCE_PAYMENT_RECONCILED" },
-    });
+    await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actor.actorId, "ADVANCE_PAYMENT_RECONCILED");
 
     return updated;
   });

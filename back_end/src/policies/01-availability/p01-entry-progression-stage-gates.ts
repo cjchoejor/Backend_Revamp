@@ -25,12 +25,21 @@ export function enforceEntryAtS7ForS7ToS8Progression(input: { currentStage: Stag
   throw new StageGateBlockedError("Entry is not at S7", "NOT_AT_S7");
 }
 
-/** Policy 1 — S5-only cancellation route (application stub). */
+/** Policy 1 — S5-only cancellation route (`CancellationService.cancelEntryAtS5`). */
 export function enforceEntryAtS5ForS5CancellationRoute(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S5) return;
   throw new StageGateBlockedError(
     "Cancellation at this route is only supported for entries at S5",
     "NOT_AT_S5",
+  );
+}
+
+/** Policy 1 — SIG-S6 Policy 35 — post-check-in early departure (`CancellationService.cancelEntryEarlyDepartureAfterCheckIn`). */
+export function enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S7) return;
+  throw new StageGateBlockedError(
+    "Early departure cancellation is only supported for checked-in entries at S7",
+    "NOT_AT_S7",
   );
 }
 
@@ -56,4 +65,22 @@ export function enforceEntryActiveForH4Initiation(input: { status: EntryStatus }
 export function enforceEntryAtS6AndActiveForCreateH2(input: { currentStage: Stage; status: EntryStatus }) {
   if (input.currentStage === Stage.S6 && input.status === EntryStatus.ACTIVE) return;
   throw new StateTransitionError("createH2 is only available for active entries at S6");
+}
+
+/** Policy 1 — S7 room-change re-entry (application slice) requires entry at S7. */
+export function enforceEntryAtS7ForRoomChangeReEntry(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S7) return;
+  throw new StateTransitionError("Room change re-entry is only supported from S7", "NOT_AT_S7");
+}
+
+/** Policy 1 — generic progressive stage route must not operate on CLOSED entries. */
+export function enforceEntryNotClosedForStageProgression(input: { status: EntryStatus }) {
+  if (input.status !== EntryStatus.CLOSED) return;
+  throw new StateTransitionError("Cannot progress stage for CLOSED entry", "ENTRY_ALREADY_CLOSED");
+}
+
+/** Policy 1 — S2→S3 progression requires entry at S2 (StateTransitionError matches prior service). */
+export function enforceEntryAtS2ForS2ToS3Progression(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S2) return;
+  throw new StateTransitionError("Entry is not at S2");
 }

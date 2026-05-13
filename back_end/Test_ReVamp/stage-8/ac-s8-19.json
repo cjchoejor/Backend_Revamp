@@ -1,0 +1,59 @@
+{
+  "meta": {
+    "stage": "S8",
+    "scenarioName": "ac-s8-19",
+    "reference": "LEGPHEL_Implementation_Reference_v1_1.html#s8-deep · Layer 03c (S8 checkout & settlement)",
+    "generatedAt": "2026-05-13T12:18:28.686Z",
+    "apiBaseUrl": "http://127.0.0.1:4068/api",
+    "apiAvailable": true
+  },
+  "summary": {
+    "passed": 1,
+    "total": 1,
+    "allPassed": true
+  },
+  "checks": [
+    {
+      "id": "AC-S8-19",
+      "title": "OUTSTANDING creates H5 CREATED",
+      "pass": true,
+      "httpStatus": 200,
+      "response": {
+        "id": "ac718795-762c-4ee3-9f86-f01014266c4a",
+        "entryId": "fc6a322c-eccd-4acf-934a-79a20ddabe1e",
+        "handoffType": "H5",
+        "state": "CREATED",
+        "fromRole": "FRONT_DESK",
+        "fromActorId": "test-fd-1",
+        "toRole": "FINANCE",
+        "toActorId": null,
+        "checklistContent": {
+          "basis": "Checkout governed outstanding",
+          "outstandingBalance": "10"
+        },
+        "deficientConditionStatus": null,
+        "fulfilmentEvidence": null,
+        "assignedAt": null,
+        "acceptedAt": null,
+        "acceptedBy": null,
+        "fulfilledAt": null,
+        "fulfilledBy": null,
+        "closedAt": null,
+        "rejectedAt": null,
+        "rejectedBy": null,
+        "rejectionReason": null,
+        "escalatedAt": null,
+        "cancelledAt": null,
+        "cancelledBy": null,
+        "cancelledReason": null,
+        "slaDeadlineAt": null,
+        "isAutoFulfilled": false,
+        "createdAt": "2026-05-13T12:18:28.580Z",
+        "createdBy": "test-fd-1",
+        "stageContext": "S8"
+      },
+      "explanation": "",
+      "dbImpact": "See acceptance script / traces for persisted tables."
+    }
+  ]
+}
