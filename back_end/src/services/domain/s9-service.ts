@@ -27,8 +27,8 @@ import {
   enforceInvoiceStateForReconciled,
 } from "../../policies/13-billing-model/p33-invoice-payment-state-transitions.js";
 import { enforceFolioOutstandingForWriteOff } from "../../policies/13-billing-model/p33-folio-outstanding-for-write-off.js";
-import { shouldCreateCommissionDueRecord } from "../../policies/13-billing-model/p68-commission-due-record-creation.js";
-import { computeGuestDataRetentionDueAt } from "../../policies/18-guest-data-retention/p18-guest-data-retention.js";
+import { shouldCreateCommissionDueRecord } from "../../policies/28-commission-production/p68-commission-due-record-creation.js";
+import { computeGuestDataRetentionDueAt } from "../../policies/07-guest-data-governance/p18-guest-data-retention.js";
 import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;

@@ -7,7 +7,7 @@ import { enforceSettlementMethodCompatibility } from "../../policies/13-billing-
 import { enforceFolioLiveForS8Settlement } from "../../policies/13-billing-model/p31-folio-live-required-for-s8-settlement.js";
 import { enforceEntryAtS8ForSettlementOperations } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
-import { enforceCreditCeilingFinalBalanceForSettlement } from "../../policies/13-billing-model/p46-credit-ceiling-final-settlement.js";
+import { enforceCreditCeilingFinalBalanceForSettlement } from "../../policies/18-credit-extension-ceiling/p46-credit-ceiling-final-settlement.js";
 import {
   enforceNightAuditsCompleteForStayBeforeSettlement,
   findIncompleteStayNightAuditDatesUtc,
@@ -17,7 +17,7 @@ import {
   enforceApprovedAmendmentChainForSettlement,
   enforceRoomChargeSumMatchesFrozenRateBasis,
   sumRoomChargesInStayWindowUtc,
-} from "../../policies/13-billing-model/p22-settlement-rate-basis.js";
+} from "../../policies/08-pricing-rate-plan/p22-settlement-rate-basis.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;

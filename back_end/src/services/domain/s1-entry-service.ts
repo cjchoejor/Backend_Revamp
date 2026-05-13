@@ -7,7 +7,7 @@ export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-
 import * as auditService from "../infrastructure/audit-service.js";
 import * as notificationService from "../infrastructure/notification-service.js";
 import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
-import { resolveGroupBillingModeFromGuestCount } from "../../policies/12-multi-booking/p64-group-detection-at-entry-creation.js";
+import { resolveGroupBillingModeFromGuestCount } from "../../policies/26-group-foc-billing/p64-group-detection-at-entry-creation.js";
 import {
   enforceEntryActiveForPark,
   enforceEntryNotExpiredForS1Lifecycle,

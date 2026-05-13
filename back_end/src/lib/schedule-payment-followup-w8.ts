@@ -3,7 +3,7 @@ import { FolioState } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { requireActiveConfigValue } from "./config-store.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
-import { shouldRunPostStayPaymentFollowUp } from "../policies/13-billing-model/p11-post-stay-payment-follow-up.js";
+import { shouldRunPostStayPaymentFollowUp } from "../policies/03-expiry-parking/p11-post-stay-payment-follow-up.js";
 
 type Db = Prisma.TransactionClient | PrismaClient;
 

@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { AuthorizationError, ValidationError } from "../../lib/errors.js";
-import { enforceValidPin } from "../../policies/01-availability/p69-session-management-and-pin-authentication.js";
+import { enforceValidPin } from "../../policies/29-session-management/p69-session-management-and-pin-authentication.js";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-jwt-secret";
 

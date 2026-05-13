@@ -20,7 +20,7 @@ import {
 } from "../../policies/01-availability/p01-s2-create-quotation-configuration-gates.js";
 import { resolveRatePlanPricingForS2Quotation } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s2-quotation.js";
 import { enforceQuotationSendTimeGovernanceConfig } from "../../policies/08-pricing-rate-plan/p07-quotation-validity-and-ack-config-s2.js";
-import { enforceGroupRateContextForS2Quotation } from "../../policies/08-pricing-rate-plan/p65-group-rate-context-for-s2-quotation.js";
+import { enforceGroupRateContextForS2Quotation } from "../../policies/26-group-foc-billing/p65-group-rate-context-for-s2-quotation.js";
 import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";

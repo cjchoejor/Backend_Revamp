@@ -1,0 +1,8 @@
+# Local / reference material — excluded from version control (see repo policy)
+DEV-SPEC finalization/
+back_end/Test_ReVamp/
+docs/
+Documentation/
+Documentation_V2/
+BACKEND-STRUCTURAL-ATLAS-v1_1 (1).html
+LEGPHEL_Implementation_Reference_v1_1.html
