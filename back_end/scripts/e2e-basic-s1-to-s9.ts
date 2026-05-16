@@ -432,14 +432,14 @@ async function main() {
   const s8Entry = await http<any>("GET", `/entries/${entryId}`, L1);
   const keysIssued = Number((s8Entry.json as any).keysIssuedCount ?? 2);
   const kr = await runStep("S8 record key return", { method: "POST", path: `/entries/${entryId}/key-return`, actor: L1, body: { keyCountReturned: keysIssued } });
-  expectStatus("S8 record key return", kr, 200);
+  expectStatus("S8 record key return", kr, 201);
   const insp = await runStep("S8 record room inspection", {
     method: "POST",
     path: `/entries/${entryId}/room-inspection`,
     actor: L1,
     body: { isDeferred: false, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false },
   });
-  expectStatus("S8 record room inspection", insp, 200);
+  expectStatus("S8 record room inspection", insp, 201);
 
   const h4 = await prisma.handoffRecord.findFirstOrThrow({ where: { entryId, handoffType: "H4" }, orderBy: { createdAt: "desc" } });
   const fulfilH4 = await runStep("S8 fulfil H4", {
