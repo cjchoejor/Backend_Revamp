@@ -1,17 +1,10 @@
-import { S5ApiHealth } from "@/components/s5/s5-api-health";
+import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
+import { hasValidSessionCookie } from "@/lib/auth/cookie";
+import { SESSION_COOKIE } from "@/types/session";
 
-export default function HomePage() {
-  return (
-    <main
-      style={{
-        padding: "2rem",
-        maxWidth: 560,
-        margin: "0 auto",
-      }}
-    >
-      <h1 style={{ fontSize: "1.25rem", fontWeight: 600 }}>LEGPHEL PMS</h1>
-      <p style={{ color: "#444", marginBottom: "1.5rem" }}>Next.js front end — S5 API connectivity check.</p>
-      <S5ApiHealth />
-    </main>
-  );
+export default async function HomePage() {
+  const cookieStore = await cookies();
+  const hasAuth = hasValidSessionCookie(cookieStore.get(SESSION_COOKIE)?.value);
+  redirect(hasAuth ? "/dashboard" : "/login");
 }

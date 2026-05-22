@@ -1,0 +1,767 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowRight,
+  Banknote,
+  CheckCircle2,
+  Circle,
+  FileCheck,
+  Lock,
+  RefreshCw,
+  Shield,
+} from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { StagePanel } from "@/components/stages/shared/stage-panel";
+import { ApiErrorAlert } from "@/components/stages/shared/api-error-alert";
+import { ProgressStageButton } from "@/components/stages/shared/progress-stage-button";
+import { useStageTransition } from "@/components/stages/shared/stage-transition-context";
+import { STAGES, stagePath } from "@/config/stages";
+import {
+  approveFocGm,
+  confirmCoordinator,
+  dispatchInvoice,
+  ensureProvisionalFolio,
+  getPaymentStatus,
+  initiateS3ReEntryToS1,
+  initiateS3ReEntryToS2,
+  placeCommittedHold,
+  recordCancellationDisclosure,
+  recordCreditExtension,
+  recordFolioPayment,
+  reconcileAdvancePayment,
+  schedulePaymentMilestones,
+} from "@/lib/api/reservation-setup";
+import { useSession } from "@/hooks/use-session";
+import { ApiError } from "@/lib/api/client";
+import type { AvailabilityConfigSummary, EntryDetail } from "@/types/api";
+
+const BILLING_MODELS = ["GUEST_PAY", "DIRECT_BILL", "TOUR_OPERATOR_VOUCHER"] as const;
+
+type S3WorkspaceProps = {
+  entry: EntryDetail;
+};
+
+function isElevated(level: string) {
+  return level === "L2" || level === "L3" || level === "L4";
+}
+
+function isGm(level: string) {
+  return level === "L3" || level === "L4";
+}
+
+export function S3Workspace({ entry }: S3WorkspaceProps) {
+  const router = useRouter();
+  const { session } = useSession();
+  const queryClient = useQueryClient();
+  const { startTransition, endTransition } = useStageTransition();
+  const meta = STAGES[2];
+
+  const folio = entry.folio ?? null;
+  const hold = entry.committedHold ?? null;
+  const disclosure = entry.cancellationDisclosure ?? null;
+
+  const acceptedQuotation = useMemo(
+    () => (entry.quotations ?? []).find((q) => q.state === "ACCEPTED"),
+    [entry.quotations],
+  );
+
+  const sealedPreferred = (entry.availabilityConfigs ?? []).find(
+    (c: AvailabilityConfigSummary) => c.sealedAt && c.optionSelected,
+  );
+  const preferredRoomId = sealedPreferred?.optionSelected?.roomId ?? null;
+
+  const proformaInvoices = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
+  const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
+  const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
+
+  const [billingModel, setBillingModel] = useState(folio?.billingModel ?? "GUEST_PAY");
+  const [noShowStatement, setNoShowStatement] = useState(
+    disclosure?.noShowTreatmentStatement ?? "No-show: one night room charge plus applicable taxes.",
+  );
+  const [paymentAmount, setPaymentAmount] = useState("1");
+  const [paymentNotes, setPaymentNotes] = useState("");
+  const [reconcileNote, setReconcileNote] = useState("");
+  const [creditCeiling, setCreditCeiling] = useState("");
+  const [creditReason, setCreditReason] = useState("");
+  const [holdJustification, setHoldJustification] = useState("Reservation setup — committed inventory hold");
+  const [dispatchTo, setDispatchTo] = useState(entry.guestProfile?.email ?? "");
+  const [reEntryReason, setReEntryReason] = useState("");
+  const [coordinatorName, setCoordinatorName] = useState("");
+  const [coordinatorScope, setCoordinatorScope] = useState("");
+  const [milestoneTemplate, setMilestoneTemplate] = useState("DEFAULT");
+  const [actionError, setActionError] = useState<unknown>(null);
+
+  const paymentStatusQuery = useQuery({
+    queryKey: ["payment-status", entry.id],
+    queryFn: () => getPaymentStatus(session!, entry.id),
+    enabled: !!session && !!folio?.id,
+  });
+  const paymentStatus = paymentStatusQuery.data;
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
+  };
+
+  const wrapMutation = <T,>(fn: () => Promise<T>, successMsg: string) => ({
+    mutationFn: fn,
+    onSuccess: () => {
+      setActionError(null);
+      toast.success(successMsg);
+      invalidate();
+    },
+    onError: (e: unknown) => {
+      setActionError(e);
+      toast.error(e instanceof ApiError ? e.message : "Action failed");
+    },
+  });
+
+  const folioMutation = useMutation(
+    wrapMutation(
+      () => ensureProvisionalFolio(session!, entry.id, { billingModel }),
+      folio?.billingModel ? "Billing model updated" : "Provisional folio created",
+    ),
+  );
+
+  const disclosureMutation = useMutation(
+    wrapMutation(
+      () =>
+        recordCancellationDisclosure(session!, entry.id, {
+          noShowTreatmentStatement: noShowStatement.trim(),
+          disclosedTerms: { tier: "DEFAULT" },
+        }),
+      "Cancellation disclosure recorded",
+    ),
+  );
+
+  const paymentMutation = useMutation(
+    wrapMutation(
+      () => {
+        if (!folio) throw new Error("Create folio first");
+        return recordFolioPayment(session!, folio.id, {
+          entryId: entry.id,
+          amount: Number(paymentAmount),
+          notes: paymentNotes.trim() || undefined,
+        });
+      },
+      "Advance payment recorded",
+    ),
+  );
+
+  const reconcileMutation = useMutation(
+    wrapMutation(
+      () => {
+        if (!folio) throw new Error("Create folio first");
+        return reconcileAdvancePayment(session!, folio.id, {
+          entryId: entry.id,
+          note: reconcileNote.trim() || undefined,
+        });
+      },
+      "Advance payment reconciled",
+    ),
+  );
+
+  const creditMutation = useMutation(
+    wrapMutation(
+      () =>
+        recordCreditExtension(session!, entry.id, {
+          ceilingAmount: Number(creditCeiling),
+          reason: creditReason.trim(),
+        }),
+      "Credit extension approved",
+    ),
+  );
+
+  const holdMutation = useMutation(
+    wrapMutation(
+      () => {
+        if (!preferredRoomId) throw new Error("No preferred room from S1");
+        return placeCommittedHold(session!, entry.id, {
+          roomId: preferredRoomId,
+          commercialJustification: holdJustification.trim(),
+        });
+      },
+      "Committed hold placed",
+    ),
+  );
+
+  const dispatchMutation = useMutation(
+    wrapMutation(
+      () => {
+        const inv = proformaInvoices.find((i) => i.state === "DRAFT") ?? proformaInvoices[0];
+        if (!inv) throw new Error("No proforma invoice");
+        return dispatchInvoice(session!, inv.id, { dispatchedTo: dispatchTo.trim() || undefined });
+      },
+      "Proforma invoice dispatched",
+    ),
+  );
+
+  const reEntryS2Mutation = useMutation({
+    mutationFn: () =>
+      initiateS3ReEntryToS2(session!, entry.id, { reason: reEntryReason.trim() || undefined }),
+    onSuccess: () => {
+      setActionError(null);
+      toast.success("Re-entry to S2 initiated");
+      invalidate();
+      startTransition({ targetStage: "S2", label: "Rolling back to quotation…" });
+      router.push(stagePath(entry.id, "S2"));
+    },
+    onError: (e: unknown) => {
+      endTransition();
+      setActionError(e);
+      toast.error(e instanceof ApiError ? e.message : "Re-entry failed");
+    },
+  });
+
+  const reEntryS1Mutation = useMutation({
+    mutationFn: () =>
+      initiateS3ReEntryToS1(session!, entry.id, { reason: reEntryReason.trim() || undefined }),
+    onSuccess: () => {
+      setActionError(null);
+      toast.success("Re-entry to S1 initiated");
+      invalidate();
+      startTransition({ targetStage: "S1", label: "Returning to inquiry & availability…" });
+      router.push(stagePath(entry.id, "S1"));
+    },
+    onError: (e: unknown) => {
+      endTransition();
+      setActionError(e);
+      toast.error(e instanceof ApiError ? e.message : "Re-entry failed");
+    },
+  });
+
+  const coordinatorMutation = useMutation(
+    wrapMutation(
+      () =>
+        confirmCoordinator(session!, entry.id, {
+          coordinatorName: coordinatorName.trim(),
+          authorityScope: coordinatorScope.trim(),
+        }),
+      "Coordinator confirmed",
+    ),
+  );
+
+  const milestonesMutation = useMutation(
+    wrapMutation(
+      () => schedulePaymentMilestones(session!, entry.id, { templateKey: milestoneTemplate.trim() }),
+      "Payment milestones scheduled",
+    ),
+  );
+
+  const focGmMutation = useMutation(
+    wrapMutation(() => approveFocGm(session!, entry.id, {}), "FOC GM approval recorded"),
+  );
+
+  const exitChecks = useMemo(() => {
+    const hasHold = hold?.state === "PLACED" || hold?.state === "UPGRADED";
+    const hasBilling = !!folio?.billingModel;
+    const hasPi = proformaInvoices.length > 0;
+    const hasDisclosure = !!disclosure?.noShowTreatmentStatement;
+    const paymentOk = paymentStatus?.satisfied === true;
+    const reconciled = folio?.advancePaymentReconciliationComplete === true;
+    const hasContact = !!(entry.guestProfile?.email || entry.guestProfile?.phone);
+    const hasAccepted = !!acceptedQuotation;
+    return [
+      { label: "Accepted quotation (from S2)", ok: hasAccepted },
+      { label: "Provisional folio with billing model", ok: hasBilling && folio?.state === "PROVISIONAL" },
+      { label: "Cancellation disclosure recorded", ok: hasDisclosure },
+      { label: "Advance payment or credit extension", ok: paymentOk },
+      { label: "Advance payment reconciled on folio", ok: reconciled },
+      { label: "Proforma invoice on folio", ok: hasPi },
+      { label: "Committed hold placed", ok: hasHold },
+      { label: "Guest contact on profile", ok: hasContact },
+    ];
+  }, [entry, folio, hold, disclosure, paymentStatus, proformaInvoices, acceptedQuotation]);
+
+  const canConfirmS4 =
+    exitChecks.every((c) => c.ok) && entry.currentStage === "S3";
+
+  if (entry.currentStage !== "S3") {
+    return (
+      <StagePanel meta={meta}>
+        <Card className="border-[var(--success)]/40 bg-accent">
+          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium">Entry is at {entry.currentStage}</p>
+              <p className="text-sm text-muted-foreground">Continue on the active stage workspace.</p>
+            </div>
+            <Button variant="gradient" asChild>
+              <Link href={stagePath(entry.id, entry.currentStage)}>
+                Open {entry.currentStage}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </StagePanel>
+    );
+  }
+
+  return (
+    <StagePanel meta={meta}>
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Reservation setup context</CardTitle>
+            <CardDescription>
+              SIG-S3 — operational & financial foundation before confirmation (not yet confirmed).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
+            <p>
+              <span className="text-muted-foreground">Stay:</span> {entry.checkInDate?.slice(0, 10) ?? "—"} →{" "}
+              {entry.checkOutDate?.slice(0, 10) ?? "—"}
+            </p>
+            <p>
+              <span className="text-muted-foreground">Use type:</span> {entry.useType ?? "—"}
+            </p>
+            {acceptedQuotation && (
+              <p className="sm:col-span-2">
+                <span className="text-muted-foreground">Accepted quote:</span>{" "}
+                <span className="font-medium">{acceptedQuotation.referenceNumber}</span>
+                {" · "}
+                {acceptedQuotation.currency}{" "}
+                {typeof acceptedQuotation.totalAmount === "string"
+                  ? acceptedQuotation.totalAmount
+                  : acceptedQuotation.totalAmount}
+              </p>
+            )}
+            <p className="sm:col-span-2">
+              <span className="text-muted-foreground">Preferred room (S1):</span>{" "}
+              {preferredRoomId ? (
+                <span className="font-mono text-xs">{preferredRoomId.slice(0, 24)}…</span>
+              ) : (
+                <span className="text-amber-700 dark:text-amber-400">Missing</span>
+              )}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">1. Provisional folio & billing model</CardTitle>
+            <CardDescription>Fix billing model — creates folio, PI draft, and transition record.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {folio && (
+              <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                Folio <span className="font-mono text-xs">{folio.id.slice(0, 12)}…</span>
+                <Badge className="ml-2">{folio.state}</Badge>
+                {folio.billingModel && (
+                  <span className="ml-2 text-muted-foreground">· {folio.billingModel}</span>
+                )}
+              </div>
+            )}
+            <div>
+              <label className="text-xs text-muted-foreground">Billing model</label>
+              <select
+                className="mt-1 flex h-9 w-full rounded-md border bg-background px-3 text-sm"
+                value={billingModel}
+                onChange={(e) => setBillingModel(e.target.value)}
+              >
+                {BILLING_MODELS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button variant="gradient" disabled={folioMutation.isPending} onClick={() => folioMutation.mutate()}>
+              {folioMutation.isPending
+                ? "Saving…"
+                : folio
+                  ? "Update billing model & ensure PI"
+                  : "Create provisional folio"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">2. Cancellation disclosure</CardTitle>
+            <CardDescription>Required before committed hold (Policy 34).</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {disclosure ? (
+              <div className="flex items-start gap-2 rounded-lg border border-[var(--success)]/40 bg-accent p-3 text-sm">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--success)]" />
+                <div>
+                  <p className="font-medium text-[var(--success)]">Disclosure recorded</p>
+                  <p className="mt-1">{disclosure.noShowTreatmentStatement}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Recorded {disclosure.disclosedAt.slice(0, 16)}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="text-xs text-muted-foreground">No-show treatment statement</label>
+                  <Input value={noShowStatement} onChange={(e) => setNoShowStatement(e.target.value)} />
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={disclosureMutation.isPending || !noShowStatement.trim()}
+                  onClick={() => disclosureMutation.mutate()}
+                >
+                  {disclosureMutation.isPending ? "Saving…" : "Record disclosure"}
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Banknote className="h-4 w-4" />
+              3. Advance payment
+            </CardTitle>
+            <CardDescription>Record payment, reconcile, or approve credit extension (FOM).</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {paymentStatus && (
+              <div className="rounded-lg border p-3 text-sm space-y-1">
+                <p>
+                  Received: <strong>{paymentStatus.totalReceived}</strong> / required{" "}
+                  <strong>{paymentStatus.requiredAmount}</strong>
+                  {paymentStatus.satisfied ? (
+                    <Badge className="ml-2 bg-[var(--success)]/15 text-[var(--success)]">Satisfied</Badge>
+                  ) : (
+                    <Badge variant="outline" className="ml-2">
+                      Shortfall {paymentStatus.shortfall}
+                    </Badge>
+                  )}
+                </p>
+                {paymentStatus.creditExtensionActive && (
+                  <p className="text-muted-foreground">
+                    Credit extension active (ceiling {paymentStatus.ceilingAmount ?? "—"})
+                  </p>
+                )}
+                {folio?.advancePaymentReconciliationComplete && (
+                  <p className="text-[var(--success)]">Reconciliation complete on folio</p>
+                )}
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs text-muted-foreground">Payment amount (IN)</label>
+                <Input
+                  type="number"
+                  min={0.01}
+                  step="0.01"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  disabled={!folio}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">Notes</label>
+                <Input
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  disabled={!folio}
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!folio || paymentMutation.isPending}
+                onClick={() => paymentMutation.mutate()}
+              >
+                Record payment
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!folio || reconcileMutation.isPending}
+                onClick={() => reconcileMutation.mutate()}
+              >
+                Mark reconciled
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!folio || paymentStatusQuery.isFetching}
+                onClick={() => paymentStatusQuery.refetch()}
+              >
+                <RefreshCw className="mr-1 h-3 w-3" />
+                Refresh status
+              </Button>
+            </div>
+            {session && isElevated(session.actorLevel) && (
+              <div className="rounded-lg border border-dashed p-3 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Credit extension (FOM+)</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Input
+                    type="number"
+                    placeholder="Ceiling amount"
+                    value={creditCeiling}
+                    onChange={(e) => setCreditCeiling(e.target.value)}
+                  />
+                  <Input
+                    placeholder="Reason (required)"
+                    value={creditReason}
+                    onChange={(e) => setCreditReason(e.target.value)}
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={creditMutation.isPending || !creditCeiling || !creditReason.trim() || !folio}
+                  onClick={() => creditMutation.mutate()}
+                >
+                  Approve credit extension
+                </Button>
+              </div>
+            )}
+            {(folio?.payments ?? []).length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {folio!.payments!.length} payment record(s) on folio.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Lock className="h-4 w-4" />
+              4. Committed hold
+            </CardTitle>
+            <CardDescription>
+              Strong inventory claim with expiry — upgrades S2 speculative hold when present.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {hold ? (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+                <p>
+                  <Badge>{hold.state}</Badge>
+                  <span className="ml-2 font-mono text-xs">room {hold.roomId?.slice(0, 12) ?? "—"}…</span>
+                </p>
+                <p className="text-muted-foreground">Expires {hold.expiresAt.slice(0, 16)}</p>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="text-xs text-muted-foreground">Commercial justification</label>
+                  <Input value={holdJustification} onChange={(e) => setHoldJustification(e.target.value)} />
+                </div>
+                <Button
+                  variant="gradient"
+                  disabled={
+                    holdMutation.isPending ||
+                    !preferredRoomId ||
+                    !holdJustification.trim() ||
+                    !folio?.billingModel ||
+                    !disclosure
+                  }
+                  onClick={() => holdMutation.mutate()}
+                >
+                  {holdMutation.isPending ? "Placing…" : "Place committed hold"}
+                </Button>
+                {!disclosure && (
+                  <p className="text-sm text-amber-700 dark:text-amber-400">
+                    Record cancellation disclosure before placing hold.
+                  </p>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileCheck className="h-4 w-4" />
+              5. Proforma invoice (PI)
+            </CardTitle>
+            <CardDescription>Dispatch PI to guest — schedules acknowledgement & follow-up timers.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {proformaInvoices.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Create folio first — a PI draft is created with the folio.</p>
+            ) : (
+              <>
+                <ul className="space-y-2 text-sm">
+                  {proformaInvoices.map((inv) => (
+                    <li key={inv.id} className="flex items-center justify-between rounded border px-3 py-2">
+                      <span className="font-mono text-xs">{inv.id.slice(0, 12)}…</span>
+                      <Badge>{inv.state}</Badge>
+                    </li>
+                  ))}
+                </ul>
+                <div>
+                  <label className="text-xs text-muted-foreground">Dispatch to</label>
+                  <Input value={dispatchTo} onChange={(e) => setDispatchTo(e.target.value)} />
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={dispatchMutation.isPending || !proformaInvoices.some((i) => i.state === "DRAFT")}
+                  onClick={() => dispatchMutation.mutate()}
+                >
+                  {dispatchMutation.isPending ? "Dispatching…" : "Dispatch PI"}
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {(isGroupLike || needsMilestones) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Group / corporate requirements</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isGroupLike && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">Coordinator confirmation</p>
+                  <Input
+                    placeholder="Coordinator name"
+                    value={coordinatorName}
+                    onChange={(e) => setCoordinatorName(e.target.value)}
+                  />
+                  <Input
+                    placeholder="Authority scope"
+                    value={coordinatorScope}
+                    onChange={(e) => setCoordinatorScope(e.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      coordinatorMutation.isPending || !coordinatorName.trim() || !coordinatorScope.trim()
+                    }
+                    onClick={() => coordinatorMutation.mutate()}
+                  >
+                    Confirm coordinator
+                  </Button>
+                  {session && isGm(session.actorLevel) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={focGmMutation.isPending}
+                      onClick={() => focGmMutation.mutate()}
+                    >
+                      FOC GM approval
+                    </Button>
+                  )}
+                </div>
+              )}
+              {needsMilestones && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">Payment milestone schedule</p>
+                  <Input
+                    value={milestoneTemplate}
+                    onChange={(e) => setMilestoneTemplate(e.target.value)}
+                    placeholder="Template key"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={milestonesMutation.isPending}
+                    onClick={() => milestonesMutation.mutate()}
+                  >
+                    Schedule milestones
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {session && isElevated(session.actorLevel) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Shield className="h-4 w-4" />
+                Back-flow (FOM+)
+              </CardTitle>
+              <CardDescription>Renegotiate terms (S2) or reconfigure stay (S1).</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                placeholder="Reason for re-entry"
+                value={reEntryReason}
+                onChange={(e) => setReEntryReason(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={reEntryS2Mutation.isPending}
+                  onClick={() => reEntryS2Mutation.mutate()}
+                >
+                  Re-enter S2 (rate renegotiation)
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={reEntryS1Mutation.isPending}
+                  onClick={() => reEntryS1Mutation.mutate()}
+                >
+                  Re-enter S1 (dates / room type)
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <ApiErrorAlert error={actionError} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">S3 exit checklist</CardTitle>
+            <CardDescription>All items required before confirmation (S4)</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {exitChecks.map((item) => (
+              <div key={item.label} className="flex items-center gap-2 text-sm">
+                {item.ok ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--success)]" />
+                ) : (
+                  <Circle className="h-4 w-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className={item.ok ? "text-foreground" : "text-muted-foreground"}>{item.label}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">6. Confirm reservation (S4)</CardTitle>
+            <CardDescription>
+              Freezes commercial terms and moves to confirmation — not available until checklist passes.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!canConfirmS4 && (
+              <p className="mb-4 text-sm text-muted-foreground">
+                Complete folio, disclosure, payment, committed hold, and PI steps above.
+              </p>
+            )}
+            <ProgressStageButton
+              entryId={entry.id}
+              version={entry.version}
+              targetStage="S4"
+              label="Confirm reservation → S4"
+              disabled={!canConfirmS4}
+            />
+          </CardContent>
+        </Card>
+      </div>
+    </StagePanel>
+  );
+}

@@ -45,11 +45,25 @@ entriesRouter.get("/:id", requireActorLevel("L1"), async (req, res, next) => {
       where: { id: req.params.id },
       include: {
         reservation: true,
-        folio: true,
+        folio: {
+          include: {
+            invoices: { orderBy: { createdAt: "desc" } },
+            payments: { orderBy: { createdAt: "desc" } },
+            billingModelTransitions: { orderBy: { createdAt: "desc" }, take: 10 },
+          },
+        },
+        cancellationDisclosure: true,
         guestProfile: true,
         handoffs: { orderBy: { createdAt: "desc" } },
         preArrivalTasks: true,
         roomAssignments: { include: { room: true } },
+        availabilityConfigs: { orderBy: { createdAt: "desc" } },
+        segments: { orderBy: { segmentNumber: "desc" }, take: 5 },
+        quotations: { orderBy: { versionNumber: "desc" } },
+        speculativeHolds: {
+          orderBy: { placedAt: "desc" },
+          include: { room: { select: { id: true, roomNumber: true } } },
+        },
         committedHold: true,
         vipArrivalNotifications: { orderBy: { createdAt: "desc" }, take: 3 },
       },

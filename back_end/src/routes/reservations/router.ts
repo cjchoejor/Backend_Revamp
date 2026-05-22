@@ -38,7 +38,7 @@ export const reservationsRouter = Router();
 reservationsRouter.post("/entries/:id/confirm", requireActorLevel("L1"), validateBody(confirmReservationRequestSchema), async (req, res, next) => {
   try {
     const out = await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, req.body);
-    res.json(out);
+    res.json({ reservation: out.reservation, entry: out.entry });
   } catch (e) {
     next(e);
   }
@@ -127,8 +127,31 @@ reservationsRouter.post("/entries/:id/progress-stage", requireActorLevel("L1"), 
         next(new ValidationError("version is required for S3→S4 progression"));
         return;
       }
-      const out = await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, { version });
-      res.json(out);
+      await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, { version });
+      const entryAfterConfirm = await prisma.entry.findUnique({
+        where: { id: req.params.id },
+        include: {
+          reservation: true,
+          folio: {
+            include: {
+              invoices: { orderBy: { createdAt: "desc" } },
+              payments: { orderBy: { createdAt: "desc" } },
+              billingModelTransitions: { orderBy: { createdAt: "desc" }, take: 10 },
+            },
+          },
+          cancellationDisclosure: true,
+          guestProfile: true,
+          handoffs: { orderBy: { createdAt: "desc" } },
+          committedHold: true,
+          quotations: { orderBy: { versionNumber: "desc" } },
+          segments: { orderBy: { segmentNumber: "desc" }, take: 5 },
+        },
+      });
+      if (!entryAfterConfirm) {
+        next(new NotFoundError("Entry"));
+        return;
+      }
+      res.json(entryAfterConfirm);
       return;
     }
 

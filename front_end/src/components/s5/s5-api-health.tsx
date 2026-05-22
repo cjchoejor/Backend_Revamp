@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { cn } from "@/lib/utils";
 
 type Health = { ok?: boolean; scope?: string };
 
@@ -34,36 +35,27 @@ export function S5ApiHealth() {
 
   if (err) {
     return (
-      <section
-        style={{
-          border: "1px solid #c62828",
-          borderRadius: 8,
-          padding: 12,
-          background: "#ffebee",
-        }}
-      >
+      <section className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
         <strong>API</strong>: not reachable ({err}). Start the backend on port 4000 (or set{" "}
-        <code>BACKEND_URL</code>) and run <code>npm run dev</code> in <code>front_end</code>; Next rewrites{" "}
-        <code>/api/*</code> to the backend.
+        <code className="text-xs">BACKEND_URL</code>) and run <code className="text-xs">npm run dev</code> in{" "}
+        <code className="text-xs">front_end</code>.
       </section>
     );
   }
 
   if (!data) {
-    return <p style={{ color: "#666" }}>Checking API…</p>;
+    return <p className="text-sm text-muted-foreground">Checking API…</p>;
   }
 
   return (
     <section
-      style={{
-        border: "1px solid #2e7d32",
-        borderRadius: 8,
-        padding: 12,
-        background: "#e8f5e9",
-      }}
+      className={cn(
+        "rounded-lg border p-4 text-sm",
+        data.ok ? "border-success/40 bg-accent" : "border-muted bg-muted",
+      )}
     >
-        <strong>API</strong>: {data.ok ? "healthy" : "unknown"}
-        {data.scope ? ` (${data.scope})` : ""}
+      <strong>API</strong>: {data.ok ? "healthy" : "unknown"}
+      {data.scope ? ` (${data.scope})` : ""}
     </section>
   );
 }
