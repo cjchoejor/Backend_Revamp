@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, HandoffType, InventoryClaimState, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { resolvePostCheckoutInspectionWindowMs } from "../../lib/post-checkout-inspection-window.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import * as disputeGateEngine from "../../engines/dispute-gate-engine.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -111,9 +112,8 @@ export async function recordInspection(
   });
 
   if (input.isDeferred) {
-    const windowDays = Number(await requireActiveConfigValue<number>(prisma, "inspection.postCheckout.windowDays"));
-    if (!Number.isFinite(windowDays) || windowDays < 1) throw new MissingConfigurationError("inspection.postCheckout.windowDays");
-    const dueAt = new Date(Date.now() + windowDays * 86400_000);
+    const windowMs = await resolvePostCheckoutInspectionWindowMs(prisma);
+    const dueAt = new Date(Date.now() + windowMs);
     const timerRecordId = randomUUID();
     const engine = await getTimerEngine();
     const pgBossJobId = await engine.schedule("POST_CHECKOUT_INSPECTION_W9", { entryId, timerRecordId }, { startAfter: dueAt });

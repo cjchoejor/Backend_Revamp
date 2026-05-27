@@ -11,7 +11,8 @@ import {
 } from "react";
 import type { Stage } from "@/types/api";
 
-const MIN_VISIBLE_MS = 450;
+/** Minimum overlay time so the animation does not flash; actual dismiss waits for data in EntryWorkspace. */
+const MIN_VISIBLE_MS = 280;
 
 export type StageTransitionOptions = {
   targetStage?: Stage;

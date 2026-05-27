@@ -11,6 +11,28 @@ import * as s1AvailabilityService from "../../services/domain/s1-availability-se
 
 export const availabilityRouter = Router();
 
+availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next) => {
+  try {
+    const items = await prisma.room.findMany({
+      orderBy: { roomNumber: "asc" },
+      select: {
+        id: true,
+        roomNumber: true,
+        physicalState: true,
+        roomTypeId: true,
+        currentClaimState: true,
+        isBlocked: true,
+        blockedReason: true,
+        isDeficient: true,
+        isUnderMaintenance: true,
+      },
+    });
+    res.json({ items, count: items.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
 availabilityRouter.get("/availability/configurations/:id", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const out = await s1AvailabilityService.getConfiguration(prisma, req.params.id);

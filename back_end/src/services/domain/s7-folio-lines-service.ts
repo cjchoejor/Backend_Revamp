@@ -26,6 +26,30 @@ function isMandatoryNightAuditLine(lineType: FolioLineType): boolean {
   return lineType === FolioLineType.ROOM_CHARGE;
 }
 
+function isSalesTaxLine(description: string): boolean {
+  return description.trimStart().toLowerCase().startsWith("sales tax");
+}
+
+function isCorrectionLine(description: string): boolean {
+  return description.trimStart().toLowerCase().startsWith("correction for");
+}
+
+function taxLineSuffixForCharge(chargeDescription: string): string {
+  return `on: ${chargeDescription}`;
+}
+
+async function resolveSalesTaxRate(db: DbClient): Promise<number> {
+  const taxRow = await getActiveConfigEntry(db as unknown as PrismaClient, "billing.salesTaxRate");
+  const raw = taxRow?.configValue;
+  const rate =
+    typeof raw === "number" && Number.isFinite(raw)
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : 0;
+  return typeof rate === "number" && rate > 0 ? rate : 0;
+}
+
 async function writeCeilingTrace(db: DbClient, args: { entryId: string; actorId: string; eventType: string; payload: Record<string, unknown> }) {
   const now = new Date();
   await (db as any).traceEvent.create({
@@ -256,24 +280,118 @@ export async function correctCharge(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; originalFolioLineId: string; reason: string; correctionAmount: number; correctionDate: string },
+  input: {
+    entryId: string;
+    originalFolioLineId: string;
+    reason: string;
+    correctionAmount?: number;
+    correctToAmount?: number;
+    correctionDate: string;
+  },
 ) {
   if (!input.originalFolioLineId?.trim()) throw new ValidationError("originalFolioLineId is required");
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
-  if (!Number.isFinite(input.correctionAmount) || input.correctionAmount === 0) throw new ValidationError("correctionAmount must be a non-zero number");
+  if (!input.correctionDate?.trim()) throw new ValidationError("correctionDate is required");
+
+  const hasDelta =
+    input.correctionAmount != null && Number.isFinite(input.correctionAmount) && input.correctionAmount !== 0;
+  const hasTarget = input.correctToAmount != null && Number.isFinite(input.correctToAmount);
+  if (hasDelta && hasTarget) {
+    throw new ValidationError("Provide either correctionAmount or correctToAmount, not both");
+  }
+  if (!hasDelta && !hasTarget) {
+    throw new ValidationError("Provide correctionAmount (signed delta) or correctToAmount (target net for the charge line)");
+  }
+
+  const correctionDate = new Date(input.correctionDate);
+  if (Number.isNaN(correctionDate.getTime())) throw new ValidationError("correctionDate must be a valid ISO date");
 
   const original = await prisma.folioLine.findUnique({ where: { id: input.originalFolioLineId } });
   if (!original) throw new NotFoundError("FolioLine");
   if (original.folioId !== folioId) throw new ValidationError("originalFolioLineId does not belong to this folio");
+  if (isSalesTaxLine(original.description)) {
+    throw new ValidationError("Correct the underlying charge line, not the sales tax line");
+  }
+  if (isCorrectionLine(original.description)) {
+    throw new ValidationError("Select the original charge line, not an earlier correction line");
+  }
 
-  // Corrections are additive negative / positive lines. Original is immutable.
-  return postCharge(prisma, folioId, actorId, {
-    entryId: input.entryId,
-    lineType: original.lineType,
-    description: `Correction for ${original.id}: ${input.reason}`,
-    amount: input.correctionAmount,
-    currency: original.currency,
-    chargeDate: input.correctionDate,
+  const folio = await prisma.folio.findUnique({ where: { id: folioId } });
+  if (!folio) throw new NotFoundError("Folio");
+  if (folio.entryId !== input.entryId) throw new ValidationError("Folio does not belong to this entry");
+  enforceFolioLiveForS7ChargePosting({ folioState: folio.state });
+
+  const entry = await prisma.entry.findUnique({ where: { id: input.entryId } });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryAtS7ForChargePosting({ currentStage: entry.currentStage });
+
+  const originalAmount = num(original.amount);
+  if (hasTarget && input.correctToAmount! < 0 && originalAmount > 0) {
+    throw new ValidationError(
+      'A negative "correct to" amount is not a valid net charge. To reduce this line, send correctionAmount (e.g. −50 to lower a 200 charge by 50).',
+    );
+  }
+  const delta = hasTarget ? input.correctToAmount! - originalAmount : input.correctionAmount!;
+  if (!Number.isFinite(delta) || delta === 0) {
+    throw new ValidationError("Correction would not change the charge amount");
+  }
+
+  await ensureChargeDateNotSealed(prisma, correctionDate);
+
+  return prisma.$transaction(async (tx) => {
+    await ensureChargeDateNotSealed(tx, correctionDate);
+
+    const correctionLine = await tx.folioLine.create({
+      data: {
+        folioId,
+        lineType: original.lineType,
+        description: `Correction for ${original.id}: ${input.reason}`,
+        amount: new Prisma.Decimal(delta.toFixed(2)),
+        currency: original.currency,
+        chargeDate: correctionDate,
+        stage: Stage.S7,
+        postedBy: actorId,
+      },
+    });
+
+    if (original.lineType !== FolioLineType.CREDIT_NOTE) {
+      const rate = await resolveSalesTaxRate(tx);
+      if (rate > 0) {
+        let taxDelta: number;
+        if (hasTarget) {
+          const { taxAmount: newTax } = calculateTax({ taxableAmount: input.correctToAmount!, rate });
+          const taxLines = await tx.folioLine.findMany({
+            where: {
+              folioId,
+              lineType: FolioLineType.OTHER,
+              description: { contains: taxLineSuffixForCharge(original.description) },
+            },
+          });
+          const oldTax = taxLines.reduce((sum, line) => sum + num(line.amount), 0);
+          taxDelta = newTax - oldTax;
+        } else {
+          taxDelta = calculateTax({ taxableAmount: delta, rate }).taxAmount;
+        }
+
+        if (Math.abs(taxDelta) >= 0.005) {
+          await tx.folioLine.create({
+            data: {
+              folioId,
+              lineType: FolioLineType.OTHER,
+              description: `Sales tax correction on: ${original.description}`,
+              amount: new Prisma.Decimal(taxDelta.toFixed(2)),
+              currency: original.currency,
+              chargeDate: correctionDate,
+              stage: Stage.S7,
+              postedBy: actorId,
+            },
+          });
+        }
+      }
+    }
+
+    await recomputeFolioOutstandingBalance(tx, folioId);
+    return correctionLine;
   });
 }
 

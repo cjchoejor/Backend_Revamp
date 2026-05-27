@@ -4,10 +4,7 @@ import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownersh
 import { resolveInitialCustodianActorId } from "../../policies/02-ownership-custodian-assignment/p03-initial-custodian-assignment.js";
 import * as duplicateDetectionService from "./duplicate-detection-service.js";
 import * as auditService from "../infrastructure/audit-service.js";
-
-function randomRef() {
-  return `INQ-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-}
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
 export async function createInquiry(
   prisma: PrismaClient,
@@ -35,9 +32,11 @@ export async function createInquiry(
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
+    const id = await allocateReadableId(tx, READABLE_ID_PREFIXES.INQUIRY, now);
     const created = await tx.inquiry.create({
       data: {
-        referenceNumber: randomRef(),
+        id,
+        referenceNumber: id,
         guestProfileId: input.guestProfileId,
         sourceChannel: input.sourceChannel,
         defaultCustodianId: custodian,
@@ -224,6 +223,9 @@ export async function listInquiries(prisma: PrismaClient, query: { limit: number
     orderBy: { updatedAt: "desc" },
     take: query.limit,
     include: {
+      guestProfile: {
+        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+      },
       entries: { select: inquiryEntrySummarySelect },
     },
   });

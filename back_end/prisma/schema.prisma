@@ -279,6 +279,15 @@ enum StageDwellMode {
   PARKED
 }
 
+// --- Admin console (ACIG v1.1 core models) ------------------------------
+
+enum ModeLifecycleState {
+  DRAFT
+  VALIDATED
+  ACTIVE
+  SUPERSEDED
+}
+
 // --- Configuration ------------------------------------------------------
 
 // SIG-S1 §2.12 — ConfigurationEntry with date-range semantics. Admin writes only.
@@ -295,6 +304,207 @@ model ConfigurationEntry {
 
   @@index([configKey, effectiveFrom])
   @@map("configuration_entries")
+}
+
+model HotelProfile {
+  id                    String   @id @default(uuid())
+  hotelName             String
+  registeredAddress     String
+  tradingAddress        String?
+  contactNumbers        Json
+  primaryEmail          String
+  operatingHours        Json
+  publicHolidaySchedule Json
+  timeZone              String
+  propertyCurrency      String
+  version               Int      @default(1)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  createdBy             String
+
+  @@map("hotel_profile")
+}
+
+model Department {
+  id             String   @id @default(uuid())
+  departmentCode String   @unique
+  departmentName String
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String
+
+  @@map("departments")
+}
+
+model Role {
+  id          String    @id @default(uuid())
+  roleCode    String    @unique
+  displayName String
+  actorLevel  ActorLevel
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdBy   String
+
+  permissions RolePermissionMapping[]
+  sessionCfg  RoleSessionConfig?
+
+  @@map("roles")
+}
+
+model RolePermissionMapping {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  isAllowed    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@unique([roleId, permissionId])
+  @@map("role_permission_mappings")
+}
+
+model RoleSessionConfig {
+  id                     String   @id @default(uuid())
+  roleId                 String   @unique
+  idleLockTimeoutSeconds Int
+  hardLogoutTimeoutSeconds Int
+  manualLockAvailable    Boolean  @default(true)
+  version                Int      @default(1)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  createdBy              String
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@map("role_session_configs")
+}
+
+model PolicyRegistry {
+  id               String   @id @default(uuid())
+  policyId         String
+  policyClass      String
+  policyDefinition Json
+  version          Int      @default(1)
+  effectiveFrom    DateTime @default(now())
+  isActive         Boolean  @default(true)
+  createdBy        String
+  createdAt        DateTime @default(now())
+
+  @@unique([policyId, version])
+  @@map("policy_registry")
+}
+
+model ModeConfiguration {
+  id             String             @id @default(uuid())
+  modeKey         String
+  displayName     String
+  description     String?
+  lifecycleState  ModeLifecycleState @default(DRAFT)
+  isActive        Boolean            @default(false)
+  isPredefined    Boolean            @default(false)
+  config          Json
+  version         Int                @default(1)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  createdBy       String
+
+  @@index([modeKey])
+  @@map("mode_configurations")
+}
+
+model CommunicationTemplate {
+  id          String   @id @default(uuid())
+  templateKey String   @unique
+  channel     String
+  stage       Stage?
+  templateType String
+  subjectTemplate String?
+  bodyTemplate String
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+
+  @@map("communication_templates")
+}
+
+model InvoiceTemplate {
+  id           String   @id @default(uuid())
+  templateKey  String   @unique
+  invoiceType  InvoiceType
+  title        String
+  bodyTemplate String
+  isActive     Boolean  @default(true)
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String
+
+  @@map("invoice_templates")
+}
+
+model FeedbackSurveyTemplate {
+  id          String   @id @default(uuid())
+  templateKey String   @unique
+  title       String
+  questions   Json
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+
+  @@map("feedback_survey_templates")
+}
+
+model VipNotificationRoutingConfig {
+  id          String   @id @default(uuid())
+  vipTier     String
+  notifyRoles Json
+  notifyActorIds Json
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+
+  @@index([vipTier])
+  @@map("vip_notification_routing_configs")
+}
+
+model HandoffChecklistTemplate {
+  id           String   @id @default(uuid())
+  handoffType  HandoffType
+  version      Int      @default(1)
+  checklistItems Json
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  createdBy    String
+
+  @@unique([handoffType, version])
+  @@map("handoff_checklist_templates")
+}
+
+model WorkOrderTemplate {
+  id          String   @id @default(uuid())
+  templateKey String   @unique
+  useType     EntryUseType?
+  title       String
+  todoItems   Json
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+
+  @@map("work_order_templates")
 }
 
 // --- Staff & Sessions (SIG-S1 §6.6 SessionService / Policy 69) ---------
@@ -1621,4 +1831,15 @@ model HumanDecisionRecord {
   @@index([aiDraftId])
   @@index([communicationId])
   @@map("human_decision_records")
+}
+
+// --- Readable business IDs (PREFIX-YYYYMMDD-####, daily sequence) --------
+
+model ReadableIdSequence {
+  prefix       String
+  sequenceDate String @map("sequence_date")
+  lastValue    Int    @default(0) @map("last_value")
+
+  @@id([prefix, sequenceDate])
+  @@map("readable_id_sequences")
 }

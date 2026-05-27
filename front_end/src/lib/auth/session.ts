@@ -40,12 +40,16 @@ export async function hydrateSessionFromServer(): Promise<Session | null> {
 }
 
 export async function persistSessionToServer(session: Session): Promise<void> {
-  await fetch("/api/session", {
+  const res = await fetch("/api/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(session),
     credentials: "same-origin",
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Failed to save session (${res.status})`);
+  }
 }
 
 export async function clearSessionOnServer(): Promise<void> {

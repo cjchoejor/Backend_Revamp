@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { ClipboardList, FileText, LayoutDashboard, ListChecks } from "lucide-react";
+import { ClipboardList, FileText, LayoutDashboard, ListChecks, Settings2 } from "lucide-react";
 
 export type NavItem = {
   title: string;
@@ -21,5 +21,6 @@ export const mainNav: NavItem[] = [
 ];
 
 export const secondaryNav: NavItem[] = [
+  { title: "Admin Console", href: "/admin", icon: Settings2, minLevel: "L4" },
   { title: "System health", href: "/admin/health", icon: ClipboardList, minLevel: "L1" },
 ];

@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billing-model/p30-billing-model-allowlist-from-config.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
 export { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 
@@ -27,13 +28,21 @@ export async function ensureProvisionalFolioAndBillingModel(
     const flattened = Object.values(allowed).flat();
     enforceBillingModelAllowlistFromConfig({ billingModel: input.billingModel, allowedFlattened: flattened });
 
-    const folio =
-      entry.folio ??
-      (await tx.folio.create({
-        data: { entryId, state: FolioState.PROVISIONAL, billingModel: input.billingModel.trim(), createdBy: actorId, outstandingBalance: 0, advancePaymentReconciliationComplete: false },
-      }));
-
-    if (entry.folio) {
+    let folio = entry.folio;
+    if (!folio) {
+      const folioId = await allocateReadableId(tx, READABLE_ID_PREFIXES.FOLIO);
+      folio = await tx.folio.create({
+        data: {
+          id: folioId,
+          entryId,
+          state: FolioState.PROVISIONAL,
+          billingModel: input.billingModel.trim(),
+          createdBy: actorId,
+          outstandingBalance: 0,
+          advancePaymentReconciliationComplete: false,
+        },
+      });
+    } else {
       await tx.folio.update({ where: { id: folio.id }, data: { billingModel: input.billingModel.trim() } });
     }
 
@@ -41,9 +50,11 @@ export async function ensureProvisionalFolioAndBillingModel(
       data: { folioId: folio.id, segmentId, fromModel: null, toModel: input.billingModel.trim(), createdBy: actorId },
     });
 
+    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE);
     // Create a proforma invoice as S3 exit evidence starter.
     await tx.invoice.create({
       data: {
+        id: invoiceId,
         folioId: folio.id,
         entryId,
         invoiceType: InvoiceType.PROFORMA,

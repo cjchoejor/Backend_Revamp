@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -14,6 +15,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { stageById, stagePath } from "@/config/stages";
+import { entryListGuestName } from "@/lib/guest-display-name";
+import { formatListId } from "@/lib/readable-id";
 import type { EntryListItem, InquiryListItem } from "@/types/api";
 
 type WorkQueueTableProps = {
@@ -59,23 +62,20 @@ export function WorkQueueTable({ entries, inquiries }: WorkQueueTableProps) {
             <TableBody>
               {sorted.map((entry) => {
                 const inquiry = inquiryMap[entry.inquiryId];
-                const guest =
-                  entry.guestProfile?.displayName ??
-                  inquiry?.guestProfile?.displayName ??
-                  inquiry?.guestProfileId ??
-                  "—";
+                const guest = entryListGuestName({
+                  guestProfile: entry.guestProfile ?? inquiry?.guestProfile,
+                  inquiry: inquiry ? { guestProfile: inquiry.guestProfile } : null,
+                });
                 const stageMeta = stageById[entry.currentStage];
                 return (
                   <TableRow key={entry.id}>
-                    <TableCell className="font-mono text-xs">{entry.id.slice(0, 12)}…</TableCell>
+                    <TableCell className="font-mono text-xs">{formatListId(entry.id)}</TableCell>
                     <TableCell>{guest}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{stageMeta?.shortLabel ?? entry.currentStage}</Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={entry.status === "PARKED" ? "secondary" : "success"}>
-                        {entry.status}
-                      </Badge>
+                      <StatusBadge status={entry.status} />
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="sm" asChild>

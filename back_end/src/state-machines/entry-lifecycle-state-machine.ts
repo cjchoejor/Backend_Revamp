@@ -8,6 +8,7 @@ import { cancelScheduledRoomReadinessSlaForEntry } from "../services/domain/room
 import { issueVipArrivalNotificationAtCommencementTx } from "../services/domain/vip-arrival-notification-service.js";
 import * as checkInService from "../services/domain/check-in-service.js";
 import * as disputeService from "../services/domain/s7-dispute-service.js";
+import { loadEntryDetail } from "../lib/entry-detail-include.js";
 import { enforceDisputeGateAllowsProgress } from "../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { enforceNoPendingPreArrivalTasks } from "../policies/03-expiry-parking/p09-s5-normal-exit-pre-arrival-tasks-terminal.js";
 import { enforceCreditCeilingTier2Acknowledged } from "../policies/18-credit-extension-ceiling/p44-credit-ceiling-proximity-check.js";
@@ -187,7 +188,7 @@ export async function progressStageS5ToS6(
     }
   }
 
-  return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  return loadEntryDetail(prisma, entryId);
 }
 
 /** SIG-S6 §8.2 — S6 → S7 (check-in completion: folio LIVE, OCCUPIED, H2/H3, keys, registration). */
@@ -266,7 +267,7 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
     });
   });
 
-  return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  return loadEntryDetail(prisma, entryId);
 }
 
 /** SIG-S7 — S7 → S8 (exit stay to checkout prep). */
@@ -380,5 +381,5 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
     });
   });
 
-  return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  return loadEntryDetail(prisma, entryId);
 }

@@ -5,6 +5,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceCreditExtensionConstraints } from "../../policies/18-credit-extension-ceiling/p42-credit-ceiling-mandatory-set.js";
 import { enforceAdvancePaymentReconciliationRequiresPayment } from "../../policies/12-advance-payment/p27-advance-payment-reconciliation.js";
+import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -182,6 +183,8 @@ export async function markAdvancePaymentReconciled(
     });
 
     await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actor.actorId, "ADVANCE_PAYMENT_RECONCILED");
+
+    await recomputeFolioOutstandingBalance(tx, input.folioId);
 
     return updated;
   });

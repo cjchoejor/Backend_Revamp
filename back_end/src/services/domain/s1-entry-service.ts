@@ -14,6 +14,7 @@ import {
   enforceEntryParkedForUnpark,
 } from "../../policies/01-availability/p01-s1-entry-status-and-stage-gates.js";
 import { enforceEntryParkAllowedForCurrentStage } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
 export async function createEntry(
   prisma: PrismaClient,
@@ -52,8 +53,10 @@ export async function createEntry(
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
 
   return prisma.$transaction(async (tx) => {
+    const entryId = await allocateReadableId(tx, READABLE_ID_PREFIXES.ENTRY);
     const entry = await tx.entry.create({
       data: {
+        id: entryId,
         inquiryId: input.inquiryId,
         guestProfileId: input.guestProfileId ?? inquiry.guestProfileId ?? null,
         useType: input.useType as any,
@@ -306,8 +309,19 @@ export async function listEntries(
       checkInDate: true,
       checkOutDate: true,
       walkInCompressed: true,
+      version: true,
       createdAt: true,
       updatedAt: true,
+      guestProfile: {
+        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+      },
+      inquiry: {
+        select: {
+          guestProfile: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+        },
+      },
     },
   });
 }

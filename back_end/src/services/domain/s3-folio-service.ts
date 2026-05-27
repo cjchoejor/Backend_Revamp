@@ -9,6 +9,7 @@ import {
   evaluateAdvancePaymentConditionTx,
 } from "./s3-payment-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
 /**
  * SIG-S3 §6.3 — `FolioService.getOrCreate` slice: single provisional folio per entry; trace on create vs continuation.
@@ -60,8 +61,10 @@ export async function getOrCreateProvisionalFolioTx(
     return existing;
   }
 
+  const folioId = await allocateReadableId(tx, READABLE_ID_PREFIXES.FOLIO, now);
   const created = await tx.folio.create({
     data: {
+      id: folioId,
       entryId,
       state: FolioState.PROVISIONAL,
       billingModel: null,
@@ -169,8 +172,10 @@ export async function issueInvoice(
     }
 
     const now = new Date();
+    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE, now);
     const inv = await tx.invoice.create({
       data: {
+        id: invoiceId,
         folioId,
         entryId: input.entryId,
         invoiceType: InvoiceType.PROFORMA,

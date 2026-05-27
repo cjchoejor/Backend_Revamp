@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { stageById, stagePath } from "@/config/stages";
 import type { EntryDetail } from "@/types/api";
 import { StageBadge } from "./stage-badge";
+import { formatListId } from "@/lib/readable-id";
 import { useStageTransition } from "./stage-transition-context";
 
 export function EntryHeader({ entry }: { entry: EntryDetail }) {
@@ -14,7 +15,7 @@ export function EntryHeader({ entry }: { entry: EntryDetail }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border bg-card p-6">
       <div>
-        <p className="font-mono text-xs text-muted-foreground">{entry.id}</p>
+        <p className="font-mono text-xs text-muted-foreground">{formatListId(entry.id)}</p>
         <h2 className="mt-1 font-display text-xl font-semibold">
           {entry.guestProfile?.displayName ?? "Guest entry"}
         </h2>

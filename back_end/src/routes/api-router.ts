@@ -24,6 +24,7 @@ import { cancellationsRouter } from "./cancellations/router.js";
 import { noShowRouter } from "./no-show/router.js";
 import { adminRouter } from "./admin/router.js";
 import { incidentsAndLostFoundRouter } from "./incidents-and-lost-found/router.js";
+import { deficientConditionsRouter } from "./deficient-conditions/router.js";
 
 export const apiRouter = Router();
 
@@ -73,5 +74,6 @@ apiRouter.use(amendmentsRouter);
 apiRouter.use(cancellationsRouter);
 apiRouter.use(noShowRouter);
 apiRouter.use(incidentsAndLostFoundRouter);
+apiRouter.use(deficientConditionsRouter);
 apiRouter.use("/admin", adminRouter);
 

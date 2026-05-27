@@ -126,3 +126,9 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Consistent typography when using LAN IP or mobile Safari (avoids auto “larger” text). */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}

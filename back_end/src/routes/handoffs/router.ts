@@ -9,9 +9,25 @@ import {
 } from "../../dtos/11-handoffs/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
+import { requireActiveConfigValue } from "../../lib/config-store.js";
 import * as handoffService from "../../services/domain/handoff-service.js";
 
 export const handoffsRouter = Router();
+
+/** Active checklist template for handoff accept (e.g. H1 at S5). */
+handoffsRouter.get("/handoffs/checklists/:handoffType", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const handoffType = String(req.params.handoffType ?? "").toUpperCase();
+    const key = `handoff.${handoffType}.checklist`;
+    const items =
+      (await requireActiveConfigValue<
+        Array<{ code: string; mandatory: boolean; description?: string }> | undefined
+      >(prisma, key).catch(() => [])) ?? [];
+    res.json({ handoffType, items });
+  } catch (e) {
+    next(e);
+  }
+});
 
 handoffsRouter.post("/handoffs/:id/accept", requireActorLevel("L1"), validateBody(acceptHandoffRequestSchema), async (req, res, next) => {
   try {

@@ -2,11 +2,11 @@
 
 import { useParams } from "next/navigation";
 import { StagePage } from "@/components/stages/shared/stage-page";
-import { GenericStageWorkspace } from "@/components/stages/shared/generic-stage-workspace";
+import { S8Workspace } from "@/components/stages/s8/s8-workspace";
 
 export default function EntryS8Page() {
   const { entryId } = useParams<{ entryId: string }>();
   return (
-    <StagePage entryId={entryId} stage="S8" slug="s8" render={(entry) => <GenericStageWorkspace entry={entry} stage="S8" />} />
+    <StagePage entryId={entryId} stage="S8" slug="s8" render={(entry) => <S8Workspace entry={entry} />} />
   );
 }

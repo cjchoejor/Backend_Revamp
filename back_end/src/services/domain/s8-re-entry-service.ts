@@ -3,6 +3,7 @@ import { FolioState, HandoffState, HandoffType, Prisma, Stage } from "@prisma/cl
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
+import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 
 /**
  * SIG-S8 §3.7 — S8→S7 re-entry (additional charge path).
@@ -73,7 +74,7 @@ export async function reEnterS8ToS7(
     });
   });
 
-  return prisma.entry.findUniqueOrThrow({ where: { id: entryId }, include: { folio: true } });
+  return loadEntryDetail(prisma, entryId);
 }
 
 /**
@@ -159,5 +160,5 @@ export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actor
     });
   });
 
-  return prisma.entry.findUniqueOrThrow({ where: { id: entryId }, include: { folio: true, reservation: true } });
+  return loadEntryDetail(prisma, entryId);
 }

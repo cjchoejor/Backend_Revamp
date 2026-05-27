@@ -10,6 +10,9 @@ import { getInquiry } from "@/lib/api/inquiries";
 import { listEntries } from "@/lib/api/entries";
 import { useSession } from "@/hooks/use-session";
 import { stagePath } from "@/config/stages";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { entryListGuestName, formatGuestName } from "@/lib/guest-display-name";
+import { deriveInquiryStatus } from "@/lib/inquiry-status";
 
 export default function InquiryDetailPage() {
   const { inquiryId } = useParams<{ inquiryId: string }>();
@@ -43,8 +46,10 @@ export default function InquiryDetailPage() {
         <CardContent className="space-y-2 text-sm">
           <p className="font-mono text-xs">{inquiry.id}</p>
           <p>Channel: {inquiry.sourceChannel}</p>
-          <p>Status: {inquiry.status}</p>
-          <p>Guest: {inquiry.guestProfile?.displayName ?? inquiry.guestProfileId}</p>
+          <p className="flex items-center gap-2">
+            Status: <StatusBadge status={deriveInquiryStatus(inquiry)} />
+          </p>
+          <p>Guest: {formatGuestName(inquiry.guestProfile)}</p>
         </CardContent>
       </Card>
 
@@ -59,8 +64,10 @@ export default function InquiryDetailPage() {
             entries.map((e) => (
               <Button key={e.id} variant="outline" className="w-full justify-between" asChild>
                 <Link href={stagePath(e.id, e.currentStage)}>
-                  <span className="font-mono text-xs">{e.id.slice(0, 16)}</span>
-                  <span>{e.currentStage}</span>
+                  <span className="font-medium">{entryListGuestName(e)}</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {e.id.slice(0, 12)}… · {e.currentStage}
+                  </span>
                 </Link>
               </Button>
             ))

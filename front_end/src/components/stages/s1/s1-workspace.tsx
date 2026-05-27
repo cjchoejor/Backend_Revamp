@@ -24,6 +24,11 @@ import { listInquiries } from "@/lib/api/inquiries";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import {
+  describeUnavailableRoom,
+  formatClaimState,
+  formatUnavailabilityReason,
+} from "@/lib/room-inventory-status";
 import type { AvailabilityConfigSummary, EntryDetail } from "@/types/api";
 
 type S1WorkspaceProps = {
@@ -60,12 +65,36 @@ function RoomOption({
           <span className="ml-2 text-muted-foreground">· {room.capacity} guests</span>
         )}
       </span>
-      {variant === "deficient" && (
-        <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">
-          Deficient
-        </Badge>
-      )}
+      <span className="flex shrink-0 items-center gap-1.5">
+        {room.claimState && (
+          <Badge variant="outline" className="text-muted-foreground">
+            {formatClaimState(room.claimState)}
+          </Badge>
+        )}
+        {variant === "deficient" && (
+          <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">
+            Deficient
+          </Badge>
+        )}
+      </span>
     </button>
+  );
+}
+
+function UnavailableRoomRow({ room }: { room: AvailabilityRoomResult }) {
+  return (
+    <div className="flex w-full items-center justify-between rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+      <span>
+        <span className="font-medium text-foreground">
+          Room {room.roomNumber ?? room.roomId.slice(0, 8)}
+        </span>
+        {room.capacity != null && <span className="ml-2">· {room.capacity} guests</span>}
+        <p className="mt-0.5 text-xs">{describeUnavailableRoom(room)}</p>
+      </span>
+      <Badge variant="outline" className="shrink-0 border-red-500/40 text-red-800 dark:text-red-400">
+        {formatUnavailabilityReason(room.unavailabilityReason)}
+      </Badge>
+    </div>
   );
 }
 
@@ -155,19 +184,22 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
   const activeConfigurationId =
     searchResult?.configurationId ?? latestConfig?.id ?? preferredConfig?.id ?? null;
 
-  const { availableRooms, deficientRooms } = useMemo(() => {
+  const { availableRooms, deficientRooms, unavailableRooms } = useMemo(() => {
     if (searchResult?.results) {
+      const fromApi = roomsFromResultSet(searchResult.results);
       return {
-        availableRooms: searchResult.results.availableRooms ?? [],
-        deficientRooms: searchResult.results.deficientRooms ?? [],
+        availableRooms: searchResult.results.availableRooms ?? fromApi.availableRooms,
+        deficientRooms: searchResult.results.deficientRooms ?? fromApi.deficientRooms,
+        unavailableRooms: searchResult.results.unavailableRooms ?? fromApi.unavailableRooms,
       };
     }
     const source = latestConfig?.resultSet ?? preferredConfig?.resultSet;
     if (source) return roomsFromResultSet(source);
-    return { availableRooms: [], deficientRooms: [] };
+    return { availableRooms: [], deficientRooms: [], unavailableRooms: [] };
   }, [searchResult, latestConfig, preferredConfig]);
 
-  const hasRoomResults = availableRooms.length > 0 || deficientRooms.length > 0;
+  const hasRoomResults =
+    availableRooms.length > 0 || deficientRooms.length > 0 || unavailableRooms.length > 0;
 
   const exitChecks = useMemo(() => {
     const hasDates = !!(entry.checkInDate && entry.checkOutDate) || !!(checkIn && checkOut);
@@ -353,6 +385,17 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
                       disabled={selectMutation.isPending || !activeConfigurationId}
                       onSelect={() => handleSelectRoom(room, true)}
                     />
+                  ))}
+                </div>
+              )}
+
+              {unavailableRooms.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Unavailable ({unavailableRooms.length}) — not selectable
+                  </p>
+                  {unavailableRooms.map((room) => (
+                    <UnavailableRoomRow key={room.roomId} room={room} />
                   ))}
                 </div>
               )}

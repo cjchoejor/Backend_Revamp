@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,8 @@ import {
 } from "@/components/ui/table";
 import { stageById, stagePath } from "@/config/stages";
 import { listEntries } from "@/lib/api/entries";
+import { entryListGuestName, guestNameSearchText } from "@/lib/guest-display-name";
+import { formatListId } from "@/lib/readable-id";
 import { useSession } from "@/hooks/use-session";
 import type { Stage } from "@/types/api";
 
@@ -28,7 +31,7 @@ function EntriesContent() {
   const stageFilter = searchParams.get("stage") as Stage | null;
   const [search, setSearch] = useState("");
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["entries", { limit: 200, stage: stageFilter }],
     queryFn: () =>
       listEntries(session!, {
@@ -46,7 +49,8 @@ function EntriesContent() {
       (e) =>
         e.id.toLowerCase().includes(q) ||
         e.inquiryId.toLowerCase().includes(q) ||
-        e.guestProfile?.displayName?.toLowerCase().includes(q),
+        guestNameSearchText(e.guestProfile ?? e.inquiry?.guestProfile).includes(q) ||
+        entryListGuestName(e).toLowerCase().includes(q),
     );
   }, [data?.items, search]);
 
@@ -74,10 +78,17 @@ function EntriesContent() {
         <CardContent>
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
+          ) : isError ? (
+            <p className="py-8 text-center text-sm text-destructive">
+              Could not load entries{(error as Error)?.message ? `: ${(error as Error).message}` : ""}
+            </p>
+          ) : items.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">No entries found</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Guest</TableHead>
                   <TableHead>Entry</TableHead>
                   <TableHead>Inquiry</TableHead>
                   <TableHead>Stage</TableHead>
@@ -88,12 +99,15 @@ function EntriesContent() {
               <TableBody>
                 {items.map((entry) => (
                   <TableRow key={entry.id}>
-                    <TableCell className="font-mono text-xs">{entry.id.slice(0, 16)}</TableCell>
-                    <TableCell className="font-mono text-xs">{entry.inquiryId.slice(0, 12)}…</TableCell>
+                    <TableCell className="font-medium">{entryListGuestName(entry)}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{formatListId(entry.id)}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{formatListId(entry.inquiryId)}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{entry.currentStage}</Badge>
                     </TableCell>
-                    <TableCell>{entry.status}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={entry.status} />
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button size="sm" variant="ghost" asChild>
                         <Link href={stagePath(entry.id, entry.currentStage)}>Workspace</Link>

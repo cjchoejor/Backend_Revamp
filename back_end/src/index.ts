@@ -20,8 +20,12 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 });
 
 const port = Number(process.env.PORT ?? 4000);
-app.listen(port, () => {
-  console.log(`PMS API (S5 + S6) listening on http://localhost:${port}/api`);
+const host = process.env.HOST ?? "0.0.0.0";
+app.listen(port, host, () => {
+  console.log(`PMS API listening on http://localhost:${port}/api (bind ${host})`);
+  if (host === "0.0.0.0") {
+    console.log("  LAN devices use the front-end URL only; /api is proxied by Next.js rewrites.");
+  }
 });
 
 if (process.env.RUN_WORKERS === "true") {

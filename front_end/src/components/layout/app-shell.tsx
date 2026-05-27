@@ -10,7 +10,7 @@ import { redirectToLogin } from "@/lib/auth/sign-out";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function titleFromPath(pathname: string): string {
-  const nav = [...mainNav, { title: "Entry", href: "/entries" }, { title: "Health", href: "/admin" }];
+  const nav = [...mainNav, { title: "Entry", href: "/entries" }];
   const match = nav.find((n) => pathname === n.href || pathname.startsWith(`${n.href}/`));
   if (pathname.startsWith("/entries/")) return "Entry workspace";
   if (pathname.startsWith("/inquiries/")) return "Inquiry";

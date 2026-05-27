@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, Stage } from "@prisma/client";
+import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
@@ -58,6 +59,40 @@ async function resolveGuestDataRetentionPeriodDays(db: DbClient): Promise<number
 
 export async function listInvoices(prisma: PrismaClient, folioId: string) {
   return prisma.invoice.findMany({ where: { folioId }, orderBy: { createdAt: "desc" } });
+}
+
+/** SIG-S9 §8.4 — create a DRAFT final invoice when none was issued at S8 (post-stay / government paths). */
+export async function issueInvoiceAtS9(
+  prisma: PrismaClient,
+  folioId: string,
+  actorId: string,
+  input: { entryId: string; templateKey?: string },
+) {
+  const folio = await prisma.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
+  if (!folio?.entry) throw new NotFoundError("Folio");
+  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+  enforceEntryAtS9ForS9Closure({ currentStage: folio.entry.currentStage });
+  if (folio.state === FolioState.PROVISIONAL) {
+    throw new ValidationError("Cannot issue S9 invoice on a provisional folio");
+  }
+
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE, now);
+    return tx.invoice.create({
+      data: {
+        id: invoiceId,
+        folioId,
+        entryId: input.entryId,
+        invoiceType: InvoiceType.FINAL,
+        state: InvoiceState.DRAFT,
+        templateKey: input.templateKey?.trim() || "final-v1",
+        issuedAt: now,
+        issuedBy: actorId,
+        metadata: { basis: "S9 issueInvoice", stage: Stage.S9 },
+      },
+    });
+  });
 }
 
 export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, actorId: string, input?: { dispatchedTo?: string }) {
@@ -711,6 +746,7 @@ export async function postStayCharge(
         createdBy: actorId,
       },
     });
+    await recomputeFolioOutstandingBalance(tx, folioId);
     return line;
   });
   return created;

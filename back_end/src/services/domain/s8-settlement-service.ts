@@ -7,6 +7,7 @@ import { enforceSettlementMethodCompatibility } from "../../policies/13-billing-
 import { enforceFolioLiveForS8Settlement } from "../../policies/13-billing-model/p31-folio-live-required-for-s8-settlement.js";
 import { enforceEntryAtS8ForSettlementOperations } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { enforceCreditCeilingFinalBalanceForSettlement } from "../../policies/18-credit-extension-ceiling/p46-credit-ceiling-final-settlement.js";
 import {
   enforceNightAuditsCompleteForStayBeforeSettlement,
@@ -28,6 +29,43 @@ export async function getFolio(prisma: PrismaClient, folioId: string) {
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
   return folio;
+}
+
+/** SIG-S8 — issue a DRAFT final invoice after settlement (cash/guest-pay paths that did not auto-create one). */
+export async function issueInvoiceAtS8(
+  prisma: PrismaClient,
+  folioId: string,
+  actorId: string,
+  input: { entryId: string; templateKey?: string },
+) {
+  const folio = await prisma.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
+  if (!folio?.entry) throw new NotFoundError("Folio");
+  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+  enforceEntryAtS8ForSettlementOperations({ currentStage: folio.entry.currentStage });
+  if (folio.state === FolioState.PROVISIONAL) {
+    throw new ValidationError("Cannot issue final invoice on a provisional folio");
+  }
+  if (folio.state !== FolioState.LIVE && folio.state !== FolioState.SETTLED && folio.state !== FolioState.OUTSTANDING) {
+    throw new ValidationError(`Cannot issue final invoice when folio is ${folio.state}`);
+  }
+
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE, now);
+    return tx.invoice.create({
+      data: {
+        id: invoiceId,
+        folioId,
+        entryId: input.entryId,
+        invoiceType: InvoiceType.FINAL,
+        state: InvoiceState.DRAFT,
+        templateKey: input.templateKey?.trim() || "final-v1",
+        issuedAt: now,
+        issuedBy: actorId,
+        metadata: { basis: "S8 issueFinalInvoice", stage: Stage.S8 },
+      },
+    });
+  });
 }
 
 export async function initiateSettlement(

@@ -24,7 +24,6 @@ export type EntryListItem = {
   currentStage: Stage;
   status: EntryStatus;
   version: number;
-  custodianId?: string | null;
   checkInDate?: string | null;
   checkOutDate?: string | null;
   guestCount?: number | null;
@@ -32,25 +31,39 @@ export type EntryListItem = {
   segmentNumber?: number;
   createdAt: string;
   updatedAt: string;
-  guestProfile?: {
-    id: string;
-    displayName?: string | null;
-    firstName?: string | null;
-    lastName?: string | null;
-    email?: string | null;
-    phone?: string | null;
-  } | null;
+  guestProfile?: GuestProfileName | null;
+  inquiry?: { guestProfile?: GuestProfileName | null } | null;
+};
+
+export type GuestProfileName = {
+  id: string;
+  displayName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  vipTier?: string | null;
+  nationality?: string | null;
+  identityVerifiedAt?: string | null;
+  identityVerifiedBy?: string | null;
+  identityVerificationPath?: string | null;
 };
 
 export type InquiryListItem = {
   id: string;
   guestProfileId: string;
   sourceChannel: string;
-  status: string;
-  custodianId?: string | null;
+  /** Derived on the client — not a DB column on Inquiry. */
+  status?: string;
+  parkedAt?: string | null;
   createdAt: string;
   updatedAt: string;
-  guestProfile?: { id: string; displayName?: string | null } | null;
+  guestProfile?: GuestProfileName | null;
+  entries?: {
+    id: string;
+    status?: string;
+    currentStage?: string;
+  }[];
 };
 
 export type QuotationState = "DRAFT" | "SENT" | "ACCEPTED" | "SUPERSEDED" | "EXPIRED";
@@ -123,6 +136,27 @@ export type PaymentRecordSummary = {
   notes?: string | null;
 };
 
+export type WriteOffRecordSummary = {
+  id: string;
+  writtenOffAmount: string | number;
+  currency: string;
+  reason: string;
+  createdAt: string;
+};
+
+export type FolioLineSummary = {
+  id: string;
+  folioId: string;
+  lineType: string;
+  description: string;
+  amount: string | number;
+  currency: string;
+  chargeDate: string;
+  stage: string;
+  postedAt: string;
+  nightAuditRecordId?: string | null;
+};
+
 export type FolioDetail = {
   id: string;
   entryId: string;
@@ -130,8 +164,14 @@ export type FolioDetail = {
   billingModel?: string | null;
   outstandingBalance?: string | number;
   advancePaymentReconciliationComplete?: boolean;
+  convertedToLiveAt?: string | null;
+  convertedBy?: string | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  lines?: FolioLineSummary[];
   invoices?: InvoiceSummary[];
   payments?: PaymentRecordSummary[];
+  writeOffRecords?: WriteOffRecordSummary[];
   billingModelTransitions?: Array<{
     id: string;
     segmentId: string;
@@ -189,11 +229,136 @@ export type HandoffSummary = {
   entryId: string;
   handoffType: string;
   state: string;
+  stageContext?: string | null;
   fromRole: string;
   toRole: string;
   assignedAt?: string | null;
   acceptedAt?: string | null;
   fulfilledAt?: string | null;
+  closedAt?: string | null;
+  slaDeadlineAt?: string | null;
+  deficientConditionStatus?: string | null;
+  isAutoFulfilled?: boolean;
+  rejectedAt?: string | null;
+};
+
+export type VipArrivalNotificationSummary = {
+  id: string;
+  entryId: string;
+  guestProfileId: string;
+  vipTier: string;
+  roomNumber: string;
+  checkInInitiatedAt: string;
+  createdAt: string;
+};
+
+export type PreArrivalTaskSummary = {
+  id: string;
+  entryId: string;
+  taskType: string;
+  status: string;
+  targetDate?: string | null;
+  waivedReason?: string | null;
+  completedAt?: string | null;
+};
+
+export type DeficientConditionSummary = {
+  id: string;
+  roomId: string;
+  category: string;
+  description: string;
+  status: string;
+  detectedAt: string;
+  resolutionDeadline: string;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+  resolutionNotes?: string | null;
+};
+
+export type DisputeSummary = {
+  id: string;
+  entryId: string;
+  folioId: string;
+  title: string;
+  description?: string | null;
+  status: string;
+  openedAt: string;
+  updatedAt?: string;
+};
+
+export type RoomAssignmentSummary = {
+  id: string;
+  entryId: string;
+  roomId: string;
+  deficientAtAssignment?: boolean;
+  acknowledgementActorId?: string | null;
+  acknowledgementAt?: string | null;
+  room?: {
+    id: string;
+    roomNumber: string;
+    physicalState?: string;
+    currentClaimState?: string;
+    expectedReadyAt?: string | null;
+    deficientConditionRecords?: DeficientConditionSummary[];
+  };
+};
+
+export type KeyReturnSummary = {
+  id: string;
+  entryId: string;
+  roomId: string;
+  keyCountIssued: number;
+  keyCountReturned: number;
+  countReconciled: boolean;
+  reconciliationNote?: string | null;
+  returnedAt: string;
+};
+
+export type RoomInspectionSummary = {
+  id: string;
+  entryId: string;
+  roomId: string;
+  inspectedAt: string;
+  isDeferred: boolean;
+  deficientFlagStatus: string;
+  damageFound: boolean;
+  damageNotes?: string | null;
+};
+
+export type AgentProfileSummary = {
+  id: string;
+  displayName?: string | null;
+  commissionRate?: string | number | null;
+  commissionBasis?: string | null;
+};
+
+export type CommissionDueSummary = {
+  id: string;
+  entryId: string;
+  agentProfileId: string;
+  commissionRate?: string | number | null;
+  commissionBasis?: string | null;
+  calculatedAmount?: string | number | null;
+  currency: string;
+  status: string;
+  createdAt: string;
+};
+
+export type FollowUpTaskSummary = {
+  id: string;
+  entryId: string;
+  dueAt: string;
+  completedAt?: string | null;
+  notes?: string | null;
+  createdAt: string;
+};
+
+export type NoShowDeterminationSummary = {
+  id: string;
+  entryId: string;
+  determinationPath: string;
+  decisionReason?: string | null;
+  createdAt: string;
 };
 
 export type EntryDetail = EntryListItem & {
@@ -201,14 +366,28 @@ export type EntryDetail = EntryListItem & {
   folio?: FolioDetail | null;
   cancellationDisclosure?: CancellationDisclosureSummary | null;
   committedHold?: CommittedHoldSummary | null;
-  handoffs?: unknown[];
-  preArrivalTasks?: unknown[];
-  roomAssignments?: unknown[];
+  creditCeilingTier2AcknowledgedAt?: string | null;
+  handoffs?: HandoffSummary[];
+  preArrivalTasks?: PreArrivalTaskSummary[];
+  roomAssignments?: RoomAssignmentSummary[];
   availabilityConfigs?: AvailabilityConfigSummary[];
   segments?: SegmentSummary[];
   quotations?: QuotationSummary[];
   speculativeHolds?: SpeculativeHoldSummary[];
-  committedHold?: unknown;
+  vipArrivalNotifications?: VipArrivalNotificationSummary[];
+  disputes?: DisputeSummary[];
+  keyReturnRecords?: KeyReturnSummary[];
+  roomInspectionRecords?: RoomInspectionSummary[];
+  commissionDueRecords?: CommissionDueSummary[];
+  followUpTasks?: FollowUpTaskSummary[];
+  noShowDetermination?: NoShowDeterminationSummary | null;
+  inquiry?: { agentProfile?: AgentProfileSummary | null } | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  walkInCompressed?: boolean;
+  keysIssuedCount?: number | null;
+  keysIssuedAt?: string | null;
+  registrationCompletedAt?: string | null;
 };
 
 export type ListResponse<T> = {

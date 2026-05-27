@@ -8,7 +8,9 @@ export type AvailabilityRoomResult = {
   capacity?: number;
   isDeficient?: boolean;
   deficientConditionCategory?: string | null;
+  claimState?: string;
   unavailabilityReason?: string;
+  blockedReason?: string | null;
   pricingIndicative?: unknown;
 };
 
@@ -48,10 +50,12 @@ export function normalizeAvailabilityQuery(raw: AvailabilityQueryRawResponse): A
 export function roomsFromResultSet(resultSet: unknown): {
   availableRooms: AvailabilityRoomResult[];
   deficientRooms: AvailabilityRoomResult[];
+  unavailableRooms: AvailabilityRoomResult[];
 } {
   const rs = (resultSet ?? {}) as {
     availableRooms?: Array<Record<string, unknown>>;
     deficientRooms?: Array<Record<string, unknown>>;
+    unavailableRooms?: Array<Record<string, unknown>>;
   };
   const mapRoom = (r: Record<string, unknown>): AvailabilityRoomResult => ({
     roomId: String(r.roomId ?? r.inventoryId ?? ""),
@@ -60,12 +64,16 @@ export function roomsFromResultSet(resultSet: unknown): {
     capacity: typeof r.capacity === "number" ? r.capacity : undefined,
     isDeficient: r.isDeficient as boolean | undefined,
     deficientConditionCategory: r.deficientConditionCategory as string | null | undefined,
+    claimState: r.claimState as string | undefined,
     unavailabilityReason: r.unavailabilityReason as string | undefined,
+    blockedReason: r.blockedReason as string | null | undefined,
     pricingIndicative: r.pricingIndicative,
   });
+  const filterValid = (rooms: AvailabilityRoomResult[]) => rooms.filter((r) => r.roomId);
   return {
-    availableRooms: (rs.availableRooms ?? []).map(mapRoom).filter((r) => r.roomId),
-    deficientRooms: (rs.deficientRooms ?? []).map(mapRoom).filter((r) => r.roomId),
+    availableRooms: filterValid((rs.availableRooms ?? []).map(mapRoom)),
+    deficientRooms: filterValid((rs.deficientRooms ?? []).map(mapRoom)),
+    unavailableRooms: filterValid((rs.unavailableRooms ?? []).map(mapRoom)),
   };
 }
 

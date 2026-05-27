@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -21,10 +22,12 @@ import { StagePanel } from "@/components/stages/shared/stage-panel";
 import { ApiErrorAlert } from "@/components/stages/shared/api-error-alert";
 import { ProgressStageButton } from "@/components/stages/shared/progress-stage-button";
 import { useStageTransition } from "@/components/stages/shared/stage-transition-context";
+import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { STAGES, stagePath } from "@/config/stages";
 import { acknowledgeMultiBooking, verifyConference } from "@/lib/api/confirmation";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { formatListId } from "@/lib/readable-id";
 import type {
   CommittedHoldSummary,
   EntryDetail,
@@ -46,9 +49,10 @@ function formatMoney(v: string | number) {
 }
 
 export function S4Workspace({ entry }: S4WorkspaceProps) {
+  const router = useRouter();
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const { startTransition } = useStageTransition();
+  const { startTransition, endTransition } = useStageTransition();
   const meta = STAGES[3];
 
   const reservation = entry.reservation as ReservationSummary | null | undefined;
@@ -106,6 +110,25 @@ export function S4Workspace({ entry }: S4WorkspaceProps) {
     onError: (e) => {
       setActionError(e);
       toast.error(e instanceof ApiError ? e.message : "Acknowledgement failed");
+    },
+  });
+
+  const activateS5Mutation = useMutation({
+    mutationFn: () => {
+      startTransition({ targetStage: "S5", label: "Activating pre-arrival…" });
+      return activatePreArrival(session!, entry.id);
+    },
+    onSuccess: (updated) => {
+      setActionError(null);
+      queryClient.setQueryData(["entry", entry.id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+      toast.success("Pre-arrival activated — now at S5");
+      router.push(stagePath(entry.id, "S5"));
+    },
+    onError: (e) => {
+      endTransition();
+      setActionError(e);
+      toast.error(e instanceof ApiError ? e.message : "Activation failed");
     },
   });
 
@@ -350,6 +373,10 @@ export function S4Workspace({ entry }: S4WorkspaceProps) {
               <CardDescription>Frozen at confirmation — read-only</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <span className="text-muted-foreground">Reservation ID:</span>{" "}
+                <span className="font-mono text-xs">{formatListId(reservation.id)}</span>
+              </div>
               <div>
                 <span className="text-muted-foreground">Frozen rate:</span> BTN {formatMoney(reservation.frozenRate)}
               </div>
@@ -517,27 +544,21 @@ export function S4Workspace({ entry }: S4WorkspaceProps) {
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                  Check-in date: {entry.checkInDate?.slice(0, 10) ?? "—"}. After sign-off, wait for W4 or refresh
-                  once the entry shows stage S5.
+                  Check-in date: {entry.checkInDate?.slice(0, 10) ?? "—"}. This runs the W4 pre-arrival activation
+                  (moves the entry to S5 and seeds tasks). Same-day arrivals activate immediately.
                 </p>
                 {custodianSignOffComplete && systemOutcomesComplete ? (
-                  <Button variant="gradient" asChild>
-                    <Link
-                      href={stagePath(entry.id, "S5")}
-                      onClick={() =>
-                        startTransition({
-                          targetStage: "S5",
-                          label: "Opening pre-arrival workspace…",
-                        })
-                      }
-                    >
-                      Open pre-arrival (S5)
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Link>
+                  <Button
+                    variant="gradient"
+                    disabled={activateS5Mutation.isPending}
+                    onClick={() => activateS5Mutation.mutate()}
+                  >
+                    {activateS5Mutation.isPending ? "Activating…" : "Activate pre-arrival → S5"}
+                    <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 ) : (
                   <Button variant="gradient" disabled>
-                    Open pre-arrival (S5)
+                    Activate pre-arrival → S5
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 )}

@@ -41,13 +41,35 @@ export const postFolioChargesBodySchema = z
 export type PostFolioChargesBodyDto = z.infer<typeof postFolioChargesBodySchema>;
 export type PostFolioChargeRequestDto = PostFolioChargesBodyDto;
 
-export const correctFolioChargeRequestSchema = z.object({
-  entryId: z.string().min(1),
-  originalFolioLineId: z.string().min(1),
-  reason: z.string().min(1),
-  correctionAmount: z.coerce.number(),
-  correctionDate: z.string().min(1),
-});
+export const correctFolioChargeRequestSchema = z
+  .object({
+    entryId: z.string().min(1),
+    originalFolioLineId: z.string().min(1),
+    reason: z.string().min(1),
+    /** Signed delta added as a new line (e.g. −50 to reduce an 800 charge). */
+    correctionAmount: z.coerce.number().optional(),
+    /** Target net for the original charge line; server computes the delta. Preferred over correctionAmount. */
+    correctToAmount: z.coerce.number().optional(),
+    correctionDate: z.string().min(1),
+  })
+  .superRefine((v, ctx) => {
+    const hasDelta =
+      v.correctionAmount != null && Number.isFinite(v.correctionAmount) && v.correctionAmount !== 0;
+    const hasTarget = v.correctToAmount != null && Number.isFinite(v.correctToAmount);
+    if (hasDelta && hasTarget) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide either correctionAmount or correctToAmount, not both",
+      });
+      return;
+    }
+    if (!hasDelta && !hasTarget) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide correctionAmount (signed delta) or correctToAmount (target net for the charge line)",
+      });
+    }
+  });
 export type CorrectFolioChargeRequestDto = z.infer<typeof correctFolioChargeRequestSchema>;
 
 export const postCreditNoteRequestSchema = z.object({

@@ -43,7 +43,14 @@ foliosRouter.post(
   async (req, res, next) => {
     try {
       const { entryId, templateKey } = req.body;
-      const inv = await s3FolioService.issueInvoice(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey });
+      const entry = await prisma.entry.findUnique({ where: { id: entryId } });
+      if (!entry) throw new NotFoundError("Entry");
+      const inv =
+        entry.currentStage === Stage.S9
+          ? await s9Service.issueInvoiceAtS9(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey })
+          : entry.currentStage === Stage.S8
+            ? await s8SettlementService.issueInvoiceAtS8(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey })
+            : await s3FolioService.issueInvoice(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey });
       res.status(201).json(inv);
     } catch (e) {
       next(e);

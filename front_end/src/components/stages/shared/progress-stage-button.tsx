@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -43,6 +43,10 @@ export function ProgressStageButton({
   const stageTransition = useStageTransitionOptional();
   const [error, setError] = useState<unknown>(null);
 
+  useEffect(() => {
+    router.prefetch(stagePath(entryId, targetStage));
+  }, [router, entryId, targetStage]);
+
   const mutation = useMutation({
     mutationFn: async () => {
       if (!session) throw new Error("Not signed in");
@@ -64,14 +68,31 @@ export function ProgressStageButton({
     },
     onSuccess: async (updated) => {
       setError(null);
-      queryClient.setQueryData(["entry", entryId], updated);
-      await queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      let entryForCache: EntryDetail = updated;
+      if (session) {
+        try {
+          entryForCache = await getEntry(session, entryId);
+        } catch {
+          /* progress response may be partial; keep updated if refetch fails */
+        }
+      }
+      queryClient.setQueryData(["entry", entryId], entryForCache);
       queryClient.invalidateQueries({ queryKey: ["entries"] });
+
+      const stageAfter = entryForCache?.currentStage ?? targetStage;
+      const dest = navigateOnSuccess && stageAfter ? stagePath(entryId, stageAfter) : null;
+
+      if (session && dest) {
+        await queryClient.prefetchQuery({
+          queryKey: ["entry", entryId],
+          queryFn: () => getEntry(session, entryId),
+        });
+      }
+
       toast.success(`Moved to ${targetStage}`);
 
-      const stageAfter = updated?.currentStage ?? targetStage;
-      if (navigateOnSuccess && stageAfter) {
-        router.push(stagePath(entryId, stageAfter));
+      if (dest) {
+        router.push(dest);
       }
     },
     onError: async (e) => {

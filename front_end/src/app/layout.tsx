@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Montserrat } from "next/font/google";
 import type { ReactNode } from "react";
 import { AppProviders } from "@/components/providers/app-providers";
@@ -18,6 +18,12 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: "LEGPHEL PMS",
   description: "LEGPHEL Hotel property management system",
+};
+
+/** Same scale on localhost, LAN IP, and mobile browsers (avoids auto text inflation on network). */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

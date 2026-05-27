@@ -174,6 +174,25 @@ async function main() {
       dbImpact:
         "**INSERT** another row into `folio_lines` (same columns as AC-S7-01). **UPDATE** `folios.outstanding_balance` by the correction `amount` (here −5). The row referenced by `original_folio_line_id` in the request is **not updated** — only read for validation and description text.",
     });
+
+    const r3 = await http("POST", `/folios/${folioId}/corrections`, L1, {
+      entryId: entry.id,
+      originalFolioLineId: created.id,
+      reason: "Target net 20",
+      correctToAmount: 20,
+      correctionDate: "2026-04-21T10:06:00.000Z",
+    });
+    results.push({
+      id: "AC-S7-02b",
+      title: "correctToAmount computes delta (25 → 20) without double-counting original",
+      pass: r3.status === 200,
+      status: r3.status,
+      body: r3.json,
+      explanation:
+        "Posts a correction with `correctToAmount: 20` on the 25 BTN mini-bar line from AC-S7-01. Server emits a −5 offset line (and sales-tax adjustment when configured) instead of treating 20 as an additive charge.",
+      dbImpact:
+        "**INSERT** `folio_lines` for correction (−5) and optional tax correction. **UPDATE** `folios.outstanding_balance` via full recompute.",
+    });
   }
 
   // AC-S7-04/05 (night audit anomaly + idempotency)

@@ -65,6 +65,9 @@ export type UnavailableRoomEntry = {
   inventoryId: string;
   roomNumber: string;
   unavailabilityReason: "CLAIMED" | "MAINTENANCE_CONFLICT" | "BLOCKED" | "PHYSICAL_NOT_READY";
+  /** Present when reason is CLAIMED or PHYSICAL_NOT_READY — actual inventory claim on the room. */
+  claimState?: InventoryClaimState;
+  blockedReason?: string | null;
 };
 
 export type MaintenanceConflictEntry = {
@@ -106,20 +109,35 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
     // Policy 1: only configured bookable physical states can be returned as available candidates.
     if (Array.isArray(input.bookablePhysicalStates) && input.bookablePhysicalStates.length > 0) {
       if (!input.bookablePhysicalStates.includes(room.currentClaimState)) {
-        unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, unavailabilityReason: "PHYSICAL_NOT_READY" });
+        unavailableRooms.push({
+          inventoryId: room.id,
+          roomNumber: room.roomNumber,
+          unavailabilityReason: "PHYSICAL_NOT_READY",
+          claimState: room.currentClaimState,
+        });
         continue;
       }
     }
 
     // Model 1 claim state
     if (room.currentClaimState !== "FREE") {
-      unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, unavailabilityReason: "CLAIMED" });
+      unavailableRooms.push({
+        inventoryId: room.id,
+        roomNumber: room.roomNumber,
+        unavailabilityReason: "CLAIMED",
+        claimState: room.currentClaimState,
+      });
       continue;
     }
 
     // Hardcoded floor: blocked is always a conflict
     if (room.isBlocked) {
-      unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, unavailabilityReason: "BLOCKED" });
+      unavailableRooms.push({
+        inventoryId: room.id,
+        roomNumber: room.roomNumber,
+        unavailabilityReason: "BLOCKED",
+        blockedReason: room.blockedReason ?? null,
+      });
       continue;
     }
 

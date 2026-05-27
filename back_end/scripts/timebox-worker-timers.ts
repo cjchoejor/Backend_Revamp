@@ -93,10 +93,10 @@ async function main() {
       unitNote: "minutes",
     },
     {
-      key: "inspection.postCheckout.windowDays",
+      key: "inspection.postCheckout.windowHours",
       purpose: "W9 POST_CHECKOUT_INSPECTION_W9 dueAt when inspection is deferred at S8.",
       newValue: 1,
-      unitNote: "days (min 1 in code; use timer dueAt adjustment for fast test if needed)",
+      unitNote: "hours (seed default 18; legacy windowDays still supported as fallback)",
     },
     {
       key: "feedback.solicitation.delaySeconds",
@@ -212,7 +212,7 @@ async function main() {
   }
 
   lines.push(section("Notes / constraints", [
-    "- Some windows are designed in **days** (e.g. `inspection.postCheckout.windowDays`, `payment.followUp.ttlDays`).",
+    "- W9 uses **hours** (`inspection.postCheckout.windowHours`; legacy `windowDays` fallback). Other windows may use days (e.g. `payment.followUp.ttlDays`).",
     "  - For those, we set them to the smallest valid value, and in the timed test we’ll either:",
     "    - choose flows where the worker is not required to fire, or",
     "    - adjust the scheduled timer’s `dueAt/firesAt` to near-now (still letting pg-boss process it naturally).",

@@ -8,8 +8,9 @@ import { useSession } from "@/hooks/use-session";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EntryHeader } from "./entry-header";
 import { StageStepper } from "./stage-stepper";
-import { StageTransitionProvider, useStageTransition } from "./stage-transition-context";
-import { StageTransitionOverlay } from "./stage-transition-overlay";
+import { useStageTransition } from "./stage-transition-context";
+import { EntryDetailProvider } from "./entry-detail-context";
+import { StageContentSkeleton } from "./stage-content-skeleton";
 import type { Stage } from "@/types/api";
 
 type EntryWorkspaceProps = {
@@ -20,32 +21,38 @@ type EntryWorkspaceProps = {
 };
 
 export function EntryWorkspace({ entryId, stageSlug, stage, children }: EntryWorkspaceProps) {
-  return (
-    <StageTransitionProvider>
-      <EntryWorkspaceInner entryId={entryId} stageSlug={stageSlug} stage={stage}>
-        {children}
-      </EntryWorkspaceInner>
-      <StageTransitionOverlay />
-    </StageTransitionProvider>
-  );
-}
-
-function EntryWorkspaceInner({ entryId, stageSlug, stage, children }: EntryWorkspaceProps) {
   const { session } = useSession();
-  const { active: transitionActive, endTransition } = useStageTransition();
+  const { active: transitionActive, targetStage, endTransition } = useStageTransition();
   const { data: entry, isLoading, isFetching, error } = useQuery({
     queryKey: ["entry", entryId],
     queryFn: () => getEntry(session!, entryId),
     enabled: !!session,
+    staleTime: 15_000,
   });
 
+  const isLeavingPage = transitionActive && !!targetStage && targetStage !== stage;
+  const isArrivingPage = transitionActive && targetStage === stage;
+  const stageMatchesEntry = entry?.currentStage === stage;
+  const blockWorkspace =
+    transitionActive &&
+    (isLeavingPage || (isArrivingPage && (!stageMatchesEntry || isLoading || isFetching)));
+
   useEffect(() => {
-    if (transitionActive && !isLoading && !isFetching && entry) {
+    if (!transitionActive || !entry) return;
+
+    if (targetStage) {
+      if (entry.currentStage === targetStage && !isLoading && !isFetching) {
+        endTransition();
+      }
+      return;
+    }
+
+    if (!isLoading && !isFetching) {
       endTransition();
     }
-  }, [transitionActive, isLoading, isFetching, entry, endTransition]);
+  }, [transitionActive, targetStage, entry, isLoading, isFetching, endTransition]);
 
-  if (isLoading && !transitionActive) {
+  if (isLoading && !entry && !transitionActive) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-32 w-full" />
@@ -71,7 +78,13 @@ function EntryWorkspaceInner({ entryId, stageSlug, stage, children }: EntryWorks
     <div className="mx-auto max-w-5xl space-y-6">
       <EntryHeader entry={entry} />
       <StageStepper entryId={entryId} currentStage={entry.currentStage} activeSlug={stageSlug} />
-      {children}
+      {blockWorkspace ? (
+        <StageContentSkeleton />
+      ) : (
+        <EntryDetailProvider entry={entry} isFetching={isFetching}>
+          {children}
+        </EntryDetailProvider>
+      )}
     </div>
   );
 }

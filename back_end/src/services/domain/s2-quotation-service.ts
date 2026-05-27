@@ -24,10 +24,7 @@ import { enforceGroupRateContextForS2Quotation } from "../../policies/26-group-f
 import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
-
-function ref(versionNumber: number) {
-  return `Q-${String(versionNumber).padStart(3, "0")}`;
-}
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
 export async function createQuotation(
   prisma: PrismaClient,
@@ -106,12 +103,13 @@ export async function createQuotation(
   };
 
   return prisma.$transaction(async (tx) => {
+    const referenceNumber = await allocateReadableId(tx, READABLE_ID_PREFIXES.QUOTATION);
     const created = await tx.quotation.create({
       data: {
         entryId,
         segmentId,
         versionNumber: nextVersion,
-        referenceNumber: ref(nextVersion),
+        referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
         totalAmount: pricing.effectiveRate,
@@ -252,12 +250,13 @@ export async function createGroupQuotation(
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
+    const referenceNumber = await allocateReadableId(tx, READABLE_ID_PREFIXES.QUOTATION, now);
     const created = await tx.quotation.create({
       data: {
         entryId,
         segmentId,
         versionNumber: nextVersion,
-        referenceNumber: ref(nextVersion),
+        referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
         totalAmount: pricing.effectiveRate,
@@ -338,12 +337,13 @@ export async function supersedeQuotationWithNewDraft(
     const terms = { ...(prior.commercialTerms as any), notes: input.notes?.trim() ? input.notes.trim() : (prior.commercialTerms as any)?.notes };
     if (input.requestedDiscount) terms.requestedDiscount = input.requestedDiscount;
 
+    const referenceNumber = await allocateReadableId(tx, READABLE_ID_PREFIXES.QUOTATION, now);
     const created = await tx.quotation.create({
       data: {
         entryId: prior.entryId,
         segmentId: prior.segmentId,
         versionNumber: nextVersion,
-        referenceNumber: ref(nextVersion),
+        referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: terms as any,
         totalAmount: prior.totalAmount,

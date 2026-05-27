@@ -32,6 +32,7 @@ import { runGuestDataRetentionWorker } from "./w30-guest-data-retention-worker.j
 import { runLostFoundRetentionWorker } from "./w30-lost-found-retention-worker.js";
 import { runFomOverrideFrequencyWorkerW32 } from "./w32-fom-override-frequency-worker.js";
 import { runVipArrivalNotificationWorker } from "./w14-vip-arrival-notification-worker.js";
+import { reconcileOverduePostCheckoutInspectionTimers } from "./reconcile-overdue-w9-timers.js";
 
 export async function startWorkers() {
   const connectionString = process.env.DATABASE_URL;
@@ -91,6 +92,12 @@ export async function startWorkers() {
   await (engine.boss as any).work("GUEST_DATA_RETENTION_P18", async (job: any) => runGuestDataRetentionWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("LOST_FOUND_RETENTION_W30", async (job: any) => runLostFoundRetentionWorker(prisma as any, unwrapJobData(job)));
   await (engine.boss as any).work("FOM_OVERRIDE_FREQUENCY_W32", async (job: any) => runFomOverrideFrequencyWorkerW32(prisma, unwrapJobData(job)));
+
+  const w9CatchUp = await reconcileOverduePostCheckoutInspectionTimers(prisma);
+  if (w9CatchUp.fired > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[workers] Reconciled ${w9CatchUp.fired} overdue POST_CHECKOUT_INSPECTION_W9 timer(s).`);
+  }
 
   return engine;
 }

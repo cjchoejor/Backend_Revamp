@@ -16,6 +16,8 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
+import { entryDetailInclude } from "../../lib/entry-detail-include.js";
+import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 
 export const entriesRouter = Router();
 
@@ -43,30 +45,7 @@ entriesRouter.get("/:id", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const entry = await prisma.entry.findUnique({
       where: { id: req.params.id },
-      include: {
-        reservation: true,
-        folio: {
-          include: {
-            invoices: { orderBy: { createdAt: "desc" } },
-            payments: { orderBy: { createdAt: "desc" } },
-            billingModelTransitions: { orderBy: { createdAt: "desc" }, take: 10 },
-          },
-        },
-        cancellationDisclosure: true,
-        guestProfile: true,
-        handoffs: { orderBy: { createdAt: "desc" } },
-        preArrivalTasks: true,
-        roomAssignments: { include: { room: true } },
-        availabilityConfigs: { orderBy: { createdAt: "desc" } },
-        segments: { orderBy: { segmentNumber: "desc" }, take: 5 },
-        quotations: { orderBy: { versionNumber: "desc" } },
-        speculativeHolds: {
-          orderBy: { placedAt: "desc" },
-          include: { room: { select: { id: true, roomNumber: true } } },
-        },
-        committedHold: true,
-        vipArrivalNotifications: { orderBy: { createdAt: "desc" }, take: 3 },
-      },
+      include: entryDetailInclude,
     });
     if (!entry) {
       next(new NotFoundError("Entry"));
@@ -105,6 +84,31 @@ entriesRouter.post(
     }
   },
 );
+
+/** FOM: mark deferred inspection window lapsed (runs W9 worker — same as timer expiry). */
+entriesRouter.post("/:id/post-checkout-inspection/expire-window", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    const result = await runPostCheckoutInspectionWorker(prisma, { entryId: req.params.id });
+    if (result.skipped) {
+      res.status(409).json({
+        error: "StateTransitionError",
+        message: `Cannot expire window: ${result.reason ?? "skipped"}`,
+      });
+      return;
+    }
+    const entry = await prisma.entry.findUnique({
+      where: { id: req.params.id },
+      include: entryDetailInclude,
+    });
+    if (!entry) {
+      next(new NotFoundError("Entry"));
+      return;
+    }
+    res.json(entry);
+  } catch (e) {
+    next(e);
+  }
+});
 
 entriesRouter.post("/:id/close", requireActorLevel("L2"), validateBody(closeEntryRequestSchema), async (req, res, next) => {
   try {

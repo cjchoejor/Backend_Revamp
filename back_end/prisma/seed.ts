@@ -1,10 +1,12 @@
 import {
   PrismaClient,
+  ActorLevel,
   Stage,
   EntryStatus,
   HoldState,
   HandoffType,
   HandoffState,
+  InvoiceType,
   FolioState,
   InventoryClaimState,
   TaskStatus,
@@ -16,10 +18,26 @@ import {
   FolioLineType,
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../src/lib/readable-id.js";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  // Admin console registries
+  await prisma.rolePermissionMapping.deleteMany();
+  await prisma.roleSessionConfig.deleteMany();
+  await prisma.role.deleteMany();
+  await prisma.department.deleteMany();
+  await prisma.hotelProfile.deleteMany();
+  await prisma.workOrderTemplate.deleteMany();
+  await prisma.handoffChecklistTemplate.deleteMany();
+  await prisma.invoiceTemplate.deleteMany();
+  await prisma.communicationTemplate.deleteMany();
+  await prisma.vipNotificationRoutingConfig.deleteMany();
+  await prisma.feedbackSurveyTemplate.deleteMany();
+  await prisma.modeConfiguration.deleteMany();
+  await prisma.policyRegistry.deleteMany();
+
   await prisma.sessionEventRecord.deleteMany();
   await prisma.sessionRecord.deleteMany();
   await prisma.staffUser.deleteMany();
@@ -251,10 +269,26 @@ async function main() {
       notes: "W27 — offsets from dispute openedAt; second timer only if resolutionReminderMinutes > firstResponseDueMinutes",
     },
     { configKey: "nightAudit.schedule", configValue: { stayNightReminderHourUtc: 14 }, notes: "SIG-S5 Policy 59 — UTC hour for per stay-night W37 countdown jobs" },
+    { configKey: "nightAudit.scheduleTime", configValue: "0 2 * * *", notes: "Admin readiness — cron for night audit run" },
+    { configKey: "payment.followUp.intervals", configValue: [1, 3, 7], notes: "S9 readiness — days after checkout for payment follow-up" },
+    {
+      configKey: "invoice.templates",
+      configValue: [{ templateKey: "final-v1", isActive: true }, { templateKey: "proforma-v1", isActive: true }],
+      notes: "S9 readiness — active invoice template keys",
+    },
+    { configKey: "feedback.survey.templates", configValue: [{ templateKey: "post-stay-v1", isActive: true }] },
+    { configKey: "feedback.platform.links", configValue: { google: "https://example.com/review" } },
+    { configKey: "government.submission.config", configValue: { enabled: false } },
+    { configKey: "identity.document.retentionPeriodDays", configValue: { PASSPORT: 2555, CID: 2555, DEFAULT: 2555 } },
+    { configKey: "expiry.defaults", configValue: { inquiry: 3600, quotation: 86400, hold: 3600 } },
     { configKey: "housekeeping.sla.windowMinutes", configValue: 180 },
     { configKey: "housekeeping.sla.readinessWindowMinutes", configValue: 180, notes: "S5 readiness SLA window from assignment (S5)" },
     { configKey: "room.readiness.slaWindow", configValue: 10800, notes: "Room readiness SLA window (seconds) for W23 at S5–S6 (S6)" },
-    { configKey: "inspection.postCheckout.windowDays", configValue: 2 },
+    {
+      configKey: "inspection.postCheckout.windowHours",
+      configValue: 18,
+      notes: "W9 deferred inspection window — hours after S8 deferral (was windowDays=2)",
+    },
     { configKey: "payment.followUp.ttlDays", configValue: 7, notes: "W8 follow-up timer default TTL (days)" },
     { configKey: "fomOverride.frequency", configValue: { rollingWindowDays: 7, maxFrequency: 1 }, notes: "W33 override frequency threshold" },
     { configKey: "invoice.templates.final", configValue: [{ templateKey: "final-v1", isActive: true }] },
@@ -276,6 +310,94 @@ async function main() {
       notes: r.notes ?? null,
     })),
   });
+
+  // Seed admin console identity/org surface.
+  await prisma.hotelProfile.create({
+    data: {
+      hotelName: "Legphel Demo Hotel",
+      registeredAddress: "Demo Registered Address",
+      tradingAddress: "Demo Trading Address",
+      contactNumbers: [{ label: "Front Desk", value: "+0000000000" }],
+      primaryEmail: "admin@legphel.local",
+      operatingHours: { checkIn: "14:00", checkOut: "12:00" },
+      publicHolidaySchedule: [],
+      timeZone: "Asia/Dhaka",
+      propertyCurrency: "BTN",
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.department.createMany({
+    data: [
+      { departmentCode: "FRONT_OFFICE", departmentName: "Front Office", isActive: true, createdBy: "actor-seed-system" },
+      { departmentCode: "HOUSEKEEPING", departmentName: "Housekeeping", isActive: true, createdBy: "actor-seed-system" },
+      { departmentCode: "ACCOUNTS", departmentName: "Accounts", isActive: true, createdBy: "actor-seed-system" },
+    ],
+  });
+
+  const roles = await prisma.role.createMany({
+    data: [
+      { roleCode: "FRONT_DESK", displayName: "Front Desk", actorLevel: ActorLevel.L1, isActive: true, createdBy: "actor-seed-system" },
+      { roleCode: "FOM", displayName: "Front Office Manager", actorLevel: ActorLevel.L2, isActive: true, createdBy: "actor-seed-system" },
+      { roleCode: "GM", displayName: "General Manager", actorLevel: ActorLevel.L3, isActive: true, createdBy: "actor-seed-system" },
+      { roleCode: "ADMIN", displayName: "Administrator", actorLevel: ActorLevel.L4, isActive: true, createdBy: "actor-seed-system" },
+    ],
+  });
+  void roles; // createMany returns count only
+
+  const seededRoles = await prisma.role.findMany({ where: { roleCode: { in: ["FRONT_DESK", "FOM", "GM", "ADMIN"] } } });
+  await prisma.roleSessionConfig.createMany({
+    data: seededRoles.map((r) => ({
+      roleId: r.id,
+      idleLockTimeoutSeconds: 600,
+      hardLogoutTimeoutSeconds: 28800,
+      manualLockAvailable: true,
+      createdBy: "actor-seed-system",
+    })),
+  });
+
+  await prisma.communicationTemplate.create({
+    data: {
+      templateKey: "quotation-v1",
+      channel: "EMAIL",
+      templateType: "QUOTATION",
+      bodyTemplate: "Dear guest, your quotation reference {{entryId}} is ready.",
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.invoiceTemplate.createMany({
+    data: [
+      {
+        templateKey: "final-v1",
+        invoiceType: InvoiceType.FINAL,
+        title: "Final invoice",
+        bodyTemplate: "Final invoice for stay {{entryId}}",
+        createdBy: "actor-seed-system",
+      },
+      {
+        templateKey: "proforma-v1",
+        invoiceType: InvoiceType.PROFORMA,
+        title: "Proforma invoice",
+        bodyTemplate: "Proforma for reservation {{entryId}}",
+        createdBy: "actor-seed-system",
+      },
+    ],
+  });
+
+  for (const handoffType of [HandoffType.H1, HandoffType.H2, HandoffType.H3] as const) {
+    const configKey = `handoff.${handoffType}.checklist` as const;
+    const row = configRows.find((r) => r.configKey === configKey);
+    await prisma.handoffChecklistTemplate.create({
+      data: {
+        handoffType,
+        checklistItems: row?.configValue ?? [],
+        version: 1,
+        isActive: true,
+        createdBy: "actor-seed-system",
+      },
+    });
+  }
 
   // Seed staff users for auth/session flows (SIG-S1 §8.1).
   const pinHashL1 = await bcrypt.hash("1111", 10);
@@ -327,6 +449,22 @@ async function main() {
       isShadowInventory: false,
     },
   });
+
+  // Additional empty (FREE, clean) rooms for availability / assignment testing.
+  for (const roomNumber of ["404", "405", "406", "407", "408", "409", "410"]) {
+    await prisma.room.create({
+      data: {
+        roomNumber,
+        roomTypeId: roomType.id,
+        floorNumber: Number.parseInt(roomNumber.slice(0, 1), 10),
+        capacity: 2,
+        currentClaimState: InventoryClaimState.FREE,
+        physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+        isDeficient: false,
+        isShadowInventory: false,
+      },
+    });
+  }
 
   await prisma.room.create({
     data: {
@@ -508,6 +646,7 @@ async function main() {
 
   await prisma.reservation.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.RESERVATION),
       entryId: entry.id,
       segmentId: segment.id,
       frozenRate: 350,
@@ -621,6 +760,7 @@ async function main() {
 
   await prisma.reservation.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.RESERVATION),
       entryId: entryCredit.id,
       segmentId: seg2.id,
       frozenRate: 200,
@@ -806,6 +946,7 @@ async function main() {
 
   await prisma.reservation.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.RESERVATION),
       entryId: entryS7.id,
       segmentId: segS7.id,
       frozenRate: 350,
@@ -825,6 +966,7 @@ async function main() {
 
   await prisma.reservation.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.RESERVATION),
       entryId: entryS7DirectBill.id,
       segmentId: segS7DirectBill.id,
       frozenRate: 500,

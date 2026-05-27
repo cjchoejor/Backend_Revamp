@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { AppShell } from "@/components/layout/app-shell";
+import { AppOrAdminLayout } from "@/components/layout/app-or-admin-layout";
 
 export default function AppLayout({ children }: { children: ReactNode }) {
-  return <AppShell>{children}</AppShell>;
+  return <AppOrAdminLayout>{children}</AppOrAdminLayout>;
 }

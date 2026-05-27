@@ -25,6 +25,7 @@ import { enforceEntryVersionMatchesClientForOptimisticLock } from "../../policie
 import { enforceCommitmentRateFreezeAtS4 } from "../../policies/08-pricing-rate-plan/p20-commitment-rate-freeze-at-s4.js";
 import { dispatchConfirmationVoucherTx } from "./communication-service.js";
 import { createH1AtS4ConfirmationTx } from "./handoff-service.js";
+import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -145,8 +146,10 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     const frozenRatePlanId = (accepted.commercialTerms as any)?.ratePlanId ?? (accepted.commercialTerms as any)?.resolvedRatePlanId ?? "rp-slice";
     const frozenInclusions = (accepted.commercialTerms as any)?.inclusions ?? {};
 
+    const reservationId = await allocateReadableId(tx, READABLE_ID_PREFIXES.RESERVATION, now);
     const res = await tx.reservation.create({
       data: {
+        id: reservationId,
         entryId,
         segmentId,
         frozenRate: frozenRate || 0,

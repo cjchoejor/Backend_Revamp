@@ -7,6 +7,7 @@ import { enforceH5PresentForS8ToS9 } from "../policies/25-handoff/p63-handoff-li
 import { enforceEntryAtS8ForS8ToS9Progression } from "../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { schedulePaymentFollowUpW8IfOutstanding } from "../lib/schedule-payment-followup-w8.js";
 import { buildOrAutoFulfilH5 } from "../services/domain/s8-checkout-service.js";
+import { loadEntryDetail } from "../lib/entry-detail-include.js";
 
 export async function progressStageS8ToS9(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
   if (clientVersion == null) throw new ValidationError("version is required");
@@ -43,5 +44,5 @@ export async function progressStageS8ToS9(prisma: PrismaClient, entryId: string,
     });
   });
 
-  return prisma.entry.findUniqueOrThrow({ where: { id: entryId } });
+  return loadEntryDetail(prisma, entryId);
 }

@@ -32,8 +32,72 @@ import * as reservationService from "../../services/domain/reservation-service.j
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s8S9StateMachine from "../../state-machines/s8-s9-state-machine.js";
 import { Stage } from "@prisma/client";
+import { entryDetailInclude } from "../../lib/entry-detail-include.js";
+import { getTimerEngine } from "../../services/infrastructure/timer-management-service.js";
+import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 
 export const reservationsRouter = Router();
+
+async function loadEntryDetail(entryId: string) {
+  return prisma.entry.findUnique({ where: { id: entryId }, include: entryDetailInclude });
+}
+
+/** SIG-S4→S5 — manual / same-day activation (runs W4 pre-arrival worker). */
+reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const entryId = req.params.id;
+    const actorId = req.actor!.actorId;
+    const before = await prisma.entry.findUnique({
+      where: { id: entryId },
+      select: { currentStage: true, status: true },
+    });
+    if (!before) {
+      next(new NotFoundError("Entry"));
+      return;
+    }
+    enforceEntryNotClosedForStageProgression({ status: before.status });
+
+    const engine = await getTimerEngine();
+    const activation = await runPreArrivalWindowActivationWorker(prisma, engine, { entryId });
+
+    let entry = await loadEntryDetail(entryId);
+    if (!entry) {
+      next(new NotFoundError("Entry"));
+      return;
+    }
+
+    if (activation.skipped) {
+      const ok =
+        activation.reason === "ALREADY_FIRED" ||
+        (activation.reason === "NOT_AT_S4" && entry.currentStage === Stage.S5);
+      if (!ok && entry.currentStage !== Stage.S5) {
+        next(new ValidationError(`Pre-arrival activation could not run: ${activation.reason ?? "unknown"}`));
+        return;
+      }
+    }
+
+    if (entry.currentStage === Stage.S5) {
+      const taskCount = await prisma.preArrivalTask.count({ where: { entryId } });
+      if (taskCount === 0) {
+        await preArrivalService.initialiseTasks(prisma, entryId, actorId);
+        entry = await loadEntryDetail(entryId);
+      }
+    }
+
+    if (!entry || entry.currentStage !== Stage.S5) {
+      next(
+        new ValidationError(
+          "Entry must be at S4 (with confirmed reservation) to activate pre-arrival, or already at S5.",
+        ),
+      );
+      return;
+    }
+
+    res.json(entry);
+  } catch (e) {
+    next(e);
+  }
+});
 
 reservationsRouter.post("/entries/:id/confirm", requireActorLevel("L1"), validateBody(confirmReservationRequestSchema), async (req, res, next) => {
   try {
@@ -128,25 +192,7 @@ reservationsRouter.post("/entries/:id/progress-stage", requireActorLevel("L1"), 
         return;
       }
       await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, { version });
-      const entryAfterConfirm = await prisma.entry.findUnique({
-        where: { id: req.params.id },
-        include: {
-          reservation: true,
-          folio: {
-            include: {
-              invoices: { orderBy: { createdAt: "desc" } },
-              payments: { orderBy: { createdAt: "desc" } },
-              billingModelTransitions: { orderBy: { createdAt: "desc" }, take: 10 },
-            },
-          },
-          cancellationDisclosure: true,
-          guestProfile: true,
-          handoffs: { orderBy: { createdAt: "desc" } },
-          committedHold: true,
-          quotations: { orderBy: { versionNumber: "desc" } },
-          segments: { orderBy: { segmentNumber: "desc" }, take: 5 },
-        },
-      });
+      const entryAfterConfirm = await loadEntryDetail(req.params.id);
       if (!entryAfterConfirm) {
         next(new NotFoundError("Entry"));
         return;
