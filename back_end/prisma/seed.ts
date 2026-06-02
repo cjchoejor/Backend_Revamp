@@ -37,6 +37,11 @@ async function main() {
   await prisma.feedbackSurveyTemplate.deleteMany();
   await prisma.modeConfiguration.deleteMany();
   await prisma.policyRegistry.deleteMany();
+  await prisma.ratePlanRegistry.deleteMany();
+  await prisma.seasonCalendar.deleteMany();
+  await prisma.packageRegistry.deleteMany();
+  await prisma.cancellationPolicyRegistry.deleteMany();
+  await prisma.aiActorIdentity.deleteMany();
 
   await prisma.sessionEventRecord.deleteMany();
   await prisma.sessionRecord.deleteMany();
@@ -335,6 +340,85 @@ async function main() {
     ],
   });
 
+  // Sample policy registry rows (versioned DB definitions — separate from TypeScript runtime guards).
+  await prisma.policyRegistry.createMany({
+    data: [
+      {
+        policyId: "registry.noShow.graceMinutes",
+        policyClass: "CANCELLATION",
+        policyDefinition: { description: "Grace period before no-show treatment", enabled: true, graceMinutes: 120 },
+        version: 1,
+        isActive: true,
+        createdBy: "actor-seed-system",
+      },
+      {
+        policyId: "registry.duplicateInquiry.blockS1Exit",
+        policyClass: "DUPLICATE_DETECTION",
+        policyDefinition: { description: "Block S1 exit when open duplicate flag exists", enabled: true },
+        version: 1,
+        isActive: true,
+        createdBy: "actor-seed-system",
+      },
+      {
+        policyId: "registry.shadowInventory.l4Only",
+        policyClass: "AVAILABILITY",
+        policyDefinition: { description: "Shadow inventory visible to L4 only by default", enabled: true },
+        version: 1,
+        isActive: true,
+        createdBy: "actor-seed-system",
+      },
+    ],
+  });
+
+  // --- Admin console registries (ACIG v1.1) ---
+  await prisma.ratePlanRegistry.createMany({
+    data: [
+      // Deluxe Weekday is bound to the Deluxe room type (DLX-0001).
+      { name: "Deluxe Weekday", description: "Standard weekday deluxe rate", roomTypeId: "DLX-0001", type: "INDIVIDUAL", baseRate: 500 as any, currency: "BTN", msr: 350 as any, createdBy: "actor-seed-system" },
+      // Walk-in Standard is universal — applies to any room type.
+      { name: "Walk-in Standard", description: "Default walk-in rate plan", roomTypeId: null, type: "RACK", baseRate: 650 as any, currency: "BTN", msr: 500 as any, overrideMargin: 0.05 as any, createdBy: "actor-seed-system" },
+    ],
+  });
+
+  await prisma.seasonCalendar.create({
+    data: {
+      name: "Peak 2026",
+      startDate: new Date("2026-10-01T00:00:00.000Z"),
+      endDate: new Date("2026-12-31T23:59:59.000Z"),
+      rateMultiplier: 1.25 as any,
+      priority: 10,
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.packageRegistry.create({
+    data: {
+      name: "Honeymoon Package",
+      description: "Romantic add-ons bundle",
+      inclusions: [{ label: "Welcome flowers" }, { label: "Candlelight dinner" }],
+      priceAdjustment: 1500 as any,
+      currency: "BTN",
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.cancellationPolicyRegistry.create({
+    data: {
+      name: "Standard Cancellation",
+      penaltyTiers: [
+        { daysBeforeArrival: 7, penaltyPercentage: 0 },
+        { daysBeforeArrival: 3, penaltyPercentage: 50 },
+        { daysBeforeArrival: 0, penaltyPercentage: 100 },
+      ],
+      noShowTreatment: "FULL_PENALTY",
+      createdBy: "actor-seed-system",
+    },
+  });
+
+  await prisma.aiActorIdentity.create({
+    data: { displayName: "Legphel AI Concierge", createdBy: "actor-seed-system" },
+  });
+
   const roles = await prisma.role.createMany({
     data: [
       { roleCode: "FRONT_DESK", displayName: "Front Desk", actorLevel: ActorLevel.L1, isActive: true, createdBy: "actor-seed-system" },
@@ -418,8 +502,9 @@ async function main() {
     data: { code: "HALL-A", name: "Hall A", capacity: 200 },
   });
 
+  // Generate the readable `<CODE>-<global-seq>` ID — matches the admin createRoomType service.
   const roomType = await prisma.roomType.create({
-    data: { code: "DLX", name: "Deluxe King" },
+    data: { id: "DLX-0001", code: "DLX", name: "Deluxe King" },
   });
 
   // Rooms for S1 availability (must include at least one FREE and one DEFICIENT-FREE).
@@ -1192,5 +1277,7 @@ main()
   .catch((e) => {
     console.error(e);
     prisma.$disconnect();
-    process.exit(1);
+    // Avoid `process` dependency in environments without Node typings.
+    // A non-zero exit is still achieved by allowing the rejection to surface.
+    throw e;
   });

@@ -54,13 +54,29 @@ export async function acceptHandoff(
     checklistCompletion,
   });
 
-  const updated = await prisma.handoffRecord.update({
-    where: { id: handoffId },
-    data: {
-      state: HandoffState.ACCEPTED,
-      acceptedAt: new Date(),
-      acceptedBy: actorId,
-    },
+  const now = new Date();
+  const updated = await prisma.$transaction(async (tx) => {
+    const u = await tx.handoffRecord.update({
+      where: { id: handoffId },
+      data: { state: HandoffState.ACCEPTED, acceptedAt: now, acceptedBy: actorId },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: `HANDOFF.${u.handoffType}_ACCEPTED`,
+        actorId,
+        actorLevel: "L1",
+        entityType: "HandoffRecord",
+        entityId: handoffId,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: u.stageContext,
+        inquiryId: null,
+        entryId: u.entryId,
+        payload: { handoffId, entryId: u.entryId, type: u.handoffType },
+        createdBy: actorId,
+      },
+    });
+    return u;
   });
 
   // SIG-S6: cancel W25 acceptance timer when H2/H3 accepted.
@@ -104,14 +120,34 @@ export async function fulfilHandoff(
     fulfilmentEvidence: ev,
   });
 
-  return prisma.handoffRecord.update({
-    where: { id: handoffId },
-    data: {
-      state: HandoffState.FULFILLED,
-      fulfilledAt: new Date(),
-      fulfilledBy: actorId,
-      fulfilmentEvidence: enforcedEvidence as object,
-    },
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const u = await tx.handoffRecord.update({
+      where: { id: handoffId },
+      data: {
+        state: HandoffState.FULFILLED,
+        fulfilledAt: now,
+        fulfilledBy: actorId,
+        fulfilmentEvidence: enforcedEvidence as object,
+      },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: `HANDOFF.${u.handoffType}_FULFILLED`,
+        actorId,
+        actorLevel: "L1",
+        entityType: "HandoffRecord",
+        entityId: handoffId,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: u.stageContext,
+        inquiryId: null,
+        entryId: u.entryId,
+        payload: { handoffId, entryId: u.entryId, type: u.handoffType },
+        createdBy: actorId,
+      },
+    });
+    return u;
   });
 }
 

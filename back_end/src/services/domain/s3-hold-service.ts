@@ -230,6 +230,70 @@ export async function confirmCommittedHoldTx(
   return tx.committedHold.findUniqueOrThrow({ where: { id: hold.id } });
 }
 
+/**
+ * SIG-S6 room change — release the entry's committed hold regardless of state (PLACED or
+ * CONFIRMED) so the old room is freed and a fresh hold can be placed for the newly chosen room.
+ * Frees the held room, cancels W3 expiry timers, and writes a trace event. Idempotent: a hold
+ * already RELEASED/EXPIRED is left untouched. Runs inside the caller's transaction.
+ */
+export async function releaseCommittedHoldForRoomChange(
+  tx: Prisma.TransactionClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: string },
+  reason: string,
+  inquiryId: string | null,
+) {
+  const hold = await tx.committedHold.findUnique({ where: { entryId } });
+  if (!hold) return null;
+  if (hold.state === HoldState.RELEASED || hold.state === HoldState.EXPIRED) return hold;
+  const now = new Date();
+
+  if (hold.roomId) {
+    const room = await tx.room.findUnique({ where: { id: hold.roomId } });
+    if (room && room.currentClaimState !== InventoryClaimState.FREE) {
+      await tx.room.update({ where: { id: hold.roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
+      await tx.roomClaimStateEvent.create({
+        data: { roomId: hold.roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason, effectiveFrom: now },
+      });
+    }
+  }
+
+  const engine = await getTimerEngine();
+  const timers = await tx.timerRecord.findMany({
+    where: { entityType: "CommittedHold", entityId: hold.id, status: "SCHEDULED" },
+    select: { id: true, pgBossJobId: true },
+  });
+  await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+  await tx.timerRecord.updateMany({
+    where: { id: { in: timers.map((t) => t.id) } },
+    data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: reason } as any,
+  });
+
+  const updated = await tx.committedHold.update({
+    where: { id: hold.id },
+    data: { state: HoldState.RELEASED, releasedAt: now, releasedBy: actor.actorId, releaseReason: reason },
+  });
+
+  await tx.traceEvent.create({
+    data: {
+      eventType: "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
+      actorId: actor.actorId,
+      actorLevel: (actor.actorLevel ?? "L1") as any,
+      entityType: "CommittedHold",
+      entityId: hold.id,
+      operation: "RELEASE",
+      timestamp: now,
+      stageContext: Stage.S6,
+      inquiryId,
+      entryId,
+      payload: { entryId, committedHoldId: hold.id, roomId: hold.roomId, priorState: hold.state, reason },
+      createdBy: actor.actorId,
+    },
+  });
+
+  return updated;
+}
+
 export async function releaseOnReEntry(
   prisma: PrismaClient | Prisma.TransactionClient,
   entryId: string,

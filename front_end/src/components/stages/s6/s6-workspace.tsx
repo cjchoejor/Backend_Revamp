@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   BedDouble,
@@ -27,10 +28,9 @@ import { ApiErrorAlert } from "@/components/stages/shared/api-error-alert";
 import { ProgressStageButton } from "@/components/stages/shared/progress-stage-button";
 import { STAGES, stagePath } from "@/config/stages";
 import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
-import { assignRoom } from "@/lib/api/pre-arrival";
+import { s6RoomChangeReEnterS1 } from "@/lib/api/pre-arrival";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
-import { listRooms } from "@/lib/api/rooms";
-import { formatClaimState, formatPhysicalState, formatRoomPickerLabel } from "@/lib/room-inventory-status";
+import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { formatListId } from "@/lib/readable-id";
@@ -72,6 +72,7 @@ function guestName(entry: EntryDetail) {
 export function S6Workspace({ entry }: S6WorkspaceProps) {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const meta = STAGES[5];
 
   const reservation = entry.reservation;
@@ -93,7 +94,7 @@ export function S6Workspace({ entry }: S6WorkspaceProps) {
   const [documentNumber, setDocumentNumber] = useState("");
   const [keyCount, setKeyCount] = useState("1");
   const [registrationConfirmed, setRegistrationConfirmed] = useState(false);
-  const [roomChangeId, setRoomChangeId] = useState("");
+  const [roomChangeReason, setRoomChangeReason] = useState("");
   const [actionError, setActionError] = useState<unknown>(null);
 
   useEffect(() => {
@@ -108,12 +109,6 @@ export function S6Workspace({ entry }: S6WorkspaceProps) {
   const paymentStatus = paymentStatusQuery.data;
   const paymentReconciled =
     !!folio?.advancePaymentReconciliationComplete || paymentStatus?.satisfied === true;
-
-  const roomsCatalogQuery = useQuery({
-    queryKey: ["rooms-catalog"],
-    queryFn: () => listRooms(session!),
-    enabled: !!session && entry.currentStage === "S6" && isElevated(session.actorLevel),
-  });
 
   const identityVerified = Boolean(guest?.identityVerifiedAt);
   const roomReady = isRoomReady(latestAssignment);
@@ -234,16 +229,14 @@ export function S6Workspace({ entry }: S6WorkspaceProps) {
   const roomChangeMutation = useMutation({
     mutationFn: () => {
       if (!session) throw new Error("Not signed in");
-      return assignRoom(session, entry.id, {
-        roomId: roomChangeId.trim(),
-        notes: "S6 room change — re-entry to S1",
-        reEntryToS1: true,
-      });
+      return s6RoomChangeReEnterS1(session, entry.id, roomChangeReason.trim());
     },
     onSuccess: () => {
       setActionError(null);
-      toast.success("Room change initiated — re-select availability at S1");
+      setRoomChangeReason("");
+      toast.success("Room change requested — select the new room at S1");
       invalidate();
+      router.push(stagePath(entry.id, "S1"));
     },
     onError: (e) => {
       setActionError(e);
@@ -491,31 +484,24 @@ export function S6Workspace({ entry }: S6WorkspaceProps) {
                 <p className="text-xs font-medium text-muted-foreground">
                   Room change at check-in (S6→S1 re-entry, L2+)
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    className="h-9 min-w-[140px] flex-1 rounded-md border border-input bg-background px-3 text-sm"
-                    value={roomChangeId}
-                    onChange={(e) => setRoomChangeId(e.target.value)}
-                  >
-                    <option value="">Select new room…</option>
-                    {(roomsCatalogQuery.data?.items ?? []).map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {formatRoomPickerLabel({
-                          roomNumber: r.roomNumber,
-                          currentClaimState: r.currentClaimState,
-                          physicalState: r.physicalState,
-                          isBlocked: r.isBlocked,
-                        })}
-                      </option>
-                    ))}
-                  </select>
+                <p className="text-xs text-muted-foreground">
+                  Give a reason for the change. The booking returns to S1 where you select the new room; the old room
+                  and its hold are released and recorded.
+                </p>
+                <div className="flex flex-wrap items-start gap-2">
+                  <Input
+                    className="min-w-[200px] flex-1"
+                    placeholder="Reason for room change (required)"
+                    value={roomChangeReason}
+                    onChange={(e) => setRoomChangeReason(e.target.value)}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={roomChangeMutation.isPending || !roomChangeId.trim()}
+                    disabled={roomChangeMutation.isPending || roomChangeReason.trim().length < 3}
                     onClick={() => roomChangeMutation.mutate()}
                   >
-                    Change room → S1
+                    Request room change → S1
                   </Button>
                 </div>
               </div>

@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -H \"X-Actor-Id: staff-admin-1\" -H \"X-Actor-Level: L4\" \"http://localhost:4000/api/admin/policies?activeOnly=true\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:4000/api/admin/overview -H \"X-Actor-Id: staff-admin-1\" -H \"X-Actor-Level: L4\")",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/admin/audit-trail)",
+      "Bash(echo \"/admin/audit-trail -> $\\(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/admin/audit-trail\\)\")",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/entries/3520cd82-c897-4624-a3e7-0e6e3ca0c02d/stages/s5)",
+      "Bash(echo \"/entries/<seed>/stages/s5 -> $\\(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/entries/3520cd82-c897-4624-a3e7-0e6e3ca0c02d/stages/s5\\)\")",
+      "Bash(grep -E 'traceEvent|prisma\\\\.$transaction')",
+      "Bash(tail -8 'C:\\\\Users\\\\ASUS\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--New-Legphel-Web-Backend-ReVamped\\\\fab0b93a-e319-4c1f-81d2-17ba7eec7aa7\\\\tasks\\\\byml7bhq2.output')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:4000/api/health)",
+      "Bash(curl -s -H \"X-Actor-Id: staff-fom-1\" -H \"X-Actor-Level: L2\" \"http://localhost:4000/api/entries/ENT-20260529-0002\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('stage',d.get\\('currentStage'\\),'version',d.get\\('version'\\)\\); h=d.get\\('committedHold'\\); print\\('hold', h and {k:h.get\\(k\\) for k in ['state','roomId']}\\); r=d.get\\('reservation'\\); print\\('reservation', r and {k:r.get\\(k\\) for k in ['id','segmentId']}\\); print\\('segmentNumber', d.get\\('segmentNumber'\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" -X POST -H \"X-Actor-Id: staff-fom-1\" -H \"X-Actor-Level: L2\" -H \"Content-Type: application/json\" -d '{\"targetStage\":\"S4\",\"version\":9}' \"http://localhost:4000/api/entries/ENT-20260529-0002/progress-stage\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('stage',d.get\\('currentStage'\\),'version',d.get\\('version'\\)\\); h=d.get\\('committedHold'\\); print\\('hold', h and h.get\\('state'\\)\\); r=d.get\\('reservation'\\); print\\('reservation', r and r.get\\('id'\\), 'confirmedAt', r and r.get\\('confirmedAt'\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" -X POST -H \"X-Actor-Id: staff-fom-1\" -H \"X-Actor-Level: L2\" -H \"Content-Type: application/json\" \"http://localhost:4000/api/entries/ENT-20260529-0002/activate-pre-arrival\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('stage', d.get\\('currentStage'\\), 'version', d.get\\('version'\\)\\)\")",
+      "Bash(curl -s -H \"X-Actor-Id: staff-fom-1\" -H \"X-Actor-Level: L2\" \"http://localhost:4000/api/entries/ENT-20260529-0002/trace?limit=40\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(e['timestamp'][11:19], e['eventType']\\) for e in d.get\\('items',[]\\)]\")",
+      "PowerShell(Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess | ForEach-Object { $proc = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; $cmd = \\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($_.OwningProcess\\)\" -ErrorAction SilentlyContinue\\).CommandLine; \"PID $\\($_.OwningProcess\\) \\($\\($proc.ProcessName\\)\\) -> $cmd\" })",
+      "Bash(curl -s -o /dev/null -w \"backend on 4000: HTTP %{http_code}\\\\n\" http://localhost:4000/api/health)",
+      "Bash(npx tsx *)",
+      "PowerShell($tsx = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'tsx' -and $_.CommandLine -match 'src/index.ts' }; if \\($tsx\\) { $tsx | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; \"stopped tsx watcher\\(s\\)\" } else { \"no tsx watcher running\" })",
+      "Bash(findstr /R /I \"^## .*[Pp]olic\\\\|^### .*[Pp]olic\\\\|Policy A\\\\|Policy P-\\\\|^- *P[0-9]\\\\|^- *A[0-9]\" docs\\\\SIG-S*.md docs\\\\ACIG-v1_1.md)",
+      "Bash(findstr admin-service *)",
+      "Bash(findstr router *)",
+      "Bash(findstr \"^d\")",
+      "Bash(dir \"d:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\admin\" /b)",
+      "Bash(PowerShell -Command \"Get-ChildItem -Path 'back_end\\\\src\\\\services\\\\admin' -Filter '*admin-service.ts' | Measure-Object | Select-Object -ExpandProperty Count\")",
+      "Bash(xargs basename -a)",
+      "Bash(sed 's/.*admin.//')",
+      "Bash(ls \"front_end/src/app/\\(app\\)/admin/policies/\")",
+      "Bash(ls \"front_end/src/app/\\\\\\(app\\\\\\)/admin/policies/\")",
+      "Bash(sed 's/-admin-service.ts//')",
+      "Bash(sed 's/-router.ts//')"
+    ]
+  }
+}

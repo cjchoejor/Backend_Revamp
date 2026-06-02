@@ -15,6 +15,16 @@ import { adminTemplatesRouter } from "./templates-router.js";
 import { adminFinancialRouter } from "./financial-router.js";
 import { adminOperationalRouter } from "./operational-router.js";
 import { adminVipRouter } from "./vip-router.js";
+import { adminRatePlanRouter } from "./rate-plan-router.js";
+import { adminSeasonRouter } from "./season-router.js";
+import { adminPackageRouter } from "./package-router.js";
+import { adminCancellationPolicyRouter } from "./cancellation-policy-router.js";
+import { adminCommercialThresholdRouter } from "./commercial-threshold-router.js";
+import { adminOtaConfigRouter } from "./ota-config-router.js";
+import { adminAiAgentConfigRouter } from "./ai-agent-config-router.js";
+import { adminCommunicationConfigRouter } from "./communication-config-router.js";
+import { adminPostStayGovernanceRouter } from "./post-stay-governance-router.js";
+import { adminAuditTrailRouter } from "./audit-trail-router.js";
 
 export const adminRouter = Router();
 
@@ -30,6 +40,16 @@ adminRouter.use(adminTemplatesRouter);
 adminRouter.use(adminFinancialRouter);
 adminRouter.use(adminOperationalRouter);
 adminRouter.use(adminVipRouter);
+adminRouter.use(adminRatePlanRouter);
+adminRouter.use(adminSeasonRouter);
+adminRouter.use(adminPackageRouter);
+adminRouter.use(adminCancellationPolicyRouter);
+adminRouter.use(adminCommercialThresholdRouter);
+adminRouter.use(adminOtaConfigRouter);
+adminRouter.use(adminAiAgentConfigRouter);
+adminRouter.use(adminCommunicationConfigRouter);
+adminRouter.use(adminPostStayGovernanceRouter);
+adminRouter.use(adminAuditTrailRouter);
 
 /** Dev helper — enqueue a timer job (L4). */
 adminRouter.post("/enqueue", requireActorLevel("L4"), validateBody(adminEnqueueRequestSchema), async (req, res, next) => {

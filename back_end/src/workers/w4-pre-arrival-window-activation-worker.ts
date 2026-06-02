@@ -20,8 +20,20 @@ export async function runPreArrivalWindowActivationWorker(
   if (entry.currentStage !== Stage.S4) return { skipped: true, reason: "NOT_AT_S4" } as const;
   enforceReservationSnapshotPresentForS5Activation({ reservation: entry.reservation });
 
+  // Idempotency is scoped to the CURRENT segment: after a re-entry (e.g. room change) the entry
+  // has a prior activation event from its first pass through S4→S5, which must not block
+  // re-activation in the new segment.
+  const currentSegment = await prisma.segment.findFirst({
+    where: { entryId, segmentNumber: entry.segmentNumber },
+    orderBy: { startedAt: "desc" },
+  });
+  const activationSince = currentSegment?.startedAt ?? null;
   const alreadyFired = await prisma.traceEvent.findFirst({
-    where: { entryId, eventType: "PRE_ARRIVAL.ACTIVATION_FIRED" },
+    where: {
+      entryId,
+      eventType: "PRE_ARRIVAL.ACTIVATION_FIRED",
+      ...(activationSince ? { timestamp: { gte: activationSince } } : {}),
+    },
     orderBy: { timestamp: "desc" },
   });
   if (alreadyFired) return { skipped: true, reason: "ALREADY_FIRED" } as const;

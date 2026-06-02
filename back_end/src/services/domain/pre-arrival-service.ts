@@ -373,25 +373,57 @@ export async function updatePreArrivalTask(
     }
   }
 
+  const entryForTrace = await prisma.entry.findUnique({ where: { id: task.entryId }, select: { inquiryId: true, currentStage: true } });
+
   if (action === "WAIVE") {
     enforcePreArrivalTaskWaiveRequiresReason({ action, waivedReason });
-    return prisma.preArrivalTask.update({
-      where: { id: taskId },
-      data: {
-        status: TaskStatus.WAIVED,
-        waivedReason: waivedReason!.trim(),
-        waivedBy: actorId,
-      },
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.preArrivalTask.update({
+        where: { id: taskId },
+        data: { status: TaskStatus.WAIVED, waivedReason: waivedReason!.trim(), waivedBy: actorId },
+      });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "PRE_ARRIVAL_TASK.WAIVED",
+          actorId,
+          actorLevel: "L1",
+          entityType: "PreArrivalTask",
+          entityId: taskId,
+          operation: "UPDATE",
+          timestamp: new Date(),
+          stageContext: entryForTrace?.currentStage ?? null,
+          inquiryId: entryForTrace?.inquiryId ?? null,
+          entryId: task.entryId,
+          payload: { entryId: task.entryId, taskType: task.taskType, waivedReason: waivedReason!.trim() },
+          createdBy: actorId,
+        },
+      });
+      return updated;
     });
   }
 
-  return prisma.preArrivalTask.update({
-    where: { id: taskId },
-    data: {
-      status: TaskStatus.COMPLETE,
-      completedAt: new Date(),
-      completedBy: actorId,
-    },
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.preArrivalTask.update({
+      where: { id: taskId },
+      data: { status: TaskStatus.COMPLETE, completedAt: new Date(), completedBy: actorId },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "PRE_ARRIVAL_TASK.COMPLETED",
+        actorId,
+        actorLevel: "L1",
+        entityType: "PreArrivalTask",
+        entityId: taskId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: entryForTrace?.currentStage ?? null,
+        inquiryId: entryForTrace?.inquiryId ?? null,
+        entryId: task.entryId,
+        payload: { entryId: task.entryId, taskType: task.taskType },
+        createdBy: actorId,
+      },
+    });
+    return updated;
   });
 }
 

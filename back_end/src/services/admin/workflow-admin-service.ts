@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { ModeLifecycleState } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { invalidatePolicyRegistryCache } from "../../lib/policy-registry-runtime.js";
 
 export async function listModes(prisma: PrismaClient) {
   return prisma.modeConfiguration.findMany({ orderBy: [{ modeKey: "asc" }, { version: "desc" }] });
@@ -159,7 +160,7 @@ export async function savePolicy(
   const policyClass = input.policyClass.trim();
   if (!policyId || !policyClass) throw new ValidationError("policyId and policyClass are required");
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const latest = await tx.policyRegistry.findFirst({
       where: { policyId },
       orderBy: { version: "desc" },
@@ -195,17 +196,20 @@ export async function savePolicy(
 
     return created;
   });
+
+  invalidatePolicyRegistryCache(policyId);
+  return created;
 }
 
 export async function deactivatePolicy(prisma: PrismaClient, policyId: string, actorId: string) {
-  return prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
     const active = await tx.policyRegistry.findFirst({
       where: { policyId, isActive: true },
       orderBy: { version: "desc" },
     });
     if (!active) throw new NotFoundError("PolicyRegistry");
 
-    const updated = await tx.policyRegistry.update({
+    const result = await tx.policyRegistry.update({
       where: { id: active.id },
       data: { isActive: false },
     });
@@ -217,6 +221,9 @@ export async function deactivatePolicy(prisma: PrismaClient, policyId: string, a
       operation: "UPDATE",
       payload: { policyId, version: active.version },
     });
-    return updated;
+    return result;
   });
+
+  invalidatePolicyRegistryCache(policyId);
+  return updated;
 }

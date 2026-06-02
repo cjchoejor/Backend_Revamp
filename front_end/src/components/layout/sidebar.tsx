@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { Logo } from "@/components/brand/logo";
 import { mainNav, secondaryNav } from "@/config/site";
 import { cn } from "@/lib/utils";
+import { ZoneTransitionLink } from "@/components/layout/zone-transition";
 import type { Session } from "@/types/session";
 
 const LEVEL_RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
@@ -44,12 +45,25 @@ export function Sidebar({ session }: { session: Session }) {
         <div className="my-4 h-px bg-border" />
         {secondaryNav
           .filter((item) => canAccess(session.actorLevel, item.minLevel))
-          .map((item) => (
-            <Link key={item.href} href={item.href} className={linkClass(item.href)}>
-              <item.icon className="h-4 w-4 shrink-0" />
-              {item.title}
-            </Link>
-          ))}
+          .map((item) => {
+            // Cross-zone links into Admin trigger the transition overlay so the page change is not abrupt.
+            const isCrossZone = item.href === "/admin" || item.href.startsWith("/admin?");
+            const content = (
+              <>
+                <item.icon className="h-4 w-4 shrink-0" />
+                {item.title}
+              </>
+            );
+            return isCrossZone ? (
+              <ZoneTransitionLink key={item.href} href={item.href} target="admin" className={linkClass(item.href)}>
+                {content}
+              </ZoneTransitionLink>
+            ) : (
+              <Link key={item.href} href={item.href} className={linkClass(item.href)}>
+                {content}
+              </Link>
+            );
+          })}
       </nav>
       <div className="border-t p-4 text-xs text-muted-foreground">
         <p className="font-medium text-foreground">{session.displayName ?? session.userId}</p>

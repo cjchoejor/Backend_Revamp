@@ -13,6 +13,7 @@ import {
   placeCommittedHoldRequestSchema,
   progressStageRequestSchema,
   s3ReEntryRequestSchema,
+  s6RoomChangeReEnterS1RequestSchema,
   schedulePaymentMilestonesRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
 import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -305,6 +306,27 @@ reservationsRouter.post("/entries/:id/credit-ceiling-tier2-ack", requireActorLev
     next(e);
   }
 });
+
+// S6 room change — request a re-entry to S1 with a required reason. The new room is chosen
+// fresh at S1; no room is selected here. Reason is recorded (AmendmentEventRecord) and traced.
+reservationsRouter.post(
+  "/entries/:id/s6-room-change/re-enter-s1",
+  requireActorLevel("L2"),
+  validateBody(s6RoomChangeReEnterS1RequestSchema),
+  async (req, res, next) => {
+    try {
+      await entryService.reEnterS6ToS1(prisma, req.params.id, req.actor!.actorId, req.body.reason);
+      const entry = await prisma.entry.findUnique({ where: { id: req.params.id }, include: entryDetailInclude });
+      if (!entry) {
+        next(new NotFoundError("Entry"));
+        return;
+      }
+      res.json(entry);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1"), validateBody(createRoomAssignmentRequestSchema), async (req, res, next) => {
   try {

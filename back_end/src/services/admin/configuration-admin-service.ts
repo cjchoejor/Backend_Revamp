@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { isSystemSeedSetBy, supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
+import { getConfigKeyMeta, ownerSurfaceHint } from "../../lib/admin/config-key-registry.js";
 
 const FORBIDDEN_ZERO_KEYS = new Set([
   "expiry.s3.committedHoldTtlSeconds",
@@ -9,7 +10,36 @@ const FORBIDDEN_ZERO_KEYS = new Set([
   "expiry.s1.defaultTtlSeconds",
 ]);
 
+// When true, the generic ConfigurationService rejects keys with no registered validator
+// (full ACIG §6.2.25 strictness). Default lenient to preserve open-ended config writes.
+const STRICT_CONFIG_KEYS = process.env.ADMIN_STRICT_CONFIG_KEYS === "true";
+
+/**
+ * ACIG §6.2.25 — the generic ConfigurationService enforces key ownership and shape validation.
+ * Keys owned by a domain service must be written through that service's dedicated surface.
+ */
 function assertConfigValueAllowed(configKey: string, value: unknown) {
+  const meta = getConfigKeyMeta(configKey);
+
+  if (!meta) {
+    if (STRICT_CONFIG_KEYS) {
+      throw new ValidationError(`Unknown configuration key "${configKey}" — no registered validator`);
+    }
+  } else {
+    if (meta.owner !== "ConfigurationService") {
+      const hint = ownerSurfaceHint(meta.owner);
+      throw new ValidationError(
+        `Configuration key "${configKey}" is owned by ${meta.owner}` +
+          (hint ? ` — use its dedicated surface (${hint})` : "") +
+          " rather than the generic configuration route",
+      );
+    }
+    if (meta.validate) {
+      const error = meta.validate(value);
+      if (error) throw new ValidationError(`${configKey} ${error}`);
+    }
+  }
+
   if (FORBIDDEN_ZERO_KEYS.has(configKey)) {
     const n = typeof value === "number" ? value : Number(value);
     if (Number.isFinite(n) && n <= 0) {

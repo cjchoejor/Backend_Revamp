@@ -12,6 +12,15 @@ export async function activatePreArrival(session: Session, entryId: string) {
   });
 }
 
+/** S6 room change — re-enter S1 with a required reason; the new room is chosen fresh at S1. */
+export async function s6RoomChangeReEnterS1(session: Session, entryId: string, reason: string) {
+  return apiRequest<EntryDetail>(`/api/entries/${entryId}/s6-room-change/re-enter-s1`, {
+    method: "POST",
+    session,
+    body: { reason },
+  });
+}
+
 export async function patchPreArrivalTask(
   session: Session,
   taskId: string,

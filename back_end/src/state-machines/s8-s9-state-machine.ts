@@ -36,6 +36,22 @@ export async function progressStageS8ToS9(prisma: PrismaClient, entryId: string,
     if (s8Dwell) await tx.stageDwellRecord.update({ where: { id: s8Dwell.id }, data: { exitedAt: now } });
     await tx.stageDwellRecord.create({ data: { entryId, stage: Stage.S9, enteredAt: now } });
     await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S9, version: { increment: 1 }, updatedAt: now } });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ENTRY.STAGE_TRANSITION",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S9,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, fromStage: "S8", toStage: "S9", h5State: h5?.state ?? null, folioState: folio.state },
+        createdBy: actorId,
+      },
+    });
     await schedulePaymentFollowUpW8IfOutstanding(tx, {
       entryId,
       folioId: folio.id,

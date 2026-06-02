@@ -8,6 +8,7 @@ import { cancelScheduledRoomReadinessSlaForEntry } from "../services/domain/room
 import { issueVipArrivalNotificationAtCommencementTx } from "../services/domain/vip-arrival-notification-service.js";
 import * as checkInService from "../services/domain/check-in-service.js";
 import * as disputeService from "../services/domain/s7-dispute-service.js";
+import { releaseCommittedHoldForRoomChange } from "../services/domain/s3-hold-service.js";
 import { loadEntryDetail } from "../lib/entry-detail-include.js";
 import { enforceDisputeGateAllowsProgress } from "../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { enforceNoPendingPreArrivalTasks } from "../policies/03-expiry-parking/p09-s5-normal-exit-pre-arrival-tasks-terminal.js";
@@ -150,6 +151,22 @@ export async function progressStageS5ToS6(
         updatedAt: now,
       },
     });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ENTRY.STAGE_TRANSITION",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S6,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, fromStage: "S5", toStage: "S6" },
+        createdBy: actorId,
+      },
+    });
 
     if (vipTier && entry.guestProfileId) {
       const roomNumber = entry.roomAssignments[0]?.room?.roomNumber ?? "";
@@ -203,8 +220,9 @@ export async function progressStageS6ToS7(
   return checkInService.completeCheckInToS7(prisma, entryId, actorId, clientVersion, keyCount, registrationConfirmed);
 }
 
-/** SIG-S6 §5.2 / AC-S6-036 — S6→S1 re-entry (room change at check-in). */
-export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actorId: string) {
+/** SIG-S6 §5.2 / AC-S6-036 — S6→S1 re-entry (room change at check-in). A reason is recorded as an
+ *  AmendmentEventRecord and traced; the new room is chosen fresh at S1. */
+export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actorId: string, reason?: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
@@ -242,9 +260,40 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
       });
     }
 
-    await tx.segment.create({
+    // Erase the committed hold bound to the old room (any state) so the old room is fully released
+    // and a fresh hold can be placed for the newly chosen room at S3. Traced for audit.
+    await releaseCommittedHoldForRoomChange(tx, entryId, { actorId, actorLevel: "L1" }, "REENTRY_S6_TO_S1", entry.inquiryId);
+
+    // Unseal any sealed availability configs so re-progression at S1 forces a fresh room selection.
+    // Without this, the prior sealed config (pointing at the OLD room) propagates to the S3
+    // committed-hold placement, causing the hold to bind to the old room while the new assignment
+    // is for the new room — a divergence that blocks S8 settlement ("Room must be OCCUPIED").
+    await tx.availabilityConfiguration.updateMany({
+      where: { entryId, sealedAt: { not: null } },
+      data: { sealedAt: null },
+    });
+
+    const newSegment = await tx.segment.create({
       data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S1, startedAt: now, createdBy: actorId, notes: "REENTRY_S6_TO_S1" },
     });
+
+    // Record the room-change request reason in a relatable table for audit/history.
+    const changeReason = reason?.trim() || "Room change requested at check-in";
+    await tx.amendmentEventRecord.create({
+      data: {
+        entryId,
+        segmentId: newSegment.id,
+        amendmentPath: "PATH_1",
+        amendmentType: "ROOM_CHANGE",
+        requestedBy: actorId,
+        authorisedBy: actorId,
+        authorityBasis: "S6 room change re-entry",
+        reason: changeReason,
+        newTermsSummary: `Room change requested at check-in (from room ${room?.roomNumber ?? "—"}); new room to be selected at S1`,
+        stageAtAmendment: Stage.S6,
+      },
+    });
+
     await tx.entry.update({
       where: { id: entryId },
       data: { currentStage: Stage.S1, segmentNumber: nextSegmentNumber, version: { increment: 1 }, updatedAt: now },
@@ -261,7 +310,7 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
         stageContext: Stage.S6,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, toStage: "S1", segmentNumber: nextSegmentNumber, cancelledHandoffIds: handoffIds },
+        payload: { entryId, toStage: "S1", segmentNumber: nextSegmentNumber, reason: changeReason, fromRoomId: room?.id ?? null, cancelledHandoffIds: handoffIds },
         createdBy: actorId,
       },
     });
@@ -372,6 +421,22 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
     await tx.entry.update({
       where: { id: entryId },
       data: { currentStage: Stage.S8, version: { increment: 1 }, updatedAt: now },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ENTRY.STAGE_TRANSITION",
+        actorId: _actorId ?? "SYSTEM",
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S8,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, fromStage: "S7", toStage: "S8" },
+        createdBy: _actorId ?? "SYSTEM",
+      },
     });
 
     // AC-S7-14: if exiting S7 with an unresolved deficient condition, mark it as unresolved-at-checkout.

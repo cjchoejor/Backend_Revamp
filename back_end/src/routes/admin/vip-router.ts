@@ -38,3 +38,12 @@ adminVipRouter.post("/vip-routing/:id/deactivate", requireActorLevel("L4"), asyn
     next(e);
   }
 });
+
+adminVipRouter.post("/vip-routing/:id/reactivate", requireActorLevel("L4"), async (req, res, next) => {
+  try {
+    const updated = await vipRoutingAdminService.reactivateVipRouting(prisma, req.params.id, req.actor!.actorId);
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});

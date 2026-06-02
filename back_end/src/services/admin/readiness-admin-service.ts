@@ -12,7 +12,6 @@ const CORE_KEYS = [
   "handoff.H2.checklist",
   "handoff.H3.checklist",
   "deficientCondition.categories",
-  "pricing.ratePlans",
 ] as const;
 
 export type ReadinessCheck = {
@@ -47,6 +46,14 @@ export async function runReadinessCheck(prisma: PrismaClient) {
     };
   }
   checks.push(s9);
+
+  const ratePlanCount = await prisma.ratePlanRegistry.count({ where: { isActive: true } });
+  checks.push({
+    id: "RATE_PLAN_REGISTRY",
+    label: "Active rate plans (PricingPipelineEngine source)",
+    status: ratePlanCount > 0 ? "OK" : "MISSING",
+    detail: ratePlanCount > 0 ? `${ratePlanCount} active rate plan(s) in registry` : "No active rate plans — S1 indicative + S2 quotation pricing will fail",
+  });
 
   const staffCount = await prisma.staffUser.count({ where: { isActive: true, actorLevel: "L4" } });
   checks.push({

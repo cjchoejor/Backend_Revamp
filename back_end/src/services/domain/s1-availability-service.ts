@@ -61,7 +61,7 @@ async function runAvailabilityEngineForEntry(
     currentTimestamp: new Date(),
   });
 
-  const indicative = await resolveIndicativePricingForS1Availability(prisma, { checkIn, checkOut });
+  const indicative = await resolveIndicativePricingForS1Availability(prisma, { checkIn, checkOut }, input.roomTypeId);
   const engineOutRaw = indicative
     ? {
         ...engineRaw,

@@ -65,7 +65,8 @@ export async function createQuotation(
 
   const tier = entry.guestProfile?.clientTier;
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
-  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { isDeficientGuestTier });
+  const stay = entry.checkInDate && entry.checkOutDate ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate } : undefined;
+  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { isDeficientGuestTier, roomTypeId, stay });
   const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
     belowMsr: pricing.belowMsr,
     actorId,
@@ -208,7 +209,8 @@ export async function createGroupQuotation(
 
   const tier = entry.guestProfile?.clientTier;
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
-  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { groupSize: roomsRequested, isDeficientGuestTier });
+  const stay = entry.checkInDate && entry.checkOutDate ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate } : undefined;
+  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { groupSize: roomsRequested, isDeficientGuestTier, roomTypeId, stay });
   const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
     belowMsr: pricing.belowMsr,
     actorId,

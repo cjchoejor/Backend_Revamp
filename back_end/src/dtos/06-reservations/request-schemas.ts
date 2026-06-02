@@ -78,6 +78,11 @@ export const s3ReEntryRequestSchema = z.object({
 });
 export type S3ReEntryRequestDto = z.infer<typeof s3ReEntryRequestSchema>;
 
+// S6 room change — reason is required; the new room is chosen fresh at S1.
+export const s6RoomChangeReEnterS1RequestSchema = z.object({
+  reason: z.string().min(3, "A reason for the room change is required"),
+});
+
 export const approveFocGmRequestSchema = z.object({
   note: z.string().optional(),
 });

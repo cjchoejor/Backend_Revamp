@@ -12,6 +12,20 @@ export async function listRoomTypes(prisma: PrismaClient) {
   });
 }
 
+/**
+ * Generates a human-readable RoomType id of the form `<CODE>-<padded-global-seq>` (e.g. DLX-0001,
+ * STD-0002). The sequence is the count of existing room-type rows + 1 — global, not per-code —
+ * matching the user-facing illustration "STD-0001 / DXL-0002".
+ */
+export async function generateRoomTypeId(
+  tx: Pick<PrismaClient, "roomType">,
+  code: string,
+): Promise<string> {
+  const total = await tx.roomType.count();
+  const seq = String(total + 1).padStart(4, "0");
+  return `${code.toUpperCase()}-${seq}`;
+}
+
 export async function createRoomType(
   prisma: PrismaClient,
   input: { code: string; name: string },
@@ -22,7 +36,8 @@ export async function createRoomType(
   if (!code || !name) throw new ValidationError("code and name are required");
 
   return prisma.$transaction(async (tx) => {
-    const created = await tx.roomType.create({ data: { code, name } });
+    const id = await generateRoomTypeId(tx, code);
+    const created = await tx.roomType.create({ data: { id, code, name } });
     await writeAdminAuditEvent(tx, {
       actorId,
       eventType: "ADMIN.ROOM_TYPE_CREATED",
@@ -189,7 +204,9 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
         select: {
           roomAssignments: true,
           speculativeHolds: true,
-          deficientConditionRecords: true,
+          // Only OPEN (UNRESOLVED) deficient records should block deletion. Resolved historical
+          // records are bookkeeping; the lifecycle is preserved in trace_events.
+          deficientConditionRecords: { where: { status: { not: "RESOLVED" } } },
           claimStateEvents: true,
         },
       },
@@ -206,10 +223,12 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
     throw new ValidationError("Cannot delete room with speculative holds");
   }
   if (existing._count.deficientConditionRecords > 0) {
-    throw new ValidationError("Cannot delete room with deficient condition records");
+    throw new ValidationError("Cannot delete room with unresolved deficient condition records — resolve first");
   }
 
   return prisma.$transaction(async (tx) => {
+    // Cascade-delete the now-empty bookkeeping rows (all resolved, by the guard above).
+    await tx.deficientConditionRecord.deleteMany({ where: { roomId: id } });
     await tx.roomClaimStateEvent.deleteMany({ where: { roomId: id } });
     await tx.room.delete({ where: { id } });
     await writeAdminAuditEvent(tx, {
@@ -350,6 +369,141 @@ export async function updateSpace(
       entityId: id,
       operation: "UPDATE",
       payload: { fieldsChanged: Object.keys(input).filter((k) => (input as Record<string, unknown>)[k] !== undefined) },
+    });
+    return updated;
+  });
+}
+
+/** Mark a room as deficient. Category must be one of the active `deficientCondition.categories`. */
+export async function markRoomDeficient(
+  prisma: PrismaClient,
+  roomId: string,
+  input: { category: string; description: string; resolutionDeadline?: string | Date },
+  actorId: string,
+) {
+  const description = input.description?.trim();
+  if (!description) throw new ValidationError("description is required");
+
+  const room = await prisma.room.findUnique({ where: { id: roomId } });
+  if (!room) throw new NotFoundError("Room");
+  if (room.isDeficient) throw new ValidationError("Room is already deficient");
+  if (room.isBlocked) throw new ValidationError("Room is blocked");
+
+  // Validate the category against the admin-managed categories config.
+  const catsRow = await getActiveConfigEntry(prisma, "deficientCondition.categories");
+  const allowed = Array.isArray(catsRow?.configValue)
+    ? (catsRow!.configValue as Array<{ code: string; isActive?: boolean }>).filter((c) => c.isActive !== false).map((c) => c.code)
+    : [];
+  if (allowed.length && !allowed.includes(input.category)) {
+    throw new ValidationError(`Category "${input.category}" is not in the active deficient categories list`);
+  }
+
+  // Default deadline from `deficientResolution.deadlineHours` (fallback 48h).
+  const deadlineRow = await getActiveConfigEntry(prisma, "deficientResolution.deadlineHours");
+  const defaultHours = Number(deadlineRow?.configValue ?? 48);
+  const now = new Date();
+  const deadline = input.resolutionDeadline ? new Date(input.resolutionDeadline) : new Date(now.getTime() + defaultHours * 3600 * 1000);
+  if (Number.isNaN(deadline.getTime()) || deadline.getTime() <= now.getTime()) {
+    throw new ValidationError("resolutionDeadline must be a future timestamp");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const record = await tx.deficientConditionRecord.create({
+      data: {
+        roomId,
+        category: input.category as any,
+        description,
+        detectedAt: now,
+        detectedBy: actorId,
+        resolutionDeadline: deadline,
+        status: "UNRESOLVED",
+      },
+    });
+    const updatedRoom = await tx.room.update({
+      where: { id: roomId },
+      data: {
+        isDeficient: true,
+        deficientConditionCategory: input.category as any,
+        deficientSince: now,
+        deficientDeadline: deadline,
+        updatedAt: now,
+      },
+    });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ROOM.MARKED_DEFICIENT",
+      entityType: "Room",
+      entityId: roomId,
+      operation: "UPDATE",
+      payload: {
+        roomNumber: updatedRoom.roomNumber,
+        category: input.category,
+        description,
+        resolutionDeadline: deadline.toISOString(),
+        deficientConditionRecordId: record.id,
+      },
+    });
+    return { room: updatedRoom, record };
+  });
+}
+
+/** Resolve the latest unresolved deficient record on a room and clear its deficient state. */
+export async function resolveRoomDeficient(
+  prisma: PrismaClient,
+  roomId: string,
+  actorId: string,
+  resolutionNotes?: string,
+) {
+  const room = await prisma.room.findUnique({ where: { id: roomId } });
+  if (!room) throw new NotFoundError("Room");
+  if (!room.isDeficient) throw new ValidationError("Room is not deficient");
+
+  const open = await prisma.deficientConditionRecord.findFirst({
+    where: { roomId, status: "UNRESOLVED" },
+    orderBy: { detectedAt: "desc" },
+  });
+  if (!open) throw new NotFoundError("DeficientConditionRecord");
+
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const record = await tx.deficientConditionRecord.update({
+      where: { id: open.id },
+      data: { status: "RESOLVED", resolvedAt: now, resolvedBy: actorId, resolutionNotes: resolutionNotes?.trim() || null },
+    });
+    const updatedRoom = await tx.room.update({
+      where: { id: roomId },
+      data: { isDeficient: false, deficientConditionCategory: null, deficientSince: null, deficientDeadline: null, updatedAt: now },
+    });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ROOM.DEFICIENT_RESOLVED",
+      entityType: "Room",
+      entityId: roomId,
+      operation: "UPDATE",
+      payload: { roomNumber: updatedRoom.roomNumber, deficientConditionRecordId: record.id, resolutionNotes: resolutionNotes?.trim() ?? null },
+    });
+    return { room: updatedRoom, record };
+  });
+}
+
+/** Reactivate a previously deactivated (blocked) room. Clears the block. */
+export async function reactivateRoom(prisma: PrismaClient, roomId: string, actorId: string) {
+  const room = await prisma.room.findUnique({ where: { id: roomId } });
+  if (!room) throw new NotFoundError("Room");
+  if (!room.isBlocked) throw new ValidationError("Room is not blocked");
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.room.update({
+      where: { id: roomId },
+      data: { isBlocked: false, blockedReason: null, updatedAt: new Date() },
+    });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ROOM.REACTIVATED",
+      entityType: "Room",
+      entityId: roomId,
+      operation: "UPDATE",
+      payload: { roomNumber: updated.roomNumber },
     });
     return updated;
   });

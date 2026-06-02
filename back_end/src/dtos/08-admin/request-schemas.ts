@@ -39,6 +39,12 @@ export const deficientCategoriesRequestSchema = z.object({
   notes: z.string().optional().nullable(),
 });
 
+export const markRoomDeficientRequestSchema = z.object({
+  category: z.string().min(1),
+  description: z.string().min(1),
+  resolutionDeadline: z.string().optional().nullable(),
+});
+
 export const adminEnqueueRequestSchema = z.object({
   jobName: z.string().min(1),
   data: z.record(z.unknown()).optional(),
@@ -210,4 +216,157 @@ export const saveVipRoutingRequestSchema = z.object({
   notifyRoles: z.unknown(),
   notifyActorIds: z.unknown(),
   isActive: z.boolean().optional(),
+});
+
+// --- Generic keyed-config payloads ---------------------------------------
+
+export const valueOnlyRequestSchema = z.object({
+  value: z.unknown(),
+});
+
+// --- Rate plans (ACIG §6.2.8) --------------------------------------------
+
+const ratePlanType = z.enum(["INDIVIDUAL", "PROMOTIONAL", "TIER", "CHANNEL", "RACK"]);
+
+export const createRatePlanRequestSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional().nullable(),
+  roomTypeId: z.string().optional().nullable(),
+  type: ratePlanType.optional(),
+  baseRate: z.coerce.number().nonnegative(),
+  currency: z.string().min(1).optional(),
+  msr: z.coerce.number().nonnegative().optional().nullable(),
+  overrideMargin: z.coerce.number().optional().nullable(),
+});
+
+export const updateRatePlanRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional().nullable(),
+  roomTypeId: z.string().optional().nullable(),
+  type: ratePlanType.optional(),
+  baseRate: z.coerce.number().nonnegative().optional(),
+  currency: z.string().min(1).optional(),
+  msr: z.coerce.number().nonnegative().optional().nullable(),
+  overrideMargin: z.coerce.number().optional().nullable(),
+});
+
+export const setWalkInRatePlanRequestSchema = z.object({
+  ratePlanId: z.string().min(1),
+});
+
+// --- Seasons (ACIG §6.2.9) -----------------------------------------------
+
+export const createSeasonRequestSchema = z.object({
+  name: z.string().min(1),
+  startDate: z.string().min(1),
+  endDate: z.string().min(1),
+  rateMultiplier: z.coerce.number().positive().optional().nullable(),
+  priority: z.coerce.number().int().optional(),
+});
+
+export const updateSeasonRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  startDate: z.string().min(1).optional(),
+  endDate: z.string().min(1).optional(),
+  rateMultiplier: z.coerce.number().positive().optional().nullable(),
+  priority: z.coerce.number().int().optional(),
+});
+
+// --- Packages (ACIG §6.2.10) ---------------------------------------------
+
+export const createPackageRequestSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional().nullable(),
+  inclusions: z.unknown(),
+  priceAdjustment: z.coerce.number().optional().nullable(),
+  currency: z.string().min(1).optional(),
+});
+
+export const updatePackageRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional().nullable(),
+  inclusions: z.unknown().optional(),
+  priceAdjustment: z.coerce.number().optional().nullable(),
+  currency: z.string().min(1).optional(),
+});
+
+// --- Cancellation policies (ACIG §6.2.12) --------------------------------
+
+export const createCancellationPolicyRequestSchema = z.object({
+  name: z.string().min(1),
+  penaltyTiers: z.array(
+    z.object({
+      daysBeforeArrival: z.coerce.number().int().nonnegative(),
+      penaltyPercentage: z.coerce.number().min(0).max(100),
+    }),
+  ),
+  noShowTreatment: z.string().min(1),
+});
+
+export const updateCancellationPolicyRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  penaltyTiers: z
+    .array(
+      z.object({
+        daysBeforeArrival: z.coerce.number().int().nonnegative(),
+        penaltyPercentage: z.coerce.number().min(0).max(100),
+      }),
+    )
+    .optional(),
+  noShowTreatment: z.string().min(1).optional(),
+});
+
+// --- Commercial thresholds (ACIG §6.2.11) --------------------------------
+
+export const setDiscountThresholdsRequestSchema = z.object({
+  fomMaxPercentage: z.coerce.number().min(0).max(100),
+  gmMaxPercentage: z.coerce.number().min(0).max(100),
+});
+
+export const setCreditCeilingThresholdsRequestSchema = z.object({
+  clientTierThresholds: z.unknown(),
+  proximityThresholds: z.unknown(),
+});
+
+export const setOverbookingLimitsRequestSchema = z.object({
+  maxAllowedRooms: z.coerce.number().int().nonnegative(),
+});
+
+// --- OTA config (ACIG §6.2.23) -------------------------------------------
+
+export const setPollingIntervalRequestSchema = z.object({
+  seconds: z.coerce.number().int().positive(),
+});
+
+export const setNoShowCutoffRequestSchema = z.object({
+  minutes: z.coerce.number().int().nonnegative(),
+});
+
+// --- AI agent config (ACIG §6.2.24) --------------------------------------
+
+export const updateAIAgentConfigRequestSchema = z.record(z.unknown());
+
+export const setProcessingLockTTLsRequestSchema = z.record(z.coerce.number().int().positive());
+
+// --- Communication channels (ACIG §6.2.16) -------------------------------
+
+export const updateChannelRequestSchema = z.record(z.unknown());
+
+// --- Post-stay & governance (ACIG §6.2.22) -------------------------------
+
+export const createFeedbackTemplateRequestSchema = z.object({
+  templateKey: z.string().min(1),
+  title: z.string().min(1),
+  questions: z.unknown(),
+});
+
+export const updateFeedbackTemplateRequestSchema = z.object({
+  title: z.string().min(1).optional(),
+  questions: z.unknown().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const setCommissionRateRequestSchema = z.object({
+  rate: z.coerce.number().min(0).max(1),
+  effectiveFrom: z.string().optional().nullable(),
 });

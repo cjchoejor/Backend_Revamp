@@ -200,6 +200,19 @@
   cursor: not-allowed;
 }
 
+/* Affirmative variant for resolve / reactivate actions — distinct from the default and
+   from any destructive (Deactivate / Delete) action so operators can't confuse them. */
+.admin-console .admin-btn-success {
+  border-color: color-mix(in srgb, var(--success) 60%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, var(--accent));
+  color: var(--success);
+}
+
+.admin-console .admin-btn-success:hover {
+  background: color-mix(in srgb, var(--success) 22%, var(--accent));
+  filter: none;
+}
+
 .admin-console table.admin-table {
   width: 100%;
   font-size: 0.875rem;

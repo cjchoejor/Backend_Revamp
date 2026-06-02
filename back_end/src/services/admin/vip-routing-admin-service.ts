@@ -76,3 +76,28 @@ export async function deactivateVipRouting(prisma: PrismaClient, id: string, act
     return updated;
   });
 }
+
+export async function reactivateVipRouting(prisma: PrismaClient, id: string, actorId: string) {
+  const existing = await prisma.vipNotificationRoutingConfig.findUnique({ where: { id } });
+  if (!existing) throw new NotFoundError("VipNotificationRoutingConfig");
+  if (existing.isActive) throw new ValidationError("Routing is already active");
+  // Active routings are unique per tier; deactivate any conflict before reactivating this one.
+  const conflict = await prisma.vipNotificationRoutingConfig.findFirst({
+    where: { vipTier: existing.vipTier, isActive: true, id: { not: id } },
+  });
+  return prisma.$transaction(async (tx) => {
+    if (conflict) {
+      await tx.vipNotificationRoutingConfig.update({ where: { id: conflict.id }, data: { isActive: false } });
+    }
+    const updated = await tx.vipNotificationRoutingConfig.update({ where: { id }, data: { isActive: true } });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ADMIN.VIP_ROUTING_REACTIVATED",
+      entityType: "VipNotificationRoutingConfig",
+      entityId: id,
+      operation: "UPDATE",
+      payload: { vipTier: updated.vipTier, supersededRoutingId: conflict?.id ?? null },
+    });
+    return updated;
+  });
+}

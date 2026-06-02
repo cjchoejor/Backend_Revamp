@@ -1,5 +1,6 @@
 import type { EntryDetail, EntryListItem, ListResponse } from "@/types/api";
 import type { Session } from "@/types/session";
+import type { TraceEvent } from "@/lib/trace/humanize";
 import { apiRequest } from "./client";
 
 export type ListEntriesParams = {
@@ -21,6 +22,13 @@ export async function listEntries(session: Session, params?: ListEntriesParams) 
 
 export async function getEntry(session: Session, entryId: string) {
   return apiRequest<EntryDetail>(`/api/entries/${entryId}`, { session });
+}
+
+export async function getEntryTrace(session: Session, entryId: string, limit = 100) {
+  return apiRequest<{ items: TraceEvent[]; count: number }>(
+    `/api/entries/${entryId}/trace?limit=${limit}`,
+    { session },
+  );
 }
 
 export async function createEntry(

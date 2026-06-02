@@ -5,7 +5,8 @@ import { isSystemSeedSetBy, supersedeConfigurationEntry } from "../../lib/admin/
 
 /** Curated commercial configuration keys (ACIG Domain 03). */
 export const COMMERCIAL_CONFIG_KEYS = [
-  "pricing.ratePlans",
+  // `pricing.ratePlans` removed (legacy) — rate plans live in the rate_plan_registry table per
+  // ACIG §6.1058 and are edited via the Admin → Rate plans page.
   "creditCeiling.clientTier.thresholds",
   "creditCeiling.proximityThresholds",
   "writeOff.authority.thresholds",

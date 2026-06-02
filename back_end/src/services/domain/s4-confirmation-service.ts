@@ -146,25 +146,29 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     const frozenRatePlanId = (accepted.commercialTerms as any)?.ratePlanId ?? (accepted.commercialTerms as any)?.resolvedRatePlanId ?? "rp-slice";
     const frozenInclusions = (accepted.commercialTerms as any)?.inclusions ?? {};
 
-    const reservationId = await allocateReadableId(tx, READABLE_ID_PREFIXES.RESERVATION, now);
-    const res = await tx.reservation.create({
-      data: {
-        id: reservationId,
-        entryId,
-        segmentId,
-        frozenRate: frozenRate || 0,
-        frozenRatePlanId,
-        frozenInclusions,
-        frozenCancellationTerms: entry.cancellationDisclosure?.disclosedTerms ?? {},
-        frozenBillingModel: billingModel,
-        frozenCheckInDate: entry.checkInDate ?? new Date(),
-        frozenCheckOutDate: entry.checkOutDate ?? new Date(Date.now() + 86400_000),
-        frozenGuestCount: entry.guestCount ?? 1,
-        creditCeilingIfExtended: ceiling ? (ceiling.ceilingAmount as any) : null,
-        confirmedAt: new Date(),
-        confirmedBy: actorId,
-        confirmationVoucherSent: true,
-      },
+    // A Reservation is unique per entry. On re-confirmation after a re-entry (e.g. room change),
+    // one already exists — update its frozen terms in place rather than creating a duplicate.
+    const existingReservation = await tx.reservation.findUnique({ where: { entryId } });
+    const reservationId = existingReservation?.id ?? (await allocateReadableId(tx, READABLE_ID_PREFIXES.RESERVATION, now));
+    const reservationData = {
+      segmentId,
+      frozenRate: frozenRate || 0,
+      frozenRatePlanId,
+      frozenInclusions,
+      frozenCancellationTerms: entry.cancellationDisclosure?.disclosedTerms ?? {},
+      frozenBillingModel: billingModel,
+      frozenCheckInDate: entry.checkInDate ?? new Date(),
+      frozenCheckOutDate: entry.checkOutDate ?? new Date(Date.now() + 86400_000),
+      frozenGuestCount: entry.guestCount ?? 1,
+      creditCeilingIfExtended: ceiling ? (ceiling.ceilingAmount as any) : null,
+      confirmedAt: new Date(),
+      confirmedBy: actorId,
+      confirmationVoucherSent: true,
+    };
+    const res = await tx.reservation.upsert({
+      where: { entryId },
+      create: { id: reservationId, entryId, ...reservationData },
+      update: { ...reservationData, sealedAt: null },
     });
 
     await confirmCommittedHoldTx(tx, { entryId, holdId: hold.id, actorId, inquiryId: entry.inquiryId });
@@ -239,11 +243,11 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
         actorLevel: "L1",
         entityType: "Reservation",
         entityId: res.id,
-        operation: "CREATE",
+        operation: existingReservation ? "UPDATE" : "CREATE",
         timestamp: new Date(),
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { reservationId: res.id },
+        payload: { reservationId: res.id, reconfirmation: !!existingReservation },
         createdBy: actorId,
       },
     });

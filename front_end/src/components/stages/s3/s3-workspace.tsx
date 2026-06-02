@@ -65,7 +65,10 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
   const meta = STAGES[2];
 
   const folio = entry.folio ?? null;
-  const hold = entry.committedHold ?? null;
+  // A released/expired hold (e.g. after a room change re-entry) is treated as "no active hold"
+  // so the operator can place a fresh committed hold for the newly chosen room.
+  const rawHold = entry.committedHold ?? null;
+  const hold = rawHold && rawHold.state !== "RELEASED" && rawHold.state !== "EXPIRED" ? rawHold : null;
   const disclosure = entry.cancellationDisclosure ?? null;
 
   const acceptedQuotation = useMemo(
@@ -451,6 +454,29 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
                 )}
               </div>
             )}
+            {(() => {
+              const inPayments = (folio?.payments ?? []).filter((p) => p.paymentDirection === "IN");
+              if (inPayments.length === 0) return null;
+              const total = inPayments.reduce((s, p) => s + Number(p.amount), 0);
+              return (
+                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                  <p className="mb-2 font-medium">
+                    Already paid on this booking: <strong>{total}</strong>{" "}
+                    <span className="text-xs font-normal text-muted-foreground">({inPayments.length} payment{inPayments.length === 1 ? "" : "s"} — carried across any room change)</span>
+                  </p>
+                  <ul className="space-y-1">
+                    {inPayments.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="font-mono">{p.currency} {Number(p.amount)}</span>
+                        <span className="text-muted-foreground">{p.receivedAt ? p.receivedAt.slice(0, 16).replace("T", " ") : "—"}</span>
+                        <span className="flex-1 truncate text-right text-muted-foreground">{p.notes ?? ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-muted-foreground">Add more below only if additional advance is needed.</p>
+                </div>
+              );
+            })()}
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="text-xs text-muted-foreground">Payment amount (IN)</label>

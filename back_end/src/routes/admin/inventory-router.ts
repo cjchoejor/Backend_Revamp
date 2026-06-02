@@ -5,6 +5,7 @@ import {
   createRoomTypeRequestSchema,
   createSpaceRequestSchema,
   deficientCategoriesRequestSchema,
+  markRoomDeficientRequestSchema,
   updateRoomRequestSchema,
   updateRoomTypeRequestSchema,
   updateSpaceRequestSchema,
@@ -120,6 +121,49 @@ adminInventoryRouter.delete("/rooms/:id", requireActorLevel("L4"), async (req, r
   try {
     const result = await inventoryAdminService.deleteRoom(prisma, req.params.id, req.actor!.actorId);
     res.json(result);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Mark a room as deficient. Category is validated against active deficientCondition.categories.
+adminInventoryRouter.post(
+  "/rooms/:id/deficient-conditions",
+  requireActorLevel("L4"),
+  validateBody(markRoomDeficientRequestSchema),
+  async (req, res, next) => {
+    try {
+      const result = await inventoryAdminService.markRoomDeficient(
+        prisma,
+        req.params.id,
+        { category: req.body.category, description: req.body.description, resolutionDeadline: req.body.resolutionDeadline ?? undefined },
+        req.actor!.actorId,
+      );
+      res.status(201).json(result);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+adminInventoryRouter.post("/rooms/:id/resolve-deficient", requireActorLevel("L4"), async (req, res, next) => {
+  try {
+    const result = await inventoryAdminService.resolveRoomDeficient(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+      typeof req.body?.resolutionNotes === "string" ? req.body.resolutionNotes : undefined,
+    );
+    res.json(result);
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminInventoryRouter.post("/rooms/:id/reactivate", requireActorLevel("L4"), async (req, res, next) => {
+  try {
+    const updated = await inventoryAdminService.reactivateRoom(prisma, req.params.id, req.actor!.actorId);
+    res.json(updated);
   } catch (e) {
     next(e);
   }

@@ -6,15 +6,16 @@ import { toast } from "sonner";
 import { activateMode, deactivateMode, listModes, saveMode } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
 
 export default function AdminModesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{ modeKey: string; displayName: string; description: string; config: unknown }>({
     modeKey: "",
     displayName: "",
     description: "",
-    config: "{}",
+    config: {},
   });
 
   const query = useQuery({
@@ -24,25 +25,18 @@ export default function AdminModesPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: () => {
-      let config: unknown;
-      try {
-        config = JSON.parse(form.config);
-      } catch {
-        throw new Error("Invalid JSON in config");
-      }
-      return saveMode(session!, {
+    mutationFn: () =>
+      saveMode(session!, {
         modeKey: form.modeKey,
         displayName: form.displayName,
         description: form.description || null,
-        config,
-      });
-    },
+        config: form.config,
+      }),
     onSuccess: () => {
       toast.success("Mode saved");
       void queryClient.invalidateQueries({ queryKey: ["admin", "modes"] });
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Save failed"),
   });
 
   const activateMutation = useMutation({
@@ -79,7 +73,10 @@ export default function AdminModesPage() {
           <input className="admin-input" placeholder="Display name" value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
         </div>
         <input className="admin-input" placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-        <textarea className="admin-textarea min-h-[120px] font-mono text-xs" value={form.config} onChange={(e) => setForm({ ...form, config: e.target.value })} />
+        <div>
+          <p className="admin-muted mb-1 text-xs">Mode configuration</p>
+          <SmartConfigEditor value={form.config} onChange={(v) => setForm({ ...form, config: v })} />
+        </div>
         <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
           Save mode
         </button>

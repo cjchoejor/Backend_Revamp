@@ -40,17 +40,37 @@ export async function recordKeyReturn(prisma: PrismaClient, entryId: string, act
   if (!reconciled && !input.reconciliationNote?.trim()) {
     throw new ValidationError("reconciliationNote is required when keyCountReturned differs from keysIssuedCount");
   }
-  return prisma.keyReturnRecord.create({
-    data: {
-      entryId,
-      roomId: room.id,
-      receivedBy: actorId,
-      returnedAt: new Date(),
-      keyCountIssued: issued,
-      keyCountReturned: input.keyCountReturned,
-      countReconciled: reconciled,
-      reconciliationNote: reconciled ? null : input.reconciliationNote?.trim(),
-    },
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const created = await tx.keyReturnRecord.create({
+      data: {
+        entryId,
+        roomId: room.id,
+        receivedBy: actorId,
+        returnedAt: now,
+        keyCountIssued: issued,
+        keyCountReturned: input.keyCountReturned,
+        countReconciled: reconciled,
+        reconciliationNote: reconciled ? null : input.reconciliationNote?.trim(),
+      },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: reconciled ? "KEY_RETURN.RECORDED" : "KEY_RETURN.DISCREPANCY",
+        actorId,
+        actorLevel: "L1",
+        entityType: "KeyReturnRecord",
+        entityId: created.id,
+        operation: "CREATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, reconciled, reconciliationNote: reconciled ? null : input.reconciliationNote?.trim() ?? null },
+        createdBy: actorId,
+      },
+    });
+    return created;
   });
 }
 

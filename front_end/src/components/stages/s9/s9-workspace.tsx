@@ -316,7 +316,9 @@ export function S9Workspace({ entry }: S9WorkspaceProps) {
   const fulfilH5Mutation = useMutation({
     mutationFn: () => {
       if (!h5) throw new Error("No H5");
-      return fulfilHandoff(session!, h5.id, { notes: h5Evidence.trim() });
+      // SIG-S9 §2.7 — H5 fulfilment evidence must include `resolutionBasis` explaining how
+      // residual financial obligations were resolved (e.g. payment matched, written off, no-action).
+      return fulfilHandoff(session!, h5.id, { resolutionBasis: h5Evidence.trim() });
     },
     onSuccess: () => {
       toast.success("H5 fulfilled");
@@ -772,11 +774,18 @@ export function S9Workspace({ entry }: S9WorkspaceProps) {
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <Badge variant="outline">{h5.state}</Badge>
-                  <Input value={h5Evidence} onChange={(e) => setH5Evidence(e.target.value)} />
+                  <label className="block text-xs text-muted-foreground">
+                    Resolution basis (required) — how were the residual obligations resolved?
+                  </label>
+                  <Input
+                    value={h5Evidence}
+                    onChange={(e) => setH5Evidence(e.target.value)}
+                    placeholder="e.g. balance settled, written off, no action required"
+                  />
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={fulfilH5Mutation.isPending}
+                    disabled={fulfilH5Mutation.isPending || h5Evidence.trim().length < 3}
                     onClick={() => fulfilH5Mutation.mutate()}
                   >
                     Fulfil H5

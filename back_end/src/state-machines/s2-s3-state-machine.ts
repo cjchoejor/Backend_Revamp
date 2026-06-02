@@ -71,6 +71,22 @@ export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _act
     });
 
     await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S3, version: { increment: 1 } } });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ENTRY.STAGE_TRANSITION",
+        actorId: _actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S3,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, fromStage: "S2", toStage: "S3" },
+        createdBy: _actorId,
+      },
+    });
 
     await getOrCreateProvisionalFolioTx(tx, entryId, segmentId, _actorId, entry.inquiryId, now);
 

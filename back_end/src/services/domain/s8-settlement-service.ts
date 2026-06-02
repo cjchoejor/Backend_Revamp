@@ -289,6 +289,38 @@ export async function initiateSettlement(
     // Physical checkout: room becomes DEPARTED_DIRTY + W24 timer (AC-S8-01/03)
     await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
 
+    // Trace settlement outcome so the audit + entry timeline show what happened.
+    const isPartial = !balanceClosed && (partial != null || (method === "VOUCHER" && (voucherAmount ?? 0) < outstanding));
+    const finalState = updated.state;
+    await tx.traceEvent.create({
+      data: {
+        eventType: isPartial
+          ? "SETTLEMENT.PARTIAL"
+          : finalState === FolioState.SETTLED
+            ? "SETTLEMENT.COMPLETED"
+            : "SETTLEMENT.OUTSTANDING",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Folio",
+        entityId: folioId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: Stage.S8,
+        inquiryId: entry.inquiryId,
+        entryId: folio.entryId,
+        payload: {
+          folioId,
+          settlementMethod: method,
+          billingModel: billing,
+          settledAmount: settleAmount,
+          outstandingBefore: outstanding,
+          outstandingAfter: outstandingAtIssuance,
+          folioState: finalState,
+        },
+        createdBy: actorId,
+      },
+    });
+
     return updated;
   });
 

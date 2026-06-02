@@ -6,6 +6,9 @@ import { toast } from "sonner";
 import { ApiError } from "@/lib/api/client";
 import { getHotelProfile, updateHotelProfile, type HotelProfileAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
+import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
+
+type ContactRow = { label: string; value: string };
 
 export default function AdminHotelProfilePage() {
   const { session } = useSession();
@@ -17,36 +20,28 @@ export default function AdminHotelProfilePage() {
   });
 
   const [draft, setDraft] = useState<Partial<HotelProfileAdmin> | null>(null);
-  const [jsonFields, setJsonFields] = useState({
-    contactNumbers: "",
-    operatingHours: "",
-    publicHolidaySchedule: "",
-  });
+  const [contacts, setContacts] = useState<ContactRow[]>([{ label: "Front Desk", value: "" }]);
+  const [checkIn, setCheckIn] = useState("14:00");
+  const [checkOut, setCheckOut] = useState("12:00");
+  const [holidays, setHolidays] = useState<unknown[]>([]);
 
   useEffect(() => {
     const row = profileQuery.data;
     if (!row) return;
     setDraft(row);
-    setJsonFields({
-      contactNumbers: JSON.stringify(row.contactNumbers ?? [], null, 2),
-      operatingHours: JSON.stringify(row.operatingHours ?? {}, null, 2),
-      publicHolidaySchedule: JSON.stringify(row.publicHolidaySchedule ?? [], null, 2),
-    });
+    const nums = Array.isArray(row.contactNumbers) ? (row.contactNumbers as ContactRow[]) : [];
+    setContacts(nums.length > 0 ? nums.map((n) => ({ label: String(n.label ?? ""), value: String(n.value ?? "") })) : [{ label: "Front Desk", value: "" }]);
+    const hours = typeof row.operatingHours === "object" && row.operatingHours !== null ? (row.operatingHours as Record<string, string>) : {};
+    setCheckIn(hours.checkIn ?? "14:00");
+    setCheckOut(hours.checkOut ?? "12:00");
+    const holidays = Array.isArray(row.publicHolidaySchedule) ? row.publicHolidaySchedule : [];
+    setHolidays(holidays);
   }, [profileQuery.data]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!draft) throw new Error("No profile loaded");
-      let contactNumbers: unknown;
-      let operatingHours: unknown;
-      let publicHolidaySchedule: unknown;
-      try {
-        contactNumbers = JSON.parse(jsonFields.contactNumbers || "[]");
-        operatingHours = JSON.parse(jsonFields.operatingHours || "{}");
-        publicHolidaySchedule = JSON.parse(jsonFields.publicHolidaySchedule || "[]");
-      } catch {
-        throw new Error("One of the JSON fields is invalid");
-      }
+      const publicHolidaySchedule = holidays;
       return updateHotelProfile(session!, {
         expectedVersion: draft.version,
         hotelName: draft.hotelName ?? "",
@@ -55,8 +50,8 @@ export default function AdminHotelProfilePage() {
         primaryEmail: draft.primaryEmail ?? "",
         timeZone: draft.timeZone ?? "",
         propertyCurrency: draft.propertyCurrency ?? "",
-        contactNumbers,
-        operatingHours,
+        contactNumbers: contacts.filter((c) => c.label.trim() || c.value.trim()),
+        operatingHours: { checkIn, checkOut },
         publicHolidaySchedule,
       });
     },
@@ -116,26 +111,41 @@ export default function AdminHotelProfilePage() {
           <input className="admin-input" value={draft.timeZone ?? ""} onChange={(e) => setDraft({ ...draft, timeZone: e.target.value })} placeholder="Time zone (IANA)" />
           <input className="admin-input" value={draft.propertyCurrency ?? ""} onChange={(e) => setDraft({ ...draft, propertyCurrency: e.target.value })} placeholder="Currency (e.g. BTN)" />
 
-          <h2 className="admin-display col-span-full mt-4 text-lg">Structured JSON fields</h2>
-          <div className="md:col-span-2">
-            <div className="admin-muted mb-1 text-xs">contactNumbers</div>
-            <textarea className="admin-textarea min-h-[120px]" value={jsonFields.contactNumbers} onChange={(e) => setJsonFields({ ...jsonFields, contactNumbers: e.target.value })} />
+          <h2 className="admin-display col-span-full mt-4 text-lg">Contact numbers</h2>
+          <div className="col-span-full space-y-2">
+            {contacts.map((c, i) => (
+              <div key={i} className="flex flex-wrap gap-2">
+                <input className="admin-input flex-1" placeholder="Label" value={c.label} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
+                <input className="admin-input flex-[2]" placeholder="Phone number" value={c.value} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+                <button type="button" className="admin-btn text-[10px]" onClick={() => setContacts(contacts.filter((_, j) => j !== i))}>
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button type="button" className="admin-btn text-[10px]" onClick={() => setContacts([...contacts, { label: "", value: "" }])}>
+              Add number
+            </button>
           </div>
-          <div className="md:col-span-2">
-            <div className="admin-muted mb-1 text-xs">operatingHours</div>
-            <textarea className="admin-textarea min-h-[120px]" value={jsonFields.operatingHours} onChange={(e) => setJsonFields({ ...jsonFields, operatingHours: e.target.value })} />
-          </div>
-          <div className="md:col-span-2">
-            <div className="admin-muted mb-1 text-xs">publicHolidaySchedule</div>
-            <textarea
-              className="admin-textarea min-h-[120px]"
-              value={jsonFields.publicHolidaySchedule}
-              onChange={(e) => setJsonFields({ ...jsonFields, publicHolidaySchedule: e.target.value })}
-            />
+
+          <h2 className="admin-display col-span-full mt-4 text-lg">Operating hours</h2>
+          <label className="space-y-1">
+            <span className="admin-muted text-xs">Check-in from</span>
+            <input type="time" className="admin-input" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="admin-muted text-xs">Check-out by</span>
+            <input type="time" className="admin-input" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+          </label>
+
+          <h2 className="admin-display col-span-full mt-4 text-lg">Public holidays (optional)</h2>
+          <div className="col-span-full">
+            <p className="admin-muted mb-1 text-xs">
+              List of public holidays. Add items with at least a date (e.g. <code>2026-12-31</code>) and a label.
+            </p>
+            <SmartConfigEditor value={holidays} onChange={(v) => setHolidays(Array.isArray(v) ? (v as unknown[]) : [])} />
           </div>
         </div>
       )}
     </div>
   );
 }
-

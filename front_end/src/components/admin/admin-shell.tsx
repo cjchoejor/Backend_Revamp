@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { adminNav } from "@/config/admin-nav";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import { ZoneTransitionLink } from "@/components/layout/zone-transition";
 import { useSession } from "@/hooks/use-session";
 import { cn } from "@/lib/utils";
 import { AdminGuard } from "./admin-guard";
@@ -21,28 +22,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             Admin Console
             <small>LEGPHEL PMS · Configuration</small>
           </div>
-          <nav className="admin-nav ml-auto hidden flex-wrap gap-0 md:flex">
-            {adminNav.map((item) => {
-              const active = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));
-              return (
-                <Link key={item.href} href={item.href} className={cn("admin-nav-link", active && "active")}>
-                  {item.title}
-                </Link>
-              );
-            })}
-          </nav>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             <ThemeToggle />
-            <Link href="/dashboard" className="admin-nav-link flex items-center gap-1 text-xs">
+            <ZoneTransitionLink href="/dashboard" target="operations" className="admin-nav-link flex items-center gap-1 text-xs">
               <ArrowLeft className="h-3 w-3" />
               Operations
-            </Link>
+            </ZoneTransitionLink>
           </div>
         </div>
       </header>
 
       <div className="mx-auto flex w-full max-w-[1500px] flex-1 gap-0 px-4 py-6 md:px-6">
-        <aside className="admin-sidebar hidden w-56 shrink-0 border-r border-border pr-4 md:block">
+        <aside className="admin-sidebar sticky top-[64px] hidden max-h-[calc(100vh-64px)] w-56 shrink-0 overflow-y-auto border-r border-border pr-4 md:block">
           <nav className="space-y-1">
             {adminNav.map((item) => {
               const active = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));

@@ -1,18 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { StructuredConfigPanel } from "@/components/admin/structured-config-panel";
 import { getConfiguration, listConfigurationKeys, setConfiguration } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
-import { ApiError } from "@/lib/api/client";
 
 export default function AdminConfigurationPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [selectedKey, setSelectedKey] = useState("");
-  const [editor, setEditor] = useState("");
-  const [notes, setNotes] = useState("");
 
   const keysQuery = useQuery({
     queryKey: ["admin", "config-keys"],
@@ -33,42 +30,19 @@ export default function AdminConfigurationPage() {
     enabled: !!session && session.actorLevel === "L4" && !!selectedKey && keys.includes(selectedKey),
   });
 
-  const loadKey = (key: string) => {
-    setSelectedKey(key);
-    getConfiguration(session!, key)
-      .then((row) => {
-        setEditor(JSON.stringify(row.configValue, null, 2));
-        setNotes(row.notes ?? "");
-      })
-      .catch((e) => toast.error(e instanceof ApiError ? e.message : "Failed to load"));
-  };
-
-  const saveMutation = useMutation({
-    mutationFn: () => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(editor);
-      } catch {
-        throw new Error("Invalid JSON");
-      }
-      return setConfiguration(session!, selectedKey, { configValue: parsed, notes: notes || null });
-    },
-    onSuccess: () => {
-      toast.success("Configuration superseded (new temporal row)");
-      void queryClient.invalidateQueries({ queryKey: ["admin", "config", selectedKey] });
-      void keysQuery.refetch();
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
-  });
-
   return (
     <div className="space-y-6 pb-16">
       <div>
         <p className="admin-eyebrow mb-2">Domain 04 · Workflow & keys</p>
         <h1 className="admin-display text-3xl">Configuration entries</h1>
         <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Values are never edited in place — saving creates a new row and closes the prior active window
-          (effectiveFrom / effectiveTo). Seeded defaults show a system-default indicator.
+          Values are never edited in place — saving creates a new row and closes the prior active window. Keys with a
+          friendly form use structured fields; others fall back to the generic editor (with an Advanced JSON escape
+          hatch). For timers and workers, prefer{" "}
+          <a href="/admin/timers-workers" className="text-primary underline">
+            Timers & workers
+          </a>
+          .
         </p>
       </div>
 
@@ -86,7 +60,7 @@ export default function AdminConfigurationPage() {
                 <button
                   type="button"
                   className="w-full truncate rounded px-2 py-1.5 text-left text-[var(--admin-ink-soft)] hover:bg-[var(--admin-brass-glow)] hover:text-[var(--admin-brass)]"
-                  onClick={() => loadKey(key)}
+                  onClick={() => setSelectedKey(key)}
                 >
                   {key}
                 </button>
@@ -110,25 +84,16 @@ export default function AdminConfigurationPage() {
                   {activeQuery.data.setBy}
                 </p>
               )}
-              <textarea
-                className="admin-textarea min-h-[280px] font-mono text-xs"
-                value={editor}
-                onChange={(e) => setEditor(e.target.value)}
+              <StructuredConfigPanel
+                key={selectedKey}
+                configKey={selectedKey}
+                load={(key) => getConfiguration(session!, key)}
+                save={(key, body) => setConfiguration(session!, key, body)}
+                onSaved={() => {
+                  void activeQuery.refetch();
+                  void queryClient.invalidateQueries({ queryKey: ["admin", "config", selectedKey] });
+                }}
               />
-              <input
-                className="admin-input"
-                placeholder="Notes (optional)"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-              <button
-                type="button"
-                className="admin-btn"
-                disabled={saveMutation.isPending}
-                onClick={() => saveMutation.mutate()}
-              >
-                {saveMutation.isPending ? "Saving…" : "Supersede with new value"}
-              </button>
             </>
           )}
         </div>

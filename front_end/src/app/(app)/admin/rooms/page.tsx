@@ -3,14 +3,17 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCategories, listAdminRooms, listRoomTypes } from "@/lib/api/admin";
+import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCategories, listAdminRooms, listRoomTypes, markRoomDeficient, reactivateAdminRoom, resolveRoomDeficient } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+
+type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
 
 export default function AdminRoomsPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "", capacity: "2" });
+  const [defForm, setDefForm] = useState<DeficientForm | null>(null);
 
   const roomsQuery = useQuery({
     queryKey: ["admin", "rooms"],
@@ -58,6 +61,41 @@ export default function AdminRoomsPage() {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed"),
   });
 
+  const resolveDeficientMutation = useMutation({
+    mutationFn: ({ id, note }: { id: string; note?: string }) => resolveRoomDeficient(session!, id, note),
+    onSuccess: () => {
+      toast.success("Deficient condition resolved");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Resolve failed"),
+  });
+
+  const reactivateMutation = useMutation({
+    mutationFn: (id: string) => reactivateAdminRoom(session!, id),
+    onSuccess: () => {
+      toast.success("Room reactivated");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Reactivate failed"),
+  });
+
+  const markDeficientMutation = useMutation({
+    mutationFn: () => {
+      if (!defForm) throw new Error("No form");
+      return markRoomDeficient(session!, defForm.roomId, {
+        category: defForm.category,
+        description: defForm.description,
+        resolutionDeadline: defForm.deadline ? new Date(defForm.deadline).toISOString() : null,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Room marked deficient");
+      setDefForm(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Mark deficient failed"),
+  });
+
   const categoriesQuery = useQuery({
     queryKey: ["admin", "deficient-categories"],
     queryFn: () => getDeficientCategories(session!),
@@ -97,13 +135,81 @@ export default function AdminRoomsPage() {
       <div className="admin-panel p-5">
         <h2 className="admin-display mb-3 text-lg">Deficient condition categories</h2>
         {categoriesQuery.data?.isSystemDefault && <span className="admin-tag mb-3 inline-block">system default</span>}
-        <pre className="overflow-auto font-mono text-xs text-[var(--admin-ink-soft)]">
-          {JSON.stringify(categoriesQuery.data?.configValue ?? [], null, 2)}
-        </pre>
-        <p className="admin-muted mt-2 text-xs">
-          Edit via Configuration → <span className="font-mono text-[var(--admin-brass)]">deficientCondition.categories</span>
+        <p className="admin-muted text-xs">
+          These categories are the allowed reasons when marking a room deficient. Edit the list under{" "}
+          <span className="font-mono text-[var(--admin-brass)]">Configuration → deficientCondition.categories</span>.
         </p>
+        <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+          {(Array.isArray(categoriesQuery.data?.configValue) ? (categoriesQuery.data!.configValue as Array<{ code: string; label: string; isActive?: boolean }>) : []).map((c) => (
+            <li key={c.code} className="flex items-center justify-between rounded border border-[var(--admin-rule)] px-3 py-2 text-xs">
+              <span>
+                <span className="font-mono">{c.code}</span> · {c.label}
+              </span>
+              {c.isActive === false && <span className="admin-tag admin-tag-warn">inactive</span>}
+            </li>
+          ))}
+        </ul>
       </div>
+
+      {defForm && (
+        <div className="admin-panel space-y-3 p-5">
+          <h2 className="admin-display text-lg">Mark room {defForm.roomNumber} deficient</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="admin-muted text-xs">
+              Category
+              <select
+                className="admin-select mt-1 w-full"
+                value={defForm.category}
+                onChange={(e) => setDefForm({ ...defForm, category: e.target.value })}
+              >
+                <option value="">Select category…</option>
+                {(Array.isArray(categoriesQuery.data?.configValue) ? (categoriesQuery.data!.configValue as Array<{ code: string; label: string; isActive?: boolean }>) : [])
+                  .filter((c) => c.isActive !== false)
+                  .map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label} ({c.code})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="admin-muted text-xs">
+              Resolution deadline (optional)
+              <input
+                className="admin-input mt-1 w-full"
+                type="datetime-local"
+                value={defForm.deadline}
+                onChange={(e) => setDefForm({ ...defForm, deadline: e.target.value })}
+              />
+            </label>
+            <label className="admin-muted text-xs md:col-span-2">
+              Description
+              <textarea
+                className="admin-input mt-1 w-full"
+                rows={2}
+                placeholder="What's wrong with the room?"
+                value={defForm.description}
+                onChange={(e) => setDefForm({ ...defForm, description: e.target.value })}
+              />
+            </label>
+          </div>
+          <p className="admin-muted text-xs">
+            Defaults the deadline to <span className="font-mono">deficientResolution.deadlineHours</span> from now (48h if not configured).
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="admin-btn w-fit"
+              disabled={markDeficientMutation.isPending || !defForm.category || defForm.description.trim().length < 3}
+              onClick={() => markDeficientMutation.mutate()}
+            >
+              Confirm mark deficient
+            </button>
+            <button type="button" className="admin-btn w-fit" onClick={() => setDefForm(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="admin-panel overflow-x-auto p-4">
         <table className="admin-table">
@@ -135,7 +241,47 @@ export default function AdminRoomsPage() {
                 <td>{r.isBlocked ? "Yes" : "—"}</td>
                 <td className="text-right">
                   <div className="flex justify-end gap-1">
-                    {!r.isBlocked && (
+                    {r.isDeficient && (
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn-success text-[10px]"
+                        disabled={resolveDeficientMutation.isPending}
+                        onClick={() => {
+                          const note = window.prompt(`Resolve deficient condition on room ${r.roomNumber}. Resolution notes (optional):`, "");
+                          if (note === null) return;
+                          resolveDeficientMutation.mutate({ id: r.id, note: note.trim() || undefined });
+                        }}
+                      >
+                        Mark resolved
+                      </button>
+                    )}
+                    {!r.isDeficient && !r.isBlocked && (
+                      <button
+                        type="button"
+                        className="admin-btn text-[10px]"
+                        onClick={() =>
+                          setDefForm({
+                            roomId: r.id,
+                            roomNumber: r.roomNumber,
+                            category: "",
+                            description: "",
+                            deadline: "",
+                          })
+                        }
+                      >
+                        Mark deficient
+                      </button>
+                    )}
+                    {r.isBlocked ? (
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn-success text-[10px]"
+                        disabled={reactivateMutation.isPending}
+                        onClick={() => reactivateMutation.mutate(r.id)}
+                      >
+                        Reactivate
+                      </button>
+                    ) : (
                       <button
                         type="button"
                         className="admin-btn text-[10px]"

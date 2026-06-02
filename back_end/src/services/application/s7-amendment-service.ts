@@ -136,6 +136,22 @@ export async function roomChangeReEntryToS1(
         updatedAt: now,
       },
     });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ENTRY.REENTRY_S7_TO_S1",
+        actorId,
+        actorLevel: "L2",
+        entityType: "Entry",
+        entityId: input.entryId,
+        operation: "TRANSITION",
+        timestamp: now,
+        stageContext: Stage.S7,
+        inquiryId: entry.inquiryId,
+        entryId: input.entryId,
+        payload: { entryId: input.entryId, fromStage: "S7", toStage: "S1", reason: input.reason, fromRoomId: currentAssignment.roomId, toRoomId: input.newRoomId },
+        createdBy: actorId,
+      },
+    });
 
     await tx.amendmentEventRecord.create({
       data: {

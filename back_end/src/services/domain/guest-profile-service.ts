@@ -191,5 +191,22 @@ export async function recordVerification(
     });
   }
 
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "GUEST.IDENTITY_VERIFIED",
+      actorId,
+      actorLevel: "L1",
+      entityType: "GuestProfile",
+      entityId: guestProfileId,
+      operation: "UPDATE",
+      timestamp: now,
+      stageContext: entry.currentStage,
+      inquiryId: entry.inquiryId,
+      entryId: body.entryId,
+      payload: { entryId: body.entryId, guestProfileId, verificationPath: body.verificationPath, documentType: body.documentType ?? null },
+      createdBy: actorId,
+    },
+  });
+
   return prisma.guestProfile.findUniqueOrThrow({ where: { id: guestProfileId } });
 }

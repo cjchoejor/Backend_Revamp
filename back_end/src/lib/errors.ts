@@ -87,3 +87,14 @@ export class MissingConfigurationError extends AppError {
     super(422, { error: "MissingConfigurationError", message: `Missing or invalid configuration: ${configKey}`, blockingCondition: configKey });
   }
 }
+
+/** ACIG §4.4/§6.1A.1 — a RequiredControlCheck violation. Surfaces as HTTP 422. */
+export class ConfigurationViolationError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(422, {
+      error: "ConfigurationViolationError",
+      message,
+      ...(details !== undefined ? { details } : {}),
+    });
+  }
+}

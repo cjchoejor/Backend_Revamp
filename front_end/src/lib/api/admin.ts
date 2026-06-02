@@ -1,4 +1,5 @@
 import type { Session } from "@/types/session";
+import type { TraceEvent } from "@/lib/trace/humanize";
 import { apiRequest } from "./client";
 
 export type AdminOverview = {
@@ -262,6 +263,63 @@ export async function deleteAdminRoom(session: Session, id: string) {
   return apiRequest<{ id: string; deleted: boolean }>(`/api/admin/rooms/${id}`, { method: "DELETE", session });
 }
 
+export async function markRoomDeficient(
+  session: Session,
+  roomId: string,
+  body: { category: string; description: string; resolutionDeadline?: string | null },
+) {
+  return apiRequest(`/api/admin/rooms/${roomId}/deficient-conditions`, { method: "POST", session, body });
+}
+
+export async function resolveRoomDeficient(session: Session, roomId: string, resolutionNotes?: string) {
+  return apiRequest(`/api/admin/rooms/${roomId}/resolve-deficient`, {
+    method: "POST",
+    session,
+    body: { resolutionNotes: resolutionNotes ?? null },
+  });
+}
+
+export async function reactivateAdminRoom(session: Session, roomId: string) {
+  return apiRequest(`/api/admin/rooms/${roomId}/reactivate`, { method: "POST", session });
+}
+
+// --- Registry reactivate ------------------------------------------------
+
+export async function reactivateRatePlan(session: Session, id: string) {
+  return apiRequest<RatePlanAdmin>(`/api/admin/rate-plans/${id}/reactivate`, { method: "POST", session });
+}
+
+export async function reactivateSeason(session: Session, id: string) {
+  return apiRequest<SeasonAdmin>(`/api/admin/seasons/${id}/reactivate`, { method: "POST", session });
+}
+
+export async function reactivatePackage(session: Session, id: string) {
+  return apiRequest<PackageAdmin>(`/api/admin/packages/${id}/reactivate`, { method: "POST", session });
+}
+
+export async function reactivateCancellationPolicy(session: Session, id: string) {
+  return apiRequest<CancellationPolicyAdmin>(`/api/admin/cancellation-policies/${id}/reactivate`, { method: "POST", session });
+}
+
+export async function reactivateVipRouting(session: Session, id: string) {
+  return apiRequest(`/api/admin/vip-routing/${id}/reactivate`, { method: "POST", session });
+}
+
+export async function reactivateFeedbackTemplate(session: Session, id: string) {
+  return apiRequest<FeedbackTemplateAdmin>(`/api/admin/post-stay/feedback-templates/${id}/reactivate`, { method: "POST", session });
+}
+
+// Templates (communication/invoice/work-order) — use existing PATCH with isActive:true.
+export async function reactivateCommunicationTemplate(session: Session, id: string) {
+  return updateCommunicationTemplate(session, id, { isActive: true });
+}
+export async function reactivateInvoiceTemplate(session: Session, id: string) {
+  return updateInvoiceTemplate(session, id, { isActive: true });
+}
+export async function reactivateWorkOrderTemplate(session: Session, id: string) {
+  return updateWorkOrderTemplate(session, id, { isActive: true });
+}
+
 export async function getDeficientCategories(session: Session) {
   return apiRequest<{ configKey: string; configValue: unknown; isSystemDefault: boolean }>(
     "/api/admin/deficient-condition-categories",
@@ -433,6 +491,59 @@ export async function deactivateInvoiceTemplate(session: Session, id: string) {
   return apiRequest(`/api/admin/templates/invoice/${id}`, { method: "PATCH", session, body: { isActive: false } });
 }
 
+// --- Template CRUD (ACIG §6.2.16–§6.2.20) -------------------------------
+
+export async function createCommunicationTemplate(
+  session: Session,
+  body: { templateKey: string; channel: string; templateType: string; bodyTemplate: string; subjectTemplate?: string | null; stage?: string | null },
+) {
+  return apiRequest<CommunicationTemplateAdmin>("/api/admin/templates/communication", { method: "POST", session, body });
+}
+
+export async function updateCommunicationTemplate(
+  session: Session,
+  id: string,
+  body: Partial<{ channel: string; templateType: string; bodyTemplate: string; subjectTemplate: string | null; isActive: boolean }>,
+) {
+  return apiRequest<CommunicationTemplateAdmin>(`/api/admin/templates/communication/${id}`, { method: "PATCH", session, body });
+}
+
+export async function saveHandoffTemplate(session: Session, body: { handoffType: "H1" | "H2" | "H3" | "H4"; checklistItems: unknown }) {
+  return apiRequest("/api/admin/templates/handoff", { method: "POST", session, body });
+}
+
+export async function createInvoiceTemplate(
+  session: Session,
+  body: { templateKey: string; invoiceType: "PROFORMA" | "FINAL"; title: string; bodyTemplate: string },
+) {
+  return apiRequest("/api/admin/templates/invoice", { method: "POST", session, body });
+}
+
+export async function updateInvoiceTemplate(session: Session, id: string, body: Partial<{ title: string; bodyTemplate: string; isActive: boolean }>) {
+  return apiRequest(`/api/admin/templates/invoice/${id}`, { method: "PATCH", session, body });
+}
+
+export type WorkOrderTemplateAdmin = { id: string; templateKey: string; title: string; useType: string | null; todoItems: unknown; isActive: boolean; version: number };
+
+export async function listWorkOrderTemplates(session: Session) {
+  return apiRequest<{ items: WorkOrderTemplateAdmin[]; count: number }>("/api/admin/templates/work-order", { session });
+}
+
+export async function createWorkOrderTemplate(
+  session: Session,
+  body: { templateKey: string; title: string; todoItems: unknown; useType?: string | null },
+) {
+  return apiRequest<WorkOrderTemplateAdmin>("/api/admin/templates/work-order", { method: "POST", session, body });
+}
+
+export async function updateWorkOrderTemplate(session: Session, id: string, body: Partial<{ title: string; todoItems: unknown; isActive: boolean }>) {
+  return apiRequest<WorkOrderTemplateAdmin>(`/api/admin/templates/work-order/${id}`, { method: "PATCH", session, body });
+}
+
+export async function deactivateWorkOrderTemplate(session: Session, id: string) {
+  return apiRequest(`/api/admin/templates/work-order/${id}`, { method: "PATCH", session, body: { isActive: false } });
+}
+
 // --- Financial & operational -------------------------------------------
 
 export async function listFinancialConfigKeys(session: Session) {
@@ -475,4 +586,278 @@ export async function saveVipRouting(
 
 export async function deactivateVipRouting(session: Session, id: string) {
   return apiRequest(`/api/admin/vip-routing/${id}/deactivate`, { method: "POST", session });
+}
+
+// --- Rate plans (ACIG §6.2.8) -------------------------------------------
+
+export type RatePlanType = "INDIVIDUAL" | "PROMOTIONAL" | "TIER" | "CHANNEL" | "RACK";
+
+export type RatePlanAdmin = {
+  id: string;
+  name: string;
+  description: string | null;
+  roomTypeId: string | null;
+  type: RatePlanType;
+  baseRate: string;
+  currency: string;
+  msr: string | null;
+  overrideMargin: string | null;
+  isActive: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+};
+
+export type RatePlanInput = {
+  name: string;
+  description?: string | null;
+  roomTypeId?: string | null;
+  type?: RatePlanType;
+  baseRate: number;
+  currency?: string;
+  msr?: number | null;
+  overrideMargin?: number | null;
+};
+
+export async function listRatePlans(session: Session, includeInactive = false) {
+  const q = includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ items: RatePlanAdmin[]; count: number }>(`/api/admin/rate-plans${q}`, { session });
+}
+export async function createRatePlan(session: Session, body: RatePlanInput) {
+  return apiRequest<RatePlanAdmin>("/api/admin/rate-plans", { method: "POST", session, body });
+}
+export async function updateRatePlan(session: Session, id: string, body: Partial<RatePlanInput>) {
+  return apiRequest<RatePlanAdmin>(`/api/admin/rate-plans/${id}`, { method: "PATCH", session, body });
+}
+export async function deactivateRatePlan(session: Session, id: string) {
+  return apiRequest<RatePlanAdmin>(`/api/admin/rate-plans/${id}/deactivate`, { method: "POST", session });
+}
+export async function getWalkInRatePlan(session: Session) {
+  return apiRequest<{ ratePlanId: string | null; ratePlan: RatePlanAdmin | null }>("/api/admin/rate-plans/walk-in", { session });
+}
+export async function setWalkInRatePlan(session: Session, ratePlanId: string) {
+  return apiRequest("/api/admin/rate-plans/walk-in", { method: "PUT", session, body: { ratePlanId } });
+}
+
+// --- Seasons (ACIG §6.2.9) ----------------------------------------------
+
+export type SeasonAdmin = {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  rateMultiplier: string | null;
+  priority: number;
+  isActive: boolean;
+  version: number;
+};
+
+export type SeasonInput = {
+  name: string;
+  startDate: string;
+  endDate: string;
+  rateMultiplier?: number | null;
+  priority?: number;
+};
+
+export async function listSeasons(session: Session, includeInactive = false) {
+  const q = includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ items: SeasonAdmin[]; count: number }>(`/api/admin/seasons${q}`, { session });
+}
+export async function createSeason(session: Session, body: SeasonInput) {
+  return apiRequest<SeasonAdmin>("/api/admin/seasons", { method: "POST", session, body });
+}
+export async function updateSeason(session: Session, id: string, body: Partial<SeasonInput>) {
+  return apiRequest<SeasonAdmin>(`/api/admin/seasons/${id}`, { method: "PATCH", session, body });
+}
+export async function deactivateSeason(session: Session, id: string) {
+  return apiRequest<SeasonAdmin>(`/api/admin/seasons/${id}/deactivate`, { method: "POST", session });
+}
+
+// --- Packages (ACIG §6.2.10) --------------------------------------------
+
+export type PackageAdmin = {
+  id: string;
+  name: string;
+  description: string | null;
+  inclusions: unknown;
+  priceAdjustment: string | null;
+  currency: string;
+  isActive: boolean;
+  version: number;
+};
+
+export type PackageInput = {
+  name: string;
+  description?: string | null;
+  inclusions: unknown;
+  priceAdjustment?: number | null;
+  currency?: string;
+};
+
+export async function listPackages(session: Session, includeInactive = false) {
+  const q = includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ items: PackageAdmin[]; count: number }>(`/api/admin/packages${q}`, { session });
+}
+export async function createPackage(session: Session, body: PackageInput) {
+  return apiRequest<PackageAdmin>("/api/admin/packages", { method: "POST", session, body });
+}
+export async function updatePackage(session: Session, id: string, body: Partial<PackageInput>) {
+  return apiRequest<PackageAdmin>(`/api/admin/packages/${id}`, { method: "PATCH", session, body });
+}
+export async function deactivatePackage(session: Session, id: string) {
+  return apiRequest<PackageAdmin>(`/api/admin/packages/${id}/deactivate`, { method: "POST", session });
+}
+
+// --- Cancellation policies (ACIG §6.2.12) -------------------------------
+
+export type PenaltyTier = { daysBeforeArrival: number; penaltyPercentage: number };
+export type CancellationPolicyAdmin = {
+  id: string;
+  name: string;
+  penaltyTiers: PenaltyTier[];
+  noShowTreatment: string;
+  isActive: boolean;
+  version: number;
+};
+
+export async function listCancellationPolicies(session: Session, includeInactive = false) {
+  const q = includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ items: CancellationPolicyAdmin[]; count: number }>(`/api/admin/cancellation-policies${q}`, { session });
+}
+export async function createCancellationPolicy(
+  session: Session,
+  body: { name: string; penaltyTiers: PenaltyTier[]; noShowTreatment: string },
+) {
+  return apiRequest<CancellationPolicyAdmin>("/api/admin/cancellation-policies", { method: "POST", session, body });
+}
+export async function updateCancellationPolicy(
+  session: Session,
+  id: string,
+  body: Partial<{ name: string; penaltyTiers: PenaltyTier[]; noShowTreatment: string }>,
+) {
+  return apiRequest<CancellationPolicyAdmin>(`/api/admin/cancellation-policies/${id}`, { method: "PATCH", session, body });
+}
+export async function deactivateCancellationPolicy(session: Session, id: string) {
+  return apiRequest<CancellationPolicyAdmin>(`/api/admin/cancellation-policies/${id}/deactivate`, { method: "POST", session });
+}
+
+// --- Commercial thresholds (ACIG §6.2.11) -------------------------------
+
+export async function getDiscountThresholds(session: Session) {
+  return apiRequest<{ fomMaxPercentage: unknown; gmMaxPercentage: unknown }>("/api/admin/commercial-thresholds/discount", { session });
+}
+export async function setDiscountThresholds(session: Session, body: { fomMaxPercentage: number; gmMaxPercentage: number }) {
+  return apiRequest("/api/admin/commercial-thresholds/discount", { method: "PUT", session, body });
+}
+export async function getCreditCeilingThresholds(session: Session) {
+  return apiRequest<{ clientTierThresholds: unknown; proximityThresholds: unknown }>("/api/admin/commercial-thresholds/credit-ceiling", { session });
+}
+export async function setCreditCeilingThresholds(session: Session, body: { clientTierThresholds: unknown; proximityThresholds: unknown }) {
+  return apiRequest("/api/admin/commercial-thresholds/credit-ceiling", { method: "PUT", session, body });
+}
+export async function getOverbookingLimits(session: Session) {
+  return apiRequest<{ maxAllowedRooms: unknown }>("/api/admin/commercial-thresholds/overbooking", { session });
+}
+export async function setOverbookingLimits(session: Session, maxAllowedRooms: number) {
+  return apiRequest("/api/admin/commercial-thresholds/overbooking", { method: "PUT", session, body: { maxAllowedRooms } });
+}
+
+// --- OTA config (ACIG §6.2.23) ------------------------------------------
+
+export async function getOtaConfig(session: Session, surface: string) {
+  return apiRequest<Record<string, unknown>>(`/api/admin/ota-config/${surface}`, { session });
+}
+export async function setOtaConfigValue(session: Session, surface: string, value: unknown) {
+  return apiRequest(`/api/admin/ota-config/${surface}`, { method: "PUT", session, body: { value } });
+}
+export async function setOtaPollingInterval(session: Session, seconds: number) {
+  return apiRequest("/api/admin/ota-config/polling-interval", { method: "PUT", session, body: { seconds } });
+}
+export async function setOtaNoShowCutoff(session: Session, minutes: number) {
+  return apiRequest("/api/admin/ota-config/no-show-cutoff", { method: "PUT", session, body: { minutes } });
+}
+
+// --- AI agent config (ACIG §6.2.24) -------------------------------------
+
+export async function getAiAgentConfig(session: Session) {
+  return apiRequest<{ value: unknown }>("/api/admin/ai-agent-config", { session });
+}
+export async function updateAiAgentConfig(session: Session, body: Record<string, unknown>) {
+  return apiRequest("/api/admin/ai-agent-config", { method: "PUT", session, body });
+}
+export async function getProcessingLockTtls(session: Session) {
+  return apiRequest<{ value: unknown }>("/api/admin/ai-agent-config/processing-lock-ttl", { session });
+}
+export async function setProcessingLockTtls(session: Session, body: Record<string, number>) {
+  return apiRequest("/api/admin/ai-agent-config/processing-lock-ttl", { method: "PUT", session, body });
+}
+
+// --- Communication channels (ACIG §6.2.16) ------------------------------
+
+export async function listCommunicationChannels(session: Session) {
+  return apiRequest<{ channels: Record<string, unknown> }>("/api/admin/communication-config/channels", { session });
+}
+export async function updateCommunicationChannel(session: Session, channelId: string, body: Record<string, unknown>) {
+  return apiRequest(`/api/admin/communication-config/channels/${encodeURIComponent(channelId)}`, { method: "PUT", session, body });
+}
+export async function getAcknowledgementWindow(session: Session) {
+  return apiRequest<{ value: unknown }>("/api/admin/communication-config/acknowledgement-window", { session });
+}
+export async function setAcknowledgementWindow(session: Session, value: unknown) {
+  return apiRequest("/api/admin/communication-config/acknowledgement-window", { method: "PUT", session, body: { value } });
+}
+
+// --- Post-stay & governance (ACIG §6.2.22) ------------------------------
+
+export type FeedbackTemplateAdmin = { id: string; templateKey: string; title: string; questions: unknown; isActive: boolean; version: number };
+
+export async function listFeedbackTemplates(session: Session, includeInactive = false) {
+  const q = includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ items: FeedbackTemplateAdmin[]; count: number }>(`/api/admin/post-stay/feedback-templates${q}`, { session });
+}
+export async function createFeedbackTemplate(session: Session, body: { templateKey: string; title: string; questions: unknown }) {
+  return apiRequest<FeedbackTemplateAdmin>("/api/admin/post-stay/feedback-templates", { method: "POST", session, body });
+}
+export async function deactivateFeedbackTemplate(session: Session, id: string) {
+  return apiRequest(`/api/admin/post-stay/feedback-templates/${id}/deactivate`, { method: "POST", session });
+}
+export async function getPostStayValue(session: Session, surface: string) {
+  return apiRequest<{ value: unknown }>(`/api/admin/post-stay/${surface}`, { session });
+}
+export async function setPostStayValue(session: Session, surface: string, value: unknown) {
+  return apiRequest(`/api/admin/post-stay/${surface}`, { method: "PUT", session, body: { value } });
+}
+
+// --- Audit trail (read-only trace_events view) --------------------------
+
+export type AuditEventFilters = {
+  actorId?: string;
+  entityType?: string;
+  entityId?: string;
+  eventType?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export async function queryAuditEvents(session: Session, filters: AuditEventFilters = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) {
+    if (v === undefined || v === null || String(v).trim() === "") continue;
+    // datetime-local values are local wall-clock; convert to a UTC instant so the range matches intent.
+    if ((k === "from" || k === "to") && typeof v === "string") {
+      const d = new Date(v);
+      q.set(k, Number.isNaN(d.getTime()) ? String(v) : d.toISOString());
+      continue;
+    }
+    q.set(k, String(v));
+  }
+  const qs = q.toString();
+  return apiRequest<{ items: TraceEvent[]; total: number; limit: number; offset: number }>(
+    `/api/admin/audit-events${qs ? `?${qs}` : ""}`,
+    { session },
+  );
 }

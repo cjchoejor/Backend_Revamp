@@ -18,8 +18,20 @@ import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js
 import * as s9Service from "../../services/domain/s9-service.js";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
+import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 
 export const entriesRouter = Router();
+
+/** Read-only trace/event feed for a single entry — visible to the staff working it (L1+). */
+entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const result = await getEntryTrace(prisma, req.params.id, limit);
+    res.json(result);
+  } catch (e) {
+    next(e);
+  }
+});
 
 entriesRouter.get("/", requireActorLevel("L1"), async (req, res, next) => {
   try {

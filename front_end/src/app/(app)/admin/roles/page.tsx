@@ -22,7 +22,8 @@ export default function AdminRolesPage() {
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({ roleCode: "", displayName: "", actorLevel: "L1" as const });
   const [selectedRoleId, setSelectedRoleId] = useState<string>("");
-  const [permissionsText, setPermissionsText] = useState("");
+  const [permissionList, setPermissionList] = useState<string[]>([]);
+  const [permInput, setPermInput] = useState("");
   const [sessionCfgDraft, setSessionCfgDraft] = useState({ idle: "600", hard: "28800", manual: true });
 
   const rolesQuery = useQuery({
@@ -33,6 +34,21 @@ export default function AdminRolesPage() {
 
   const items = rolesQuery.data?.items ?? [];
   const selected = useMemo(() => items.find((r) => r.id === selectedRoleId) ?? null, [items, selectedRoleId]);
+
+  // Distinct permission IDs seen across all roles — used as quick-add suggestions.
+  const knownPermissions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of items) for (const p of r.permissions) set.add(p.permissionId);
+    return [...set].sort();
+  }, [items]);
+
+  const addPermission = (id: string) => {
+    const v = id.trim();
+    if (!v) return;
+    setPermissionList((prev) => (prev.includes(v) ? prev : [...prev, v]));
+    setPermInput("");
+  };
+  const removePermission = (id: string) => setPermissionList((prev) => prev.filter((p) => p !== id));
 
   const createMutation = useMutation({
     mutationFn: () => createRole(session!, form),
@@ -141,7 +157,8 @@ export default function AdminRolesPage() {
                 type="button"
                 onClick={() => {
                   setSelectedRoleId(r.id);
-                  setPermissionsText(r.permissions.map((p) => p.permissionId).join("\n"));
+                  setPermissionList(r.permissions.map((p) => p.permissionId));
+                  setPermInput("");
                   setSessionCfgDraft({
                     idle: String(r.sessionCfg?.idleLockTimeoutSeconds ?? 600),
                     hard: String(r.sessionCfg?.hardLogoutTimeoutSeconds ?? 28800),
@@ -221,17 +238,49 @@ export default function AdminRolesPage() {
 
               <div className="admin-panel p-5">
                 <h3 className="admin-display text-lg">Permissions</h3>
-                <p className="admin-muted mt-1 text-xs">One permission ID per line. (Hard RequiredControlCheck enforcement is coming next.)</p>
-                <textarea className="admin-textarea mt-3 min-h-[160px]" value={permissionsText} onChange={(e) => setPermissionsText(e.target.value)} />
+                <p className="admin-muted mt-1 text-xs">Add or remove permission keys, then save. The backend runs a RequiredControlCheck to reject changes that would leave a required action uncovered.</p>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {permissionList.length === 0 && <span className="admin-muted text-xs">No permissions assigned.</span>}
+                  {permissionList.map((p) => (
+                    <span key={p} className="admin-tag inline-flex items-center gap-1 font-mono text-[10px]">
+                      {p}
+                      <button type="button" className="text-destructive" aria-label={`Remove ${p}`} onClick={() => removePermission(p)}>×</button>
+                    </span>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <input
+                    className="admin-input w-72"
+                    placeholder="Add permission key (e.g. quotation.create)"
+                    value={permInput}
+                    onChange={(e) => setPermInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addPermission(permInput);
+                      }
+                    }}
+                  />
+                  <button type="button" className="admin-btn" onClick={() => addPermission(permInput)}>Add</button>
+                </div>
+
+                {knownPermissions.filter((p) => !permissionList.includes(p)).length > 0 && (
+                  <div className="mt-3">
+                    <p className="admin-muted text-[10px] uppercase tracking-wide">Quick add (used by other roles)</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {knownPermissions.filter((p) => !permissionList.includes(p)).map((p) => (
+                        <button key={p} type="button" className="admin-btn font-mono text-[10px]" onClick={() => addPermission(p)}>+ {p}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <button
                   type="button"
-                  className="admin-btn mt-3 w-fit"
-                  onClick={() =>
-                    permissionsMutation.mutate({
-                      id: selected.id,
-                      permissionIds: permissionsText.split("\n").map((s) => s.trim()).filter(Boolean),
-                    })
-                  }
+                  className="admin-btn mt-4 w-fit"
+                  onClick={() => permissionsMutation.mutate({ id: selected.id, permissionIds: permissionList })}
                   disabled={permissionsMutation.isPending}
                 >
                   Save permissions
