@@ -2,6 +2,7 @@ import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
 import { EntryStatus, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import * as auditService from "../infrastructure/audit-service.js";
@@ -36,14 +37,22 @@ export async function createEntry(
   const inquiry = await prisma.inquiry.findUnique({ where: { id: input.inquiryId } });
   if (!inquiry) throw new NotFoundError("Inquiry");
 
-  const thresholdEntry = await getActiveConfigEntry(prisma, "groupDetection.guestCountThreshold");
+  // Policy registry override: `registry.groupDetection.guestCountThreshold` (when enabled)
+  // takes precedence over the legacy `groupDetection.guestCountThreshold` ConfigurationEntry.
+  const groupPolicy = await getRegistryPolicy(prisma, "registry.groupDetection.guestCountThreshold");
+  const registryGroupThreshold =
+    groupPolicy && groupPolicy.enabled !== false && typeof groupPolicy.count === "number"
+      ? (groupPolicy.count as number)
+      : null;
+  const thresholdEntry = registryGroupThreshold === null ? await getActiveConfigEntry(prisma, "groupDetection.guestCountThreshold") : null;
   const thresholdRaw = thresholdEntry?.configValue;
   const threshold =
-    typeof thresholdRaw === "number"
+    registryGroupThreshold ??
+    (typeof thresholdRaw === "number"
       ? thresholdRaw
       : typeof thresholdRaw === "string"
         ? Number(thresholdRaw)
-        : Number.MAX_SAFE_INTEGER;
+        : Number.MAX_SAFE_INTEGER);
   const groupBillingMode = resolveGroupBillingModeFromGuestCount({
     guestCount: input.guestCount,
     threshold: Number.isFinite(threshold) ? threshold : Number.MAX_SAFE_INTEGER,
@@ -89,8 +98,21 @@ export async function createEntry(
       createdBy: actorId,
     });
 
-    const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
-    const dueAt = new Date(Date.now() + Number(ttl.DEFAULT ?? 3600) * 1000);
+    // Policy registry override: `registry.s1Expiry.minutes` takes precedence over the legacy
+    // `expiry.s1.defaultTtlSeconds.DEFAULT` ConfigurationEntry. Set `enabled: false` to revert.
+    const s1ExpiryPolicy = await getRegistryPolicy(tx as any, "registry.s1Expiry.minutes");
+    const registryS1Seconds =
+      s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
+        ? (s1ExpiryPolicy.minutes as number) * 60
+        : null;
+    let ttlSeconds: number;
+    if (registryS1Seconds !== null) {
+      ttlSeconds = registryS1Seconds;
+    } else {
+      const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
+      ttlSeconds = Number(ttl.DEFAULT ?? 3600);
+    }
+    const dueAt = new Date(Date.now() + ttlSeconds * 1000);
     const engine = await getTimerEngine();
     const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId: entry.id }, { startAfter: dueAt });
     await tx.timerRecord.create({
@@ -166,8 +188,21 @@ export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId
     });
 
     // (Re-)register expiry timer on unpark (SIG-S1 §6.6 TimerManagementService).
-    const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
-    const dueAt = new Date(Date.now() + Number(ttl.DEFAULT ?? 3600) * 1000);
+    // Policy registry override: `registry.s1Expiry.minutes` takes precedence over the legacy
+    // `expiry.s1.defaultTtlSeconds.DEFAULT` ConfigurationEntry. Set `enabled: false` to revert.
+    const s1ExpiryPolicy = await getRegistryPolicy(tx as any, "registry.s1Expiry.minutes");
+    const registryS1Seconds =
+      s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
+        ? (s1ExpiryPolicy.minutes as number) * 60
+        : null;
+    let ttlSeconds: number;
+    if (registryS1Seconds !== null) {
+      ttlSeconds = registryS1Seconds;
+    } else {
+      const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
+      ttlSeconds = Number(ttl.DEFAULT ?? 3600);
+    }
+    const dueAt = new Date(Date.now() + ttlSeconds * 1000);
     const engine = await getTimerEngine();
     const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId }, { startAfter: dueAt });
     await tx.timerRecord.create({

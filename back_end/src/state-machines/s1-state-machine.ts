@@ -45,7 +45,7 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
   const gp = entry.guestProfile;
   enforceGuestProfilePrimaryContactForS1Exit({ email: gp?.email, phone: gp?.phone });
 
-  enforceNoOpenDuplicateFlagsForS1Exit({ duplicateFlags: (entry.inquiry as any)?.duplicateFlags });
+  await enforceNoOpenDuplicateFlagsForS1Exit(prisma, { duplicateFlags: (entry.inquiry as any)?.duplicateFlags });
 
   const inq: any = entry.inquiry;
   enforceCorporateOrGovernmentInquiryContextForS1Exit({

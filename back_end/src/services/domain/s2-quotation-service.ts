@@ -5,7 +5,8 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as documentGenerationService from "../infrastructure/document-generation-service.js";
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
-import { enforceDiscountApprovalAuthority } from "../../policies/09-discount/p23-discount-approval-authority.js";
+import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "../../policies/09-discount/p23-discount-approval-authority.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { validateDiscountRequestAgainstAuthorityBands } from "../../policies/09-discount/p23-discount-request-constraints.js";
 import { enforceAckOpenLoopResolutionRequiresFom } from "../../policies/20-communication-acknowledgement-tracking/p52-ack-open-loop-resolution-requires-fom.js";
 import {
@@ -430,10 +431,13 @@ export async function applyDiscount(
     throw new ValidationError("Quotation has no resolved base amount for discount application");
   }
 
-  const maxFom = await requireActiveConfigValue<number>(prisma, "discount.fom.maxPercentage");
-  const maxGm = await requireActiveConfigValue<number>(prisma, "discount.gm.maxPercentage");
+  const ceilings = await resolveActorDiscountCeilings(prisma);
   const actorMaxDiscountPercent =
-    actor.actorLevel === "L1" ? maxFom : actor.actorLevel === "L2" ? maxGm : 100;
+    actor.actorLevel === "L1"
+      ? ceilings.l1MaxPercent
+      : actor.actorLevel === "L2"
+        ? ceilings.l2MaxPercent
+        : ceilings.l3MaxPercent;
 
   const groupSize = typeof terms.groupSize === "number" && Number.isFinite(terms.groupSize) ? terms.groupSize : undefined;
   const tier = q.entry?.guestProfile?.clientTier;
@@ -610,7 +614,16 @@ export async function sendQuotation(
   const discount = (q.commercialTerms as any)?.requestedDiscount;
   await enforceDiscountApprovalBeforeSend(prisma, { quotationId, hasDiscount: Boolean(discount) });
 
-  const defaultValidityDays = await requireActiveConfigValue<number>(prisma, "expiry.s2.quotationValidityDays");
+  // Policy registry override: `registry.quotationValidity.days` (when enabled) replaces the
+  // legacy `expiry.s2.quotationValidityDays` ConfigurationEntry. Per-quotation `input.validDays`
+  // still wins over both — operator may always set a specific validity at send time.
+  const quotationValidityPolicy = await getRegistryPolicy(prisma, "registry.quotationValidity.days");
+  const registryDefaultValidity =
+    quotationValidityPolicy && quotationValidityPolicy.enabled !== false && typeof quotationValidityPolicy.days === "number"
+      ? (quotationValidityPolicy.days as number)
+      : null;
+  const defaultValidityDays =
+    registryDefaultValidity ?? (await requireActiveConfigValue<number>(prisma, "expiry.s2.quotationValidityDays"));
   const validDays = input.validDays ?? defaultValidityDays;
   if (!Number.isFinite(validDays) || validDays < 1) throw new ValidationError("validDays must be >= 1");
   const now = new Date();

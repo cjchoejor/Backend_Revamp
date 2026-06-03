@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import * as preArrivalService from "../services/domain/pre-arrival-service.js";
 import { enforceReservationSnapshotPresentForS5Activation } from "../policies/01-availability/p01-reservation-snapshot-required-for-s5-activation.js";
 import { scheduleS5StageDwellWarningMonitor } from "../lib/schedule-s5-dwell-warning-monitor.js";
@@ -39,7 +40,16 @@ export async function runPreArrivalWindowActivationWorker(
   if (alreadyFired) return { skipped: true, reason: "ALREADY_FIRED" } as const;
 
   const s4Dwell = await prisma.stageDwellRecord.findFirst({ where: { entryId, stage: Stage.S4, exitedAt: null }, orderBy: { enteredAt: "desc" } });
-  const cutoffWindowMinutes = await requireActiveConfigValue<number>(prisma, "noShow.cutoffWindowMinutes", { now });
+  // Policy registry override: admin-editable `registry.noShow.graceMinutes` row takes precedence
+  // over the legacy `noShow.cutoffWindowMinutes` ConfigurationEntry. Set `enabled: false` on the
+  // registry row to disable the override and revert to the ConfigurationEntry value.
+  const noShowPolicy = await getRegistryPolicy(prisma, "registry.noShow.graceMinutes");
+  const registryGraceMinutes =
+    noShowPolicy && noShowPolicy.enabled !== false && typeof noShowPolicy.graceMinutes === "number"
+      ? (noShowPolicy.graceMinutes as number)
+      : null;
+  const cutoffWindowMinutes =
+    registryGraceMinutes ?? (await requireActiveConfigValue<number>(prisma, "noShow.cutoffWindowMinutes", { now }));
   const expectedArrival = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
   const cutoffAt = expectedArrival ? new Date(expectedArrival.getTime() + cutoffWindowMinutes * 60_000) : null;
 
@@ -75,7 +85,13 @@ export async function runPreArrivalWindowActivationWorker(
         stageContext: Stage.S4,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, from: "S4", to: "S5" },
+        payload: {
+          entryId,
+          from: "S4",
+          to: "S5",
+          noShowCutoffMinutes: cutoffWindowMinutes,
+          noShowGraceSource: registryGraceMinutes !== null ? "policy_registry" : "configuration_entry",
+        },
         createdBy: "SYSTEM",
       },
     });

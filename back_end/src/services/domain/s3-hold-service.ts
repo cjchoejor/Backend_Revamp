@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as paymentService from "./s3-payment-service.js";
 import { enforceFocValidationForCommittedHold } from "../../policies/15-foc/p38-foc-validation-for-committed-hold.js";
@@ -46,9 +47,19 @@ export async function placeCommittedHold(
     focRoomsRequested: Number(input.focRoomsRequested ?? 1),
   });
 
-  const ttlSeconds = await requireActiveConfigValue<number>(prisma, "expiry.s3.committedHoldTtlSeconds").catch(() => {
-    throw new MissingConfigurationError("expiry.s3.committedHoldTtlSeconds");
-  });
+  // Policy registry override: `registry.holdExpiry.minutes` (when enabled) replaces the
+  // legacy `expiry.s3.committedHoldTtlSeconds` ConfigurationEntry. Set `enabled: false` to
+  // revert to the ConfigurationEntry value.
+  const holdPolicy = await getRegistryPolicy(prisma, "registry.holdExpiry.minutes");
+  const registryTtlSeconds =
+    holdPolicy && holdPolicy.enabled !== false && typeof holdPolicy.minutes === "number"
+      ? (holdPolicy.minutes as number) * 60
+      : null;
+  const ttlSeconds =
+    registryTtlSeconds ??
+    (await requireActiveConfigValue<number>(prisma, "expiry.s3.committedHoldTtlSeconds").catch(() => {
+      throw new MissingConfigurationError("expiry.s3.committedHoldTtlSeconds");
+    }));
 
   const room = await prisma.room.findUnique({ where: { id: input.roomId } });
   if (!room) throw new NotFoundError("Room");

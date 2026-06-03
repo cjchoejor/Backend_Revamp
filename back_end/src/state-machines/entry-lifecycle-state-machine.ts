@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { HandoffState, HandoffType, Stage } from "@prisma/client";
 import { NotFoundError, OptimisticLockError, ValidationError } from "../lib/errors.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import { scheduleS6StageDwellWarningMonitor } from "../lib/schedule-s6-dwell-warning-monitor.js";
 import { cancelScheduledRoomReadinessSlaForEntry } from "../services/domain/room-assignment-service.js";
@@ -105,7 +106,7 @@ export async function progressStageS5ToS6(
 
   enforceAdvancePaymentReconciliationComplete({ isReconciled: !!folio.advancePaymentReconciliationComplete });
 
-  enforceCreditCeilingTier2Acknowledged({
+  await enforceCreditCeilingTier2Acknowledged(prisma, {
     ceilingAmount: entry.reservation?.creditCeilingIfExtended != null ? num(entry.reservation.creditCeilingIfExtended) : null,
     outstandingBalance: num(folio.outstandingBalance),
     hasTier2Acknowledgement: !!entry.creditCeilingTier2AcknowledgedAt,
@@ -124,10 +125,36 @@ export async function progressStageS5ToS6(
     if (!entry.guestProfileId) {
       throw new ValidationError("Guest profile is required for VIP check-in commencement");
     }
-    routingPerTier = await requireActiveConfigValue<Record<string, string[]>>(prisma, "vipNotification.routingPerTier");
-    const ackWindowsRaw = (await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(() => ({}))) ?? {};
-    const ackWindows = ackWindowsRaw as Record<string, number>;
-    vipAckWindowSeconds = Number(ackWindows.vipArrival ?? ackWindows.VIP_ARRIVAL ?? 3600);
+    // Policy registry override: `registry.vip.notificationRoutingPerTier` (SIG-S6 §9, blocking
+    // for S6_READINESS) — when enabled and `tiers` is a record-of-string-arrays — supplies the
+    // routing map. Otherwise falls back to the legacy `vipNotification.routingPerTier`
+    // ConfigurationEntry. Either source must yield a non-empty map; otherwise the downstream
+    // VIP notification service raises a ValidationError.
+    const vipRoutingPolicy = await getRegistryPolicy(prisma, "registry.vip.notificationRoutingPerTier");
+    const registryTiers =
+      vipRoutingPolicy &&
+      vipRoutingPolicy.enabled !== false &&
+      vipRoutingPolicy.tiers &&
+      typeof vipRoutingPolicy.tiers === "object" &&
+      !Array.isArray(vipRoutingPolicy.tiers)
+        ? (vipRoutingPolicy.tiers as Record<string, string[]>)
+        : null;
+    routingPerTier =
+      registryTiers ?? (await requireActiveConfigValue<Record<string, string[]>>(prisma, "vipNotification.routingPerTier"));
+    // Policy registry override: `registry.vipArrivalAck.seconds` takes precedence over the
+    // legacy `acknowledgement.windowPerType.vipArrival` sub-key when enabled.
+    const vipAckPolicy = await getRegistryPolicy(prisma, "registry.vipArrivalAck.seconds");
+    const registryVipAck =
+      vipAckPolicy && vipAckPolicy.enabled !== false && typeof vipAckPolicy.seconds === "number"
+        ? (vipAckPolicy.seconds as number)
+        : null;
+    if (registryVipAck !== null) {
+      vipAckWindowSeconds = registryVipAck;
+    } else {
+      const ackWindowsRaw = (await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(() => ({}))) ?? {};
+      const ackWindows = ackWindowsRaw as Record<string, number>;
+      vipAckWindowSeconds = Number(ackWindows.vipArrival ?? ackWindows.VIP_ARRIVAL ?? 3600);
+    }
     if (!Number.isFinite(vipAckWindowSeconds) || vipAckWindowSeconds < 60) {
       vipAckWindowSeconds = 3600;
     }

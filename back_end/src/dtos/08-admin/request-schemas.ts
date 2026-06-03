@@ -154,7 +154,12 @@ export const saveModeRequestSchema = z.object({
   displayName: z.string().min(1),
   description: z.string().optional().nullable(),
   isPredefined: z.boolean().optional(),
-  config: z.unknown(),
+  // ACIG §2.1A.7 typed columns.
+  stageRoute: z.array(z.string()).default([]),
+  autoFulfilmentConditions: z
+    .array(z.object({ stage: z.string(), condition: z.string() }))
+    .default([]),
+  featureDependencies: z.array(z.string()).default([]),
 });
 
 export const savePolicyRequestSchema = z.object({

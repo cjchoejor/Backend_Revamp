@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 
 /**
  * W30 — Lost & Found retention (SIG-S9 §7).
@@ -16,7 +17,14 @@ export async function runLostFoundRetentionWorker(prisma: PrismaClient, input: {
   if (!rec) return { skipped: true, reason: "NOT_FOUND" } as const;
   if (rec.returnStatus === "RETURNED" || rec.returnStatus === "DISPOSED") return { skipped: true, reason: "TERMINAL" } as const;
 
-  const warningOffsetDays = Number(await requireActiveConfigValue<number>(prisma as any, "lostFound.retention.warningOffsetDays").catch(() => 3));
+  // Policy registry override: `registry.lostFound.retentionWarning.days` (when enabled)
+  // replaces the legacy `lostFound.retention.warningOffsetDays` ConfigurationEntry.
+  const retentionWarningPolicy = await getRegistryPolicy(prisma as any, "registry.lostFound.retentionWarning.days");
+  const registryDays =
+    retentionWarningPolicy && retentionWarningPolicy.enabled !== false && typeof retentionWarningPolicy.days === "number"
+      ? (retentionWarningPolicy.days as number)
+      : null;
+  const warningOffsetDays = registryDays ?? Number(await requireActiveConfigValue<number>(prisma as any, "lostFound.retention.warningOffsetDays").catch(() => 3));
   const warningAt = new Date(new Date(rec.retentionExpiresAt).getTime() - warningOffsetDays * 86400_000);
   const now = new Date();
 

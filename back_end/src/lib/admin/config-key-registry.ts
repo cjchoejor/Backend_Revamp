@@ -144,6 +144,8 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
 
   // Generic surfaces owned by ConfigurationService
   "stageDwell.thresholds": own("ConfigurationService", isObject),
+  "deficientResolution.deadlineHours": own("ConfigurationService", positiveInt),
+  "lostFound.retention.warningOffsetDays": own("ConfigurationService", nonNegativeInt),
   "availability.staleness.ttlSeconds": own("ConfigurationService", positiveInt),
   "availability.bookablePhysicalStates": own("ConfigurationService", isArray),
   "availability.shadowInventory.visibilityRules": own("ConfigurationService"),

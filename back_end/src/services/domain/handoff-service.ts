@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { HandoffState, HandoffType, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { enforceDeficientCarryIntoH2 } from "../../policies/19-deficient-condition/p49-deficient-carry-into-h2.js";
 import { enforceHandoffFulfilmentEvidence, enforceMandatoryChecklistItemsCompleted } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import {
@@ -236,8 +237,15 @@ export async function createH4(
   const isSameDayDeparture = checkout ? checkout.toISOString().slice(0, 10) === now.toISOString().slice(0, 10) : false;
   const shouldAuto = input.autoFulfilForSameDayDeparture === true && isSameDayDeparture;
 
-  const ack = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType")) ?? {};
-  const h4WindowSeconds = ack.h4 ?? ack.H4 ?? ack.handoffH4 ?? null;
+  // Policy registry override: `registry.handoffAck.seconds.h4Seconds` (when enabled) overrides
+  // the legacy `acknowledgement.windowPerType.h4` sub-key.
+  const handoffAckPolicy = await getRegistryPolicy(prisma, "registry.handoffAck.seconds");
+  const registryH4 =
+    handoffAckPolicy && handoffAckPolicy.enabled !== false && typeof handoffAckPolicy.h4Seconds === "number"
+      ? (handoffAckPolicy.h4Seconds as number)
+      : null;
+  const ack = registryH4 === null ? ((await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType")) ?? {}) : {};
+  const h4WindowSeconds = registryH4 ?? ack.h4 ?? ack.H4 ?? ack.handoffH4 ?? null;
   const slaDeadlineAt = h4WindowSeconds == null ? null : new Date(now.getTime() + Number(h4WindowSeconds) * 1000);
 
   return prisma.$transaction(async (tx) => {
@@ -334,8 +342,15 @@ export async function createH2(
     deficientConditionStatus: h2Content.deficientConditionStatus,
   });
 
-  const ackWindows = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType")) ?? {};
-  const h2s = ackWindows.h2 ?? ackWindows.H2 ?? ackWindows.handoffH2;
+  // Policy registry override: `registry.handoffAck.seconds.h2Seconds` (when enabled) overrides
+  // the legacy `acknowledgement.windowPerType.h2` sub-key.
+  const h2Policy = await getRegistryPolicy(prisma, "registry.handoffAck.seconds");
+  const registryH2 =
+    h2Policy && h2Policy.enabled !== false && typeof h2Policy.h2Seconds === "number"
+      ? (h2Policy.h2Seconds as number)
+      : null;
+  const ackWindows = registryH2 === null ? ((await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType")) ?? {}) : {};
+  const h2s = registryH2 ?? ackWindows.h2 ?? ackWindows.H2 ?? ackWindows.handoffH2;
   if (h2s == null) {
     throw new MissingConfigurationError("acknowledgement.windowPerType");
   }

@@ -405,8 +405,11 @@ export type ModeAdmin = {
   lifecycleState: string;
   isActive: boolean;
   isPredefined: boolean;
-  config: unknown;
+  stageRoute: string[];
+  autoFulfilmentConditions: { stage: string; condition: string }[];
+  featureDependencies: string[];
   version: number;
+  effectiveFrom: string;
 };
 
 export type PolicyAdmin = {
@@ -424,7 +427,16 @@ export async function listModes(session: Session) {
 
 export async function saveMode(
   session: Session,
-  body: { id?: string; modeKey: string; displayName: string; description?: string | null; config: unknown },
+  body: {
+    id?: string;
+    modeKey: string;
+    displayName: string;
+    description?: string | null;
+    isPredefined?: boolean;
+    stageRoute: string[];
+    autoFulfilmentConditions: { stage: string; condition: string }[];
+    featureDependencies: string[];
+  },
 ) {
   return apiRequest<ModeAdmin>("/api/admin/modes", { method: "POST", session, body });
 }

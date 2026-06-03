@@ -400,20 +400,27 @@ model PolicyRegistry {
   @@map("policy_registry")
 }
 
+// ACIG §2.1A.7 — operational scenario definitions (New Booking, Room Change, …).
+// `stageRoute`, `autoFulfilmentConditions`, `featureDependencies` are the spec's three typed
+// JSON columns. `displayName` keeps its pragmatic name (spec calls it `modeName`).
 model ModeConfiguration {
-  id             String             @id @default(uuid())
-  modeKey        String
-  displayName    String
-  description    String?
-  lifecycleState ModeLifecycleState @default(DRAFT)
-  isActive       Boolean            @default(false)
-  isPredefined   Boolean            @default(false)
-  config         Json
-  version        Int                @default(1)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  createdBy      String
+  id                       String             @id @default(uuid())
+  modeKey                  String
+  displayName              String
+  description              String?
+  lifecycleState           ModeLifecycleState @default(DRAFT)
+  isActive                 Boolean            @default(false)
+  isPredefined             Boolean            @default(false)
+  stageRoute               Json               @default("[]")
+  autoFulfilmentConditions Json               @default("[]")
+  featureDependencies      Json               @default("[]")
+  version                  Int                @default(1)
+  effectiveFrom            DateTime           @default(now())
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  createdBy                String
 
+  @@unique([modeKey, version])
   @@index([modeKey])
   @@map("mode_configurations")
 }

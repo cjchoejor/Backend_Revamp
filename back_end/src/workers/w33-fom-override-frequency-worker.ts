@@ -1,13 +1,26 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 
 /**
  * AC-S8-21/22: ambient GM notice when override frequency exceeds threshold.
+ *
+ * Policy registry override: `registry.fomOverride.frequency` (when enabled) supplies both
+ * `rollingWindowDays` and `maxFrequency`, replacing the legacy ConfigurationEntry
+ * `fomOverride.frequency` object.
  */
 export async function runFomOverrideFrequencyWorker(prisma: PrismaClient, input: { now?: Date } = {}) {
   const now = input.now ?? new Date();
-  const cfg = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "fomOverride.frequency")) ?? {};
+  const policy = await getRegistryPolicy(prisma, "registry.fomOverride.frequency");
+  const useRegistry =
+    !!policy &&
+    policy.enabled !== false &&
+    typeof policy.rollingWindowDays === "number" &&
+    typeof policy.maxFrequency === "number";
+  const cfg = useRegistry
+    ? { rollingWindowDays: policy!.rollingWindowDays as number, maxFrequency: policy!.maxFrequency as number }
+    : ((await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "fomOverride.frequency")) ?? {});
   const rollingWindowDays = typeof cfg.rollingWindowDays === "number" ? cfg.rollingWindowDays : 7;
   const maxFrequency = typeof cfg.maxFrequency === "number" ? cfg.maxFrequency : 3;
 

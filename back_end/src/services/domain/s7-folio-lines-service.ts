@@ -1,6 +1,7 @@
 import { FolioLineType, FolioState, Prisma, Stage, type PrismaClient } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { calculateTax } from "../../engines/tax-engine.js";
 import { enforceCreditCeilingChargePostingGate } from "../../policies/18-credit-extension-ceiling/p45-credit-ceiling-charge-posting-gate.js";
 import { enforceChargeDateNotSealedByCompleteNightAudit } from "../../policies/24-night-audit/p61-charge-date-not-sealed-by-complete-night-audit.js";
@@ -80,7 +81,17 @@ async function ensureChargeDateNotSealed(db: DbClient, chargeDate: Date) {
 }
 
 async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryId: string; folioId: string; ceilingAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; actorId: string }) {
-  const v = (await requireActiveConfigValue<{ tier1Percent?: number; tier2Percent?: number } | undefined>(db as any, "creditCeiling.proximityThresholds")) ?? {};
+  // Policy registry override: `registry.creditCeiling.advisoryThresholds` (when enabled)
+  // replaces the legacy `creditCeiling.proximityThresholds` ConfigurationEntry.
+  const advisoryPolicy = await getRegistryPolicy(db as any, "registry.creditCeiling.advisoryThresholds");
+  const useRegistry =
+    !!advisoryPolicy &&
+    advisoryPolicy.enabled !== false &&
+    typeof advisoryPolicy.tier1Percent === "number" &&
+    typeof advisoryPolicy.tier2Percent === "number";
+  const v = useRegistry
+    ? { tier1Percent: advisoryPolicy!.tier1Percent as number, tier2Percent: advisoryPolicy!.tier2Percent as number }
+    : ((await requireActiveConfigValue<{ tier1Percent?: number; tier2Percent?: number } | undefined>(db as any, "creditCeiling.proximityThresholds")) ?? {});
   const tier1 = typeof v.tier1Percent === "number" ? v.tier1Percent : 75;
   const tier2 = typeof v.tier2Percent === "number" ? v.tier2Percent : 90;
 
@@ -151,7 +162,7 @@ export async function postCharge(
 
   const ceiling = entry.reservation?.creditCeilingIfExtended;
   const isMandatory = isMandatoryNightAuditLine(input.lineType);
-  enforceCreditCeilingChargePostingGate({
+  await enforceCreditCeilingChargePostingGate(prisma, {
     ceiling: ceiling != null ? num(ceiling) : undefined,
     outstandingBalance: num(folio.outstandingBalance),
     chargeAmount: input.amount,

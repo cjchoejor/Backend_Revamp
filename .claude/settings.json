@@ -33,7 +33,14 @@
       "Bash(ls \"front_end/src/app/\\(app\\)/admin/policies/\")",
       "Bash(ls \"front_end/src/app/\\\\\\(app\\\\\\)/admin/policies/\")",
       "Bash(sed 's/-admin-service.ts//')",
-      "Bash(sed 's/-router.ts//')"
+      "Bash(sed 's/-router.ts//')",
+      "Bash(Get-ChildItem -Path \"D:\\\\New Legphel Web\\\\Backend_ReVamped\" -Recurse -Name)",
+      "Bash(Select-Object -First 50)",
+      "Bash(grep -E \"\\\\.\\(ts|js\\)$\")",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'tsx|Backend_ReVamped' } | Select-Object ProcessId, @{N='Cmd';E={$_.CommandLine.Substring\\(0, [Math]::Min\\(160, $_.CommandLine.Length\\)\\)}} | Format-Table -AutoSize -Wrap)",
+      "PowerShell(Stop-Process -Id 31504 -Force -ErrorAction Stop)",
+      "PowerShell(Stop-Process -Id 1884 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(\"Stopped\")"
     ]
   }
 }

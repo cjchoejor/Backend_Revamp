@@ -22,7 +22,9 @@ export async function saveMode(
     displayName: string;
     description?: string | null;
     isPredefined?: boolean;
-    config: Prisma.InputJsonValue;
+    stageRoute: string[];
+    autoFulfilmentConditions: { stage: string; condition: string }[];
+    featureDependencies: string[];
   },
   actorId: string,
 ) {
@@ -46,7 +48,9 @@ export async function saveMode(
         data: {
           displayName,
           description: input.description?.trim() || null,
-          config: input.config,
+          stageRoute: input.stageRoute as Prisma.InputJsonValue,
+          autoFulfilmentConditions: input.autoFulfilmentConditions as unknown as Prisma.InputJsonValue,
+          featureDependencies: input.featureDependencies as Prisma.InputJsonValue,
           lifecycleState: ModeLifecycleState.VALIDATED,
           version: { increment: 1 },
           createdBy: actorId,
@@ -71,7 +75,9 @@ export async function saveMode(
         lifecycleState: ModeLifecycleState.VALIDATED,
         isActive: false,
         isPredefined: input.isPredefined ?? false,
-        config: input.config,
+        stageRoute: input.stageRoute as Prisma.InputJsonValue,
+        autoFulfilmentConditions: input.autoFulfilmentConditions as unknown as Prisma.InputJsonValue,
+        featureDependencies: input.featureDependencies as Prisma.InputJsonValue,
         createdBy: actorId,
       },
     });

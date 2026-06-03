@@ -40,6 +40,18 @@ function numInput(
   );
 }
 
+const ENTRY_STATE_LABELS: Record<string, string> = {
+  ACTIVE: "Active (in-progress)",
+  IDLE: "Idle (no recent activity)",
+  PARKED: "Parked (deliberately paused)",
+};
+
+const DWELL_LEVEL_HELP: Record<string, string> = {
+  warning: "Soft alert to staff",
+  critical: "Stronger alert; FOM notified",
+  escalation: "GM-level escalation",
+};
+
 function StageDwellEditor({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
   const data = (typeof value === "object" && value !== null ? value : {}) as StageDwellValue;
 
@@ -52,16 +64,21 @@ function StageDwellEditor({ value, onChange }: { value: unknown; onChange: (v: u
 
   return (
     <div className="space-y-6 overflow-x-auto">
+      <p className="admin-muted text-xs">
+        For each stage, set how many seconds an entry can sit before an alert fires. Three escalating levels per entry
+        state. 600 = 10 minutes, 3600 = 1 hour, 86400 = 1 day.
+      </p>
       {STAGES.map((stage) => (
         <div key={stage} className="rounded-lg border border-[var(--admin-rule)] p-4">
-          <h4 className="admin-display mb-3 text-sm">{stage}</h4>
+          <h4 className="admin-display mb-3 text-sm">Stage {stage}</h4>
           <table className="admin-table text-xs">
             <thead>
               <tr>
-                <th>State</th>
+                <th>Entry state</th>
                 {DWELL_LEVELS.map((l) => (
-                  <th key={l} className="capitalize">
-                    {l} (sec)
+                  <th key={l}>
+                    <span className="capitalize">{l}</span>
+                    <span className="admin-muted block text-[10px] font-normal">{DWELL_LEVEL_HELP[l]} (sec)</span>
                   </th>
                 ))}
               </tr>
@@ -69,7 +86,7 @@ function StageDwellEditor({ value, onChange }: { value: unknown; onChange: (v: u
             <tbody>
               {ENTRY_STATES.map((state) => (
                 <tr key={state}>
-                  <td>{state}</td>
+                  <td>{ENTRY_STATE_LABELS[state] ?? state}</td>
                   {DWELL_LEVELS.map((level) => (
                     <td key={level}>
                       <input
@@ -96,22 +113,30 @@ function AckWindowsEditor({ value, onChange }: { value: unknown; onChange: (v: u
   const data = (typeof value === "object" && value !== null ? value : {}) as Record<string, number>;
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {Object.entries(ACK_WINDOW_LABELS).map(([key, label]) => (
-        <label key={key} className="block space-y-1">
-          <span className="admin-muted text-xs">{label}</span>
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              className="admin-input"
-              min={60}
-              value={data[key] ?? 0}
-              onChange={(e) => onChange({ ...data, [key]: Number.parseInt(e.target.value, 10) || 0 })}
-            />
-            <span className="admin-muted text-[10px]">sec</span>
-          </div>
-        </label>
-      ))}
+    <div className="space-y-3">
+      <p className="admin-muted text-xs">
+        How long (in seconds) the system waits for an acknowledgement before firing a follow-up. 1800 = 30 minutes,
+        3600 = 1 hour, 86400 = 1 day. Examples: H2 is the front-desk → housekeeping handoff; PI is the proforma
+        invoice sent at S3; VIP arrival is the S5→S6 notification.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {Object.entries(ACK_WINDOW_LABELS).map(([key, label]) => (
+          <label key={key} className="block space-y-1">
+            <span className="admin-muted text-xs">{label}</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                className="admin-input"
+                min={60}
+                step={60}
+                value={data[key] ?? 0}
+                onChange={(e) => onChange({ ...data, [key]: Number.parseInt(e.target.value, 10) || 0 })}
+              />
+              <span className="admin-muted text-[10px]">sec</span>
+            </div>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -207,6 +232,28 @@ export function ConfigFormEditor({ schema, value, onChange }: Props) {
                 type="number"
                 className="admin-input max-w-[200px]"
                 min={60}
+                value={data[f.key] ?? 0}
+                onChange={(e) => onChange({ ...data, [f.key]: Number.parseInt(e.target.value, 10) || 0 })}
+              />
+            </label>
+          ))}
+          {schema.help && <p className="admin-muted text-[10px]">{schema.help}</p>}
+        </div>
+      );
+    }
+    case "record-percent": {
+      const data = (typeof value === "object" && value !== null ? value : {}) as Record<string, number>;
+      return (
+        <div className="space-y-3">
+          {schema.fields.map((f) => (
+            <label key={f.key} className="block space-y-1">
+              <span className="admin-muted text-xs">{f.label}</span>
+              <input
+                type="number"
+                className="admin-input max-w-[200px]"
+                min={0}
+                max={100}
+                step={1}
                 value={data[f.key] ?? 0}
                 onChange={(e) => onChange({ ...data, [f.key]: Number.parseInt(e.target.value, 10) || 0 })}
               />

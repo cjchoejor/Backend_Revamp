@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { InventoryClaimState, RoomPhysicalState, SpaceAllocationState } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 
@@ -398,9 +399,15 @@ export async function markRoomDeficient(
     throw new ValidationError(`Category "${input.category}" is not in the active deficient categories list`);
   }
 
-  // Default deadline from `deficientResolution.deadlineHours` (fallback 48h).
-  const deadlineRow = await getActiveConfigEntry(prisma, "deficientResolution.deadlineHours");
-  const defaultHours = Number(deadlineRow?.configValue ?? 48);
+  // Policy registry override: `registry.deficientResolution.deadlineHours` takes precedence over
+  // the legacy `deficientResolution.deadlineHours` ConfigurationEntry. Defaults to 48h if neither.
+  const deficientPolicy = await getRegistryPolicy(prisma, "registry.deficientResolution.deadlineHours");
+  const registryHours =
+    deficientPolicy && deficientPolicy.enabled !== false && typeof deficientPolicy.hours === "number"
+      ? (deficientPolicy.hours as number)
+      : null;
+  const deadlineRow = registryHours === null ? await getActiveConfigEntry(prisma, "deficientResolution.deadlineHours") : null;
+  const defaultHours = registryHours ?? Number(deadlineRow?.configValue ?? 48);
   const now = new Date();
   const deadline = input.resolutionDeadline ? new Date(input.resolutionDeadline) : new Date(now.getTime() + defaultHours * 3600 * 1000);
   if (Number.isNaN(deadline.getTime()) || deadline.getTime() <= now.getTime()) {

@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -39,9 +40,18 @@ export async function placeSpeculativeHold(
     throw new MissingConfigurationError("speculativeHold.placementThresholds");
   });
 
-  const defaultTtl = await requireActiveConfigValue<number>(prisma, "expiry.s2.speculativeHoldTtlSeconds").catch(() => {
-    throw new MissingConfigurationError("expiry.s2.speculativeHoldTtlSeconds");
-  });
+  // Policy registry override: `registry.s2HoldExpiry.minutes` (when enabled) replaces the
+  // legacy `expiry.s2.speculativeHoldTtlSeconds` ConfigurationEntry.
+  const s2HoldPolicy = await getRegistryPolicy(prisma, "registry.s2HoldExpiry.minutes");
+  const registryS2HoldSeconds =
+    s2HoldPolicy && s2HoldPolicy.enabled !== false && typeof s2HoldPolicy.minutes === "number"
+      ? (s2HoldPolicy.minutes as number) * 60
+      : null;
+  const defaultTtl =
+    registryS2HoldSeconds ??
+    (await requireActiveConfigValue<number>(prisma, "expiry.s2.speculativeHoldTtlSeconds").catch(() => {
+      throw new MissingConfigurationError("expiry.s2.speculativeHoldTtlSeconds");
+    }));
 
   const ttlSeconds = Number.isFinite(input.ttlSeconds) && Number(input.ttlSeconds) > 0 ? Number(input.ttlSeconds) : Number(defaultTtl);
   if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) throw new ValidationError("ttlSeconds must be positive");

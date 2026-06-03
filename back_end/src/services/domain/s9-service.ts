@@ -3,6 +3,7 @@ import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, InvoiceType
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { randomUUID } from "node:crypto";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
@@ -166,7 +167,16 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
         const credit = await tx.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } }).catch(() => null);
         const satisfied = !!credit || (Number.isFinite(requiredAmount) ? totalIn >= requiredAmount : totalIn > 0);
         if (!satisfied) {
-          const followUpSeconds = Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.followUpWindowSeconds"));
+          // Policy registry override: `registry.advancePaymentFollowUp.windowSeconds` (when
+          // enabled) replaces the legacy `advancePayment.followUpWindowSeconds`. Escalation
+          // window remains ConfigurationEntry-driven.
+          const advancePolicy = await getRegistryPolicy(tx as any, "registry.advancePaymentFollowUp.windowSeconds");
+          const registryFollowUp =
+            advancePolicy && advancePolicy.enabled !== false && typeof advancePolicy.seconds === "number"
+              ? (advancePolicy.seconds as number)
+              : null;
+          const followUpSeconds =
+            registryFollowUp ?? Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.followUpWindowSeconds"));
           const escalationSeconds = Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.escalationWindowSeconds"));
           const t1At = new Date(now.getTime() + followUpSeconds * 1000);
           const t2At = new Date(now.getTime() + escalationSeconds * 1000);

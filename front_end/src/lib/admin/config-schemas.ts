@@ -10,6 +10,7 @@ export type ConfigSchema =
   | { kind: "day-list"; label: string; help?: string }
   | { kind: "money"; label: string; currencyField?: boolean; help?: string }
   | { kind: "record-seconds"; label: string; fields: { key: string; label: string }[]; help?: string }
+  | { kind: "record-percent"; label: string; fields: { key: string; label: string }[]; help?: string }
   | { kind: "dispute-sla"; label: string }
   | { kind: "night-audit-schedule"; label: string }
   | { kind: "fom-override-frequency"; label: string }
@@ -165,6 +166,20 @@ export const TIMER_WORKER_CONFIG_KEYS: ConfigKeyMeta[] = [
     description: "Warning / critical / escalation seconds per stage and entry state.",
     worker: "Dwell monitors",
     schema: { kind: "stage-dwell", label: "Stage dwell thresholds" },
+  },
+  {
+    key: "deficientResolution.deadlineHours",
+    title: "Deficient condition resolution deadline (W10)",
+    description: "Default hours given to housekeeping/maintenance to resolve a deficient condition before escalation.",
+    worker: "W10",
+    schema: { kind: "hours", label: "Deadline (hours)", help: "May also be overridden via the Policy Registry (registry.deficientResolution.deadlineHours)." },
+  },
+  {
+    key: "lostFound.retention.warningOffsetDays",
+    title: "Lost & Found retention warning offset (W30)",
+    description: "Days before retention expiry that W30 emits the approaching-expiry trace.",
+    worker: "W30",
+    schema: { kind: "days", label: "Warning offset (days)", help: "May also be overridden via the Policy Registry (registry.lostFound.retentionWarning.days)." },
   },
 ];
 
