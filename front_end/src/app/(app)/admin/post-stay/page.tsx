@@ -106,7 +106,16 @@ export default function AdminPostStayPage() {
       <KeyedConfigPanel title="Online review platform links" queryKey={["admin", "post-stay", "platform-links"]} enabled={enabled} load={async () => (await getPostStayValue(session, "platform-links")).value} save={(v) => setPostStayValue(session, "platform-links", v)} />
       <KeyedConfigPanel title="Government portal submission config" queryKey={["admin", "post-stay", "government-portal"]} enabled={enabled} load={async () => (await getPostStayValue(session, "government-portal")).value} save={(v) => setPostStayValue(session, "government-portal", v)} />
       <KeyedConfigPanel title="Commission calculation basis" queryKey={["admin", "post-stay", "commission-basis"]} enabled={enabled} load={async () => (await getPostStayValue(session, "commission-basis")).value} save={(v) => setPostStayValue(session, "commission-basis", v)} />
-      <KeyedConfigPanel title="Identity document types" description="JSON array of accepted document types." queryKey={["admin", "post-stay", "identity-document-types"]} enabled={enabled} load={async () => (await getPostStayValue(session, "identity-document-types")).value} save={(v) => setPostStayValue(session, "identity-document-types", v)} />
+      <div className="admin-panel border-amber-500/30 bg-amber-500/5 p-3 text-xs text-[var(--admin-ink-soft)]">
+        <p>
+          <strong>Heads up:</strong> &ldquo;Identity document types&rdquo; lists the kinds of ID your hotel accepts
+          (Passport, National ID, …) &mdash; <em>not</em> attributes captured about each guest. Each entry has a fixed
+          shape (<span className="font-mono">documentTypeCode</span>, <span className="font-mono">documentTypeName</span>,{" "}
+          <span className="font-mono">isActive</span>) that operational code matches against. If you want to capture
+          something like gender or date of birth, that&rsquo;s a Guest Profile field &mdash; not a document type.
+        </p>
+      </div>
+      <KeyedConfigPanel title="Identity document types" description="Catalogue of accepted ID document types. Array of { documentTypeCode, documentTypeName, isActive }." queryKey={["admin", "post-stay", "identity-document-types"]} enabled={enabled} load={async () => (await getPostStayValue(session, "identity-document-types")).value} save={(v) => setPostStayValue(session, "identity-document-types", v)} />
       <KeyedConfigPanel title="Identity retention period (days)" description="Retention per document type (JSON object)." queryKey={["admin", "post-stay", "identity-retention"]} enabled={enabled} load={async () => (await getPostStayValue(session, "identity-retention")).value} save={(v) => setPostStayValue(session, "identity-retention", v)} />
     </div>
   );

@@ -67,6 +67,7 @@ export default function AdminOverviewPage() {
             <div key={d.num} className="admin-panel p-5">
               <p className="admin-eyebrow mb-2">Domain {d.num}</p>
               <h3 className="admin-display text-lg">{d.name}</h3>
+              <p className="admin-muted mt-1 text-xs">{d.purpose}</p>
               <div className="mt-3 flex flex-wrap gap-1">
                 {d.services.map((s) => (
                   <span key={s} className="admin-tag">

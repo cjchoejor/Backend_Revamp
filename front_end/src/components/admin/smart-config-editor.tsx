@@ -22,14 +22,26 @@ const initialFor: Record<string, JsonValue> = {
   null: null,
 };
 
+type EditorContext = {
+  /**
+   * When true, structure-changing actions are exposed: renaming object keys, removing object
+   * fields, and removing array items. When false (the default), only values are editable —
+   * field names render as read-only labels. Adding NEW fields/items is always permitted
+   * because additive changes can't break operational code that consumes a known shape.
+   */
+  structureUnlocked: boolean;
+};
+
 /** Recursive editor for any JSON value — keeps the JSON valid by construction. */
 function ValueEditor({
   value,
   onChange,
+  ctx,
   depth = 0,
 }: {
   value: JsonValue;
   onChange: (v: JsonValue) => void;
+  ctx: EditorContext;
   depth?: number;
 }): ReactNode {
   const type = detectType(value);
@@ -109,17 +121,20 @@ function ValueEditor({
                 <ValueEditor
                   value={item}
                   onChange={(v) => onChange([...items.slice(0, i), v, ...items.slice(i + 1)])}
+                  ctx={ctx}
                   depth={depth + 1}
                 />
               </div>
-              <button
-                type="button"
-                className="admin-btn shrink-0 text-[10px]"
-                onClick={() => onChange([...items.slice(0, i), ...items.slice(i + 1)])}
-                title="Remove this item"
-              >
-                Remove
-              </button>
+              {ctx.structureUnlocked && (
+                <button
+                  type="button"
+                  className="admin-btn shrink-0 text-[10px]"
+                  onClick={() => onChange([...items.slice(0, i), ...items.slice(i + 1)])}
+                  title="Remove this item"
+                >
+                  Remove
+                </button>
+              )}
             </div>
           );
         })}
@@ -150,41 +165,49 @@ function ValueEditor({
         return (
           <div key={k} className="rounded border border-[var(--admin-rule)] p-2">
             <div className="mb-1 flex items-center gap-2">
-              <input
-                className="admin-input w-44 text-xs font-mono"
-                value={k}
-                onChange={(e) => {
-                  const next: Record<string, JsonValue> = {};
-                  let renamed = false;
-                  for (const [ek, ev] of entries) {
-                    if (ek === k && !renamed) {
-                      const newKey = e.target.value || k;
-                      next[newKey] = ev;
-                      renamed = true;
-                    } else {
-                      next[ek] = ev;
+              {ctx.structureUnlocked ? (
+                <input
+                  className="admin-input w-44 text-xs font-mono"
+                  value={k}
+                  onChange={(e) => {
+                    const next: Record<string, JsonValue> = {};
+                    let renamed = false;
+                    for (const [ek, ev] of entries) {
+                      if (ek === k && !renamed) {
+                        const newKey = e.target.value || k;
+                        next[newKey] = ev;
+                        renamed = true;
+                      } else {
+                        next[ek] = ev;
+                      }
                     }
-                  }
-                  onChange(next);
-                }}
-                aria-label={`Field name (${k})`}
-              />
+                    onChange(next);
+                  }}
+                  aria-label={`Field name (${k})`}
+                />
+              ) : (
+                <span className="font-mono text-xs text-[var(--admin-brass)]" title="Field name — unlock structure controls to rename">
+                  {k}
+                </span>
+              )}
               <span className="admin-muted text-[10px]">: {itemType}</span>
-              <button
-                type="button"
-                className="admin-btn ml-auto text-[10px]"
-                onClick={() => {
-                  const { [k]: _drop, ...rest } = obj;
-                  void _drop;
-                  onChange(rest);
-                }}
-                title="Remove this field"
-              >
-                Remove
-              </button>
+              {ctx.structureUnlocked && (
+                <button
+                  type="button"
+                  className="admin-btn ml-auto text-[10px]"
+                  onClick={() => {
+                    const { [k]: _drop, ...rest } = obj;
+                    void _drop;
+                    onChange(rest);
+                  }}
+                  title="Remove this field"
+                >
+                  Remove
+                </button>
+              )}
             </div>
-            <div className={isBlock ? "pl-3 border-l-2 border-[var(--admin-rule)]" : ""}>
-              <ValueEditor value={v} onChange={(nv) => onChange({ ...obj, [k]: nv })} depth={depth + 1} />
+            <div className={isBlock ? "border-l-2 border-[var(--admin-rule)] pl-3" : ""}>
+              <ValueEditor value={v} onChange={(nv) => onChange({ ...obj, [k]: nv })} ctx={ctx} depth={depth + 1} />
             </div>
           </div>
         );
@@ -211,6 +234,11 @@ function ValueEditor({
  * Safe, non-coder-friendly editor for JSON configuration values. Internally tracks the value as a
  * structured object and emits valid JSON on every change. Includes an "Advanced JSON" escape hatch
  * for power users / inspection.
+ *
+ * Structural edits (renaming object keys, removing fields, removing array items) are LOCKED by
+ * default to prevent accidental shape mutation — operational code consumes these objects by exact
+ * field name (`id`, `code`, `nightlyRate`, …) and a rename would break the workflow. Operators who
+ * genuinely need to restructure toggle "Show structure controls" or switch to Advanced JSON.
  */
 export function SmartConfigEditor({
   value,
@@ -220,6 +248,7 @@ export function SmartConfigEditor({
   onChange: (next: unknown) => void;
 }) {
   const [advanced, setAdvanced] = useState(false);
+  const [structureUnlocked, setStructureUnlocked] = useState(false);
   const [rawDraft, setRawDraft] = useState<string>("");
   const [rawError, setRawError] = useState<string | null>(null);
 
@@ -227,29 +256,49 @@ export function SmartConfigEditor({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="admin-muted text-xs">
           {advanced
             ? "Editing raw JSON. Switch back to use the structured editor."
-            : "Edit fields below — types are detected automatically. Use Advanced JSON if you need to paste a value."}
+            : "Edit values below — field names are locked to prevent accidental shape changes. Use Advanced JSON to paste or restructure freely."}
         </p>
-        <button
-          type="button"
-          className="admin-btn text-[10px]"
-          onClick={() => {
-            if (!advanced) {
-              setRawDraft(JSON.stringify(safeValue, null, 2));
-              setRawError(null);
-            }
-            setAdvanced((p) => !p);
-          }}
-        >
-          {advanced ? "Use structured editor" : "Advanced JSON"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          {!advanced && (
+            <label className="admin-muted flex items-center gap-1 text-[10px]" title="Allows renaming and removing fields. Use with care — field names are read by operational code.">
+              <input
+                type="checkbox"
+                checked={structureUnlocked}
+                onChange={(e) => setStructureUnlocked(e.target.checked)}
+              />
+              Show structure controls
+            </label>
+          )}
+          <button
+            type="button"
+            className="admin-btn text-[10px]"
+            onClick={() => {
+              if (!advanced) {
+                setRawDraft(JSON.stringify(safeValue, null, 2));
+                setRawError(null);
+              }
+              setAdvanced((p) => !p);
+            }}
+          >
+            {advanced ? "Use structured editor" : "Advanced JSON"}
+          </button>
+        </div>
       </div>
 
+      {!advanced && structureUnlocked && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[10px] text-[var(--admin-ink-soft)]">
+          ⚠ Structure controls enabled — renaming or removing a field can break operational code that expects exact
+          field names (e.g. <span className="font-mono">id</span>, <span className="font-mono">nightlyRate</span>).
+          Only do this if you know the consumer.
+        </div>
+      )}
+
       {!advanced ? (
-        <ValueEditor value={safeValue} onChange={(v) => onChange(v)} />
+        <ValueEditor value={safeValue} onChange={(v) => onChange(v)} ctx={{ structureUnlocked }} />
       ) : (
         <div className="space-y-2">
           <textarea

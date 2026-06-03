@@ -183,8 +183,28 @@ export const TIMER_WORKER_CONFIG_KEYS: ConfigKeyMeta[] = [
   },
 ];
 
+/**
+ * Operational schedule keys that need typed editors but should NOT appear on /admin/timers-workers
+ * (they're owned by OperationalScheduleService and write through that domain endpoint).
+ */
+export const OPERATIONAL_CONFIG_SCHEMAS: ConfigKeyMeta[] = [
+  {
+    key: "checkout.cutoffTime",
+    title: "Checkout cutoff time",
+    description: "Time of day (24-hour, hotel-local) after which the late-checkout escalation timer fires.",
+    schema: {
+      kind: "text",
+      label: "Cutoff time (HH:MM)",
+      help: "Example: 12:00 = noon hotel-local. Use 24-hour format.",
+    },
+  },
+];
+
 export function getConfigSchema(configKey: string): ConfigKeyMeta | undefined {
-  return TIMER_WORKER_CONFIG_KEYS.find((k) => k.key === configKey);
+  return (
+    TIMER_WORKER_CONFIG_KEYS.find((k) => k.key === configKey) ??
+    OPERATIONAL_CONFIG_SCHEMAS.find((k) => k.key === configKey)
+  );
 }
 
 export const STAGES = ["S1", "S2", "S3", "S4", "S5", "S6", "S7"] as const;

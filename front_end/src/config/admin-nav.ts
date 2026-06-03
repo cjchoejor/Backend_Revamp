@@ -60,35 +60,76 @@ export const workflowConfigKeys = [
   { key: "checkout.cutoffTime", label: "Checkout cutoff time" },
 ] as const;
 
+/**
+ * The 9 ACIG admin console domains. Source of truth: `docs/admin-console-visual.html` §domains
+ * and `docs/ACIG-v1_1.md` §6.2 (service catalogue) / §6.3 (inventory summary).
+ *
+ * Service counts add up to 26: 4 + 3 + 4 + 4 + 3 + 3 + 1 + 2 + 2 = 26. Update this list (and
+ * the matching `domains` count in `back_end/src/routes/admin/overview-router.ts`) whenever a
+ * service is added or moved.
+ */
 export const adminDomains = [
   {
     num: "01",
     name: "Identity & org",
+    purpose: "The hotel itself, its departments, its people, and the role-permission map.",
     services: ["HotelProfile", "Department", "Staff", "Role"],
     icon: Users,
   },
   {
     num: "02",
     name: "Inventory",
+    purpose: "Room types, rooms with deficient-condition tracking, and non-room spaces.",
     services: ["RoomType", "RoomInstance", "SpaceInventory"],
     icon: Building2,
   },
   {
     num: "03",
     name: "Commercial",
+    purpose: "Rate plans, seasonal calendars, packages, and every commercial threshold (discount, FOC, overbooking, credit ceiling, write-off).",
     services: ["RatePlan", "Season", "Package", "CommercialThreshold"],
     icon: Receipt,
   },
   {
     num: "04",
-    name: "Workflow",
-    services: ["WorkflowConfiguration", "Mode", "PolicyRegistry"],
+    name: "Workflow governance",
+    purpose: "Cancellation policy, hold/expiry behaviour, operational modes, and the policy registry.",
+    services: ["CancellationPolicy", "WorkflowConfiguration", "Mode", "PolicyRegistry"],
     icon: Workflow,
   },
   {
     num: "05",
-    name: "Communications",
-    services: ["CommunicationConfig", "HandoffTemplate"],
+    name: "Communications & templates",
+    purpose: "Channel credentials, acknowledgement windows, message templates, handoff checklists, and work order templates.",
+    services: ["CommunicationConfig", "HandoffTemplate", "WorkOrderTemplate"],
     icon: KeyRound,
+  },
+  {
+    num: "06",
+    name: "Financial & operational schedule",
+    purpose: "Advance payment thresholds, invoices, damage rates, night audit, checkout time, room assignment priorities, VIP routing.",
+    services: ["FinancialConfiguration", "OperationalSchedule", "VIPNotificationRouting"],
+    icon: Receipt,
+  },
+  {
+    num: "07",
+    name: "Post-stay & governance",
+    purpose: "Feedback templates, review platform links, government portal config, agent commission, ID document types and retention.",
+    services: ["PostStayAndGovernance"],
+    icon: Settings2,
+  },
+  {
+    num: "08",
+    name: "OTA & AI agent",
+    purpose: "OTA source flags, polling, conflict rules, no-show penalties; AI agent processing locks, voice-note SLAs, escalation routing.",
+    services: ["OTAConfiguration", "AIAgentConfig"],
+    icon: Settings2,
+  },
+  {
+    num: "09",
+    name: "Generic & readiness",
+    purpose: "Catch-all keyed configuration for anything not owned by a domain service, plus the readiness gate endpoint.",
+    services: ["Configuration", "Readiness"],
+    icon: Shield,
   },
 ] as const;

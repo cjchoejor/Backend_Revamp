@@ -12,7 +12,16 @@ export function AppProviders({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 30_000,
+            // 5-minute stale window: admin config doesn't change minute-to-minute, and pages that
+            // need fresh reads after their own mutation already call queryClient.invalidateQueries.
+            // Keeps tab switches near-instant on warm pages.
+            staleTime: 5 * 60_000,
+            // Keep cached data for 30 min after the last component unmounts, so navigating away
+            // and back doesn't force a refetch even past the stale window.
+            gcTime: 30 * 60_000,
+            // Don't refetch when the browser tab regains focus — admin sessions are long and the
+            // automatic refetch was forcing a network hit every time the user alt-tabbed.
+            refetchOnWindowFocus: false,
             retry: 1,
           },
         },
