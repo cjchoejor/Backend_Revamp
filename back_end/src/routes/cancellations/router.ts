@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
   cancelEarlyDepartureRequestSchema,
+  cancelS3EntryRequestSchema,
   cancelS5EntryRequestSchema,
   recordCancellationDisclosureRequestSchema,
 } from "../../dtos/09-cancellations/request-schemas.js";
@@ -12,6 +13,24 @@ import * as cancellationService from "../../services/application/cancellation-se
 import * as s3DisclosureService from "../../services/domain/s3-cancellation-disclosure-service.js";
 
 export const cancellationsRouter = Router();
+
+cancellationsRouter.post(
+  "/entries/:id/cancel-at-s3",
+  requireActorLevel("L1"),
+  validateBody(cancelS3EntryRequestSchema),
+  async (req, res, next) => {
+    try {
+      const updated = await cancellationService.cancelEntryAtS3(prisma, req.params.id, req.actor!.actorId, {
+        reason: req.body.reason,
+        penaltyWaiverRequested: req.body.penaltyWaiverRequested === true,
+        actorLevel: req.actor!.level,
+      });
+      res.json(updated);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 cancellationsRouter.post(
   "/entries/:id/cancel",

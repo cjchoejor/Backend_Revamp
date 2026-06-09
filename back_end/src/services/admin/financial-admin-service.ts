@@ -4,6 +4,8 @@ import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { isSystemSeedSetBy, supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 
 export const FINANCIAL_CONFIG_KEYS = [
+  "billing.salesTaxRate",
+  "billing.serviceChargeRate",
   "advancePayment.thresholds",
   "advancePayment.followUpWindowSeconds",
   "advancePayment.escalationWindowSeconds",

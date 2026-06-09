@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import {
   ACK_WINDOW_LABELS,
   DWELL_LEVELS,
@@ -8,6 +9,78 @@ import {
   type ConfigSchema,
   type StageDwellValue,
 } from "@/lib/admin/config-schemas";
+
+/**
+ * Percentage input — user types the percentage (e.g. "5", "2.5"), value is stored as the decimal
+ * equivalent (0.05, 0.025). Keeps an internal string draft so partial input like "2." or empty
+ * field doesn't snap back to a number while the user is mid-type.
+ */
+function PercentageInput({
+  schema,
+  storedDecimal,
+  onChange,
+}: {
+  schema: Extract<ConfigSchema, { kind: "percentage" }>;
+  storedDecimal: number;
+  onChange: (value: unknown) => void;
+}) {
+  const [draft, setDraft] = useState<string>(() => (storedDecimal * 100).toString());
+  const lastEmittedRef = useRef<number>(storedDecimal);
+
+  // If the underlying decimal changes from somewhere else (e.g. server reload), sync the draft.
+  useEffect(() => {
+    if (Math.abs(storedDecimal - lastEmittedRef.current) > 1e-9) {
+      setDraft((storedDecimal * 100).toString());
+      lastEmittedRef.current = storedDecimal;
+    }
+  }, [storedDecimal]);
+
+  const commit = (text: string) => {
+    setDraft(text);
+    // Allow empty / partial input ("2.") without emitting NaN.
+    if (text === "" || text === "." || text === "-") return;
+    const pct = Number.parseFloat(text);
+    if (!Number.isFinite(pct)) return;
+    const decimal = Math.round((pct / 100) * 1_000_000) / 1_000_000;
+    lastEmittedRef.current = decimal;
+    onChange(decimal);
+  };
+
+  const onBlur = () => {
+    // On blur, normalise the draft so what's visible matches what's stored.
+    const pct = Number.parseFloat(draft);
+    if (!Number.isFinite(pct)) {
+      setDraft((storedDecimal * 100).toString());
+      return;
+    }
+    setDraft(pct.toString());
+  };
+
+  return (
+    <label className="block space-y-1">
+      <span className="admin-muted text-xs">{schema.label}</span>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          inputMode="decimal"
+          className="admin-input max-w-[200px]"
+          min={schema.min ?? 0}
+          max={schema.max}
+          step={schema.step ?? 0.5}
+          value={draft}
+          onChange={(e) => commit(e.target.value)}
+          onBlur={onBlur}
+        />
+        <span className="admin-muted text-sm">%</span>
+      </div>
+      <span className="admin-muted text-[10px]">
+        Stored as decimal:{" "}
+        <span className="font-mono">{(storedDecimal).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}</span>
+      </span>
+      {schema.help && <span className="admin-muted block text-[10px]">{schema.help}</span>}
+    </label>
+  );
+}
 
 type Props = {
   schema: ConfigSchema;
@@ -177,6 +250,12 @@ export function ConfigFormEditor({ schema, value, onChange }: Props) {
         unit: schema.unit,
         help: schema.help,
       });
+    case "percentage": {
+      // Stored as decimal (0.05); user types percentage (5). Track a string draft so the user can
+      // type things like "2." or empty without the input snapping back to a number mid-edit.
+      const storedDecimal = typeof value === "number" ? value : 0;
+      return <PercentageInput schema={schema} storedDecimal={storedDecimal} onChange={onChange} />;
+    }
     case "text":
     case "cron":
       return (

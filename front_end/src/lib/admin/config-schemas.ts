@@ -2,6 +2,7 @@
 
 export type ConfigSchema =
   | { kind: "number"; label: string; unit?: string; min?: number; step?: number; help?: string }
+  | { kind: "percentage"; label: string; min?: number; max?: number; step?: number; help?: string }
   | { kind: "text"; label: string; help?: string }
   | { kind: "cron"; label: string; help?: string }
   | { kind: "seconds"; label: string; help?: string }
@@ -23,7 +24,8 @@ export type ConfigKeyMeta = {
   title: string;
   description: string;
   worker?: string;
-  schema: ConfigSchema;
+  /** Optional — when missing the SmartConfigEditor (JSON-aware fallback) renders. */
+  schema?: ConfigSchema;
 };
 
 export const TIMER_WORKER_CONFIG_KEYS: ConfigKeyMeta[] = [
@@ -196,6 +198,32 @@ export const OPERATIONAL_CONFIG_SCHEMAS: ConfigKeyMeta[] = [
       kind: "text",
       label: "Cutoff time (HH:MM)",
       help: "Example: 12:00 = noon hotel-local. Use 24-hour format.",
+    },
+  },
+  {
+    key: "billing.salesTaxRate",
+    title: "GST rate",
+    description: "Goods and Services Tax applied to every guest folio. Enter the percentage (e.g. 5 for 5%, 2.5 for 2.5%); stored as a decimal internally.",
+    schema: {
+      kind: "percentage",
+      label: "GST rate",
+      min: 0,
+      max: 100,
+      step: 0.5,
+      help: "Read at S2 quotation, S3 PI, S4 confirmation, S7 charge posting, S8/S9 invoice. Compound: applied to subtotal + service charge.",
+    },
+  },
+  {
+    key: "billing.serviceChargeRate",
+    title: "Service charge rate",
+    description: "Service charge applied to the room subtotal before GST is calculated. Enter the percentage (e.g. 10 for 10%).",
+    schema: {
+      kind: "percentage",
+      label: "Service charge rate",
+      min: 0,
+      max: 100,
+      step: 0.5,
+      help: "Applied to subtotal only; GST is then applied to subtotal + service charge.",
     },
   },
 ];

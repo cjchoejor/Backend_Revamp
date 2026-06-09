@@ -7,6 +7,9 @@ import * as documentGenerationService from "../infrastructure/document-generatio
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
 import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "../../policies/09-discount/p23-discount-approval-authority.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
+import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
+import { renderQuotationEmail } from "../infrastructure/stage-email-templates.js";
+import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { validateDiscountRequestAgainstAuthorityBands } from "../../policies/09-discount/p23-discount-request-constraints.js";
 import { enforceAckOpenLoopResolutionRequiresFom } from "../../policies/20-communication-acknowledgement-tracking/p52-ack-open-loop-resolution-requires-fom.js";
 import {
@@ -629,8 +632,8 @@ export async function sendQuotation(
   const now = new Date();
   const validUntil = new Date(now.getTime() + validDays * 86400_000);
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.quotation.update({
+  const updated = await prisma.$transaction(async (tx) => {
+    const updatedRow = await tx.quotation.update({
       where: { id: quotationId },
       data: { state: QuotationState.SENT, sentAt: now, validUntil, sentTo: input.sentTo ?? input.recipientAddress ?? null },
     });
@@ -760,8 +763,58 @@ export async function sendQuotation(
       },
     });
 
-    return updated;
+    return updatedRow;
   });
+
+  // Phase 3 — outbound quotation email (best-effort, post-tx).
+  await sendQuotationEmailBestEffort(prisma, quotationId);
+
+  return updated;
+}
+
+async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: string) {
+  const q = await prisma.quotation.findUnique({
+    where: { id: quotationId },
+    include: { entry: { include: { guestProfile: true } } },
+  });
+  if (!q || !q.entry) return;
+  const entry = q.entry;
+  const terms = (q.commercialTerms as any) ?? {};
+  const nightly = Number(terms.nightlyRate ?? terms.rate ?? terms.effectiveRate ?? 0);
+  const currency = terms.currency ?? "BTN";
+  const ci = entry.checkInDate ?? q.validUntil ?? new Date();
+  const co = entry.checkOutDate ?? new Date(ci.getTime() + 86400_000);
+  const nights = Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400_000));
+  const breakdown = await computeStayCharges(prisma, nightly, nights);
+  const displayName =
+    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+
+  const content = renderQuotationEmail({
+    guestDisplayName: displayName,
+    inquiryReadableId: entry.inquiryId,
+    quotationRef: q.referenceNumber ?? q.id,
+    checkInDate: ci,
+    checkOutDate: co,
+    guestCount: entry.guestCount ?? 1,
+    nightlyRate: nightly,
+    currency,
+    breakdown,
+    validUntil: q.validUntil ?? new Date(),
+    ratePlanName: terms.ratePlanName ?? null,
+  });
+
+  await dispatchStageEmailBestEffort(
+    {
+      prisma,
+      entryId: entry.id,
+      actorId: q.createdBy ?? "SYSTEM",
+      inquiryId: entry.inquiryId,
+      guestEmail: entry.guestProfile?.email ?? null,
+      stage: Stage.S2,
+      eventTypePrefix: "QUOTATION_EMAIL",
+    },
+    content,
+  );
 }
 
 export async function acceptQuotation(

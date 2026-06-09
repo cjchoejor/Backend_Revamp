@@ -6,10 +6,12 @@ import { toast } from "sonner";
 import { createSpace, deleteSpace, listSpaces, updateSpace } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 export default function AdminSpacesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState({ code: "", name: "", capacity: "0" });
 
   const query = useQuery({
@@ -95,8 +97,14 @@ export default function AdminSpacesPage() {
                       type="button"
                       className="admin-btn text-[10px] text-destructive"
                       disabled={deleteMutation.isPending}
-                      onClick={() => {
-                        if (window.confirm(`Delete space "${s.code}"?`)) deleteMutation.mutate(s.id);
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: "Delete space",
+                          message: `Delete "${s.code}" permanently? Any historical event allocations referencing it will be orphaned.`,
+                          confirmLabel: "Delete",
+                          variant: "danger",
+                        });
+                        if (ok) deleteMutation.mutate(s.id);
                       }}
                     >
                       Delete

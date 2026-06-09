@@ -4,6 +4,7 @@ import {
   Gauge,
   KeyRound,
   LayoutDashboard,
+  Mail,
   Receipt,
   Settings2,
   Shield,
@@ -48,6 +49,7 @@ export const adminNav: AdminNavItem[] = [
   { title: "Audit trail", href: "/admin/audit-trail", icon: Gauge, description: "Read-only event history (who did what, when)" },
   { title: "Readiness", href: "/admin/readiness", icon: Gauge, description: "Stage readiness gate checks" },
   { title: "System health", href: "/admin/health", icon: Shield, description: "API connectivity" },
+  { title: "Email test", href: "/admin/email-test", icon: Mail, description: "Phase 1 — verify SMTP & threading" },
 ];
 
 export const workflowConfigKeys = [

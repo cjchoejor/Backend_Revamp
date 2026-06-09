@@ -8,6 +8,7 @@ import {
   deactivateRatePlan,
   getWalkInRatePlan,
   listRatePlans,
+  listRoomTypes,
   reactivateRatePlan,
   setWalkInRatePlan,
   updateRatePlan,
@@ -15,14 +16,17 @@ import {
 } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 const RATE_PLAN_TYPES = ["INDIVIDUAL", "PROMOTIONAL", "TIER", "CHANNEL", "RACK"] as const;
 type RatePlanTypeLiteral = (typeof RATE_PLAN_TYPES)[number];
-const EMPTY = { name: "", description: "", type: "INDIVIDUAL" as RatePlanTypeLiteral, baseRate: "", currency: "BTN", msr: "", overrideMargin: "" };
+// `roomTypeId` empty string = universal (null on save); any other value = bound to a room type ID.
+const EMPTY = { name: "", description: "", type: "INDIVIDUAL" as RatePlanTypeLiteral, roomTypeId: "", baseRate: "", currency: "BTN", msr: "", overrideMargin: "" };
 
 export default function AdminRatePlansPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState(EMPTY);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
@@ -49,12 +53,23 @@ export default function AdminRatePlansPage() {
     enabled,
   });
 
+  const roomTypesQuery = useQuery({
+    queryKey: ["admin", "room-types"],
+    queryFn: () => listRoomTypes(session!),
+    enabled,
+  });
+  const roomTypes = roomTypesQuery.data?.items ?? [];
+  // Lookup table so the table cell can show the friendly room-type name from its ID.
+  const roomTypeNameById = new Map(roomTypes.map((rt) => [rt.id, `${rt.code} — ${rt.name}`] as const));
+
   const saveMutation = useMutation({
     mutationFn: () => {
       const body = {
         name: form.name,
         description: form.description || null,
         type: form.type,
+        // Empty string means universal — convert to null so the backend stores it that way.
+        roomTypeId: form.roomTypeId ? form.roomTypeId : null,
         baseRate: Number.parseFloat(form.baseRate) || 0,
         currency: form.currency || "BTN",
         msr: form.msr ? Number.parseFloat(form.msr) : null,
@@ -145,6 +160,19 @@ export default function AdminRatePlansPage() {
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
+        <select
+          className="admin-select"
+          value={form.roomTypeId}
+          onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}
+          title="Pick a room type to bind this rate plan to those rooms only. Universal plans apply to every room type."
+        >
+          <option value="">Applies to: all room types (universal)</option>
+          {roomTypes.map((rt) => (
+            <option key={rt.id} value={rt.id}>
+              {rt.code} — {rt.name}
+            </option>
+          ))}
+        </select>
         <input className="admin-input" placeholder="Currency" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} />
         <input className="admin-input" placeholder="Base rate (nightly)" type="number" value={form.baseRate} onChange={(e) => setForm({ ...form, baseRate: e.target.value })} />
         <input className="admin-input" placeholder="Minimum sell rate (MSR, optional)" type="number" value={form.msr} onChange={(e) => setForm({ ...form, msr: e.target.value })} title="MSR is the floor that discounts + override paths may not cross." />
@@ -172,6 +200,7 @@ export default function AdminRatePlansPage() {
             <tr>
               <th>Name</th>
               <th>Type</th>
+              <th>Applies to</th>
               <th>Base rate</th>
               <th>MSR</th>
               <th>Override margin</th>
@@ -183,13 +212,20 @@ export default function AdminRatePlansPage() {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={8} className="admin-muted">No rate plans found.</td>
+                <td colSpan={9} className="admin-muted">No rate plans found.</td>
               </tr>
             )}
             {items.map((rp: RatePlanAdmin) => (
               <tr key={rp.id}>
                 <td>{rp.name}</td>
                 <td className="font-mono text-[10px]">{rp.type}</td>
+                <td className="text-xs">
+                  {rp.roomTypeId ? (
+                    <span className="font-mono">{roomTypeNameById.get(rp.roomTypeId) ?? rp.roomTypeId}</span>
+                  ) : (
+                    <span className="admin-muted italic">Universal</span>
+                  )}
+                </td>
                 <td className="font-mono text-xs">{rp.baseRate} {rp.currency}</td>
                 <td className="font-mono text-xs">{rp.msr ?? "—"}</td>
                 <td>
@@ -228,6 +264,7 @@ export default function AdminRatePlansPage() {
                           name: rp.name,
                           description: rp.description ?? "",
                           type: (RATE_PLAN_TYPES as readonly string[]).includes(rp.type) ? (rp.type as RatePlanTypeLiteral) : "INDIVIDUAL",
+                          roomTypeId: rp.roomTypeId ?? "",
                           baseRate: String(rp.baseRate),
                           currency: rp.currency,
                           msr: rp.msr ?? "",
@@ -243,8 +280,14 @@ export default function AdminRatePlansPage() {
                         type="button"
                         className="admin-btn text-[10px]"
                         disabled={deactivateMutation.isPending}
-                        onClick={() => {
-                          if (window.confirm(`Deactivate rate plan "${rp.name}"?`)) deactivateMutation.mutate(rp.id);
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: "Deactivate rate plan",
+                            message: `Deactivate "${rp.name}"? It won't be offered for new quotations. Existing reservations carry a frozen rate snapshot and are unaffected.`,
+                            confirmLabel: "Deactivate",
+                            variant: "danger",
+                          });
+                          if (ok) deactivateMutation.mutate(rp.id);
                         }}
                       >
                         Deactivate

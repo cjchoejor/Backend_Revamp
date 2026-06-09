@@ -34,6 +34,15 @@ export function enforceEntryAtS5ForS5CancellationRoute(input: { currentStage: St
   );
 }
 
+/** Policy 1 — SIG-S3 §6.5 — pre-confirmation cancellation while at S3 (`CancellationService.cancelEntryAtS3`). */
+export function enforceEntryAtS3ForS3CancellationRoute(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S3) return;
+  throw new StageGateBlockedError(
+    "S3 cancellation is only supported for entries currently at S3",
+    "NOT_AT_S3",
+  );
+}
+
 /** Policy 1 — SIG-S6 Policy 35 — post-check-in early departure (`CancellationService.cancelEntryEarlyDepartureAfterCheckIn`). */
 export function enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S7) return;

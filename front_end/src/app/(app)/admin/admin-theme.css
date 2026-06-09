@@ -213,6 +213,28 @@
   filter: none;
 }
 
+/* Destructive variant for Delete / Deactivate confirmations in the dialog. */
+.admin-console .admin-btn-danger {
+  border-color: color-mix(in srgb, var(--destructive) 60%, transparent);
+  background: var(--destructive);
+  color: white;
+}
+
+.admin-console .admin-btn-danger:hover {
+  filter: brightness(1.05);
+}
+
+/* Ghost variant for the Cancel button in dialogs. */
+.admin-console .admin-btn-ghost {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--admin-ink) 18%, transparent);
+  color: var(--admin-ink);
+}
+
+.admin-console .admin-btn-ghost:hover {
+  background: color-mix(in srgb, var(--admin-ink) 6%, transparent);
+}
+
 .admin-console table.admin-table {
   width: 100%;
   font-size: 0.875rem;

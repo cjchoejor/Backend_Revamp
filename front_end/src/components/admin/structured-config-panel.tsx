@@ -21,6 +21,7 @@ function defaultValueForSchema(schema: ConfigSchema | undefined): unknown {
   if (!schema) return {};
   switch (schema.kind) {
     case "number":
+    case "percentage":
     case "seconds":
     case "hours":
     case "days":
@@ -32,6 +33,29 @@ function defaultValueForSchema(schema: ConfigSchema | undefined): unknown {
       return "";
     default:
       return {};
+  }
+}
+
+/**
+ * Simple scalar shapes don't have structure to edit — hiding the "Use advanced JSON editor" toggle
+ * keeps the panel focused. Object/array-style configs (record-seconds, stage-dwell, fom-override-
+ * frequency, etc.) still expose the toggle so power users can paste a value.
+ */
+function isScalarSchema(schema: ConfigSchema | undefined): boolean {
+  if (!schema) return false;
+  switch (schema.kind) {
+    case "number":
+    case "percentage":
+    case "text":
+    case "cron":
+    case "seconds":
+    case "hours":
+    case "days":
+    case "day-list":
+    case "money":
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -114,14 +138,22 @@ export function StructuredConfigPanel({ configKey, load, save, onSaved }: Props)
         </div>
       )}
 
-      {meta && (
+      {meta && !isScalarSchema(meta.schema) && (
         <label className="flex items-center gap-2 text-xs text-[var(--admin-ink-soft)]">
           <input type="checkbox" checked={useAdvanced} onChange={(e) => setUseAdvanced(e.target.checked)} />
           Use advanced JSON editor instead of the dedicated form
         </label>
       )}
 
-      <input className="admin-input" placeholder="Change notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      <label className="block space-y-1">
+        <span className="admin-muted text-xs">Change note (optional, recorded in the audit trail)</span>
+        <input
+          className="admin-input"
+          placeholder="e.g. Updated GST to 5% per circular 2026-06"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+      </label>
 
       <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
         {isNew ? "Create configuration" : "Save changes"}

@@ -14,11 +14,14 @@ import {
   type RoleAdmin,
 } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
+import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { cn } from "@/lib/utils";
 
 export default function AdminRolesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({ roleCode: "", displayName: "", actorLevel: "L1" as const });
   const [selectedRoleId, setSelectedRoleId] = useState<string>("");
@@ -209,8 +212,13 @@ export default function AdminRolesPage() {
                     <button
                       type="button"
                       className="admin-btn text-[10px]"
-                      onClick={() => {
-                        const nextName = window.prompt("New display name", selected.displayName);
+                      onClick={async () => {
+                        const nextName = await prompt({
+                          title: "Rename role",
+                          message: `Set a new display name for role "${selected.roleCode}". The role code (used by code) won't change.`,
+                          initialValue: selected.displayName,
+                          confirmLabel: "Save",
+                        });
                         if (nextName && nextName.trim()) updateMutation.mutate({ id: selected.id, body: { displayName: nextName.trim() } });
                       }}
                     >
@@ -220,14 +228,14 @@ export default function AdminRolesPage() {
                       type="button"
                       className="admin-btn text-[10px] text-destructive"
                       disabled={deleteMutation.isPending}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Delete role "${selected.roleCode}"? Only works when no staff use this role code.`,
-                          )
-                        ) {
-                          deleteMutation.mutate(selected.id);
-                        }
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: "Delete role",
+                          message: `Delete role "${selected.roleCode}"? Only works when no staff are currently assigned to this role code.`,
+                          confirmLabel: "Delete",
+                          variant: "danger",
+                        });
+                        if (ok) deleteMutation.mutate(selected.id);
                       }}
                     >
                       Delete

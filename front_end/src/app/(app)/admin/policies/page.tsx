@@ -8,6 +8,7 @@ import { REGISTRY_POLICY_KEYS, getPolicyMeta, type PolicyKeyMeta } from "@/lib/a
 import { deactivatePolicy, listPolicies, savePolicy, type PolicyAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 type Draft = {
   policyId: string;
@@ -75,6 +76,7 @@ const draftFromExistingRow = (row: PolicyAdmin): Draft => {
 export default function AdminPoliciesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editingExisting, setEditingExisting] = useState(false);
 
@@ -289,9 +291,14 @@ export default function AdminPoliciesPage() {
                       type="button"
                       className="admin-btn text-[10px]"
                       disabled={deactivateMutation.isPending}
-                      onClick={() => {
-                        if (window.confirm(`Deactivate "${m.policyId}" (v${row.version})?`))
-                          deactivateMutation.mutate(m.policyId);
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: "Deactivate policy",
+                          message: `Deactivate "${m.policyId}" (v${row.version})? Runtime code will fall back to the ConfigurationEntry default (if any) or the TS default.`,
+                          confirmLabel: "Deactivate",
+                          variant: "danger",
+                        });
+                        if (ok) deactivateMutation.mutate(m.policyId);
                       }}
                     >
                       Deactivate
@@ -481,10 +488,14 @@ export default function AdminPoliciesPage() {
                           type="button"
                           className="admin-btn ml-1 text-[10px]"
                           disabled={deactivateMutation.isPending}
-                          onClick={() => {
-                            if (window.confirm(`Deactivate policy "${p.policyId}" (v${p.version})?`)) {
-                              deactivateMutation.mutate(p.policyId);
-                            }
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: "Deactivate policy",
+                              message: `Deactivate "${p.policyId}" (v${p.version})?`,
+                              confirmLabel: "Deactivate",
+                              variant: "danger",
+                            });
+                            if (ok) deactivateMutation.mutate(p.policyId);
                           }}
                         >
                           Deactivate

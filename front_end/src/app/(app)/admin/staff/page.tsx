@@ -12,10 +12,13 @@ import {
 } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 
 export default function AdminStaffPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({
     fullName: "",
@@ -178,8 +181,15 @@ export default function AdminStaffPage() {
                       <button
                         type="button"
                         className="admin-btn text-[10px]"
-                        onClick={() => {
-                          const pin = window.prompt("New PIN (min 4 chars)");
+                        onClick={async () => {
+                          const pin = await prompt({
+                            title: `Reset PIN for ${row.fullName}`,
+                            message: "Enter the new PIN (minimum 4 characters). The user will use this to sign in next time.",
+                            inputType: "password",
+                            placeholder: "New PIN",
+                            confirmLabel: "Reset PIN",
+                            minLength: 4,
+                          });
                           if (pin) resetPinMutation.mutate({ id: row.id, pin });
                         }}
                       >
@@ -188,10 +198,14 @@ export default function AdminStaffPage() {
                       <button
                         type="button"
                         className="admin-btn text-[10px]"
-                        onClick={() => {
-                          if (window.confirm(`Deactivate ${row.fullName}?`)) {
-                            deactivateMutation.mutate(row.id);
-                          }
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: "Deactivate staff member",
+                            message: `Deactivate ${row.fullName}? They will no longer be able to sign in. You can reactivate later from this page.`,
+                            confirmLabel: "Deactivate",
+                            variant: "danger",
+                          });
+                          if (ok) deactivateMutation.mutate(row.id);
                         }}
                       >
                         Deactivate

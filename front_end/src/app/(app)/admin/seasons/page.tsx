@@ -6,12 +6,14 @@ import { toast } from "sonner";
 import { createSeason, deactivateSeason, listSeasons, reactivateSeason, type SeasonAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 const EMPTY = { name: "", startDate: "", endDate: "", rateMultiplier: "", priority: "0" };
 
 export default function AdminSeasonsPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState(EMPTY);
   const [showInactive, setShowInactive] = useState(false);
   const enabled = !!session && session.actorLevel === "L4";
@@ -100,7 +102,15 @@ export default function AdminSeasonsPage() {
                 <td>{s.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>
                 <td className="text-right">
                   {s.isActive ? (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => { if (window.confirm(`Deactivate season "${s.name}"?`)) deactivateMutation.mutate(s.id); }}>
+                    <button type="button" className="admin-btn text-[10px]" onClick={async () => {
+                      const ok = await confirm({
+                        title: "Deactivate season",
+                        message: `Deactivate "${s.name}"? Its rate multiplier will no longer apply to new pricing calculations.`,
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                      });
+                      if (ok) deactivateMutation.mutate(s.id);
+                    }}>
                       Deactivate
                     </button>
                   ) : (

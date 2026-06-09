@@ -24,6 +24,7 @@ import {
 } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 import type { Session } from "@/types/session";
 
 const err = (e: unknown, fallback: string) => toast.error(e instanceof ApiError ? e.message : fallback);
@@ -35,6 +36,7 @@ const linesToItems = (text: string) =>
 
 function CommunicationTemplates({ session }: { session: Session }) {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const key = ["admin", "templates", "communication"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ templateKey: "", channel: "EMAIL", templateType: "QUOTATION", subjectTemplate: "", bodyTemplate: "" });
@@ -119,7 +121,15 @@ function CommunicationTemplates({ session }: { session: Session }) {
                 <div className="flex justify-end gap-1">
                   <button type="button" className="admin-btn text-[10px]" onClick={() => { setEditingId(t.id); setForm({ templateKey: t.templateKey, channel: t.channel, templateType: t.templateType, subjectTemplate: "", bodyTemplate: t.bodyTemplate }); }}>Edit</button>
                   {t.isActive ? (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => { if (window.confirm(`Deactivate "${t.templateKey}"?`)) deactivateMutation.mutate(t.id); }}>Deactivate</button>
+                    <button type="button" className="admin-btn text-[10px]" onClick={async () => {
+                      const ok = await confirm({
+                        title: "Deactivate template",
+                        message: `Deactivate "${t.templateKey}"? Sent communications carry a frozen snapshot and are unaffected. New sends will use the next active version (if any).`,
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                      });
+                      if (ok) deactivateMutation.mutate(t.id);
+                    }}>Deactivate</button>
                   ) : (
                     <button type="button" className="admin-btn admin-btn-success text-[10px]" disabled={reactivateMutation.isPending} onClick={() => reactivateMutation.mutate(t.id)}>Reactivate</button>
                   )}
@@ -186,6 +196,7 @@ function HandoffTemplates({ session }: { session: Session }) {
 
 function InvoiceTemplates({ session }: { session: Session }) {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const key = ["admin", "templates", "invoice"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ templateKey: "", invoiceType: "FINAL" as "PROFORMA" | "FINAL", title: "", bodyTemplate: "" });
@@ -244,7 +255,15 @@ function InvoiceTemplates({ session }: { session: Session }) {
                 <div className="flex justify-end gap-1">
                   <button type="button" className="admin-btn text-[10px]" onClick={() => { setEditingId(t.id); setForm({ templateKey: t.templateKey, invoiceType: t.invoiceType as "PROFORMA" | "FINAL", title: t.title, bodyTemplate: "" }); }}>Edit</button>
                   {t.isActive ? (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => { if (window.confirm(`Deactivate "${t.templateKey}"?`)) deactivateMutation.mutate(t.id); }}>Deactivate</button>
+                    <button type="button" className="admin-btn text-[10px]" onClick={async () => {
+                      const ok = await confirm({
+                        title: "Deactivate template",
+                        message: `Deactivate "${t.templateKey}"? Sent communications carry a frozen snapshot and are unaffected. New sends will use the next active version (if any).`,
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                      });
+                      if (ok) deactivateMutation.mutate(t.id);
+                    }}>Deactivate</button>
                   ) : (
                     <button type="button" className="admin-btn admin-btn-success text-[10px]" disabled={reactivateMutation.isPending} onClick={() => reactivateMutation.mutate(t.id)}>Reactivate</button>
                   )}
@@ -260,6 +279,7 @@ function InvoiceTemplates({ session }: { session: Session }) {
 
 function WorkOrderTemplates({ session }: { session: Session }) {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const key = ["admin", "templates", "work-order"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ templateKey: "", title: "", useType: "", todoItems: "" });
@@ -316,7 +336,15 @@ function WorkOrderTemplates({ session }: { session: Session }) {
                 <div className="flex justify-end gap-1">
                   <button type="button" className="admin-btn text-[10px]" onClick={() => { setEditingId(t.id); setForm({ templateKey: t.templateKey, title: t.title, useType: t.useType ?? "", todoItems: Array.isArray(t.todoItems) ? (t.todoItems as Array<{ description?: string }>).map((i) => i.description ?? "").join("\n") : "" }); }}>Edit</button>
                   {t.isActive ? (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => { if (window.confirm(`Deactivate "${t.templateKey}"?`)) deactivateMutation.mutate(t.id); }}>Deactivate</button>
+                    <button type="button" className="admin-btn text-[10px]" onClick={async () => {
+                      const ok = await confirm({
+                        title: "Deactivate template",
+                        message: `Deactivate "${t.templateKey}"? Sent communications carry a frozen snapshot and are unaffected. New sends will use the next active version (if any).`,
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                      });
+                      if (ok) deactivateMutation.mutate(t.id);
+                    }}>Deactivate</button>
                   ) : (
                     <button type="button" className="admin-btn admin-btn-success text-[10px]" disabled={reactivateMutation.isPending} onClick={() => reactivateMutation.mutate(t.id)}>Reactivate</button>
                   )}

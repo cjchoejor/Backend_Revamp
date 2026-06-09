@@ -32,6 +32,20 @@ export async function recordCancellationDisclosure(
   });
 }
 
+/** SIG-S3 §6.5 — pre-confirmation cancellation. Releases hold, cancels timers, supersedes invoices,
+ *  posts penalty, terminates entry. */
+export async function cancelEntryAtS3(
+  session: Session,
+  entryId: string,
+  body: { reason?: string; penaltyWaiverRequested?: boolean },
+) {
+  return apiRequest<unknown>(`/api/entries/${entryId}/cancel-at-s3`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
 export async function getPaymentStatus(session: Session, entryId: string) {
   return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/payment-status`, { session });
 }

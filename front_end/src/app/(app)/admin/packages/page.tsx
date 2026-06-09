@@ -6,12 +6,14 @@ import { toast } from "sonner";
 import { createPackage, deactivatePackage, listPackages, reactivatePackage, type PackageAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 const EMPTY = { name: "", description: "", inclusions: "", priceAdjustment: "", currency: "BTN" };
 
 export default function AdminPackagesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState(EMPTY);
   const [showInactive, setShowInactive] = useState(false);
   const enabled = !!session && session.actorLevel === "L4";
@@ -105,7 +107,15 @@ export default function AdminPackagesPage() {
                 <td>{p.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>
                 <td className="text-right">
                   {p.isActive ? (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => { if (window.confirm(`Deactivate package "${p.name}"?`)) deactivateMutation.mutate(p.id); }}>
+                    <button type="button" className="admin-btn text-[10px]" onClick={async () => {
+                      const ok = await confirm({
+                        title: "Deactivate package",
+                        message: `Deactivate "${p.name}"? It won't be available to add to new quotations.`,
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                      });
+                      if (ok) deactivateMutation.mutate(p.id);
+                    }}>
                       Deactivate
                     </button>
                   ) : (

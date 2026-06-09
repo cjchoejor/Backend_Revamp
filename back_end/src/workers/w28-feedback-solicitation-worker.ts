@@ -1,12 +1,17 @@
 import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, Stage } from "@prisma/client";
+import { dispatchStageEmailBestEffort } from "../services/infrastructure/stage-email-helpers.js";
+import { renderFeedbackSolicitationEmail } from "../services/infrastructure/stage-email-templates.js";
 
 /**
  * W28 — Feedback solicitation dispatch (dual-channel).
  * Implements AC-S9-026..030.
  */
 export async function runFeedbackSolicitationWorker(prisma: PrismaClient, input: { entryId: string }) {
-  const entry = await prisma.entry.findUnique({ where: { id: input.entryId }, include: { folio: true } });
+  const entry = await prisma.entry.findUnique({
+    where: { id: input.entryId },
+    include: { folio: true, guestProfile: true, reservation: true },
+  });
   if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
 
   if (entry.status === EntryStatus.CANCELLED || entry.status === EntryStatus.EXPIRED) return { skipped: true, reason: "STATUS_EXCLUDED" } as const;
@@ -54,6 +59,29 @@ export async function runFeedbackSolicitationWorker(prisma: PrismaClient, input:
       },
     });
   });
+
+  // Phase 3 — outbound feedback solicitation email (best-effort, post-tx).
+  const displayName =
+    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? new Date();
+  const co = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? new Date(ci.getTime() + 86400_000);
+  const content = renderFeedbackSolicitationEmail({
+    guestDisplayName: displayName,
+    checkInDate: ci,
+    checkOutDate: co,
+  });
+  await dispatchStageEmailBestEffort(
+    {
+      prisma,
+      entryId: entry.id,
+      actorId: "SYSTEM",
+      inquiryId: entry.inquiryId,
+      guestEmail: entry.guestProfile?.email ?? null,
+      stage: Stage.S9,
+      eventTypePrefix: "FEEDBACK_EMAIL",
+    },
+    content,
+  );
 
   return { skipped: false, entryId: entry.id, timerId: timer.id } as const;
 }

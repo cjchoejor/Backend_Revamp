@@ -13,6 +13,7 @@ import {
 } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 const DEFAULT_TIERS: PenaltyTier[] = [
   { daysBeforeArrival: 7, penaltyPercentage: 0 },
@@ -23,6 +24,7 @@ const DEFAULT_TIERS: PenaltyTier[] = [
 export default function AdminCancellationPoliciesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [name, setName] = useState("");
   const [noShowTreatment, setNoShowTreatment] = useState("FULL_PENALTY");
   const [tiers, setTiers] = useState<PenaltyTier[]>(DEFAULT_TIERS);
@@ -120,7 +122,15 @@ export default function AdminCancellationPoliciesPage() {
                 <td>{p.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>
                 <td className="text-right">
                   {p.isActive ? (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => { if (window.confirm(`Deactivate "${p.name}"?`)) deactivateMutation.mutate(p.id); }}>
+                    <button type="button" className="admin-btn text-[10px]" onClick={async () => {
+                      const ok = await confirm({
+                        title: "Deactivate cancellation policy",
+                        message: `Deactivate "${p.name}"? New reservations won't be able to attach this policy; existing reservations carry a frozen copy and are unaffected.`,
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                      });
+                      if (ok) deactivateMutation.mutate(p.id);
+                    }}>
                       Deactivate
                     </button>
                   ) : (

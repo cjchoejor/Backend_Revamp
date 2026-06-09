@@ -11,6 +11,7 @@ import {
 } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -187,30 +188,46 @@ export async function postCharge(
     });
 
     if (input.lineType !== FolioLineType.CREDIT_NOTE && input.amount > 0) {
-      const taxRow = await getActiveConfigEntry(tx as unknown as PrismaClient, "billing.salesTaxRate");
-      const raw = taxRow?.configValue;
-      const rate =
-        typeof raw === "number" && Number.isFinite(raw)
-          ? raw
-          : typeof raw === "string" && raw.trim()
-            ? Number(raw)
-            : 0;
-      if (typeof rate === "number" && rate > 0) {
-        const { taxAmount } = calculateTax({ taxableAmount: input.amount, rate });
-        if (taxAmount > 0) {
-          await tx.folioLine.create({
-            data: {
-              folioId,
-              lineType: FolioLineType.OTHER,
-              description: `Sales tax (${(rate * 100).toFixed(2)}%) on: ${input.description}`,
-              amount: new Prisma.Decimal(taxAmount.toFixed(2)),
-              currency: input.currency?.trim() ? input.currency.trim() : "BTN",
-              chargeDate,
-              stage: Stage.S7,
-              postedBy: actorId,
-            },
-          });
-        }
+      // Apply service charge first, THEN GST on (charge + service charge). Matches the
+      // hotel-wide breakdown rule encoded in compute-stay-charges.ts and the breakdown shown
+      // on every guest-facing email (S2 quote, S3 PI, S4 confirmation, S8 final invoice).
+      // Both rates come from ConfigurationEntry so the L4 admin can change them on /admin/financial.
+      const { gstRate, serviceChargeRate } = await resolveChargeRates(tx as unknown as PrismaClient);
+      const lineCurrency = input.currency?.trim() ? input.currency.trim() : "BTN";
+      const subTotal = input.amount;
+
+      const serviceCharge = serviceChargeRate > 0 ? Math.round(subTotal * serviceChargeRate * 100) / 100 : 0;
+      if (serviceCharge > 0) {
+        await tx.folioLine.create({
+          data: {
+            folioId,
+            lineType: FolioLineType.SERVICE,
+            description: `Service charge (${(serviceChargeRate * 100).toFixed(2)}%) on: ${input.description}`,
+            amount: new Prisma.Decimal(serviceCharge.toFixed(2)),
+            currency: lineCurrency,
+            chargeDate,
+            stage: Stage.S7,
+            postedBy: actorId,
+          },
+        });
+      }
+
+      // GST is compound — applied to (subTotal + serviceCharge).
+      const gstBase = subTotal + serviceCharge;
+      const gst = gstRate > 0 ? Math.round(gstBase * gstRate * 100) / 100 : 0;
+      if (gst > 0) {
+        await tx.folioLine.create({
+          data: {
+            folioId,
+            lineType: FolioLineType.OTHER,
+            description: `GST (${(gstRate * 100).toFixed(2)}%) on: ${input.description}`,
+            amount: new Prisma.Decimal(gst.toFixed(2)),
+            currency: lineCurrency,
+            chargeDate,
+            stage: Stage.S7,
+            postedBy: actorId,
+          },
+        });
       }
     }
 

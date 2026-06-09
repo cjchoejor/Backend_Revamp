@@ -6,6 +6,8 @@ import { StructuredConfigPanel } from "@/components/admin/structured-config-pane
 import { getFinancialConfig, listFinancialConfigKeys, setFinancialConfig } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 const FINANCIAL_LABELS: Record<string, string> = {
+  "billing.salesTaxRate": "GST rate (decimal)",
+  "billing.serviceChargeRate": "Service charge rate (decimal)",
   "advancePayment.thresholds": "Advance payment thresholds",
   "advancePayment.followUpWindowSeconds": "Advance follow-up (tier 1)",
   "advancePayment.escalationWindowSeconds": "Advance escalation (tier 2)",

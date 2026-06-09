@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { useState, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { SessionProvider } from "./session-provider";
+import { DialogProvider } from "./dialog-provider";
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -32,8 +33,10 @@ export function AppProviders({ children }: { children: ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
         <SessionProvider>
-          {children}
-          <Toaster richColors position="top-right" closeButton />
+          <DialogProvider>
+            {children}
+            <Toaster richColors position="top-right" closeButton />
+          </DialogProvider>
         </SessionProvider>
       </QueryClientProvider>
     </ThemeProvider>

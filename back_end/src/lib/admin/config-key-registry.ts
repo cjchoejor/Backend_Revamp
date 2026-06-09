@@ -108,6 +108,8 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "damage.rateList": own("FinancialConfigurationService"),
   "payment.followUpIntervalDays": own("FinancialConfigurationService", positiveInt),
   "dispute.fomOverride.maxFrequency": own("FinancialConfigurationService", nonNegativeInt),
+  "billing.salesTaxRate": own("FinancialConfigurationService"),
+  "billing.serviceChargeRate": own("FinancialConfigurationService"),
 
   // Operational schedule (OperationalScheduleService)
   "nightAudit.scheduleTime": own("OperationalScheduleService", cronString),

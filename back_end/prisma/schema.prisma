@@ -821,6 +821,11 @@ model Entry {
   /// AWAITING_WRITTEN_CONFIRMATION sub-state blocks normal S5→S6 exit.
   awaitingWrittenConfirmationActive Boolean @default(false)
 
+  /// Message-ID of the FIRST email sent for this entry's journey. Used by the email service to
+  /// anchor every later email (PI, confirmation, pre-arrival, invoice, feedback) into the same
+  /// Gmail thread via In-Reply-To / References headers. Null until the first email is sent.
+  emailThreadRootMessageId String?
+
   /// SIG-S6 — key issuance recorded at check-in completion.
   keysIssuedAt    DateTime?
   keysIssuedCount Int?

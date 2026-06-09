@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { deactivateVipRouting, listVipRoutings, reactivateVipRouting, saveVipRouting } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 function parseRoleList(text: string): string[] {
   return text
@@ -17,6 +18,7 @@ function parseRoleList(text: string): string[] {
 export default function AdminVipRoutingPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState({
     vipTier: "PLATINUM",
     notifyRoles: "FOM, GM",
@@ -99,8 +101,14 @@ export default function AdminVipRoutingPage() {
                   type="button"
                   className="admin-btn shrink-0 text-[10px]"
                   disabled={deactivateMutation.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Deactivate VIP routing for ${r.vipTier}?`)) deactivateMutation.mutate(r.id);
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: "Deactivate VIP routing",
+                      message: `Deactivate routing for tier ${r.vipTier}? VIP arrivals at this tier will no longer notify the configured roles.`,
+                      confirmLabel: "Deactivate",
+                      variant: "danger",
+                    });
+                    if (ok) deactivateMutation.mutate(r.id);
                   }}
                 >
                   Deactivate

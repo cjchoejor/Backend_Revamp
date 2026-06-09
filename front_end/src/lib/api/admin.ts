@@ -873,3 +873,26 @@ export async function queryAuditEvents(session: Session, filters: AuditEventFilt
     { session },
   );
 }
+
+// ----- Email (Phase 1: test surface) -----
+
+export type EmailVerifyResult = { ok: true } | { ok: false; error: string };
+export type EmailSendResult =
+  | { status: "sent"; messageId: string; redirected: boolean; intendedRecipient: string; actualRecipient: string }
+  | { status: "skipped"; reason: string }
+  | { status: "error"; message: string };
+
+export async function verifyEmailTransport(session: Session) {
+  return apiRequest<EmailVerifyResult>("/api/admin/email/verify", { session });
+}
+
+export async function sendTestEmail(
+  session: Session,
+  body: { to: string; subject: string; body: string; threadEntryId?: string; threadReadableId?: string },
+) {
+  return apiRequest<EmailSendResult>("/api/admin/email/test-send", {
+    method: "POST",
+    session,
+    body,
+  });
+}

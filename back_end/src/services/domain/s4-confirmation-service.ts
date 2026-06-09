@@ -26,6 +26,9 @@ import { enforceCommitmentRateFreezeAtS4 } from "../../policies/08-pricing-rate-
 import { dispatchConfirmationVoucherTx } from "./communication-service.js";
 import { createH1AtS4ConfirmationTx } from "./handoff-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
+import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
+import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -261,6 +264,42 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   });
 
   await scheduleS4StageDwellWarningMonitor(prisma, entryId, actorId);
+
+  // Phase 2 — outbound confirmation email. Runs AFTER the transaction commits so an SMTP
+  // failure cannot roll back the reservation. The send is best-effort; a failure is logged
+  // to TraceEvent and does not propagate to the caller.
+  // Phase 3 — refactored to use the shared best-effort helper + bundled template.
+  const ciDate = result.reservation.frozenCheckInDate;
+  const coDate = result.reservation.frozenCheckOutDate;
+  const frozenRate = Number(result.reservation.frozenRate?.toString?.() ?? result.reservation.frozenRate ?? 0);
+  const ms = coDate.getTime() - ciDate.getTime();
+  const nights = Math.max(1, Math.round(ms / 86400_000));
+  const currency = (accepted.commercialTerms as any)?.currency ?? "BTN";
+  const breakdown = await computeStayCharges(prisma, frozenRate, nights);
+  const displayName =
+    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  const content = renderReservationConfirmationEmail({
+    guestDisplayName: displayName,
+    reservationReadableId: result.reservation.id,
+    checkInDate: ciDate,
+    checkOutDate: coDate,
+    guestCount: result.reservation.frozenGuestCount ?? entry.guestCount ?? 1,
+    nightlyRate: frozenRate,
+    currency,
+    breakdown,
+  });
+  await dispatchStageEmailBestEffort(
+    {
+      prisma,
+      entryId,
+      actorId,
+      inquiryId: entry.inquiryId,
+      guestEmail: entry.guestProfile?.email ?? null,
+      stage: Stage.S4,
+      eventTypePrefix: "RESERVATION_CONFIRMATION_EMAIL",
+    },
+    content,
+  );
 
   return result;
 }

@@ -26,6 +26,7 @@ import { useStageTransition } from "@/components/stages/shared/stage-transition-
 import { STAGES, stagePath } from "@/config/stages";
 import {
   approveFocGm,
+  cancelEntryAtS3,
   confirmCoordinator,
   dispatchInvoice,
   ensureProvisionalFolio,
@@ -39,6 +40,7 @@ import {
   reconcileAdvancePayment,
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
+import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import type { AvailabilityConfigSummary, EntryDetail } from "@/types/api";
@@ -206,6 +208,44 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
       "Proforma invoice dispatched",
     ),
   );
+
+  const confirmDialog = useConfirm();
+  const promptDialog = usePrompt();
+
+  const cancelMutation = useMutation({
+    mutationFn: (body: { reason?: string }) => cancelEntryAtS3(session!, entry.id, body),
+    onSuccess: () => {
+      setActionError(null);
+      toast.success("Booking cancelled — hold released, timers cancelled");
+      invalidate();
+      // Land back on the dashboard since the entry is now terminal.
+      router.push("/dashboard");
+    },
+    onError: (e: unknown) => {
+      setActionError(e);
+      toast.error(e instanceof ApiError ? e.message : "Cancellation failed");
+    },
+  });
+
+  async function handleCancel() {
+    const reason = await promptDialog({
+      title: "Cancel booking at S3",
+      message:
+        "This will release the committed hold, supersede any in-flight proforma invoice, cancel all scheduled timers (W3/W22/W34), and terminate the entry. The cancellation penalty (if any) per the disclosed terms will be posted to the folio; the net advance will refund. This cannot be undone.",
+      placeholder: "Reason (e.g. guest changed plans)",
+      confirmLabel: "Continue",
+      multiline: true,
+    });
+    if (reason === null) return;
+    const ok = await confirmDialog({
+      title: "Confirm cancellation",
+      message: `Cancel booking ${entry.id.slice(0, 8)}…? This terminates the entry and cannot be reversed.`,
+      confirmLabel: "Cancel booking",
+      variant: "danger",
+    });
+    if (!ok) return;
+    cancelMutation.mutate({ reason: reason.trim() || undefined });
+  }
 
   const reEntryS2Mutation = useMutation({
     mutationFn: () =>
@@ -743,6 +783,29 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
             </CardContent>
           </Card>
         )}
+
+        <Card className="border-destructive/30">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base text-destructive">
+              Cancel booking (terminal)
+            </CardTitle>
+            <CardDescription>
+              SIG-S3 §6.5 — releases the committed hold, supersedes any in-flight proforma invoice,
+              cancels all scheduled timers, applies the disclosed cancellation penalty, and refunds
+              the net advance. The entry becomes terminal — there&apos;s no undo.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={cancelMutation.isPending}
+              onClick={handleCancel}
+            >
+              {cancelMutation.isPending ? "Cancelling…" : "Cancel booking"}
+            </Button>
+          </CardContent>
+        </Card>
 
         <ApiErrorAlert error={actionError} />
 

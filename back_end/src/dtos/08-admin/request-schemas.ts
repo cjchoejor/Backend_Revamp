@@ -168,6 +168,16 @@ export const savePolicyRequestSchema = z.object({
   policyDefinition: z.unknown(),
 });
 
+export const sendTestEmailRequestSchema = z.object({
+  to: z.string().email(),
+  subject: z.string().min(1),
+  body: z.string().min(1),
+  /** Optional Entry ID to thread under. If omitted, no threading anchor is used. */
+  threadEntryId: z.string().optional(),
+  /** Optional readable ID (e.g. "ENT-0042") that becomes the subject prefix for threading. */
+  threadReadableId: z.string().optional(),
+});
+
 export const createCommunicationTemplateRequestSchema = z.object({
   templateKey: z.string().min(1),
   channel: z.string().min(1),

@@ -8,6 +8,8 @@ import {
   enforcePreArrivalTaskWaiveRequiresReason,
 } from "../../policies/03-expiry-parking/p09-s5-normal-exit-pre-arrival-tasks-terminal.js";
 import { dispatchPreArrivalOutboundTx } from "./communication-service.js";
+import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
+import { renderPreArrivalEmail } from "../infrastructure/stage-email-templates.js";
 
 function categoryForTaskType(taskType: PreArrivalTaskType): TaskCategory {
   switch (taskType) {
@@ -274,6 +276,37 @@ export async function sendPreArrivalReminderOutbound(prisma: PrismaClient, entry
       templateKey,
     });
   });
+
+  // Phase 3 — outbound pre-arrival email (best-effort, post-tx).
+  const full = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: { guestProfile: true, reservation: true },
+  });
+  if (full) {
+    const displayName =
+      [full.guestProfile?.firstName, full.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+    const ci = full.reservation?.frozenCheckInDate ?? full.checkInDate ?? new Date();
+    const co = full.reservation?.frozenCheckOutDate ?? full.checkOutDate ?? new Date(ci.getTime() + 86400_000);
+    const content = renderPreArrivalEmail({
+      guestDisplayName: displayName,
+      reservationReadableId: full.reservation?.id ?? entryId,
+      checkInDate: ci,
+      checkOutDate: co,
+      guestCount: full.reservation?.frozenGuestCount ?? full.guestCount ?? 1,
+    });
+    await dispatchStageEmailBestEffort(
+      {
+        prisma,
+        entryId,
+        actorId,
+        inquiryId: full.inquiryId,
+        guestEmail: full.guestProfile?.email ?? null,
+        stage: Stage.S5,
+        eventTypePrefix: "PRE_ARRIVAL_EMAIL",
+      },
+      content,
+    );
+  }
 }
 
 export async function evaluateCreditCeiling(prisma: PrismaClient, entryId: string, actorId: string) {

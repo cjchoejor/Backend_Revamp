@@ -9,6 +9,9 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { schedulePaymentFollowUpW8IfOutstanding } from "../../lib/schedule-payment-followup-w8.js";
 import { enforceWriteOffConstraints } from "../../policies/13-billing-model/write-off-policy-constraints.js";
+import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
+import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
+import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import {
   enforceApartmentSecurityDepositResolvedForS9Closure,
   enforceDirectBillPaymentsMatchedForS9Closure,
@@ -101,7 +104,7 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
   if (!invoice) throw new NotFoundError("Invoice");
   if (invoice.state !== InvoiceState.DRAFT) return invoice;
   const now = new Date();
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -226,6 +229,90 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
 
     return updated;
   });
+
+  // Phase 3 — outbound invoice email (best-effort, post-tx).
+  // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
+  await sendInvoiceEmailBestEffort(prisma, actorId, result.id);
+
+  return result;
+}
+
+async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string, invoiceId: string) {
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: {
+      entry: {
+        include: {
+          guestProfile: true,
+          reservation: true,
+          // At S3 (PI dispatch) the reservation doesn't exist yet — the accepted quotation
+          // carries the nightly rate in commercialTerms. Pull it in as a fallback.
+          quotations: { where: { state: "ACCEPTED" }, orderBy: { createdAt: "desc" }, take: 1 },
+        },
+      },
+      folio: { include: { payments: { where: { paymentDirection: "IN" } } } },
+    },
+  });
+  if (!inv?.entry) return;
+  const entry = inv.entry;
+  const displayName =
+    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  const paid = (inv.folio?.payments ?? []).reduce((s, p) => s + Number(p.amount.toString()), 0);
+  // Prefer the frozen reservation dates + rate (authoritative from S4); fall back to the accepted
+  // quotation (S3 PI scenario — no reservation yet); final fallback is the entry / invoice totals.
+  const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? new Date();
+  const co = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? new Date(ci.getTime() + 86400_000);
+  const nights = Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400_000));
+
+  const quotationTerms = (entry.quotations[0]?.commercialTerms as any) ?? null;
+  const quotationNightly = Number(
+    quotationTerms?.nightlyRate ?? quotationTerms?.rate ?? quotationTerms?.effectiveRate ?? 0,
+  );
+  const invoiceImpliedNightly = Number(inv.totalAmount?.toString?.() ?? 0) / nights;
+  const nightlyRate = entry.reservation?.frozenRate
+    ? Number(entry.reservation.frozenRate.toString())
+    : quotationNightly > 0
+      ? quotationNightly
+      : invoiceImpliedNightly > 0
+        ? invoiceImpliedNightly
+        : 0;
+  const currency = quotationTerms?.currency ?? "BTN";
+  const breakdown = await computeStayCharges(prisma, nightlyRate, nights);
+  const isPI = inv.invoiceType === InvoiceType.PROFORMA;
+
+  const content = isPI
+    ? renderProformaInvoiceEmail({
+        guestDisplayName: displayName,
+        invoiceRef: inv.id,
+        checkInDate: ci,
+        checkOutDate: co,
+        guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
+        currency,
+        breakdown,
+        amountPaid: paid,
+      })
+    : renderFinalInvoiceEmail({
+        guestDisplayName: displayName,
+        invoiceRef: inv.id,
+        checkInDate: ci,
+        checkOutDate: co,
+        currency,
+        breakdown,
+        amountPaid: paid,
+      });
+
+  await dispatchStageEmailBestEffort(
+    {
+      prisma,
+      entryId: entry.id,
+      actorId,
+      inquiryId: entry.inquiryId,
+      guestEmail: entry.guestProfile?.email ?? null,
+      stage: isPI ? Stage.S3 : Stage.S9,
+      eventTypePrefix: isPI ? "PROFORMA_INVOICE_EMAIL" : "FINAL_INVOICE_EMAIL",
+    },
+    content,
+  );
 }
 
 export async function recordInvoicePaymentEvent(

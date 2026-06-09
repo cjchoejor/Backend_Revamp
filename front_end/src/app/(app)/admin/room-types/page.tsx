@@ -6,10 +6,12 @@ import { toast } from "sonner";
 import { createRoomType, deleteRoomType, listRoomTypes } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm } from "@/components/providers/dialog-provider";
 
 export default function AdminRoomTypesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState({ code: "", name: "" });
 
   const query = useQuery({
@@ -39,12 +41,18 @@ export default function AdminRoomTypesPage() {
 
   const items = query.data?.items ?? [];
 
-  function handleDelete(id: string, code: string, roomCount: number) {
+  async function handleDelete(id: string, code: string, roomCount: number) {
     if (roomCount > 0) {
       toast.error("Remove or reassign all rooms of this type before deleting");
       return;
     }
-    if (!window.confirm(`Delete room type "${code}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: "Delete room type",
+      message: `Delete "${code}" permanently? This cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (!ok) return;
     deleteMutation.mutate(id);
   }
 

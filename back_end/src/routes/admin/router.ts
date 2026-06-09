@@ -25,6 +25,7 @@ import { adminAiAgentConfigRouter } from "./ai-agent-config-router.js";
 import { adminCommunicationConfigRouter } from "./communication-config-router.js";
 import { adminPostStayGovernanceRouter } from "./post-stay-governance-router.js";
 import { adminAuditTrailRouter } from "./audit-trail-router.js";
+import { adminEmailRouter } from "./email-router.js";
 
 export const adminRouter = Router();
 
@@ -50,6 +51,7 @@ adminRouter.use(adminAiAgentConfigRouter);
 adminRouter.use(adminCommunicationConfigRouter);
 adminRouter.use(adminPostStayGovernanceRouter);
 adminRouter.use(adminAuditTrailRouter);
+adminRouter.use(adminEmailRouter);
 
 /** Dev helper — enqueue a timer job (L4). */
 adminRouter.post("/enqueue", requireActorLevel("L4"), validateBody(adminEnqueueRequestSchema), async (req, res, next) => {

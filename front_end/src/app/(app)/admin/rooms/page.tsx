@@ -6,12 +6,15 @@ import { toast } from "sonner";
 import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCategories, listAdminRooms, listRoomTypes, markRoomDeficient, reactivateAdminRoom, resolveRoomDeficient } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
 
 export default function AdminRoomsPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "", capacity: "2" });
   const [defForm, setDefForm] = useState<DeficientForm | null>(null);
 
@@ -246,8 +249,14 @@ export default function AdminRoomsPage() {
                         type="button"
                         className="admin-btn admin-btn-success text-[10px]"
                         disabled={resolveDeficientMutation.isPending}
-                        onClick={() => {
-                          const note = window.prompt(`Resolve deficient condition on room ${r.roomNumber}. Resolution notes (optional):`, "");
+                        onClick={async () => {
+                          const note = await prompt({
+                            title: `Resolve deficient condition`,
+                            message: `Room ${r.roomNumber} — describe what was fixed (optional). Leave blank if no notes.`,
+                            placeholder: "Resolution notes (optional)",
+                            confirmLabel: "Mark resolved",
+                            multiline: true,
+                          });
                           if (note === null) return;
                           resolveDeficientMutation.mutate({ id: r.id, note: note.trim() || undefined });
                         }}
@@ -286,10 +295,14 @@ export default function AdminRoomsPage() {
                         type="button"
                         className="admin-btn text-[10px]"
                         disabled={deactivateMutation.isPending}
-                        onClick={() => {
-                          if (window.confirm(`Deactivate room ${r.roomNumber}? It will be marked blocked.`)) {
-                            deactivateMutation.mutate(r.id);
-                          }
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: "Deactivate room",
+                            message: `Deactivate room ${r.roomNumber}? It will be marked BLOCKED — not bookable until you reactivate it.`,
+                            confirmLabel: "Deactivate",
+                            variant: "danger",
+                          });
+                          if (ok) deactivateMutation.mutate(r.id);
                         }}
                       >
                         Deactivate
@@ -299,14 +312,18 @@ export default function AdminRoomsPage() {
                       type="button"
                       className="admin-btn text-[10px] text-destructive"
                       disabled={deleteMutation.isPending}
-                      onClick={() => {
+                      onClick={async () => {
                         if (r.currentClaimState !== "FREE") {
                           toast.error("Only FREE rooms with no history can be deleted — use Deactivate instead");
                           return;
                         }
-                        if (window.confirm(`Permanently delete room ${r.roomNumber}?`)) {
-                          deleteMutation.mutate(r.id);
-                        }
+                        const ok = await confirm({
+                          title: "Delete room",
+                          message: `Permanently delete room ${r.roomNumber}? This cannot be undone. Use Deactivate if you might want it back later.`,
+                          confirmLabel: "Delete",
+                          variant: "danger",
+                        });
+                        if (ok) deleteMutation.mutate(r.id);
                       }}
                     >
                       Delete
