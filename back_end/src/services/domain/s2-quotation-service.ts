@@ -108,7 +108,7 @@ export async function createQuotation(
   };
 
   return prisma.$transaction(async (tx) => {
-    const referenceNumber = await allocateReadableId(tx, READABLE_ID_PREFIXES.QUOTATION);
+    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
     const created = await tx.quotation.create({
       data: {
         entryId,
@@ -256,7 +256,7 @@ export async function createGroupQuotation(
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
-    const referenceNumber = await allocateReadableId(tx, READABLE_ID_PREFIXES.QUOTATION, now);
+    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
     const created = await tx.quotation.create({
       data: {
         entryId,
@@ -343,7 +343,7 @@ export async function supersedeQuotationWithNewDraft(
     const terms = { ...(prior.commercialTerms as any), notes: input.notes?.trim() ? input.notes.trim() : (prior.commercialTerms as any)?.notes };
     if (input.requestedDiscount) terms.requestedDiscount = input.requestedDiscount;
 
-    const referenceNumber = await allocateReadableId(tx, READABLE_ID_PREFIXES.QUOTATION, now);
+    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
     const created = await tx.quotation.create({
       data: {
         entryId: prior.entryId,

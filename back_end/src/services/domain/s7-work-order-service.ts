@@ -1,12 +1,16 @@
 import type { PrismaClient } from "@prisma/client";
 import { Prisma, WorkOrderToDoStatus } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 export async function createWorkOrder(prisma: PrismaClient, actorId: string, input: { entryId: string }) {
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
-  return prisma.workOrder.create({
-    data: { entryId: input.entryId, createdBy: actorId },
-    include: { todoItems: true },
+  return prisma.$transaction(async (tx) => {
+    const workOrderId = await allocateReadableId(tx, "WORK_ORDER" as const);
+    return tx.workOrder.create({
+      data: { id: workOrderId, entryId: input.entryId, createdBy: actorId },
+      include: { todoItems: true },
+    });
   });
 }
 

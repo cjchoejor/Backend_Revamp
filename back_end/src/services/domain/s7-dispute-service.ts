@@ -6,6 +6,7 @@ import * as disputeGateEngine from "../../engines/dispute-gate-engine.js";
 import { cancelDisputeSlaW27Timers, scheduleDisputeSlaW27Timers } from "../../lib/schedule-dispute-sla-w27.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceDisputeGateOverrideTargetAllowed } from "../../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 export async function getDispute(prisma: PrismaClient, disputeId: string) {
   const d = await prisma.disputeRecord.findUnique({
@@ -33,8 +34,10 @@ export async function openDispute(
   if (!folio) throw new NotFoundError("Folio");
   if (folio.entryId !== input.entryId) throw new ValidationError("Folio does not belong to this entry");
 
+  const disputeId = await allocateReadableId(prisma, "DISPUTE" as const);
   const created = await prisma.disputeRecord.create({
     data: {
+      id: disputeId,
       entryId: input.entryId,
       folioId: input.folioId,
       title: input.title,

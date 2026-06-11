@@ -61,7 +61,7 @@ export async function getOrCreateProvisionalFolioTx(
     return existing;
   }
 
-  const folioId = await allocateReadableId(tx, READABLE_ID_PREFIXES.FOLIO, now);
+  const folioId = await allocateReadableId(tx, "FOLIO" as const, now);
   const created = await tx.folio.create({
     data: {
       id: folioId,
@@ -111,8 +111,10 @@ export async function recordPayment(
     enforceEntryAtS3ForS3DomainOperations({ currentStage: folio.entry.currentStage });
     enforceAdvancePaymentInboundRecordAtS3({ folioState: folio.state, amount: amountNum });
 
+    const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
     const created = await tx.paymentRecord.create({
       data: {
+        id: paymentId,
         folioId,
         entryId: input.entryId,
         amount: amountNum,
@@ -172,7 +174,7 @@ export async function issueInvoice(
     }
 
     const now = new Date();
-    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE, now);
+    const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
     const inv = await tx.invoice.create({
       data: {
         id: invoiceId,

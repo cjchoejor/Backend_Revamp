@@ -3,6 +3,7 @@ import { HandoffState, HandoffType, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 import { enforceDeficientCarryIntoH2 } from "../../policies/19-deficient-condition/p49-deficient-carry-into-h2.js";
 import { enforceHandoffFulfilmentEvidence, enforceMandatoryChecklistItemsCompleted } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import {
@@ -249,8 +250,10 @@ export async function createH4(
   const slaDeadlineAt = h4WindowSeconds == null ? null : new Date(now.getTime() + Number(h4WindowSeconds) * 1000);
 
   return prisma.$transaction(async (tx) => {
+    const h4Id = await allocateReadableId(tx, "HANDOFF" as const, now);
     const created = await tx.handoffRecord.create({
       data: {
+        id: h4Id,
         entryId,
         handoffType: HandoffType.H4,
         state: shouldAuto ? HandoffState.FULFILLED : HandoffState.CREATED,
@@ -355,8 +358,10 @@ export async function createH2(
     throw new MissingConfigurationError("acknowledgement.windowPerType");
   }
   const sla = new Date(Date.now() + Number(h2s) * 1000);
+  const h2Id = await allocateReadableId(prisma, "HANDOFF" as const);
   const created = await prisma.handoffRecord.create({
     data: {
+      id: h2Id,
       entryId,
       handoffType: HandoffType.H2,
       state: HandoffState.CREATED,
@@ -403,8 +408,10 @@ export async function createH1AtS4ConfirmationTx(
   tx: Prisma.TransactionClient,
   input: { entryId: string; actorId: string; checklistContent: unknown; isAutoFulfilled?: boolean },
 ) {
+  const h1Id = await allocateReadableId(tx, "HANDOFF" as const);
   return tx.handoffRecord.create({
     data: {
+      id: h1Id,
       entryId: input.entryId,
       handoffType: HandoffType.H1,
       state: HandoffState.CREATED,

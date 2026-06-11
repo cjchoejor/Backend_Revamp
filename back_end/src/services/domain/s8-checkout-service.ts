@@ -6,6 +6,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import * as disputeGateEngine from "../../engines/dispute-gate-engine.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { randomUUID } from "node:crypto";
+import { allocateReadableId } from "../../lib/readable-id.js";
 import { enforceInspectionCarriesFinalDeficientFlagStatus } from "../../policies/19-deficient-condition/p51-deficient-inspection-review.js";
 import { enforceDisputeGateClearForS8ToS9 } from "../../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { enforceH4FulfilledOrAutoBeforeS8Exit } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
@@ -42,8 +43,10 @@ export async function recordKeyReturn(prisma: PrismaClient, entryId: string, act
   }
   const now = new Date();
   return prisma.$transaction(async (tx) => {
+    const keyReturnId = await allocateReadableId(tx, "KEY_RETURN" as const, now);
     const created = await tx.keyReturnRecord.create({
       data: {
+        id: keyReturnId,
         entryId,
         roomId: room.id,
         receivedBy: actorId,
@@ -115,8 +118,10 @@ export async function recordInspection(
   const seg = await prisma.segment.findFirst({ where: { entryId }, orderBy: { segmentNumber: "desc" } });
   if (!seg) throw new NotFoundError("Segment");
 
+  const inspectionId = await allocateReadableId(prisma, "ROOM_INSPECTION" as const);
   const created = await prisma.roomInspectionRecord.create({
     data: {
+      id: inspectionId,
       entryId,
       roomId: room.id,
       segmentId: seg.id,
@@ -216,8 +221,10 @@ export async function buildOrAutoFulfilH5(prisma: PrismaClient, entryId: string,
   if (existing) return existing;
 
   if (folio.state === FolioState.OUTSTANDING) {
+    const h5Id = await allocateReadableId(prisma, "HANDOFF" as const);
     return prisma.handoffRecord.create({
       data: {
+        id: h5Id,
         entryId,
         handoffType: HandoffType.H5,
         state: "CREATED",
@@ -234,8 +241,10 @@ export async function buildOrAutoFulfilH5(prisma: PrismaClient, entryId: string,
 
   // SETTLED with no residual obligations → auto fulfil
   const now = new Date();
+  const h5AutoId = await allocateReadableId(prisma, "HANDOFF" as const, now);
   const created = await prisma.handoffRecord.create({
     data: {
+      id: h5AutoId,
       entryId,
       handoffType: HandoffType.H5,
       state: "FULFILLED",

@@ -16,6 +16,7 @@ import { enforceGmAuthorityForCancellationPenaltyWaiver } from "../../policies/1
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import type { ActorLevel as RequestActorLevel } from "../../types/actor.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 /**
  * SIG-S3 §6.5 — pre-confirmation cancellation at S3: release the committed hold, cancel timers,
@@ -116,8 +117,10 @@ export async function cancelEntryAtS3(
 
     // 2. Refund obligation (only if net refund > 0).
     if (netRefund > 0) {
+      const refundId = await allocateReadableId(tx, "PAYMENT" as const, now);
       await tx.paymentRecord.create({
         data: {
+          id: refundId,
           folioId: folio.id,
           entryId,
           amount: netRefund,
@@ -333,8 +336,10 @@ export async function cancelEntryAtS5(
     }
 
     if (netRefund > 0) {
+      const refundId = await allocateReadableId(tx, "PAYMENT" as const, now);
       await tx.paymentRecord.create({
         data: {
+          id: refundId,
           folioId: folio.id,
           entryId,
           amount: netRefund,

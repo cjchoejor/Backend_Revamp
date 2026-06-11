@@ -9,6 +9,7 @@ import {
 import * as folioService from "./folio-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 import * as preArrivalService from "./pre-arrival-service.js";
 import { enforceRoomAssignmentPresentForCheckInCompletion, enforceRoomPhysicalReadyForS6CheckInCompletion } from "../../policies/01-availability/p01-room-assignment-and-physical-ready-s6-checkin.js";
 import { enforceH1EligibleForS6CheckInCompletion } from "../../policies/02-ownership-custodian-assignment/p05-h1-eligible-for-s6-checkin-completion.js";
@@ -171,8 +172,10 @@ export async function completeCheckInToS7(
     });
     if (!h2Existing) {
       const slaDeadlineAt = new Date(now.getTime() + Number(h2WindowSeconds) * 1000);
+      const h2Id = await allocateReadableId(tx, "HANDOFF" as const, now);
       await tx.handoffRecord.create({
         data: {
+          id: h2Id,
           entryId,
           handoffType: HandoffType.H2,
           state: HandoffState.CREATED,
@@ -205,8 +208,10 @@ export async function completeCheckInToS7(
     });
     if (!h3Existing) {
       const slaDeadlineAt = new Date(now.getTime() + Number(h3WindowSeconds) * 1000);
+      const h3Id = await allocateReadableId(tx, "HANDOFF" as const, now);
       await tx.handoffRecord.create({
         data: {
+          id: h3Id,
           entryId,
           handoffType: HandoffType.H3,
           state: HandoffState.CREATED,

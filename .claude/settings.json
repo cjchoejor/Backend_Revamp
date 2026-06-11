@@ -48,7 +48,10 @@
       "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=8424\"; \"Name=$\\($p.Name\\)`nCmd=$\\($p.CommandLine\\)\")",
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($conn.OwningProcess\\)\"; \"PID $\\($conn.OwningProcess\\): $\\($p.Name\\) — $\\($p.CommandLine.Substring\\(0, [Math]::Min\\(180, $p.CommandLine.Length\\)\\)\\)\" } else { \"Port 4000 free\" })",
       "PowerShell(Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue)",
-      "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=44112\"; \"PID 44112 = \" + $p.Name + \"`nCmd: \" + $p.CommandLine)"
+      "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=44112\"; \"PID 44112 = \" + $p.Name + \"`nCmd: \" + $p.CommandLine)",
+      "Bash(grep -v -E \"//.*$\")",
+      "PowerShell(Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort, OwningProcess, @{N='Process';E={\\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($_.OwningProcess\\)\"\\).Name}})",
+      "PowerShell(Stop-Process -Id 29180 -Force)"
     ]
   }
 }

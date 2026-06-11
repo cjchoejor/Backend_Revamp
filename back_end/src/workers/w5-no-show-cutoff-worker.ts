@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, FolioState, Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { NotFoundError } from "../lib/errors.js";
+import { allocateReadableId } from "../lib/readable-id.js";
 
 export async function runNoShowCutoffWorker(
   prisma: PrismaClient,
@@ -67,8 +68,10 @@ export async function runNoShowCutoffWorker(
   const net = advanceTotal - penalty;
 
   await prisma.$transaction(async (tx) => {
+    const noShowId = await allocateReadableId(tx, "NO_SHOW" as const);
     await tx.noShowDeterminationRecord.create({
       data: {
+        id: noShowId,
         entryId,
         determinationPath: "SUB_PATH_2B_AUTO",
         fomActorId: "SYSTEM",

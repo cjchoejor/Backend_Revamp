@@ -4,6 +4,7 @@ import { MissingConfigurationError, NotFoundError, ValidationError } from "../..
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 
@@ -70,9 +71,9 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
   }
 
   const processedCount = plan.length;
-  const recordId = randomUUID();
 
   await prisma.$transaction(async (tx) => {
+    const recordId = await allocateReadableId(tx, "NIGHT_AUDIT" as const);
     await tx.nightAuditRecord.create({
       data: {
         id: recordId,

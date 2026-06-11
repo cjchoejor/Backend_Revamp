@@ -3,6 +3,7 @@ import { InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
 import { enforceEntryAtS7ForRoomChangeReEntry } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 export async function createAmendmentEvent(
   prisma: PrismaClient,
@@ -28,8 +29,10 @@ export async function createAmendmentEvent(
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
   if (!input.newTermsSummary?.trim()) throw new ValidationError("newTermsSummary is required");
 
+  const amendmentId = await allocateReadableId(prisma, "AMENDMENT" as const);
   return prisma.amendmentEventRecord.create({
     data: {
+      id: amendmentId,
       entryId: input.entryId,
       segmentId: input.segmentId,
       amendmentPath: input.amendmentPath,
@@ -123,8 +126,9 @@ export async function roomChangeReEntryToS1(
       },
     });
 
+    const roomAssignmentId = await allocateReadableId(tx, "ROOM_ASSIGNMENT" as const, now);
     await tx.roomAssignment.create({
-      data: { entryId: input.entryId, roomId: input.newRoomId, assignedBy: actorId, deficientAtAssignment: false },
+      data: { id: roomAssignmentId, entryId: input.entryId, roomId: input.newRoomId, assignedBy: actorId, deficientAtAssignment: false },
     });
 
     await tx.entry.update({
@@ -153,8 +157,10 @@ export async function roomChangeReEntryToS1(
       },
     });
 
+    const amendmentId = await allocateReadableId(tx, "AMENDMENT" as const, now);
     await tx.amendmentEventRecord.create({
       data: {
+        id: amendmentId,
         entryId: input.entryId,
         segmentId: newSeg.id,
         amendmentPath: "PATH_1",

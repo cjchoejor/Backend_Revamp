@@ -62,7 +62,7 @@ export async function createEntry(
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
 
   return prisma.$transaction(async (tx) => {
-    const entryId = await allocateReadableId(tx, READABLE_ID_PREFIXES.ENTRY);
+    const entryId = await allocateReadableId(tx, "ENTRY" as const);
     const entry = await tx.entry.create({
       data: {
         id: entryId,

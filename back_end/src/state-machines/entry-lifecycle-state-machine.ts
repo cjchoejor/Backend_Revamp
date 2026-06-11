@@ -4,6 +4,7 @@ import { NotFoundError, OptimisticLockError, ValidationError } from "../lib/erro
 import { requireActiveConfigValue } from "../lib/config-store.js";
 import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { allocateReadableId } from "../lib/readable-id.js";
 import { scheduleS6StageDwellWarningMonitor } from "../lib/schedule-s6-dwell-warning-monitor.js";
 import { cancelScheduledRoomReadinessSlaForEntry } from "../services/domain/room-assignment-service.js";
 import { issueVipArrivalNotificationAtCommencementTx } from "../services/domain/vip-arrival-notification-service.js";
@@ -306,8 +307,10 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
 
     // Record the room-change request reason in a relatable table for audit/history.
     const changeReason = reason?.trim() || "Room change requested at check-in";
+    const amendmentId = await allocateReadableId(tx, "AMENDMENT" as const, now);
     await tx.amendmentEventRecord.create({
       data: {
+        id: amendmentId,
         entryId,
         segmentId: newSegment.id,
         amendmentPath: "PATH_1",
@@ -408,8 +411,10 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
       const today = now.toISOString().slice(0, 10);
       const isSameDayDeparture = checkout ? checkout.toISOString().slice(0, 10) === today : false;
       if (isSameDayDeparture) {
+        const h4Id = await allocateReadableId(tx, "HANDOFF" as const, now);
         const created = await tx.handoffRecord.create({
           data: {
+            id: h4Id,
             entryId,
             handoffType: HandoffType.H4,
             state: "FULFILLED",

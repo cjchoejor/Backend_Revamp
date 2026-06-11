@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { requireDeficientRoomAcknowledgement } from "../../policies/19-deficient-condition/p48-deficient-room-assignment-decision.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 import {
   enforceArrivalDatePresentForRoomAssignment,
   enforceCommittedHoldPresentForRoomAssignment,
@@ -73,8 +74,10 @@ export async function assignRoom(
   if (isDeficient) {
     const { acknowledgementAt } = requireDeficientRoomAcknowledgement(deficientAcknowledgement);
     const acknowledgementActorId = deficientAcknowledgement!.acknowledgementActorId;
+    const roomAssignmentId = await allocateReadableId(prisma, "ROOM_ASSIGNMENT" as const);
     const created = await prisma.roomAssignment.create({
       data: {
+        id: roomAssignmentId,
         entryId,
         roomId,
         assignedBy: actorId,
@@ -93,8 +96,10 @@ export async function assignRoom(
     throw new ValidationError("deficientAcknowledgement must not be sent when room is not DEFICIENT");
   }
 
+  const roomAssignmentId = await allocateReadableId(prisma, "ROOM_ASSIGNMENT" as const);
   const created = await prisma.roomAssignment.create({
     data: {
+      id: roomAssignmentId,
       entryId,
       roomId,
       assignedBy: actorId,

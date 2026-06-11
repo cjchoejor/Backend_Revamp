@@ -82,7 +82,7 @@ export async function issueInvoiceAtS9(
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE, now);
+    const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
     return tx.invoice.create({
       data: {
         id: invoiceId,
@@ -126,8 +126,10 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
         const ackFireAt = new Date(now.getTime() + piSeconds * 1000);
 
         const engine = await getTimerEngine();
+        const commId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
         const comm = await tx.communicationRecord.create({
           data: {
+            id: commId,
             entryId: updated.entryId,
             channel: "EMAIL",
             // NOTE: We use an existing commType for now to avoid Prisma client regeneration issues on Windows.
@@ -349,8 +351,10 @@ export async function recordInvoicePaymentEvent(
   return prisma.$transaction(async (tx) => {
     // SIG-S9 §8.6: record a payment event (optional in this repo for backwards compatibility).
     if (amount != null) {
+      const paymentId = await allocateReadableId(tx, "PAYMENT" as const, now);
       await tx.paymentRecord.create({
         data: {
+          id: paymentId,
           folioId: invoice.folioId,
           invoiceId: invoice.id,
           entryId: invoice.entryId,
@@ -579,8 +583,10 @@ async function maybeCreateCommissionDue(db: DbClient, entryId: string, actorId: 
   // If commission basis not configured, create RATE_MISSING and schedule W11.
   const now = new Date();
   const isBasisMissing = profile.commissionBasis == null;
+  const commissionDueId = await allocateReadableId(db, "COMMISSION_DUE" as const, now);
   const created = await db.commissionDueRecord.create({
     data: {
+      id: commissionDueId,
       entryId,
       agentProfileId: profile.id,
       commissionRate: profile.commissionRate!,
@@ -834,8 +840,10 @@ export async function postStayCharge(
         postedAt,
       },
     });
+    const noticeCommId = await allocateReadableId(tx, "COMMUNICATION" as const, postedAt);
     await tx.communicationRecord.create({
       data: {
+        id: noticeCommId,
         entryId: input.entryId,
         channel: "EMAIL",
         commType: "POST_STAY_CHARGE_NOTICE",

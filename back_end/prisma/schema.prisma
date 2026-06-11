@@ -905,7 +905,7 @@ enum CommissionDueStatus {
 }
 
 model CommissionDueRecord {
-  id               String              @id @default(uuid())
+  id               String              @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("COMMISSION_DUE", ...)
   entryId          String
   agentProfileId   String
   commissionRate   Decimal             @db.Decimal(5, 4)
@@ -1412,7 +1412,7 @@ model FolioLine {
   createdAt          DateTime      @default(now())
 
   folio            Folio             @relation(fields: [folioId], references: [id])
-  nightAuditRecord NightAuditRecord? @relation(fields: [nightAuditRecordId], references: [id])
+  nightAuditRecord NightAuditRecord? @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
 
   @@map("folio_lines")
 }
@@ -1434,7 +1434,7 @@ model WriteOffRecord {
 }
 
 model PaymentRecord {
-  id                    String           @id @default(uuid())
+  id                    String           @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("PAYMENT", ...)
   folioId               String
   invoiceId             String?
   entryId               String?
@@ -1457,7 +1457,7 @@ model PaymentRecord {
 }
 
 model CreditExtensionCeilingRecord {
-  id            String   @id @default(uuid())
+  id            String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("CREDIT_EXTENSION", ...)
   folioId       String   @unique
   entryId       String
   ceilingAmount Decimal  @db.Decimal(15, 2)
@@ -1473,7 +1473,7 @@ model CreditExtensionCeilingRecord {
 // --- Operational artefacts (S5–S9) --------------------------------------
 
 model HandoffRecord {
-  id                       String       @id @default(uuid())
+  id                       String       @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("HANDOFF", ...)
   entryId                  String
   handoffType              HandoffType
   state                    HandoffState @default(CREATED)
@@ -1532,7 +1532,7 @@ model PreArrivalTask {
 }
 
 model RoomAssignment {
-  id                         String    @id @default(uuid())
+  id                         String    @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_ASSIGNMENT", ...)
   entryId                    String
   roomId                     String
   assignedAt                 DateTime  @default(now())
@@ -1551,7 +1551,7 @@ model RoomAssignment {
 }
 
 model NoShowDeterminationRecord {
-  id                      String   @id @default(uuid())
+  id                      String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("NO_SHOW", ...)
   entryId                 String   @unique
   determinationPath       String
   fomActorId              String
@@ -1569,7 +1569,7 @@ model NoShowDeterminationRecord {
 }
 
 model RoomInspectionRecord {
-  id                   String   @id @default(uuid())
+  id                   String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_INSPECTION", ...)
   entryId              String
   roomId               String
   segmentId            String
@@ -1590,7 +1590,7 @@ model RoomInspectionRecord {
 }
 
 model KeyReturnRecord {
-  id                 String   @id @default(uuid())
+  id                 String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("KEY_RETURN", ...)
   entryId            String
   roomId             String
   receivedBy         String
@@ -1675,7 +1675,7 @@ model CreditCeilingThresholdEvent {
 }
 
 model NightAuditRecord {
-  id                    String              @id @default(uuid())
+  id                    String              @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("NIGHT_AUDIT", ...)
   operatingDate         DateTime            @unique
   runStatus             NightAuditRunStatus
   entriesProcessedCount Int                 @default(0)
@@ -1699,13 +1699,13 @@ model NightAuditAnomaly {
   resolvedAt         DateTime?
   resolvedBy         String?
 
-  nightAuditRecord NightAuditRecord @relation(fields: [nightAuditRecordId], references: [id])
+  nightAuditRecord NightAuditRecord @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
 
   @@map("night_audit_anomalies")
 }
 
 model WorkOrder {
-  id        String   @id @default(uuid())
+  id        String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("WORK_ORDER", ...)
   entryId   String
   status    String   @default("OPEN")
   createdAt DateTime @default(now())
@@ -1730,7 +1730,7 @@ model WorkOrderToDoItem {
   updatedBy    String?
   cancelReason String?
 
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onUpdate: Cascade)
 
   @@map("work_order_todo_items")
 }
@@ -1747,7 +1747,7 @@ model WorkOrderConsumptionRecord {
   createdAt                    DateTime  @default(now())
   createdBy                    String
 
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onUpdate: Cascade)
 
   @@map("work_order_consumption_records")
 }
@@ -1761,13 +1761,13 @@ model WorkOrderAmendmentEvent {
   createdAt     DateTime @default(now())
   createdBy     String
 
-  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onUpdate: Cascade)
 
   @@map("work_order_amendment_events")
 }
 
 model DisputeRecord {
-  id            String        @id @default(uuid())
+  id            String        @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("DISPUTE", ...)
   entryId       String
   folioId       String
   status        DisputeStatus @default(OPEN)
@@ -1796,13 +1796,13 @@ model DisputeGateOverrideRecord {
   createdAt      DateTime @default(now())
   createdBy      String
 
-  dispute DisputeRecord @relation(fields: [disputeId], references: [id])
+  dispute DisputeRecord @relation(fields: [disputeId], references: [id], onUpdate: Cascade)
 
   @@map("dispute_gate_override_records")
 }
 
 model AmendmentEventRecord {
-  id               String        @id @default(uuid())
+  id               String        @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("AMENDMENT", ...)
   entryId          String
   segmentId        String
   amendmentPath    AmendmentPath
@@ -1841,7 +1841,7 @@ model FollowUpTaskRecord {
 }
 
 model LostAndFoundRecord {
-  id                 String                @id @default(uuid())
+  id                 String                @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("LOST_AND_FOUND", ...)
   entryId            String?
   guestProfileId     String?
   description        String
@@ -1856,7 +1856,7 @@ model LostAndFoundRecord {
 }
 
 model CommunicationRecord {
-  id                        String               @id @default(uuid())
+  id                        String               @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("COMMUNICATION", ...)
   entryId                   String?
   channel                   CommunicationChannel
   commType                  CommunicationType
@@ -1901,7 +1901,7 @@ model AiDraftRecord {
   createdAt          DateTime      @default(now())
   createdBy          String
 
-  communication CommunicationRecord   @relation(fields: [communicationId], references: [id])
+  communication CommunicationRecord   @relation(fields: [communicationId], references: [id], onUpdate: Cascade)
   decisions     HumanDecisionRecord[]
 
   @@index([communicationId])
@@ -1927,7 +1927,7 @@ model HumanDecisionRecord {
   createdBy       String
 
   aiDraft       AiDraftRecord?       @relation(fields: [aiDraftId], references: [id])
-  communication CommunicationRecord? @relation(fields: [communicationId], references: [id])
+  communication CommunicationRecord? @relation(fields: [communicationId], references: [id], onUpdate: Cascade)
 
   @@index([aiDraftId])
   @@index([communicationId])

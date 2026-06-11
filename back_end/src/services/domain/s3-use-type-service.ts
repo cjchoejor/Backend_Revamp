@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceFocGmApprovalAuthority } from "../../policies/15-foc/p38-foc-gm-approval-authority.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 export async function approveFocGm(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { note?: string }) {
   enforceFocGmApprovalAuthority({ actorLevel: actor.actorLevel });
@@ -47,11 +48,13 @@ export async function confirmCoordinator(
   const now = new Date();
   // Persist via WorkOrder amendment event for operational continuity.
   const wo = await prisma.workOrder.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
-  const workOrder =
-    wo ??
-    (await prisma.workOrder.create({
-      data: { entryId, createdBy: actor.actorId },
-    }));
+  let workOrder = wo;
+  if (!workOrder) {
+    const workOrderId = await allocateReadableId(prisma, "WORK_ORDER" as const);
+    workOrder = await prisma.workOrder.create({
+      data: { id: workOrderId, entryId, createdBy: actor.actorId },
+    });
+  }
   await prisma.workOrderAmendmentEvent.create({
     data: {
       workOrderId: workOrder.id,

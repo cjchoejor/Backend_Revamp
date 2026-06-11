@@ -896,3 +896,33 @@ export async function sendTestEmail(
     body,
   });
 }
+
+// ----- ID prefix admin (readable business IDs per entity) -----
+
+export type IdPrefixEntry = {
+  entity: string;
+  currentPrefix: string;
+  defaultPrefix: string;
+  isOverridden: boolean;
+};
+
+export async function listIdPrefixAssignments(session: Session) {
+  return apiRequest<{ assignments: IdPrefixEntry[] }>("/api/admin/id-prefixes", { session });
+}
+
+export async function setIdPrefix(session: Session, body: { entity: string; prefix: string; notes?: string }) {
+  return apiRequest<{ assignments: IdPrefixEntry[] }>("/api/admin/id-prefixes", {
+    method: "PUT",
+    session,
+    body,
+  });
+}
+
+export async function resetIdPrefix(session: Session, body: { entity: string }) {
+  return apiRequest<{ assignments: IdPrefixEntry[] }>("/api/admin/id-prefixes/reset", {
+    method: "POST",
+    session,
+    body,
+  });
+}
+

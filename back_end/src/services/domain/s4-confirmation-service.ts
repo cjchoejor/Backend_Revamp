@@ -152,7 +152,7 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     // A Reservation is unique per entry. On re-confirmation after a re-entry (e.g. room change),
     // one already exists — update its frozen terms in place rather than creating a duplicate.
     const existingReservation = await tx.reservation.findUnique({ where: { entryId } });
-    const reservationId = existingReservation?.id ?? (await allocateReadableId(tx, READABLE_ID_PREFIXES.RESERVATION, now));
+    const reservationId = existingReservation?.id ?? (await allocateReadableId(tx, "RESERVATION" as const, now));
     const reservationData = {
       segmentId,
       frozenRate: frozenRate || 0,

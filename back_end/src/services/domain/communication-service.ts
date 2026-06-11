@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { CommunicationChannel, CommunicationType, Stage } from "@prisma/client";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 export type OutboundQuotationCommunicationInput = {
   entryId: string;
@@ -19,8 +20,10 @@ export async function sendOutboundQuotationCommunication(
   tx: Prisma.TransactionClient,
   input: OutboundQuotationCommunicationInput,
 ) {
+  const commId = await allocateReadableId(tx, "COMMUNICATION" as const);
   return tx.communicationRecord.create({
     data: {
+      id: commId,
       entryId: input.entryId,
       channel: input.channel,
       commType: CommunicationType.QUOTATION,
@@ -52,8 +55,10 @@ export type DispatchConfirmationVoucherTxInput = {
  * SIG-S4 §6.5 — governed confirmation voucher outbound + **W22** ack window (skipped for OTA auto-fulfilment).
  */
 export async function dispatchConfirmationVoucherTx(tx: Prisma.TransactionClient, input: DispatchConfirmationVoucherTxInput) {
+  const commId = await allocateReadableId(tx, "COMMUNICATION" as const);
   const comm = await tx.communicationRecord.create({
     data: {
+      id: commId,
       entryId: input.entryId,
       channel: CommunicationChannel.EMAIL,
       commType: CommunicationType.CONFIRMATION_VOUCHER,
@@ -109,8 +114,10 @@ export type DispatchPreArrivalOutboundTxInput = {
  * SIG-S5 Policy 52 — governed pre-arrival outbound + **W22** ack window (skipped for OTA auto-fulfilment pattern).
  */
 export async function dispatchPreArrivalOutboundTx(tx: Prisma.TransactionClient, input: DispatchPreArrivalOutboundTxInput) {
+  const commId = await allocateReadableId(tx, "COMMUNICATION" as const);
   const comm = await tx.communicationRecord.create({
     data: {
+      id: commId,
       entryId: input.entryId,
       channel: CommunicationChannel.EMAIL,
       commType: CommunicationType.PRE_ARRIVAL_REMINDER,

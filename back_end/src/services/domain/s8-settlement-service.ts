@@ -51,7 +51,7 @@ export async function issueInvoiceAtS8(
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE, now);
+    const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
     return tx.invoice.create({
       data: {
         id: invoiceId,
@@ -195,8 +195,10 @@ export async function initiateSettlement(
     // Voucher settlement IN (mutually exclusive with generic GUEST_PAY below — same settleAmount must not post twice).
     if (method === "VOUCHER") {
       if (settleAmount > 0) {
+        const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
         await tx.paymentRecord.create({
           data: {
+            id: paymentId,
             folioId,
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,
@@ -206,8 +208,10 @@ export async function initiateSettlement(
       }
     } else if (billing === "GUEST_PAY") {
       if (settleAmount > 0) {
+        const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
         await tx.paymentRecord.create({
           data: {
+            id: paymentId,
             folioId,
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,

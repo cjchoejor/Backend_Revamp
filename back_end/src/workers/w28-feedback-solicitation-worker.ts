@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, Stage } from "@prisma/client";
 import { dispatchStageEmailBestEffort } from "../services/infrastructure/stage-email-helpers.js";
 import { renderFeedbackSolicitationEmail } from "../services/infrastructure/stage-email-templates.js";
+import { allocateReadableId } from "../lib/readable-id.js";
 
 /**
  * W28 — Feedback solicitation dispatch (dual-channel).
@@ -36,10 +37,12 @@ export async function runFeedbackSolicitationWorker(prisma: PrismaClient, input:
   await prisma.timerRecord.update({ where: { id: timer.id }, data: { status: "FIRED", firedAt: now } as any });
 
   await prisma.$transaction(async (tx) => {
+    const emailId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
+    const whatsappId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
     await tx.communicationRecord.createMany({
       data: [
-        { entryId: entry.id, channel: "EMAIL", commType: "FEEDBACK_SOLICITATION", stageContext: Stage.S9, payload: { entryId: entry.id }, createdBy: "SYSTEM" } as any,
-        { entryId: entry.id, channel: "WHATSAPP", commType: "FEEDBACK_SOLICITATION", stageContext: Stage.S9, payload: { entryId: entry.id }, createdBy: "SYSTEM" } as any,
+        { id: emailId, entryId: entry.id, channel: "EMAIL", commType: "FEEDBACK_SOLICITATION", stageContext: Stage.S9, payload: { entryId: entry.id }, createdBy: "SYSTEM" } as any,
+        { id: whatsappId, entryId: entry.id, channel: "WHATSAPP", commType: "FEEDBACK_SOLICITATION", stageContext: Stage.S9, payload: { entryId: entry.id }, createdBy: "SYSTEM" } as any,
       ],
     });
     await (tx as any).traceEvent.create({

@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { CommunicationChannel, CommunicationType, Stage } from "@prisma/client";
 import { ValidationError } from "../../lib/errors.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 export type VipArrivalCommencementTxInput = {
   entryId: string;
@@ -75,8 +76,10 @@ export async function issueVipArrivalNotificationAtCommencementTx(
   for (const role of roles) {
     const r = typeof role === "string" ? role : String(role);
     const ackAt = new Date(now.getTime() + ackSeconds * 1000);
+    const commId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
     const comm = await tx.communicationRecord.create({
       data: {
+        id: commId,
         entryId: input.entryId,
         channel: CommunicationChannel.EMAIL,
         commType: CommunicationType.VIP_ARRIVAL_NOTIFICATION,

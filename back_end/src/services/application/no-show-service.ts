@@ -9,6 +9,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceNoShowDeterminationPrereqs, enforceNoShowDeterminationNotAlreadyRecorded } from "../../policies/22-no-show/p56-no-show-determination-prereqs.js";
 import { enforceEntryAtS5ForNoShowActions } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 import {
   capCancellationPenaltyAtAdvancePayment,
   sumAdvancePaymentInTotalForFolio,
@@ -152,9 +153,12 @@ export async function determineNoShow(
 
   const net = advanceTotal - penalty;
 
+  const noShowId = await allocateReadableId(prisma, "NO_SHOW" as const);
+
   await prisma.$transaction([
     prisma.noShowDeterminationRecord.create({
       data: {
+        id: noShowId,
         entryId,
         determinationPath: "SUB_PATH_1",
         fomActorId,
@@ -191,8 +195,10 @@ export async function determineNoShow(
 
   if (net > 0) {
     await prisma.$transaction(async (tx) => {
+      const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
       await tx.paymentRecord.create({
         data: {
+          id: paymentId,
           folioId: folio.id,
           amount: net,
           paymentDirection: "OUT",

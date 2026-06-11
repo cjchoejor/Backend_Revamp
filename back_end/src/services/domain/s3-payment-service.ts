@@ -6,6 +6,7 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceCreditExtensionConstraints } from "../../policies/18-credit-extension-ceiling/p42-credit-ceiling-mandatory-set.js";
 import { enforceAdvancePaymentReconciliationRequiresPayment } from "../../policies/12-advance-payment/p27-advance-payment-reconciliation.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -103,9 +104,12 @@ export async function recordCreditExtensionApproval(
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
+    // Pre-allocate a readable ID; if upsert hits the update path it's discarded harmlessly.
+    const crId = await allocateReadableId(tx, "CREDIT_EXTENSION" as const, now);
     const rec = await tx.creditExtensionCeilingRecord.upsert({
       where: { folioId: input.folioId },
       create: {
+        id: crId,
         folioId: input.folioId,
         entryId: input.entryId,
         ceilingAmount: input.ceilingAmount,

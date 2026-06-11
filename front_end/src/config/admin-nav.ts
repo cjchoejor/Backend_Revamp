@@ -62,6 +62,7 @@ export const adminNavGroups: AdminNavGroup[] = [
       { title: "Departments", href: "/admin/departments", icon: ClipboardList, description: "Org registry (codes, active status)" },
       { title: "Roles & sessions", href: "/admin/roles", icon: KeyRound, description: "Roles, permissions, session config" },
       { title: "Staff registry", href: "/admin/staff", icon: Users, description: "People, roles, session timeouts" },
+      { title: "ID prefixes", href: "/admin/id-prefixes", icon: KeyRound, description: "Edit the PREFIX in PREFIX-YYYYMMDD-NNNN business IDs" },
     ],
   },
   {

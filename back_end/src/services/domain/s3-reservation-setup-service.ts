@@ -30,7 +30,7 @@ export async function ensureProvisionalFolioAndBillingModel(
 
     let folio = entry.folio;
     if (!folio) {
-      const folioId = await allocateReadableId(tx, READABLE_ID_PREFIXES.FOLIO);
+      const folioId = await allocateReadableId(tx, "FOLIO" as const);
       folio = await tx.folio.create({
         data: {
           id: folioId,
@@ -50,7 +50,7 @@ export async function ensureProvisionalFolioAndBillingModel(
       data: { folioId: folio.id, segmentId, fromModel: null, toModel: input.billingModel.trim(), createdBy: actorId },
     });
 
-    const invoiceId = await allocateReadableId(tx, READABLE_ID_PREFIXES.INVOICE);
+    const invoiceId = await allocateReadableId(tx, "INVOICE" as const);
     // Create a proforma invoice as S3 exit evidence starter.
     await tx.invoice.create({
       data: {

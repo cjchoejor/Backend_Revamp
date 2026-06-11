@@ -32,7 +32,7 @@ export async function createInquiry(
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    const id = await allocateReadableId(tx, READABLE_ID_PREFIXES.INQUIRY, now);
+    const id = await allocateReadableId(tx, "INQUIRY" as const, now);
     const created = await tx.inquiry.create({
       data: {
         id,
