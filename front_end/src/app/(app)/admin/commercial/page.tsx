@@ -9,7 +9,7 @@ import { useSession } from "@/hooks/use-session";
 export default function AdminCommercialPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [selectedKey, setSelectedKey] = useState("pricing.ratePlans");
+  const [selectedKey, setSelectedKey] = useState("discount.fom.maxPercentage");
 
   const keysQuery = useQuery({
     queryKey: ["admin", "commercial-keys"],
@@ -35,9 +35,15 @@ export default function AdminCommercialPage() {
     <div className="space-y-6 pb-16">
       <div>
         <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">Commercial configuration</h1>
+        <h1 className="admin-display text-3xl">Commercial thresholds</h1>
         <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Rate plans, credit ceilings, cancellation tiers, and authority thresholds. Edit fields below; use Advanced JSON if you need to paste a value.
+          Discount ceilings, credit ceilings, FOC, overbooking, confirmation authority, speculative
+          hold thresholds, and write-off authority — the nine commercial limit knobs per ACIG §6.2.11.
+          Rate plans live under{" "}
+          <a href="/admin/rate-plans" className="text-primary underline">
+            Rate plans
+          </a>
+          .
         </p>
       </div>
 

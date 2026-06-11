@@ -4,18 +4,21 @@ import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { isSystemSeedSetBy, supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 
 /** Curated commercial configuration keys (ACIG Domain 03). */
+/**
+ * CommercialThresholdService-owned keys per ACIG §6.2.11. `cancellation.policyTiers` is owned by
+ * CancellationPolicyService — surface it on /admin/cancellation-policies or the generic
+ * Configuration page, not here. `pricing.ratePlans` is legacy (replaced by rate_plan_registry).
+ */
 export const COMMERCIAL_CONFIG_KEYS = [
-  // `pricing.ratePlans` removed (legacy) — rate plans live in the rate_plan_registry table per
-  // ACIG §6.1058 and are edited via the Admin → Rate plans page.
-  "creditCeiling.clientTier.thresholds",
-  "creditCeiling.proximityThresholds",
-  "writeOff.authority.thresholds",
-  "overbooking.maxAllowedRooms",
-  "confirmation.authorityThresholds",
-  "cancellation.policyTiers",
-  "foc.configuration",
   "discount.fom.maxPercentage",
   "discount.gm.maxPercentage",
+  "creditCeiling.clientTier.thresholds",
+  "creditCeiling.proximityThresholds",
+  "foc.configuration",
+  "overbooking.maxAllowedRooms",
+  "confirmation.authorityThresholds",
+  "speculativeHold.placementThresholds",
+  "writeOff.authority.thresholds",
 ] as const;
 
 export type CommercialConfigKey = (typeof COMMERCIAL_CONFIG_KEYS)[number];

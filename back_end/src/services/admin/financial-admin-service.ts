@@ -14,10 +14,12 @@ export const FINANCIAL_CONFIG_KEYS = [
   "invoice.templates",
   "invoice.templates.final",
   "invoice.templates.proforma",
+  "proformaInvoice.templates",
   "damage.rateList",
   "dispute.sla",
   "fomOverride.frequency",
-  "writeOff.authority.thresholds",
+  // NOTE: writeOff.authority.thresholds was moved off this list — it's owned by
+  // CommercialThresholdService per config-key-registry.ts and surfaces on /admin/commercial.
 ] as const;
 
 export type FinancialConfigKey = (typeof FINANCIAL_CONFIG_KEYS)[number];

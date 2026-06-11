@@ -12,6 +12,8 @@ export const OPERATIONAL_CONFIG_KEYS = [
   "roomAssignment.priorityRules",
   "housekeeping.sla.windowMinutes",
   "inspection.postCheckout.windowHours",
+  "room.readiness.slaWindow",
+  "noShow.cutoffWindowMinutes",
 ] as const;
 
 export type OperationalConfigKey = (typeof OPERATIONAL_CONFIG_KEYS)[number];

@@ -1,0 +1,1767 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="codex">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Console — Implementation Reference · LEGPHEL PMS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..900,0..100,0..1&family=Newsreader:ital,opsz,wght@0,6..72,300..800;1,6..72,300..700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0E1116;
+  --bg-elev: #141921;
+  --bg-side: #0A0D12;
+  --bg-deep: #060810;
+  --ink: #E8E2D2;
+  --ink-soft: #B6AE9A;
+  --ink-faint: #6E6857;
+  --ink-faintest: #3D3A30;
+  --rule: rgba(232, 226, 210, 0.10);
+  --rule-strong: rgba(232, 226, 210, 0.22);
+  --brass: #C9A04C;
+  --brass-deep: #8E6F2C;
+  --brass-soft: rgba(201, 160, 76, 0.40);
+  --brass-glow: rgba(201, 160, 76, 0.13);
+  --brass-glow-strong: rgba(201, 160, 76, 0.25);
+  --terracotta: #C66B3D;
+  --terracotta-glow: rgba(198, 107, 61, 0.18);
+  --teal: #5DA39E;
+  --teal-glow: rgba(93, 163, 158, 0.18);
+  --slate: #6B7C99;
+  --crimson: #B14545;
+  --crimson-glow: rgba(177, 69, 69, 0.18);
+
+  --f-display: 'Fraunces', 'Times New Roman', serif;
+  --f-body: 'Newsreader', Georgia, serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 64px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 16px;
+  line-height: 1.65;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background-image:
+    radial-gradient(ellipse at 20% 0%, rgba(201, 160, 76, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 100%, rgba(93, 163, 158, 0.03) 0%, transparent 60%);
+}
+
+/* ═══════════════════ Top Nav ═══════════════════ */
+.topnav {
+  position: sticky; top: 0; z-index: 100;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule-strong);
+}
+.topnav-inner {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 12px 32px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+.brand {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: var(--brass);
+  text-transform: uppercase;
+  border-left: 2px solid var(--brass);
+  padding-left: 10px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+.brand small {
+  display: block;
+  color: var(--ink-faint);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  font-weight: 400;
+  margin-top: 2px;
+}
+.nav-links {
+  display: flex;
+  gap: 0;
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  flex-wrap: wrap;
+}
+.nav-links a {
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding: 6px 11px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+.nav-links a:hover { color: var(--brass); }
+.nav-links a.active { color: var(--brass); border-bottom-color: var(--brass); }
+
+.progress {
+  position: fixed; top: 0; left: 0;
+  height: 2px; background: var(--brass);
+  width: 0%; z-index: 200;
+  transition: width 0.05s ease-out;
+}
+
+/* ═══════════════════ Page Layout ═══════════════════ */
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+section.frame {
+  padding: 80px 0 60px 0;
+  border-top: 1px solid var(--rule);
+  position: relative;
+  scroll-margin-top: 64px;
+}
+section.frame:first-of-type { border-top: 0; padding-top: 60px; }
+
+.frame-num {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.frame-num::before {
+  content: "";
+  display: inline-block;
+  width: 28px;
+  height: 1px;
+  background: var(--brass);
+}
+
+.frame-title {
+  font-family: var(--f-display);
+  font-weight: 400;
+  font-size: 44px;
+  line-height: 1.05;
+  letter-spacing: -0.022em;
+  color: var(--ink);
+  margin: 0 0 18px 0;
+  font-variation-settings: "opsz" 96, "SOFT" 30;
+  max-width: 980px;
+}
+.frame-title em {
+  font-style: italic;
+  color: var(--brass);
+  font-weight: 300;
+  font-variation-settings: "opsz" 96, "SOFT" 100;
+}
+.frame-lede {
+  font-family: var(--f-body);
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  max-width: 760px;
+  margin: 0 0 48px 0;
+  font-weight: 400;
+}
+.frame-lede strong { color: var(--ink); font-weight: 600; }
+
+/* Section eyebrow / kicker */
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brass);
+  margin-bottom: 16px;
+}
+
+/* ═══════════════════ Hero (Frame 0) ═══════════════════ */
+.hero {
+  padding: 100px 0 80px 0;
+  position: relative;
+}
+.hero-eyebrow {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin-bottom: 24px;
+}
+.hero-title {
+  font-family: var(--f-display);
+  font-weight: 300;
+  font-size: 92px;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  color: var(--ink);
+  margin: 0 0 28px 0;
+  font-variation-settings: "opsz" 144, "SOFT" 40;
+  max-width: 1100px;
+}
+.hero-title em {
+  font-style: italic;
+  color: var(--brass);
+  font-variation-settings: "opsz" 144, "SOFT" 100;
+  font-weight: 200;
+}
+.hero-sub {
+  font-family: var(--f-body);
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-width: 780px;
+  margin: 0 0 56px 0;
+  font-weight: 400;
+}
+.hero-meta {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  border-top: 1px solid var(--rule-strong);
+  border-bottom: 1px solid var(--rule-strong);
+  margin-top: 40px;
+}
+.hero-meta > div {
+  padding: 22px 24px;
+  border-right: 1px solid var(--rule);
+}
+.hero-meta > div:last-child { border-right: 0; }
+.hero-meta dt {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.hero-meta dd {
+  font-family: var(--f-display);
+  font-size: 28px;
+  font-weight: 500;
+  color: var(--brass);
+  margin: 0;
+  line-height: 1;
+  font-variation-settings: "opsz" 60;
+}
+.hero-meta dd small {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  display: block;
+  margin-top: 4px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+
+/* ═══════════════════ Generic Components ═══════════════════ */
+.callout {
+  border-left: 3px solid var(--brass);
+  padding: 6px 0 6px 22px;
+  margin: 24px 0;
+  font-style: italic;
+  color: var(--ink);
+  max-width: 760px;
+  font-size: 18px;
+  line-height: 1.55;
+}
+.callout-mono {
+  border-left: 3px solid var(--terracotta);
+  padding: 14px 0 14px 22px;
+  margin: 24px 0;
+  font-family: var(--f-mono);
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--bg-elev);
+  border-radius: 0 2px 2px 0;
+}
+
+.tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 2px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+  border: 1px solid currentColor;
+  vertical-align: middle;
+}
+.tag-brass { color: var(--brass); background: var(--brass-glow); }
+.tag-teal { color: var(--teal); background: var(--teal-glow); }
+.tag-terra { color: var(--terracotta); background: var(--terracotta-glow); }
+.tag-crimson { color: var(--crimson); background: var(--crimson-glow); }
+.tag-faint { color: var(--ink-faint); border-color: var(--ink-faintest); }
+
+.k { font-family: var(--f-mono); font-size: 0.86em; color: var(--brass); letter-spacing: 0.02em; }
+.k-terra { color: var(--terracotta); }
+
+/* ═══════════════════ Frame 1 — Boundary Diagram ═══════════════════ */
+.boundary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin: 32px 0 0 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.boundary-svg-wrap {
+  padding: 36px 32px;
+  border-bottom: 1px solid var(--rule);
+}
+.boundary-svg { width: 100%; height: auto; max-width: 1200px; margin: 0 auto; display: block; }
+.boundary-rules {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+}
+.boundary-rule {
+  padding: 26px 28px;
+  border-right: 1px solid var(--rule);
+}
+.boundary-rule:last-child { border-right: 0; }
+.boundary-rule h4 {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin: 0 0 12px 0;
+  font-weight: 500;
+}
+.boundary-rule p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.boundary-rule p strong { color: var(--ink); font-weight: 600; }
+
+/* ═══════════════════ Frame 2 — Authority ═══════════════════ */
+.authority {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 32px;
+  margin-top: 24px;
+}
+.auth-stack {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  padding: 28px 32px;
+  border-radius: 2px;
+}
+.auth-row {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: 18px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.auth-row:last-child { border-bottom: 0; }
+.auth-level {
+  font-family: var(--f-display);
+  font-size: 36px;
+  font-weight: 500;
+  color: var(--ink-faint);
+  line-height: 1;
+  text-align: center;
+  font-variation-settings: "opsz" 60;
+}
+.auth-row.l4 .auth-level { color: var(--brass); }
+.auth-name {
+  font-family: var(--f-display);
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.auth-name small {
+  display: block;
+  font-family: var(--f-body);
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+  font-weight: 400;
+}
+.auth-write {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 2px;
+  border: 1px solid;
+}
+.auth-row.l4 .auth-write { color: var(--brass); border-color: var(--brass); background: var(--brass-glow); }
+.auth-row:not(.l4) .auth-write { color: var(--ink-faint); border-color: var(--ink-faintest); }
+
+.auth-notes {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  padding: 28px;
+  border-radius: 2px;
+}
+.auth-notes h4 {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin: 0 0 16px 0;
+}
+.auth-notes ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.auth-notes li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.auth-notes li:last-child { border-bottom: 0; }
+.auth-notes li strong { color: var(--ink); font-weight: 600; display: block; margin-bottom: 2px; font-family: var(--f-display); font-size: 15px; }
+
+/* ═══════════════════ Frame 3 — Service Domains ═══════════════════ */
+.domain-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-top: 32px;
+}
+@media (max-width: 1100px) { .domain-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 700px) { .domain-grid { grid-template-columns: 1fr; } }
+
+.domain {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 22px 22px 20px 22px;
+  position: relative;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+.domain:hover {
+  border-color: var(--brass-soft);
+  transform: translateY(-2px);
+}
+.domain::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 32px; height: 2px;
+  background: var(--brass);
+}
+.domain-num {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  letter-spacing: 0.14em;
+  margin-bottom: 6px;
+}
+.domain-name {
+  font-family: var(--f-display);
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 0 10px 0;
+  font-variation-settings: "opsz" 36;
+  line-height: 1.2;
+}
+.domain-purpose {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  margin: 0 0 14px 0;
+}
+.domain-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.svc {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--brass);
+  background: var(--brass-glow);
+  border: 1px solid var(--brass-soft);
+  padding: 2px 8px;
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+}
+
+/* ═══════════════════ Frame 4 — Stage Consumption Matrix ═══════════════════ */
+.matrix-wrap {
+  margin-top: 32px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  padding: 24px 24px 28px 24px;
+  overflow-x: auto;
+}
+.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 920px;
+}
+.matrix th {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.10em;
+  color: var(--brass);
+  text-transform: uppercase;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--rule-strong);
+  text-align: center;
+  vertical-align: bottom;
+}
+.matrix th:first-child {
+  text-align: left;
+  width: 28%;
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+}
+.matrix th .stage-name {
+  display: block;
+  font-size: 9px;
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+  font-weight: 400;
+  margin-top: 3px;
+  text-transform: none;
+}
+.matrix td {
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--rule);
+  text-align: center;
+  vertical-align: middle;
+}
+.matrix td:first-child {
+  text-align: left;
+  font-family: var(--f-display);
+  font-size: 14.5px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.matrix td:first-child small {
+  display: block;
+  font-family: var(--f-body);
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 400;
+  margin-top: 1px;
+  line-height: 1.3;
+}
+.matrix tr:hover td { background: var(--brass-glow); }
+.dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--brass);
+  box-shadow: 0 0 0 2px var(--brass-glow);
+}
+.dot-strong { background: var(--terracotta); box-shadow: 0 0 0 2px var(--terracotta-glow); }
+.dot-faint { background: transparent; border: 1px solid var(--ink-faintest); width: 8px; height: 8px; }
+.matrix-legend {
+  display: flex;
+  gap: 22px;
+  margin-top: 18px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  align-items: center;
+}
+.matrix-legend > span { display: inline-flex; align-items: center; gap: 8px; }
+
+/* ═══════════════════ Frame 5 — Lifecycle Timeline ═══════════════════ */
+.lifecycle-svg-wrap {
+  margin-top: 32px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  padding: 36px 36px 28px 36px;
+}
+.lifecycle-svg { width: 100%; height: auto; display: block; }
+.lifecycle-rules {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  margin-top: 24px;
+  border-top: 1px solid var(--rule);
+  padding-top: 22px;
+}
+.lifecycle-rules > div {
+  padding: 0 22px;
+  border-right: 1px solid var(--rule);
+}
+.lifecycle-rules > div:first-child { padding-left: 0; }
+.lifecycle-rules > div:last-child { border-right: 0; padding-right: 0; }
+.lifecycle-rules h5 {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin: 0 0 8px 0;
+}
+.lifecycle-rules p { margin: 0; font-size: 13.5px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ═══════════════════ Frame 6 — Mode FSM ═══════════════════ */
+.modes-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 32px;
+  margin-top: 32px;
+}
+.modes-fsm {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  padding: 32px;
+  border-radius: 2px;
+}
+.modes-fsm svg { width: 100%; height: auto; }
+.modes-seeds {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  padding: 28px;
+  border-radius: 2px;
+}
+.modes-seeds h4 {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin: 0 0 14px 0;
+}
+.modes-seeds ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: seed;
+}
+.modes-seeds li {
+  counter-increment: seed;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--f-display);
+  font-size: 14.5px;
+  color: var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.modes-seeds li::before {
+  content: counter(seed, decimal-leading-zero);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--brass);
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.modes-seeds li:last-child { border-bottom: 0; }
+
+/* ═══════════════════ Frame 7 — Readiness Gate ═══════════════════ */
+.readiness-svg-wrap {
+  margin-top: 32px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  padding: 32px 28px;
+  overflow-x: auto;
+}
+.readiness-svg { width: 100%; min-width: 880px; height: auto; display: block; }
+
+.readiness-rules {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
+  margin-top: 24px;
+}
+.readiness-rules > div {
+  padding: 22px 26px;
+  border-right: 1px solid var(--rule);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--rule);
+}
+.readiness-rules > div:nth-child(2n) { border-right: 0; }
+.readiness-rules h5 {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--brass);
+  text-transform: uppercase;
+  margin: 0 0 8px 0;
+}
+.readiness-rules p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+/* ═══════════════════ Frame 8 — Policies A1–A7 ═══════════════════ */
+.policies-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-top: 32px;
+}
+@media (max-width: 880px) { .policies-grid { grid-template-columns: 1fr; } }
+.policy {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--brass);
+  padding: 22px 24px;
+  border-radius: 0 2px 2px 0;
+}
+.policy-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.policy-id {
+  font-family: var(--f-display);
+  font-size: 32px;
+  font-weight: 500;
+  color: var(--brass);
+  line-height: 1;
+  font-variation-settings: "opsz" 60;
+}
+.policy-name {
+  font-family: var(--f-display);
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.25;
+}
+.policy-desc {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin: 0 0 12px 0;
+}
+.policy-layer {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--terracotta);
+  text-transform: uppercase;
+  border-top: 1px solid var(--rule);
+  padding-top: 10px;
+}
+.policy-layer span { color: var(--ink-soft); }
+
+/* ═══════════════════ Frame 9 — Engines ═══════════════════ */
+.engines-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  margin-top: 32px;
+}
+.engine {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  padding: 32px;
+}
+.engine-name {
+  font-family: var(--f-display);
+  font-weight: 500;
+  font-size: 26px;
+  color: var(--ink);
+  margin: 0 0 4px 0;
+  font-variation-settings: "opsz" 48;
+}
+.engine-mono {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--brass);
+  margin-bottom: 18px;
+  letter-spacing: 0.02em;
+}
+.engine-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--rule);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.engine-row:first-of-type { border-top: 1px solid var(--rule-strong); margin-top: 6px; }
+.engine-row dt {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-top: 1px;
+}
+.engine-row dd {
+  margin: 0;
+  color: var(--ink-soft);
+}
+.engine-row dd strong { color: var(--ink); font-weight: 600; }
+
+/* ═══════════════════ Frame 10 — Findings Dashboard ═══════════════════ */
+.findings-dashboard {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 32px 0;
+}
+.finding-bucket {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  padding: 26px 28px;
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+}
+.finding-bucket::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--brass);
+}
+.finding-count {
+  font-family: var(--f-display);
+  font-size: 76px;
+  font-weight: 300;
+  color: var(--brass);
+  line-height: 1;
+  font-variation-settings: "opsz" 144, "SOFT" 30;
+  letter-spacing: -0.04em;
+}
+.finding-target {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  margin: 6px 0 12px 0;
+}
+.finding-desc {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin: 0;
+}
+.findings-meta {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+}
+.findings-meta > div {
+  padding: 18px 22px;
+  border-right: 1px solid var(--rule);
+}
+.findings-meta > div:last-child { border-right: 0; }
+.findings-meta dt {
+  font-family: var(--f-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.findings-meta dd {
+  font-family: var(--f-display);
+  font-size: 17px;
+  color: var(--ink);
+  margin: 0;
+  font-weight: 500;
+}
+.findings-meta dd .pill { font-size: 10px; padding: 2px 9px; }
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 2px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 500;
+  border: 1px solid;
+}
+.pill-pending { color: var(--brass); background: var(--brass-glow); border-color: var(--brass); }
+
+/* ═══════════════════ (legacy chain styles — unused) ═══════════════════ */
+.chain-svg-wrap {
+  margin-top: 32px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule-strong);
+  padding: 36px 28px;
+  border-radius: 2px;
+  overflow-x: auto;
+}
+.chain-svg { width: 100%; min-width: 980px; height: auto; display: block; }
+
+/* Footer */
+.footer {
+  border-top: 1px solid var(--rule-strong);
+  padding: 32px 0 60px 0;
+  margin-top: 60px;
+  color: var(--ink-faint);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  display: flex;
+  justify-content: space-between;
+}
+
+@media (max-width: 880px) {
+  .hero-title { font-size: 56px; }
+  .hero-meta { grid-template-columns: repeat(2, 1fr); }
+  .hero-meta > div:nth-child(2) { border-right: 0; }
+  .frame-title { font-size: 32px; }
+  .authority, .modes-grid, .engines-grid { grid-template-columns: 1fr; }
+  .boundary-rules { grid-template-columns: 1fr; }
+  .boundary-rule { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .findings-dashboard { grid-template-columns: 1fr; }
+  .findings-meta { grid-template-columns: repeat(2, 1fr); }
+  .lifecycle-rules { grid-template-columns: 1fr; }
+  .lifecycle-rules > div { border-right: 0; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+  .nav-links { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+
+<header class="topnav">
+  <div class="topnav-inner">
+    <div class="brand">Admin Console<small>LEGPHEL PMS · IMPLEMENTATION REFERENCE</small></div>
+    <nav class="nav-links" id="navLinks">
+      <a href="#hero">Overview</a>
+      <a href="#boundary">Boundary</a>
+      <a href="#authority">Authority</a>
+      <a href="#domains">Domains</a>
+      <a href="#matrix">Stage Matrix</a>
+      <a href="#lifecycle">Lifecycle</a>
+      <a href="#modes">Modes</a>
+      <a href="#readiness">Readiness</a>
+      <a href="#policies">Policies</a>
+      <a href="#engines">Engines</a>
+    </nav>
+  </div>
+</header>
+
+<div class="page">
+
+<!-- ═══════════════════ HERO ═══════════════════ -->
+<section id="hero" class="hero frame">
+  <div class="hero-eyebrow">Admin Console · Implementation Reference</div>
+  <h1 class="hero-title">The Admin Console <em>configures.</em><br>It does not <em>operate.</em></h1>
+  <p class="hero-sub">A single off-axis governance surface that owns every parameter the nine operational stages read at runtime — and writes none of the records they produce. This is the visual reference for what gets configured, by whom, where each value flows, and how it stays correct.</p>
+
+  <dl class="hero-meta">
+    <div><dt>Domains</dt><dd>9<small>configuration domains</small></dd></div>
+    <div><dt>Services</dt><dd>26<small>configuration services</small></dd></div>
+    <div><dt>Surfaces</dt><dd>13<small>admin surface groups</small></dd></div>
+    <div><dt>Policies</dt><dd>7<small>structural policies enforced</small></dd></div>
+  </dl>
+</section>
+
+<!-- ═══════════════════ FRAME 1 — BOUNDARY ═══════════════════ -->
+<section id="boundary" class="frame">
+  <div class="frame-num">Frame 01 · Surface Boundary</div>
+  <h2 class="frame-title">One direction of motion. <em>Always.</em></h2>
+  <p class="frame-lede">The Admin Console writes to configuration tables. The nine operational stages read from those same tables at runtime. <strong>No admin surface ever creates, updates, or closes an operational record.</strong> Cross-direction writes are structural defects, not business decisions.</p>
+
+  <div class="boundary">
+    <div class="boundary-svg-wrap">
+      <svg class="boundary-svg" viewBox="0 0 1200 380" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowBrass" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#C9A04C"/>
+          </marker>
+          <marker id="arrowTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#5DA39E"/>
+          </marker>
+        </defs>
+
+        <!-- Admin Console box -->
+        <rect x="40" y="80" width="280" height="220" rx="2" fill="#141921" stroke="#C9A04C" stroke-width="1.5"/>
+        <text x="180" y="55" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="3" fill="#C9A04C">L4 ACTOR</text>
+        <text x="180" y="125" text-anchor="middle" font-family="Fraunces" font-size="22" font-weight="500" fill="#E8E2D2">Admin Console</text>
+        <text x="180" y="148" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="14" fill="#B6AE9A">Configuration Authority</text>
+        <line x1="80" y1="170" x2="280" y2="170" stroke="#C9A04C" stroke-opacity="0.25" stroke-width="1"/>
+        <text x="180" y="195" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">26 services</text>
+        <text x="180" y="215" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">13 surfaces</text>
+        <text x="180" y="235" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">~120 keys</text>
+        <text x="180" y="265" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" fill="#C66B3D">WRITES ONLY</text>
+
+        <!-- Database box (center) -->
+        <rect x="440" y="100" width="320" height="180" rx="2" fill="#0A0D12" stroke="#6E6857" stroke-width="1"/>
+        <text x="600" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="3" fill="#6E6857">SHARED STATE</text>
+        <text x="600" y="135" text-anchor="middle" font-family="Fraunces" font-size="18" font-weight="500" fill="#E8E2D2">Configuration Tables</text>
+        <text x="600" y="165" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">ConfigurationEntry</text>
+        <text x="600" y="183" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">PolicyRegistry</text>
+        <text x="600" y="201" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">RoomTypeRegistry · …</text>
+        <text x="600" y="234" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="12" fill="#6E6857">temporal: effectiveFrom / effectiveTo</text>
+
+        <!-- Operational stages box -->
+        <rect x="880" y="80" width="280" height="220" rx="2" fill="#141921" stroke="#5DA39E" stroke-width="1.5"/>
+        <text x="1020" y="55" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="3" fill="#5DA39E">L1–L3 ACTORS</text>
+        <text x="1020" y="125" text-anchor="middle" font-family="Fraunces" font-size="22" font-weight="500" fill="#E8E2D2">Operational Stages</text>
+        <text x="1020" y="148" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="14" fill="#B6AE9A">S1 → S2 → … → S9</text>
+        <line x1="920" y1="170" x2="1120" y2="170" stroke="#5DA39E" stroke-opacity="0.25" stroke-width="1"/>
+        <text x="1020" y="195" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">Inquiry · Quotation</text>
+        <text x="1020" y="215" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">Hold · Confirm · Stay</text>
+        <text x="1020" y="235" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B6AE9A">CheckOut · PostStay</text>
+        <text x="1020" y="265" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" fill="#5DA39E">READS ONLY</text>
+
+        <!-- Arrow: Admin → DB -->
+        <line x1="320" y1="190" x2="430" y2="190" stroke="#C9A04C" stroke-width="2" marker-end="url(#arrowBrass)"/>
+        <text x="375" y="180" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" fill="#C9A04C">WRITE</text>
+
+        <!-- Arrow: DB → Stages -->
+        <line x1="770" y1="190" x2="870" y2="190" stroke="#5DA39E" stroke-width="2" marker-end="url(#arrowTeal)"/>
+        <text x="820" y="180" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" fill="#5DA39E">READ</text>
+
+        <!-- Forbidden arrow (operational write back) -->
+        <path d="M 870 240 Q 600 320 330 240" stroke="#B14545" stroke-width="1" stroke-dasharray="4 4" fill="none"/>
+        <line x1="595" y1="320" x2="605" y2="310" stroke="#B14545" stroke-width="2"/>
+        <line x1="595" y1="310" x2="605" y2="320" stroke="#B14545" stroke-width="2"/>
+        <text x="600" y="345" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="3" fill="#B14545">FORBIDDEN: OPERATIONAL → ADMIN</text>
+      </svg>
+    </div>
+
+    <div class="boundary-rules">
+      <div class="boundary-rule">
+        <h4>What Admin Owns</h4>
+        <p><strong>Configuration tables only.</strong> Hotel profile, departments, staff registry, roles, room types, rate plans, seasons, packages, thresholds, modes, policies, templates, schedules, OTA &amp; AI configuration.</p>
+      </div>
+      <div class="boundary-rule">
+        <h4>What Admin Never Touches</h4>
+        <p><strong>Every operational record.</strong> Inquiry, Quotation, Hold, Reservation, Folio, Invoice, WorkOrder, HandoffRecord, NightAuditRecord, NoShowDeterminationRecord — admin code cannot create, update, or close any of them.</p>
+      </div>
+      <div class="boundary-rule">
+        <h4>The One Exception</h4>
+        <p><strong><span class="k">AgentProfile.commissionRate</span></strong> is the lone admin write into an operational record — narrowly scoped to <span class="k">PostStayAndGovernanceService</span>. Everything else stays inside the boundary.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 2 — AUTHORITY ═══════════════════ -->
+<section id="authority" class="frame">
+  <div class="frame-num">Frame 02 · Authority Model</div>
+  <h2 class="frame-title">Every admin write is locked at <em>L4.</em></h2>
+  <p class="frame-lede">The L4 designation is not a UI access list. It is woven through every admin service, middleware, and route. <strong>L1 Front Desk, L2 FOM, and L3 GM-in-operations</strong> cannot reach any admin write path — the rejection returns <span class="k">AuthorizationError 403</span>, not a generic 401, so the caller's authority level is recorded.</p>
+
+  <div class="authority">
+    <div class="auth-stack">
+      <div class="auth-row">
+        <div class="auth-level">L1</div>
+        <div class="auth-name">Front Desk · Reservations<small>Operates S1–S6 inquiry &amp; check-in surfaces</small></div>
+        <div class="auth-write">No Admin Write</div>
+      </div>
+      <div class="auth-row">
+        <div class="auth-level">L2</div>
+        <div class="auth-name">FOM (Front Office Manager)<small>Approves overrides, escalations, FOC, override-margin</small></div>
+        <div class="auth-write">No Admin Write</div>
+      </div>
+      <div class="auth-row">
+        <div class="auth-level">L3</div>
+        <div class="auth-name">GM in Operational Workflow<small>Operating role inside S1–S9, not in Admin Console</small></div>
+        <div class="auth-write">No Admin Write</div>
+      </div>
+      <div class="auth-row l4">
+        <div class="auth-level">L4</div>
+        <div class="auth-name">GM / Designated Administrator<small>The Admin Console actor — every write, every save, every activation</small></div>
+        <div class="auth-write">All Writes</div>
+      </div>
+    </div>
+
+    <div class="auth-notes">
+      <h4>Authority Rules</h4>
+      <ul>
+        <li><strong>Custom mode activation</strong>L4 GM specifically — not any L4. A custom mode cannot be activated by anyone else, even an actor otherwise authorised to save mode configurations.</li>
+        <li><strong>Audit visibility reads</strong>A subset of read paths extends to actors below L4 via role-permission mapping — own session events, scoped audit logs, readiness summary.</li>
+        <li><strong>Individual attribution</strong>Every admin action carries the <span class="k">actorId</span> of the specific administrator. There is no shared admin account.</li>
+        <li><strong>Per-role session config</strong>Idle-lock timeout, hard-logout timeout, and manual-lock availability are configured <em>per role</em> — every defined role has its own <span class="k">RoleSessionConfig</span>. No shared timeouts.</li>
+        <li><strong>Single-tenant namespace</strong>One deployment, one configuration namespace. No <span class="k">tenantId</span> column anywhere in admin schema.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 3 — DOMAINS ═══════════════════ -->
+<section id="domains" class="frame">
+  <div class="frame-num">Frame 03 · Configuration Domains</div>
+  <h2 class="frame-title">26 services across <em>9 configuration domains.</em></h2>
+  <p class="frame-lede">Every parameter the operational stages read at runtime is owned by exactly one admin service. The 26 services group into 9 domains by purpose. Below: what each domain configures and why operational code cares.</p>
+
+  <div class="domain-grid">
+    <div class="domain">
+      <div class="domain-num">DOMAIN 01</div>
+      <h3 class="domain-name">Identity &amp; Org</h3>
+      <p class="domain-purpose">The hotel itself, its departments, its people, and the role-permission map that gates every operational session.</p>
+      <div class="domain-services">
+        <span class="svc">HotelProfileService</span>
+        <span class="svc">DepartmentService</span>
+        <span class="svc">StaffService</span>
+        <span class="svc">RoleService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 02</div>
+      <h3 class="domain-name">Inventory</h3>
+      <p class="domain-purpose">Room types, room instances with deficient-condition tracking, and non-room spaces. The physical things you sell.</p>
+      <div class="domain-services">
+        <span class="svc">RoomTypeService</span>
+        <span class="svc">RoomInstanceService</span>
+        <span class="svc">SpaceInventoryService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 03</div>
+      <h3 class="domain-name">Commercial</h3>
+      <p class="domain-purpose">Rate plans, seasonal calendars with overlap rejection, packages, and every commercial threshold — discount, FOC, overbooking, credit ceiling, write-off.</p>
+      <div class="domain-services">
+        <span class="svc">RatePlanService</span>
+        <span class="svc">SeasonService</span>
+        <span class="svc">PackageService</span>
+        <span class="svc">CommercialThresholdService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 04</div>
+      <h3 class="domain-name">Workflow Governance</h3>
+      <p class="domain-purpose">How holds expire, how ownership is assigned, which billing models are available, and which operational modes are live.</p>
+      <div class="domain-services">
+        <span class="svc">CancellationPolicyService</span>
+        <span class="svc">WorkflowConfigurationService</span>
+        <span class="svc">ModeService</span>
+        <span class="svc">PolicyRegistryService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 05</div>
+      <h3 class="domain-name">Communications &amp; Templates</h3>
+      <p class="domain-purpose">Channel credentials, acknowledgement windows, message templates, handoff checklists, and work order templates.</p>
+      <div class="domain-services">
+        <span class="svc">CommunicationConfigService</span>
+        <span class="svc">HandoffTemplateService</span>
+        <span class="svc">WorkOrderTemplateService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 06</div>
+      <h3 class="domain-name">Financial &amp; Operational Schedule</h3>
+      <p class="domain-purpose">Advance payment thresholds, invoice templates, damage rates, dispute gates, night audit schedule, checkout time, room assignment priorities.</p>
+      <div class="domain-services">
+        <span class="svc">FinancialConfigurationService</span>
+        <span class="svc">OperationalScheduleService</span>
+        <span class="svc">VIPNotificationRoutingService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 07</div>
+      <h3 class="domain-name">Post-Stay &amp; Governance</h3>
+      <p class="domain-purpose">Feedback templates, review platform links, government portal config, agent commission, ID document types and retention.</p>
+      <div class="domain-services">
+        <span class="svc">PostStayAndGovernanceService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 08</div>
+      <h3 class="domain-name">OTA &amp; AI Agent</h3>
+      <p class="domain-purpose">OTA source flags, polling intervals, conflict triggers, no-show penalties; AI agent processing locks, voice-note SLAs, escalation routing.</p>
+      <div class="domain-services">
+        <span class="svc">OTAConfigurationService</span>
+        <span class="svc">AIAgentConfigService</span>
+      </div>
+    </div>
+
+    <div class="domain">
+      <div class="domain-num">DOMAIN 09</div>
+      <h3 class="domain-name">Generic &amp; Readiness</h3>
+      <p class="domain-purpose">Catch-all keyed configuration for anything not owned by a domain service, plus the read-only readiness gate endpoint.</p>
+      <div class="domain-services">
+        <span class="svc">ConfigurationService</span>
+        <span class="svc">ReadinessService</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 4 — STAGE CONSUMPTION MATRIX ═══════════════════ -->
+<section id="matrix" class="frame">
+  <div class="frame-num">Frame 04 · Stage Consumption Matrix</div>
+  <h2 class="frame-title">Where each configuration <em>flows.</em></h2>
+  <p class="frame-lede">Every operational stage reads a specific subset of admin-owned configuration. The matrix below shows which configuration domain feeds which stage — and where read pressure is highest. <strong>Solid amber dots</strong> mean primary consumers; <strong>terracotta</strong> means cross-stage / always-on dependencies.</p>
+
+  <div class="matrix-wrap">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>Configuration Domain</th>
+          <th>S1<span class="stage-name">Inquiry</span></th>
+          <th>S2<span class="stage-name">Quotation</span></th>
+          <th>S3<span class="stage-name">Hold</span></th>
+          <th>S4<span class="stage-name">Confirmed</span></th>
+          <th>S5<span class="stage-name">Pre-Arrival</span></th>
+          <th>S6<span class="stage-name">CheckIn</span></th>
+          <th>S7<span class="stage-name">In-House</span></th>
+          <th>S8<span class="stage-name">CheckOut</span></th>
+          <th>S9<span class="stage-name">Post-Stay</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Identity &amp; Org<small>Staff PINs, role gates, session windows</small></td>
+          <td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td>
+        </tr>
+        <tr>
+          <td>Inventory<small>Room types, instances, deficient categories</small></td>
+          <td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Commercial · Rates &amp; Seasons<small>Pricing pipeline, walk-in rate plan</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Commercial · Thresholds<small>Discount, FOC, overbooking, credit ceiling</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Cancellation Policies<small>Penalty tiers per booking</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Workflow · Expiry &amp; TTLs<small>S1/S2/S3 timer durations</small></td>
+          <td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Modes &amp; Policies<small>Active mode routes, policy registry</small></td>
+          <td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td><td><span class="dot dot-strong"></span></td>
+        </tr>
+        <tr>
+          <td>Communications &amp; Templates<small>Channel creds, ack windows, message bodies</small></td>
+          <td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td>
+        </tr>
+        <tr>
+          <td>Handoff &amp; Work Order Templates<small>Checklist content per shift &amp; per WO type</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Financial<small>Advance pmt, damage, dispute, payment FU</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td>
+        </tr>
+        <tr>
+          <td>Operational Schedule<small>Night audit, checkout cutoff, room priority</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>VIP Notification Routing<small>Who to ping when a VIP booking lands</small></td>
+          <td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+        <tr>
+          <td>Post-Stay &amp; Governance<small>Feedback, reviews, gov portal, ID retention</small></td>
+          <td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td>
+        </tr>
+        <tr>
+          <td>OTA &amp; AI Agent<small>Polling, conflict, no-show, processing locks</small></td>
+          <td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td><td><span class="dot dot-faint"></span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="matrix-legend">
+      <span><span class="dot dot-strong"></span> Cross-stage / always-on</span>
+      <span><span class="dot"></span> Primary stage consumer</span>
+      <span><span class="dot dot-faint"></span> Light / indirect read</span>
+    </div>
+  </div>
+
+  <div class="callout">"Operational workers consume admin configuration. The TimerEngine, NightAuditWorker, AvailabilityEngine, PricingPipelineEngine — all read keys owned by an admin service. The writers are admin; the readers are operational; no worker crosses that line."</div>
+</section>
+
+<!-- ═══════════════════ FRAME 5 — LIFECYCLE ═══════════════════ -->
+<section id="lifecycle" class="frame">
+  <div class="frame-num">Frame 05 · Configuration Lifecycle</div>
+  <h2 class="frame-title">Time, not state, is the lifecycle.</h2>
+  <p class="frame-lede">Configuration has no stage gate. A value is <strong>active</strong> while now() falls inside its <span class="k">[effectiveFrom, effectiveTo)</span> window. Saves don't edit — they <strong>supersede</strong>. The previous row's <span class="k">effectiveTo</span> is set to the new row's <span class="k">effectiveFrom</span>, both writes happen in one transaction with the audit event, and history is retained forever.</p>
+
+  <div class="lifecycle-svg-wrap">
+    <svg class="lifecycle-svg" viewBox="0 0 1100 280" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrowSmall" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#C9A04C"/>
+        </marker>
+      </defs>
+
+      <!-- Time axis -->
+      <line x1="60" y1="200" x2="1040" y2="200" stroke="#3D3A30" stroke-width="1"/>
+      <text x="60" y="225" font-family="JetBrains Mono" font-size="10" fill="#6E6857">t₀</text>
+      <text x="1030" y="225" font-family="JetBrains Mono" font-size="10" fill="#6E6857">now() →</text>
+
+      <!-- Tick marks -->
+      <line x1="280" y1="195" x2="280" y2="205" stroke="#6E6857"/>
+      <text x="280" y="225" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#6E6857">save 1</text>
+      <line x1="540" y1="195" x2="540" y2="205" stroke="#6E6857"/>
+      <text x="540" y="225" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#6E6857">save 2</text>
+      <line x1="820" y1="195" x2="820" y2="205" stroke="#6E6857"/>
+      <text x="820" y="225" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#6E6857">save 3 (now)</text>
+
+      <!-- Bar 1: Seed value -->
+      <rect x="60" y="80" width="220" height="36" fill="#0A0D12" stroke="#6E6857" stroke-width="1" rx="2"/>
+      <text x="170" y="103" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="13" fill="#B6AE9A">SYSTEM_SEED</text>
+      <text x="60" y="68" font-family="JetBrains Mono" font-size="9" fill="#6E6857">effFrom: t₀  effTo: t₁</text>
+
+      <!-- Bar 2: First admin save -->
+      <rect x="280" y="80" width="260" height="36" fill="#141921" stroke="#8E6F2C" stroke-width="1" rx="2"/>
+      <text x="410" y="103" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="13" fill="#C9A04C">administrator value v1</text>
+      <text x="280" y="68" font-family="JetBrains Mono" font-size="9" fill="#6E6857">effFrom: t₁  effTo: t₂</text>
+
+      <!-- Bar 3: Second admin save -->
+      <rect x="540" y="80" width="280" height="36" fill="#141921" stroke="#8E6F2C" stroke-width="1" rx="2"/>
+      <text x="680" y="103" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="13" fill="#C9A04C">administrator value v2</text>
+      <text x="540" y="68" font-family="JetBrains Mono" font-size="9" fill="#6E6857">effFrom: t₂  effTo: t₃</text>
+
+      <!-- Bar 4: Currently active -->
+      <rect x="820" y="80" width="220" height="36" fill="#C9A04C" fill-opacity="0.18" stroke="#C9A04C" stroke-width="1.5" rx="2"/>
+      <text x="930" y="103" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="13" font-weight="600" fill="#E8E2D2">ACTIVE · v3</text>
+      <text x="820" y="68" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">effFrom: t₃  effTo: NULL</text>
+
+      <!-- Status labels -->
+      <text x="170" y="140" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" fill="#6E6857">SUPERSEDED</text>
+      <text x="410" y="140" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" fill="#6E6857">SUPERSEDED</text>
+      <text x="680" y="140" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" fill="#6E6857">SUPERSEDED</text>
+      <text x="930" y="140" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" fill="#C9A04C">LIVE</text>
+
+      <!-- Read query indicator -->
+      <line x1="930" y1="200" x2="930" y2="155" stroke="#C9A04C" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <circle cx="930" cy="200" r="4" fill="#C9A04C"/>
+
+      <!-- Title -->
+      <text x="60" y="35" font-family="JetBrains Mono" font-size="10" letter-spacing="3" fill="#C9A04C">SUPERSESSION TIMELINE · ConfigurationEntry FOR ONE configKey</text>
+      <text x="60" y="52" font-family="Newsreader" font-style="italic" font-size="13" fill="#B6AE9A">Every save closes the prior row and inserts a new one. History is queryable, never deleted.</text>
+
+      <!-- Read at now indicator -->
+      <text x="930" y="265" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#C9A04C">runtime read</text>
+      <text x="930" y="178" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">↑</text>
+    </svg>
+
+    <div class="lifecycle-rules">
+      <div>
+        <h5>Three States</h5>
+        <p><strong>ACTIVE</strong> (effectiveTo = NULL), <strong>SUPERSEDED</strong> (effectiveTo set), <strong>HISTORY</strong> (retained forever). At most one ACTIVE row per <span class="k">configKey</span>.</p>
+      </div>
+      <div>
+        <h5>Atomic Supersession</h5>
+        <p>Update prior <span class="k">effectiveTo</span>, insert new row, write <span class="k">TraceEvent</span> — all three writes in one Prisma transaction. If any rolls back, all roll back.</p>
+      </div>
+      <div>
+        <h5>Optimistic Locking on Registries</h5>
+        <p>Registry rows carry a <span class="k">version: Int</span> field. The update request must match the current version, or the second writer is rejected with <span class="k">ConcurrentEditingError</span>. No silent overwrites.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 6 — MODES ═══════════════════ -->
+<section id="modes" class="frame">
+  <div class="frame-num">Frame 06 · Mode Lifecycle</div>
+  <h2 class="frame-title">Modes have a <em>validation gate</em> the rest of configuration doesn't.</h2>
+  <p class="frame-lede">A mode defines the operational route — which stages run, what auto-fulfils, what features depend on which services. Because a bad mode could silently bypass policy or dead-end the state machine, every save runs through the <span class="k">ModeValidationEngine</span> against three constraint categories before it's allowed to persist. The current state lives on the row itself as a typed <span class="k">state</span> field on <span class="k">ModeConfiguration</span>.</p>
+
+  <div class="modes-grid">
+    <div class="modes-fsm">
+      <svg viewBox="0 0 600 380" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#C9A04C"/>
+          </marker>
+          <marker id="arrMReject" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#B14545"/>
+          </marker>
+        </defs>
+
+        <!-- DRAFT -->
+        <circle cx="100" cy="100" r="46" fill="#141921" stroke="#6E6857" stroke-width="1.5"/>
+        <text x="100" y="96" text-anchor="middle" font-family="Fraunces" font-size="14" font-weight="500" fill="#E8E2D2">DRAFT</text>
+        <text x="100" y="114" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#6E6857">editing</text>
+
+        <!-- VALIDATED -->
+        <circle cx="300" cy="100" r="46" fill="#141921" stroke="#C9A04C" stroke-width="1.5"/>
+        <text x="300" y="96" text-anchor="middle" font-family="Fraunces" font-size="13" font-weight="500" fill="#E8E2D2">VALIDATED</text>
+        <text x="300" y="114" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">isActive=false</text>
+
+        <!-- ACTIVE -->
+        <circle cx="500" cy="100" r="46" fill="#C9A04C" fill-opacity="0.18" stroke="#C9A04C" stroke-width="2"/>
+        <text x="500" y="96" text-anchor="middle" font-family="Fraunces" font-size="14" font-weight="500" fill="#E8E2D2">ACTIVE</text>
+        <text x="500" y="114" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">isActive=true</text>
+
+        <!-- SUPERSEDED -->
+        <circle cx="500" cy="280" r="46" fill="#0A0D12" stroke="#6E6857" stroke-width="1" stroke-dasharray="3 3"/>
+        <text x="500" y="276" text-anchor="middle" font-family="Fraunces" font-size="13" font-weight="500" fill="#B6AE9A">SUPERSEDED</text>
+        <text x="500" y="294" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#6E6857">history</text>
+
+        <!-- REJECTED node -->
+        <rect x="240" y="240" width="120" height="50" rx="2" fill="#141921" stroke="#B14545" stroke-width="1"/>
+        <text x="300" y="262" text-anchor="middle" font-family="Fraunces" font-size="13" font-weight="500" fill="#B14545">REJECTED</text>
+        <text x="300" y="278" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#B14545">save denied</text>
+
+        <!-- arrows -->
+        <line x1="146" y1="100" x2="254" y2="100" stroke="#C9A04C" stroke-width="1.5" marker-end="url(#arrM)"/>
+        <text x="200" y="92" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">save → validate</text>
+
+        <line x1="346" y1="100" x2="454" y2="100" stroke="#C9A04C" stroke-width="1.5" marker-end="url(#arrM)"/>
+        <text x="400" y="92" text-anchor="middle" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">activate (L4 GM)</text>
+
+        <line x1="500" y1="146" x2="500" y2="234" stroke="#C9A04C" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arrM)"/>
+        <text x="540" y="195" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">superseded</text>
+        <text x="540" y="208" font-family="JetBrains Mono" font-size="9" fill="#C9A04C">by new save</text>
+
+        <!-- DRAFT to REJECTED -->
+        <path d="M 130 138 Q 200 220 248 250" stroke="#B14545" stroke-width="1.5" stroke-dasharray="3 3" fill="none" marker-end="url(#arrMReject)"/>
+        <text x="155" y="200" font-family="JetBrains Mono" font-size="9" fill="#B14545">violation</text>
+
+        <!-- Labels -->
+        <text x="60" y="40" font-family="JetBrains Mono" font-size="9" letter-spacing="3" fill="#C9A04C">MODE STATE MACHINE</text>
+        <text x="60" y="56" font-family="Newsreader" font-style="italic" font-size="11" fill="#B6AE9A">save → validate → activate → supersede</text>
+
+        <!-- Validator gate annotation -->
+        <text x="200" y="160" text-anchor="middle" font-family="JetBrains Mono" font-size="8" letter-spacing="2" fill="#C66B3D">↓ ModeValidationEngine ↓</text>
+        <text x="200" y="175" text-anchor="middle" font-family="JetBrains Mono" font-size="8" fill="#6E6857">policy · state-machine · service-deps</text>
+
+        <!-- Activate gate -->
+        <text x="400" y="160" text-anchor="middle" font-family="JetBrains Mono" font-size="8" letter-spacing="2" fill="#C9A04C">↓ L4 GM REQUIRED ↓</text>
+        <text x="400" y="175" text-anchor="middle" font-family="JetBrains Mono" font-size="8" fill="#6E6857">for custom modes</text>
+      </svg>
+    </div>
+
+    <div class="modes-seeds">
+      <h4>Eight Seed Modes (ship Active)</h4>
+      <ol>
+        <li>New Booking</li>
+        <li>Room Change</li>
+        <li>Rate Revision</li>
+        <li>Date Extension</li>
+        <li>Early Departure / Cancellation</li>
+        <li>Billing Model Change</li>
+        <li>Guest Composition Change</li>
+        <li>Complaint Resolution / Goodwill</li>
+      </ol>
+      <div style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--ink-soft); line-height: 1.55;">
+        Predefined modes ship <span class="tag tag-brass">ACTIVE</span> on initialisation. They may be customised through supersession, but they may not be deleted. Custom modes built by an administrator follow the full DRAFT → VALIDATED → ACTIVE path and require the <strong>L4 GM</strong> specifically to activate.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 7 — READINESS ═══════════════════ -->
+<section id="readiness" class="frame">
+  <div class="frame-num">Frame 07 · Readiness Gate</div>
+  <h2 class="frame-title">A stage is not <em>live</em> until its configuration is complete.</h2>
+  <p class="frame-lede">At system bootstrap, the <span class="k">ReadinessGateEngine</span> evaluates every configuration surface required by every readiness group. <strong>It collects all failures, never fail-fast</strong> — an administrator must see every gap in one configuration session, not one restart at a time. There are no fallback defaults. Absence of a required surface raises <span class="k">MissingConfigurationError</span>; the operation halts.</p>
+
+  <div class="readiness-svg-wrap">
+    <svg class="readiness-svg" viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#C9A04C"/>
+        </marker>
+      </defs>
+
+      <!-- Title -->
+      <text x="0" y="20" font-family="JetBrains Mono" font-size="10" letter-spacing="3" fill="#C9A04C">10 READINESS GROUPS · EVALUATED IN ONE PASS</text>
+
+      <!-- 10 groups in a grid -->
+      <!-- S1 -->
+      <g>
+        <rect x="0" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="50" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S1_READINESS</text>
+        <text x="50" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">Inquiry</text>
+      </g>
+      <g>
+        <rect x="110" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="160" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S2_READINESS</text>
+        <text x="160" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">Quotation</text>
+      </g>
+      <g>
+        <rect x="220" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="270" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S3_READINESS</text>
+        <text x="270" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">Hold</text>
+      </g>
+      <g>
+        <rect x="330" y="50" width="100" height="60" fill="#141921" stroke="#C9A04C" rx="2"/>
+        <text x="380" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#C9A04C">S4_READINESS</text>
+        <text x="380" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">Confirmed</text>
+      </g>
+      <g>
+        <rect x="440" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="490" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S5_READINESS</text>
+        <text x="490" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">Pre-Arrival</text>
+      </g>
+      <g>
+        <rect x="550" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="600" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S6_READINESS</text>
+        <text x="600" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">CheckIn</text>
+      </g>
+      <g>
+        <rect x="660" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="710" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S7_READINESS</text>
+        <text x="710" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">In-House</text>
+      </g>
+      <g>
+        <rect x="770" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="820" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S8_READINESS</text>
+        <text x="820" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">CheckOut</text>
+      </g>
+      <g>
+        <rect x="880" y="50" width="100" height="60" fill="#141921" stroke="#5DA39E" rx="2"/>
+        <text x="930" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" fill="#5DA39E">S9_READINESS</text>
+        <text x="930" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">Post-Stay</text>
+      </g>
+      <g>
+        <rect x="990" y="50" width="110" height="60" fill="#141921" stroke="#C66B3D" rx="2"/>
+        <text x="1045" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="10" font-weight="600" fill="#C66B3D">CROSS_STAGE</text>
+        <text x="1045" y="92" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">always-on deps</text>
+      </g>
+
+      <!-- Convergence lines -->
+      <path d="M 50 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 160 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 270 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 380 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 490 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 600 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 710 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 820 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 930 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+      <path d="M 1045 110 L 550 180" stroke="#3D3A30" stroke-width="0.5"/>
+
+      <!-- Engine box -->
+      <rect x="380" y="170" width="340" height="60" rx="2" fill="#0A0D12" stroke="#C9A04C" stroke-width="1.5"/>
+      <text x="550" y="195" text-anchor="middle" font-family="Fraunces" font-size="16" font-weight="500" fill="#E8E2D2">ReadinessGateEngine</text>
+      <text x="550" y="215" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="11" fill="#B6AE9A">collects all failures · no fail-fast</text>
+
+      <!-- Output split -->
+      <line x1="550" y1="230" x2="550" y2="265" stroke="#C9A04C" stroke-width="1"/>
+      <line x1="280" y1="265" x2="820" y2="265" stroke="#C9A04C" stroke-width="1"/>
+      <line x1="280" y1="265" x2="280" y2="290" stroke="#C9A04C" stroke-width="1" marker-end="url(#arrR)"/>
+      <line x1="820" y1="265" x2="820" y2="290" stroke="#B14545" stroke-width="1" marker-end="url(#arrR)"/>
+
+      <!-- Output: LIVE -->
+      <rect x="200" y="295" width="160" height="50" rx="2" fill="#5DA39E" fill-opacity="0.18" stroke="#5DA39E" stroke-width="1.5"/>
+      <text x="280" y="318" text-anchor="middle" font-family="JetBrains Mono" font-size="13" letter-spacing="3" font-weight="600" fill="#5DA39E">LIVE</text>
+      <text x="280" y="335" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">stage accepts traffic</text>
+
+      <!-- Output: BLOCKED -->
+      <rect x="740" y="295" width="160" height="50" rx="2" fill="#B14545" fill-opacity="0.18" stroke="#B14545" stroke-width="1.5"/>
+      <text x="820" y="318" text-anchor="middle" font-family="JetBrains Mono" font-size="13" letter-spacing="3" font-weight="600" fill="#B14545">BLOCKED</text>
+      <text x="820" y="335" text-anchor="middle" font-family="Newsreader" font-style="italic" font-size="10" fill="#B6AE9A">MissingConfigurationError</text>
+    </svg>
+  </div>
+
+  <div class="readiness-rules">
+    <div>
+      <h5>Validity Criteria (per surface)</h5>
+      <p>Surface record exists · all mandatory fields populated · all referential dependencies resolvable. Per-surface logic delegated to the owning service's <span class="k">validateForReadiness()</span> method.</p>
+    </div>
+    <div>
+      <h5>No Fallback Defaults</h5>
+      <p>If a required surface is missing, <strong>no service may substitute a hardcoded default</strong>. Workers raising <span class="k">MissingConfigurationError</span> halt the operation; they don't proceed with an assumed value.</p>
+    </div>
+    <div>
+      <h5>When It Runs</h5>
+      <p>At system bootstrap before operational requests are accepted, and on demand via the admin <span class="k">ReadinessService</span> when an administrator requests re-validation.</p>
+    </div>
+    <div>
+      <h5>What It Returns</h5>
+      <p>For each readiness group: <span class="tag tag-teal">LIVE</span> or <span class="tag tag-crimson">BLOCKED</span>, plus the full failure list. Overall status: <span class="k">ALL_LIVE</span> or <span class="k">SOME_BLOCKED</span>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 8 — POLICIES ═══════════════════ -->
+<section id="policies" class="frame">
+  <div class="frame-num">Frame 08 · Structural Policies</div>
+  <h2 class="frame-title">Seven structural policies enforce the surface — at <em>seven different layers.</em></h2>
+  <p class="frame-lede">These are not preferences. Each policy carries a specific applicability, a specific enforcement mechanism, and a specific error contract. The layer at which each is enforced is part of the policy itself.</p>
+
+  <div class="policies-grid">
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A1</div>
+        <div class="policy-name">Strict Separation from Operational Code</div>
+      </div>
+      <p class="policy-desc">Admin code never imports operational services. Operational code never imports admin services. The two layers live in separate top-level directories with a build-time boundary check. The forbidden-patterns list explicitly carves out <span class="k">agent-profiles</span> — the one narrow write into an operational table — so it isn't flagged as a violation.</p>
+      <div class="policy-layer"><span>Enforced at:</span> Build-time / review-time</div>
+    </div>
+
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A2</div>
+        <div class="policy-name">Audit Event on Every Configuration Save</div>
+      </div>
+      <p class="policy-desc">Every CREATE, UPDATE, and DELETE writes a <span class="k">TraceEvent</span> in the same transaction as the change. If either write fails, both roll back. There is no path to "save without audit."</p>
+      <div class="policy-layer"><span>Enforced at:</span> Service layer · transaction</div>
+    </div>
+
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A3</div>
+        <div class="policy-name">Default Values Visually Distinguished</div>
+      </div>
+      <p class="policy-desc">Every UI surface that renders a configurable value shows a non-intrusive marker when that value is a seeded default and has not been administrator-reviewed. Indicator disappears on first conscious save.</p>
+      <div class="policy-layer"><span>Enforced at:</span> UI layer</div>
+    </div>
+
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A4</div>
+        <div class="policy-name">Mode Configuration Validated at Save Time</div>
+      </div>
+      <p class="policy-desc">Every mode save runs through the <span class="k">ModeValidationEngine</span> for policy, state-machine, and service-dependency constraints. Save proceeds only on ACCEPTED. L4 cannot override.</p>
+      <div class="policy-layer"><span>Enforced at:</span> Service layer · via engine</div>
+    </div>
+
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A5</div>
+        <div class="policy-name">Configuration Cannot Disable a Required Control</div>
+      </div>
+      <p class="policy-desc">Saves that would disable exit-evidence checks, timer governance, AI approval gates, audit writes, or financial immutability are rejected with <span class="k">ConfigurationViolationError</span>. Tunes parameters; does not remove controls.</p>
+      <div class="policy-layer"><span>Enforced at:</span> Service layer · check helper</div>
+    </div>
+
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A6</div>
+        <div class="policy-name">Single-Tenant Namespace</div>
+      </div>
+      <p class="policy-desc">No <span class="k">tenantId</span> column on any admin table. No partition filter on any admin query. No property selector on any admin UI. Multi-property is a future scope extension, not a runtime feature flag.</p>
+      <div class="policy-layer"><span>Enforced at:</span> Schema review · code review</div>
+    </div>
+
+    <div class="policy">
+      <div class="policy-header">
+        <div class="policy-id">A7</div>
+        <div class="policy-name">L4 Authority on Every Admin Write</div>
+      </div>
+      <p class="policy-desc">Every write route registers <span class="k">requireL4()</span> after auth, before validation. Non-L4 callers get <span class="k">AuthorizationError 403</span> with their authenticated level recorded. A read-only middleware <span class="k">requireAdminRead()</span> handles audit-visibility extensions.</p>
+      <div class="policy-layer"><span>Enforced at:</span> Middleware layer</div>
+    </div>
+
+    <div class="policy" style="border-left-color: var(--terracotta);">
+      <div class="policy-header">
+        <div class="policy-id" style="color: var(--terracotta);">∑</div>
+        <div class="policy-name">All seven enforced together. None redundant.</div>
+      </div>
+      <p class="policy-desc">A1 governs code-layer separation; A7 governs runtime authorisation. Both are required — the build-time check protects against misimports, the middleware check protects against runtime bypass. Every policy has its own enforcement layer because each catches a different class of error.</p>
+      <div class="policy-layer" style="color: var(--terracotta);"><span>Net effect:</span> Defence in depth across 7 layers</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ FRAME 9 — ENGINES ═══════════════════ -->
+<section id="engines" class="frame">
+  <div class="frame-num">Frame 09 · Engines</div>
+  <h2 class="frame-title">Two pure engines. <em>No state. No side effects.</em></h2>
+  <p class="frame-lede">The Admin Console introduces only two engines. Both take typed inputs, return typed outputs, and own no state of their own. They orchestrate; the owning admin services hold the per-surface truth.</p>
+
+  <div class="engines-grid">
+    <div class="engine">
+      <h3 class="engine-name">ReadinessGateEngine</h3>
+      <div class="engine-mono">readiness · evaluation · all-failures-collected</div>
+      <dl>
+        <div class="engine-row"><dt>Purpose</dt><dd>Decide whether every required configuration surface for every readiness group is populated, valid, and fit to be read by operational code.</dd></div>
+        <div class="engine-row"><dt>Invocation</dt><dd>System bootstrap (synchronously, before traffic) and on-demand via <span class="k">ReadinessService.runReadinessCheck</span>.</dd></div>
+        <div class="engine-row"><dt>Input</dt><dd><span class="k">{ groups[], asOf }</span> — supports historical audit (asOf in the past).</dd></div>
+        <div class="engine-row"><dt>Output</dt><dd><span class="k">{ groupResults[], overallStatus }</span> with every <span class="k">MissingConfigurationError</span> collected.</dd></div>
+        <div class="engine-row"><dt>Hardcoded</dt><dd>Collection-not-fail-fast · no fallback defaults · readiness manifest is code, not config.</dd></div>
+      </dl>
+    </div>
+
+    <div class="engine">
+      <h3 class="engine-name">ModeValidationEngine</h3>
+      <div class="engine-mono">mode · validation · three-category-constraints</div>
+      <dl>
+        <div class="engine-row"><dt>Purpose</dt><dd>Validate proposed mode configurations against policy, state-machine, and service-dependency constraints. Return <span class="k">ACCEPTED</span> or <span class="k">REJECTED</span> with violations.</dd></div>
+        <div class="engine-row"><dt>Invocation</dt><dd>Synchronous from <span class="k">ModeService.save()</span> and <span class="k">ModeService.activate()</span>. No async path.</dd></div>
+        <div class="engine-row"><dt>Input</dt><dd><span class="k">{ modeId, modeDefinition, actorId, context }</span> where context ∈ {SAVE, ACTIVATE}.</dd></div>
+        <div class="engine-row"><dt>Output</dt><dd><span class="k">{ status, violations[] }</span>. Violations enumerated, not first-fail.</dd></div>
+        <div class="engine-row"><dt>Hardcoded</dt><dd>Three-category constraint structure · synchronous from ModeService · rejection on any violation.</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <div class="callout-mono">Operational engines (TimerEngine, PricingPipelineEngine, AvailabilityEngine, OverbookingDetectionEngine, CreditCeilingMonitorEngine, DisputeGateEngine, FOCValidationEngine, NightAuditEngine, RoomAssignmentSuggestionEngine) are <strong style="color: var(--ink);">consumed</strong> by admin services through their configuration surface dependencies. The Admin Console owns the configuration they read; it does not re-specify their behaviour.</div>
+</section>
+
+<div class="footer">
+  <span>Admin Console · Implementation Reference</span>
+  <span>LEGPHEL PMS</span>
+</div>
+
+</div>
+
+<script>
+// Reading-progress bar
+const progress = document.getElementById('progress');
+function updateProgress() {
+  const h = document.documentElement;
+  const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+  progress.style.width = pct + '%';
+}
+window.addEventListener('scroll', updateProgress, { passive: true });
+
+// Scroll spy on top nav
+const navLinks = document.querySelectorAll('#navLinks a');
+const linkByTarget = {};
+navLinks.forEach(a => { linkByTarget[a.getAttribute('href').slice(1)] = a; });
+const sections = Array.from(navLinks).map(a => document.getElementById(a.getAttribute('href').slice(1))).filter(Boolean);
+
+const obs = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const a = linkByTarget[entry.target.id];
+      if (a) a.classList.add('active');
+    }
+  });
+}, { rootMargin: '-40% 0px -55% 0px', threshold: 0 });
+
+sections.forEach(s => obs.observe(s));
+</script>
+</body>
+</html>

@@ -125,20 +125,20 @@ export function StructuredConfigPanel({ configKey, load, save, onSaved }: Props)
         </div>
       )}
 
-      {meta && !useAdvanced ? (
+      {meta?.schema && !useAdvanced ? (
         <ConfigFormEditor schema={meta.schema} value={draft} onChange={setDraft} />
       ) : (
         <div>
           {!meta && (
             <p className="admin-muted mb-2 text-xs">
-              No dedicated form for this key yet — edit fields below. Use Advanced JSON to paste a value.
+              No dedicated form or description for this key yet — edit fields below.
             </p>
           )}
           <SmartConfigEditor value={draft} onChange={setDraft} />
         </div>
       )}
 
-      {meta && !isScalarSchema(meta.schema) && (
+      {meta?.schema && !isScalarSchema(meta.schema) && (
         <label className="flex items-center gap-2 text-xs text-[var(--admin-ink-soft)]">
           <input type="checkbox" checked={useAdvanced} onChange={(e) => setUseAdvanced(e.target.checked)} />
           Use advanced JSON editor instead of the dedicated form

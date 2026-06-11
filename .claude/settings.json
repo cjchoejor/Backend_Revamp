@@ -42,7 +42,13 @@
       "PowerShell(Stop-Process -Id 1884 -Force -ErrorAction SilentlyContinue)",
       "PowerShell(\"Stopped\")",
       "Bash(npm install *)",
-      "Bash(awk '{print $1}')"
+      "Bash(awk '{print $1}')",
+      "PowerShell(Get-NetTCPConnection -LocalPort 3000,3001 -ErrorAction SilentlyContinue)",
+      "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=8424\"; if \\($p\\) { \"PID 8424 = \" + $p.Name + \": \" + $p.CommandLine.Substring\\(0, [Math]::Min\\(150, $p.CommandLine.Length\\)\\) } else { \"PID 8424 not found\" })",
+      "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=8424\"; \"Name=$\\($p.Name\\)`nCmd=$\\($p.CommandLine\\)\")",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($conn.OwningProcess\\)\"; \"PID $\\($conn.OwningProcess\\): $\\($p.Name\\) — $\\($p.CommandLine.Substring\\(0, [Math]::Min\\(180, $p.CommandLine.Length\\)\\)\\)\" } else { \"Port 4000 free\" })",
+      "PowerShell(Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue)",
+      "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=44112\"; \"PID 44112 = \" + $p.Name + \"`nCmd: \" + $p.CommandLine)"
     ]
   }
 }

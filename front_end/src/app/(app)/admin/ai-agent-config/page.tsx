@@ -27,17 +27,19 @@ export default function AdminAiAgentConfigPage() {
 
       <KeyedConfigPanel
         title="AI agent config"
-        description="LLM credentials, per-category trust levels, confidence thresholds, escalation routing (JSON)."
+        description="LLM credentials, per-category trust levels, confidence thresholds, escalation routing."
         queryKey={["admin", "ai-agent", "config"]}
         enabled={enabled}
+        configKey="ai.agentConfig"
         load={async () => (await getAiAgentConfig(session)).value}
         save={(v) => updateAiAgentConfig(session, (v ?? {}) as Record<string, unknown>)}
       />
       <KeyedConfigPanel
         title="Processing lock TTL per channel"
-        description="Required for all four channels: EMAIL_AI, WHATSAPP_AI, FRONT_DESK, PHONE (JSON of seconds)."
+        description="Max time a channel lock may be held before W16 releases it. Required for all four channels: EMAIL_AI, WHATSAPP_AI, FRONT_DESK, PHONE."
         queryKey={["admin", "ai-agent", "processing-lock-ttl"]}
         enabled={enabled}
+        configKey="processingLock.ttl.perChannel"
         load={async () => (await getProcessingLockTtls(session)).value}
         save={(v) => setProcessingLockTtls(session, (v ?? {}) as Record<string, number>)}
       />

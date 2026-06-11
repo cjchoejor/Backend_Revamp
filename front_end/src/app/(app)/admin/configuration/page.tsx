@@ -6,6 +6,78 @@ import { StructuredConfigPanel } from "@/components/admin/structured-config-pane
 import { getConfiguration, listConfigurationKeys, setConfiguration } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 
+/**
+ * Per ACIG §6.2.25, the generic ConfigurationService surface only owns keys that don't have a
+ * dedicated domain service. Domain-owned keys (discount.*, advancePayment.*, nightAudit.*, etc.)
+ * are excluded here so operators are forced to edit them on their proper domain page.
+ *
+ * Source of truth for ownership: `back_end/src/lib/admin/config-key-registry.ts`.
+ */
+const ORPHANED_KEY_WHITELIST = new Set([
+  "stageDwell.thresholds",
+  "deficientResolution.deadlineHours",
+  "lostFound.retention.warningOffsetDays",
+  "availability.staleness.ttlSeconds",
+  "availability.bookablePhysicalStates",
+  "availability.shadowInventory.visibilityRules",
+  "paymentMilestone.scheduleTemplates",
+  "paymentMilestone.warningOffsetDays",
+  "ai.confidenceThreshold.autoApprove",
+  "ai.correctionLog.maximumSize",
+  // CancellationPolicyService-owned but no dedicated UI surface today — surface here so it's
+  // editable. /admin/cancellation-policies is a CRUD page for the registry table, not for the
+  // default-fallback policy tiers config key.
+  "cancellation.policyTiers",
+]);
+
+/** Domain-owned (or legacy) key prefixes that should never appear in the generic catalogue. */
+const DOMAIN_OWNED_PREFIXES = [
+  "discount.",
+  "creditCeiling.",
+  "foc.",
+  "overbooking.",
+  "confirmation.authority",
+  "speculativeHold.placementThresholds",
+  "writeOff.authority.thresholds",
+  "cancellation.policyTiers",
+  "advancePayment.",
+  "proformaInvoice.",
+  "damage.",
+  "payment.followUp",
+  "billing.",
+  "invoice.templates",
+  "dispute.",
+  "fomOverride.",
+  "nightAudit.",
+  "checkout.",
+  "roomAssignment.",
+  "housekeeping.",
+  "inspection.",
+  "room.readiness",
+  "noShow.",
+  "ota.",
+  "ota_email_poll",
+  "ai.agentConfig",
+  "processingLock.",
+  "voiceNote.",
+  "communication.",
+  "acknowledgement.",
+  "feedback.",
+  "government.",
+  "commission.",
+  "identity.",
+  "deficientCondition.categories",
+  "availability.walkIn",
+  "expiry.s",
+  // Legacy (no longer read by operational code) — rate plans moved to the rate_plan_registry table.
+  "pricing.ratePlans",
+];
+
+function isOrphaned(key: string): boolean {
+  if (ORPHANED_KEY_WHITELIST.has(key)) return true;
+  return !DOMAIN_OWNED_PREFIXES.some((p) => key.startsWith(p));
+}
+
 export default function AdminConfigurationPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -17,7 +89,9 @@ export default function AdminConfigurationPage() {
     enabled: !!session && session.actorLevel === "L4",
   });
 
-  const keys = keysQuery.data?.keys ?? [];
+  // Restrict to orphaned keys per ACIG §6.2.25 — domain-owned keys must be edited on their
+  // proper domain pages so the ownership check on the backend doesn't reject saves.
+  const keys = (keysQuery.data?.keys ?? []).filter(isOrphaned);
   const filteredKeys = useMemo(() => {
     const q = selectedKey.trim().toLowerCase();
     if (!q || keys.includes(selectedKey)) return keys;
@@ -33,16 +107,13 @@ export default function AdminConfigurationPage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 04 · Workflow & keys</p>
-        <h1 className="admin-display text-3xl">Configuration entries</h1>
+        <p className="admin-eyebrow mb-2">Domain 09 · Generic & readiness</p>
+        <h1 className="admin-display text-3xl">Configuration (orphaned keys)</h1>
         <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Values are never edited in place — saving creates a new row and closes the prior active window. Keys with a
-          friendly form use structured fields; others fall back to the generic editor (with an Advanced JSON escape
-          hatch). For timers and workers, prefer{" "}
-          <a href="/admin/timers-workers" className="text-primary underline">
-            Timers & workers
-          </a>
-          .
+          The generic ConfigurationService surface per ACIG §6.2.25. Only keys with no dedicated
+          domain service appear here. Domain-owned keys (discount, credit ceiling, advance payment,
+          night audit, OTA, etc.) are surfaced on their proper domain page — edit them there.
+          Saving creates a new version row and closes the prior active window.
         </p>
       </div>
 

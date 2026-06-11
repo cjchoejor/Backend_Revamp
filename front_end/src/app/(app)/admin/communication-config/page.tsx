@@ -66,9 +66,10 @@ export default function AdminCommunicationConfigPage() {
 
       <KeyedConfigPanel
         title="Acknowledgement window per type"
-        description="Seconds allowed before each communication type's acknowledgement times out (JSON)."
+        description="Seconds allowed before each communication type's acknowledgement times out (W22). Read by every stage when computing follow-up timer SLAs."
         queryKey={["admin", "comm", "ack-window"]}
         enabled={enabled}
+        configKey="acknowledgement.windowPerType"
         load={async () => (await getAcknowledgementWindow(session)).value}
         save={(v) => setAcknowledgementWindow(session, v)}
       />

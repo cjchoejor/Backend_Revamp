@@ -88,28 +88,143 @@ type Props = {
   onChange: (value: unknown) => void;
 };
 
-function numInput(
-  label: string,
-  val: number,
-  onChange: (n: number) => void,
-  opts?: { min?: number; step?: number; unit?: string; help?: string },
-) {
+/**
+ * String-draft number input. The HTML input is controlled by a local string so the user can
+ * freely backspace to empty, type a leading `0.`, or paste partial values without the field
+ * snapping back to a stale numeric value. Commits the parsed float (or `0` for empty/invalid)
+ * to the parent on every change, then on blur the field re-syncs to a canonical numeric string.
+ */
+function NumberInput({
+  label,
+  val,
+  onChange,
+  opts,
+}: {
+  label: string;
+  val: number;
+  onChange: (n: number) => void;
+  opts?: { min?: number; step?: number; unit?: string; help?: string };
+}) {
+  const [draft, setDraft] = useState<string>(() => (Number.isFinite(val) ? String(val) : "0"));
+  const lastEmittedRef = useRef<number>(Number.isFinite(val) ? val : 0);
+
+  // External update (e.g. parent state reset) → re-sync draft.
+  useEffect(() => {
+    if (!Number.isFinite(val)) return;
+    if (Math.abs(val - lastEmittedRef.current) > 1e-9) {
+      setDraft(String(val));
+      lastEmittedRef.current = val;
+    }
+  }, [val]);
+
+  const commit = (text: string) => {
+    setDraft(text);
+    if (text === "" || text === "." || text === "-" || text === "-." || text.endsWith(".")) return;
+    const n = Number.parseFloat(text);
+    if (!Number.isFinite(n)) return;
+    lastEmittedRef.current = n;
+    onChange(n);
+  };
+
+  const onBlur = () => {
+    const n = Number.parseFloat(draft);
+    if (!Number.isFinite(n)) {
+      setDraft(String(Number.isFinite(val) ? val : 0));
+      return;
+    }
+    setDraft(String(n));
+  };
+
   return (
     <label className="block space-y-1">
       <span className="admin-muted text-xs">{label}</span>
       <div className="flex items-center gap-2">
         <input
           type="number"
+          inputMode="decimal"
           className="admin-input max-w-[200px]"
-          value={Number.isFinite(val) ? val : 0}
+          value={draft}
           min={opts?.min}
           step={opts?.step ?? 1}
-          onChange={(e) => onChange(Number.parseInt(e.target.value, 10) || 0)}
+          onChange={(e) => commit(e.target.value)}
+          onBlur={onBlur}
         />
         {opts?.unit && <span className="admin-muted text-xs">{opts.unit}</span>}
       </div>
       {opts?.help && <span className="admin-muted text-[10px]">{opts.help}</span>}
     </label>
+  );
+}
+
+// Legacy positional-arg shim — preserved so existing call sites that take `numInput(label, val, onChange, opts)`
+// keep compiling. New code should use <NumberInput /> directly.
+function numInput(
+  label: string,
+  val: number,
+  onChange: (n: number) => void,
+  opts?: { min?: number; step?: number; unit?: string; help?: string },
+) {
+  return <NumberInput label={label} val={val} onChange={onChange} opts={opts} />;
+}
+
+/**
+ * Compact cell-style number input for tables (stage-dwell, ack-windows, record-seconds, etc.).
+ * Same string-draft semantics as NumberInput — lets the user clear and retype without snapping
+ * back to 0.
+ */
+function CellNumberInput({
+  val,
+  onChange,
+  min,
+  max,
+  step,
+  className = "admin-input w-24 py-1 text-xs",
+}: {
+  val: number;
+  onChange: (n: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState<string>(() => String(Number.isFinite(val) ? val : 0));
+  const lastEmittedRef = useRef<number>(Number.isFinite(val) ? val : 0);
+
+  useEffect(() => {
+    if (!Number.isFinite(val)) return;
+    if (Math.abs(val - lastEmittedRef.current) > 1e-9) {
+      setDraft(String(val));
+      lastEmittedRef.current = val;
+    }
+  }, [val]);
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      className={className}
+      value={draft}
+      min={min}
+      max={max}
+      step={step ?? 1}
+      onChange={(e) => {
+        const text = e.target.value;
+        setDraft(text);
+        if (text === "" || text === "." || text === "-" || text === "-." || text.endsWith(".")) return;
+        const n = Number.parseFloat(text);
+        if (!Number.isFinite(n)) return;
+        lastEmittedRef.current = n;
+        onChange(n);
+      }}
+      onBlur={() => {
+        const n = Number.parseFloat(draft);
+        if (!Number.isFinite(n)) {
+          setDraft(String(Number.isFinite(val) ? val : 0));
+          return;
+        }
+        setDraft(String(n));
+      }}
+    />
   );
 }
 
@@ -162,13 +277,11 @@ function StageDwellEditor({ value, onChange }: { value: unknown; onChange: (v: u
                   <td>{ENTRY_STATE_LABELS[state] ?? state}</td>
                   {DWELL_LEVELS.map((level) => (
                     <td key={level}>
-                      <input
-                        type="number"
-                        className="admin-input w-24 py-1 text-xs"
+                      <CellNumberInput
+                        val={data[stage]?.[state]?.[level] ?? 0}
+                        onChange={(n) => update(stage, state, level, n)}
                         min={60}
                         step={60}
-                        value={data[stage]?.[state]?.[level] ?? 0}
-                        onChange={(e) => update(stage, state, level, Number.parseInt(e.target.value, 10) || 0)}
                       />
                     </td>
                   ))}
@@ -197,13 +310,12 @@ function AckWindowsEditor({ value, onChange }: { value: unknown; onChange: (v: u
           <label key={key} className="block space-y-1">
             <span className="admin-muted text-xs">{label}</span>
             <div className="flex items-center gap-2">
-              <input
-                type="number"
+              <CellNumberInput
                 className="admin-input"
+                val={data[key] ?? 0}
+                onChange={(n) => onChange({ ...data, [key]: n })}
                 min={60}
                 step={60}
-                value={data[key] ?? 0}
-                onChange={(e) => onChange({ ...data, [key]: Number.parseInt(e.target.value, 10) || 0 })}
               />
               <span className="admin-muted text-[10px]">sec</span>
             </div>
@@ -228,12 +340,11 @@ function ProcessingLockEditor({ value, onChange }: { value: unknown; onChange: (
       {channels.map((ch) => (
         <label key={ch.key} className="block space-y-1">
           <span className="admin-muted text-xs">{ch.label}</span>
-          <input
-            type="number"
+          <CellNumberInput
             className="admin-input"
+            val={data[ch.key] ?? 300}
+            onChange={(n) => onChange({ ...data, [ch.key]: n })}
             min={30}
-            value={data[ch.key] ?? 300}
-            onChange={(e) => onChange({ ...data, [ch.key]: Number.parseInt(e.target.value, 10) || 0 })}
           />
         </label>
       ))}
@@ -307,12 +418,11 @@ export function ConfigFormEditor({ schema, value, onChange }: Props) {
           {schema.fields.map((f) => (
             <label key={f.key} className="block space-y-1">
               <span className="admin-muted text-xs">{f.label}</span>
-              <input
-                type="number"
+              <CellNumberInput
                 className="admin-input max-w-[200px]"
+                val={data[f.key] ?? 0}
+                onChange={(n) => onChange({ ...data, [f.key]: n })}
                 min={60}
-                value={data[f.key] ?? 0}
-                onChange={(e) => onChange({ ...data, [f.key]: Number.parseInt(e.target.value, 10) || 0 })}
               />
             </label>
           ))}
@@ -327,14 +437,13 @@ export function ConfigFormEditor({ schema, value, onChange }: Props) {
           {schema.fields.map((f) => (
             <label key={f.key} className="block space-y-1">
               <span className="admin-muted text-xs">{f.label}</span>
-              <input
-                type="number"
+              <CellNumberInput
                 className="admin-input max-w-[200px]"
+                val={data[f.key] ?? 0}
+                onChange={(n) => onChange({ ...data, [f.key]: n })}
                 min={0}
                 max={100}
                 step={1}
-                value={data[f.key] ?? 0}
-                onChange={(e) => onChange({ ...data, [f.key]: Number.parseInt(e.target.value, 10) || 0 })}
               />
             </label>
           ))}

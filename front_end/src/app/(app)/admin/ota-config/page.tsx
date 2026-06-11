@@ -24,41 +24,48 @@ export default function AdminOtaConfigPage() {
 
       <KeyedConfigPanel
         title="Source flag config"
-        description="Which OTA sources are enabled (JSON object)."
+        description="Which OTA sources are enabled. Toggle a source off to stop accepting bookings from that channel."
         queryKey={["admin", "ota", "source-flags"]}
         enabled={enabled}
+        configKey="ota.sourceFlagConfig"
         load={async () => (await getOtaConfig(session, "source-flags")).value}
         save={(v) => setOtaConfigValue(session, "source-flags", v)}
       />
       <KeyedConfigPanel
         title="Inbox polling interval (seconds)"
+        description="How often W7 checks the OTA inbox for new bookings. 300 = 5 minutes."
         queryKey={["admin", "ota", "polling-interval"]}
         mode="number"
         enabled={enabled}
+        configKey="ota.inbox.pollingIntervalSeconds"
         load={async () => (await getOtaConfig(session, "polling-interval")).seconds}
         save={(v) => setOtaPollingInterval(session, Number(v))}
       />
       <KeyedConfigPanel
         title="Conflict trigger rules"
-        description="Rules used to flag OTA conflict overbookings (JSON)."
+        description="Rules used to flag OTA conflict overbookings."
         queryKey={["admin", "ota", "conflict-rules"]}
         enabled={enabled}
+        configKey="ota.conflictTriggerRules"
         load={async () => (await getOtaConfig(session, "conflict-rules")).value}
         save={(v) => setOtaConfigValue(session, "conflict-rules", v)}
       />
       <KeyedConfigPanel
         title="No-show cutoff (minutes)"
+        description="Per-OTA-channel no-show cutoff override. Minutes after expected arrival before no-show treatment fires."
         queryKey={["admin", "ota", "no-show-cutoff"]}
         mode="number"
         enabled={enabled}
+        configKey="noShow.cutoffMinutes"
         load={async () => (await getOtaConfig(session, "no-show-cutoff")).minutes}
         save={(v) => setOtaNoShowCutoff(session, Number(v))}
       />
       <KeyedConfigPanel
         title="No-show penalty structure"
-        description="Penalty per source/tier combination (JSON). All combinations must be covered."
+        description="Penalty per source/tier combination. All combinations must be covered."
         queryKey={["admin", "ota", "no-show-penalty"]}
         enabled={enabled}
+        configKey="noShow.penaltyStructure"
         load={async () => (await getOtaConfig(session, "no-show-penalty")).value}
         save={(v) => setOtaConfigValue(session, "no-show-penalty", v)}
       />
