@@ -3,6 +3,7 @@ import { ActorLevel } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 const LEVELS: ActorLevel[] = [ActorLevel.L1, ActorLevel.L2, ActorLevel.L3, ActorLevel.L4];
 
@@ -136,6 +137,7 @@ export async function updateStaff(
   }
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "StaffUser", entityId: id, actorId });
     const updated = await tx.staffUser.update({
       where: { id },
       data: {
@@ -201,6 +203,7 @@ export async function deactivateStaff(prisma: PrismaClient, id: string, actorId:
   if (!existing.isActive) return existing;
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "StaffUser", entityId: id, actorId });
     const updated = await tx.staffUser.update({
       where: { id },
       data: { isActive: false },

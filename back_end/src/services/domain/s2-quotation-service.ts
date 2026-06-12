@@ -29,6 +29,40 @@ import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-pla
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
+
+/**
+ * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
+ * the rate-resolution helper. Returns null if no party is linked OR the linked party has no
+ * active rate card. Callers use this to optionally override the standard rate plan resolution.
+ */
+async function resolveAgentRateForEntryQuotation(
+  prisma: PrismaClient,
+  args: { inquiryId: string; roomTypeId: string; asOf?: Date },
+): Promise<AgentRateBreakdown | null> {
+  const inq = await prisma.inquiry.findUnique({
+    where: { id: args.inquiryId },
+    select: { travelAgentId: true, corporateAccountId: true },
+  });
+  if (!inq) return null;
+  if (inq.travelAgentId) {
+    return resolveAgentRate(prisma, {
+      partyType: "TRAVEL_AGENT",
+      partyId: inq.travelAgentId,
+      roomTypeId: args.roomTypeId,
+      asOf: args.asOf,
+    });
+  }
+  if (inq.corporateAccountId) {
+    return resolveAgentRate(prisma, {
+      partyType: "CORPORATE",
+      partyId: inq.corporateAccountId,
+      roomTypeId: args.roomTypeId,
+      asOf: args.asOf,
+    });
+  }
+  return null;
+}
 
 export async function createQuotation(
   prisma: PrismaClient,
@@ -71,8 +105,22 @@ export async function createQuotation(
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
   const stay = entry.checkInDate && entry.checkOutDate ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate } : undefined;
   const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { isDeficientGuestTier, roomTypeId, stay });
+
+  // Phase C — if the inquiry is linked to a travel agent or corporate account with an active
+  // rate card, override the standard pricing with the negotiated room rate (including per-room-type
+  // override if present). Standard pricing stays as a reference inside commercialTerms.standardPricing
+  // so the operator can see what the hotel's rate plan would have charged.
+  const agentRate = entry.inquiryId
+    ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: roomTypeId! })
+    : null;
+  const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
+  const resolvedNightlyRate = agentRate ? agentRate.roomRate : pricing.resolvedNightlyRate;
+  const currency = agentRate ? agentRate.currency : pricing.currency;
+  const resolutionPath = agentRate ? `${pricing.resolutionPath ?? ""} → AGENT_RATE_CARD` : pricing.resolutionPath;
+
   const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
-    belowMsr: pricing.belowMsr,
+    // Agent rates are negotiated and not subject to MSR — only flag below-MSR when standard pricing applies.
+    belowMsr: agentRate ? false : pricing.belowMsr,
     actorId,
     waiver: input.belowMsrGmWaiver ?? null,
   });
@@ -94,17 +142,39 @@ export async function createQuotation(
     useType: entry.useType,
     resolvedRatePlanId: pricing.resolvedRatePlanId,
     resolvedRatePlanType: pricing.resolvedRatePlanType,
-    resolvedNightlyRate: pricing.resolvedNightlyRate,
-    effectiveRate: pricing.effectiveRate,
+    resolvedNightlyRate,
+    effectiveRate,
     msrValue: pricing.msrValue,
-    belowMsr: pricing.belowMsr,
+    belowMsr: agentRate ? false : pricing.belowMsr,
     isDeterrentRateApplied: pricing.isDeterrentRateApplied,
-    resolutionPath: pricing.resolutionPath,
-    currency: pricing.currency,
+    resolutionPath,
+    currency,
     inclusions: [],
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
+    // Phase C — agent / corporate negotiated rate, when applicable.
+    ...(agentRate
+      ? {
+          agentRate: {
+            rateCardId: agentRate.rateCardId,
+            partyType: agentRate.partyType,
+            partyId: agentRate.partyId,
+            roomRate: agentRate.roomRate,
+            roomRateSource: agentRate.roomRateSource,
+            addOns: agentRate.addOns,
+            cnbPercent: agentRate.cnbPercent,
+            currency: agentRate.currency,
+          },
+          // Preserve the standard rate plan resolution as reference even when the agent rate is used.
+          standardPricing: {
+            resolvedRatePlanId: pricing.resolvedRatePlanId,
+            effectiveRate: pricing.effectiveRate,
+            msrValue: pricing.msrValue,
+            belowMsr: pricing.belowMsr,
+          },
+        }
+      : {}),
   };
 
   return prisma.$transaction(async (tx) => {
@@ -117,8 +187,8 @@ export async function createQuotation(
         referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
-        totalAmount: pricing.effectiveRate,
-        currency: input.currency?.trim() ? input.currency.trim() : pricing.currency?.trim() ? pricing.currency : "BTN",
+        totalAmount: effectiveRate,
+        currency: input.currency?.trim() ? input.currency.trim() : currency?.trim() ? currency : "BTN",
         createdBy: actorId,
       },
     });

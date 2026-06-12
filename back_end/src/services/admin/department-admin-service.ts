@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 export async function listDepartments(prisma: PrismaClient, input?: { includeInactive?: boolean }) {
   return prisma.department.findMany({
@@ -56,6 +57,7 @@ export async function updateDepartment(
   }
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "Department", entityId: id, actorId });
     const updated = await tx.department.update({
       where: { id },
       data: {

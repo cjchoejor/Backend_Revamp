@@ -27,6 +27,10 @@ import { adminPostStayGovernanceRouter } from "./post-stay-governance-router.js"
 import { adminAuditTrailRouter } from "./audit-trail-router.js";
 import { adminEmailRouter } from "./email-router.js";
 import { adminIdPrefixRouter } from "./id-prefix-router.js";
+import { adminEntityVersionSnapshotRouter } from "./entity-version-snapshot-router.js";
+import { adminTravelAgentRouter } from "./travel-agent-router.js";
+import { adminCorporateAccountRouter } from "./corporate-account-router.js";
+import { adminRateCardRouter } from "./rate-card-router.js";
 
 export const adminRouter = Router();
 
@@ -54,6 +58,10 @@ adminRouter.use(adminPostStayGovernanceRouter);
 adminRouter.use(adminAuditTrailRouter);
 adminRouter.use(adminEmailRouter);
 adminRouter.use(adminIdPrefixRouter);
+adminRouter.use(adminEntityVersionSnapshotRouter);
+adminRouter.use(adminTravelAgentRouter);
+adminRouter.use(adminCorporateAccountRouter);
+adminRouter.use(adminRateCardRouter);
 
 /** Dev helper — enqueue a timer job (L4). */
 adminRouter.post("/enqueue", requireActorLevel("L4"), validateBody(adminEnqueueRequestSchema), async (req, res, next) => {

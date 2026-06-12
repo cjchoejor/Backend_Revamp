@@ -245,11 +245,12 @@ export async function listAdminRooms(session: Session) {
       id: string;
       roomNumber: string;
       floorNumber: number | null;
+      capacity: number;
       currentClaimState: string;
       physicalState: string;
       isDeficient: boolean;
       isBlocked: boolean;
-      roomType: { code: string; name: string };
+      roomType: { id: string; code: string; name: string };
     }>;
     count: number;
   }>("/api/admin/rooms", { session });
@@ -360,6 +361,22 @@ export async function createAdminRoom(
   body: { roomNumber: string; roomTypeId: string; floorNumber?: number | null; capacity?: number; isShadowInventory?: boolean },
 ) {
   return apiRequest("/api/admin/rooms", { method: "POST", session, body });
+}
+
+export async function updateAdminRoom(
+  session: Session,
+  id: string,
+  body: {
+    roomNumber?: string;
+    roomTypeId?: string;
+    floorNumber?: number | null;
+    capacity?: number;
+    isShadowInventory?: boolean;
+    isBlocked?: boolean;
+    blockedReason?: string | null;
+  },
+) {
+  return apiRequest(`/api/admin/rooms/${id}`, { method: "PATCH", session, body });
 }
 
 export async function listSpaces(session: Session) {
@@ -923,6 +940,223 @@ export async function resetIdPrefix(session: Session, body: { entity: string }) 
     method: "POST",
     session,
     body,
+  });
+}
+
+// ----- EntityVersionSnapshot (version history for admin CRUD tables) -----
+
+export type EntityVersionSnapshot = {
+  id: string;
+  version: number;
+  rowJson: Record<string, unknown>;
+  changedAt: string;
+  changedBy: string;
+  changeNote: string | null;
+};
+
+export async function listVersionSnapshots(
+  session: Session,
+  params: { entityType: string; entityId: string },
+) {
+  const qs = new URLSearchParams({ entityType: params.entityType, entityId: params.entityId });
+  return apiRequest<{ snapshots: EntityVersionSnapshot[] }>(
+    `/api/admin/version-snapshots?${qs.toString()}`,
+    { session },
+  );
+}
+
+export async function restoreVersionSnapshot(
+  session: Session,
+  body: { snapshotId: string; changeNote?: string },
+) {
+  return apiRequest<{ restored: unknown }>(`/api/admin/version-snapshots/restore`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
+// ----- Travel agents (Phase B) -----
+
+export type ContactMode = "PHONE" | "EMAIL" | "WHATSAPP" | "IN_PERSON" | "OTHER";
+export type PartyType = "TRAVEL_AGENT" | "CORPORATE";
+export type MealPlanType = "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP";
+
+export type TravelAgentAdmin = {
+  id: string;
+  displayName: string;
+  contactNumber: string | null;
+  contactEmail: string | null;
+  modeOfContact: ContactMode;
+  notes: string | null;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+};
+
+export type TravelAgentInput = {
+  displayName: string;
+  contactNumber?: string | null;
+  contactEmail?: string | null;
+  modeOfContact?: ContactMode | null;
+  notes?: string | null;
+  isActive?: boolean;
+};
+
+export async function listTravelAgents(session: Session, params?: { includeInactive?: boolean }) {
+  const qs = params?.includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ agents: TravelAgentAdmin[] }>(`/api/admin/travel-agents${qs}`, { session });
+}
+
+export async function createTravelAgent(session: Session, body: TravelAgentInput) {
+  return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents`, { method: "POST", session, body });
+}
+
+export async function updateTravelAgent(session: Session, id: string, body: Partial<TravelAgentInput>) {
+  return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}`, { method: "PUT", session, body });
+}
+
+export async function deactivateTravelAgent(session: Session, id: string) {
+  return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}/deactivate`, { method: "POST", session });
+}
+
+export async function reactivateTravelAgent(session: Session, id: string) {
+  return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}/reactivate`, { method: "POST", session });
+}
+
+// ----- Corporate accounts (Phase B) -----
+
+export type CorporateAccountAdmin = {
+  id: string;
+  displayName: string;
+  contactNumber: string | null;
+  contactEmail: string | null;
+  modeOfContact: ContactMode;
+  gstNumber: string | null;
+  billingAddress: string | null;
+  notes: string | null;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+};
+
+export type CorporateAccountInput = {
+  displayName: string;
+  contactNumber?: string | null;
+  contactEmail?: string | null;
+  modeOfContact?: ContactMode | null;
+  gstNumber?: string | null;
+  billingAddress?: string | null;
+  notes?: string | null;
+  isActive?: boolean;
+};
+
+export async function listCorporateAccounts(session: Session, params?: { includeInactive?: boolean }) {
+  const qs = params?.includeInactive ? "?includeInactive=true" : "";
+  return apiRequest<{ accounts: CorporateAccountAdmin[] }>(`/api/admin/corporate-accounts${qs}`, { session });
+}
+
+export async function createCorporateAccount(session: Session, body: CorporateAccountInput) {
+  return apiRequest<CorporateAccountAdmin>(`/api/admin/corporate-accounts`, { method: "POST", session, body });
+}
+
+export async function updateCorporateAccount(session: Session, id: string, body: Partial<CorporateAccountInput>) {
+  return apiRequest<CorporateAccountAdmin>(`/api/admin/corporate-accounts/${id}`, { method: "PUT", session, body });
+}
+
+export async function deactivateCorporateAccount(session: Session, id: string) {
+  return apiRequest<CorporateAccountAdmin>(`/api/admin/corporate-accounts/${id}/deactivate`, { method: "POST", session });
+}
+
+export async function reactivateCorporateAccount(session: Session, id: string) {
+  return apiRequest<CorporateAccountAdmin>(`/api/admin/corporate-accounts/${id}/reactivate`, { method: "POST", session });
+}
+
+// ----- Rate cards (Phase B) -----
+
+export type RateCardOverride = {
+  id: string;
+  rateCardId: string;
+  roomTypeId: string;
+  roomBaseRate: string;
+  notes: string | null;
+  createdAt: string;
+  createdBy: string;
+  roomType?: { id: string; code: string; name: string };
+};
+
+export type RateCardAdmin = {
+  id: string;
+  partyType: PartyType;
+  partyId: string;
+  roomBaseRate: string;
+  extraBedRate: string | null;
+  cnbPercent: number | null;
+  breakfastRate: string | null;
+  lunchRate: string | null;
+  dinnerRate: string | null;
+  cpRate: string | null;
+  mapLunchRate: string | null;
+  mapDinnerRate: string | null;
+  apRate: string | null;
+  currency: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  notes: string | null;
+  createdAt: string;
+  createdBy: string;
+  overrides: RateCardOverride[];
+};
+
+export type RateCardInput = {
+  partyType: PartyType;
+  partyId: string;
+  roomBaseRate: number | string;
+  extraBedRate?: number | string | null;
+  cnbPercent?: number | null;
+  breakfastRate?: number | string | null;
+  lunchRate?: number | string | null;
+  dinnerRate?: number | string | null;
+  cpRate?: number | string | null;
+  mapLunchRate?: number | string | null;
+  mapDinnerRate?: number | string | null;
+  apRate?: number | string | null;
+  currency?: string;
+  notes?: string | null;
+};
+
+export async function listRateCards(session: Session, partyType: PartyType, partyId: string) {
+  const qs = new URLSearchParams({ partyType, partyId });
+  return apiRequest<{ cards: RateCardAdmin[] }>(`/api/admin/rate-cards?${qs}`, { session });
+}
+
+export async function getActiveRateCard(session: Session, partyType: PartyType, partyId: string) {
+  const qs = new URLSearchParams({ partyType, partyId });
+  return apiRequest<{ active: RateCardAdmin | null }>(`/api/admin/rate-cards/active?${qs}`, { session });
+}
+
+export async function createRateCardVersion(session: Session, body: RateCardInput) {
+  return apiRequest<RateCardAdmin>(`/api/admin/rate-cards`, { method: "POST", session, body });
+}
+
+export async function setRateCardOverride(
+  session: Session,
+  rateCardId: string,
+  body: { roomTypeId: string; roomBaseRate: number | string; notes?: string | null },
+) {
+  return apiRequest<RateCardOverride>(`/api/admin/rate-cards/${rateCardId}/overrides`, {
+    method: "PUT",
+    session,
+    body,
+  });
+}
+
+export async function deleteRateCardOverride(session: Session, overrideId: string) {
+  return apiRequest<{ ok: true }>(`/api/admin/rate-cards/overrides/${overrideId}`, {
+    method: "DELETE",
+    session,
   });
 }
 

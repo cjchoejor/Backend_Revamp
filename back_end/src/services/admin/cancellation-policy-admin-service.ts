@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { requiredControlCheck } from "../../lib/admin/required-control-check.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 const MIRROR_KEY = "cancellation.policyTiers";
 
@@ -69,6 +70,7 @@ export async function updatePolicy(
   await requiredControlCheck({ surfaceName: "CancellationPolicyRegistry", proposedChange: merged, currentValue: existing, operationType: "UPDATE", actorId });
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "CancellationPolicyRegistry", entityId: id, actorId });
     const updated = await tx.cancellationPolicyRegistry.update({
       where: { id },
       data: {
@@ -103,6 +105,7 @@ export async function deactivatePolicy(prisma: PrismaClient, id: string, actorId
   if (!existing) throw new NotFoundError("CancellationPolicyRegistry");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "CancellationPolicyRegistry", entityId: id, actorId });
     const updated = await tx.cancellationPolicyRegistry.update({ where: { id }, data: { isActive: false } });
     await writeAdminAuditEvent(tx, {
       actorId,
@@ -121,6 +124,7 @@ export async function reactivatePolicy(prisma: PrismaClient, id: string, actorId
   if (!existing) throw new NotFoundError("CancellationPolicyRegistry");
   if (existing.isActive) throw new ValidationError("Cancellation policy is already active");
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "CancellationPolicyRegistry", entityId: id, actorId });
     const updated = await tx.cancellationPolicyRegistry.update({ where: { id }, data: { isActive: true } });
     await writeAdminAuditEvent(tx, {
       actorId,

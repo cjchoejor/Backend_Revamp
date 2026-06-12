@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 export interface PackageInput {
   name: string;
@@ -55,6 +56,7 @@ export async function updatePackage(prisma: PrismaClient, id: string, input: Par
   if (!existing) throw new NotFoundError("PackageRegistry");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "PackageRegistry", entityId: id, actorId });
     const updated = await tx.packageRegistry.update({
       where: { id },
       data: {
@@ -88,6 +90,7 @@ export async function deactivatePackage(prisma: PrismaClient, id: string, actorI
   if (!existing) throw new NotFoundError("PackageRegistry");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "PackageRegistry", entityId: id, actorId });
     const updated = await tx.packageRegistry.update({ where: { id }, data: { isActive: false } });
     await writeAdminAuditEvent(tx, {
       actorId,
@@ -106,6 +109,7 @@ export async function reactivatePackage(prisma: PrismaClient, id: string, actorI
   if (!existing) throw new NotFoundError("PackageRegistry");
   if (existing.isActive) throw new ValidationError("Package is already active");
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "PackageRegistry", entityId: id, actorId });
     const updated = await tx.packageRegistry.update({ where: { id }, data: { isActive: true } });
     await writeAdminAuditEvent(tx, {
       actorId,

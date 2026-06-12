@@ -16,6 +16,7 @@ import { createInquiry } from "@/lib/api/inquiries";
 import { createEntry } from "@/lib/api/entries";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { AgentCorporatePicker, type AgentCorporateSelection } from "@/components/inquiries/agent-corporate-picker";
 
 const SOURCE_CHANNELS = ["WALK_IN", "DIRECT", "OTA", "CORPORATE", "AGENT"] as const;
 
@@ -41,6 +42,7 @@ export function NewInquiryForm() {
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   const [guestCount, setGuestCount] = useState("1");
+  const [agentSelection, setAgentSelection] = useState<AgentCorporateSelection>({ kind: "NONE" });
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -90,6 +92,8 @@ export function NewInquiryForm() {
         notes: notes.trim() || undefined,
         proposedCheckIn: checkIn || undefined,
         proposedCheckOut: checkOut || undefined,
+        travelAgentId: agentSelection.kind === "TRAVEL_AGENT" ? agentSelection.party.id : null,
+        corporateAccountId: agentSelection.kind === "CORPORATE" ? agentSelection.party.id : null,
       });
 
       const entry = await createEntry(session, {
@@ -278,6 +282,9 @@ export function NewInquiryForm() {
           <div className="sm:col-span-2">
             <label className="text-xs text-muted-foreground">Notes</label>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+          <div className="sm:col-span-2">
+            <AgentCorporatePicker selection={agentSelection} onChange={setAgentSelection} />
           </div>
         </CardContent>
       </Card>

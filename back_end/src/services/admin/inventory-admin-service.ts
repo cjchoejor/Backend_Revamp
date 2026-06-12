@@ -165,32 +165,51 @@ export async function createRoom(
   const roomType = await prisma.roomType.findUnique({ where: { id: input.roomTypeId } });
   if (!roomType) throw new NotFoundError("RoomType");
 
-  return prisma.$transaction(async (tx) => {
-    const created = await tx.room.create({
-      data: {
-        roomNumber,
-        roomTypeId: input.roomTypeId,
-        floorNumber: input.floorNumber ?? null,
-        capacity: input.capacity ?? 2,
-        currentClaimState: InventoryClaimState.FREE,
-        physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
-        isShadowInventory: input.isShadowInventory ?? false,
-        isDeficient: false,
-        isUnderMaintenance: false,
-        isBlocked: false,
-      },
-      include: { roomType: { select: { id: true, code: true, name: true } } },
+  // Friendly pre-check so the operator sees "Room 201 already exists" instead of a
+  // Prisma P2002 unique-constraint violation surfacing as "Internal server error".
+  const conflict = await prisma.room.findUnique({ where: { roomNumber } });
+  if (conflict) {
+    throw new ValidationError(
+      `Room number "${roomNumber}" already exists. Pick a different number or edit the existing room.`,
+    );
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const created = await tx.room.create({
+        data: {
+          roomNumber,
+          roomTypeId: input.roomTypeId,
+          floorNumber: input.floorNumber ?? null,
+          capacity: input.capacity ?? 2,
+          currentClaimState: InventoryClaimState.FREE,
+          physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
+          isShadowInventory: input.isShadowInventory ?? false,
+          isDeficient: false,
+          isUnderMaintenance: false,
+          isBlocked: false,
+        },
+        include: { roomType: { select: { id: true, code: true, name: true } } },
+      });
+      await writeAdminAuditEvent(tx, {
+        actorId,
+        eventType: "ADMIN.ROOM_CREATED",
+        entityType: "Room",
+        entityId: created.id,
+        operation: "CREATE",
+        payload: { roomNumber, roomTypeId: input.roomTypeId },
+      });
+      return created;
     });
-    await writeAdminAuditEvent(tx, {
-      actorId,
-      eventType: "ADMIN.ROOM_CREATED",
-      entityType: "Room",
-      entityId: created.id,
-      operation: "CREATE",
-      payload: { roomNumber, roomTypeId: input.roomTypeId },
-    });
-    return created;
-  });
+  } catch (e) {
+    // Race-condition fallback: pre-check passed but another concurrent create won.
+    if (e && typeof e === "object" && (e as { code?: string }).code === "P2002") {
+      throw new ValidationError(
+        `Room number "${roomNumber}" already exists. Pick a different number or edit the existing room.`,
+      );
+    }
+    throw e;
+  }
 }
 
 export async function deactivateRoom(prisma: PrismaClient, id: string, actorId: string, blockedReason?: string | null) {
@@ -247,34 +266,66 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
 export async function updateRoom(
   prisma: PrismaClient,
   id: string,
-  input: Partial<{ floorNumber: number | null; capacity: number; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
+  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; capacity: number; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
   actorId: string,
 ) {
   const existing = await prisma.room.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError("Room");
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.room.update({
-      where: { id },
-      data: {
-        floorNumber: input.floorNumber,
-        capacity: input.capacity,
-        isShadowInventory: input.isShadowInventory,
-        isBlocked: input.isBlocked,
-        blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason?.trim() || null,
-      },
-      include: { roomType: { select: { id: true, code: true, name: true } } },
+  // Validate roomNumber change — must be non-empty and not collide with another room.
+  let newRoomNumber: string | undefined;
+  if (input.roomNumber !== undefined) {
+    newRoomNumber = input.roomNumber.trim();
+    if (!newRoomNumber) throw new ValidationError("roomNumber is required");
+    if (newRoomNumber !== existing.roomNumber) {
+      const conflict = await prisma.room.findUnique({ where: { roomNumber: newRoomNumber } });
+      if (conflict) {
+        throw new ValidationError(
+          `Room number "${newRoomNumber}" already exists. Pick a different number.`,
+        );
+      }
+    }
+  }
+
+  // Validate roomTypeId change.
+  if (input.roomTypeId !== undefined && input.roomTypeId !== existing.roomTypeId) {
+    const roomType = await prisma.roomType.findUnique({ where: { id: input.roomTypeId } });
+    if (!roomType) throw new NotFoundError("RoomType");
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const updated = await tx.room.update({
+        where: { id },
+        data: {
+          roomNumber: newRoomNumber,
+          roomTypeId: input.roomTypeId,
+          floorNumber: input.floorNumber,
+          capacity: input.capacity,
+          isShadowInventory: input.isShadowInventory,
+          isBlocked: input.isBlocked,
+          blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason?.trim() || null,
+        },
+        include: { roomType: { select: { id: true, code: true, name: true } } },
+      });
+      await writeAdminAuditEvent(tx, {
+        actorId,
+        eventType: "ADMIN.ROOM_UPDATED",
+        entityType: "Room",
+        entityId: id,
+        operation: "UPDATE",
+        payload: { fieldsChanged: Object.keys(input).filter((k) => (input as Record<string, unknown>)[k] !== undefined) },
+      });
+      return updated;
     });
-    await writeAdminAuditEvent(tx, {
-      actorId,
-      eventType: "ADMIN.ROOM_UPDATED",
-      entityType: "Room",
-      entityId: id,
-      operation: "UPDATE",
-      payload: { fieldsChanged: Object.keys(input).filter((k) => (input as Record<string, unknown>)[k] !== undefined) },
-    });
-    return updated;
-  });
+  } catch (e) {
+    if (e && typeof e === "object" && (e as { code?: string }).code === "P2002") {
+      throw new ValidationError(
+        `Room number "${newRoomNumber ?? input.roomNumber}" already exists. Pick a different number.`,
+      );
+    }
+    throw e;
+  }
 }
 
 export async function listSpaces(prisma: PrismaClient) {

@@ -18,6 +18,10 @@ export async function createInquiry(
     notes?: string;
     proposedCheckIn?: string;
     proposedCheckOut?: string;
+    /** Phase C — optional link to a Phase-B TravelAgent (mutually exclusive with corporateAccountId). */
+    travelAgentId?: string | null;
+    /** Phase C — optional link to a Phase-B CorporateAccount (mutually exclusive with travelAgentId). */
+    corporateAccountId?: string | null;
   },
 ) {
   return apiRequest<InquiryListItem>("/api/inquiries", {
@@ -25,4 +29,25 @@ export async function createInquiry(
     session,
     body,
   });
+}
+
+// ----- Phase C operational lookups (L1-accessible search) -----
+
+export type LookupPartyMatch = {
+  id: string;
+  displayName: string;
+  contactNumber: string | null;
+  contactEmail: string | null;
+  modeOfContact: string;
+  gstNumber?: string | null;
+};
+
+export async function searchTravelAgentsLookup(session: Session, q: string) {
+  const qs = new URLSearchParams({ q });
+  return apiRequest<{ matches: LookupPartyMatch[] }>(`/api/lookups/travel-agents/search?${qs}`, { session });
+}
+
+export async function searchCorporateAccountsLookup(session: Session, q: string) {
+  const qs = new URLSearchParams({ q });
+  return apiRequest<{ matches: LookupPartyMatch[] }>(`/api/lookups/corporate-accounts/search?${qs}`, { session });
 }

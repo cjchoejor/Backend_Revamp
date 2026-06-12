@@ -119,6 +119,8 @@ export const createRoomRequestSchema = z.object({
 });
 
 export const updateRoomRequestSchema = z.object({
+  roomNumber: z.string().min(1).optional(),
+  roomTypeId: z.string().min(1).optional(),
   floorNumber: z.coerce.number().int().optional().nullable(),
   capacity: z.coerce.number().int().positive().optional(),
   isShadowInventory: z.boolean().optional(),

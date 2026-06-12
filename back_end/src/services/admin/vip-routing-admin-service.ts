@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 export async function listVipRoutings(prisma: PrismaClient) {
   return prisma.vipNotificationRoutingConfig.findMany({
@@ -27,6 +28,7 @@ export async function saveVipRouting(
     });
 
     if (existing) {
+      await captureSnapshotTx(tx, { entityType: "VipNotificationRoutingConfig", entityId: existing.id, actorId });
       await tx.vipNotificationRoutingConfig.update({
         where: { id: existing.id },
         data: { isActive: false },
@@ -61,6 +63,7 @@ export async function deactivateVipRouting(prisma: PrismaClient, id: string, act
   if (!existing) throw new NotFoundError("VipNotificationRoutingConfig");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "VipNotificationRoutingConfig", entityId: id, actorId });
     const updated = await tx.vipNotificationRoutingConfig.update({
       where: { id },
       data: { isActive: false, createdBy: actorId },
@@ -87,8 +90,10 @@ export async function reactivateVipRouting(prisma: PrismaClient, id: string, act
   });
   return prisma.$transaction(async (tx) => {
     if (conflict) {
+      await captureSnapshotTx(tx, { entityType: "VipNotificationRoutingConfig", entityId: conflict.id, actorId });
       await tx.vipNotificationRoutingConfig.update({ where: { id: conflict.id }, data: { isActive: false } });
     }
+    await captureSnapshotTx(tx, { entityType: "VipNotificationRoutingConfig", entityId: id, actorId });
     const updated = await tx.vipNotificationRoutingConfig.update({ where: { id }, data: { isActive: true } });
     await writeAdminAuditEvent(tx, {
       actorId,

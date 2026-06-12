@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { HandoffType, InvoiceType } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 // --- Communication templates --------------------------------------------
 
@@ -65,6 +66,7 @@ export async function updateCommunicationTemplate(
   if (!existing) throw new NotFoundError("CommunicationTemplate");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "CommunicationTemplate", entityId: id, actorId });
     const updated = await tx.communicationTemplate.update({
       where: { id },
       data: {
@@ -108,6 +110,7 @@ export async function saveHandoffTemplate(
     const nextVersion = (latest?.version ?? 0) + 1;
 
     if (latest?.isActive) {
+      await captureSnapshotTx(tx, { entityType: "HandoffChecklistTemplate", entityId: latest.id, actorId });
       await tx.handoffChecklistTemplate.update({
         where: { id: latest.id },
         data: { isActive: false },
@@ -182,6 +185,7 @@ export async function updateInvoiceTemplate(
   if (!existing) throw new NotFoundError("InvoiceTemplate");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "InvoiceTemplate", entityId: id, actorId });
     const updated = await tx.invoiceTemplate.update({
       where: { id },
       data: {
@@ -251,6 +255,7 @@ export async function updateWorkOrderTemplate(
   if (!existing) throw new NotFoundError("WorkOrderTemplate");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "WorkOrderTemplate", entityId: id, actorId });
     const updated = await tx.workOrderTemplate.update({
       where: { id },
       data: {

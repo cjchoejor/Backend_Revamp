@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 export async function getHotelProfile(prisma: PrismaClient) {
   const row = await prisma.hotelProfile.findFirst({
@@ -34,6 +35,7 @@ export async function updateHotelProfile(
   }
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "HotelProfile", entityId: existing.id, actorId });
     const updated = await tx.hotelProfile.update({
       where: { id: existing.id },
       data: {

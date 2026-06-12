@@ -17,10 +17,30 @@ export async function createInquiry(
     proposedCheckIn?: string;
     proposedCheckOut?: string;
     duplicateCheck?: { isDuplicate: boolean; conflictingInquiryId?: string };
+    /** Phase C — optional FK to TravelAgent. Mutually exclusive with corporateAccountId. */
+    travelAgentId?: string | null;
+    /** Phase C — optional FK to CorporateAccount. Mutually exclusive with travelAgentId. */
+    corporateAccountId?: string | null;
   },
 ) {
   if (!input.guestProfileId?.trim()) throw new ValidationError("guestProfileId is required");
   if (!input.sourceChannel?.trim()) throw new ValidationError("sourceChannel is required");
+
+  const travelAgentId = input.travelAgentId?.trim() || null;
+  const corporateAccountId = input.corporateAccountId?.trim() || null;
+  if (travelAgentId && corporateAccountId) {
+    throw new ValidationError("An inquiry can be linked to a travel agent OR a corporate account, not both");
+  }
+  if (travelAgentId) {
+    const agent = await prisma.travelAgent.findUnique({ where: { id: travelAgentId } });
+    if (!agent) throw new ValidationError(`Travel agent ${travelAgentId} not found`);
+    if (!agent.isActive) throw new ValidationError(`Travel agent ${travelAgentId} is inactive`);
+  }
+  if (corporateAccountId) {
+    const corp = await prisma.corporateAccount.findUnique({ where: { id: corporateAccountId } });
+    if (!corp) throw new ValidationError(`Corporate account ${corporateAccountId} not found`);
+    if (!corp.isActive) throw new ValidationError(`Corporate account ${corporateAccountId} is inactive`);
+  }
 
   await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
     guestProfileId: input.guestProfileId.trim(),
@@ -41,6 +61,8 @@ export async function createInquiry(
         sourceChannel: input.sourceChannel,
         defaultCustodianId: custodian,
         notes: input.notes?.trim() || null,
+        travelAgentId,
+        corporateAccountId,
         createdBy: actorId,
       },
     });
@@ -238,6 +260,8 @@ export async function getInquiryById(prisma: PrismaClient, inquiryId: string) {
       entries: { select: inquiryEntrySummarySelect },
       guestProfile: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
       duplicateFlags: { where: { status: "OPEN" }, orderBy: { createdAt: "desc" } },
+      travelAgent: { select: { id: true, displayName: true, modeOfContact: true, contactNumber: true, contactEmail: true } },
+      corporateAccount: { select: { id: true, displayName: true, modeOfContact: true, contactNumber: true, contactEmail: true, gstNumber: true, billingAddress: true } },
     },
   });
   if (!inquiry) throw new NotFoundError("Inquiry");

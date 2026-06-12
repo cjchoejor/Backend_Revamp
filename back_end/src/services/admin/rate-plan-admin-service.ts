@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { requiredControlCheck } from "../../lib/admin/required-control-check.js";
 import { getActiveConfigEntry } from "../../lib/config-store.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 
 const WALK_IN_CONFIG_KEY = "availability.walkIn.ratePlanId";
@@ -82,6 +83,7 @@ export async function updateRatePlan(
   });
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "RatePlanRegistry", entityId: id, actorId });
     const updated = await tx.ratePlanRegistry.update({
       where: { id },
       data: {
@@ -127,6 +129,7 @@ export async function deactivateRatePlan(prisma: PrismaClient, id: string, actor
   }
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "RatePlanRegistry", entityId: id, actorId });
     const updated = await tx.ratePlanRegistry.update({ where: { id }, data: { isActive: false } });
     await writeAdminAuditEvent(tx, {
       actorId,
@@ -146,6 +149,7 @@ export async function reactivateRatePlan(prisma: PrismaClient, id: string, actor
   if (existing.isActive) throw new ValidationError("Rate plan is already active");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "RatePlanRegistry", entityId: id, actorId });
     const updated = await tx.ratePlanRegistry.update({ where: { id }, data: { isActive: true } });
     await writeAdminAuditEvent(tx, {
       actorId,

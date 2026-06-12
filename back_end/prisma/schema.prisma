@@ -281,6 +281,34 @@ enum StageDwellMode {
 
 // --- Admin console (ACIG v1.1 core models) ------------------------------
 
+/**
+ * EntityVersionSnapshot — generic version-history table for in-place CRUD admin tables
+ * (HotelProfile, Department, Role, StaffUser, RatePlanRegistry, SeasonCalendar, PackageRegistry,
+ * CancellationPolicyRegistry, ModeConfiguration, CommunicationTemplate, InvoiceTemplate,
+ * FeedbackSurveyTemplate, HandoffChecklistTemplate, WorkOrderTemplate, VipNotificationRoutingConfig).
+ *
+ * Before every UPDATE through an admin endpoint that opts in (via `withEntityVersionSnapshot`),
+ * the prior row state is captured here as `rowJson`. Restoring a snapshot writes its JSON back
+ * to the live row and creates another snapshot capturing what was just superseded.
+ *
+ * Snapshots are kept forever (compliance + audit). Only L4 may write or restore.
+ */
+model EntityVersionSnapshot {
+  id          String   @id @default(uuid())
+  entityType  String   // e.g. "HotelProfile", "Department"
+  entityId    String
+  version     Int      // per-entity sequence, starts at 1
+  rowJson     Json     // the full row state BEFORE the change this snapshot precedes
+  changedBy   String
+  changedAt   DateTime @default(now())
+  changeNote  String?  // optional reason / "why" text from the admin
+
+  @@unique([entityType, entityId, version])
+  @@index([entityType, entityId])
+  @@index([changedAt])
+  @@map("entity_version_snapshots")
+}
+
 enum ModeLifecycleState {
   DRAFT
   VALIDATED
@@ -741,6 +769,12 @@ model Inquiry {
   corporateCoordinator       String?
   corporateContextCapturedAt DateTime?
   corporateContextCapturedBy String?
+  /// Phase B/C — link to a Phase-B TravelAgent or CorporateAccount. At most ONE of these two
+  /// is set per inquiry; the booking inherits that party's negotiated RateCard at quotation.
+  /// The legacy `agentProfileId` and `corporateClientRef` fields stay for backward compat with
+  /// pre-Phase-B data; new intake forms write to these two FKs.
+  travelAgentId              String?
+  corporateAccountId         String?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
   createdBy                  String    @default("actor-seed-system")
@@ -751,8 +785,12 @@ model Inquiry {
   duplicateFlags DuplicateDetectionFlag[]
   guestProfile   GuestProfile             @relation(fields: [guestProfileId], references: [id])
   agentProfile   AgentProfile?            @relation(fields: [agentProfileId], references: [id])
+  travelAgent      TravelAgent?           @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
+  corporateAccount CorporateAccount?      @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
 
   @@index([guestProfileId])
+  @@index([travelAgentId])
+  @@index([corporateAccountId])
   @@map("inquiries")
 }
 
@@ -1120,8 +1158,9 @@ model RoomType {
   name      String
   createdAt DateTime @default(now())
 
-  rooms          Room[]
-  committedHolds CommittedHold[]
+  rooms             Room[]
+  committedHolds    CommittedHold[]
+  rateOverrides     RoomTypeRateOverride[]
 
   @@map("room_types")
 }
@@ -1932,6 +1971,152 @@ model HumanDecisionRecord {
   @@index([aiDraftId])
   @@index([communicationId])
   @@map("human_decision_records")
+}
+
+// --- Travel agents, corporate accounts, rate cards (Phase B) -------------
+
+/** Mode-of-contact for agent/corporate primary contact. */
+enum ContactMode {
+  PHONE
+  EMAIL
+  WHATSAPP
+  IN_PERSON
+  OTHER
+}
+
+/** Discriminator for which kind of party a RateCard belongs to. */
+enum PartyType {
+  TRAVEL_AGENT
+  CORPORATE
+}
+
+/**
+ * Meal plan options carried on a RateCard. Mirrors the legacy `agent_rate` columns:
+ *   CP         = breakfast included
+ *   MAP_LUNCH  = breakfast + lunch
+ *   MAP_DINNER = breakfast + dinner
+ *   AP         = breakfast + lunch + dinner
+ * Standalone breakfast/lunch/dinner add-on rates live as separate fields on RateCard,
+ * not as MealPlanType values.
+ */
+enum MealPlanType {
+  CP
+  MAP_LUNCH
+  MAP_DINNER
+  AP
+}
+
+/**
+ * TravelAgent — a third-party booking agent the hotel works with. Tracked by
+ * EntityVersionSnapshot; commission rate (if any) lives on the operational AgentProfile
+ * row at the time of booking, not here. This table carries agent identity + their
+ * negotiated rate card.
+ */
+model TravelAgent {
+  id              String       @id // readable TA-YYYYMMDD-NNNN
+  displayName     String
+  contactNumber   String?
+  contactEmail    String?
+  modeOfContact   ContactMode  @default(PHONE)
+  notes           String?
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  createdBy       String
+  updatedAt       DateTime     @updatedAt
+
+  inquiries       Inquiry[]
+
+  @@index([displayName])
+  @@index([isActive])
+  @@map("travel_agents")
+}
+
+/**
+ * CorporateAccount — a company / institutional account with negotiated rates.
+ * Distinct from TravelAgent because corporates carry tax + billing fields and don't
+ * carry commission. Tracked by EntityVersionSnapshot.
+ */
+model CorporateAccount {
+  id              String       @id // readable CORP-YYYYMMDD-NNNN
+  displayName     String
+  contactNumber   String?
+  contactEmail    String?
+  modeOfContact   ContactMode  @default(EMAIL)
+  gstNumber       String?
+  billingAddress  String?
+  notes           String?
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  createdBy       String
+  updatedAt       DateTime     @updatedAt
+
+  inquiries       Inquiry[]
+
+  @@index([displayName])
+  @@index([isActive])
+  @@map("corporate_accounts")
+}
+
+/**
+ * RateCard — the rates an agent / corporate has negotiated with the hotel. Append-only
+ * versioned, same pattern as ConfigurationEntry: editing creates a new row with a new
+ * effectiveFrom and closes the prior with effectiveTo. Historical bookings always look up
+ * the rate card that was active at the time they were quoted.
+ *
+ * `partyType` + `partyId` is a polymorphic reference; no Prisma FK constraint. The admin
+ * service validates the referenced party exists on every write.
+ */
+model RateCard {
+  id                String       @id // readable RC-YYYYMMDD-NNNN
+  partyType         PartyType
+  partyId           String       // FK to TravelAgent.id OR CorporateAccount.id depending on partyType
+  // Base + extras
+  roomBaseRate      Decimal      @db.Decimal(10, 2)
+  extraBedRate      Decimal?     @db.Decimal(10, 2)
+  cnbPercent        Int?         // 0-100 — child-no-bed discount percentage
+  // Standalone meal add-on rates (à la carte)
+  breakfastRate     Decimal?     @db.Decimal(10, 2)
+  lunchRate         Decimal?     @db.Decimal(10, 2)
+  dinnerRate        Decimal?     @db.Decimal(10, 2)
+  // Meal-plan-inclusive rates
+  cpRate            Decimal?     @db.Decimal(10, 2)
+  mapLunchRate      Decimal?     @db.Decimal(10, 2)
+  mapDinnerRate     Decimal?     @db.Decimal(10, 2)
+  apRate            Decimal?     @db.Decimal(10, 2)
+  currency          String       @default("BTN")
+  effectiveFrom     DateTime     @default(now())
+  effectiveTo       DateTime?    // null = currently active
+  notes             String?
+  createdAt         DateTime     @default(now())
+  createdBy         String
+
+  overrides         RoomTypeRateOverride[]
+
+  @@index([partyType, partyId, effectiveFrom])
+  @@index([effectiveTo])
+  @@map("rate_cards")
+}
+
+/**
+ * RoomTypeRateOverride — optional override of `RateCard.roomBaseRate` for a specific
+ * RoomType. Tied to a specific RateCard version; when the admin creates a new RateCard
+ * version, the service copies the active overrides forward.
+ */
+model RoomTypeRateOverride {
+  id              String   @id @default(uuid())
+  rateCardId      String
+  roomTypeId      String
+  roomBaseRate    Decimal  @db.Decimal(10, 2)
+  notes           String?
+  createdAt       DateTime @default(now())
+  createdBy       String
+
+  rateCard        RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  roomType        RoomType @relation(fields: [roomTypeId], references: [id], onUpdate: Cascade)
+
+  @@unique([rateCardId, roomTypeId])
+  @@index([roomTypeId])
+  @@map("room_type_rate_overrides")
 }
 
 // --- Readable business IDs (PREFIX-YYYYMMDD-####, daily sequence) --------

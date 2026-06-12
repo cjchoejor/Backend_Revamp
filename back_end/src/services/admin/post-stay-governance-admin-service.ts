@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 async function readActive(prisma: PrismaClient, key: string) {
   const row = await getActiveConfigEntry(prisma, key);
@@ -53,6 +54,7 @@ export async function updateFeedbackTemplate(
   const existing = await prisma.feedbackSurveyTemplate.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError("FeedbackSurveyTemplate");
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "FeedbackSurveyTemplate", entityId: id, actorId });
     const updated = await tx.feedbackSurveyTemplate.update({
       where: { id },
       data: {
@@ -78,6 +80,7 @@ export async function deactivateFeedbackTemplate(prisma: PrismaClient, id: strin
   const existing = await prisma.feedbackSurveyTemplate.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError("FeedbackSurveyTemplate");
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "FeedbackSurveyTemplate", entityId: id, actorId });
     const updated = await tx.feedbackSurveyTemplate.update({ where: { id }, data: { isActive: false } });
     await writeAdminAuditEvent(tx, {
       actorId,
@@ -96,6 +99,7 @@ export async function reactivateFeedbackTemplate(prisma: PrismaClient, id: strin
   if (!existing) throw new NotFoundError("FeedbackSurveyTemplate");
   if (existing.isActive) throw new ValidationError("Template is already active");
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "FeedbackSurveyTemplate", entityId: id, actorId });
     const updated = await tx.feedbackSurveyTemplate.update({ where: { id }, data: { isActive: true } });
     await writeAdminAuditEvent(tx, {
       actorId,

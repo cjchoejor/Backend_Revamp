@@ -185,6 +185,69 @@ Prefixes are stored on the `ConfigurationEntry` row `idPrefix.assignments` (a fl
 
 **Phase 2 — done 2026-06-11**: dropped `@default(uuid())` on all 14 tier-A PKs; updated 31 service `create()` call sites (including 1 `upsert` and 1 `createMany`) to call `allocateReadableId(...)` and pass the result as `id`; added `onUpdate: Cascade` to the 8 FKs pointing into tier-A tables (already the Postgres default for these but now explicit in the schema); ran [scripts/backfill-tier-a-readable-ids.ts](back_end/scripts/backfill-tier-a-readable-ids.ts) which rewrote 38 existing UUID rows to readable IDs (sequence numbers derived from each row's `createdAt`; DisputeRecord uses `openedAt` since it has no `createdAt`). FK references cascaded automatically thanks to the existing `ON UPDATE CASCADE` constraints. Re-run the backfill with `--commit` to apply, or omit for a dry run.
 
+### EntityVersionSnapshot — version history for in-place admin CRUD tables
+
+Per ACIG §3.4 the audit trail records WHO changed WHAT and WHEN via TraceEvent, but the *prior values* were not stored — once a HotelProfile field was overwritten, the previous state was gone. Phase A (2026-06-11) closed that gap with a generic snapshot table.
+
+**Schema**: `EntityVersionSnapshot` in [schema.prisma](back_end/prisma/schema.prisma) — `(entityType, entityId, version, rowJson, changedBy, changedAt, changeNote)` with `@@unique([entityType, entityId, version])`.
+
+**Wrapper**: [`captureSnapshotTx`](back_end/src/lib/admin/entity-version-snapshot.ts) — call **inside an existing `prisma.$transaction`** immediately before any `tx.<entity>.update({...})` on a tracked table. Captures the current row state as JSON, increments the per-entity version counter, and writes the snapshot. `withEntityVersionSnapshot` is the higher-level form for callers that own the transaction.
+
+**Tracked entities** (17 — defined in `TRACKED_ENTITY_TYPES`): HotelProfile, Department, Role, StaffUser, RatePlanRegistry, SeasonCalendar, PackageRegistry, CancellationPolicyRegistry, ModeConfiguration, CommunicationTemplate, InvoiceTemplate, FeedbackSurveyTemplate, HandoffChecklistTemplate, WorkOrderTemplate, VipNotificationRoutingConfig — plus the 2 Phase-B-to-come tables (TravelAgent, CorporateAccount). **Not tracked**: ConfigurationEntry / PolicyRegistry (already use append-only versioning natively); high-volume operational tables (TraceEvent, etc. — already audit-by-design).
+
+**Routes** (L4-only): `GET /admin/version-snapshots?entityType=X&entityId=Y` lists snapshots newest-first; `POST /admin/version-snapshots/restore` body `{snapshotId, changeNote?}` restores. Restore captures another snapshot of the current state before reverting, so the restore itself is undoable.
+
+**Adding to a new admin page** (mechanical):
+```tsx
+import { VersionsTab } from "@/components/admin/versions-tab";
+
+<VersionsTab
+  entityType="Department"          // must be in TRACKED_ENTITY_TYPES
+  entityId={departmentId}
+  invalidateOnRestore={[["admin", "departments"]]}  // query keys to refresh after restore
+/>
+```
+
+The component shows snapshots newest-first, each row expands to view the prior JSON, "Restore" prompts for a change note then a confirmation. Pages currently wired with the tab: HotelProfile. The other 14 are mechanical additions — drop the component anywhere on the page, pass the entity's id, and pass the query keys it uses for its own data fetching.
+
+**Adding tracking to a new entity**:
+1. Add the entity name to `TRACKED_ENTITY_TYPES` in [entity-version-snapshot.ts](back_end/src/lib/admin/entity-version-snapshot.ts)
+2. Add the Prisma delegate name to `ENTITY_DELEGATE` in the same file
+3. Inside each `prisma.$transaction(async (tx) => …)` that updates this entity, call `await captureSnapshotTx(tx, { entityType, entityId, actorId })` immediately before the `.update()`
+4. Drop `<VersionsTab>` on the admin page
+
+### Travel agents, corporate accounts, and rate cards (Phase B)
+
+Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **CorporateAccount** under `/admin/travel-agents` and `/admin/corporate-accounts`. Each carries a versioned **RateCard** (append-only — editing creates a new version, prior gets `effectiveTo` set) plus optional per-room-type overrides.
+
+**Models** ([schema.prisma](back_end/prisma/schema.prisma)):
+- `TravelAgent` — id (`TA-YYYYMMDD-NNNN`), displayName, contactNumber, contactEmail, modeOfContact (PHONE/EMAIL/WHATSAPP/IN_PERSON/OTHER), notes, isActive
+- `CorporateAccount` — same shape + gstNumber + billingAddress
+- `RateCard` — partyType (TRAVEL_AGENT/CORPORATE) + partyId (polymorphic, no FK), roomBaseRate, extraBedRate, cnbPercent, breakfast/lunch/dinner standalone rates, CP/MAP_LUNCH/MAP_DINNER/AP meal-plan rates, currency, effectiveFrom/effectiveTo
+- `RoomTypeRateOverride` — per-room-type roomBaseRate override on a specific RateCard. New RateCard versions automatically carry forward the active overrides from the prior version.
+
+**Enums**: `ContactMode`, `PartyType`, `MealPlanType` (CP / MAP_LUNCH / MAP_DINNER / AP). Standalone meal add-ons (breakfast/lunch/dinner) are separate Decimal fields on RateCard, not enum values.
+
+**Services** (all 3 in `back_end/src/services/admin/`):
+- `travel-agent-admin-service.ts` — CRUD with EntityVersionSnapshot integration
+- `corporate-account-admin-service.ts` — CRUD with snapshots
+- `rate-card-admin-service.ts` — `createRateCardVersion` (supersedes prior + copies overrides forward), `setRoomTypeRateOverride`, `deleteRoomTypeRateOverride`, `listRateCardsForParty`, `getActiveRateCard`
+
+**Rate resolution helper** at [`back_end/src/lib/agent-rate-resolution.ts`](back_end/src/lib/agent-rate-resolution.ts) — `resolveAgentRate({ partyType, partyId, roomTypeId, mealPlan?, asOf? })` returns the applicable per-night rate breakdown (room rate after override resolution + meal plan rate + standalone add-ons + cnbPercent + currency). Returns `null` if no rate card exists for the party — caller (Phase C: S2 quotation service) decides whether to fall back to the hotel's standard rate plan.
+
+**Versioning**: TravelAgent and CorporateAccount were added to `TRACKED_ENTITY_TYPES` in [entity-version-snapshot.ts](back_end/src/lib/admin/entity-version-snapshot.ts) — every CRUD save on either captures a snapshot. RateCard is versioned natively via the append-only pattern (no EntityVersionSnapshot needed).
+
+**Reusable rate-card editor** at [`front_end/src/components/admin/rate-card-editor.tsx`](front_end/src/components/admin/rate-card-editor.tsx) — used by both the Travel Agents and Corporate Accounts pages. Handles the full grid of rate fields, per-room-type override CRUD, and historical version listing in one self-contained component.
+
+**Phase C — done 2026-06-12**: front-desk wiring complete.
+
+- **Schema** ([schema.prisma](back_end/prisma/schema.prisma)): Inquiry gained two nullable FKs — `travelAgentId` and `corporateAccountId`. Mutually exclusive. Backed by `ON UPDATE CASCADE` (matches the readable-ID pattern). Migration `20260612071638_inquiry_links_to_phase_b`.
+- **L1-accessible lookup routes** at [`back_end/src/routes/lookups/router.ts`](back_end/src/routes/lookups/router.ts) — `GET /api/lookups/travel-agents/search?q=…` and `/api/lookups/corporate-accounts/search?q=…`. These mirror the L4-only admin search but with L1 authority so receptionists can use them during intake.
+- **S1 inquiry service** ([s1-inquiry-service.ts](back_end/src/services/domain/s1-inquiry-service.ts)): `createInquiry` accepts `travelAgentId` and `corporateAccountId`, validates mutual exclusivity, verifies the referenced party exists and is active, and includes both relations in `getInquiryById`. DTO updated with Zod `.refine()` enforcing the XOR.
+- **S2 quotation service** ([s2-quotation-service.ts](back_end/src/services/domain/s2-quotation-service.ts)): new helper `resolveAgentRateForEntryQuotation` looks up the inquiry's linked party, calls `resolveAgentRate` ([agent-rate-resolution.ts](back_end/src/lib/agent-rate-resolution.ts)), and when a card exists overrides `effectiveRate` / `resolvedNightlyRate` / `currency` with the negotiated rate. `commercialTerms` now carries an `agentRate` block (rateCardId, partyType, partyId, roomRate, source, addOns, cnbPercent, currency) plus a `standardPricing` reference of what the hotel's standard rate plan would have charged. Below-MSR check is skipped for agent rates (they're negotiated, not subject to MSR). Currently only wired into single-party `createQuotation`; group quotations still use standard pricing.
+- **Front-desk picker** ([agent-corporate-picker.tsx](front_end/src/components/inquiries/agent-corporate-picker.tsx)): reusable mutually-exclusive picker (None / Travel agent / Corporate) with debounced search-by-name and click-to-select. Wired into the new-inquiry form ([new-inquiry-form.tsx](front_end/src/components/inquiries/new-inquiry-form.tsx)).
+- **Backward compatibility**: legacy `Inquiry.agentProfileId` and `Inquiry.corporateClientRef` columns remain. Pre-Phase-B inquiries still work; new intake writes to the two FK columns instead.
+
 ### Cancellation entry points
 
 | Cancel type | Service function | Route | Stage gate | Authority |

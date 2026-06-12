@@ -83,6 +83,8 @@ export const adminNavGroups: AdminNavGroup[] = [
       { title: "Rate plans", href: "/admin/rate-plans", icon: Receipt, description: "Rate plan registry & walk-in designation" },
       { title: "Seasons", href: "/admin/seasons", icon: Receipt, description: "Season calendar (non-overlapping)" },
       { title: "Packages", href: "/admin/packages", icon: Receipt, description: "Package registry & inclusions" },
+      { title: "Travel agents", href: "/admin/travel-agents", icon: Users, description: "Travel agencies + their negotiated rate cards" },
+      { title: "Corporate accounts", href: "/admin/corporate-accounts", icon: Building2, description: "Company accounts + their negotiated rate cards" },
       { title: "Commercial thresholds", href: "/admin/commercial", icon: Receipt, description: "Discount, FOC, overbooking, credit ceiling, write-off" },
     ],
   },

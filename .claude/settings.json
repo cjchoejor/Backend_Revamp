@@ -51,7 +51,11 @@
       "PowerShell($p = Get-CimInstance Win32_Process -Filter \"ProcessId=44112\"; \"PID 44112 = \" + $p.Name + \"`nCmd: \" + $p.CommandLine)",
       "Bash(grep -v -E \"//.*$\")",
       "PowerShell(Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort, OwningProcess, @{N='Process';E={\\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($_.OwningProcess\\)\"\\).Name}})",
-      "PowerShell(Stop-Process -Id 29180 -Force)"
+      "PowerShell(Stop-Process -Id 29180 -Force)",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { Stop-Process -Id $conn.OwningProcess -Force; Start-Sleep -Milliseconds 500; \"Stopped backend on PID $\\($conn.OwningProcess\\)\" } else { \"Port 4000 free\" })",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { Stop-Process -Id $conn.OwningProcess -Force; Start-Sleep -Milliseconds 600; \"Stopped backend on PID $\\($conn.OwningProcess\\)\" } else { \"Port 4000 free\" })",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { Stop-Process -Id $conn.OwningProcess -Force; Start-Sleep -Milliseconds 600; \"Killed backend on PID $\\($conn.OwningProcess\\)\" } else { \"Port 4000 free\" })",
+      "Bash(grep -nB1 -A30 \"^export async function listRooms\\\\b\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\admin\\\\inventory-admin-service.ts')"
     ]
   }
 }

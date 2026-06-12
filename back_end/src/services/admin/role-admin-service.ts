@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { ActorLevel } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 const LEVELS: ActorLevel[] = [ActorLevel.L1, ActorLevel.L2, ActorLevel.L3, ActorLevel.L4];
 
@@ -63,6 +64,7 @@ export async function updateRole(
   if (input.actorLevel && !LEVELS.includes(input.actorLevel)) throw new ValidationError("invalid actorLevel");
 
   return prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "Role", entityId: id, actorId });
     const updated = await tx.role.update({
       where: { id },
       data: {

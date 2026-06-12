@@ -3,6 +3,7 @@ import { ModeLifecycleState } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { invalidatePolicyRegistryCache } from "../../lib/policy-registry-runtime.js";
+import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 export async function listModes(prisma: PrismaClient) {
   return prisma.modeConfiguration.findMany({ orderBy: [{ modeKey: "asc" }, { version: "desc" }] });
@@ -43,6 +44,7 @@ export async function saveMode(
         throw new ValidationError("Cannot update a superseded mode");
       }
 
+      await captureSnapshotTx(tx, { entityType: "ModeConfiguration", entityId: input.id, actorId });
       const updated = await tx.modeConfiguration.update({
         where: { id: input.id },
         data: {
@@ -106,6 +108,7 @@ export async function activateMode(prisma: PrismaClient, id: string, actorId: st
       data: { isActive: false, lifecycleState: ModeLifecycleState.SUPERSEDED },
     });
 
+    await captureSnapshotTx(tx, { entityType: "ModeConfiguration", entityId: id, actorId });
     const updated = await tx.modeConfiguration.update({
       where: { id },
       data: { isActive: true, lifecycleState: ModeLifecycleState.ACTIVE, createdBy: actorId },
@@ -127,6 +130,7 @@ export async function deactivateMode(prisma: PrismaClient, id: string, actorId: 
     const existing = await tx.modeConfiguration.findUnique({ where: { id } });
     if (!existing) throw new NotFoundError("ModeConfiguration");
 
+    await captureSnapshotTx(tx, { entityType: "ModeConfiguration", entityId: id, actorId });
     const updated = await tx.modeConfiguration.update({
       where: { id },
       data: {

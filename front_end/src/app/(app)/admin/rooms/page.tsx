@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCategories, listAdminRooms, listRoomTypes, markRoomDeficient, reactivateAdminRoom, resolveRoomDeficient } from "@/lib/api/admin";
+import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCategories, listAdminRooms, listRoomTypes, markRoomDeficient, reactivateAdminRoom, resolveRoomDeficient, updateAdminRoom } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
+type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string; capacity: string };
 
 export default function AdminRoomsPage() {
   const { session } = useSession();
@@ -17,6 +18,14 @@ export default function AdminRoomsPage() {
   const prompt = usePrompt();
   const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "", capacity: "2" });
   const [defForm, setDefForm] = useState<DeficientForm | null>(null);
+
+  // Edit-in-place: when not null, the row with this roomId renders as editable inputs.
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "", capacity: "" });
+
+  // Filters
+  const [filterRoomTypeId, setFilterRoomTypeId] = useState<string>("ALL");
+  const [filterFloor, setFilterFloor] = useState<string>("ALL");
 
   const roomsQuery = useQuery({
     queryKey: ["admin", "rooms"],
@@ -44,6 +53,26 @@ export default function AdminRoomsPage() {
       void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Create failed"),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: () => {
+      if (!editId) throw new Error("No row in edit mode");
+      const floorNumber = editDraft.floorNumber.trim() === "" ? null : Number.parseInt(editDraft.floorNumber, 10);
+      const capacity = editDraft.capacity.trim() === "" ? undefined : Number.parseInt(editDraft.capacity, 10);
+      return updateAdminRoom(session!, editId, {
+        roomNumber: editDraft.roomNumber.trim(),
+        roomTypeId: editDraft.roomTypeId,
+        floorNumber,
+        capacity,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Room updated");
+      setEditId(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Update failed"),
   });
 
   const deactivateMutation = useMutation({
@@ -105,7 +134,39 @@ export default function AdminRoomsPage() {
     enabled: !!session && session.actorLevel === "L4",
   });
 
-  const rooms = roomsQuery.data?.items ?? [];
+  const allRooms = roomsQuery.data?.items ?? [];
+
+  // Derive the unique floor values from the loaded inventory for the floor filter.
+  const distinctFloors = Array.from(
+    new Set(allRooms.map((r) => (r.floorNumber == null ? "_none" : String(r.floorNumber)))),
+  ).sort((a, b) => {
+    if (a === "_none") return 1;
+    if (b === "_none") return -1;
+    return Number(a) - Number(b);
+  });
+
+  // Apply filters.
+  const rooms = allRooms.filter((r) => {
+    if (filterRoomTypeId !== "ALL" && r.roomType.id !== filterRoomTypeId) return false;
+    if (filterFloor !== "ALL") {
+      if (filterFloor === "_none" && r.floorNumber != null) return false;
+      if (filterFloor !== "_none" && String(r.floorNumber ?? "") !== filterFloor) return false;
+    }
+    return true;
+  });
+
+  function startEdit(r: { id: string; roomNumber: string; roomType: { id: string }; floorNumber: number | null; capacity: number }) {
+    setEditId(r.id);
+    setEditDraft({
+      roomNumber: r.roomNumber,
+      roomTypeId: r.roomType.id,
+      floorNumber: r.floorNumber == null ? "" : String(r.floorNumber),
+      capacity: String(r.capacity ?? ""),
+    });
+  }
+  function cancelEdit() {
+    setEditId(null);
+  }
 
   return (
     <div className="space-y-8 pb-16">
@@ -215,12 +276,46 @@ export default function AdminRoomsPage() {
       )}
 
       <div className="admin-panel overflow-x-auto p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-3 border-b border-[var(--admin-rule)] pb-3 text-xs">
+          <span className="admin-muted">Filter:</span>
+          <label className="flex items-center gap-1">
+            <span className="admin-muted">Room type</span>
+            <select className="admin-select w-44" value={filterRoomTypeId} onChange={(e) => setFilterRoomTypeId(e.target.value)}>
+              <option value="ALL">All</option>
+              {(roomTypesQuery.data?.items ?? []).map((rt) => (
+                <option key={rt.id} value={rt.id}>{rt.code} — {rt.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1">
+            <span className="admin-muted">Floor</span>
+            <select className="admin-select w-28" value={filterFloor} onChange={(e) => setFilterFloor(e.target.value)}>
+              <option value="ALL">All</option>
+              {distinctFloors.map((f) => (
+                <option key={f} value={f}>{f === "_none" ? "(no floor)" : `Floor ${f}`}</option>
+              ))}
+            </select>
+          </label>
+          {(filterRoomTypeId !== "ALL" || filterFloor !== "ALL") && (
+            <button
+              type="button"
+              className="admin-btn admin-btn-ghost text-[10px]"
+              onClick={() => { setFilterRoomTypeId("ALL"); setFilterFloor("ALL"); }}
+            >
+              Clear filters
+            </button>
+          )}
+          <span className="ml-auto admin-muted">
+            Showing {rooms.length} of {allRooms.length}
+          </span>
+        </div>
         <table className="admin-table">
           <thead>
             <tr>
               <th>Room</th>
               <th>Type</th>
               <th>Floor</th>
+              <th>Capacity</th>
               <th>Claim</th>
               <th>Physical</th>
               <th>Deficient</th>
@@ -229,7 +324,70 @@ export default function AdminRoomsPage() {
             </tr>
           </thead>
           <tbody>
-            {rooms.map((r) => (
+            {rooms.map((r) => {
+              const inEdit = editId === r.id;
+              if (inEdit) {
+                return (
+                  <tr key={r.id} className="bg-[var(--admin-brass-glow)]/30">
+                    <td>
+                      <input
+                        className="admin-input w-20"
+                        value={editDraft.roomNumber}
+                        onChange={(e) => setEditDraft({ ...editDraft, roomNumber: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        className="admin-select"
+                        value={editDraft.roomTypeId}
+                        onChange={(e) => setEditDraft({ ...editDraft, roomTypeId: e.target.value })}
+                      >
+                        {(roomTypesQuery.data?.items ?? []).map((rt) => (
+                          <option key={rt.id} value={rt.id}>{rt.code}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input w-16"
+                        type="number"
+                        value={editDraft.floorNumber}
+                        onChange={(e) => setEditDraft({ ...editDraft, floorNumber: e.target.value })}
+                        placeholder="—"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input w-16"
+                        type="number"
+                        min={1}
+                        value={editDraft.capacity}
+                        onChange={(e) => setEditDraft({ ...editDraft, capacity: e.target.value })}
+                      />
+                    </td>
+                    <td>{r.currentClaimState}</td>
+                    <td>{r.physicalState}</td>
+                    <td>{r.isDeficient ? "Yes" : "—"}</td>
+                    <td>{r.isBlocked ? "Yes" : "—"}</td>
+                    <td className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-success text-[10px]"
+                          disabled={updateMutation.isPending || !editDraft.roomNumber.trim() || !editDraft.roomTypeId}
+                          onClick={() => updateMutation.mutate()}
+                        >
+                          Save
+                        </button>
+                        <button type="button" className="admin-btn admin-btn-ghost text-[10px]" onClick={cancelEdit}>
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }
+              return (
               <tr key={r.id}>
                 <td>
                   <strong>{r.roomNumber}</strong>
@@ -238,12 +396,20 @@ export default function AdminRoomsPage() {
                   {r.roomType.name} <span className="text-xs opacity-60">({r.roomType.code})</span>
                 </td>
                 <td>{r.floorNumber ?? "—"}</td>
+                <td>{r.capacity ?? "—"}</td>
                 <td>{r.currentClaimState}</td>
                 <td>{r.physicalState}</td>
                 <td>{r.isDeficient ? "Yes" : "—"}</td>
                 <td>{r.isBlocked ? "Yes" : "—"}</td>
                 <td className="text-right">
                   <div className="flex justify-end gap-1">
+                    <button
+                      type="button"
+                      className="admin-btn text-[10px]"
+                      onClick={() => startEdit(r)}
+                    >
+                      Edit
+                    </button>
                     {r.isDeficient && (
                       <button
                         type="button"
@@ -331,7 +497,8 @@ export default function AdminRoomsPage() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
         <p className="admin-muted mt-3 text-xs">{rooms.length} room(s)</p>

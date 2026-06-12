@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/api/client";
 import { getHotelProfile, updateHotelProfile, type HotelProfileAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
+import { VersionsTab } from "@/components/admin/versions-tab";
 
 type ContactRow = { label: string; value: string };
 
@@ -144,6 +145,16 @@ export default function AdminHotelProfilePage() {
             </p>
             <SmartConfigEditor value={holidays} onChange={(v) => setHolidays(Array.isArray(v) ? (v as unknown[]) : [])} />
           </div>
+        </div>
+      )}
+
+      {profileQuery.data?.id && (
+        <div className="mt-10 border-t border-border pt-6">
+          <VersionsTab
+            entityType="HotelProfile"
+            entityId={profileQuery.data.id}
+            invalidateOnRestore={[["admin", "hotel-profile"]]}
+          />
         </div>
       )}
     </div>
