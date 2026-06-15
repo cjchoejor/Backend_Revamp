@@ -327,26 +327,8 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
   const canConfirmS4 =
     exitChecks.every((c) => c.ok) && entry.currentStage === "S3";
 
-  if (entry.currentStage !== "S3") {
-    return (
-      <StagePanel meta={meta}>
-        <Card className="border-[var(--success)]/40 bg-accent">
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="font-medium">Entry is at {entry.currentStage}</p>
-              <p className="text-sm text-muted-foreground">Continue on the active stage workspace.</p>
-            </div>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // Stage-mismatch gate removed — ReadOnlyShell + <fieldset disabled> in stage-page.tsx handles
+  // past/future stage viewing. Workspace content always renders.
 
   return (
     <StagePanel meta={meta}>

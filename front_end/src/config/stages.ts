@@ -25,6 +25,9 @@ export const stageById = Object.fromEntries(STAGES.map((s) => [s.id, s])) as Rec
 
 export function stageSlug(stage: Stage | string | null | undefined): string {
   if (!stage) return "s1";
+  // TERMINAL is not a navigable stage — it's the end state of the workflow. Route to S9
+  // (the natural landing) so the user sees the final stage in read-only.
+  if (String(stage).toUpperCase() === "TERMINAL") return "s9";
   const meta = stageById[stage as Stage];
   if (meta?.slug) return meta.slug;
   return String(stage).toLowerCase();

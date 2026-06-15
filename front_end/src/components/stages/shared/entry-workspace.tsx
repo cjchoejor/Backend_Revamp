@@ -32,16 +32,20 @@ export function EntryWorkspace({ entryId, stageSlug, stage, children }: EntryWor
 
   const isLeavingPage = transitionActive && !!targetStage && targetStage !== stage;
   const isArrivingPage = transitionActive && targetStage === stage;
-  const stageMatchesEntry = entry?.currentStage === stage;
   const blockWorkspace =
-    transitionActive &&
-    (isLeavingPage || (isArrivingPage && (!stageMatchesEntry || isLoading || isFetching)));
+    transitionActive && (isLeavingPage || (isArrivingPage && (isLoading || isFetching)));
 
   useEffect(() => {
     if (!transitionActive || !entry) return;
 
+    // End the transition once we've ARRIVED at the target stage's URL and finished loading.
+    // We deliberately do NOT require `entry.currentStage === targetStage` — that breaks
+    // backward navigation (viewing an old stage on an entry that has already progressed),
+    // where the entry's stage will never move backwards. For forward transitions after an
+    // action, by the time loading completes the refetched entry will already reflect the
+    // server-side stage change, so this works for both cases.
     if (targetStage) {
-      if (entry.currentStage === targetStage && !isLoading && !isFetching) {
+      if (stage === targetStage && !isLoading && !isFetching) {
         endTransition();
       }
       return;
@@ -50,7 +54,7 @@ export function EntryWorkspace({ entryId, stageSlug, stage, children }: EntryWor
     if (!isLoading && !isFetching) {
       endTransition();
     }
-  }, [transitionActive, targetStage, entry, isLoading, isFetching, endTransition]);
+  }, [transitionActive, targetStage, stage, entry, isLoading, isFetching, endTransition]);
 
   if (isLoading && !entry && !transitionActive) {
     return (
@@ -81,7 +85,7 @@ export function EntryWorkspace({ entryId, stageSlug, stage, children }: EntryWor
       {blockWorkspace ? (
         <StageContentSkeleton />
       ) : (
-        <EntryDetailProvider entry={entry} isFetching={isFetching}>
+        <EntryDetailProvider entry={entry} isFetching={isFetching} viewingStage={stage}>
           {children}
         </EntryDetailProvider>
       )}

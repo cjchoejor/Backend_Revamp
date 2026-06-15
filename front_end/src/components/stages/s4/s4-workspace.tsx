@@ -229,23 +229,7 @@ export function S4Workspace({ entry }: S4WorkspaceProps) {
   const custodianSignOffComplete = custodianSignOffItems.every((item) => custodianSignOff[item.key]);
   const systemOutcomesComplete = s4SystemOutcomes.every((c) => c.ok);
 
-  if (entry.currentStage !== "S3" && entry.currentStage !== "S4") {
-    return (
-      <StagePanel meta={meta}>
-        <Card>
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="font-medium">Entry is at {entry.currentStage}</p>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // Stage-mismatch gate removed — ReadOnlyShell handles past/future stage viewing.
 
   return (
     <StagePanel meta={meta}>

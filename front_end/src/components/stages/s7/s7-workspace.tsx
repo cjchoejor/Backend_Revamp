@@ -475,25 +475,7 @@ export function S7Workspace({ entry }: S7WorkspaceProps) {
 
   const canProgressS8 = s7ExitChecks.every((c) => c.ok);
 
-  if (entry.currentStage !== "S7") {
-    return (
-      <StagePanel meta={meta}>
-        <Card>
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="font-medium">
-              Entry is at <StatusBadge status={entry.currentStage} />
-            </p>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // Stage-mismatch gate removed — ReadOnlyShell handles past/future stage viewing.
 
   return (
     <StagePanel meta={meta}>

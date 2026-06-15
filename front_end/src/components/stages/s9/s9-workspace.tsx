@@ -327,25 +327,7 @@ export function S9Workspace({ entry }: S9WorkspaceProps) {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "H5 fulfil failed"),
   });
 
-  if (entry.currentStage !== "S9" && !isClosed) {
-    return (
-      <StagePanel meta={meta}>
-        <Card>
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="font-medium">
-              Entry is at <StatusBadge status={entry.currentStage} />
-            </p>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // Stage-mismatch gate removed — ReadOnlyShell handles past/future stage viewing.
 
   return (
     <StagePanel meta={meta}>
@@ -430,6 +412,68 @@ export function S9Workspace({ entry }: S9WorkspaceProps) {
               </p>
               {entry.noShowDetermination.decisionReason && (
                 <p className="mt-1 text-muted-foreground">{entry.noShowDetermination.decisionReason}</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Folio details — always visible; useful for historical reading on closed entries. */}
+        {folio && (folioLines.length > 0 || folioPayments.length > 0 || invoices.length > 0) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Folio details</CardTitle>
+              <CardDescription>Lines, payments, and invoices on this folio.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm">
+              {folioLines.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Lines ({folioLines.length})</p>
+                  <div className="space-y-1">
+                    {folioLines.map((l) => (
+                      <div key={l.id} className="flex items-center justify-between gap-2 border-b border-border/50 pb-1 last:border-0">
+                        <div className="min-w-0 flex-1">
+                          <span className="text-xs font-mono text-muted-foreground">{l.lineType}</span>
+                          <span className="ml-2">{l.description}</span>
+                        </div>
+                        <span className="font-mono text-right">{Number(l.amount).toFixed(2)} {l.currency}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {folioPayments.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Payments ({folioPayments.length})</p>
+                  <div className="space-y-1">
+                    {folioPayments.map((p) => (
+                      <div key={p.id} className="flex items-center justify-between gap-2 border-b border-border/50 pb-1 last:border-0">
+                        <div className="min-w-0 flex-1 text-xs">
+                          <span className="font-mono">{p.paymentDirection}</span>
+                          {p.receivedAt && <span className="ml-2 text-muted-foreground">{new Date(p.receivedAt).toLocaleDateString()}</span>}
+                          {p.notes && <span className="ml-2 text-muted-foreground">— {p.notes}</span>}
+                        </div>
+                        <span className="font-mono text-right">{Number(p.amount).toFixed(2)} {p.currency}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {invoices.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Invoices ({invoices.length})</p>
+                  <div className="space-y-1">
+                    {invoices.map((inv) => (
+                      <div key={inv.id} className="flex items-center justify-between gap-2 border-b border-border/50 pb-1 last:border-0">
+                        <div className="min-w-0 flex-1 text-xs">
+                          <span className="font-mono">{formatListId(inv.id)}</span>
+                          <span className="ml-2">{inv.invoiceType}</span>
+                          <span className="ml-2"><StatusBadge status={inv.state} /></span>
+                        </div>
+                        <span className="font-mono text-right text-muted-foreground">{inv.dispatchedAt ? new Date(inv.dispatchedAt).toLocaleDateString() : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>

@@ -99,11 +99,8 @@ export function GenericStageWorkspace({
           </Card>
         )}
 
-        {entry.currentStage !== stage && (
-          <p className="text-sm text-amber-600 dark:text-amber-400">
-            This entry is currently at {entry.currentStage}. Actions may be read-only.
-          </p>
-        )}
+        {/* Stage-mismatch warning removed — ReadOnlyShell in stage-page.tsx now shows a more
+            prominent banner when viewing a past or future stage. */}
       </div>
     </StagePanel>
   );

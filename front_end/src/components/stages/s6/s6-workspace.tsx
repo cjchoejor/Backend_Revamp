@@ -244,26 +244,7 @@ export function S6Workspace({ entry }: S6WorkspaceProps) {
     },
   });
 
-  if (entry.currentStage !== "S6") {
-    return (
-      <StagePanel meta={meta}>
-        <Card>
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="font-medium">
-              Entry is at <StatusBadge status={entry.currentStage} />
-              {entry.currentStage === "S5" && " — complete pre-arrival and progress to S6 first."}
-            </p>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // Stage-mismatch gate removed — ReadOnlyShell handles past/future stage viewing.
 
   return (
     <StagePanel meta={meta}>

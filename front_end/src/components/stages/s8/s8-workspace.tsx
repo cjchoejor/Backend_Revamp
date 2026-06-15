@@ -338,25 +338,7 @@ export function S8Workspace({ entry }: S8WorkspaceProps) {
 
   const canProgressS9 = s8ExitChecks.filter((c) => c.label !== "H5 (created on S9 progression)").every((c) => c.ok);
 
-  if (entry.currentStage !== "S8") {
-    return (
-      <StagePanel meta={meta}>
-        <Card>
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <p className="font-medium">
-              Entry is at <StatusBadge status={entry.currentStage} />
-            </p>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // Stage-mismatch gate removed — ReadOnlyShell handles past/future stage viewing.
 
   return (
     <StagePanel meta={meta}>

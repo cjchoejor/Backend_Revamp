@@ -231,28 +231,9 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
     selectMutation.mutate({ configurationId: configId, roomId: room.roomId, isDeficient });
   };
 
-  if (entry.currentStage !== "S1") {
-    return (
-      <StagePanel meta={meta}>
-        <Card className="border-[var(--success)]/40 bg-accent">
-          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="font-medium">S1 complete — entry is now at {entry.currentStage}</p>
-              <p className="text-sm text-muted-foreground">
-                Continue quotation and hold workflow on the next stage.
-              </p>
-            </div>
-            <Button variant="gradient" asChild>
-              <Link href={stagePath(entry.id, entry.currentStage)}>
-                Open {entry.currentStage} workspace
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </StagePanel>
-    );
-  }
+  // The stage-mismatch gate (was: `if (entry.currentStage !== "S1") return <placeholder>`) has
+  // been removed — the read-only shell + <fieldset disabled> in stage-page.tsx now handles the
+  // case when the operator views a past or future stage. Workspace content always renders.
 
   return (
     <StagePanel meta={meta}>

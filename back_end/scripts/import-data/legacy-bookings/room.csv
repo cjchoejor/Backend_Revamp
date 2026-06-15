@@ -1,0 +1,28 @@
+room_no,room_type,phone_no,no_of_beds,adult_capacity,children_capacity,room_rate,availability_status,bed_size,extra_bed_availability,max_children_with_extra_bed,extra_rate_per_bed,image_room,cnb_percent,room_rate_indian,cnb_percent_indian,extra_rate_per_bed_indian
+5051,Family Apartment(King),505,1,2,1,4000.00,reserved,King Size,1,1,900.00,,0,4400.00,0,990.00
+5052,Family Apartment(Twin),505,2,2,1,3500.00,reserved,Single Size,1,1,900.00,,0,3850.00,0,990.00
+6032,Family Apartment(Twin),603,2,2,1,3500.00,reserved,Single Size,1,1,900.00,,0,3850.00,0,990.00
+7031,Family Apartment(King),703,1,2,1,4000.00,reserved,King Size,1,1,900.00,,0,4400.00,0,990.00
+202,Standard Double,202,2,2,1,1800.00,occupied,Single Size,1,1,900.00,,0,1980.00,0,990.00
+702,Executive Apartment,702,1,2,1,4000.00,reserved,King Size,2,1,900.00,,0,4400.00,0,990.00
+7032,Family Apartment(Twin),703,2,2,1,3500.00,reserved,Single Size,1,1,900.00,,0,3850.00,0,990.00
+305,Deluxe Double,305,2,2,1,2100.00,occupied,Single Size,1,1,900.00,,0,2310.00,0,990.00
+306,Deluxe Double,306,2,2,1,2100.00,occupied,Single Size,1,1,900.00,,0,2310.00,0,990.00
+502,Executive Apartment,502,1,2,1,4000.00,reserved,King Size,2,1,900.00,,0,4400.00,0,990.00
+203,Standard Double,203,2,2,1,1800.00,reserved,Single Size,1,1,900.00,,0,1980.00,0,990.00
+601,Deluxe Studio Apartment,601,1,2,1,3500.00,occupied,King Size,1,1,900.00,,0,3850.00,0,990.00
+6031,Family Apartment(King),603,1,2,1,4000.00,reserved,King Size,1,1,900.00,,0,4400.00,0,990.00
+304,Executive,304,1,2,1,3000.00,reserved,King Size,2,1,900.00,,0,3300.00,0,990.00
+307,Deluxe Double,307,2,2,1,2100.00,reserved,Single Size,1,1,900.00,,0,2310.00,0,990.00
+602,Executive Apartment,602,1,2,1,4000.00,reserved,King Size,2,1,900.00,,0,4400.00,0,990.00
+701,Deluxe Studio Apartment,701,1,2,1,3500.00,reserved,King Size,1,1,900.00,,0,3850.00,0,990.00
+201,Suite,201,1,2,1,4500.00,occupied,King Size,2,1,900.00,,0,4950.00,0,990.00
+303,Standard Double,303,2,2,1,1800.00,reserved,Single Size,1,1,900.00,,0,1980.00,0,990.00
+204,Deluxe Double,204,2,2,1,2100.00,reserved,Single Size,1,1,900.00,,0,2310.00,0,990.00
+205,Deluxe Double,205,2,2,1,2100.00,reserved,Single Size,1,1,900.00,,0,2310.00,0,990.00
+206,Deluxe Double,206,2,2,1,2100.00,reserved,Single Size,1,1,900.00,,0,2310.00,0,990.00
+302,Standard Double,302,2,2,1,1800.00,occupied,Single Size,1,1,900.00,,0,1980.00,0,990.00
+301,Standard Single,301,1,2,0,1558.44,reserved,Queen Size,1,0,900.00,,0,1650.00,0,990.00
+501,Deluxe Studio Apartment,501,1,2,1,3500.00,reserved,King Size,1,1,900.00,,0,3850.00,0,990.00
+503,Premium Suite,503,1,2,1,5000.00,reserved,King Size,2,1,900.00,,0,5500.00,0,990.00
+504,Premium Suite,504,1,2,1,5000.00,reserved,King Size,1,1,900.00,,0,5500.00,0,990.00
