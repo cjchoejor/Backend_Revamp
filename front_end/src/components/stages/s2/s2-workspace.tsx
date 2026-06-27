@@ -720,25 +720,33 @@ export function S2Workspace({ entry }: S2WorkspaceProps) {
                 label="Progress to S3 — Reservation hold"
                 disabled={!canProgressS3}
               />
-              <Button
-                variant="outline"
-                disabled={autoFulfilMutation.isPending || !sealedPreferred}
-                onClick={() => {
-                  startTransition({
-                    targetStage: "S3",
-                    label: "Auto-fulfilling into reservation hold…",
-                  });
-                  autoFulfilMutation.mutate(undefined, {
-                    onSuccess: () => {
-                      void invalidate();
-                      router.push(stagePath(entry.id, "S3"));
-                    },
-                    onError: () => endTransition(),
-                  });
-                }}
-              >
-                {autoFulfilMutation.isPending ? "Auto-fulfilling…" : "Auto-fulfil S2→S3 (package rate)"}
-              </Button>
+              {/* Auto-fulfil is an S1→S3 SKIP path (the backend guard requires currentStage = S1).
+                  It bypasses the quotation step entirely for standard package rates with no
+                  negotiation. Once the operator has clicked "Progress to S2" the entry is past S1
+                  and this shortcut is no longer applicable — hide it then to avoid the misleading
+                  "label says S2→S3 but call rejects with stage-mismatch error" trap. */}
+              {entry.currentStage === "S1" && (
+                <Button
+                  variant="outline"
+                  disabled={autoFulfilMutation.isPending || !sealedPreferred}
+                  onClick={() => {
+                    startTransition({
+                      targetStage: "S3",
+                      label: "Auto-fulfilling into reservation hold…",
+                    });
+                    autoFulfilMutation.mutate(undefined, {
+                      onSuccess: () => {
+                        void invalidate();
+                        router.push(stagePath(entry.id, "S3"));
+                      },
+                      onError: () => endTransition(),
+                    });
+                  }}
+                  title="Skip the quotation step. Available only while the entry is still at S1 — used for standard package rates with no negotiation."
+                >
+                  {autoFulfilMutation.isPending ? "Auto-fulfilling…" : "Skip quotation — auto-fulfil to S3"}
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>

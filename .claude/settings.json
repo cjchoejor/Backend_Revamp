@@ -56,7 +56,10 @@
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { Stop-Process -Id $conn.OwningProcess -Force; Start-Sleep -Milliseconds 600; \"Stopped backend on PID $\\($conn.OwningProcess\\)\" } else { \"Port 4000 free\" })",
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { Stop-Process -Id $conn.OwningProcess -Force; Start-Sleep -Milliseconds 600; \"Killed backend on PID $\\($conn.OwningProcess\\)\" } else { \"Port 4000 free\" })",
       "Bash(grep -nB1 -A30 \"^export async function listRooms\\\\b\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\admin\\\\inventory-admin-service.ts')",
-      "Bash(grep -nA10 \"export type PaymentRecordSummary\\\\|export type InvoiceSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')"
+      "Bash(grep -nA10 \"export type PaymentRecordSummary\\\\|export type InvoiceSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')",
+      "Bash(grep -nA20 \"export type EntryDetail\\\\|export type AvailabilityConfigSummary\\\\|export type QuotationSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')",
+      "Bash(grep -nA3 \"export function guestDisplayName\\\\|export const guestDisplayName\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\lib\\\\api\\\\guest-profiles.ts')",
+      "Bash(grep -nA15 \"autoFulfilS2ToS3\\\\|autoFulfilToS3\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\domain\\\\s2-quotation-service.ts')"
     ]
   }
 }

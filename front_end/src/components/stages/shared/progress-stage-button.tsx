@@ -11,6 +11,7 @@ import { ApiError } from "@/lib/api/client";
 import { ApiErrorAlert } from "./api-error-alert";
 import { stagePath, stageById } from "@/config/stages";
 import { useStageTransitionOptional } from "./stage-transition-context";
+import { useIsInBookingFlow } from "@/components/booking-flow/booking-flow-context";
 import type { EntryDetail, Stage } from "@/types/api";
 
 type ProgressStageButtonProps = {
@@ -41,11 +42,13 @@ export function ProgressStageButton({
   const { session } = useSession();
   const queryClient = useQueryClient();
   const stageTransition = useStageTransitionOptional();
+  const inBookingFlow = useIsInBookingFlow();
+  const shouldNavigate = navigateOnSuccess && !inBookingFlow;
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
-    router.prefetch(stagePath(entryId, targetStage));
-  }, [router, entryId, targetStage]);
+    if (shouldNavigate) router.prefetch(stagePath(entryId, targetStage));
+  }, [router, entryId, targetStage, shouldNavigate]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -80,7 +83,7 @@ export function ProgressStageButton({
       queryClient.invalidateQueries({ queryKey: ["entries"] });
 
       const stageAfter = entryForCache?.currentStage ?? targetStage;
-      const dest = navigateOnSuccess && stageAfter ? stagePath(entryId, stageAfter) : null;
+      const dest = shouldNavigate && stageAfter ? stagePath(entryId, stageAfter) : null;
 
       if (session && dest) {
         await queryClient.prefetchQuery({
@@ -93,6 +96,9 @@ export function ProgressStageButton({
 
       if (dest) {
         router.push(dest);
+      } else if (inBookingFlow) {
+        // Embedded: signal the orchestrator to end any pending transition skeleton.
+        stageTransition?.endTransition();
       }
     },
     onError: async (e) => {

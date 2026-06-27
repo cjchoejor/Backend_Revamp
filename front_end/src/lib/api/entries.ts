@@ -40,11 +40,52 @@ export async function createEntry(
     checkInDate?: string;
     checkOutDate?: string;
     guestCount?: number;
+    adultCount?: number;
+    childCount?: number;
+    childAges?: number[];
     otaSource?: boolean;
   },
 ) {
   return apiRequest<EntryDetail>("/api/entries", {
     method: "POST",
+    session,
+    body,
+  });
+}
+
+export type TimerRecordSummary = {
+  id: string;
+  timerType: string;
+  timerCode: string;
+  stageContext: string | null;
+  firesAt: string;
+  warningAt: string | null;
+  criticalAt: string | null;
+  status: string;
+  createdAt: string;
+};
+
+export async function getEntryTimers(session: Session, entryId: string) {
+  return apiRequest<{ items: TimerRecordSummary[]; count: number }>(`/api/entries/${entryId}/timers`, { session });
+}
+
+/** Narrow update for the booking flow's "Edit step 1" affordance. S1-only on the server side. */
+export async function updateEntryIntake(
+  session: Session,
+  entryId: string,
+  body: {
+    checkInDate?: string;
+    checkOutDate?: string;
+    guestCount?: number;
+    adultCount?: number;
+    childCount?: number;
+    childAges?: number[];
+    useType?: string;
+    expectedVersion?: number;
+  },
+) {
+  return apiRequest<EntryDetail>(`/api/entries/${entryId}`, {
+    method: "PATCH",
     session,
     body,
   });

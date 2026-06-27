@@ -342,14 +342,41 @@ export async function setDeficientCategories(
 
 // --- Inventory (extended) ------------------------------------------------
 
-export type RoomTypeAdmin = { id: string; code: string; name: string; _count?: { rooms: number } };
+export type RoomTypeAdmin = {
+  id: string;
+  code: string;
+  name: string;
+  maxOccupancy?: number;
+  maxChildren?: number;
+  requiredAccompanyingAdults?: number;
+  maxExtraBeds?: number;
+  _count?: { rooms: number };
+};
+
+export type RoomTypeCapacityFields = {
+  maxOccupancy?: number;
+  maxChildren?: number;
+  requiredAccompanyingAdults?: number;
+  maxExtraBeds?: number;
+};
 
 export async function listRoomTypes(session: Session) {
   return apiRequest<{ items: RoomTypeAdmin[]; count: number }>("/api/admin/room-types", { session });
 }
 
-export async function createRoomType(session: Session, body: { code: string; name: string }) {
+export async function createRoomType(
+  session: Session,
+  body: { code: string; name: string } & RoomTypeCapacityFields,
+) {
   return apiRequest<RoomTypeAdmin>("/api/admin/room-types", { method: "POST", session, body });
+}
+
+export async function updateRoomType(
+  session: Session,
+  id: string,
+  body: { name?: string } & RoomTypeCapacityFields,
+) {
+  return apiRequest<RoomTypeAdmin>(`/api/admin/room-types/${id}`, { method: "PATCH", session, body });
 }
 
 export async function deleteRoomType(session: Session, id: string) {

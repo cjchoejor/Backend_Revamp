@@ -29,7 +29,14 @@ export async function generateRoomTypeId(
 
 export async function createRoomType(
   prisma: PrismaClient,
-  input: { code: string; name: string },
+  input: {
+    code: string;
+    name: string;
+    maxOccupancy?: number;
+    maxChildren?: number;
+    requiredAccompanyingAdults?: number;
+    maxExtraBeds?: number;
+  },
   actorId: string,
 ) {
   const code = input.code.trim();
@@ -38,14 +45,24 @@ export async function createRoomType(
 
   return prisma.$transaction(async (tx) => {
     const id = await generateRoomTypeId(tx, code);
-    const created = await tx.roomType.create({ data: { id, code, name } });
+    const created = await tx.roomType.create({
+      data: {
+        id,
+        code,
+        name,
+        ...(input.maxOccupancy != null ? { maxOccupancy: input.maxOccupancy } : {}),
+        ...(input.maxChildren != null ? { maxChildren: input.maxChildren } : {}),
+        ...(input.requiredAccompanyingAdults != null ? { requiredAccompanyingAdults: input.requiredAccompanyingAdults } : {}),
+        ...(input.maxExtraBeds != null ? { maxExtraBeds: input.maxExtraBeds } : {}),
+      },
+    });
     await writeAdminAuditEvent(tx, {
       actorId,
       eventType: "ADMIN.ROOM_TYPE_CREATED",
       entityType: "RoomType",
       entityId: created.id,
       operation: "CREATE",
-      payload: { code, name },
+      payload: { code, name, capacity: { maxOccupancy: created.maxOccupancy, maxChildren: created.maxChildren, requiredAccompanyingAdults: created.requiredAccompanyingAdults, maxExtraBeds: created.maxExtraBeds } },
     });
     return created;
   });
@@ -81,7 +98,13 @@ export async function deleteRoomType(prisma: PrismaClient, id: string, actorId: 
 export async function updateRoomType(
   prisma: PrismaClient,
   id: string,
-  input: { name?: string },
+  input: {
+    name?: string;
+    maxOccupancy?: number;
+    maxChildren?: number;
+    requiredAccompanyingAdults?: number;
+    maxExtraBeds?: number;
+  },
   actorId: string,
 ) {
   const existing = await prisma.roomType.findUnique({ where: { id } });
@@ -92,7 +115,13 @@ export async function updateRoomType(
   return prisma.$transaction(async (tx) => {
     const updated = await tx.roomType.update({
       where: { id },
-      data: { name: name ?? undefined },
+      data: {
+        ...(name != null ? { name } : {}),
+        ...(input.maxOccupancy != null ? { maxOccupancy: input.maxOccupancy } : {}),
+        ...(input.maxChildren != null ? { maxChildren: input.maxChildren } : {}),
+        ...(input.requiredAccompanyingAdults != null ? { requiredAccompanyingAdults: input.requiredAccompanyingAdults } : {}),
+        ...(input.maxExtraBeds != null ? { maxExtraBeds: input.maxExtraBeds } : {}),
+      },
     });
     await writeAdminAuditEvent(tx, {
       actorId,

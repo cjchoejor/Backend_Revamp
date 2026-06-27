@@ -836,6 +836,12 @@ model Entry {
   checkInDate        DateTime?
   checkOutDate       DateTime?
   guestCount         Int?
+  /// Breakdown of the head count. guestCount remains the canonical total (adultCount + childCount when both set).
+  /// adultCount/childCount are nullable for backward compatibility with pre-Phase-D inquiries.
+  adultCount         Int?
+  childCount         Int?
+  /// Ages of accompanying children, ordered. Length should equal childCount; not enforced at the DB layer.
+  childAges          Int[]             @default([])
   otaSource          Boolean           @default(false)
   otaReference       String?
   groupBillingMode   GroupBillingMode?
@@ -1157,6 +1163,18 @@ model RoomType {
   code      String   @unique
   name      String
   createdAt DateTime @default(now())
+
+  /// Total guests allowed in a room of this type (adults + children, infants may be excluded
+  /// per the child policy). Defaults match the legacy Room.capacity of 2 so existing rows
+  /// continue to behave the same way.
+  maxOccupancy              Int @default(2)
+  /// Max children allowed in a room of this type — independent cap on top of maxOccupancy.
+  maxChildren               Int @default(2)
+  /// Minimum number of accompanying adults required for any children to occupy this room type.
+  /// 1 = "at least one adult must be present with the children".
+  requiredAccompanyingAdults Int @default(1)
+  /// Max extra beds available for a room of this type (0 = no extra bed possible).
+  maxExtraBeds              Int @default(0)
 
   rooms             Room[]
   committedHolds    CommittedHold[]

@@ -10,8 +10,9 @@ import { TraceEventRow } from "@/components/trace/trace-event-row";
 
 const STORAGE_KEY = "entry-trace-panel-open";
 
-export function EntryTracePanel() {
-  const { entryId } = useParams<{ entryId: string }>();
+export function EntryTracePanel({ entryId: explicitEntryId }: { entryId?: string } = {}) {
+  const routeParams = useParams<{ entryId?: string }>();
+  const entryId = explicitEntryId ?? routeParams?.entryId;
   const { session } = useSession();
   const [open, setOpen] = useState(false);
 
@@ -30,7 +31,7 @@ export function EntryTracePanel() {
 
   const query = useQuery({
     queryKey: ["entry-trace", entryId],
-    queryFn: () => getEntryTrace(session!, entryId),
+    queryFn: () => getEntryTrace(session!, entryId!),
     enabled: !!session && !!entryId && open,
     refetchInterval: open ? 15000 : false,
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Circle, AlertTriangle, ArrowRight } from "lucide-react";
@@ -21,6 +21,8 @@ import {
   type AvailabilityRoomResult,
 } from "@/lib/api/availability";
 import { listInquiries } from "@/lib/api/inquiries";
+import { listRooms } from "@/lib/api/rooms";
+import { AvailabilityCalendar } from "@/components/stages/s1/availability-calendar";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
@@ -106,6 +108,22 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
   const [checkIn, setCheckIn] = useState(entry.checkInDate?.slice(0, 10) ?? "");
   const [checkOut, setCheckOut] = useState(entry.checkOutDate?.slice(0, 10) ?? "");
   const [guestCount, setGuestCount] = useState(String(entry.guestCount ?? 1));
+
+  // When the operator edits intake dates upstream (step 1's "Edit" affordance in the booking
+  // flow patches the entry, which refetches), reflect the new dates into this workspace's
+  // search form so the operator doesn't have to re-type them. We only refresh when the entry
+  // value has actually changed so we don't clobber an in-progress edit.
+  const entryCheckIn = entry.checkInDate?.slice(0, 10) ?? "";
+  const entryCheckOut = entry.checkOutDate?.slice(0, 10) ?? "";
+  useEffect(() => {
+    if (entryCheckIn) setCheckIn(entryCheckIn);
+  }, [entryCheckIn]);
+  useEffect(() => {
+    if (entryCheckOut) setCheckOut(entryCheckOut);
+  }, [entryCheckOut]);
+  useEffect(() => {
+    if (entry.guestCount != null) setGuestCount(String(entry.guestCount));
+  }, [entry.guestCount]);
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
   const [searchError, setSearchError] = useState<unknown>(null);
   const [selectError, setSelectError] = useState<unknown>(null);
@@ -200,6 +218,19 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
 
   const hasRoomResults =
     availableRooms.length > 0 || deficientRooms.length > 0 || unavailableRooms.length > 0;
+
+  // Hotel-wide room list — used by the calendar grid for floor + room-type lookups.
+  const allRoomsQuery = useQuery({
+    queryKey: ["rooms", "all"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+    staleTime: 5 * 60_000,
+  });
+  const allRooms = allRoomsQuery.data?.items ?? [];
+
+  // Calendar grid wants the active stay range. Prefer the form (latest search), fall back to entry.
+  const calendarCheckIn = (checkIn || entry.checkInDate?.slice(0, 10)) ?? "";
+  const calendarCheckOut = (checkOut || entry.checkOutDate?.slice(0, 10)) ?? "";
 
   const exitChecks = useMemo(() => {
     const hasDates = !!(entry.checkInDate && entry.checkOutDate) || !!(checkIn && checkOut);
@@ -335,51 +366,19 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
                 </div>
               )}
 
-              {availableRooms.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">Available</p>
-                  {availableRooms.map((room) => (
-                    <RoomOption
-                      key={room.roomId}
-                      room={room}
-                      variant="available"
-                      selected={preferredRoomId === room.roomId || pendingRoomId === room.roomId}
-                      disabled={selectMutation.isPending || !activeConfigurationId}
-                      onSelect={() => handleSelectRoom(room, false)}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {deficientRooms.length > 0 && (
-                <div className="space-y-2">
-                  <p className="flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
-                    <AlertTriangle className="h-3 w-3" />
-                    Deficient (acknowledgement recorded on select)
-                  </p>
-                  {deficientRooms.map((room) => (
-                    <RoomOption
-                      key={room.roomId}
-                      room={room}
-                      variant="deficient"
-                      selected={preferredRoomId === room.roomId || pendingRoomId === room.roomId}
-                      disabled={selectMutation.isPending || !activeConfigurationId}
-                      onSelect={() => handleSelectRoom(room, true)}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {unavailableRooms.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Unavailable ({unavailableRooms.length}) — not selectable
-                  </p>
-                  {unavailableRooms.map((room) => (
-                    <UnavailableRoomRow key={room.roomId} room={room} />
-                  ))}
-                </div>
-              )}
+              {/* Phase 2: replaced the flat rooms list with a date × room-type calendar grid. */}
+              <AvailabilityCalendar
+                checkInDate={calendarCheckIn}
+                checkOutDate={calendarCheckOut}
+                availableRooms={availableRooms}
+                deficientRooms={deficientRooms}
+                unavailableRooms={unavailableRooms}
+                allRooms={allRooms}
+                selectedRoomId={preferredRoomId}
+                pendingRoomId={pendingRoomId}
+                disabled={selectMutation.isPending || !activeConfigurationId}
+                onSelectRoomType={(room, isDeficient) => handleSelectRoom(room, isDeficient)}
+              />
 
               <PolicyGateAlert error={selectError} />
             </CardContent>

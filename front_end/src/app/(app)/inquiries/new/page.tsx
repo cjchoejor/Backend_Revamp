@@ -1,5 +1,5 @@
-import { NewInquiryForm } from "@/components/inquiries/new-inquiry-form";
+import { BookingFlow } from "@/components/booking-flow/booking-flow";
 
 export default function NewInquiryPage() {
-  return <NewInquiryForm />;
+  return <BookingFlow />;
 }

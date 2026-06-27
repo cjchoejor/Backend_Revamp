@@ -12,8 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { createGuestProfile, guestDisplayName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
+import { getChildPolicy } from "@/lib/api/child-policy";
 import { createInquiry } from "@/lib/api/inquiries";
-import { createEntry } from "@/lib/api/entries";
+import { createEntry, updateEntryIntake } from "@/lib/api/entries";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { AgentCorporatePicker, type AgentCorporateSelection } from "@/components/inquiries/agent-corporate-picker";
@@ -22,7 +23,28 @@ const SOURCE_CHANNELS = ["WALK_IN", "DIRECT", "OTA", "CORPORATE", "AGENT"] as co
 
 type IntakeMode = "new" | "returning";
 
-export function NewInquiryForm() {
+export type NewInquiryFormProps = {
+  /**
+   * Optional — when supplied, the form does NOT navigate after a successful create. Instead it
+   * calls this callback with the created entry. Used by the unified booking flow page
+   * (BookingFlow) to advance to the next step inline.
+   */
+  onCreated?: (entry: { id: string }) => void;
+  /** When true, hides the page header (used inside the booking flow stepper which has its own). */
+  hideHeader?: boolean;
+  /** Override the submit button label. */
+  submitLabel?: string;
+  /**
+   * When set, the form switches to "edit mode" — the create button is replaced by an "update
+   * intake fields" action that PATCHes the existing entry instead of POSTing a new one.
+   * Pass the live entry's id + version (for optimistic concurrency).
+   */
+  editEntry?: { id: string; version: number } | null;
+  /** Called after a successful PATCH so the parent can close the edit drawer. */
+  onUpdated?: () => void;
+};
+
+export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, onUpdated }: NewInquiryFormProps = {}) {
   const router = useRouter();
   const { session } = useSession();
   const [mode, setMode] = useState<IntakeMode>("new");
@@ -41,8 +63,86 @@ export function NewInquiryForm() {
   const [notes, setNotes] = useState("");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
-  const [guestCount, setGuestCount] = useState("1");
+  // Nights is a derived/editable string — empty = "no opinion yet", otherwise a positive int.
+  const [nights, setNights] = useState<string>("");
+  const [adults, setAdults] = useState<string>("1");
+  const [children, setChildren] = useState<string>("0");
+  // Child ages list, one entry per child. Length is synced to `children` count below.
+  const [childAges, setChildAges] = useState<string[]>([]);
   const [agentSelection, setAgentSelection] = useState<AgentCorporateSelection>({ kind: "NONE" });
+
+  // ---- Date / nights sync ----
+  // When check-in is set without a check-out, auto-fill check-out to the next day.
+  // When nights is set, recompute check-out from check-in + nights.
+  // When check-out is edited directly, recompute nights from the new range.
+  // Timezone-safe date math. Parsing "2026-06-25" as a Date and serializing via toISOString()
+  // shifts the calendar day in any non-UTC timezone (e.g. Bhutan UTC+6 wraps a midnight back to
+  // the previous day). Operate on the numeric Y/M/D components instead and reformat manually.
+  function parseIsoDate(iso: string): { y: number; m: number; d: number } | null {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if (!match) return null;
+    return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) };
+  }
+  function formatIsoDate(y: number, m: number, d: number): string {
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  function diffNights(ci: string, co: string): number | null {
+    const a = parseIsoDate(ci);
+    const b = parseIsoDate(co);
+    if (!a || !b) return null;
+    // Use UTC.UTC to get a calendar-day diff that's immune to DST and timezone offsets.
+    const aMs = Date.UTC(a.y, a.m - 1, a.d);
+    const bMs = Date.UTC(b.y, b.m - 1, b.d);
+    const diff = Math.round((bMs - aMs) / 86400_000);
+    return diff > 0 ? diff : null;
+  }
+  function addDays(iso: string, n: number): string {
+    const p = parseIsoDate(iso);
+    if (!p) return "";
+    const dt = new Date(Date.UTC(p.y, p.m - 1, p.d + n));
+    return formatIsoDate(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+  }
+  function handleCheckInChange(value: string) {
+    setCheckIn(value);
+    if (!value) return;
+    if (nights && /^\d+$/.test(nights)) {
+      // Nights field is authoritative — recompute checkout from check-in + nights.
+      setCheckOut(addDays(value, parseInt(nights, 10)));
+    } else if (!checkOut || (diffNights(value, checkOut) ?? 0) <= 0) {
+      // No checkout yet (or it's now invalid) — default to next day, 1 night.
+      setCheckOut(addDays(value, 1));
+      setNights("1");
+    } else {
+      // Both dates valid — update nights to reflect the new range.
+      const n = diffNights(value, checkOut);
+      if (n) setNights(String(n));
+    }
+  }
+  function handleCheckOutChange(value: string) {
+    setCheckOut(value);
+    if (checkIn && value) {
+      const n = diffNights(checkIn, value);
+      if (n) setNights(String(n));
+    }
+  }
+  function handleNightsChange(value: string) {
+    setNights(value);
+    if (value && /^\d+$/.test(value) && checkIn) {
+      setCheckOut(addDays(checkIn, parseInt(value, 10)));
+    }
+  }
+
+  // ---- Children → ages list sync ----
+  useEffect(() => {
+    const n = Math.max(0, parseInt(children || "0", 10) || 0);
+    setChildAges((prev) => {
+      if (prev.length === n) return prev;
+      if (prev.length > n) return prev.slice(0, n);
+      return [...prev, ...Array.from({ length: n - prev.length }, () => "")];
+    });
+  }, [children]);
+
+  const guestCount = (parseInt(adults || "0", 10) || 0) + (parseInt(children || "0", 10) || 0);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -57,6 +157,17 @@ export function NewInquiryForm() {
       mode === "returning" &&
       (debouncedSearch.length === 0 || debouncedSearch.length >= 2),
   });
+
+  // Live child-policy snapshot — drives the max age of the child-age inputs. When L4 admin
+  // changes `registry.child.unaccompaniedMinorMinAge.minimumAge`, the form's cap follows.
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+    staleTime: 5 * 60_000,
+  });
+  const minAdultAge = childPolicyQuery.data?.unaccompaniedMinor.minimumAge ?? 18;
+  const maxChildAge = Math.max(0, minAdultAge - 1);
 
   const canSubmitNew =
     firstName.trim() &&
@@ -96,13 +207,19 @@ export function NewInquiryForm() {
         corporateAccountId: agentSelection.kind === "CORPORATE" ? agentSelection.party.id : null,
       });
 
+      const adultCount = parseInt(adults || "0", 10) || 0;
+      const childCount = parseInt(children || "0", 10) || 0;
+      const parsedAges = childAges.map((a) => parseInt(a || "0", 10)).filter((n) => Number.isFinite(n));
       const entry = await createEntry(session, {
         inquiryId: inquiry.id,
         useType: "LEISURE",
         guestProfileId,
         checkInDate: checkIn || undefined,
         checkOutDate: checkOut || undefined,
-        guestCount: guestCount ? Number(guestCount) : undefined,
+        guestCount: guestCount || undefined,
+        adultCount: adultCount > 0 ? adultCount : undefined,
+        childCount: childCount > 0 ? childCount : undefined,
+        childAges: parsedAges.length === childCount ? parsedAges : undefined,
         otaSource: sourceChannel === "OTA",
       });
 
@@ -110,17 +227,48 @@ export function NewInquiryForm() {
     },
     onSuccess: (entry) => {
       toast.success("Inquiry and entry created");
-      router.push(`/entries/${entry.id}/stages/s1`);
+      if (onCreated) {
+        onCreated(entry);
+      } else {
+        router.push(`/entries/${entry.id}/stages/s1`);
+      }
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Failed to create inquiry"),
   });
 
+  // ---- Update existing entry (Edit mode) ----
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      if (!session) throw new Error("Not signed in");
+      if (!editEntry) throw new Error("No entry to edit");
+      const adultCount = parseInt(adults || "0", 10) || 0;
+      const childCount = parseInt(children || "0", 10) || 0;
+      const parsedAges = childAges.map((a) => parseInt(a || "0", 10)).filter((n) => Number.isFinite(n));
+      return updateEntryIntake(session, editEntry.id, {
+        checkInDate: checkIn || undefined,
+        checkOutDate: checkOut || undefined,
+        guestCount: guestCount || undefined,
+        adultCount,
+        childCount,
+        childAges: parsedAges.length === childCount ? parsedAges : undefined,
+        expectedVersion: editEntry.version,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Intake fields updated");
+      onUpdated?.();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Failed to update entry"),
+  });
+
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h2 className="font-display text-2xl font-semibold">New inquiry</h2>
-        <p className="text-sm text-muted-foreground">S1 intake — create or find a guest, then start the inquiry</p>
-      </div>
+    <div className={hideHeader ? "space-y-6" : "mx-auto max-w-2xl space-y-6"}>
+      {!hideHeader && (
+        <div>
+          <h2 className="font-display text-2xl font-semibold">New inquiry</h2>
+          <p className="text-sm text-muted-foreground">S1 intake — create or find a guest, then start the inquiry</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 rounded-xl border bg-card p-1">
         <button
@@ -264,21 +412,74 @@ export function NewInquiryForm() {
           </div>
           <div>
             <label className="text-xs text-muted-foreground">Proposed check-in</label>
-            <Input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
+            <Input type="date" value={checkIn} onChange={(e) => handleCheckInChange(e.target.value)} />
           </div>
           <div>
             <label className="text-xs text-muted-foreground">Proposed check-out</label>
-            <Input type="date" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+            <Input type="date" value={checkOut} onChange={(e) => handleCheckOutChange(e.target.value)} />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Guest count</label>
+            <label className="text-xs text-muted-foreground">Number of nights</label>
             <Input
               type="number"
               min={1}
-              value={guestCount}
-              onChange={(e) => setGuestCount(e.target.value)}
+              max={365}
+              value={nights}
+              onChange={(e) => handleNightsChange(e.target.value)}
+              placeholder="auto"
             />
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground">Adults</label>
+              <Input
+                type="number"
+                min={1}
+                value={adults}
+                onChange={(e) => setAdults(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Children</label>
+              <Input
+                type="number"
+                min={0}
+                value={children}
+                onChange={(e) => setChildren(e.target.value)}
+              />
+            </div>
+          </div>
+          {childAges.length > 0 && (
+            <div className="sm:col-span-2 rounded-lg border bg-muted/30 p-3">
+              <p className="mb-2 text-xs text-muted-foreground">Child ages (0–{maxChildAge})</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {childAges.map((age, idx) => (
+                  <div key={idx}>
+                    <label className="text-[10px] uppercase text-muted-foreground">Child {idx + 1}</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={maxChildAge}
+                      value={age}
+                      onChange={(e) => {
+                        // Soft-clamp to the policy cap for UX (so the user sees the value snap
+                        // visibly), but the backend remains the authority. The cap comes from
+                        // registry.child.unaccompaniedMinorMinAge — no hardcoded 17 here.
+                        let v = e.target.value;
+                        if (v !== "" && /^\d+$/.test(v)) {
+                          const n = parseInt(v, 10);
+                          if (n > maxChildAge) v = String(maxChildAge);
+                          if (n < 0) v = "0";
+                        }
+                        setChildAges((prev) => prev.map((a, i) => (i === idx ? v : a)));
+                      }}
+                      placeholder="age"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="sm:col-span-2">
             <label className="text-xs text-muted-foreground">Notes</label>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -289,18 +490,35 @@ export function NewInquiryForm() {
         </CardContent>
       </Card>
 
-      <Button
-        variant="gradient"
-        className="w-full"
-        size="lg"
-        disabled={
-          mutation.isPending ||
-          (mode === "new" ? !canSubmitNew : !canSubmitReturning)
-        }
-        onClick={() => mutation.mutate()}
-      >
-        {mutation.isPending ? "Creating…" : "Create inquiry & open S1 workspace"}
-      </Button>
+      {editEntry ? (
+        <Button
+          variant="gradient"
+          className="w-full"
+          size="lg"
+          disabled={updateMutation.isPending}
+          onClick={() => updateMutation.mutate()}
+        >
+          {updateMutation.isPending ? "Saving…" : "Save changes"}
+        </Button>
+      ) : (
+        <Button
+          variant="gradient"
+          className="w-full"
+          size="lg"
+          disabled={
+            mutation.isPending ||
+            mutation.isSuccess ||
+            (mode === "new" ? !canSubmitNew : !canSubmitReturning)
+          }
+          onClick={() => mutation.mutate()}
+        >
+          {mutation.isPending
+            ? "Creating…"
+            : mutation.isSuccess
+              ? "Inquiry created — continue to availability"
+              : (submitLabel ?? "Create inquiry & open S1 workspace")}
+        </Button>
+      )}
     </div>
   );
 }

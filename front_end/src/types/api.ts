@@ -27,6 +27,9 @@ export type EntryListItem = {
   checkInDate?: string | null;
   checkOutDate?: string | null;
   guestCount?: number | null;
+  adultCount?: number | null;
+  childCount?: number | null;
+  childAges?: number[] | null;
   useType?: string | null;
   segmentNumber?: number;
   createdAt: string;

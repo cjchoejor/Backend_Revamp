@@ -9,6 +9,7 @@ import {
   closeEntryRequestSchema,
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
+  updateEntryRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
@@ -33,6 +34,34 @@ entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) 
   }
 });
 
+/**
+ * Active timers for one entry — drives the right-side countdown panel in the booking flow.
+ * Returns SCHEDULED timers only (already-fired or cancelled ones are noise for the operator).
+ * Sorted by firesAt asc so the soonest expiry is first.
+ */
+entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const items = await prisma.timerRecord.findMany({
+      where: { entryId: req.params.id, status: "SCHEDULED" },
+      orderBy: { firesAt: "asc" },
+      select: {
+        id: true,
+        timerType: true,
+        timerCode: true,
+        stageContext: true,
+        firesAt: true,
+        warningAt: true,
+        criticalAt: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+    res.json({ items, count: items.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
 entriesRouter.get("/", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const parsed = listEntriesQuerySchema.safeParse(req.query);
@@ -48,6 +77,22 @@ entriesRouter.post("/", requireActorLevel("L1"), validateBody(createEntryRequest
   try {
     const created = await s1EntryService.createEntry(prisma, req.actor!.actorId, req.actor!.level, req.body);
     res.status(201).json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Booking flow's step-1 Edit — narrow update for intake fields only, S1-gated server-side. */
+entriesRouter.patch("/:id", requireActorLevel("L1"), validateBody(updateEntryRequestSchema), async (req, res, next) => {
+  try {
+    const updated = await s1EntryService.updateEntryIntakeFields(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+      req.actor!.level,
+      req.body,
+    );
+    res.json(updated);
   } catch (e) {
     next(e);
   }

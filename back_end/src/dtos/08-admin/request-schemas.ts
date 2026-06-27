@@ -104,10 +104,18 @@ export const upsertRoleSessionConfigRequestSchema = z.object({
 export const createRoomTypeRequestSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
+  maxOccupancy: z.coerce.number().int().min(1).optional(),
+  maxChildren: z.coerce.number().int().min(0).optional(),
+  requiredAccompanyingAdults: z.coerce.number().int().min(0).optional(),
+  maxExtraBeds: z.coerce.number().int().min(0).optional(),
 });
 
 export const updateRoomTypeRequestSchema = z.object({
   name: z.string().min(1).optional(),
+  maxOccupancy: z.coerce.number().int().min(1).optional(),
+  maxChildren: z.coerce.number().int().min(0).optional(),
+  requiredAccompanyingAdults: z.coerce.number().int().min(0).optional(),
+  maxExtraBeds: z.coerce.number().int().min(0).optional(),
 });
 
 export const createRoomRequestSchema = z.object({

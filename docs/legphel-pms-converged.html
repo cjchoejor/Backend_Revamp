@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Legphel PMS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ════════════════════════════════════════════════════════════════
+   LEGPHEL PMS — converged prototype (responsive)
+   Operator language only (no stage numbers / clauses).
+   Origin + binding visual grammar. Ambient reminders.
+   Confirmation reserved for the one consequential act.
+   ════════════════════════════════════════════════════════════════ */
+:root{
+  --paper:#fcf9f2; --cream:#f5f1e6; --cream-2:#efe9da; --cream-3:#e9e2d0;
+  --line:#e4ddcc; --line-2:#d6cdb7; --line-3:#c7bca2;
+  --ink:#202a23; --ink-2:#5a645a; --ink-3:#8b9389; --ink-4:#aab0a5;
+  --green:#3c5a45; --green-d:#2c4434; --green-dd:#22382b; --green-t:#e7efe8; --green-t2:#d6e4d9;
+  --terra:#c07d5f; --terra-d:#a4634a; --terra-t:#f4e6dd;
+  --ok:#3f7d5a; --warn:#bd882a; --warn-t:#f7ecd0; --stop:#a8514a; --stop-t:#f4e0dd;
+  --epi-suggest:#b9842a; --epi-system:#5e7d6b; --bind-bound:#3c5a45;
+  --r-sm:6px; --r-md:9px; --r-lg:13px; --r-xl:18px;
+  --sh-sm:0 1px 2px rgba(32,42,35,.05),0 1px 1px rgba(32,42,35,.03);
+  --sh-md:0 8px 28px rgba(32,42,35,.13);
+  --sh-lg:0 18px 50px rgba(32,42,35,.20);
+  --ui:"Hanken Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --mono:"IBM Plex Mono","SF Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:var(--ui);color:var(--ink);background:var(--cream);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--mono);font-feature-settings:"tnum" 1;letter-spacing:-.01em}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.015em}
+button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+::selection{background:var(--terra-t)}
+:focus-visible{outline:2px solid var(--terra);outline-offset:2px;border-radius:4px}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:rgba(32,42,35,.16);border-radius:6px}
+
+/* ───────── shell (desktop) ───────── */
+.app{display:flex;height:100dvh;overflow:hidden}
+.backdrop{display:none}
+.sidebar{width:228px;flex:0 0 228px;background:var(--green-d);color:#e9efe9;display:flex;flex-direction:column;border-right:1px solid var(--green-dd);height:100dvh}
+.brand{padding:18px 16px 14px;display:flex;align-items:center;gap:11px;border-bottom:1px solid rgba(255,255,255,.08)}
+.brand .mk{width:34px;height:34px;border-radius:9px;background:var(--terra);color:#fff8f3;display:grid;place-items:center;font-weight:700;font-size:17px;flex:0 0 auto;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.brand .b1{font-weight:600;font-size:15px;color:#fbfdfb;line-height:1.1}
+.brand .b2{font-size:10px;color:#9bb2a2;letter-spacing:.14em;text-transform:uppercase}
+.navwrap{flex:1;overflow-y:auto;padding:12px}
+.navlabel{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:#7e9586;padding:13px 10px 6px}
+.nav{display:flex;align-items:center;gap:11px;width:100%;text-align:left;color:#cdd9cf;font-size:13.5px;padding:10px 11px;border-radius:var(--r-md);position:relative;transition:background .14s,color .14s}
+.nav .ic{width:18px;height:18px;flex:0 0 auto;color:#9bb2a2}
+.nav:hover{background:rgba(255,255,255,.06);color:#fbfdfb}
+.nav.on{background:var(--green);color:#fff}.nav.on .ic{color:#f2ddd4}
+.nav.on::before{content:"";position:absolute;left:-12px;top:8px;bottom:8px;width:3px;background:var(--terra);border-radius:0 3px 3px 0}
+.nav.disabled{color:#5d7164;cursor:not-allowed}.nav.disabled .ic{color:#4f6358}
+.nav .badge{margin-left:auto;font-size:10.5px;background:rgba(255,255,255,.13);color:#eaf1ea;border-radius:999px;padding:1px 7px;font-family:var(--mono)}
+.nav .soon{margin-left:auto;font-size:9px;color:#6f8475;border:1px solid #46594d;border-radius:5px;padding:1px 5px}
+.sidefoot{padding:11px;border-top:1px solid rgba(255,255,255,.08)}
+.userrow{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r-md);background:rgba(255,255,255,.04)}
+.userrow .av{width:30px;height:30px;border-radius:50%;background:#54705c;color:#eaf3ec;display:grid;place-items:center;font-size:12px;font-weight:600;flex:0 0 auto}
+.userrow .u1{font-size:13px;color:#f1f6f1;font-weight:500;line-height:1.2}.userrow .u2{font-size:11px;color:#9bb2a2}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column;height:100dvh}
+.topbar{flex:0 0 auto;background:var(--paper);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:10px 20px;min-height:56px}
+.hamb{display:none;width:38px;height:38px;border-radius:9px;border:1px solid var(--line-2);background:var(--cream);color:var(--ink-2);place-items:center;flex:0 0 auto}
+.hamb svg{width:20px;height:20px}
+.pt1{font-size:16px;font-weight:600;line-height:1.15}
+.pt2{font-size:11.5px;color:var(--ink-3)}
+.topspace{flex:1}
+.clock{display:flex;align-items:center;gap:8px;padding:6px 11px;border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--cream);white-space:nowrap}
+.clock .cd{font-size:12px;color:var(--ink-2)}.clock .ct{font-size:12.5px}
+.content{flex:1;overflow:hidden;position:relative}
+.view{position:absolute;inset:0;overflow-y:auto;padding:24px 26px;display:none;animation:fade .28s ease both}
+.view.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* ───────── shared ───────── */
+.eyebrow{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.h-lg{font-size:22px;letter-spacing:-.02em}
+.lead{font-size:13.5px;color:var(--ink-2);max-width:660px;line-height:1.55}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--sh-sm)}
+.sectitle{font-size:13px;font-weight:600}
+.cardhead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px 11px;border-bottom:1px solid var(--line)}
+.btn{display:inline-flex;align-items:center;gap:7px;border-radius:var(--r-md);font-size:13px;font-weight:600;padding:9px 14px;transition:.14s;white-space:nowrap}
+.btn svg{width:15px;height:15px}
+.btn-primary{background:var(--terra);color:#fff8f3;box-shadow:0 3px 12px rgba(192,125,95,.3)}.btn-primary:hover{background:var(--terra-d)}
+.btn-ghost{background:var(--cream);border:1.5px solid var(--line-2);color:var(--ink-2)}.btn-ghost:hover{border-color:var(--line-3);color:var(--ink)}
+.btn-sm{padding:6px 11px;font-size:12px}
+
+/* fact chip (origin mark + binding frame) */
+.fact{display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 9px;border-radius:8px;font-size:12.5px;background:var(--paper);border:1.5px solid var(--line-2)}
+.fact .mk{width:16px;height:16px;border-radius:4px;display:grid;place-items:center;font-size:10px;font-weight:700;flex:0 0 auto;font-family:var(--mono)}
+.mk.cap{background:var(--green-t2);color:var(--green-d)}.mk.der{background:var(--cream-3);color:var(--ink-2)}
+.mk.sug{background:#f4e3c2;color:var(--epi-suggest)}.mk.sys{background:#dce8e1;color:var(--epi-system)}
+.fact.b-live{border-color:var(--line-2)}
+.fact.b-transit{border-color:var(--warn);background:repeating-linear-gradient(135deg,var(--paper),var(--paper) 7px,#faf2dd 7px,#faf2dd 12px)}
+.fact.b-bound{border-color:var(--bind-bound);background:var(--green-t)}
+.fact.b-bound .lock{width:12px;height:12px;color:var(--green-d)}
+
+/* ───────── TODAY ───────── */
+.today-grid{display:grid;grid-template-columns:1.45fr 1fr;gap:16px;margin-top:16px;align-items:start}
+.attn-row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line);cursor:pointer;transition:background .13s}
+.attn-row:last-child{border-bottom:0}.attn-row:hover{background:var(--cream)}
+.attn-av{width:34px;height:34px;border-radius:9px;color:#fff;display:grid;place-items:center;font-size:12px;font-weight:600;flex:0 0 auto}
+.attn-mid{flex:1;min-width:0}
+.attn-name{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.attn-need{font-size:12px;color:var(--ink-2);margin-top:1px}
+.attn-step{font-size:10.5px;font-weight:600;color:var(--green-d);background:var(--green-t);border:1px solid var(--green-t2);padding:2px 8px;border-radius:6px;white-space:nowrap}
+.timer{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--ink-2);background:var(--cream);border:1px solid var(--line-2);padding:3px 8px;border-radius:7px;white-space:nowrap}
+.timer svg{width:11px;height:11px;color:var(--ink-3)}
+.timer.warn{color:var(--warn);border-color:#e6cf9a;background:var(--warn-t)}.timer.warn svg{color:var(--warn)}
+.timer.crit{color:var(--stop);border-color:#e2b3ac;background:var(--stop-t)}.timer.crit svg{color:var(--stop)}
+.presence{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--ink-3)}
+.presence .pdot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.statgrid{display:grid;grid-template-columns:1fr 1fr}
+.statgrid>div{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:13px 15px;display:flex;flex-direction:column;gap:3px}
+.statgrid>div:nth-child(2n){border-right:0}.statgrid>div:nth-last-child(-n+2){border-bottom:0}
+.ms-v{font-family:var(--mono);font-size:25px;font-weight:600;letter-spacing:-.02em}
+.ms-k{font-size:11px;color:var(--ink-3)}
+
+/* ───────── BOOKINGS LIST ───────── */
+.eng-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:16px}
+.eng-card{background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:15px 16px;cursor:pointer;display:flex;flex-direction:column;gap:12px;transition:.14s}
+.eng-card:hover{border-color:var(--terra);box-shadow:var(--sh-md);transform:translateY(-2px)}
+.ec-top{display:flex;align-items:center;gap:11px}
+.ec-av{width:38px;height:38px;border-radius:10px;color:#fff;display:grid;place-items:center;font-weight:600;font-size:13px;flex:0 0 auto}
+.ec-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ec-sub{font-size:11.5px;color:var(--ink-3)}
+.ec-track{display:flex;align-items:center;gap:5px;margin:1px 0}
+.ec-pip{flex:1;height:4px;border-radius:2px;background:var(--cream-3)}
+.ec-pip.done{background:var(--green)}.ec-pip.cur{background:var(--terra)}
+.ec-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px dashed var(--line-2);padding-top:10px}
+.ec-need{font-size:12px;color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ec-open{font-size:11.5px;font-weight:600;color:var(--terra-d);display:inline-flex;gap:3px;align-items:center;flex:0 0 auto}
+
+/* ───────── WORKSPACE ───────── */
+.ws{position:absolute;inset:0;display:none;grid-template-columns:208px 1fr 318px}
+.ws.on{display:grid}
+.track{background:var(--green-d);color:#e9efe9;padding:16px 0;overflow-y:auto;border-right:1px solid var(--green-dd)}
+.track-h{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:#7e9586;padding:0 16px 11px}
+.tnode{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:9px 16px;color:#aebcb1;position:relative}
+.tnode .g{width:25px;height:25px;border-radius:50%;border:1.5px solid rgba(255,255,255,.22);display:grid;place-items:center;font-size:12px;flex:0 0 auto;background:var(--green-dd)}
+.tnode .g svg{width:13px;height:13px}
+.tnode .tl{font-size:12.5px;font-weight:500;line-height:1.15}
+.tnode .tl small{display:block;font-size:9.5px;color:#7e9586;font-weight:400;margin-top:1px}
+.tnode.done{color:#dbe6dd}.tnode.done .g{background:var(--green);border-color:var(--green);color:#fff}
+.tnode.cur{color:#fff}.tnode.cur .g{background:var(--terra);border-color:var(--terra);color:#fff;box-shadow:0 0 0 4px rgba(192,125,95,.22)}
+.tnode.future{color:#6f8475}.tnode.future .g{border-style:dashed}
+.tnode:not(.future):not(.cur):hover{background:rgba(255,255,255,.05)}
+.tnode::before{content:"";position:absolute;left:28px;top:-6px;width:1.5px;height:12px;background:rgba(255,255,255,.16)}
+.tnode:first-of-type::before{display:none}
+.track-div{margin:11px 16px;border-top:1px dashed rgba(255,255,255,.14);padding-top:9px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#6f8475}
+
+.canvas-wrap{display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.canvas-top{flex:0 0 auto;background:var(--paper);border-bottom:1px solid var(--line);padding:10px 22px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ws-back{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-2)}.ws-back:hover{color:var(--ink)}
+.ws-back svg{width:13px;height:13px}
+.gb-av{width:33px;height:33px;border-radius:9px;background:linear-gradient(135deg,var(--terra),#d2987c);color:#fff;display:grid;place-items:center;font-weight:600;font-size:12.5px}
+.gb-name{font-size:14px;font-weight:600;line-height:1.2}.gb-sub{font-size:11px;color:var(--ink-3)}
+.canvas-scroll{flex:1;overflow-y:auto;padding:22px 22px 26px}
+.canvas{max-width:660px;margin:0 auto}
+.speak{margin-bottom:18px}
+.speak .now{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--terra-d);font-weight:700;margin-bottom:6px}
+.speak h2{font-size:20px;letter-spacing:-.02em}
+.speak p{font-size:13.5px;color:var(--ink-2);margin-top:6px;line-height:1.55}
+.block{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 17px;margin-bottom:14px;box-shadow:var(--sh-sm)}
+.block-h{display:flex;align-items:center;gap:9px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:12px}
+.block-h .ln{flex:1;height:1px;background:var(--line)}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.field{margin-bottom:11px}
+.field>label{display:block;font-size:11px;font-weight:600;color:var(--ink-2);margin-bottom:5px}
+.val{font-size:13.5px;padding:9px 11px;border-radius:8px;border:1.5px solid var(--line-2);background:#fff;display:flex;align-items:center;gap:8px}
+.val.derived{background:var(--cream);color:var(--ink-2);border-color:var(--line);font-family:var(--mono)}
+.val .axis{margin-left:auto;flex:0 0 auto}
+.axis-mk{width:15px;height:15px;border-radius:4px;display:grid;place-items:center;font-size:9px;font-weight:700;font-family:var(--mono)}
+.opt{display:flex;align-items:center;gap:12px;padding:12px 13px;border:1.5px solid var(--line-2);border-radius:var(--r-md);cursor:pointer;margin-bottom:9px;transition:.13s}
+.opt:hover{border-color:var(--line-3)}.opt.sel{border-color:var(--terra);background:var(--terra-t)}
+.opt .radio{width:18px;height:18px;border-radius:50%;border:2px solid var(--line-3);flex:0 0 auto;display:grid;place-items:center}
+.opt.sel .radio{border-color:var(--terra)}.opt.sel .radio::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--terra)}
+.opt .ot{flex:1;min-width:0}.opt .otn{font-size:13.5px;font-weight:600}.opt .ots{font-size:11.5px;color:var(--ink-3)}
+.opt .op{font-family:var(--mono);font-size:12.5px;font-weight:600;flex:0 0 auto}
+.ai{border:1.5px dashed var(--epi-suggest);border-radius:var(--r-md);background:#fdf8ee;padding:13px 14px;margin-bottom:11px}
+.ai-h{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.ai-tag{font-size:10px;font-weight:700;color:var(--epi-suggest);background:#f4e3c2;padding:2px 8px;border-radius:6px;display:inline-flex;gap:5px;align-items:center}
+.ai-tag svg{width:11px;height:11px}
+.ai-conf{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--ink-3)}
+.ai-bar{width:50px;height:5px;border-radius:3px;background:var(--cream-3);overflow:hidden}.ai-bar i{display:block;height:100%;background:var(--epi-suggest)}
+.ai-body{font-size:12.5px;color:var(--ink-2);line-height:1.5;font-style:italic;border-left:2px solid #ecd9b0;padding-left:10px;margin-bottom:10px}
+.ai-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ai-basis{font-size:10.5px;color:var(--epi-suggest);text-decoration:underline;cursor:pointer}
+
+.gatebar{flex:0 0 auto;background:var(--paper);border-top:1px solid var(--line);padding:12px 22px;box-shadow:0 -8px 22px rgba(32,42,35,.05)}
+.gate-inner{max-width:660px;margin:0 auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.needs{flex:1;display:flex;flex-wrap:wrap;gap:6px 13px;align-items:center;min-width:180px}
+.needs .nl{width:100%;font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.need{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-2)}
+.need .nd{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--warn);flex:0 0 auto;position:relative}
+.need.met{color:var(--ink)}.need.met .nd{background:var(--ok);border-color:var(--ok)}
+.need.met .nd::after{content:"";position:absolute;left:4px;top:1.5px;width:4px;height:7px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.adv{background:var(--terra);color:#fff8f3;padding:11px 18px;border-radius:var(--r-md);font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:8px;box-shadow:0 3px 12px rgba(192,125,95,.3);flex:0 0 auto}
+.adv svg{width:15px;height:15px}
+.adv:hover{background:var(--terra-d)}
+.adv.locked{background:var(--cream-2);color:var(--ink-3);box-shadow:none;cursor:not-allowed}
+.adv.commit{background:var(--green);box-shadow:0 3px 12px rgba(60,90,69,.32)}.adv.commit:hover{background:var(--green-d)}
+
+.summary{background:var(--cream);border-left:1px solid var(--line);overflow-y:auto}
+.sum-h{padding:15px 17px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--cream);z-index:2}
+.sum-h .t{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);margin-bottom:9px}
+.commit-tag{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;padding:5px 10px;border-radius:7px}
+.commit-tag svg{width:12px;height:12px}
+.commit-tag.indic{background:var(--warn-t);color:#8a6313;border:1px solid #e6cf9a}
+.commit-tag.frozen{background:var(--green-t);color:var(--green-d);border:1px solid var(--green-t2)}
+.sum-body{padding:15px 17px}
+.sum-price{margin-bottom:15px;padding-bottom:14px;border-bottom:1px solid var(--line);position:relative}
+.sum-price.indic{background:repeating-linear-gradient(135deg,transparent,transparent 8px,rgba(189,136,42,.07) 8px,rgba(189,136,42,.07) 9px);margin:-6px -8px 15px;padding:8px 8px 14px;border-radius:8px}
+.sum-price .pl{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;margin-bottom:5px}
+.sum-price.indic .pl{color:var(--warn)}.sum-price.frozen .pl{color:var(--green-d)}
+.sum-price .amt{font-family:var(--mono);font-weight:600;font-size:24px;letter-spacing:-.02em}
+.sum-price .sub{font-size:10.5px;color:var(--ink-3);margin-top:3px}
+.stamp{position:absolute;top:2px;right:0;transform:rotate(-8deg);border:2px solid var(--green);color:var(--green-d);border-radius:7px;padding:3px 8px;font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.05em;text-align:center;line-height:1.3;animation:stampin .4s cubic-bezier(.2,1.3,.4,1) both}
+@keyframes stampin{from{opacity:0;transform:rotate(-8deg) scale(1.7)}to{opacity:.95;transform:rotate(-8deg) scale(1)}}
+.sum-line{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:12.5px;border-bottom:1px dashed var(--line)}
+.sum-line .k{color:var(--ink-3)}.sum-line .v{font-weight:500;text-align:right}.sum-line .v.mono{font-family:var(--mono);font-size:11.5px}
+.sum-note{margin-top:13px;font-size:11.5px;color:var(--ink-2);background:var(--cream-2);border-left:2px solid var(--line-3);border-radius:0 6px 6px 0;padding:9px 11px;line-height:1.5}
+
+/* ───────── DESIGN SYSTEM ───────── */
+.ds{max-width:980px}
+.ds-sec{margin-top:24px}.ds-sec>h3{font-size:15px;margin-bottom:4px}.ds-sec>.lead{margin-bottom:13px}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:11px}
+.sw{border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:var(--paper)}
+.sw .chip{height:44px}.sw .meta{padding:8px 10px}
+.sw .sn{font-size:12px;font-weight:600}.sw .sm{font-size:10.5px;color:var(--ink-3);line-height:1.35;margin-top:2px}
+.sw .sx{font-family:var(--mono);font-size:9.5px;color:var(--ink-4);margin-top:4px}
+.axis-table{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.axis-card{border:1px solid var(--line);border-radius:var(--r-md);padding:14px 15px;background:var(--paper)}
+.axis-card h4{font-size:13px;margin-bottom:3px}.axis-card .ah{font-size:11px;color:var(--ink-3);margin-bottom:11px}
+.axis-row{display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px dashed var(--line)}
+.axis-row .desc{font-size:11.5px;color:var(--ink-2);line-height:1.4}.axis-row .desc b{color:var(--ink)}
+.rule{display:flex;gap:12px;padding:11px 0;border-top:1px dashed var(--line)}
+.rule .rn{width:24px;height:24px;border-radius:7px;flex:0 0 auto;display:grid;place-items:center;font-size:12px;background:var(--green-t);color:var(--green-d)}
+.rule .rn svg{width:13px;height:13px}
+.rule .rt{font-size:12.5px;color:var(--ink-2);line-height:1.5}.rule .rt b{color:var(--ink)}
+.vocab{width:100%;border-collapse:collapse;font-size:12px}
+.vocab td{border-bottom:1px solid var(--line);padding:8px 10px}
+.vocab td:first-child{font-weight:600;width:42%}.vocab td:last-child{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+
+.scrim{position:fixed;inset:0;background:rgba(34,42,35,.5);display:none;place-items:center;z-index:90;padding:20px}
+.scrim.on{display:grid}
+.modal{background:var(--paper);border-radius:var(--r-xl);max-width:450px;width:100%;box-shadow:var(--sh-lg);overflow:hidden;animation:fade .2s ease both}
+.modal-top{padding:18px 20px 15px;background:var(--green-t);border-bottom:1px solid var(--green-t2);display:flex;gap:12px}
+.modal-ic{width:40px;height:40px;border-radius:11px;background:var(--green);color:#fff;display:grid;place-items:center;flex:0 0 auto}.modal-ic svg{width:20px;height:20px}
+.modal-top h3{font-size:16px}.modal-top p{font-size:12px;color:var(--ink-2);margin-top:3px}
+.modal-body{padding:17px 20px}.modal-body .why{font-size:13px;color:var(--ink-2);line-height:1.6}
+.modal-consq{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.modal-consq .ci{display:flex;gap:9px;font-size:12.5px;color:var(--ink);align-items:flex-start}
+.modal-consq .ci svg{width:15px;height:15px;color:var(--green-d);flex:0 0 auto;margin-top:2px}
+.modal-foot{padding:13px 20px;background:var(--cream);border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--green-d);color:#eef4ee;padding:11px 17px;border-radius:var(--r-md);font-size:13px;font-weight:500;display:flex;align-items:center;gap:9px;box-shadow:var(--sh-md);opacity:0;pointer-events:none;transition:.28s;z-index:95}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}.toast svg{width:16px;height:16px;color:#9fd7b4}
+
+/* live folio (Stay) */
+.folio{border:1.5px solid var(--bind-bound);border-radius:var(--r-md);overflow:hidden}
+.folio-h{display:flex;align-items:center;gap:8px;padding:9px 13px;background:var(--green);color:#fff;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.folio-h .lk{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-weight:600;letter-spacing:.02em;font-size:9.5px;opacity:.92;text-transform:none}
+.folio-h .lk svg{width:11px;height:11px}
+.fline{display:flex;align-items:center;gap:10px;padding:9px 13px;background:var(--paper);border-bottom:1px solid var(--line);font-size:12.5px}
+.fline:last-child{border-bottom:0}
+.fline .fl-mk{width:15px;height:15px;border-radius:4px;display:grid;place-items:center;font-size:9px;font-weight:700;font-family:var(--mono);flex:0 0 auto}
+.fline .fl-d{flex:1;min-width:0}.fline .fl-d small{display:block;font-size:10px;color:var(--ink-3)}
+.fline .fl-a{font-family:var(--mono);font-weight:600}
+.fline.total{background:var(--green-t);font-weight:700}
+.reentry{margin-top:13px;border:1px dashed var(--line-3);border-radius:var(--r-md);padding:11px 13px;background:var(--cream)}
+.reentry .rh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);margin-bottom:7px}
+.reentry .rb{display:flex;gap:8px;flex-wrap:wrap}
+
+/* rooms board */
+.kpibar{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+.kpi{flex:1;min-width:120px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);padding:11px 14px}
+.kpi .kv{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.02em}
+.kpi .kk{font-size:11px;color:var(--ink-3);display:flex;align-items:center;gap:6px}
+.kpi .kk .d{width:8px;height:8px;border-radius:50%}
+.floor{margin-top:16px}
+.floor-h{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin-bottom:9px}
+.roomgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:9px}
+.room{border:1.5px solid var(--line-2);border-radius:var(--r-md);background:var(--paper);padding:10px 12px;cursor:pointer;transition:.13s;text-align:left}
+.room:hover{border-color:var(--line-3)}
+.room .rn{font-family:var(--mono);font-size:15px;font-weight:600}
+.room .rt{font-size:10.5px;color:var(--ink-3);margin-bottom:7px}
+.room .rs{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600}
+.room .rs .d{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.room.occ{background:var(--green-t);border-color:var(--green-t2)}
+.room.ooo{background:var(--stop-t);border-color:#e2b3ac}
+.s-occ{color:var(--green-d)}.s-dirty{color:var(--warn)}.s-clean{color:var(--epi-system)}.s-ready{color:var(--ok)}.s-ooo{color:var(--stop)}
+.d-occ{background:var(--green)}.d-dirty{background:var(--warn)}.d-clean{background:var(--epi-system)}.d-ready{background:var(--ok)}.d-ooo{background:var(--stop)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px;font-size:11.5px;color:var(--ink-2)}
+.legend .lg{display:inline-flex;align-items:center;gap:6px}.legend .lg .d{width:9px;height:9px;border-radius:50%}
+/* billing */
+.btable-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:var(--r-lg);margin-top:16px}
+.btable{width:100%;border-collapse:collapse;background:var(--paper);min-width:480px}
+.btable th,.btable td{text-align:left;padding:12px 15px;border-bottom:1px solid var(--line);font-size:13px}
+.btable th{background:var(--cream);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.btable tr:last-child td{border-bottom:0}
+.btable tbody tr{cursor:pointer;transition:background .12s}
+.btable tbody tr:hover{background:var(--cream)}
+.btable .bg{font-weight:600}.btable .bal{font-family:var(--mono);text-align:right}
+.fstate{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:7px}
+.fstate.live{background:var(--green-t);color:var(--green-d);border:1px solid var(--green-t2)}
+.fstate.prov{background:var(--warn-t);color:#8a6313;border:1px solid #e6cf9a}
+.fstate.settled{background:var(--cream-2);color:var(--ink-2);border:1px solid var(--line-2)}
+.brow-open{font-size:11px;color:var(--terra-d);font-weight:600;white-space:nowrap}
+
+/* reports */
+.repgrid{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-top:16px;align-items:start}
+.occbars{display:flex;align-items:flex-end;gap:5px;height:140px;padding-top:6px}
+.occbar{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;justify-content:flex-end}
+.occbar .bar{width:100%;border-radius:4px 4px 0 0;background:var(--green);min-height:3px}
+.occbar .bl{font-size:8.5px;color:var(--ink-3);font-family:var(--mono)}
+.occbar .bv{font-size:8.5px;color:var(--ink-2);font-family:var(--mono)}
+.hbar{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.hbar .hl{width:84px;font-size:12px;flex:0 0 auto}
+.hbar .ht{flex:1;height:18px;background:var(--cream-2);border-radius:5px;overflow:hidden}
+.hbar .ht i{display:block;height:100%;border-radius:5px}
+.hbar .hv{width:46px;text-align:right;font-family:var(--mono);font-size:11.5px;flex:0 0 auto}
+@media(max-width:920px){.repgrid{grid-template-columns:1fr}.occbars{height:120px}}
+
+/* notifications */
+.notif-wrap{position:relative}
+.bell{width:38px;height:38px;border-radius:9px;border:1px solid var(--line-2);background:var(--cream);display:grid;place-items:center;color:var(--ink-2);position:relative}
+.bell:hover{border-color:var(--line-3);color:var(--ink)}
+.bell svg{width:18px;height:18px}
+.bell .nb{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;border-radius:9px;background:var(--stop);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px;border:2px solid var(--paper)}
+.npanel{position:absolute;top:48px;right:0;width:344px;max-width:92vw;background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-lg);box-shadow:var(--sh-lg);z-index:70;overflow:hidden;display:none}
+.npanel.on{display:block;animation:fade .18s ease both}
+.npanel-h{padding:13px 15px;border-bottom:1px solid var(--line)}
+.npanel-h .t{font-size:14px;font-weight:600}
+.npanel-h .s{font-size:11px;color:var(--ink-3);margin-top:2px;line-height:1.4}
+.nsec-h{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--ink-3);padding:10px 15px 4px;display:flex;align-items:center;gap:7px}
+.nsec-h .dot{width:7px;height:7px;border-radius:50%}
+.nitem{display:flex;gap:11px;padding:10px 15px;cursor:pointer;transition:background .12s;align-items:flex-start}
+.nitem:hover{background:var(--cream)}
+.nitem .nmk{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:0 0 auto;font-size:12px;font-weight:700;font-family:var(--mono)}
+.nmk.stop{background:var(--stop-t);color:var(--stop)}
+.nmk.ok{background:var(--green-t);color:var(--ok)}
+.nmk.sug{background:#f4e3c2;color:var(--epi-suggest)}
+.nmk.sys{background:#dce8e1;color:var(--epi-system)}
+.nitem .nbody{flex:1;min-width:0}
+.nitem .ntitle{font-size:12.5px;font-weight:600;line-height:1.3}
+.nitem .nsub{font-size:11px;color:var(--ink-2);margin-top:1px;line-height:1.4}
+.nitem .ntime{font-size:10px;color:var(--ink-3);font-family:var(--mono);flex:0 0 auto;margin-top:2px}
+.npanel-f{padding:11px 15px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-3);line-height:1.5;background:var(--cream)}
+@media(max-width:920px){.npanel{position:fixed;top:58px;left:8px;right:8px;width:auto;max-width:none}}
+
+/* ════════════════════ RESPONSIVE ════════════════════ */
+@media(max-width:1080px){ .ws{grid-template-columns:190px 1fr} .summary{display:none} }
+@media(max-width:920px){
+  body{overflow:auto}
+  .app{display:block;height:auto;overflow:visible}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;width:250px;flex-basis:250px;transform:translateX(-100%);transition:transform .26s cubic-bezier(.4,0,.2,1);z-index:60}
+  .sidebar.open{transform:none;box-shadow:var(--sh-lg)}
+  .backdrop{display:block;position:fixed;inset:0;background:rgba(34,42,35,.42);z-index:55;opacity:0;pointer-events:none;transition:.22s}
+  .backdrop.on{opacity:1;pointer-events:auto}
+  .main{height:auto;display:block}
+  .topbar{position:sticky;top:0;z-index:40}
+  .hamb{display:grid}
+  .content{position:static;overflow:visible}
+  .view{position:static;inset:auto;overflow:visible;padding:20px 16px}
+  .today-grid{grid-template-columns:1fr}
+  .eng-grid{grid-template-columns:1fr}
+  .axis-table{grid-template-columns:1fr}
+  /* workspace stacks */
+  .ws{position:static;display:none;grid-template-columns:1fr}
+  .ws.on{display:block}
+  .track{display:flex;gap:6px;overflow-x:auto;padding:11px 12px;border-right:0;border-bottom:1px solid var(--green-dd);-webkit-overflow-scrolling:touch}
+  .track-h,.track-div,#trackLater{display:none}
+  .tnode{flex:0 0 auto;flex-direction:column;align-items:center;width:auto;padding:6px 8px;gap:5px;text-align:center}
+  .tnode::before{display:none}.tnode .tl{font-size:10.5px}.tnode .tl small{display:none}
+  .canvas-wrap{display:block;overflow:visible}
+  .canvas-scroll{overflow:visible;padding:18px 16px}
+  .canvas{max-width:none}
+  .frow{grid-template-columns:1fr}
+  .gatebar{position:static;padding:14px 16px}
+  .summary{display:block;border-left:0;border-top:1px solid var(--line);overflow:visible}
+  .sum-h{position:static}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-today" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g></symbol>
+  <symbol id="i-eng" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="2.5"/><path d="M3.5 9h17M8 2.5v4M16 2.5v4"/></g></symbol>
+  <symbol id="i-bed" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v12M3 13h18v6M21 13a3 3 0 0 0-3-3H9v3M3 17h18"/></g></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h14v17l-2.3-1.3-2.3 1.3-2.4-1.3L7.3 20.5 5 19.2Z"/><path d="M8.5 8h7M8.5 12h7"/></g></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><path d="M8 15v-3M12 15V8M16 15v-5"/></g></symbol>
+  <symbol id="i-ds" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></g></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></g></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></g></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="1.6"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></g></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9l-4.7 1.8L12 15l-1.8-4.2L5.5 9l4.7-1.3z"/></g></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></g></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M10 20a2 2 0 0 0 4 0"/></g></symbol>
+</svg>
+
+<div class="app">
+  <div class="backdrop" id="backdrop"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><div class="mk">L</div><div><div class="b1">Legphel</div><div class="b2">Front Desk</div></div></div>
+    <nav class="navwrap">
+      <div class="navlabel">Operations</div>
+      <button class="nav on" data-view="today"><svg class="ic"><use href="#i-today"/></svg>Today</button>
+      <button class="nav" data-view="engagements"><svg class="ic"><use href="#i-eng"/></svg>Bookings<span class="badge">7</span></button>
+      <button class="nav" data-view="rooms"><svg class="ic"><use href="#i-bed"/></svg>Rooms</button>
+      <div class="navlabel">Money</div>
+      <button class="nav" data-view="billing"><svg class="ic"><use href="#i-receipt"/></svg>Billing</button>
+      <button class="nav" data-view="reports"><svg class="ic"><use href="#i-chart"/></svg>Reports</button>
+      <div class="navlabel">Reference</div>
+      <button class="nav" data-view="ds"><svg class="ic"><use href="#i-ds"/></svg>Design system</button>
+    </nav>
+    <div class="sidefoot"><div class="userrow"><div class="av">UD</div><div><div class="u1">Ugyen Dorji</div><div class="u2">Front desk</div></div></div></div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <button class="hamb" id="hamb" aria-label="Menu"><svg><use href="#i-menu"/></svg></button>
+      <div><div class="pt1" id="pt1">Today</div><div class="pt2" id="pt2">What needs you next</div></div>
+      <div class="topspace"></div>
+      <div class="notif-wrap">
+        <button class="bell" id="bell" aria-label="Notifications"><svg><use href="#i-bell"/></svg><span class="nb" id="nbadge">0</span></button>
+        <div class="npanel" id="npanel"></div>
+      </div>
+      <div class="clock"><span class="cd">Tue, 23 Jun</span><span class="ct mono" id="clock">--:--</span></div>
+    </div>
+
+    <div class="content">
+
+      <!-- TODAY -->
+      <section class="view on" id="view-today">
+        <div class="eyebrow">Tuesday morning</div>
+        <h1 class="h-lg" style="margin:4px 0 6px">Good morning, Ugyen.</h1>
+        <p class="lead">Seven bookings are moving through the desk. Here's what each needs from you next — the ones closest to a deadline are first.</p>
+        <div class="today-grid">
+          <div class="card">
+            <div class="cardhead"><div class="sectitle">Needs you next</div><button class="btn btn-ghost btn-sm" data-go="engagements">All bookings</button></div>
+            <div id="attnList"></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div class="card">
+              <div class="cardhead"><div class="sectitle">The desk right now</div></div>
+              <div class="statgrid">
+                <div><span class="ms-v mono">7</span><span class="ms-k">Open bookings</span></div>
+                <div><span class="ms-v mono">1</span><span class="ms-k">In-house now</span></div>
+                <div><span class="ms-v mono">1</span><span class="ms-k">Near a deadline</span></div>
+                <div><span class="ms-v mono">27</span><span class="ms-k">Rooms tonight</span></div>
+              </div>
+            </div>
+            <div class="card" style="padding:14px 16px">
+              <div class="sectitle" style="margin-bottom:7px">A quieter signal</div>
+              <p style="font-size:12.5px;color:var(--ink-2);line-height:1.55;margin:0">Timers sit quietly beside each booking and only change colour as a deadline nears. The desk won't pop up at you for routine things — it speaks up only when something genuinely needs you now.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BOOKINGS -->
+      <section class="view" id="view-engagements">
+        <div class="eyebrow">Bookings</div>
+        <h1 class="h-lg" style="margin:4px 0 6px">Every booking on the desk</h1>
+        <p class="lead">Who they are, how far they've come, and what each needs next. Open one to work it.</p>
+        <div class="eng-grid" id="engGrid"></div>
+      </section>
+
+      <!-- ROOMS -->
+      <section class="view" id="view-rooms">
+        <div class="eyebrow">Housekeeping</div>
+        <h1 class="h-lg" style="margin:4px 0 6px">Rooms tonight</h1>
+        <p class="lead">Where every room stands right now. Colour is the status; tap a room being readied to move it forward.</p>
+        <div id="roomsBody"></div>
+      </section>
+
+      <!-- BILLING -->
+      <section class="view" id="view-billing">
+        <div class="eyebrow">Money</div>
+        <h1 class="h-lg" style="margin:4px 0 6px">Folios &amp; balances</h1>
+        <p class="lead">Every folio the property is carrying. Live ones can only grow; settled ones are sealed.</p>
+        <div id="billingBody"></div>
+      </section>
+
+      <!-- REPORTS -->
+      <section class="view" id="view-reports">
+        <div class="eyebrow">Reports</div>
+        <h1 class="h-lg" style="margin:4px 0 6px">How the property is doing</h1>
+        <p class="lead">Everything here is computed by the system from the bookings and folios — figures to read, not edit.</p>
+        <div id="reportsBody"></div>
+      </section>
+
+      <!-- WORKSPACE -->
+      <div class="ws" id="ws">
+        <nav class="track">
+          <div class="track-h">This booking's journey</div>
+          <div id="track"></div>
+        </nav>
+        <div class="canvas-wrap">
+          <div class="canvas-top">
+            <button class="ws-back" id="wsBack"><svg><use href="#i-back"/></svg>Bookings</button>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="gb-av" id="wsAv">KW</div>
+              <div><div class="gb-name" id="wsName">Karma Wangchuk</div><div class="gb-sub mono" id="wsSub">2 rooms · 12–15 Jul</div></div>
+            </div>
+            <div class="topspace"></div>
+            <span class="presence" id="wsPresence" style="display:none"><span class="pdot"></span><span id="wsPresenceTxt"></span></span>
+            <span class="timer" id="wsTimer"><svg><use href="#i-today"/></svg><span id="wsTimerTxt">—</span></span>
+          </div>
+          <div class="canvas-scroll"><div class="canvas" id="canvas"></div></div>
+          <div class="gatebar"><div class="gate-inner" id="gate"></div></div>
+        </div>
+        <aside class="summary" id="summary"></aside>
+      </div>
+
+      <!-- DESIGN SYSTEM -->
+      <section class="view" id="view-ds">
+        <div class="ds">
+          <div class="eyebrow">Reference · for the build team</div>
+          <h1 class="h-lg" style="margin:4px 0 6px">The design system, made visible</h1>
+          <p class="lead">The grammar key. Every visual choice on a working screen traces to a rule below — and the operator never sees a stage number or a clause.</p>
+
+          <div class="ds-sec"><h3>1 · Colour is meaning</h3>
+            <p class="lead">Warm and calm so the desk never feels like an audit. Each functional colour carries one operational meaning.</p>
+            <div class="swatches" id="swatches"></div></div>
+
+          <div class="ds-sec"><h3>2 · Two things about every fact</h3>
+            <p class="lead">Each fact tells you <b>where it came from</b> (a corner mark) and <b>how tightly it's held</b> (the frame) — different channels, so they never collide.</p>
+            <div class="axis-table">
+              <div class="axis-card"><h4>Origin — the corner mark</h4><div class="ah">what to do with the fact</div>
+                <div class="axis-row"><span class="fact b-live"><span class="mk cap">✎</span><span>Captured</span></span><span class="desc"><b>Act on it.</b> Typed or chosen by a person.</span></div>
+                <div class="axis-row"><span class="fact b-live"><span class="mk der">∑</span><span>Derived</span></span><span class="desc"><b>Consume it.</b> The system computed it — read, don't edit.</span></div>
+                <div class="axis-row"><span class="fact b-live"><span class="mk sug">◇</span><span>Suggested</span></span><span class="desc"><b>Judge it.</b> Proposed by algorithm or AI.</span></div>
+                <div class="axis-row"><span class="fact b-live"><span class="mk sys">⚙</span><span>System</span></span><span class="desc"><b>Know its origin.</b> The system did this for you.</span></div>
+              </div>
+              <div class="axis-card"><h4>Binding — the frame</h4><div class="ah">how it may be acted on</div>
+                <div class="axis-row"><span class="fact b-live"><span>Working</span></span><span class="desc"><b>Live.</b> Still changeable.</span></div>
+                <div class="axis-row"><span class="fact b-transit"><span>In transition</span></span><span class="desc"><b>Caution.</b> Expired or awaiting approval.</span></div>
+                <div class="axis-row"><span class="fact b-bound"><span>Confirmed</span><svg class="lock"><use href="#i-lock"/></svg></span><span class="desc"><b>Bound.</b> Sealed — a change opens a new round.</span></div>
+              </div>
+            </div>
+            <p style="font-size:11px;color:var(--ink-3);margin-top:9px;line-height:1.5"><b>Why two channels, not two colours:</b> a confirmed price (bound) was still typed by a person (captured). Mark + frame show both truths without fighting.</p>
+          </div>
+
+          <div class="ds-sec"><h3>3 · The price shows its own commitment</h3>
+            <p class="lead">Before confirming it's an <b>indicative band</b> on a hatched card. At confirm it stamps to a <b>frozen total</b> the guest is held to.</p>
+            <div style="display:flex;gap:14px;flex-wrap:wrap">
+              <div style="flex:1;min-width:190px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden"><div class="sum-price indic" style="margin:0;padding:13px 14px;border-radius:0"><div class="pl">Indicative · not committed</div><div class="amt" style="color:var(--warn)">Nu 24,600–27,300</div><div class="sub">a range while terms are shaped</div></div></div>
+              <div style="flex:1;min-width:190px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden"><div class="sum-price frozen" style="margin:0;padding:13px 14px;border-radius:0"><div class="pl">✓ Confirmed · frozen</div><div class="amt" style="color:var(--green-d)">Nu 25,800</div><div class="sub">held to the guest</div></div></div>
+            </div>
+          </div>
+
+          <div class="ds-sec"><h3>4 · When it asks you to confirm</h3>
+            <p class="lead">Reserved for real consequence, so the prompts that matter never get ignored.</p>
+            <div class="rule"><span class="rn">!</span><span class="rt"><b>Pauses you</b> only when an action is irreversible, affects the guest or another staff member, or commits money or a room you can't reclaim — and names that consequence. <i>In this slice, that's only confirming a booking.</i></span></div>
+            <div class="rule"><span class="rn"><svg><use href="#i-check"/></svg></span><span class="rt"><b>Just does it</b> for everything routine — one tap, no ceremony.</span></div>
+          </div>
+
+          <div class="ds-sec"><h3>5 · The operator's words, never the system's</h3>
+            <p class="lead">The right column is the system's internal name — it appears <b>only here</b>, never on a working screen.</p>
+            <table class="vocab">
+              <tr><td>Inquiry</td><td>S1 · Inquiry &amp; Configuration</td></tr>
+              <tr><td>Quote</td><td>S2 · Negotiation &amp; Quotation</td></tr>
+              <tr><td>Set up</td><td>S3 · Reservation Setup</td></tr>
+              <tr><td>Confirm</td><td>S4 · Confirmation (commitment boundary)</td></tr>
+              <tr><td>Hold a room</td><td>Committed hold · COMMITTED_HELD</td></tr>
+              <tr><td>Quote valid 1d 4h</td><td>QUOTATION_VALIDITY timer</td></tr>
+              <tr><td>Confirmed · frozen</td><td>Commitment snapshot · frozenTotal</td></tr>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"><svg><use href="#i-check"/></svg><span id="toastMsg"></span></div>
+
+<script>
+const STEPS=[
+  {key:'inquiry',label:'Inquiry',sub:'understand the stay'},
+  {key:'quote',label:'Quote',sub:'shape the price'},
+  {key:'setup',label:'Set up',sub:'hold & deposit'},
+  {key:'confirm',label:'Confirm',sub:'freeze the booking',bound:true},
+  {key:'arrival',label:'Arrival',sub:'ready the room'},
+  {key:'checkin',label:'Check-in',sub:'keys & live folio',bound:true},
+  {key:'stay',label:'Stay',sub:'daily charges'},
+  {key:'checkout',label:'Check-out',sub:'settle up'},
+  {key:'closed',label:'Closed',sub:'sealed'}
+];
+
+const ENG=[
+  {id:'kw',name:'Karma Wangchuk',initials:'KW',av:'#c07d5f',party:'2 rooms · 12–15 Jul',step:1,band:'24,600–27,300',total:'25,800',advance:'12,900',channel:'Direct · phone',need:'Pick a configuration and explore availability',timer:'Inquiry · 2d 6h',timerLvl:'',presence:null},
+  {id:'tt',name:'Tashi Tours',initials:'TT',av:'#3c5a45',party:'3 rooms · 18–20 Jul',step:2,band:'30,400–33,800',total:'31,200',advance:'15,600',channel:'Travel agent',need:'Send the quote and wait on acceptance',timer:'Quote valid · 1d 4h',timerLvl:'warn',presence:'Yeshey (manager) is viewing'},
+  {id:'pc',name:'Pelden Corporate',initials:'PC',av:'#8a6d4f',party:'4 rooms · 20–24 Jul',step:3,band:'48,000–52,800',total:'50,400',advance:'25,200',channel:'Travel agent',need:'Record the advance and cancellation terms',timer:'Hold · 4h 12m',timerLvl:'crit',presence:null},
+  {id:'dl',name:'Dawa Lhamo',initials:'DL',av:'#7a8b5a',party:'1 room · 14–16 Jul',step:2,band:'8,200–9,000',total:'8,600',advance:'4,300',channel:'OTA · entered by staff',need:'Confirm the rate matches the OTA email',timer:'Quote valid · 18h',timerLvl:'warn',presence:null},
+  {id:'sw',name:'Sonam Wangmo',initials:'SW',av:'#5e8090',party:'2 rooms · 12–13 Jul',step:1,band:'6,800–7,600',total:'7,200',advance:'3,600',channel:'Direct · walk-in',need:'Capture the stay and explore availability',timer:'Inquiry · 1d 22h',timerLvl:'',presence:null},
+  {id:'kd',name:'Kinley Dorji',initials:'KD',av:'#a4634a',party:'1 room · 16–19 Jul',step:4,band:'15,000–16,200',total:'15,600',advance:'7,800',channel:'Direct · phone',need:'Everything is ready — confirm to freeze',timer:'Ready to confirm',timerLvl:'',presence:null},
+  {id:'ny',name:'Norbu Yangzom',initials:'NY',av:'#6a7f8c',party:'1 room · in-house',step:7,band:'15,000–16,200',total:'15,600',advance:'7,800',channel:'Direct · phone',need:'Guest in-house — post charges as they happen',timer:'Checked in',timerLvl:'',presence:null}
+];
+const WS={};
+ENG.forEach(e=>{WS[e.id]={step:e.step,maxStep:e.step,confirmed:e.step>4,configChosen:e.step>1,aiApproved:e.step>2,advanceRecorded:e.step>3,disclosureRecorded:e.step>3,roomAssigned:e.step>5,identityVerified:e.step>6,folioLive:e.step>6,reviewed:e.step>8,settled:e.step>8,charges:e.step>=7?[{by:'sys',d:'Room · 16 Jul',sub:'night audit',a:'5,200'},{by:'sys',d:'Room · 17 Jul',sub:'night audit',a:'5,200'},{by:'cap',d:'Restaurant · dinner',sub:'posted by Ugyen',a:'1,180'}]:[]};});
+
+let activeId=null;
+const $=s=>document.querySelector(s);
+function closeNav(){$('#sidebar').classList.remove('open');$('#backdrop').classList.remove('on');}
+function openNav(){$('#sidebar').classList.add('open');$('#backdrop').classList.add('on');}
+$('#hamb').onclick=()=>$('#sidebar').classList.contains('open')?closeNav():openNav();
+$('#backdrop').onclick=closeNav;
+
+function view(v){
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+  $('#ws').classList.remove('on');
+  document.querySelectorAll('.nav[data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
+  const titles={today:['Today','What needs you next'],engagements:['Bookings','Every booking on the desk'],rooms:['Rooms','Status across the property'],billing:['Billing','Folios & balances'],reports:['Reports','How the property is doing'],ds:['Design system','The grammar key']};
+  const el=$('#view-'+v); if(el)el.classList.add('on');
+  if(titles[v]){$('#pt1').textContent=titles[v][0];$('#pt2').textContent=titles[v][1];}
+  if(v==='rooms')renderRooms(); if(v==='billing')renderBilling(); if(v==='reports')renderReports();
+  closeNav(); window.scrollTo(0,0);
+}
+document.querySelectorAll('.nav[data-view]').forEach(b=>b.onclick=()=>view(b.dataset.view));
+document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>view(b.dataset.go));
+
+function toast(m){const t=$('#toast');$('#toastMsg').textContent=m;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),2400);}
+
+function renderToday(){
+  const ord=[...ENG].sort((a,b)=>({crit:0,warn:1,'':2}[a.timerLvl])-({crit:0,warn:1,'':2}[b.timerLvl]));
+  $('#attnList').innerHTML=ord.map(e=>`
+    <div class="attn-row" onclick="openEng('${e.id}')">
+      <div class="attn-av" style="background:${e.av}">${e.initials}</div>
+      <div class="attn-mid"><div class="attn-name">${e.name}${e.presence?`<span class="presence"><span class="pdot"></span>${e.presence.split(' (')[0]} viewing</span>`:''}</div>
+        <div class="attn-need">${e.need}</div></div>
+      <span class="timer ${e.timerLvl}"><svg><use href="#i-today"/></svg>${e.timer}</span>
+      <span class="attn-step">${STEPS[e.step-1].label}</span>
+    </div>`).join('');
+}
+function renderList(){
+  $('#engGrid').innerHTML=ENG.map(e=>{
+    const pips=STEPS.map((s,i)=>{const n=i+1;const c=n<e.step?'done':n===e.step?'cur':'';return `<div class="ec-pip ${c}"></div>`;}).join('');
+    return `<div class="eng-card" onclick="openEng('${e.id}')">
+      <div class="ec-top"><div class="ec-av" style="background:${e.av}">${e.initials}</div>
+        <div style="min-width:0"><div class="ec-name">${e.name}</div><div class="ec-sub mono">${e.party}</div></div></div>
+      <div class="ec-track">${pips}</div>
+      <div class="ec-foot"><span class="ec-need">${STEPS[e.step-1].label} · ${e.need}</span>
+        <span class="ec-open">Open<svg width="12" height="12"><use href="#i-arrow"/></svg></span></div></div>`;
+  }).join('');
+}
+
+window.openEng=function(id){
+  activeId=id; const e=ENG.find(x=>x.id===id);
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+  $('#ws').classList.add('on');
+  $('#pt1').textContent=e.name; $('#pt2').textContent='Booking · '+e.party;
+  $('#wsAv').textContent=e.initials; $('#wsAv').style.background=e.av;
+  $('#wsName').textContent=e.name; $('#wsSub').textContent=e.party+' · '+e.channel;
+  const pr=$('#wsPresence'); if(e.presence){pr.style.display='';$('#wsPresenceTxt').textContent=e.presence;}else pr.style.display='none';
+  closeNav(); window.scrollTo(0,0); renderWS();
+};
+$('#wsBack').onclick=()=>view('engagements');
+
+function renderWS(){renderTrack();renderCanvas();renderGate();renderSummary();renderWsTimer();}
+function renderWsTimer(){const e=ENG.find(x=>x.id===activeId),w=WS[activeId];const t=$('#wsTimer');t.className='timer '+(w.confirmed?'':e.timerLvl);$('#wsTimerTxt').textContent=w.confirmed?'Confirmed':e.timer;}
+
+function renderTrack(){
+  const w=WS[activeId];
+  $('#track').innerHTML=STEPS.map((s,i)=>{
+    const n=i+1,done=n<w.step,cur=n===w.step,future=n>w.maxStep;
+    const cls=['tnode'];if(done)cls.push('done');if(cur)cls.push('cur');if(future)cls.push('future');
+    const g=done?'<svg style="stroke:#fff"><use href="#i-check"/></svg>':(s.bound?'<svg><use href="#i-lock"/></svg>':n);
+    return `<button class="${cls.join(' ')}" onclick="gotoStep(${n})"><span class="g">${g}</span><span class="tl">${s.label}<small>${s.sub}</small></span></button>`;
+  }).join('');
+}
+window.gotoStep=function(n){const w=WS[activeId];if(n>w.maxStep){toast('That step comes later — finish this one first.');return;}w.step=n;renderWS();};
+
+function valRow(label,value,epi){
+  const m={cap:['✎','cap'],der:['∑','der'],sug:['◇','sug'],sys:['⚙','sys']}[epi]||['✎','cap'];
+  const cls=epi==='der'?'derived':'';
+  return `<div class="field"><label>${label}</label><div class="val ${cls}">${value}<span class="axis"><span class="axis-mk ${m[1]}">${m[0]}</span></span></div></div>`;
+}
+function optHTML(id,name,sub,price,sel){
+  return `<div class="opt ${sel?'sel':''}" onclick="chooseConfig('${id}')"><span class="radio"></span>
+    <span class="ot"><span class="otn">${name}</span><span class="ots">${sub}</span></span><span class="op">Nu ${price}</span></div>`;
+}
+
+function renderCanvas(){
+  const e=ENG.find(x=>x.id===activeId),w=WS[activeId],c=$('#canvas');
+  if(w.confirmed&&w.step===4){
+    c.innerHTML=`<div class="speak"><div class="now">Confirmed</div><h2>This booking is frozen and live.</h2>
+      <p>Terms are held to the guest. From here it moves to the operational side — arrival, check-in, the live folio. Any change now opens a fresh round rather than editing what's sealed.</p></div>
+      <div class="block"><div class="block-h">What's sealed<span class="ln"></span></div>
+        ${valRow('Stay','12–15 Jul · 3 nights','der')}
+        <div class="field"><label>Confirmed total</label><div class="val"><span class="fact b-bound" style="border:0;background:transparent;padding:0">Nu ${e.total}</span><span class="axis"><span class="axis-mk cap">✎</span></span></div></div>
+        <div style="font-size:12px;color:var(--ink-2);margin-top:4px;line-height:1.5">The total is a person's negotiated figure (mark ✎) that is now <b>confirmed</b> (green sealed frame). Both true at once.</div></div>`;
+    return;
+  }
+  const step=STEPS[w.step-1].key;
+  if(step==='inquiry'){
+    c.innerHTML=`<div class="speak"><div class="now">Do this next</div><h2>Understand the stay, then explore availability.</h2>
+      <p>Capture what the guest needs. You don't pick a room — the system offers configurations that work for these dates, and you choose one.</p></div>
+      <div class="block"><div class="block-h">The guest &amp; the stay<span class="ln"></span></div>
+        <div class="frow">${valRow('Primary contact','Karma Wangchuk · +975 17 88 21 04','cap')}${valRow('Came in as',e.channel,'cap')}</div>
+        <div class="frow">${valRow('Stay','12 → 15 Jul','cap')}${valRow('Nights','3','der')}</div>
+        <div class="frow">${valRow('Rooms','2','cap')}${valRow('Guests','3 adults · 1 child','cap')}</div></div>
+      <div class="block"><div class="block-h">Workable configurations<span class="ln"></span><span style="font-size:9px;color:var(--epi-suggest);font-weight:700;white-space:nowrap">◇ system-offered</span></div>
+        ${optHTML('cfg1','2× Deluxe · same rooms all nights','availability confirmed · 3 nights','24,600–27,300',w.configChosen)}
+        ${optHTML('cfg2','1× Deluxe + 1× Premium','available · higher band','27,800–30,100',false)}
+        <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px;line-height:1.5">These are <b>Suggested</b> — generated from live availability. You judge and pick; room numbers come later, at arrival.</div></div>`;
+    return;
+  }
+  if(step==='quote'){
+    c.innerHTML=`<div class="speak"><div class="now">Do this next</div><h2>Shape the price and send the quote.</h2>
+      <p>The figure is still a range — nothing here binds the guest yet. A draft reply is ready for you to judge.</p></div>
+      <div class="block"><div class="block-h">The offer<span class="ln"></span></div>
+        ${valRow('Configuration','2× Deluxe · same rooms','cap')}
+        ${valRow('Indicative total','Nu '+e.band,'der')}
+        ${valRow('Discount (within your margin)','Member rate · −8%','cap')}</div>
+      <div class="ai"><div class="ai-h"><span class="ai-tag"><svg style="stroke:var(--epi-suggest)"><use href="#i-spark"/></svg>AI-drafted reply</span>
+        <span class="ai-conf">confidence<div class="ai-bar"><i style="width:82%"></i></div>82%</span></div>
+        <div class="ai-body">"Dear Mr Wangchuk, thank you for your enquiry. We're pleased to offer two Deluxe rooms for 12–15 July at a member rate of Nu 24,600–27,300 for the three nights. Shall we hold these for you?"</div>
+        <div class="ai-acts"><button class="btn btn-primary btn-sm" onclick="approveAi()">${w.aiApproved?'✓ Approved & sent':'Approve & send'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="toast('Opened for editing — your edit layers over the draft.')">Edit first</button>
+          <span class="ai-basis" onclick="toast('Based on the inquiry email and this guest\\u2019s past two stays.')">see basis</span></div></div>
+      <div style="font-size:11.5px;color:var(--ink-3);line-height:1.5">The reply is <b>AI-drafted</b> — dashed amber, with how sure it is and its basis one tap away. It can't reach the guest until you approve.</div>`;
+    return;
+  }
+  if(step==='setup'){
+    c.innerHTML=`<div class="speak"><div class="now">Do this next</div><h2>Hold the rooms and take a deposit.</h2>
+      <p>This places a hold against inventory and records what protects the hotel if the guest cancels. Still nothing frozen — the hold has a timer and releases if the booking doesn't confirm in time.</p></div>
+      <div class="block"><div class="block-h">Hold &amp; deposit<span class="ln"></span></div>
+        ${valRow('Rooms held','2× Deluxe · hold runs 26h','sys')}
+        <div class="field"><label>Advance payment</label><div class="val" style="cursor:pointer" onclick="recordAdvance()">${w.advanceRecorded?'Nu '+e.advance+' received · cash':'<span style="color:var(--ink-3)">Tap to record the advance…</span>'}<span class="axis"><span class="axis-mk cap">✎</span></span></div></div>
+        <div class="field"><label>Cancellation terms shown to guest</label><div class="val" style="cursor:pointer" onclick="recordDisclosure()">${w.disclosureRecorded?'Standard terms · acknowledged':'<span style="color:var(--ink-3)">Tap to record the disclosure…</span>'}<span class="axis"><span class="axis-mk cap">✎</span></span></div></div></div>
+      <div style="font-size:11.5px;color:var(--ink-3);line-height:1.5">A held room reads as <b>confirmed</b> on the frame (it's really held) while the booking itself is still <b>working</b> — two facets, two frames.</div>`;
+    return;
+  }
+  if(step==='confirm'){
+    c.innerHTML=`<div class="speak"><div class="now">The one moment that locks</div><h2>Ready to freeze this booking.</h2>
+      <p>Confirming turns the range into a total the guest is held to, locks the rooms, and sends the confirmation. This is the only step in the whole booking that asks you to pause — because it's the one you can't quietly undo.</p></div>
+      <div class="block"><div class="block-h">What gets frozen<span class="ln"></span></div>
+        ${valRow('Guest','Karma Wangchuk','cap')}
+        ${valRow('Stay','12–15 Jul · 3 nights','der')}
+        ${valRow('Configuration','2× Deluxe','cap')}
+        ${valRow('Total to be frozen','Nu '+e.total,'der')}
+        ${valRow('Confirmation will send','automatically, on confirm','sys')}</div>
+      <div style="font-size:12px;color:var(--ink-2);line-height:1.55;background:var(--green-t);border-radius:var(--r-md);padding:11px 13px">Everything this step needs is in place. When you confirm, the desk names exactly what becomes irreversible before it commits.</div>`;
+    return;
+  }
+  if(step==='arrival'){
+    c.innerHTML=`<div class="speak"><div class="now">Do this next</div><h2>Ready the room for arrival.</h2>
+      <p>Now the system assigns a specific room and you clear the readiness check. Still reversible — nothing about the stay is live yet.</p></div>
+      <div class="block"><div class="block-h">Readiness<span class="ln"></span></div>
+        ${valRow('Room assigned','Room 207 · Deluxe','sys')}
+        ${valRow('Advance reconciled','Nu '+e.advance+' against folio','der')}
+        <div class="field"><label>Room ready &amp; inspected</label><div class="val" style="cursor:pointer" onclick="markReady()">${w.roomAssigned?'Clean &amp; inspected · ready':'<span style="color:var(--ink-3)">Tap when housekeeping confirms ready…</span>'}<span class="axis"><span class="axis-mk sys">⚙</span></span></div></div></div>
+      <div style="font-size:11.5px;color:var(--ink-3);line-height:1.5">The room number is <b>system-assigned</b> (⚙) — the guest was never shown a specific room until now, exactly as the model intends.</div>`;
+    return;
+  }
+  if(step==='checkin'){
+    const live=w.folioLive;
+    c.innerHTML=`<div class="speak"><div class="now">${live?'Checked in':'A moment that locks'}</div><h2>${live?'Guest is in. The folio is live.':'Verify identity and open the live folio.'}</h2>
+      <p>${live?'Charges now post against a live folio that can only grow — never revert.':'Checking in hands over the keys and turns the folio live. Once live, the financial record is permanent — the second point you can&rsquo;t quietly undo.'}</p></div>
+      <div class="block"><div class="block-h">Check-in<span class="ln"></span></div>
+        ${valRow('Guest','Karma Wangchuk','cap')}
+        ${valRow('Room','207 · Deluxe','sys')}
+        <div class="field"><label>Identity verified</label><div class="val" style="cursor:pointer" onclick="markIdentity()">${w.identityVerified?'Passport seen &amp; recorded':'<span style="color:var(--ink-3)">Tap to record the identity check…</span>'}<span class="axis"><span class="axis-mk cap">✎</span></span></div></div>
+        <div class="field"><label>Folio</label><div class="val"><span class="fact ${live?'b-bound':'b-transit'}" style="padding:2px 8px;font-size:12px">${live?'Live':'Provisional'}</span><span class="axis"><span class="axis-mk sys">⚙</span></span></div></div></div>`;
+    return;
+  }
+  if(step==='stay'){
+    const lines=w.charges.map(ch=>`<div class="fline"><span class="fl-mk ${ch.by==='sys'?'mk sys':'mk cap'}">${ch.by==='sys'?'⚙':'✎'}</span><span class="fl-d">${ch.d}<small>${ch.sub}</small></span><span class="fl-a">Nu ${ch.a}</span></div>`).join('');
+    const total=w.charges.reduce((s,c)=>s+ +c.a.replace(/,/g,''),0).toLocaleString();
+    c.innerHTML=`<div class="speak"><div class="now">In-house</div><h2>The stay is live. Post charges as they happen.</h2>
+      <p>Every charge adds a line — nothing is ever edited in place. Room charges post themselves each night; you post the rest.</p></div>
+      <div class="folio"><div class="folio-h">Live folio<span class="lk"><svg><use href="#i-lock"/></svg>live · append-only</span></div>
+        ${lines}
+        <div class="fline total"><span class="fl-mk mk der">∑</span><span class="fl-d">Running total</span><span class="fl-a">Nu ${total}</span></div></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="postCharge()">Post a charge</button>
+        <button class="btn btn-ghost btn-sm" onclick="toast('Room charges post themselves each night in the audit — you never key them.')">How nightly charges work</button></div>
+      <div class="reentry"><div class="rh">Need to change something?</div>
+        <div class="rb"><button class="btn btn-ghost btn-sm" onclick="reentry('room')">Change room</button>
+          <button class="btn btn-ghost btn-sm" onclick="reentry('rate')">Revise rate</button>
+          <button class="btn btn-ghost btn-sm" onclick="reentry('extend')">Extend the stay</button></div>
+        <div style="font-size:11px;color:var(--ink-3);margin-top:8px;line-height:1.5">A confirmed stay can&rsquo;t be edited in place. Each of these takes you <b>back to an earlier step in a new round</b> — the current stay seals as history and a fresh one carries the change. That&rsquo;s how you reach the steps again from here.</div></div>`;
+    return;
+  }
+  if(step==='checkout'){
+    const total=w.charges.reduce((s,c)=>s+ +c.a.replace(/,/g,''),0);
+    const bal=(total - +e.advance.replace(/,/g,'')).toLocaleString();
+    c.innerHTML=`<div class="speak"><div class="now">${w.settled?'Settled':'Do this next'}</div><h2>${w.settled?'Folio settled. Ready to close.':'Settle the folio and collect the keys.'}</h2>
+      <p>${w.settled?'Payment has been taken; the room goes to housekeeping for turnover.':'Take payment for the balance and collect the keys. Processing payment is the last thing you can&rsquo;t reclaim.'}</p></div>
+      <div class="block"><div class="block-h">Settlement<span class="ln"></span></div>
+        ${valRow('Charges total','Nu '+total.toLocaleString(),'der')}
+        ${valRow('Advance already paid','Nu '+e.advance,'cap')}
+        ${valRow('Balance due','Nu '+bal,'der')}
+        <div class="field"><label>Balance reviewed with guest</label><div class="val" style="cursor:pointer" onclick="markReviewed()">${w.reviewed?'Reviewed &amp; agreed':'<span style="color:var(--ink-3)">Tap when reviewed with the guest…</span>'}<span class="axis"><span class="axis-mk cap">✎</span></span></div></div></div>`;
+    return;
+  }
+  if(step==='closed'){
+    c.innerHTML=`<div class="speak"><div class="now">Closed</div><h2>This stay is closed and sealed.</h2>
+      <p>The record is permanent. Nothing here can be edited — any later correction is added as a new layer on top, never a change to what&rsquo;s sealed.</p></div>
+      <div class="block"><div class="block-h">Sealed record<span class="ln"></span></div>
+        ${valRow('Outcome','Settled in full','der')}
+        ${valRow('Folio','Sealed','sys')}
+        <div class="field"><label>Record</label><div class="val"><span class="fact b-bound" style="padding:2px 8px;font-size:12px">Read-only · sealed</span><span class="axis"><span class="axis-mk sys">⚙</span></span></div></div></div>`;
+    return;
+  }
+}
+window.chooseConfig=function(id){WS[activeId].configChosen=true;renderWS();};
+window.approveAi=function(){WS[activeId].aiApproved=true;renderWS();};
+window.recordAdvance=function(){WS[activeId].advanceRecorded=true;renderWS();};
+window.recordDisclosure=function(){WS[activeId].disclosureRecorded=true;renderWS();};
+window.markReady=function(){WS[activeId].roomAssigned=true;renderWS();};
+window.markIdentity=function(){WS[activeId].identityVerified=true;renderWS();};
+window.markReviewed=function(){WS[activeId].reviewed=true;renderWS();};
+window.postCharge=function(){
+  const w=WS[activeId];
+  const opts=[['Restaurant · lunch','posted by Ugyen','640'],['Laundry','posted by Ugyen','320'],['Minibar','posted by Ugyen','450'],['Spa','posted by Ugyen','1,500']];
+  const pick=opts[w.charges.filter(c=>c.by==='cap').length%opts.length];
+  w.charges.push({by:'cap',d:pick[0],sub:pick[1],a:pick[2]}); renderWS(); /* routine — one tap, no ceremony */
+};
+window.reentry=function(kind){
+  const map={room:5,rate:2,extend:4}, labels={room:'change the room',rate:'revise the rate',extend:'extend the stay'};
+  $('#modal').innerHTML=`<div class="modal-top"><div class="modal-ic"><svg><use href="#i-back"/></svg></div>
+      <div><h3>Open a new round?</h3><p>To ${labels[kind]}</p></div></div>
+    <div class="modal-body"><p class="why">A confirmed stay can&rsquo;t be edited in place. This takes you back to an earlier step in a fresh round:</p>
+      <div class="modal-consq">
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The current stay <b>seals as history</b> — still readable, never changed.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>A new round opens at the <b>${STEPS[map[kind]-1].label}</b> step and carries the change forward.</span></div></div></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Not now</button>
+      <button class="btn btn-primary" onclick="doReentry(${map[kind]})">Open new round</button></div>`;
+  $('#scrim').classList.add('on');
+};
+window.doReentry=function(target){const w=WS[activeId];w.step=target;closeModal();renderWS();toast('New round opened — the previous stay is sealed as history.');};
+
+function gateHTML(needs,label,action,commit){
+  return `<div class="needs"><span class="nl">${commit?'Before this can commit':'Before you continue'}</span>
+    ${needs.map(n=>`<span class="need ${n[1]?'met':''}"><span class="nd"></span>${n[0]}</span>`).join('')}</div>
+    <button class="adv ${commit?'commit':''} ${action?'':'locked'}" onclick="${action}">
+      ${commit?'<svg><use href="#i-lock"/></svg>':''}${label}${!commit&&action?'<svg><use href="#i-arrow"/></svg>':''}</button>`;
+}
+function renderGate(){
+  const w=WS[activeId],g=$('#gate'),step=STEPS[w.step-1].key;
+  // a boundary already crossed → simply continue forward
+  if(step==='confirm'&&w.confirmed){ g.innerHTML=gateHTML([['Booking confirmed and frozen',true]],'Continue to Arrival','advance()',false); return; }
+  if(step==='checkin'&&w.folioLive){ g.innerHTML=gateHTML([['Checked in · folio live',true]],'Continue to Stay','advance()',false); return; }
+  if(step==='checkout'&&w.settled){ g.innerHTML=gateHTML([['Folio settled',true]],'Close &amp; seal','advance()',false); return; }
+  if(step==='closed'){ g.innerHTML=`<div class="needs"><span class="need met"><span class="nd"></span>Stay closed and sealed</span></div><button class="adv" disabled style="background:var(--green);cursor:default"><svg><use href="#i-lock"/></svg>Sealed</button>`; return; }
+
+  let needs=[],label='',action='advance()',commit=false;
+  if(step==='inquiry'){needs=[['Configuration chosen',w.configChosen]];label='Continue to Quote';}
+  else if(step==='quote'){needs=[['Quote sent to guest',w.aiApproved]];label='Continue to Set up';}
+  else if(step==='setup'){needs=[['Advance recorded',w.advanceRecorded],['Cancellation terms recorded',w.disclosureRecorded]];label='Continue to Confirm';}
+  else if(step==='confirm'){needs=[['Configuration chosen',w.configChosen],['Advance recorded',w.advanceRecorded],['Cancellation terms recorded',w.disclosureRecorded]];label='Confirm booking';commit=true;action='askConfirm()';}
+  else if(step==='arrival'){needs=[['Room ready &amp; inspected',w.roomAssigned]];label='Continue to Check-in';}
+  else if(step==='checkin'){needs=[['Identity verified',w.identityVerified]];label='Check the guest in';commit=true;action='askCheckin()';}
+  else if(step==='stay'){needs=[['At least one charge posted',w.charges.length>0]];label='Continue to Check-out';}
+  else if(step==='checkout'){needs=[['Balance reviewed',!!w.reviewed]];label='Settle the folio';commit=true;action='askSettle()';}
+  const canGo=needs.every(n=>n[1]);
+  g.innerHTML=gateHTML(needs,label,canGo?action:'',commit);
+}
+window.advance=function(){const w=WS[activeId];w.step++;w.maxStep=Math.max(w.maxStep,w.step);renderWS();};
+
+window.askConfirm=function(){
+  const e=ENG.find(x=>x.id===activeId);
+  $('#modal').innerHTML=`<div class="modal-top"><div class="modal-ic"><svg><use href="#i-lock"/></svg></div>
+      <div><h3>Freeze this booking?</h3><p>${e.name} · ${e.party}</p></div></div>
+    <div class="modal-body"><p class="why">Confirming commits the hotel and the guest. Here is exactly what becomes binding:</p>
+      <div class="modal-consq">
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The price freezes at <b>Nu ${e.total}</b> — the guest is held to it.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The rooms lock — no longer offerable to anyone else.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>A confirmation goes to the guest automatically.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>Any later change opens a <b>new round</b> — it won't quietly edit what's sealed.</span></div></div></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Not yet</button>
+      <button class="btn btn-primary" style="background:var(--green)" onclick="doConfirm()"><svg><use href="#i-lock"/></svg>Freeze & confirm</button></div>`;
+  $('#scrim').classList.add('on');
+};
+window.closeModal=()=>$('#scrim').classList.remove('on');
+$('#scrim').onclick=e=>{if(e.target===$('#scrim'))closeModal();};
+window.doConfirm=function(){
+  const e=ENG.find(x=>x.id===activeId),w=WS[activeId];
+  w.confirmed=true;w.step=4;w.maxStep=4;e.step=4;e.timerLvl='';e.timer='Confirmed';
+  closeModal();renderWS();renderList();renderToday();toast('Booking confirmed and frozen.');
+};
+window.askCheckin=function(){
+  const e=ENG.find(x=>x.id===activeId);
+  $('#modal').innerHTML=`<div class="modal-top"><div class="modal-ic"><svg><use href="#i-lock"/></svg></div>
+      <div><h3>Check the guest in?</h3><p>${e.name} · Room 207</p></div></div>
+    <div class="modal-body"><p class="why">Check-in turns the folio live. Here is what becomes permanent:</p>
+      <div class="modal-consq">
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The folio goes <b>live</b> — from here it can only grow, never revert to a draft.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The room becomes <b>occupied</b> and keys are issued.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>Charges begin posting against the live folio.</span></div></div></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Not yet</button>
+      <button class="btn btn-primary" style="background:var(--green)" onclick="doCheckin()"><svg><use href="#i-lock"/></svg>Check in &amp; go live</button></div>`;
+  $('#scrim').classList.add('on');
+};
+window.doCheckin=function(){
+  const w=WS[activeId]; w.folioLive=true;
+  if(w.charges.length===0) w.charges=[{by:'sys',d:'Room · first night',sub:'night audit',a:'5,200'}];
+  closeModal();renderWS();toast('Checked in — the folio is live.');
+};
+window.askSettle=function(){
+  const e=ENG.find(x=>x.id===activeId),w=WS[activeId];
+  const total=w.charges.reduce((s,c)=>s+ +c.a.replace(/,/g,''),0);
+  const bal=(total-+e.advance.replace(/,/g,'')).toLocaleString();
+  $('#modal').innerHTML=`<div class="modal-top"><div class="modal-ic"><svg><use href="#i-lock"/></svg></div>
+      <div><h3>Settle the folio?</h3><p>${e.name} · balance Nu ${bal}</p></div></div>
+    <div class="modal-body"><p class="why">Taking payment commits a resource you can&rsquo;t reclaim:</p>
+      <div class="modal-consq">
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The balance of <b>Nu ${bal}</b> is processed for payment.</span></div>
+        <div class="ci"><svg><use href="#i-check"/></svg><span>The room releases to housekeeping for turnover.</span></div></div></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Not yet</button>
+      <button class="btn btn-primary" style="background:var(--green)" onclick="doSettle()"><svg><use href="#i-lock"/></svg>Take payment</button></div>`;
+  $('#scrim').classList.add('on');
+};
+window.doSettle=function(){const w=WS[activeId];w.settled=true;closeModal();renderWS();toast('Folio settled.');};
+
+function renderSummary(){
+  const e=ENG.find(x=>x.id===activeId),w=WS[activeId],s=$('#summary'),frozen=w.confirmed;
+  const folioState=w.settled?'Settled':w.folioLive?'Live':w.step>=3?'Provisional':'Not opened';
+  const folioFrame=(w.settled||w.folioLive)?'b-bound':(w.step>=3?'b-transit':'b-live');
+  const total=w.charges.reduce((s2,c)=>s2+ +c.a.replace(/,/g,''),0);
+  s.innerHTML=`<div class="sum-h"><div class="t">This booking</div>
+      <span class="commit-tag ${frozen?'frozen':'indic'}">${frozen?'<svg style="stroke:var(--green-d)"><use href="#i-check"/></svg>Confirmed · frozen':'Indicative · not committed'}</span></div>
+    <div class="sum-body"><div class="sum-price ${frozen?'frozen':'indic'}">${frozen?'<div class="stamp">FROZEN<br>23 JUN</div>':''}
+        <div class="pl">${frozen?'✓ Confirmed total':'Indicative band'}</div>
+        <div class="amt" style="color:${frozen?'var(--green-d)':'var(--warn)'}">${frozen?'Nu '+e.total:'Nu '+e.band}</div>
+        <div class="sub">${frozen?'held to the guest · 3 nights':'a range while terms are shaped · 3 nights'}</div></div>
+      <div class="sum-line"><span class="k">Folio</span><span class="v"><span class="fact ${folioFrame}" style="padding:1px 8px;font-size:11px">${folioState}</span></span></div>
+      <div class="sum-line"><span class="k">Stay</span><span class="v mono">12–15 Jul · 3n</span></div>
+      ${w.folioLive?`<div class="sum-line"><span class="k">Charges so far</span><span class="v mono">Nu ${total.toLocaleString()}</span></div>`:''}
+      <div class="sum-line"><span class="k">Advance</span><span class="v mono">${w.advanceRecorded?'Nu '+e.advance:'—'}</span></div>
+      <div class="sum-note">${frozen?'The frozen figures carry to every later step unchanged — you never re-enter them.':'Nothing here is binding yet. The price is a range and the rooms aren&rsquo;t locked.'}</div></div>`;
+}
+
+function clock(){const d=new Date();$('#clock').textContent=d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});}
+setInterval(clock,1000);clock();
+renderToday();renderList();
+
+/* ════ ROOMS BOARD ════ */
+const ROOMS=[
+  ['101','Standard','ready'],['102','Standard','dirty'],['103','Standard','ready'],['104','Standard','occ'],['105','Deluxe','occ'],['106','Deluxe','ready'],['107','Deluxe','clean'],['108','Deluxe Twin','ready'],['109','Deluxe Twin','ooo'],
+  ['201','Standard','ready'],['202','Standard','dirty'],['203','Deluxe','occ'],['204','Deluxe','occ'],['205','Deluxe','ready'],['206','Deluxe Twin','clean'],['207','Deluxe','occ'],['208','Premium','ready'],['209','Premium','dirty'],
+  ['301','Deluxe','ready'],['302','Deluxe','occ'],['303','Deluxe Twin','ready'],['304','Deluxe Twin','dirty'],['305','Premium','occ'],['306','Premium','ready'],['307','Premium','clean'],['308','Suite','ready'],['309','Suite','occ']
+].map(r=>({no:r[0],type:r[1],status:r[2]}));
+const RST={occ:['Occupied','s-occ','d-occ'],dirty:['Needs cleaning','s-dirty','d-dirty'],clean:['Cleaned · to inspect','s-clean','d-clean'],ready:['Ready','s-ready','d-ready'],ooo:['Out of order','s-ooo','d-ooo']};
+function renderRooms(){
+  const c={occ:0,ready:0,clean:0,dirty:0,ooo:0}; ROOMS.forEach(r=>c[r.status]++);
+  const kpi=[['Occupied',c.occ,'d-occ'],['Ready',c.ready,'d-ready'],['Being readied',c.dirty+c.clean,'d-dirty'],['Out of order',c.ooo,'d-ooo']];
+  let h=`<div class="kpibar">${kpi.map(k=>`<div class="kpi"><div class="kv">${k[1]}</div><div class="kk"><span class="d ${k[2]}"></span>${k[0]}</div></div>`).join('')}</div>`;
+  ['1','2','3'].forEach(f=>{
+    const rs=ROOMS.filter(r=>r.no[0]===f);
+    h+=`<div class="floor"><div class="floor-h">Floor ${f}</div><div class="roomgrid">${rs.map(r=>{const s=RST[r.status];
+      return `<button class="room ${r.status==='occ'?'occ':r.status==='ooo'?'ooo':''}" onclick="cycleRoom('${r.no}')"><div class="rn">${r.no}</div><div class="rt">${r.type}</div><div class="rs ${s[1]}"><span class="d ${s[2]}"></span>${s[0]}</div></button>`;
+    }).join('')}</div></div>`;
+  });
+  h+=`<div class="legend">${Object.values(RST).map(s=>`<span class="lg"><span class="d ${s[2]}"></span>${s[0]}</span>`).join('')}</div>
+    <p class="lead" style="margin-top:12px;font-size:12px">Tap a room being readied to move it on — needs cleaning → cleaned → ready. Occupied rooms free themselves at checkout; that's not a status you set by hand.</p>`;
+  $('#roomsBody').innerHTML=h;
+}
+window.cycleRoom=function(no){
+  const r=ROOMS.find(x=>x.no===no);
+  if(r.status==='occ'){toast('Occupied — this room frees itself when the guest checks out.');return;}
+  if(r.status==='ooo'){toast('Out of order — maintenance must clear it before it returns.');return;}
+  r.status=r.status==='dirty'?'clean':'ready'; renderRooms(); /* routine — one tap, no ceremony */
+};
+
+/* ════ BILLING (a second lens on the same folios) ════ */
+function renderBilling(){
+  const rows=ENG.filter(e=>WS[e.id].step>=3).map(e=>{
+    const w=WS[e.id], total=w.charges.reduce((s,c)=>s+ +c.a.replace(/,/g,''),0);
+    let state,cls,bal;
+    if(w.settled){state='Settled';cls='settled';bal='—';}
+    else if(w.folioLive){state='Live';cls='live';bal='Nu '+(total-+e.advance.replace(/,/g,'')).toLocaleString();}
+    else{state='Provisional';cls='prov';bal='Nu '+e.advance+' held';}
+    return {e,state,cls,bal};
+  });
+  $('#billingBody').innerHTML=`<div class="btable-wrap"><table class="btable">
+    <thead><tr><th>Guest</th><th>Stay</th><th>Folio</th><th class="bal">Balance</th><th></th></tr></thead>
+    <tbody>${rows.map(r=>`<tr onclick="openEng('${r.e.id}')">
+      <td class="bg">${r.e.name}</td><td class="mono" style="font-size:12px">${r.e.party}</td>
+      <td><span class="fstate ${r.cls}">${r.state}</span></td>
+      <td class="bal">${r.bal}</td><td><span class="brow-open">Open →</span></td></tr>`).join('')}</tbody></table></div>
+    <p class="lead" style="margin-top:12px;font-size:12px">These are the same folios that live inside each booking — Billing is just the property-wide view. Open one and you land in that booking's workspace, where any change routes through the proper step.</p>`;
+}
+
+/* ════ REPORTS (computed · read-only) ════ */
+function renderReports(){
+  const occ=[78,85,92,74,63,88,96,82,70,67,90,94,79,72];
+  const days=occ.map((_,i)=>new Date(2026,5,23+i).getDate());
+  const kpi=[['Occupancy tonight','78%'],['Average room rate','Nu 5,240'],['Revenue per room','Nu 4,090'],['Rooms sold tonight','21 / 27']];
+  const chan=[['Direct',42,'var(--green)'],['Agent',28,'var(--epi-system)'],['OTA',23,'var(--terra)'],['Walk-in',7,'var(--warn)']];
+  const types=[['Deluxe',38,'var(--green)'],['Premium',31,'var(--green-d)'],['Standard',18,'var(--epi-system)'],['Suite',13,'var(--terra)']];
+  const bars=occ.map((v,i)=>`<div class="occbar"><div class="bv">${v}</div><div class="bar" style="height:${v}%"></div><div class="bl">${days[i]}</div></div>`).join('');
+  const hb=arr=>arr.map(c=>`<div class="hbar"><span class="hl">${c[0]}</span><span class="ht"><i style="width:${c[1]}%;background:${c[2]}"></i></span><span class="hv">${c[1]}%</span></div>`).join('');
+  $('#reportsBody').innerHTML=`
+    <div class="kpibar">${kpi.map(k=>`<div class="kpi"><div class="kv">${k[1]}</div><div class="kk"><span class="axis-mk der" style="width:14px;height:14px">∑</span>${k[0]}</div></div>`).join('')}</div>
+    <div class="repgrid">
+      <div class="card" style="padding:15px 17px"><div class="sectitle" style="margin-bottom:2px">Occupancy · next 14 nights</div><div class="lead" style="font-size:12px;margin-bottom:6px">Rooms sold as a share of 27</div><div class="occbars">${bars}</div></div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="card" style="padding:15px 17px"><div class="sectitle" style="margin-bottom:11px">Where bookings come from</div>${hb(chan)}</div>
+        <div class="card" style="padding:15px 17px"><div class="sectitle" style="margin-bottom:11px">Revenue by room type</div>${hb(types)}</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px 16px;margin-top:16px;display:flex;align-items:center;gap:13px;flex-wrap:wrap">
+      <span class="axis-mk sys" style="width:28px;height:28px;border-radius:8px;font-size:13px">⚙</span>
+      <div style="flex:1;min-width:220px"><div class="sectitle">Last night's audit ran clean</div><div class="lead" style="font-size:12px">Completed 02:14 · 18 room charges posted automatically · 0 exceptions. The system produced every figure on this page — no one keyed them.</div></div>
+    </div>`;
+}
+renderRooms();
+
+/* ════ NOTIFICATIONS · interruption reserved for what needs you now (C14) ════ */
+const NOTIFS={
+  now:[
+    {mk:'stop',title:'Pelden Corporate · hold expiring',sub:'The room hold releases in about 4 hours unless it\u2019s confirmed.',time:'4h',go:'pc'},
+    {mk:'ok',title:'Yeshey released a hold you were viewing',sub:'A room you had open is back in the available pool.',time:'12m',go:'tt'}
+  ],
+  later:[
+    {mk:'sug',title:'AI drafted a reply to Dawa Lhamo',sub:'Review it before it goes to the guest.',time:'25m',go:'dl'},
+    {mk:'sys',title:'Last night\u2019s audit completed',sub:'18 charges posted · 0 exceptions.',time:'07:14',view:'reports'},
+    {mk:'ok',title:'Tashi Tours quote still pending',sub:'Awaiting the agent\u2019s acceptance.',time:'1d',go:'tt'}
+  ]
+};
+const NMK={stop:'⏱',ok:'↪',sug:'◇',sys:'⚙'};
+function nItem(n){
+  const act=n.go?`openEng('${n.go}')`:n.view?`view('${n.view}')`:'';
+  return `<div class="nitem" onclick="closeNotifs();${act}"><span class="nmk ${n.mk}">${NMK[n.mk]}</span>
+    <span class="nbody"><span class="ntitle">${n.title}</span><span class="nsub">${n.sub}</span></span><span class="ntime">${n.time}</span></div>`;
+}
+function renderNotifs(){
+  const b=$('#nbadge'); b.textContent=NOTIFS.now.length; b.style.display=NOTIFS.now.length?'grid':'none';
+  $('#npanel').innerHTML=`<div class="npanel-h"><div class="t">Notifications</div><div class="s">Only what needs you — routine activity stays off this list.</div></div>
+    <div class="nsec"><div class="nsec-h"><span class="dot" style="background:var(--stop)"></span>Needs you now</div>${NOTIFS.now.map(nItem).join('')}</div>
+    <div class="nsec" style="border-top:1px solid var(--line)"><div class="nsec-h"><span class="dot" style="background:var(--ink-4)"></span>When you have a moment</div>${NOTIFS.later.map(nItem).join('')}</div>
+    <div class="npanel-f">Routine actions — posting a charge, readying a room — never land here. Only an escalation, a deadline, or a colleague\u2019s action that touches your work does.</div>`;
+}
+window.closeNotifs=function(){$('#npanel').classList.remove('on');};
+$('#bell').onclick=e=>{e.stopPropagation();const p=$('#npanel'),open=p.classList.contains('on');closeNotifs();if(!open){renderNotifs();p.classList.add('on');}};
+document.addEventListener('click',e=>{if(!e.target.closest('.notif-wrap'))closeNotifs();});
+renderNotifs();
+
+const SW=[
+  ['--green','Structure','Navigation, the journey, sealed state'],
+  ['--terra','Primary action','The one thing to do next'],
+  ['--ok','Met / done','A precondition satisfied'],
+  ['--warn','Indicative / caution','Not-yet-committed price; nearing deadline'],
+  ['--stop','Deadline near','A timer about to expire'],
+  ['--epi-suggest','Suggested','Algorithm- or AI-proposed — judge it'],
+  ['--epi-system','System did it','Performed by the system for you'],
+  ['--bind-bound','Bound / sealed','In force — a change opens a new round']
+];
+$('#swatches').innerHTML=SW.map(s=>`<div class="sw"><div class="chip" style="background:var(${s[0]})"></div>
+  <div class="meta"><div class="sn">${s[1]}</div><div class="sm">${s[2]}</div><div class="sx">${s[0]}</div></div></div>`).join('');
+</script>
+</body>
+</html>

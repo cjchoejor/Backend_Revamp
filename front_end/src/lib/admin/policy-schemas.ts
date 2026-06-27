@@ -339,6 +339,70 @@ export const REGISTRY_POLICY_KEYS: PolicyKeyMeta[] = [
     ],
     defaults: { days: 3 },
   },
+  // ---- Child policy (Legphel-Child-Policy.md) -------------------------------------------------
+  {
+    policyId: "registry.child.ageBands",
+    policyClass: "PRICING",
+    title: "Child age bands",
+    description:
+      "Age cutoffs used to classify each guest. Young child = 0..youngChildMaxAge; child = (youngChildMaxAge+1)..childMaxAge; adult = childMaxAge+1 and above.",
+    consumedBy: ["child-policy-service", "capacity-validation-service", "pricing engine"],
+    fields: [
+      { kind: "number", key: "youngChildMaxAge", label: "Young-child max age (inclusive)", unit: "yrs", min: 0, max: 17, step: 1, help: "Defaults to 5 — children aged 0–5 are 'young child'." },
+      { kind: "number", key: "childMaxAge", label: "Child max age (inclusive)", unit: "yrs", min: 0, max: 17, step: 1, help: "Defaults to 10 — children aged (youngChildMaxAge+1)–10 are 'child'; 11+ are adult." },
+    ],
+    defaults: { youngChildMaxAge: 5, childMaxAge: 10 },
+  },
+  {
+    policyId: "registry.child.mealPricing",
+    policyClass: "PRICING",
+    title: "Child meal pricing",
+    description:
+      "Percentage of the adult meal rate applied per band. Applies to the meal component of a plan or package, not the room rate.",
+    consumedBy: ["pricing engine"],
+    fields: [
+      { kind: "number", key: "youngChildPercent", label: "Young-child %", unit: "%", min: 0, max: 100, step: 5, help: "Defaults to 0 (free)." },
+      { kind: "number", key: "childPercent", label: "Child %", unit: "%", min: 0, max: 100, step: 5, help: "Defaults to 70 (70% of adult)." },
+      { kind: "number", key: "adultPercent", label: "Adult %", unit: "%", min: 0, max: 100, step: 5, help: "Defaults to 100 (full rate). Rarely changed." },
+    ],
+    defaults: { youngChildPercent: 0, childPercent: 70, adultPercent: 100 },
+  },
+  {
+    policyId: "registry.child.separateBedCharge",
+    policyClass: "PRICING",
+    title: "Separate-bed charge for a child",
+    description:
+      "Charge applied when a child requests a separate bed instead of sharing the parents' bedding. basis = FLAT (currency amount) or PERCENT_OF_ROOM (% of room base rate). Open decision per the child policy doc — start disabled until the hotel sets a value.",
+    consumedBy: ["pricing engine"],
+    fields: [
+      { kind: "text", key: "basis", label: "Basis", help: "FLAT or PERCENT_OF_ROOM" },
+      { kind: "number", key: "amount", label: "Amount", min: 0, step: 1, help: "Flat currency amount when basis=FLAT, percent when basis=PERCENT_OF_ROOM." },
+      { kind: "text", key: "currency", label: "Currency", help: "Only used when basis=FLAT. Defaults to BTN." },
+    ],
+    defaults: { basis: "FLAT", amount: 0, currency: "BTN" },
+  },
+  {
+    policyId: "registry.child.unaccompaniedMinorMinAge",
+    policyClass: "COMPLIANCE",
+    title: "Unaccompanied-minor minimum age",
+    description: "A guest younger than this cannot book or occupy a room without a responsible adult. Blocks S1 intake.",
+    consumedBy: ["capacity-validation-service"],
+    fields: [
+      { kind: "number", key: "minimumAge", label: "Minimum age", unit: "yrs", min: 0, max: 25, step: 1, help: "Defaults to 18." },
+    ],
+    defaults: { minimumAge: 18 },
+  },
+  {
+    policyId: "registry.child.adultToChildRatio",
+    policyClass: "OCCUPANCY",
+    title: "Adult-to-child ratio cap",
+    description: "Optional cap: at most maxChildrenPerAdult children for each accompanying adult. Disable to skip.",
+    consumedBy: ["capacity-validation-service"],
+    fields: [
+      { kind: "number", key: "maxChildrenPerAdult", label: "Max children per adult", min: 1, step: 1 },
+    ],
+    defaults: { maxChildrenPerAdult: 3 },
+  },
 ];
 
 export function getPolicyMeta(policyId: string): PolicyKeyMeta | undefined {
