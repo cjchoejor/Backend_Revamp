@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { validateCapacity } from "./capacity-validation-service.js";
 export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import * as notificationService from "../infrastructure/notification-service.js";
@@ -28,6 +29,9 @@ export async function createEntry(
     checkInDate?: string;
     checkOutDate?: string;
     guestCount?: number;
+    adultCount?: number;
+    childCount?: number;
+    childAges?: number[];
     otaSource?: boolean;
     walkInCompressed?: boolean;
   },
@@ -61,6 +65,21 @@ export async function createEntry(
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : null;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
 
+  // Child / capacity policy enforcement. Run BLOCK-severity issues as a hard reject at S1
+  // intake — e.g. unaccompanied-minor, ratio violation, over-capacity vs a chosen room type.
+  // When no roomTypeId is known yet (typical at S1 inquiry creation — type is picked at S2),
+  // only composition-level checks run.
+  if (input.childAges && input.childAges.length > 0) {
+    const { issues } = await validateCapacity(prisma, {
+      adults: input.adultCount ?? 0,
+      childAges: input.childAges,
+    });
+    const blocking = issues.filter((i) => i.severity === "BLOCK");
+    if (blocking.length > 0) {
+      throw new ValidationError(blocking.map((i) => i.message).join(" "), { capacityIssues: blocking } as any);
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
     const entryId = await allocateReadableId(tx, "ENTRY" as const);
     const entry = await tx.entry.create({
@@ -75,6 +94,9 @@ export async function createEntry(
         checkInDate: checkInDate && !Number.isNaN(checkInDate.getTime()) ? checkInDate : null,
         checkOutDate: checkOutDate && !Number.isNaN(checkOutDate.getTime()) ? checkOutDate : null,
         guestCount: input.guestCount ?? null,
+        adultCount: input.adultCount ?? null,
+        childCount: input.childCount ?? null,
+        childAges: input.childAges ?? [],
         otaSource: input.otaSource === true,
         ...(groupBillingMode != null ? { groupBillingMode } : {}),
         createdBy: actorId,
@@ -157,6 +179,79 @@ export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: 
       inquiryId: updated.inquiryId,
       entryId,
       payload: {},
+      createdBy: actorId,
+    });
+    return updated;
+  });
+}
+
+/**
+ * S1-scope correction path. Used by the booking flow's step-1 Edit. Only allows the field set the
+ * front-desk operator can sensibly change before quotation: stay dates, head-count breakdown,
+ * useType. Fails if the entry has already advanced past S1 (preventing silent re-pricing of
+ * sealed-in quotations / holds downstream).
+ */
+export async function updateEntryIntakeFields(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  actorLevel: ActorLevel,
+  input: {
+    checkInDate?: string;
+    checkOutDate?: string;
+    guestCount?: number;
+    adultCount?: number;
+    childCount?: number;
+    childAges?: number[];
+    useType?: string;
+    expectedVersion?: number;
+  },
+) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== Stage.S1) {
+    throw new ValidationError(`Cannot edit intake fields — entry has advanced to ${entry.currentStage}. Use the stage-specific amendment flow.`);
+  }
+  if (input.expectedVersion != null && entry.version !== input.expectedVersion) {
+    throw new ValidationError("version mismatch");
+  }
+  // Re-run capacity checks against the new composition (childAges may have changed).
+  if (input.childAges && input.childAges.length > 0) {
+    const { issues } = await validateCapacity(prisma, {
+      adults: input.adultCount ?? entry.adultCount ?? 0,
+      childAges: input.childAges,
+    });
+    const blocking = issues.filter((i) => i.severity === "BLOCK");
+    if (blocking.length > 0) {
+      throw new ValidationError(blocking.map((i) => i.message).join(" "), { capacityIssues: blocking } as any);
+    }
+  }
+  const checkInDate = input.checkInDate ? new Date(input.checkInDate) : undefined;
+  const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : undefined;
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.entry.update({
+      where: { id: entryId },
+      data: {
+        ...(checkInDate && !Number.isNaN(checkInDate.getTime()) ? { checkInDate } : {}),
+        ...(checkOutDate && !Number.isNaN(checkOutDate.getTime()) ? { checkOutDate } : {}),
+        ...(input.guestCount != null ? { guestCount: input.guestCount } : {}),
+        ...(input.adultCount != null ? { adultCount: input.adultCount } : {}),
+        ...(input.childCount != null ? { childCount: input.childCount } : {}),
+        ...(input.childAges ? { childAges: input.childAges } : {}),
+        ...(input.useType ? { useType: input.useType as any } : {}),
+        version: { increment: 1 },
+      },
+    });
+    await auditService.emit(tx as any, { actorId, actorLevel }, {
+      eventType: "ENTRY.INTAKE_UPDATED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: updated.currentStage as any,
+      inquiryId: updated.inquiryId,
+      entryId,
+      payload: input,
       createdBy: actorId,
     });
     return updated;

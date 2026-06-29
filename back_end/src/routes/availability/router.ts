@@ -20,11 +20,13 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
         roomNumber: true,
         physicalState: true,
         roomTypeId: true,
+        floorNumber: true,
         currentClaimState: true,
         isBlocked: true,
         blockedReason: true,
         isDeficient: true,
         isUnderMaintenance: true,
+        roomType: { select: { id: true, code: true, name: true } },
       },
     });
     res.json({ items, count: items.length });

@@ -10,9 +10,22 @@ import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
+import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
 
 export const lookupsRouter = Router();
 const L1 = requireActorLevel("L1");
+
+/**
+ * Live snapshot of the child-policy bundle for the front-desk forms. The booking flow's child
+ * age input reads `unaccompaniedMinorMinAge.minimumAge` so the visible cap stays in sync with
+ * whatever the L4 admin has configured at /admin/policies — no hardcoded "17".
+ */
+lookupsRouter.get("/lookups/child-policy", L1, async (_req, res, next) => {
+  try {
+    const bundle = await loadChildPolicyBundle(prisma);
+    res.json(bundle);
+  } catch (e) { next(e); }
+});
 
 lookupsRouter.get("/lookups/travel-agents/search", L1, async (req, res, next) => {
   try {

@@ -8,10 +8,35 @@ export const createEntryRequestSchema = z.object({
   checkInDate: z.string().optional(),
   checkOutDate: z.string().optional(),
   guestCount: z.coerce.number().int().optional(),
+  adultCount: z.coerce.number().int().min(0).optional(),
+  childCount: z.coerce.number().int().min(0).optional(),
+  // The legal-age upper bound (typically 17 — "under minimumAge") is enforced at the service
+  // layer against registry.child.unaccompaniedMinorMinAge so it stays editable as policy.
+  // Shape-level we only require non-negative integers below an absurd ceiling.
+  childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
   otaSource: z.boolean().optional(),
   walkInCompressed: z.boolean().optional(),
 });
 export type CreateEntryRequestDto = z.infer<typeof createEntryRequestSchema>;
+
+/**
+ * PATCH /api/entries/:id — narrow, S1-only update path for the booking flow's "Edit" affordance.
+ * Operators correcting initial intake mistakes (wrong dates, wrong head count) can re-open step 1
+ * of the unified booking flow, change values, and save. Stage gates apply on the service side.
+ */
+export const updateEntryRequestSchema = z.object({
+  checkInDate: z.string().optional(),
+  checkOutDate: z.string().optional(),
+  guestCount: z.coerce.number().int().min(0).optional(),
+  adultCount: z.coerce.number().int().min(0).optional(),
+  childCount: z.coerce.number().int().min(0).optional(),
+  // Upper bound is enforced policy-side (registry.child.unaccompaniedMinorMinAge - 1) in the
+  // service. See createEntryRequestSchema for the rationale.
+  childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
+  useType: z.string().optional(),
+  expectedVersion: z.coerce.number().int().optional(),
+});
+export type UpdateEntryRequestDto = z.infer<typeof updateEntryRequestSchema>;
 
 export const patchApartmentContextRequestSchema = z.object({
   apartmentDurationNights: z.coerce.number().int().min(1),
