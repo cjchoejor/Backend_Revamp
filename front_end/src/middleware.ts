@@ -5,12 +5,7 @@ import { SESSION_COOKIE, hasValidSessionCookie } from "@/lib/auth/cookie";
 const AUTH_PATHS = ["/login"];
 
 function isProtected(pathname: string) {
-  return (
-    pathname.startsWith("/dashboard") ||
-    pathname.startsWith("/entries") ||
-    pathname.startsWith("/inquiries") ||
-    pathname.startsWith("/admin")
-  );
+  return pathname.startsWith("/desk") || pathname.startsWith("/admin");
 }
 
 export function middleware(request: NextRequest) {
@@ -19,7 +14,7 @@ export function middleware(request: NextRequest) {
   const hasAuth = hasValidSessionCookie(sessionRaw);
 
   if (pathname === "/") {
-    return NextResponse.redirect(new URL(hasAuth ? "/dashboard" : "/login", request.url));
+    return NextResponse.redirect(new URL(hasAuth ? "/desk" : "/login", request.url));
   }
 
   if (isProtected(pathname) && !hasAuth) {
@@ -29,7 +24,7 @@ export function middleware(request: NextRequest) {
   }
 
   if (AUTH_PATHS.includes(pathname) && hasAuth) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    return NextResponse.redirect(new URL("/desk", request.url));
   }
 
   return NextResponse.next();

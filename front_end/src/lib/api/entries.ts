@@ -58,6 +58,29 @@ export function normalizeEntryResponse(data: unknown): EntryDetail {
   return data as EntryDetail;
 }
 
+/**
+ * Park an entry — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.4 /
+ * SIG-S2 §3.3), L1+. Pauses the booking without losing its place. `reason` is optional.
+ */
+export async function parkEntry(session: Session, entryId: string, reason?: string) {
+  const data = await apiRequest<unknown>(`/api/entries/${entryId}/park`, {
+    method: "POST",
+    session,
+    body: { reason },
+  });
+  return normalizeEntryResponse(data);
+}
+
+/** Unpark a parked entry — returns it to ACTIVE at its current stage (SIG-S1 §3.4). */
+export async function unparkEntry(session: Session, entryId: string) {
+  const data = await apiRequest<unknown>(`/api/entries/${entryId}/unpark`, {
+    method: "POST",
+    session,
+    body: {},
+  });
+  return normalizeEntryResponse(data);
+}
+
 export async function progressStage(
   session: Session,
   entryId: string,

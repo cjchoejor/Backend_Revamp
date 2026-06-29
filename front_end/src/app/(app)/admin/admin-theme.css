@@ -1,7 +1,44 @@
-/* Admin console — aligned with operational PMS theme (globals.css tokens) */
+/* ════════════════════════════════════════════════════════════════
+   Admin console — reskinned into the front-desk (/desk) cream/green
+   format (2026-06-26). The entire admin surface is scoped under
+   `.admin-console` (set on AdminShell's root). Redefining the
+   design-system tokens here recolours every `admin-*` class, every
+   Tailwind semantic utility (bg-background, text-muted-foreground,
+   border-border, …) and every shadcn component in ONE place — no
+   per-page edits. Palette + type ported from src/styles/desk-theme.css.
+   Because `.admin-console` is a closer ancestor than `:root`/`.dark`,
+   these token values win for the whole subtree (admin has no dark mode).
+   ════════════════════════════════════════════════════════════════ */
 
 .admin-console {
-  /* Map legacy admin-* vars to main design system */
+  /* desk cream/green palette → design-system tokens */
+  --background: #f5f1e6;            /* desk --cream  (page)   */
+  --foreground: #202a23;           /* desk --ink             */
+  --card: #fcf9f2;                 /* desk --paper  (panels) */
+  --card-foreground: #202a23;
+  --popover: #fcf9f2;
+  --popover-foreground: #202a23;
+  --primary: #3c5a45;              /* desk --green           */
+  --primary-foreground: #fcf9f2;
+  --secondary: #efe9da;            /* desk --cream-2         */
+  --secondary-foreground: #2c4434; /* desk --green-d         */
+  --muted: #efe9da;
+  --muted-foreground: #5a645a;     /* desk --ink-2           */
+  --accent: #e7efe8;               /* desk --green-t         */
+  --accent-foreground: #2c4434;
+  --destructive: #a8514a;          /* desk --stop            */
+  --success: #3f7d5a;              /* desk --ok              */
+  --border: #d6cdb7;               /* desk --line-2          */
+  --input: #d6cdb7;
+  --ring: #3c5a45;
+  --radius: 0.75rem;
+  --gradient-primary: linear-gradient(135deg, #3c5a45 0%, #22382b 100%);
+
+  /* desk typography (Hanken Grotesk for both body and display) */
+  --font-sans: var(--font-hanken), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-hanken), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  /* legacy admin-* aliases — unchanged, now resolve to the cream/green tokens */
   --admin-bg: var(--background);
   --admin-bg-elev: var(--card);
   --admin-ink: var(--foreground);
@@ -91,7 +128,8 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 4%, transparent);
+  /* desk card shadow (--sh-sm) — warm, ink-tinted, low elevation */
+  box-shadow: 0 1px 2px rgba(32, 42, 35, 0.05), 0 1px 1px rgba(32, 42, 35, 0.03);
 }
 
 .admin-console .admin-stat {

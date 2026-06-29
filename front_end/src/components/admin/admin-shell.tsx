@@ -11,7 +11,6 @@ import {
   utilityNavItems,
   type AdminNavGroup,
 } from "@/config/admin-nav";
-import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { ZoneTransitionLink } from "@/components/layout/zone-transition";
 import { useSession } from "@/hooks/use-session";
 import { cn } from "@/lib/utils";
@@ -100,8 +99,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <small>LEGPHEL PMS · Configuration</small>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            <ThemeToggle />
-            <ZoneTransitionLink href="/dashboard" target="operations" className="admin-nav-link flex items-center gap-1 text-xs">
+            <ZoneTransitionLink href="/desk" target="operations" className="admin-nav-link flex items-center gap-1 text-xs">
               <ArrowLeft className="h-3 w-3" />
               Operations
             </ZoneTransitionLink>

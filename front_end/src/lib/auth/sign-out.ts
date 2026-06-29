@@ -15,7 +15,7 @@ export async function redirectToLogin(): Promise<void> {
 }
 
 /** Hard navigation after successful sign-in. */
-export function redirectAfterLogin(path = "/dashboard"): void {
+export function redirectAfterLogin(path = "/desk"): void {
   if (typeof window !== "undefined") {
     window.location.replace(path);
   }

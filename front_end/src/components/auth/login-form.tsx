@@ -58,8 +58,8 @@ export function LoginForm() {
         setStatusMessage({ type: "success", text: `Welcome, ${name}` });
         toast.success(`Welcome, ${name}`);
 
-        const from = searchParams.get("from") ?? "/dashboard";
-        redirectAfterLogin(from.startsWith("/") ? from : "/dashboard");
+        const from = searchParams.get("from") ?? "/desk";
+        redirectAfterLogin(from.startsWith("/") ? from : "/desk");
       } catch (e) {
         setShake(true);
         setTimeout(() => setShake(false), 500);

@@ -6,5 +6,5 @@ import { SESSION_COOKIE } from "@/types/session";
 export default async function HomePage() {
   const cookieStore = await cookies();
   const hasAuth = hasValidSessionCookie(cookieStore.get(SESSION_COOKIE)?.value);
-  redirect(hasAuth ? "/dashboard" : "/login");
+  redirect(hasAuth ? "/desk" : "/login");
 }

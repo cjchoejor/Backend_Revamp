@@ -19,7 +19,7 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
           The Admin Console configures hotel parameters. Only L4 administrators may access write surfaces.
         </p>
         <Button variant="outline" asChild>
-          <Link href="/dashboard">Return to operations</Link>
+          <Link href="/desk">Return to operations</Link>
         </Button>
       </div>
     );
