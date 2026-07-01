@@ -22,7 +22,7 @@ import {
 } from "@/lib/api/inquiries";
 import { createEntry } from "@/lib/api/entries";
 import { getChildPolicy } from "@/lib/api/child-policy";
-import { BackendChips } from "@/components/desk/workspace/backend-inline";
+import { BackendRail, type RailGroup } from "@/components/desk/workspace/backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 
 const BK = STAGE_ACTIONS.INTAKE;
@@ -366,6 +366,19 @@ export function DeskNewInquiryForm() {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't start the inquiry"),
   });
 
+  // Rail highlight — no entry exists yet, so highlight is derived from form activity.
+  const lookupsUsed = !!childPolicyQuery.data || phoneMatches.length > 0 || !!party;
+  const railActiveKeys = [lookupsUsed ? "lookups" : null, canSubmit ? "create" : null].filter(Boolean) as string[];
+  const railFiringKey = mutation.isPending
+    ? "create"
+    : phoneMatch.isFetching || returningSearch.isFetching || childPolicyQuery.isFetching
+      ? "lookups"
+      : null;
+  const railGroups: RailGroup[] = [
+    { key: "lookups", label: "Lookups this page uses", items: BK.lookups },
+    { key: "create", label: "On 'Start inquiry & open booking'", items: BK.create },
+  ];
+
   return (
     <section className="view">
       <Link className="ws-back" href="/desk/bookings" style={{ marginBottom: 12, display: "inline-flex" }}>
@@ -378,21 +391,11 @@ export function DeskNewInquiryForm() {
       </h1>
       <p className="lead">
         Capture who&rsquo;s asking and the stay they want. This opens the booking at the Inquiry step, where you
-        explore availability.
+        explore availability. No entry exists yet — the live backend timeline begins once the booking opens.
       </p>
 
-      <div className="bx-feed" style={{ marginTop: 14 }}>
-        <div className="bx-feed-h">
-          <span className="bx-live-dot" />
-          Backend activity — before S1
-          <span className="bx-feed-sub">no entry exists yet, so the live timeline begins once the booking opens at Inquiry</span>
-        </div>
-        <div style={{ marginTop: 9 }}>
-          <BackendChips title="Lookups this page uses as you type" items={BK.lookups} />
-        </div>
-      </div>
-
-      <div className="formwrap" style={{ marginTop: 18 }}>
+      <div className="bx-split" style={{ maxWidth: 1020, margin: "18px auto 0" }}>
+        <div className="bx-main formwrap" style={{ margin: 0, maxWidth: "none" }}>
         <div className="block">
           <BlockH>Who is this for</BlockH>
           <div className="seg" style={{ marginBottom: 13 }}>
@@ -613,8 +616,9 @@ export function DeskNewInquiryForm() {
         >
           {mutation.isPending ? "Starting…" : "Start inquiry & open booking"}
         </button>
+        </div>
 
-        <BackendChips title="What 'Start inquiry & open booking' triggers in the backend" items={BK.create} />
+        <BackendRail groups={railGroups} activeKeys={railActiveKeys} firingKey={railFiringKey} />
       </div>
     </section>
   );

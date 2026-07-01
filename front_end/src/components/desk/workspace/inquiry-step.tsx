@@ -17,7 +17,7 @@ import { getInquiry } from "@/lib/api/inquiries";
 import { roomTypeShort } from "@/lib/desk/rooms";
 import { guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import type { BackendItem } from "@/lib/desk/backend-map";
 import type { EntryDetail } from "@/types/api";
 
@@ -203,6 +203,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
   const [pendingRoom, setPendingRoom] = useState<string | null>(null);
 
+
   const configs = entry.availabilityConfigs ?? [];
   const latestConfig = configs[0] ?? null;
   const preferredConfig = configs.find((c) => c.optionSelected != null) ?? null;
@@ -334,8 +335,27 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     selectMutation.mutate({ roomId: room.roomId, isDeficient });
   };
 
+  // Persistent highlight: a group stays lit once its action has run for this booking (derived from
+  // real state, so it survives reloads). `firingKey` adds the transient "running now" pulse.
+  const searchUsed = hasResults || !!latestConfig;
+  const selectUsed = !!preferredRoomId || !!pendingRoom;
+  const activeKeys = [
+    "intake",
+    searchUsed ? "search" : null,
+    selectUsed ? "select" : null,
+    entry.currentStage !== "S1" ? "advance" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = searchMutation.isPending ? "search" : selectMutation.isPending ? "select" : null;
+  const railGroups: RailGroup[] = [
+    { key: "intake", label: "When the booking was created", items: S1_BACKEND.intake },
+    { key: "search", label: "On availability search", items: S1_BACKEND.search },
+    { key: "select", label: "On picking a room type", items: S1_BACKEND.select },
+    { key: "advance", label: "On advancing to Quote", items: S1_BACKEND.advance },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">Do this next</div>
         <h2>Understand the stay, then explore availability.</h2>
@@ -344,9 +364,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           rates shown are indicative only, not a quote, and the final room is confirmed at arrival.
         </p>
       </div>
-
-      {/* Real-time backend activity for this booking — updates as you act. */}
-      <LiveBackendFeed entryId={entry.id} />
 
       <div className="block">
         <BlockH>The guest</BlockH>
@@ -363,7 +380,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             A phone or email is required on the guest before this booking can move to Quote.
           </p>
         )}
-        <BackendChips title="Ran when this booking was created" items={S1_BACKEND.intake} />
       </div>
 
       <div className="block">
@@ -398,7 +414,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           <Search />
           {hasResults ? "Search again" : "Search availability"}
         </button>
-        <BackendChips title="What 'Search availability' triggers" items={S1_BACKEND.search} />
         {stale && (
           <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>
             These results are stale — search again before selecting.
@@ -487,18 +502,11 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             The price is indicative only (no quote is created at this step), and the final room is assigned at
             arrival.
           </p>
-          <BackendChips title="What picking a preferred option triggers" items={S1_BACKEND.select} />
         </div>
       )}
-
-      <div className="block">
-        <BlockH>Moving to Quote</BlockH>
-        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
-          When you press <b>Continue to Quote</b> in the gate bar below, these run before the booking is allowed
-          to advance to S2.
-        </p>
-        <BackendChips title="What advancing S1 → S2 triggers" items={S1_BACKEND.advance} />
       </div>
-    </>
+
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+    </div>
   );
 }

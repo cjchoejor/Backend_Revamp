@@ -20,6 +20,118 @@ const TIMER_TONE: Record<string, string> = {
   CANCELLED: "var(--ink-3)",
 };
 
+// ───────── category colour-coding (so policy / engine / timer / … are distinct) ─────────
+
+export type BackendCategory = "policy" | "engine" | "timer" | "stateMachine" | "service" | "handoff" | "other";
+
+const CATEGORY_STYLE: Record<BackendCategory, { bd: string; bg: string; fg: string; label: string }> = {
+  policy: { bd: "#e0a06f", bg: "#fbeee2", fg: "#9a531f", label: "Policy" },
+  engine: { bd: "#88abc4", bg: "#e7eef3", fg: "#37607d", label: "Engine" },
+  timer: { bd: "#7fbf9a", bg: "#e6f0ea", fg: "#256b45", label: "Timer / worker" },
+  stateMachine: { bd: "#b39ad0", bg: "#efe8f5", fg: "#664a86", label: "State machine" },
+  service: { bd: "#c7b79f", bg: "#f0ebe3", fg: "#6b5b45", label: "Service" },
+  handoff: { bd: "#e6c877", bg: "#fbf3dc", fg: "#856012", label: "Handoff" },
+  other: { bd: "#c2c2bd", bg: "#eeeeec", fg: "#5f5f5a", label: "Other" },
+};
+
+/** Best-effort classification of a backend item from its name / ref, for colour-coding. */
+export function categorize(it: BackendItem): BackendCategory {
+  const s = `${it.name} ${it.ref ?? ""}`;
+  if (/state[- ]?machine/i.test(s)) return "stateMachine";
+  if (/engine/i.test(s)) return "engine";
+  if (/\bW\d+\b|_W\d|worker|timer|ENTRY_EXPIRY|EXPIRY|STAGE_DWELL|FOLLOW_UP|COUNTDOWN|SLA|armed|monitor/i.test(s))
+    return "timer";
+  if (/handoff|\bH[1-4]\b/i.test(s)) return "handoff";
+  if (/policy|validation|registry\.|\bp\d/i.test(s)) return "policy";
+  if (/service|createEntry|createInquiry|createGuestProfile|dispatch|folio/i.test(s)) return "service";
+  return "other";
+}
+
+/** Legend of the category colours — shown once at the top of a BackendRail. */
+export function CategoryLegend() {
+  return (
+    <div className="bx-legend">
+      {(Object.keys(CATEGORY_STYLE) as BackendCategory[])
+        .filter((k) => k !== "other")
+        .map((k) => (
+          <span className="bx-legend-item" key={k}>
+            <span className="bx-rdot" style={{ background: CATEGORY_STYLE[k].bd }} />
+            {CATEGORY_STYLE[k].label}
+          </span>
+        ))}
+    </div>
+  );
+}
+
+export type RailGroup = { key: string; label: string; items: BackendItem[] };
+
+/**
+ * Side-by-side "Backend" rail for a stage: the live feed (when there's an entry) + the stage's
+ * backend elements grouped by the action that triggers them, colour-coded by category.
+ *
+ * - `activeKeys`: groups whose action HAS run for this booking — they stay highlighted throughout.
+ * - `firingKey`: the group whose action is firing right now — extra "running now" pulse on top.
+ */
+export function BackendRail({
+  entryId,
+  groups,
+  activeKeys,
+  firingKey,
+}: {
+  /** Omit on the pre-S1 intake page — no entry exists yet, so no live feed. */
+  entryId?: string;
+  groups: RailGroup[];
+  activeKeys?: string[];
+  firingKey?: string | null;
+}) {
+  const activeSet = new Set(activeKeys ?? []);
+  return (
+    <div className="bx-rail">
+      {entryId && <LiveBackendFeed entryId={entryId} limit={14} />}
+      <CategoryLegend />
+      <div className="bx-groups">
+        {groups.map((g) => {
+          const firing = firingKey === g.key;
+          const active = firing || activeSet.has(g.key);
+          return (
+            <div className={`bx-g${active ? " active" : ""}${firing ? " firing" : ""}`} key={g.key}>
+              <div className="bx-g-h">
+                {g.label}
+                {firing ? (
+                  <span className="bx-g-run">running now</span>
+                ) : active ? (
+                  <span className="bx-g-used">used</span>
+                ) : null}
+              </div>
+              <div className="bx-g-items">
+                {g.items.map((it) => {
+                  const c = CATEGORY_STYLE[categorize(it)];
+                  return (
+                    <div
+                      className="bx-ritem"
+                      key={it.name}
+                      title={`${it.name}${it.ref ? ` · ${it.ref}` : ""}\n${it.detail}`}
+                      style={{
+                        borderLeftColor: c.bd,
+                        background: active ? c.bg : "#fff",
+                      }}
+                    >
+                      <span className="bx-rdot" style={{ background: c.bd }} />
+                      <span className="bx-rname" style={{ color: active ? c.fg : "var(--ink-2)", fontWeight: active ? 600 : 500 }}>
+                        {it.name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Inline "what runs in the backend when you do this" annotation, attached under an
  * operate action. Curated from the spec — each chip names a policy / engine / state

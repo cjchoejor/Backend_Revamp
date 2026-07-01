@@ -793,7 +793,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
         </div>
 
         <div className="canvas-scroll">
-          <div className="canvas">
+          <div className={`canvas${inquiryStepActive ? " canvas-wide" : ""}`}>
             {inquiryStepActive ? (
               <InquiryStep entry={entry} />
             ) : quoteStepActive ? (
