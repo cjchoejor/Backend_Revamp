@@ -13,7 +13,11 @@ import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-stat
 import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
+
+const BK = STAGE_ACTIONS.S6;
 
 const DOCUMENT_TYPES = ["PASSPORT", "NATIONAL_ID", "DRIVERS_LICENSE", "VOTER_ID"];
 
@@ -68,6 +72,8 @@ export function CheckInStep({
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
   };
 
   const paymentStatusQuery = useQuery({
@@ -119,6 +125,8 @@ export function CheckInStep({
         </p>
       </div>
 
+      <LiveBackendFeed entryId={entry.id} />
+
       {/* Identity verification */}
       <div className="block">
         <BlockH>
@@ -167,6 +175,7 @@ export function CheckInStep({
           disabled={!guest?.id}
           onClick={() => verifyM.mutate()}
         />
+        <BackendChips title="What recording verification triggers" items={BK.verify} />
       </div>
 
       {isVip && (
@@ -186,6 +195,7 @@ export function CheckInStep({
               </div>
             ))
           )}
+          <BackendChips title="What VIP arrival triggers" items={BK.vip} />
         </div>
       )}
 
@@ -257,6 +267,7 @@ export function CheckInStep({
         Completing check-in converts the folio to <b>live</b>, marks the room occupied, issues the keys, and
         opens the housekeeping and F&amp;B handoffs — one governed transition.
       </p>
+      <BackendChips title="What 'Check in & go live' triggers (gate bar below)" items={BK.commit} />
     </>
   );
 }

@@ -157,7 +157,177 @@ export async function createEntry(
   });
 }
 
-export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: string, _reason?: string) {
+/** DEV-SPEC-001 Part 13 — parked entries expire 30 days from the park date (configurable). */
+const PARK_EXPIRY_DEFAULT_DAYS = 30;
+async function resolveParkExpiryDays(prisma: PrismaClient): Promise<number> {
+  try {
+    const row = await getActiveConfigEntry(prisma, "expiry.parking.followUpDays");
+    const v = row?.configValue as { DEFAULT?: number; days?: number } | number | null | undefined;
+    const n =
+      typeof v === "number" ? v : typeof v?.DEFAULT === "number" ? v.DEFAULT : typeof v?.days === "number" ? v.days : null;
+    if (typeof n === "number" && n > 0) return n;
+  } catch {
+    /* fall through to the factory default */
+  }
+  return PARK_EXPIRY_DEFAULT_DAYS;
+}
+
+/**
+ * Cancel the short stage-expiry timer and arm the 30-day park-expiry (PARKING_FOLLOW_UP) timer for
+ * one entry, inside a transaction. Shared by entry-level park and the inquiry-level cascade.
+ */
+async function armParkExpiryTimersTx(
+  tx: any,
+  engine: Awaited<ReturnType<typeof getTimerEngine>>,
+  args: { entryId: string; stageContext: Stage; actorId: string },
+): Promise<{ stageTimersCancelled: number; parkExpiryDays: number }> {
+  const { entryId, stageContext, actorId } = args;
+  const active = await tx.timerRecord.findMany({ where: { entryId, timerType: "ENTRY_EXPIRY", status: "SCHEDULED" } });
+  for (const t of active) if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
+  if (active.length > 0) {
+    await tx.timerRecord.updateMany({
+      where: { id: { in: active.map((t: any) => t.id) } },
+      data: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: actorId, cancelledReason: "Entry parked" },
+    });
+  }
+  const parkExpiryDays = await resolveParkExpiryDays(tx);
+  const parkDueAt = new Date(Date.now() + parkExpiryDays * 86_400_000);
+  const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId }, { startAfter: parkDueAt });
+  await tx.timerRecord.create({
+    data: {
+      entryId,
+      entityType: "Entry",
+      entityId: entryId,
+      timerType: "ENTRY_EXPIRY",
+      timerCode: "PARKING_FOLLOW_UP",
+      stageContext,
+      firesAt: parkDueAt,
+      dueAt: parkDueAt,
+      status: "SCHEDULED",
+      payload: { entryId, parkExpiryDays },
+      pgBossJobId: jobId,
+      createdBy: actorId,
+    },
+  });
+  return { stageTimersCancelled: active.length, parkExpiryDays };
+}
+
+/**
+ * Cancel the park-expiry timer and re-arm the normal stage-expiry timer for one entry, inside a
+ * transaction. Shared by entry-level unpark and the inquiry-level cascade unpark.
+ */
+async function restoreStageExpiryTimersTx(
+  tx: any,
+  engine: Awaited<ReturnType<typeof getTimerEngine>>,
+  args: { entryId: string; stageContext: Stage; actorId: string },
+): Promise<void> {
+  const { entryId, stageContext, actorId } = args;
+  const park = await tx.timerRecord.findMany({ where: { entryId, timerType: "ENTRY_EXPIRY", status: "SCHEDULED" } });
+  for (const t of park) if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
+  if (park.length > 0) {
+    await tx.timerRecord.updateMany({
+      where: { id: { in: park.map((t: any) => t.id) } },
+      data: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: actorId, cancelledReason: "Entry unparked" },
+    });
+  }
+  const s1ExpiryPolicy = await getRegistryPolicy(tx, "registry.s1Expiry.minutes");
+  const registryS1Seconds =
+    s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
+      ? (s1ExpiryPolicy.minutes as number) * 60
+      : null;
+  let ttlSeconds: number;
+  if (registryS1Seconds !== null) {
+    ttlSeconds = registryS1Seconds;
+  } else {
+    const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx, "expiry.s1.defaultTtlSeconds");
+    ttlSeconds = Number(ttl.DEFAULT ?? 3600);
+  }
+  const dueAt = new Date(Date.now() + ttlSeconds * 1000);
+  const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId }, { startAfter: dueAt });
+  await tx.timerRecord.create({
+    data: {
+      entryId,
+      entityType: "Entry",
+      entityId: entryId,
+      timerType: "ENTRY_EXPIRY",
+      stageContext,
+      firesAt: dueAt,
+      dueAt,
+      status: "SCHEDULED",
+      payload: { entryId },
+      pgBossJobId: jobId,
+      createdBy: actorId,
+    },
+  });
+}
+
+/**
+ * Park / unpark one entry as part of an inquiry-level cascade, inside the caller's transaction.
+ * Cascade-parked entries carry `parkedIndividually = false` so an inquiry-level unpark can reverse
+ * exactly them (and leave individually-parked entries untouched) per SIG-S1 §3.3 provenance rule.
+ */
+export async function cascadeParkEntryTx(
+  tx: any,
+  engine: Awaited<ReturnType<typeof getTimerEngine>>,
+  entry: { id: string; currentStage: Stage; inquiryId: string },
+  actorId: string,
+  reason: string,
+): Promise<void> {
+  await tx.entry.update({
+    where: { id: entry.id },
+    data: { status: EntryStatus.PARKED, parkedAt: new Date(), parkedBy: actorId, parkedIndividually: false, version: { increment: 1 } },
+  });
+  const { stageTimersCancelled, parkExpiryDays } = await armParkExpiryTimersTx(tx, engine, {
+    entryId: entry.id,
+    stageContext: entry.currentStage,
+    actorId,
+  });
+  await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
+    eventType: "ENTRY.PARKED",
+    entityType: "Entry",
+    entityId: entry.id,
+    operation: "UPDATE",
+    timestamp: new Date(),
+    stageContext: entry.currentStage as any,
+    inquiryId: entry.inquiryId,
+    entryId: entry.id,
+    payload: { reason, level: "INQUIRY_CASCADE", stageExpiryTimersCancelled: stageTimersCancelled, parkExpiryDays },
+    createdBy: actorId,
+  });
+}
+
+export async function cascadeUnparkEntryTx(
+  tx: any,
+  engine: Awaited<ReturnType<typeof getTimerEngine>>,
+  entry: { id: string; currentStage: Stage; inquiryId: string },
+  actorId: string,
+): Promise<void> {
+  await tx.entry.update({
+    where: { id: entry.id },
+    data: { status: EntryStatus.ACTIVE, parkedAt: null, parkedBy: null, parkedIndividually: false, version: { increment: 1 } },
+  });
+  await restoreStageExpiryTimersTx(tx, engine, { entryId: entry.id, stageContext: entry.currentStage, actorId });
+  await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
+    eventType: "ENTRY.UNPARKED",
+    entityType: "Entry",
+    entityId: entry.id,
+    operation: "UPDATE",
+    timestamp: new Date(),
+    stageContext: entry.currentStage as any,
+    inquiryId: entry.inquiryId,
+    entryId: entry.id,
+    payload: { level: "INQUIRY_CASCADE" },
+    createdBy: actorId,
+  });
+}
+
+export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: string, reason?: string) {
+  // SIG-S1 §3.3 / SIG-S2 §3.3 + the Park API DTO mandate a reason (max 500 chars). Previously the
+  // reason was accepted then silently discarded; it is now required and recorded on the trace.
+  const trimmedReason = reason?.trim();
+  if (!trimmedReason) throw new ValidationError("A reason is required to park an entry.");
+  if (trimmedReason.length > 500) throw new ValidationError("Park reason must be 500 characters or fewer.");
+
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryNotExpiredForS1Lifecycle({ status: entry.status });
@@ -169,6 +339,17 @@ export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: 
       where: { id: entryId },
       data: { status: EntryStatus.PARKED, parkedAt: new Date(), parkedBy: actorId, parkedIndividually: true, version: { increment: 1 } },
     });
+
+    const engine = await getTimerEngine();
+    // Cancel the short stage-expiry timer and arm the 30-day park-expiry timer (SIG-S1 §6.6 +
+    // DEV-SPEC-001 Part 13). A deliberate park must not expire on the minutes-scale S1/S2 TTL, but
+    // it still expires on the longer park threshold.
+    const { stageTimersCancelled, parkExpiryDays } = await armParkExpiryTimersTx(tx, engine, {
+      entryId,
+      stageContext: updated.currentStage,
+      actorId,
+    });
+
     await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
       eventType: "ENTRY.PARKED",
       entityType: "Entry",
@@ -178,7 +359,7 @@ export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: 
       stageContext: updated.currentStage as any,
       inquiryId: updated.inquiryId,
       entryId,
-      payload: {},
+      payload: { reason: trimmedReason, level: "ENTRY", stageExpiryTimersCancelled: stageTimersCancelled, parkExpiryDays },
       createdBy: actorId,
     });
     return updated;
@@ -282,39 +463,10 @@ export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId
       createdBy: actorId,
     });
 
-    // (Re-)register expiry timer on unpark (SIG-S1 §6.6 TimerManagementService).
-    // Policy registry override: `registry.s1Expiry.minutes` takes precedence over the legacy
-    // `expiry.s1.defaultTtlSeconds.DEFAULT` ConfigurationEntry. Set `enabled: false` to revert.
-    const s1ExpiryPolicy = await getRegistryPolicy(tx as any, "registry.s1Expiry.minutes");
-    const registryS1Seconds =
-      s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
-        ? (s1ExpiryPolicy.minutes as number) * 60
-        : null;
-    let ttlSeconds: number;
-    if (registryS1Seconds !== null) {
-      ttlSeconds = registryS1Seconds;
-    } else {
-      const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
-      ttlSeconds = Number(ttl.DEFAULT ?? 3600);
-    }
-    const dueAt = new Date(Date.now() + ttlSeconds * 1000);
     const engine = await getTimerEngine();
-    const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId }, { startAfter: dueAt });
-    await tx.timerRecord.create({
-      data: {
-        entryId,
-        entityType: "Entry",
-        entityId: entryId,
-        timerType: "ENTRY_EXPIRY",
-        stageContext: updated.currentStage,
-        firesAt: dueAt,
-        dueAt,
-        status: "SCHEDULED",
-        payload: { entryId },
-        pgBossJobId: jobId,
-        createdBy: actorId,
-      },
-    });
+    // Cancel the park-expiry timer and re-arm the normal stage-expiry timer (SIG-S1 §6.6). Doing
+    // both inside the helper avoids the 30-day park timer and the fresh stage timer co-existing.
+    await restoreStageExpiryTimersTx(tx, engine, { entryId, stageContext: updated.currentStage, actorId });
     return updated;
   });
 }

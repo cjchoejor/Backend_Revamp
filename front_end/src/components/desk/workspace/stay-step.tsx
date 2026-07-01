@@ -26,7 +26,11 @@ import {
 import { listRooms } from "@/lib/api/rooms";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money } from "@/lib/desk/workspace";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
+
+const BK = STAGE_ACTIONS.S7;
 
 function BlockH({ children }: { children: React.ReactNode }) {
   return (
@@ -106,6 +110,8 @@ export function StayStep({
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
     if (lastNightYmd) void queryClient.invalidateQueries({ queryKey: ["night-audit", lastNightYmd] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
@@ -244,6 +250,8 @@ export function StayStep({
         </p>
       </div>
 
+      <LiveBackendFeed entryId={entry.id} />
+
       {/* Live folio */}
       <div className="block">
         <BlockH>
@@ -357,6 +365,8 @@ export function StayStep({
         )}
       </div>
 
+      <BackendChips title="What posting a charge / correction / credit note triggers" items={BK.charge} />
+
       {/* Night audit */}
       <div className="block">
         <BlockH>
@@ -382,6 +392,7 @@ export function StayStep({
         ) : (
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "8px 0 0" }}>Running the night audit requires FOM (L2+).</p>
         )}
+        <BackendChips title="What the night audit triggers" items={BK.nightAudit} />
       </div>
 
       {/* Handoffs */}
@@ -438,6 +449,7 @@ export function StayStep({
             )}
           </>
         )}
+        <BackendChips title="What the H4 pre-checkout handoff triggers" items={BK.handoff} />
       </div>
 
       {/* Deficiencies */}
@@ -503,6 +515,7 @@ export function StayStep({
             </button>
           </div>
         </div>
+        <BackendChips title="What opening / reviewing a dispute triggers" items={BK.dispute} />
       </div>
 
       {/* Amendments & room change */}
@@ -558,6 +571,14 @@ export function StayStep({
           </div>
         </div>
       )}
+
+      <div className="block">
+        <BlockH>Moving to Check-out</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
+          When you press <b>Continue to Check-out</b> in the gate bar below, these run before advancing to S8.
+        </p>
+        <BackendChips title="What advancing S7 → S8 triggers" items={BK.advance} />
+      </div>
     </>
   );
 }

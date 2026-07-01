@@ -5,6 +5,8 @@ import { resolveInitialCustodianActorId } from "../../policies/02-ownership-cust
 import * as duplicateDetectionService from "./duplicate-detection-service.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { cascadeParkEntryTx, cascadeUnparkEntryTx } from "./s1-entry-service.js";
 
 export async function createInquiry(
   prisma: PrismaClient,
@@ -176,15 +178,29 @@ export async function resolveDuplicateFlag(
   return duplicateDetectionService.resolveDuplicateFlag(prisma, flagId, actorId, input);
 }
 
+/**
+ * Inquiry-level park (SIG-S1 §3.3 / §6.2). Cascades to every ACTIVE non-terminal child entry,
+ * parking each as a cascade (`parkedIndividually = false`) so an inquiry-level unpark can later
+ * reverse exactly those. Entries already individually parked (`parkedIndividually = true`) are
+ * skipped — not doubly-parked. Each affected entry gets the full park treatment (stage timer
+ * cancelled, 30-day park-expiry armed) and its own ENTRY.PARKED trace.
+ */
 export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actorId: string, reason?: string) {
+  const trimmedReason = reason?.trim();
+  if (!trimmedReason) throw new ValidationError("A reason is required to park an inquiry.");
+  if (trimmedReason.length > 500) throw new ValidationError("Park reason must be 500 characters or fewer.");
+
   const inquiry = await prisma.inquiry.findUnique({ where: { id: inquiryId }, include: { entries: true } });
-  if (!inquiry) throw new ValidationError("Inquiry not found");
+  if (!inquiry) throw new NotFoundError("Inquiry");
+
+  const targets = inquiry.entries.filter((e) => e.status === "ACTIVE");
   const now = new Date();
   await prisma.$transaction(async (tx) => {
-    await tx.entry.updateMany({
-      where: { inquiryId, status: "ACTIVE" },
-      data: { status: "PARKED", parkedAt: now, parkedBy: actorId, parkedIndividually: false, version: { increment: 1 } } as any,
-    });
+    const engine = await getTimerEngine();
+    for (const e of targets) {
+      await cascadeParkEntryTx(tx as any, engine, { id: e.id, currentStage: e.currentStage, inquiryId }, actorId, trimmedReason);
+    }
+    await tx.inquiry.update({ where: { id: inquiryId }, data: { parkedAt: now, parkedBy: actorId } });
     await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
       eventType: "INQUIRY.PARKED",
       entityType: "Inquiry",
@@ -193,23 +209,39 @@ export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actor
       timestamp: now,
       inquiryId,
       entryId: null,
-      payload: { reason: typeof reason === "string" ? reason : null },
+      payload: { reason: trimmedReason, entriesParked: targets.length },
       createdBy: actorId,
     });
   });
-  return { ok: true } as const;
+
+  const refreshed = await prisma.inquiry.findUnique({ where: { id: inquiryId } });
+  return {
+    id: inquiryId,
+    referenceNumber: refreshed?.referenceNumber ?? null,
+    parkedAt: refreshed?.parkedAt ?? null,
+    parkedBy: refreshed?.parkedBy ?? null,
+    entriesParked: targets.length,
+  };
 }
 
+/**
+ * Inquiry-level unpark (SIG-S1 §3.3 / §6.2). Reverses ONLY entries parked by the inquiry-level
+ * cascade (`status = PARKED` AND `parkedIndividually = false`). Entries that were individually
+ * parked before the cascade (`parkedIndividually = true`) remain parked. Each reversed entry gets
+ * its park-expiry timer cancelled, the normal stage timer re-armed, and its own ENTRY.UNPARKED trace.
+ */
 export async function unparkInquiry(prisma: PrismaClient, inquiryId: string, actorId: string) {
-  const inquiry = await prisma.inquiry.findUnique({ where: { id: inquiryId } });
-  if (!inquiry) throw new ValidationError("Inquiry not found");
+  const inquiry = await prisma.inquiry.findUnique({ where: { id: inquiryId }, include: { entries: true } });
+  if (!inquiry) throw new NotFoundError("Inquiry");
+
+  const targets = inquiry.entries.filter((e) => e.status === "PARKED" && e.parkedIndividually === false);
   const now = new Date();
   await prisma.$transaction(async (tx) => {
-    // Only unpark entries that were parked via inquiry-level park cascade (parkedIndividually=false).
-    await tx.entry.updateMany({
-      where: { inquiryId, status: "PARKED", parkedIndividually: false },
-      data: { status: "ACTIVE", parkedAt: null, parkedBy: null, version: { increment: 1 } } as any,
-    });
+    const engine = await getTimerEngine();
+    for (const e of targets) {
+      await cascadeUnparkEntryTx(tx as any, engine, { id: e.id, currentStage: e.currentStage, inquiryId }, actorId);
+    }
+    await tx.inquiry.update({ where: { id: inquiryId }, data: { parkedAt: null, parkedBy: null } });
     await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
       eventType: "INQUIRY.UNPARKED",
       entityType: "Inquiry",
@@ -218,11 +250,19 @@ export async function unparkInquiry(prisma: PrismaClient, inquiryId: string, act
       timestamp: now,
       inquiryId,
       entryId: null,
-      payload: {},
+      payload: { entriesUnparked: targets.length },
       createdBy: actorId,
     });
   });
-  return { ok: true } as const;
+
+  const refreshed = await prisma.inquiry.findUnique({ where: { id: inquiryId } });
+  return {
+    id: inquiryId,
+    referenceNumber: refreshed?.referenceNumber ?? null,
+    parkedAt: refreshed?.parkedAt ?? null,
+    parkedBy: refreshed?.parkedBy ?? null,
+    entriesUnparked: targets.length,
+  };
 }
 
 const inquiryEntrySummarySelect = {

@@ -31,7 +31,8 @@ export const assignInquiryCustodianRequestSchema = z.object({
 export type AssignInquiryCustodianRequestDto = z.infer<typeof assignInquiryCustodianRequestSchema>;
 
 export const parkInquiryRequestSchema = z.object({
-  reason: z.string().optional(),
+  // SIG-S1 §3.3 / DEV-SPEC Part 10 — an inquiry-level park reason is required (max 500 chars).
+  reason: z.string().trim().min(1, "A reason is required to park an inquiry.").max(500),
 });
 export type ParkInquiryRequestDto = z.infer<typeof parkInquiryRequestSchema>;
 

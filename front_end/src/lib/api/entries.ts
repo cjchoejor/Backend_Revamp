@@ -100,10 +100,11 @@ export function normalizeEntryResponse(data: unknown): EntryDetail {
 }
 
 /**
- * Park an entry — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.4 /
- * SIG-S2 §3.3), L1+. Pauses the booking without losing its place. `reason` is optional.
+ * Park an entry — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.3 /
+ * SIG-S2 §3.3), L1+. Pauses the booking (and its expiry timer) without losing its
+ * place. `reason` is REQUIRED (max 500 chars) and is recorded on the trace.
  */
-export async function parkEntry(session: Session, entryId: string, reason?: string) {
+export async function parkEntry(session: Session, entryId: string, reason: string) {
   const data = await apiRequest<unknown>(`/api/entries/${entryId}/park`, {
     method: "POST",
     session,

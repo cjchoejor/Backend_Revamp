@@ -20,8 +20,12 @@ import {
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { progressDispute } from "@/lib/api/in-stay";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
+
+const BK = STAGE_ACTIONS.S8;
 
 function BlockH({ children }: { children: React.ReactNode }) {
   return (
@@ -92,7 +96,11 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     setDeficientFlagStatus(activeDeficient ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE");
   }, [activeDeficient?.id]);
 
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+  };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
     onSuccess: () => {
@@ -171,6 +179,8 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             : "Verify the bill, take payment for the balance, collect the keys and inspect the room. Taking payment is the last thing you can't reclaim."}
         </p>
       </div>
+
+      <LiveBackendFeed entryId={entry.id} />
 
       {/* Pre-checkout handoff */}
       {h4 && h4.state !== "FULFILLED" && !h4.isAutoFulfilled && (
@@ -328,6 +338,8 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         )}
       </div>
 
+      <BackendChips title="What key return + room inspection trigger" items={BK.inspection} />
+
       {/* Settlement */}
       <div className="block">
         <BlockH>
@@ -411,6 +423,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             {!folioLive && <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 0 }}>Folio must be live to settle.</p>}
           </>
         )}
+        <BackendChips title="What 'Take payment & settle' triggers" items={BK.settle} />
       </div>
 
       {/* Additional charge (S8→S7) */}
@@ -428,6 +441,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
               </button>
             </div>
           </div>
+          <BackendChips title="What returning to Stay (S8→S7) triggers" items={BK.reentry} />
         </div>
       )}
 
@@ -498,6 +512,14 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         onConfirm={() => settleM.mutate()}
         onClose={() => setSettleOpen(false)}
       />
+
+      <div className="block">
+        <BlockH>Closing the stay</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
+          When you press <b>Close &amp; seal the stay</b> in the gate bar below, these run as the booking moves to S9.
+        </p>
+        <BackendChips title="What advancing S8 → S9 triggers" items={BK.advance} />
+      </div>
     </>
   );
 }

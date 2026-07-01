@@ -24,8 +24,12 @@ import {
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
+
+const BK = STAGE_ACTIONS.S3;
 
 const BILLING_MODELS = ["GUEST_PAY", "DIRECT_BILL", "TOUR_OPERATOR_VOUCHER"] as const;
 const BILLING_LABEL: Record<string, string> = {
@@ -101,6 +105,8 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
@@ -196,6 +202,8 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         </p>
       </div>
 
+      <LiveBackendFeed entryId={entry.id} />
+
       {/* 1. Provisional folio & billing model */}
       <div className="block">
         <BlockH>Provisional folio &amp; billing model</BlockH>
@@ -218,6 +226,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         <button className="btn btn-primary" disabled={folioM.isPending} onClick={() => folioM.mutate()}>
           {folioM.isPending ? "Saving…" : folio ? "Update billing model" : "Create provisional folio"}
         </button>
+        <BackendChips title="What the provisional folio triggers" items={BK.folio} />
       </div>
 
       {/* 2. Cancellation disclosure */}
@@ -242,6 +251,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             <button className="btn btn-ghost" disabled={disclosureM.isPending || !noShowStatement.trim()} onClick={() => disclosureM.mutate()}>
               {disclosureM.isPending ? "Saving…" : "Record cancellation terms"}
             </button>
+            <BackendChips title="What recording the terms triggers" items={BK.disclosure} />
           </>
         )}
       </div>
@@ -340,6 +350,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             {!preferredRoomId && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>No preferred room — complete Inquiry first.</p>}
           </>
         )}
+        <BackendChips title="What placing the committed hold triggers" items={BK.hold} />
       </div>
 
       {/* 5. Proforma invoice */}
@@ -367,6 +378,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             </button>
           </>
         )}
+        <BackendChips title="What dispatching the proforma triggers" items={BK.dispatch} />
       </div>
 
       {/* Group / corporate (conditional) */}
@@ -408,6 +420,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               </button>
             </>
           )}
+          <BackendChips title="What group / corporate setup triggers" items={BK.group} />
         </div>
       )}
 
@@ -430,6 +443,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               Reconfigure dates / room (Inquiry)
             </button>
           </div>
+          <BackendChips title="What re-opening a round triggers" items={BK.reentry} />
         </div>
       )}
 
@@ -447,6 +461,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         <button className="btn btn-ghost" style={{ borderColor: "#e2b3ac", color: "var(--stop)" }} onClick={() => setCancelOpen(true)}>
           Cancel booking
         </button>
+        <BackendChips title="What cancelling at setup triggers" items={BK.cancel} />
       </div>
 
       <DeskConfirmModal

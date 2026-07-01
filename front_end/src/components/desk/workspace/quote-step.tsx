@@ -17,7 +17,11 @@ import {
   supersedeQuotation,
 } from "@/lib/api/quotations";
 import { money } from "@/lib/desk/workspace";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, QuotationState, QuotationSummary } from "@/types/api";
+
+const BK = STAGE_ACTIONS.S2;
 
 function BlockH({ children }: { children: React.ReactNode }) {
   return (
@@ -73,7 +77,11 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [holdTtl, setHoldTtl] = useState("900");
   const [releaseReason, setReleaseReason] = useState("");
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+  };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
     onSuccess: () => {
@@ -170,6 +178,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         </p>
       </div>
 
+      <LiveBackendFeed entryId={entry.id} />
+
       {quotations.length > 0 && (
         <div className="block">
           <BlockH>Quote history</BlockH>
@@ -204,6 +214,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
             {createM.isPending ? "Drafting…" : "Create draft quote"}
           </button>
+          <BackendChips title="What 'Create draft quote' triggers" items={BK.build} />
         </div>
       )}
 
@@ -235,6 +246,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               </button>
             )}
           </div>
+          <BackendChips title="What applying a discount triggers" items={BK.discount} />
+          <div style={{ height: 10 }} />
           <div className="frow">
             <div className="field">
               <label>Send via</label>
@@ -256,6 +269,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             <Mail style={{ width: 14, height: 14 }} />
             {sendM.isPending ? "Sending…" : "Send quote to guest"}
           </button>
+          <BackendChips title="What 'Send quote' triggers" items={BK.send} />
         </div>
       )}
 
@@ -286,6 +300,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               New round (supersede)
             </button>
           </div>
+          <BackendChips title="What recording acceptance triggers" items={BK.accept} />
         </div>
       )}
 
@@ -336,6 +351,15 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             </button>
           </>
         )}
+        <BackendChips title="What placing a speculative hold triggers" items={BK.hold} />
+      </div>
+
+      <div className="block">
+        <BlockH>Moving to Set up</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
+          When you press <b>Continue to Set up</b> in the gate bar below, these run before advancing to S3.
+        </p>
+        <BackendChips title="What advancing S2 → S3 triggers" items={BK.advance} />
       </div>
     </>
   );

@@ -22,7 +22,11 @@ import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
+
+const BK = STAGE_ACTIONS.S5;
 
 function BlockH({ children }: { children: React.ReactNode }) {
   return (
@@ -81,6 +85,8 @@ export function ArrivalStep({
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
@@ -220,6 +226,8 @@ export function ArrivalStep({
         </p>
       </div>
 
+      <LiveBackendFeed entryId={entry.id} />
+
       {/* H1 handoff */}
       <div className="block">
         <BlockH>
@@ -282,6 +290,7 @@ export function ArrivalStep({
                 Before fulfilment: assign a ready room, complete pre-arrival tasks, and reconcile the advance.
               </p>
             )}
+            <BackendChips title="What the H1 handoff triggers" items={BK.handoff} />
           </>
         )}
       </div>
@@ -321,6 +330,7 @@ export function ArrivalStep({
           disabled={!roomId.trim()}
           onClick={() => assignM.mutate()}
         />
+        <BackendChips title="What assigning a room triggers" items={BK.assign} />
       </div>
 
       {/* Pre-arrival tasks */}
@@ -391,6 +401,7 @@ export function ArrivalStep({
             </button>
           )}
         </div>
+        <BackendChips title="What advance / credit reconciliation triggers" items={BK.reconcile} />
       </div>
 
       {/* Guest present attestation */}
@@ -400,6 +411,14 @@ export function ArrivalStep({
           <input type="checkbox" checked={guestPresent} onChange={(e) => setGuestPresent(e.target.checked)} />
           <span>The guest is physically present at the front desk (required to check in)</span>
         </label>
+      </div>
+
+      <div className="block">
+        <BlockH>Moving to Check-in</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
+          When you press <b>Continue to Check-in</b> in the gate bar below, these run before advancing to S6.
+        </p>
+        <BackendChips title="What advancing S5 → S6 triggers" items={BK.advance} />
       </div>
     </>
   );

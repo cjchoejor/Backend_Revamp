@@ -45,7 +45,8 @@ export const patchApartmentContextRequestSchema = z.object({
 export type PatchApartmentContextRequestDto = z.infer<typeof patchApartmentContextRequestSchema>;
 
 export const parkEntryRequestSchema = z.object({
-  reason: z.string().optional(),
+  // SIG-S1 §3.3 / SIG-S2 §3.3 — a park reason is required (max 500 chars) and is recorded on the trace.
+  reason: z.string().trim().min(1, "A reason is required to park an entry.").max(500),
 });
 export type ParkEntryRequestDto = z.infer<typeof parkEntryRequestSchema>;
 

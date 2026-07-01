@@ -21,6 +21,11 @@ import {
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
 import { createEntry } from "@/lib/api/entries";
+import { getChildPolicy } from "@/lib/api/child-policy";
+import { BackendChips } from "@/components/desk/workspace/backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
+
+const BK = STAGE_ACTIONS.INTAKE;
 
 type IntakeMode = "new" | "returning";
 type PartyKind = "TRAVEL_AGENT" | "CORPORATE";
@@ -216,6 +221,8 @@ export function DeskNewInquiryForm() {
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
   const [adults, setAdults] = useState("1");
   const [children, setChildren] = useState("0");
+  // One age per child, synced to the children count. Drives the child policy + CNB pricing.
+  const [childAges, setChildAges] = useState<string[]>([]);
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   const [today, setToday] = useState("");
@@ -236,6 +243,30 @@ export function DeskNewInquiryForm() {
   useEffect(() => {
     if (!partyKind) setParty(null);
   }, [partyKind]);
+
+  // Keep the child-ages list length in step with the children count.
+  const childCountNum = Math.max(0, parseInt(children || "0", 10) || 0);
+  useEffect(() => {
+    setChildAges((prev) => {
+      const next = prev.slice(0, childCountNum);
+      while (next.length < childCountNum) next.push("");
+      return next;
+    });
+  }, [childCountNum]);
+
+  // Live child-policy snapshot — caps the child-age inputs at the configured
+  // unaccompanied-minor age (a guest at/above it is an adult). Follows L4 admin edits.
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+  });
+  const minAdultAge = childPolicyQuery.data?.unaccompaniedMinor.minimumAge ?? 18;
+  const maxChildAge = Math.max(0, minAdultAge - 1);
+  const agesComplete =
+    childCountNum === 0 ||
+    (childAges.length === childCountNum &&
+      childAges.every((a) => a.trim() !== "" && Number(a) >= 0 && Number(a) <= maxChildAge));
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -278,7 +309,7 @@ export function DeskNewInquiryForm() {
     selectedGuest ||
     (firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim())
   );
-  const canSubmit = mode === "new" ? canSubmitNew : !!selectedGuest;
+  const canSubmit = (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -300,13 +331,10 @@ export function DeskNewInquiryForm() {
 
       const a = Math.max(1, Number(adults) || 1);
       const c = Math.max(0, Number(children) || 0);
-      const composedNotes = [
-        notes.trim() || null,
-        channel.note || null,
-        `Guests: ${a} adult${a === 1 ? "" : "s"}${c ? `, ${c} child${c === 1 ? "" : "ren"}` : ""}`,
-      ]
-        .filter(Boolean)
-        .join(" · ");
+      const parsedAges = childAges.map((x) => parseInt(x || "", 10)).filter((n) => Number.isFinite(n));
+      // The "Came in as" distinction is still kept in notes; the head count is now
+      // structured on the entry (adultCount/childCount/childAges), not parsed from notes.
+      const composedNotes = [notes.trim() || null, channel.note || null].filter(Boolean).join(" · ");
 
       const inquiry = await createInquiry(session, {
         guestProfileId,
@@ -325,6 +353,9 @@ export function DeskNewInquiryForm() {
         checkInDate: checkIn || undefined,
         checkOutDate: checkOut || undefined,
         guestCount: a + c,
+        adultCount: a,
+        childCount: c,
+        childAges: c > 0 && parsedAges.length === c ? parsedAges : undefined,
         otaSource: channel.channel === "OTA",
       });
     },
@@ -349,6 +380,17 @@ export function DeskNewInquiryForm() {
         Capture who&rsquo;s asking and the stay they want. This opens the booking at the Inquiry step, where you
         explore availability.
       </p>
+
+      <div className="bx-feed" style={{ marginTop: 14 }}>
+        <div className="bx-feed-h">
+          <span className="bx-live-dot" />
+          Backend activity — before S1
+          <span className="bx-feed-sub">no entry exists yet, so the live timeline begins once the booking opens at Inquiry</span>
+        </div>
+        <div style={{ marginTop: 9 }}>
+          <BackendChips title="Lookups this page uses as you type" items={BK.lookups} />
+        </div>
+      </div>
 
       <div className="formwrap" style={{ marginTop: 18 }}>
         <div className="block">
@@ -519,10 +561,31 @@ export function DeskNewInquiryForm() {
               <input type="number" min={0} value={children} onChange={(e) => setChildren(e.target.value)} />
             </div>
           </div>
-          {Number(children) > 0 && (
-            <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "-4px 0 11px", lineHeight: 1.5 }}>
-              Children are priced under the child-no-bed (CNB) policy at quotation, per the applicable rate card.
-            </p>
+          {childCountNum > 0 && (
+            <div className="field">
+              <label>Child age{childCountNum === 1 ? "" : "s"} (years)</label>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {childAges.map((age, i) => (
+                  <input
+                    key={i}
+                    type="number"
+                    min={0}
+                    max={maxChildAge}
+                    className="dinput"
+                    style={{ width: 80 }}
+                    placeholder={`#${i + 1}`}
+                    value={age}
+                    onChange={(e) =>
+                      setChildAges((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
+                    }
+                  />
+                ))}
+              </div>
+              <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                Ages drive the child policy (under {minAdultAge} counts as a child) and CNB pricing at
+                quotation. Anyone aged {minAdultAge}+ should be counted under Adults.
+              </p>
+            </div>
           )}
 
           <div className="frow">
@@ -550,6 +613,8 @@ export function DeskNewInquiryForm() {
         >
           {mutation.isPending ? "Starting…" : "Start inquiry & open booking"}
         </button>
+
+        <BackendChips title="What 'Start inquiry & open booking' triggers in the backend" items={BK.create} />
       </div>
     </section>
   );

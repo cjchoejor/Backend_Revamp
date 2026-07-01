@@ -17,7 +17,42 @@ import { getInquiry } from "@/lib/api/inquiries";
 import { roomTypeShort } from "@/lib/desk/rooms";
 import { guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import type { BackendItem } from "@/lib/desk/backend-map";
 import type { EntryDetail } from "@/types/api";
+
+/**
+ * Per-action "what runs in the backend" attribution for S1, surfaced inline next to
+ * each operate action so you can watch the machinery as you work (curated from the
+ * SIG / DEV-SPEC; references point at the real module / policy id).
+ */
+const S1_BACKEND: Record<string, BackendItem[]> = {
+  intake: [
+    { name: "Policy 3 — custodian assignment", ref: "p03-initial-custodian-assignment.ts", detail: "Assigns the owning actor from the inquiry's sourceChannel (throws on an unknown channel)." },
+    { name: "Policy 64 — group detection", ref: "p64 · registry.groupDetection.guestCountThreshold", detail: "Flags the entry GROUP when guest count crosses the threshold." },
+    { name: "Child / capacity validation", ref: "capacity-validation-service.ts", detail: "BLOCK checks: unaccompanied-minor, adult:child ratio, over-capacity vs room type." },
+    { name: "s1-entry-service.createEntry", ref: "services/domain/s1-entry-service.ts", detail: "Creates the Entry and records the head-count breakdown." },
+    { name: "W20 — ENTRY_EXPIRY armed", ref: "ENTRY_EXPIRY · w20-entry-expiry-worker.ts", detail: "Arms the S1 expiry timer (registry.s1Expiry.minutes)." },
+    { name: "S1 state machine", ref: "state-machines/s1-state-machine.ts", detail: "Sets the (ACTIVE, S1) composite state." },
+  ],
+  search: [
+    { name: "Availability query params", ref: "p01-availability-query-params-s1.ts", detail: "Validates dates / guest-count / room-type of the search." },
+    { name: "Availability engine", ref: "engines/availability-engine.ts", detail: "Computes available / deficient / unavailable rooms for the window." },
+    { name: "Pricing pipeline (indicative)", ref: "engines/pricing-pipeline-engine.ts", detail: "Attaches an indicative-only nightly rate (not a quote)." },
+    { name: "s1-availability-service", ref: "services/domain/s1-availability-service.ts", detail: "Persists the AvailabilityConfiguration result set." },
+    { name: "W1 — dwell / staleness", ref: "STAGE_DWELL_MONITOR · w1-stage-dwell-monitor.ts", detail: "Marks the result stale after the staleness window; fires dwell warnings." },
+  ],
+  select: [
+    { name: "s1-availability-service.selectOption", ref: "services/domain/s1-availability-service.ts", detail: "Records the preferred room on the configuration." },
+    { name: "Deficiency acknowledgement", ref: "availability deficiency policy", detail: "A deficient room requires an explicit acknowledgement, captured on select." },
+  ],
+  advance: [
+    { name: "Optimistic-lock match", ref: "p01-entry-version-optimistic-lock-match.ts", detail: "Rejects S1→S2 if the entry version is stale." },
+    { name: "Policy 12 — duplicate-inquiry S1 exit", ref: "p12 · registry.duplicateInquiry.blockS1Exit", detail: "May block S1 exit when a duplicate inquiry is detected." },
+    { name: "S1 state machine — S1→S2 guard", ref: "state-machines/s1-state-machine.ts", detail: "Requires all S1 exit evidence; no unresolved open loops." },
+    { name: "Entry lifecycle state machine", ref: "state-machines/entry-lifecycle-state-machine.ts", detail: "Advances the composite state to (ACTIVE, S2)." },
+  ],
+};
 
 /** The indicative-pricing chip the S1 availability service attaches (SIG-S1 §1.6 — indicative only). */
 type IndicativePricing = {
@@ -185,27 +220,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   });
   const inquiry = inquiryQuery.data;
   const channel = inquiry?.sourceChannel;
-  // Adults/children composition is captured at intake in the inquiry notes (the backend has no
-  // structured child field — see desk-surface-build memory). Parse it back out for display.
-  const notes = (inquiry as { notes?: string | null } | undefined)?.notes ?? "";
-  const adultsMatch = notes.match(/(\d+)\s*adult/i);
-  const childMatch = notes.match(/(\d+)\s*child/i);
-  const adults = adultsMatch ? Number(adultsMatch[1]) : null;
-  const childCount = childMatch ? Number(childMatch[1]) : null;
+  // Head count is now structured on the entry (adultCount/childCount/childAges) — no longer
+  // parsed back out of the inquiry notes.
+  const adults = entry.adultCount ?? null;
+  const childCount = entry.childCount ?? null;
+  const childAges = entry.childAges ?? [];
   const guestsLabel =
     adults != null
-      ? `${adults} adult${adults === 1 ? "" : "s"}${childCount ? ` · ${childCount} child${childCount === 1 ? "" : "ren"}` : ""}`
+      ? `${adults} adult${adults === 1 ? "" : "s"}${childCount ? ` · ${childCount} child${childCount === 1 ? "" : "ren"}${childAges.length ? ` (age${childAges.length === 1 ? "" : "s"} ${childAges.join(", ")})` : ""}` : ""}`
       : entry.guestCount != null
         ? `${entry.guestCount} guest${entry.guestCount === 1 ? "" : "s"}`
         : null;
 
-  // Pre-fill the adults/children search inputs once from the recorded composition (intake notes).
+  // Pre-fill the adults/children search inputs once from the entry's recorded composition.
   useEffect(() => {
-    if (partyInited.current || inquiryQuery.isLoading) return;
+    if (partyInited.current) return;
     setAdultsInput(String(adults ?? entry.guestCount ?? 1));
     setChildrenInput(String(childCount ?? 0));
     partyInited.current = true;
-  }, [inquiryQuery.isLoading, adults, childCount, entry.guestCount]);
+  }, [adults, childCount, entry.guestCount]);
 
   const totalGuests = (Number(adultsInput) || 0) + (Number(childrenInput) || 0);
 
@@ -224,6 +257,9 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       setPendingRoom(null);
       toast.success("Availability saved — pick a preferred option");
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+      // Refresh the live backend feed so the new trace events / timers show immediately.
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Search failed"),
   });
@@ -243,6 +279,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       setPendingRoom(null);
       toast.success("Preferred option selected");
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
     },
     onError: (e) => {
       setPendingRoom(null);
@@ -307,6 +345,9 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         </p>
       </div>
 
+      {/* Real-time backend activity for this booking — updates as you act. */}
+      <LiveBackendFeed entryId={entry.id} />
+
       <div className="block">
         <BlockH>The guest</BlockH>
         <div className="frow">
@@ -322,6 +363,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             A phone or email is required on the guest before this booking can move to Quote.
           </p>
         )}
+        <BackendChips title="Ran when this booking was created" items={S1_BACKEND.intake} />
       </div>
 
       <div className="block">
@@ -356,6 +398,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           <Search />
           {hasResults ? "Search again" : "Search availability"}
         </button>
+        <BackendChips title="What 'Search availability' triggers" items={S1_BACKEND.search} />
         {stale && (
           <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>
             These results are stale — search again before selecting.
@@ -444,8 +487,18 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             The price is indicative only (no quote is created at this step), and the final room is assigned at
             arrival.
           </p>
+          <BackendChips title="What picking a preferred option triggers" items={S1_BACKEND.select} />
         </div>
       )}
+
+      <div className="block">
+        <BlockH>Moving to Quote</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
+          When you press <b>Continue to Quote</b> in the gate bar below, these run before the booking is allowed
+          to advance to S2.
+        </p>
+        <BackendChips title="What advancing S1 → S2 triggers" items={S1_BACKEND.advance} />
+      </div>
     </>
   );
 }

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check, ChevronLeft, Lock, Pause, Play } from "lucide-react";
+import { ArrowRight, Check, ChevronLeft, Layers, Lock, Pause, Play } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
@@ -51,6 +51,8 @@ import { ArrivalStep as ArrivalStepBase } from "./arrival-step";
 import { CheckInStep as CheckInStepBase } from "./checkin-step";
 import { StayStep as StayStepBase } from "./stay-step";
 import { CheckOutStep as CheckOutStepBase } from "./checkout-step";
+import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
 /**
@@ -211,6 +213,12 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
                 epi="sys"
               />
             )}
+          </div>
+          <LiveBackendFeed entryId={entry.id} />
+          <div className="block">
+            <BlockH>Under the hood</BlockH>
+            <BackendChips title="What 'Freeze & confirm' triggers" items={STAGE_ACTIONS.S4.confirm} />
+            <BackendChips title="What 'Continue to Arrival' triggers" items={STAGE_ACTIONS.S4.activate} />
           </div>
         </>
       );
@@ -382,6 +390,14 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
                 </span>
               </div>
             </div>
+          </div>
+          <LiveBackendFeed entryId={entry.id} />
+          <div className="block">
+            <BlockH>Under the hood · post-stay background</BlockH>
+            <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
+              The stay is sealed, but these run in the background after checkout.
+            </p>
+            <BackendChips title="Post-stay workers & services" items={STAGE_ACTIONS.S9.background} />
           </div>
         </>
       );
@@ -570,9 +586,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
   });
 
-  // Park / unpark — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.4 / SIG-S2 §3.3).
+  // Park / unpark — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.3 / SIG-S2 §3.3).
+  // Reason is required (recorded on the trace) and parking pauses the entry-expiry timer.
   const parkMutation = useMutation({
-    mutationFn: () => parkEntry(session!, entry!.id, parkReason.trim() || undefined),
+    mutationFn: () => parkEntry(session!, entry!.id, parkReason.trim()),
     onSuccess: (updated) => {
       queryClient.setQueryData(["entry", entry!.id], updated);
       void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
@@ -764,6 +781,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 Park
               </button>
             ))}
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => router.push(`/desk/bookings/${entry.id}/backend`)}
+            title="See every policy, state machine, engine, worker, timer & the decision journey"
+          >
+            <Layers />
+            Under the hood
+          </button>
           <span className={`timer ${timer?.level ?? ""}`}>{fin.frozen ? "Confirmed" : timer?.text}</span>
         </div>
 
@@ -976,16 +1001,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             </div>
             <div className="modal-body">
               <p className="why">
-                Parking pauses this booking without losing its place. It stays at the same step — you can resume it
-                any time. Nothing is cancelled or released.
+                Parking pauses this booking without losing its place. It stays at the same step and its
+                expiry timer is paused — you can resume any time. Nothing is cancelled or released.
               </p>
               <div className="field" style={{ marginTop: 12 }}>
-                <label htmlFor="park-reason">Reason (optional)</label>
+                <label htmlFor="park-reason">Reason (required)</label>
                 <textarea
                   id="park-reason"
                   value={parkReason}
                   onChange={(e) => setParkReason(e.target.value)}
                   placeholder="e.g. waiting on the guest to confirm dates"
+                  maxLength={500}
                 />
               </div>
             </div>
@@ -997,7 +1023,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 className="btn btn-primary"
                 style={{ background: "var(--warn)" }}
                 onClick={() => parkMutation.mutate()}
-                disabled={parkMutation.isPending}
+                disabled={parkMutation.isPending || !parkReason.trim()}
               >
                 <Pause />
                 {parkMutation.isPending ? "Parking…" : "Park booking"}
