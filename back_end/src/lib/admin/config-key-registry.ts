@@ -74,14 +74,20 @@ const own = (owner: ConfigOwner, validate?: ConfigKeyMeta["validate"]): ConfigKe
 // --- registry -------------------------------------------------------------
 
 export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
-  // Expiry / workflow (WorkflowConfigurationService)
-  "expiry.s1.defaultTtlSeconds": own("WorkflowConfigurationService"),
-  "expiry.s2.quotationValidityDays": own("WorkflowConfigurationService", positiveInt),
-  "expiry.s2.speculativeHoldTtlSeconds": own("WorkflowConfigurationService", positiveInt),
-  "expiry.s3.committedHoldTtlSeconds": own("WorkflowConfigurationService", positiveInt),
-  "expiry.defaults": own("WorkflowConfigurationService", isObject),
-  "ownership.assignmentRules": own("WorkflowConfigurationService", isArray),
-  "billingModel.availablePerSource": own("WorkflowConfigurationService", isObject),
+  // Expiry / workflow — historically owned by WorkflowConfigurationService, but the /admin/workflow
+  // page was deleted (it duplicated Timers-Workers) and the workflow router never exposed a
+  // ConfigurationEntry write endpoint for these keys, so ownership left them un-editable. They now
+  // flow through the generic /api/admin/configuration/:key endpoint that the Timers-Workers page
+  // uses. Validators are preserved.
+  // expiry.s1.defaultTtlSeconds accepts either a raw number (uniform TTL) OR
+  // { DEFAULT: number, [perSource]: number } (per-source overrides), so no shape validator.
+  "expiry.s1.defaultTtlSeconds": { owner: "ConfigurationService" },
+  "expiry.s2.quotationValidityDays": { validate: positiveInt, owner: "ConfigurationService" },
+  "expiry.s2.speculativeHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
+  "expiry.s3.committedHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
+  "expiry.defaults": { validate: isObject, owner: "ConfigurationService" },
+  "ownership.assignmentRules": { validate: isArray, owner: "ConfigurationService" },
+  "billingModel.availablePerSource": { validate: isObject, owner: "ConfigurationService" },
 
   // Commercial thresholds (CommercialThresholdService)
   "discount.fom.maxPercentage": own("CommercialThresholdService", percentage),
