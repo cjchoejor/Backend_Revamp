@@ -762,6 +762,7 @@ async function main() {
 
   await prisma.paymentRecord.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.PAYMENT),
       folioId: folio.id,
       amount: 350,
       paymentDirection: PaymentDirection.IN,
@@ -786,6 +787,7 @@ async function main() {
 
   await prisma.handoffRecord.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.HANDOFF),
       entryId: entry.id,
       handoffType: HandoffType.H1,
       state: HandoffState.CREATED,
@@ -889,6 +891,7 @@ async function main() {
 
   await prisma.handoffRecord.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.HANDOFF),
       entryId: entryCredit.id,
       handoffType: HandoffType.H1,
       state: HandoffState.FULFILLED,
@@ -940,6 +943,7 @@ async function main() {
 
   await prisma.roomAssignment.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.ROOM_ASSIGNMENT),
       entryId: entryCredit.id,
       roomId: roomClean.id,
       assignedBy: "actor-fd-1",
@@ -1108,6 +1112,7 @@ async function main() {
 
   await prisma.roomAssignment.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.ROOM_ASSIGNMENT),
       entryId: entryS7.id,
       roomId: roomClean.id,
       assignedBy: "actor-seed-system",
@@ -1117,6 +1122,7 @@ async function main() {
 
   await prisma.roomAssignment.create({
     data: {
+      id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.ROOM_ASSIGNMENT),
       entryId: entryS7DirectBill.id,
       roomId: roomS9DirectBill.id,
       assignedBy: "actor-seed-system",
@@ -1127,6 +1133,7 @@ async function main() {
   await prisma.handoffRecord.createMany({
     data: [
       {
+        id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.HANDOFF),
         entryId: entryS7.id,
         handoffType: HandoffType.H1,
         state: HandoffState.CLOSED,
@@ -1143,6 +1150,7 @@ async function main() {
         closedAt: new Date(),
       },
       {
+        id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.HANDOFF),
         entryId: entryS7.id,
         handoffType: HandoffType.H4,
         state: HandoffState.CREATED,
@@ -1159,6 +1167,7 @@ async function main() {
   await prisma.handoffRecord.createMany({
     data: [
       {
+        id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.HANDOFF),
         entryId: entryS7DirectBill.id,
         handoffType: HandoffType.H1,
         state: HandoffState.CLOSED,
@@ -1175,6 +1184,7 @@ async function main() {
         closedAt: new Date(),
       },
       {
+        id: await allocateReadableId(prisma, READABLE_ID_PREFIXES.HANDOFF),
         entryId: entryS7DirectBill.id,
         handoffType: HandoffType.H4,
         state: HandoffState.CREATED,
