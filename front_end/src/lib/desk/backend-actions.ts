@@ -166,6 +166,9 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
 
   // ───────── S8 · Check-out ─────────
   S8: {
+    keyReturn: [
+      { name: "Key return record", ref: "recordKeyReturn · services/domain (checkout)", detail: "Records keys returned vs issued; a mismatch requires a reconciliation note." },
+    ],
     inspection: [
       { name: "Room inspection + W9", ref: "POST_CHECKOUT_INSPECTION_W9 · w9", detail: "Records inspection / deficiency / damage; schedules post-checkout inspection." },
       { name: "W24 — housekeeping SLA", ref: "HOUSEKEEPING_SLA_W24 · w24", detail: "Tracks the housekeeping turnaround SLA." },

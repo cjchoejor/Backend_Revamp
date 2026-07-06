@@ -22,7 +22,7 @@ import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 
@@ -215,8 +215,31 @@ export function ArrivalStep({
 
   const currency = folio?.lines?.[0]?.currency;
 
+  // Persistent highlight: each group stays lit once its action has run (derived from real handoff /
+  // assignment / reconciliation state). `firingKey` adds the transient "running now" pulse.
+  const activeKeys = [
+    h1 && (h1.state === "ACCEPTED" || h1.state === "FULFILLED") ? "handoff" : null,
+    latestAssignment ? "assign" : null,
+    paymentReconciled || entry.creditCeilingTier2AcknowledgedAt ? "reconcile" : null,
+    entry.currentStage !== "S5" ? "advance" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = acceptM.isPending || fulfilM.isPending
+    ? "handoff"
+    : assignM.isPending
+      ? "assign"
+      : reconcileM.isPending || creditAckM.isPending
+        ? "reconcile"
+        : null;
+  const railGroups: RailGroup[] = [
+    { key: "handoff", label: "On the H1 handoff", items: BK.handoff },
+    { key: "assign", label: "On assigning a room", items: BK.assign },
+    { key: "reconcile", label: "On reconciling advance / credit", items: BK.reconcile },
+    { key: "advance", label: "On advancing to Check-in", items: BK.advance },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">Do this next</div>
         <h2>Ready the room for arrival.</h2>
@@ -225,8 +248,6 @@ export function ArrivalStep({
           confirm the advance. Still reversible — nothing about the stay is live yet.
         </p>
       </div>
-
-      <LiveBackendFeed entryId={entry.id} />
 
       {/* H1 handoff */}
       <div className="block">
@@ -290,7 +311,6 @@ export function ArrivalStep({
                 Before fulfilment: assign a ready room, complete pre-arrival tasks, and reconcile the advance.
               </p>
             )}
-            <BackendChips title="What the H1 handoff triggers" items={BK.handoff} />
           </>
         )}
       </div>
@@ -330,7 +350,6 @@ export function ArrivalStep({
           disabled={!roomId.trim()}
           onClick={() => assignM.mutate()}
         />
-        <BackendChips title="What assigning a room triggers" items={BK.assign} />
       </div>
 
       {/* Pre-arrival tasks */}
@@ -401,7 +420,6 @@ export function ArrivalStep({
             </button>
           )}
         </div>
-        <BackendChips title="What advance / credit reconciliation triggers" items={BK.reconcile} />
       </div>
 
       {/* Guest present attestation */}
@@ -412,14 +430,9 @@ export function ArrivalStep({
           <span>The guest is physically present at the front desk (required to check in)</span>
         </label>
       </div>
-
-      <div className="block">
-        <BlockH>Moving to Check-in</BlockH>
-        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
-          When you press <b>Continue to Check-in</b> in the gate bar below, these run before advancing to S6.
-        </p>
-        <BackendChips title="What advancing S5 → S6 triggers" items={BK.advance} />
       </div>
-    </>
+
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+    </div>
   );
 }

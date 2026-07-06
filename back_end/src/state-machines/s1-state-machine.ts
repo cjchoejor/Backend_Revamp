@@ -21,6 +21,7 @@ import { enforceConferenceSpaceAllocationForS1Exit } from "../policies/27-work-o
 import { enforceEntryAtS1ForAutoFulfilS2ToS3 } from "../policies/01-availability/p01-entry-at-s1-for-auto-fulfil-s2-to-s3.js";
 import { enforceEntryAtS1ForS1ToS2Progression } from "../policies/01-availability/p01-s1-entry-status-and-stage-gates.js";
 import { scheduleS2StageDwellWarningMonitor } from "../lib/schedule-s2-dwell-warning-monitor.js";
+import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 
 export async function progressS1ToS2(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
   const entry = await prisma.entry.findUnique({
@@ -115,6 +116,21 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
         createdBy: actorId,
       },
     });
+
+    // The entry has left S1 — the S1 inquiry-expiry (ENTRY_EXPIRY) is moot. Cancel it so it
+    // doesn't linger as "overdue" through S2–S9 (same class of fix as W4/W5 at check-in).
+    const expiryTimers = await tx.timerRecord.findMany({
+      where: { entryId, timerType: "ENTRY_EXPIRY", status: "SCHEDULED" },
+      select: { id: true, pgBossJobId: true },
+    });
+    if (expiryTimers.length) {
+      const engine = await getTimerEngine();
+      await Promise.all(expiryTimers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+      await tx.timerRecord.updateMany({
+        where: { id: { in: expiryTimers.map((t) => t.id) } },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "S1_TO_S2_PROGRESSION" },
+      });
+    }
     return next;
   });
 

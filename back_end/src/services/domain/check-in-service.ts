@@ -21,6 +21,7 @@ import { enforceVipArrivalNotificationRecordedForCheckInCompletion } from "../..
 import { enforceH2H3NotRejectedAtS6CheckIn } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceEntryAtS6ForCheckInCompletionToS7 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { scheduleS7StageDwellWarningMonitor } from "../../lib/schedule-s7-dwell-warning-monitor.js";
+import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 
 export async function completeCheckInToS7(
   prisma: PrismaClient,
@@ -396,6 +397,20 @@ export async function completeCheckInToS7(
     await scheduleS7StageDwellWarningMonitor(prisma, entryId, actorId);
   } catch {
     // Best-effort dwell monitor scheduling.
+  }
+
+  // The guest is now checked in — the pre-arrival countdown (W4) and the no-show cutoff (W5)
+  // are moot (no-show is impossible once arrived). Cancel any still-scheduled ones so they stop
+  // lingering as "overdue" through S7–S9. Best-effort; never blocks the completed check-in.
+  try {
+    await cancelEntryTimersByCode(prisma, {
+      entryId,
+      timerCodes: ["PRE_ARRIVAL_COUNTDOWN_W4", "NO_SHOW_CUTOFF_W5"],
+      cancelledBy: actorId,
+      cancelledReason: "Guest checked in (S6→S7) — pre-arrival / no-show timers no longer apply",
+    });
+  } catch {
+    // Best-effort timer cleanup.
   }
 
   return prisma.entry.findUniqueOrThrow({

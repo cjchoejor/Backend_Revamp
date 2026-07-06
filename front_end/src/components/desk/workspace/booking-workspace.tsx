@@ -51,7 +51,7 @@ import { ArrivalStep as ArrivalStepBase } from "./arrival-step";
 import { CheckInStep as CheckInStepBase } from "./checkin-step";
 import { StayStep as StayStepBase } from "./stay-step";
 import { CheckOutStep as CheckOutStepBase } from "./checkout-step";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, LiveBackendFeed, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -179,8 +179,17 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
       );
     }
     case "confirm": {
+      const s4Groups: RailGroup[] = [
+        { key: "confirm", label: "On freeze & confirm", items: STAGE_ACTIONS.S4.confirm },
+        { key: "activate", label: "On continue to Arrival", items: STAGE_ACTIONS.S4.activate },
+      ];
+      const s4Active = [
+        fin.frozen ? "confirm" : null,
+        entry.currentStage !== "S3" && entry.currentStage !== "S4" ? "activate" : null,
+      ].filter(Boolean) as string[];
       return (
-        <>
+        <div className="bx-split">
+          <div className="bx-main">
           <Speak
             now={fin.frozen ? "Confirmed" : "The one moment that locks"}
             h2={fin.frozen ? "This booking is frozen and live." : "Ready to freeze this booking."}
@@ -214,13 +223,10 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
               />
             )}
           </div>
-          <LiveBackendFeed entryId={entry.id} />
-          <div className="block">
-            <BlockH>Under the hood</BlockH>
-            <BackendChips title="What 'Freeze & confirm' triggers" items={STAGE_ACTIONS.S4.confirm} />
-            <BackendChips title="What 'Continue to Arrival' triggers" items={STAGE_ACTIONS.S4.activate} />
           </div>
-        </>
+
+          <BackendRail entryId={entry.id} groups={s4Groups} activeKeys={s4Active} firingKey={null} />
+        </div>
       );
     }
     case "arrival": {
@@ -365,8 +371,12 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
       );
     }
     case "closed": {
+      const s9Groups: RailGroup[] = [
+        { key: "background", label: "Post-stay workers & services", items: STAGE_ACTIONS.S9.background },
+      ];
       return (
-        <>
+        <div className="bx-split">
+          <div className="bx-main">
           <Speak now="Closed" h2="This stay is closed and sealed.">
             The record is permanent. Any later correction is added as a new layer on top, never a change to
             what&rsquo;s sealed.
@@ -390,16 +400,14 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
                 </span>
               </div>
             </div>
-          </div>
-          <LiveBackendFeed entryId={entry.id} />
-          <div className="block">
-            <BlockH>Under the hood · post-stay background</BlockH>
-            <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
-              The stay is sealed, but these run in the background after checkout.
+            <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "10px 0 0", lineHeight: 1.5 }}>
+              The stay is sealed, but the workers on the right run in the background after checkout.
             </p>
-            <BackendChips title="Post-stay workers & services" items={STAGE_ACTIONS.S9.background} />
           </div>
-        </>
+          </div>
+
+          <BackendRail entryId={entry.id} groups={s9Groups} activeKeys={["background"]} firingKey={null} />
+        </div>
       );
     }
     default:
@@ -423,71 +431,6 @@ function BlockH({ children }: { children: ReactNode }) {
       {children}
       <span className="ln" />
     </div>
-  );
-}
-
-const SummaryRail = memo(SummaryRailBase);
-function SummaryRailBase({ entry, fin }: { entry: EntryDetail; fin: DeskFinancials }) {
-  const stay = formatStayRange(entry.checkInDate, entry.checkOutDate) || "—";
-  const nightsTxt = fin.nights ? ` · ${fin.nights}n` : "";
-  const priceAmount = fin.frozen
-    ? fin.frozenTotal ?? fin.frozenRate
-    : fin.indicativeTotal;
-  return (
-    <aside className="summary">
-      <div className="sum-h">
-        <div className="t">This booking</div>
-        <span className={`commit-tag ${fin.frozen ? "frozen" : "indic"}`}>
-          {fin.frozen ? <Check /> : null}
-          {fin.frozen ? "Confirmed · frozen" : "Indicative · not committed"}
-        </span>
-      </div>
-      <div className="sum-body">
-        <div className={`sum-price ${fin.frozen ? "frozen" : "indic"}`}>
-          {fin.frozen && <div className="stamp">FROZEN</div>}
-          <div className="pl">{fin.frozen ? "✓ Confirmed" : "Indicative"}</div>
-          <div className="amt" style={{ color: fin.frozen ? "var(--green-d)" : "var(--warn)" }}>
-            {priceAmount !== null && priceAmount !== undefined ? money(priceAmount, fin.currency) : "—"}
-          </div>
-          <div className="sub">
-            {fin.frozen ? "held to the guest" : "a range while terms are shaped"}
-            {nightsTxt}
-          </div>
-        </div>
-        <div className="sum-line">
-          <span className="k">Folio</span>
-          <span className="v">
-            <span className={`fact ${fin.folio.frame}`} style={{ padding: "1px 8px", fontSize: 11 }}>
-              {fin.folio.state}
-            </span>
-          </span>
-        </div>
-        <div className="sum-line">
-          <span className="k">Stay</span>
-          <span className="v mono">
-            {stay}
-            {nightsTxt}
-          </span>
-        </div>
-        {fin.chargesTotal > 0 && (
-          <div className="sum-line">
-            <span className="k">Charges so far</span>
-            <span className="v mono">{money(fin.chargesTotal, fin.currency)}</span>
-          </div>
-        )}
-        <div className="sum-line">
-          <span className="k">Advance</span>
-          <span className="v mono">
-            {fin.advanceReceived > 0 ? money(fin.advanceReceived, fin.currency) : "—"}
-          </span>
-        </div>
-        <div className="sum-note">
-          {fin.frozen
-            ? "The frozen figures carry to every later step unchanged — you never re-enter them."
-            : "Nothing here is binding yet. The price is a range and the rooms aren't locked."}
-        </div>
-      </div>
-    </aside>
   );
 }
 
@@ -646,6 +589,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const name = guestName(entry.guestProfile ?? entry.inquiry?.guestProfile);
   const sub = `${partyCaption(entry)}`;
   const parked = entry.status === "PARKED";
+  // Sealed = terminal, no forward action: closed stay, cancellation, or expired no-show.
+  // Every step is freely browsable as read-only history; nothing nudges you onward.
+  const sealed =
+    entry.status === "CLOSED" ||
+    entry.status === "CANCELLED" ||
+    entry.status === "EXPIRED" ||
+    entry.currentStage === "TERMINAL";
   // Park is a governed hold only at the active negotiation stages (S1/S2).
   const parkable = entry.currentStage === "S1" || entry.currentStage === "S2";
   const timer = fin.frozen ? null : dwellTimer(entry.updatedAt);
@@ -675,7 +625,16 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     !checkOutStepActive &&
     !confirmedS4Active;
   const ready = canConfirm(entry);
-  const preconds = confirmStepActive
+  // On a sealed booking every step is read-only history — show the outcome, not pending gates.
+  const sealedOutcome =
+    entry.status === "CANCELLED"
+      ? "Booking cancelled — read-only record"
+      : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL"
+        ? "Expired (no-show) — read-only record"
+        : "Stay closed & sealed — read-only record";
+  const preconds = sealed
+    ? [{ label: sealedOutcome, met: true }]
+    : confirmStepActive
     ? confirmReadiness(entry)
     : inquiryStepActive
       ? s1Readiness(entry)
@@ -696,7 +655,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 : checkOutStepActive
                   ? s8Readiness(entry)
                   : preconditionsFor(entry, step);
-  const needsLabel = setupStepActive
+  const needsLabel = sealed
+    ? "This booking"
+    : setupStepActive
     ? "Before this can be confirmed"
     : confirmStepActive || checkInStepActive
       ? checkInStepActive
@@ -716,31 +677,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   return (
     <div className="ws">
-      {/* journey rail */}
-      <nav className="track">
-        <div className="track-h">This booking&rsquo;s journey</div>
-        {DESK_STEPS.map((s) => {
-          const future = s.order > maxReach;
-          const cls = ["tnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
-            .filter(Boolean)
-            .join(" ");
-          const glyph =
-            s.order < currentOrder ? <Check style={{ stroke: "#fff" }} /> : s.bound ? <Lock /> : s.order;
-          return (
-            <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
-              <span className="g">{glyph}</span>
-              <span className="tl">
-                {s.label}
-                <small>{s.sub}</small>
-              </span>
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* canvas */}
-      <div className="canvas-wrap">
-        <div className="canvas-top">
+      {/* top bar — guest header + key figures, with the horizontal booking journey beneath */}
+      <div className="ws-top">
+        <div className="ws-head">
           <button className="ws-back" onClick={() => router.push("/desk/bookings")}>
             <ChevronLeft />
             Bookings
@@ -755,6 +694,25 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             </div>
           </div>
           <div className="topspace" />
+          <div className="jsum">
+            <span className={`commit-tag ${fin.frozen ? "frozen" : "indic"}`}>
+              {fin.frozen ? <Check /> : null}
+              {fin.frozen ? "Confirmed" : "Indicative"}
+            </span>
+            <div className="jsum-i">
+              <span className="k">{fin.frozen ? "Frozen" : "Indicative"}</span>
+              <span className="v mono">
+                {(() => {
+                  const amt = fin.frozen ? fin.frozenTotal ?? fin.frozenRate : fin.indicativeTotal;
+                  return amt !== null && amt !== undefined ? money(amt, fin.currency) : "—";
+                })()}
+              </span>
+            </div>
+            <div className="jsum-i">
+              <span className="k">Folio</span>
+              <span className="v">{fin.folio.state}</span>
+            </div>
+          </div>
           {parked && (
             <span className="timer warn" style={{ gap: 5 }}>
               <Pause />
@@ -763,20 +721,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           )}
           {parkable &&
             (parked ? (
-              <button
-                className="btn btn-ghost btn-sm"
-                disabled={unparkMutation.isPending}
-                onClick={() => unparkMutation.mutate()}
-              >
+              <button className="btn btn-ghost btn-sm" disabled={unparkMutation.isPending} onClick={() => unparkMutation.mutate()}>
                 <Play />
                 {unparkMutation.isPending ? "Resuming…" : "Resume"}
               </button>
             ) : (
-              <button
-                className="btn btn-ghost btn-sm"
-                disabled={parkMutation.isPending}
-                onClick={() => setParkOpen(true)}
-              >
+              <button className="btn btn-ghost btn-sm" disabled={parkMutation.isPending} onClick={() => setParkOpen(true)}>
                 <Pause />
                 Park
               </button>
@@ -792,8 +742,49 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           <span className={`timer ${timer?.level ?? ""}`}>{fin.frozen ? "Confirmed" : timer?.text}</span>
         </div>
 
-        <div className="canvas-scroll">
-          <div className={`canvas${inquiryStepActive ? " canvas-wide" : ""}`}>
+        <nav className="jrail">
+          {DESK_STEPS.map((s) => {
+            const future = s.order > maxReach;
+            const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
+              .filter(Boolean)
+              .join(" ");
+            const glyph =
+              s.order < currentOrder ? <Check style={{ stroke: "#fff" }} /> : s.bound ? <Lock /> : s.order;
+            return (
+              <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
+                <span className="g">{glyph}</span>
+                <span className="jl">
+                  {s.label}
+                  <small>{s.sub}</small>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* body — Backend activity live (left) · operate flow + colour-coded groups (right) */}
+      <div className="ws-body">
+        <aside className="ws-feed">
+          <LiveBackendFeed entryId={entry.id} />
+        </aside>
+        <div className="canvas-wrap">
+          <div className="canvas-scroll">
+          <div
+            className={`canvas${
+              inquiryStepActive ||
+              quoteStepActive ||
+              setupStepActive ||
+              arrivalStepActive ||
+              checkInStepActive ||
+              stayStepActive ||
+              checkOutStepActive ||
+              step.key === "confirm" ||
+              step.key === "closed"
+                ? " canvas-wide"
+                : ""
+            }`}
+          >
             {inquiryStepActive ? (
               <InquiryStep entry={entry} />
             ) : quoteStepActive ? (
@@ -833,7 +824,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 </span>
               ))}
             </div>
-            {parked ? (
+            {sealed ? (
+              <button className="adv" disabled>
+                <Lock />
+                Sealed · read-only
+              </button>
+            ) : parked ? (
               <button
                 className="adv"
                 disabled={unparkMutation.isPending}
@@ -935,9 +931,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             )}
           </div>
         </div>
+        </div>
       </div>
-
-      <SummaryRail entry={entry} fin={fin} />
 
       <DeskConfirmModal
         open={confirmOpen}

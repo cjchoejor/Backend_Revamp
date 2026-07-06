@@ -29,7 +29,10 @@ async function runAvailabilityEngineForEntry(
   const shadowRules = await requireActiveConfigValue<any[]>(prisma, "availability.shadowInventory.visibilityRules");
   const bookablePhysicalStates = await requireActiveConfigValue<any>(prisma, "availability.bookablePhysicalStates").catch(() => ["FREE"]);
 
-  const rooms = await prisma.room.findMany({ orderBy: { roomNumber: "asc" } });
+  const rooms = await prisma.room.findMany({
+    orderBy: { roomNumber: "asc" },
+    include: { roomType: { select: { name: true } } },
+  });
   const spaces = await prisma.space.findMany({ orderBy: { code: "asc" } });
 
   const engineRaw = availabilityEngineQuery({
@@ -47,6 +50,7 @@ async function runAvailabilityEngineForEntry(
       id: r.id,
       roomNumber: r.roomNumber,
       roomTypeId: r.roomTypeId,
+      roomTypeName: r.roomType?.name ?? null,
       capacity: r.capacity,
       currentClaimState: r.currentClaimState,
       isShadowInventory: (r as any).isShadowInventory === true,

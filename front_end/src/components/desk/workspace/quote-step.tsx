@@ -17,7 +17,7 @@ import {
   supersedeQuotation,
 } from "@/lib/api/quotations";
 import { money } from "@/lib/desk/workspace";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, QuotationState, QuotationSummary } from "@/types/api";
 
@@ -167,8 +167,46 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
 
   const elevated = isElevated(session?.actorLevel);
 
+  // Persistent highlight: a group stays lit once its action has run for this booking (derived
+  // from real quote/hold state, so it survives reloads). `firingKey` adds the "running now" pulse.
+  const hasDiscount = quotations.some((q) => {
+    const t = q.commercialTerms as Record<string, unknown> | null | undefined;
+    if (!t) return false;
+    const d = t.discountPercent ?? t.appliedDiscountPercent ?? (t.discount as { discountPercent?: unknown } | undefined)?.discountPercent;
+    return typeof d === "number" ? d > 0 : d != null;
+  });
+  const sendUsed = quotations.some((q) => q.sentAt != null || q.state === "SENT" || q.state === "ACCEPTED");
+  const activeKeys = [
+    quotations.length > 0 ? "build" : null,
+    hasDiscount ? "discount" : null,
+    sendUsed ? "send" : null,
+    accepted ? "accept" : null,
+    holds.length > 0 ? "hold" : null,
+    entry.currentStage !== "S2" ? "advance" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = createM.isPending
+    ? "build"
+    : discountM.isPending || approveM.isPending
+      ? "discount"
+      : sendM.isPending
+        ? "send"
+        : acceptM.isPending || supersedeM.isPending
+          ? "accept"
+          : holdM.isPending || releaseM.isPending
+            ? "hold"
+            : null;
+  const railGroups: RailGroup[] = [
+    { key: "build", label: "On creating the quote", items: BK.build },
+    { key: "discount", label: "On applying a discount", items: BK.discount },
+    { key: "send", label: "On sending the quote", items: BK.send },
+    { key: "accept", label: "On recording acceptance", items: BK.accept },
+    { key: "hold", label: "On holding a room", items: BK.hold },
+    { key: "advance", label: "On advancing to Set up", items: BK.advance },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">Do this next</div>
         <h2>Shape the price and send the quote.</h2>
@@ -177,8 +215,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           margin, send it, and record the guest&rsquo;s answer.
         </p>
       </div>
-
-      <LiveBackendFeed entryId={entry.id} />
 
       {quotations.length > 0 && (
         <div className="block">
@@ -214,7 +250,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
             {createM.isPending ? "Drafting…" : "Create draft quote"}
           </button>
-          <BackendChips title="What 'Create draft quote' triggers" items={BK.build} />
         </div>
       )}
 
@@ -228,7 +263,15 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           <div className="frow">
             <div className="field">
               <label>Apply discount %</label>
-              <input type="number" value={discountPercent} onChange={(e) => setDiscountPercent(e.target.value)} />
+              <input
+                type="number"
+                value={discountPercent}
+                onChange={(e) => {
+                  setDiscountPercent(e.target.value);
+                  if (discountM.isSuccess) discountM.reset();
+                  if (approveM.isSuccess) approveM.reset();
+                }}
+              />
             </div>
             <div className="field">
               <label>Basis</label>
@@ -238,15 +281,14 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 13 }}>
             <button className="btn btn-ghost btn-sm" disabled={discountM.isPending || !discountPercent} onClick={() => discountM.mutate()}>
               <Percent style={{ width: 13, height: 13 }} />
-              Apply discount
+              {discountM.isPending ? "Applying…" : discountM.isSuccess ? "✓ Discount applied" : "Apply discount"}
             </button>
             {elevated && (
-              <button className="btn btn-ghost btn-sm" disabled={approveM.isPending} onClick={() => approveM.mutate()}>
-                Approve discount (FOM)
+              <button className="btn btn-ghost btn-sm" disabled={approveM.isPending || approveM.isSuccess} onClick={() => approveM.mutate()}>
+                {approveM.isPending ? "Approving…" : approveM.isSuccess ? "✓ Discount approved" : "Approve discount (FOM)"}
               </button>
             )}
           </div>
-          <BackendChips title="What applying a discount triggers" items={BK.discount} />
           <div style={{ height: 10 }} />
           <div className="frow">
             <div className="field">
@@ -269,7 +311,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             <Mail style={{ width: 14, height: 14 }} />
             {sendM.isPending ? "Sending…" : "Send quote to guest"}
           </button>
-          <BackendChips title="What 'Send quote' triggers" items={BK.send} />
         </div>
       )}
 
@@ -300,7 +341,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               New round (supersede)
             </button>
           </div>
-          <BackendChips title="What recording acceptance triggers" items={BK.accept} />
         </div>
       )}
 
@@ -351,17 +391,11 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             </button>
           </>
         )}
-        <BackendChips title="What placing a speculative hold triggers" items={BK.hold} />
+      </div>
       </div>
 
-      <div className="block">
-        <BlockH>Moving to Set up</BlockH>
-        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
-          When you press <b>Continue to Set up</b> in the gate bar below, these run before advancing to S3.
-        </p>
-        <BackendChips title="What advancing S2 → S3 triggers" items={BK.advance} />
-      </div>
-    </>
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+    </div>
   );
 }
 

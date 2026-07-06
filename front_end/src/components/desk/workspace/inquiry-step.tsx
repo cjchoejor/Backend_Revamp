@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronDown, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -126,7 +126,7 @@ function groupByType(
     const capacity = Math.max(0, ...list.map((r) => r.capacity ?? 0)) || undefined;
     return {
       key,
-      label: rep.roomTypeId ? roomTypeShort(rep.roomTypeId) : "Room",
+      label: rep.roomTypeName ?? (rep.roomTypeId ? roomTypeShort(rep.roomTypeId) : "Room"),
       rooms: list,
       representative: rep,
       capacity,
@@ -135,30 +135,62 @@ function groupByType(
   });
 }
 
+/** The individual rooms of a type, as a compact box grid (informational — selection is by type). */
+function RoomBoxes({ group, variant }: { group: RoomTypeGroup; variant: "available" | "deficient" | "unavailable" }) {
+  return (
+    <div className="room-box-grid">
+      {group.rooms.map((r) => (
+        <span
+          key={r.roomId}
+          className={`room-box${variant === "deficient" ? " deficient" : ""}${variant === "unavailable" ? " unavail" : ""}`}
+          title={`Room ${r.roomNumber ?? r.roomId}`}
+        >
+          {r.roomNumber ?? r.roomId.slice(0, 6)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function RoomTypeCard({
   group,
   variant,
   selected,
   disabled,
   onSelect,
+  expanded,
+  onToggleDetail,
 }: {
   group: RoomTypeGroup;
   variant: "available" | "deficient" | "unavailable";
   selected?: boolean;
   disabled?: boolean;
   onSelect?: () => void;
+  expanded?: boolean;
+  onToggleDetail?: () => void;
 }) {
   const count = group.rooms.length;
   const countLabel = `${count} room${count === 1 ? "" : "s"}`;
 
+  const detailToggle = (
+    <button type="button" className="opt-detail" onClick={onToggleDetail} aria-expanded={expanded}>
+      {expanded ? "Hide rooms" : `Show ${countLabel}`}
+      <ChevronDown style={{ width: 12, height: 12, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s ease" }} />
+    </button>
+  );
+
   if (variant === "unavailable") {
     return (
-      <div className="opt unavail">
-        <span className="ot">
-          <span className="otn">{group.label}</span>
-          <span className="ots">{countLabel} unavailable</span>
-        </span>
-        <span className="tag stop">Unavailable</span>
+      <div className="opt-wrap">
+        <div className="opt unavail">
+          <span className="ot">
+            <span className="otn">{group.label}</span>
+            <span className="ots">{countLabel} unavailable</span>
+          </span>
+          <span className="tag stop">Unavailable</span>
+        </div>
+        {detailToggle}
+        {expanded && <RoomBoxes group={group} variant={variant} />}
       </div>
     );
   }
@@ -169,25 +201,29 @@ function RoomTypeCard({
   const price = group.pricing?.rateAmount != null ? `${money(group.pricing.rateAmount, group.pricing.currency)}/night` : null;
 
   return (
-    <button
-      type="button"
-      className={`opt${selected ? " sel" : ""}${variant === "deficient" ? " deficient" : ""}`}
-      disabled={disabled}
-      onClick={onSelect}
-    >
-      <span className="radio" />
-      <span className="ot">
-        <span className="otn">{group.label}</span>
-        <span className="ots">{sub}</span>
-      </span>
-      {variant === "deficient" && (
-        <span className="tag warn">
-          <AlertTriangle style={{ width: 11, height: 11 }} />
-          Deficient
+    <div className="opt-wrap">
+      <button
+        type="button"
+        className={`opt${selected ? " sel" : ""}${variant === "deficient" ? " deficient" : ""}`}
+        disabled={disabled}
+        onClick={onSelect}
+      >
+        <span className="radio" />
+        <span className="ot">
+          <span className="otn">{group.label}</span>
+          <span className="ots">{sub}</span>
         </span>
-      )}
-      {price ? <span className="op">{price}</span> : null}
-    </button>
+        {variant === "deficient" && (
+          <span className="tag warn">
+            <AlertTriangle style={{ width: 11, height: 11 }} />
+            Deficient
+          </span>
+        )}
+        {price ? <span className="op">{price}</span> : null}
+      </button>
+      {detailToggle}
+      {expanded && <RoomBoxes group={group} variant={variant} />}
+    </div>
   );
 }
 
@@ -202,6 +238,9 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const partyInited = useRef(false);
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
   const [pendingRoom, setPendingRoom] = useState<string | null>(null);
+  // Which room-type cards have their room list expanded (keyed by group key).
+  const [expandedTypes, setExpandedTypes] = useState<Record<string, boolean>>({});
+  const toggleType = (key: string) => setExpandedTypes((p) => ({ ...p, [key]: !p[key] }));
 
 
   const configs = entry.availabilityConfigs ?? [];
@@ -460,6 +499,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     selected={groupSelected(group)}
                     disabled={selectMutation.isPending}
                     onSelect={() => handleSelect(group.representative, false)}
+                    expanded={!!expandedTypes[group.key]}
+                    onToggleDetail={() => toggleType(group.key)}
                   />
                 ))}
               </div>
@@ -479,6 +520,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     selected={groupSelected(group)}
                     disabled={selectMutation.isPending}
                     onSelect={() => handleSelect(group.representative, true)}
+                    expanded={!!expandedTypes[group.key]}
+                    onToggleDetail={() => toggleType(group.key)}
                   />
                 ))}
               </div>
@@ -491,7 +534,13 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
               </div>
               <div className="opt-grid">
                 {unavailableTypes.map((group) => (
-                  <RoomTypeCard key={group.key} group={group} variant="unavailable" />
+                  <RoomTypeCard
+                    key={group.key}
+                    group={group}
+                    variant="unavailable"
+                    expanded={!!expandedTypes[group.key]}
+                    onToggleDetail={() => toggleType(group.key)}
+                  />
                 ))}
               </div>
             </>

@@ -26,7 +26,7 @@ import {
 import { listRooms } from "@/lib/api/rooms";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money } from "@/lib/desk/workspace";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -239,8 +239,42 @@ export function StayStep({
   );
   const h4MandatoryComplete = h4Items.filter((i) => i.mandatory).every((i) => h4Checklist[i.code] === true);
 
+  // Night audit runs only for a *completed* operating day. A future date is never valid; today is
+  // allowed (it may be the final stay night needed for same-day checkout) but flagged, because
+  // running it seals the day to further charges (SIG-S7 §2.2 / Policy 61).
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  const naFuture = !!naDate && naDate > todayYmd;
+  const naIsToday = naDate === todayYmd;
+
+  // Persistent highlight: each group stays lit once its action has run (derived from real folio /
+  // audit / handoff / dispute state). `firingKey` adds the transient "running now" pulse.
+  const activeKeys = [
+    folioLines.length > 0 ? "charge" : null,
+    nightAuditOk ? "nightAudit" : null,
+    h4 ? "handoff" : null,
+    disputes.length > 0 ? "dispute" : null,
+    entry.currentStage !== "S7" ? "advance" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = postChargeM.isPending || creditNoteM.isPending || correctM.isPending
+    ? "charge"
+    : nightAuditM.isPending
+      ? "nightAudit"
+      : createH4M.isPending || acceptH4M.isPending || fulfilH4M.isPending
+        ? "handoff"
+        : openDisputeM.isPending
+          ? "dispute"
+          : null;
+  const railGroups: RailGroup[] = [
+    { key: "charge", label: "On posting a charge / correction", items: BK.charge },
+    { key: "nightAudit", label: "On the night audit", items: BK.nightAudit },
+    { key: "handoff", label: "On the H4 pre-checkout handoff", items: BK.handoff },
+    { key: "dispute", label: "On opening / reviewing a dispute", items: BK.dispute },
+    { key: "advance", label: "On advancing to Check-out", items: BK.advance },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">In-house</div>
         <h2>The stay is live. Post charges as they happen.</h2>
@@ -249,8 +283,6 @@ export function StayStep({
           themselves each night in the audit; you post the rest.
         </p>
       </div>
-
-      <LiveBackendFeed entryId={entry.id} />
 
       {/* Live folio */}
       <div className="block">
@@ -365,8 +397,6 @@ export function StayStep({
         )}
       </div>
 
-      <BackendChips title="What posting a charge / correction / credit note triggers" items={BK.charge} />
-
       {/* Night audit */}
       <div className="block">
         <BlockH>
@@ -377,22 +407,46 @@ export function StayStep({
           <span>Final stay night {lastNightYmd || "—"}</span>
           <span className={`tag ${nightAuditOk ? "" : "warn"}`}>{nightAuditQuery.data?.runStatus ?? "not run"}</span>
         </div>
+        <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "7px 0 0", lineHeight: 1.5 }}>
+          Night audit is a <b>hotel-wide</b> run for an operating date — not per booking. If it already
+          shows complete for this night, it was run for the property (by you on another booking, or the
+          nightly worker); it does not need re-running here.
+        </p>
         {elevated ? (
-          <div className="frow" style={{ marginTop: 11 }}>
-            <div className="field">
-              <label>Run for date (L2+)</label>
-              <input type="date" value={naDate} onChange={(e) => setNaDate(e.target.value)} />
+          <>
+            <div className="frow" style={{ marginTop: 9 }}>
+              <div className="field">
+                <label>Run for date (L2+)</label>
+                <input type="date" value={naDate} max={todayYmd} onChange={(e) => setNaDate(e.target.value)} />
+              </div>
+              <div className="field" style={{ alignSelf: "end" }}>
+                <button
+                  className="btn btn-ghost"
+                  disabled={nightAuditM.isPending || nightAuditOk || naFuture || !naDate}
+                  onClick={() => nightAuditM.mutate()}
+                >
+                  {nightAuditM.isPending
+                    ? "Running…"
+                    : nightAuditOk
+                      ? `✓ Night audit complete${lastNightYmd ? ` for ${lastNightYmd}` : ""}`
+                      : "Run night audit"}
+                </button>
+              </div>
             </div>
-            <div className="field" style={{ alignSelf: "end" }}>
-              <button className="btn btn-ghost" disabled={nightAuditM.isPending} onClick={() => nightAuditM.mutate()}>
-                Run night audit
-              </button>
-            </div>
-          </div>
+            {naFuture && (
+              <p style={{ fontSize: 11.5, color: "var(--stop)", margin: "6px 0 0" }}>
+                Night audit can only run for a completed (past) day — a future date isn&rsquo;t valid.
+              </p>
+            )}
+            {naIsToday && !nightAuditOk && (
+              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "6px 0 0" }}>
+                This seals <b>today</b> to further charges — post all of today&rsquo;s charges first.
+              </p>
+            )}
+          </>
         ) : (
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "8px 0 0" }}>Running the night audit requires FOM (L2+).</p>
         )}
-        <BackendChips title="What the night audit triggers" items={BK.nightAudit} />
       </div>
 
       {/* Handoffs */}
@@ -449,7 +503,6 @@ export function StayStep({
             )}
           </>
         )}
-        <BackendChips title="What the H4 pre-checkout handoff triggers" items={BK.handoff} />
       </div>
 
       {/* Deficiencies */}
@@ -515,7 +568,6 @@ export function StayStep({
             </button>
           </div>
         </div>
-        <BackendChips title="What opening / reviewing a dispute triggers" items={BK.dispute} />
       </div>
 
       {/* Amendments & room change */}
@@ -571,14 +623,9 @@ export function StayStep({
           </div>
         </div>
       )}
-
-      <div className="block">
-        <BlockH>Moving to Check-out</BlockH>
-        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
-          When you press <b>Continue to Check-out</b> in the gate bar below, these run before advancing to S8.
-        </p>
-        <BackendChips title="What advancing S7 → S8 triggers" items={BK.advance} />
       </div>
-    </>
+
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+    </div>
   );
 }

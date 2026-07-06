@@ -47,7 +47,8 @@ Anchor these in your head before searching:
 |---|---|
 | `prisma/schema.prisma` | Single Prisma schema (admin + operational models). Migrations under `prisma/migrations/`. |
 | `prisma/seed.ts` | Destructive seed — wipes tables it owns then re-seeds. Run via `npm run db:seed`. |
-| `scripts/` | One-off scripts: targeted seeds (`seed-additional-policies.ts`, `seed-additional-config-keys.ts`, `seed-predefined-modes.ts`), rename helpers (`rename-room-type-id.ts`), inspection (`inspect-policy-registry.ts`), acceptance tests (`s*-acceptance-tests.ts`, `Test_ReVamp/`). |
+| `scripts/` | One-off scripts: targeted seeds (`seed-additional-policies.ts`, `seed-additional-config-keys.ts`, `seed-predefined-modes.ts`), rename helpers (`rename-room-type-id.ts`), inspection (`inspect-policy-registry.ts`), acceptance tests (`s*-acceptance-tests.ts`, `Test_ReVamp/`), the destructive `wipe-operational-data.ts` (`--confirm`; keeps config/staff/rooms/registries). |
+| `scripts/import-data/` | **Real Legphel data importers** (dry-run by default, `--commit` to write). `import-legacy-rooms.ts` — `legacy-bookings/room.csv` → 10 RoomTypes + 27 Rooms + per-type RatePlanRegistry (clears the demo catalogue first). `import-legacy-agent-rates.ts` — `agent_rate` CSV → 127 TravelAgents + 9 CorporateAccounts + RateCards. `import-legacy-bookings.ts` — `legacy-bookings/*.csv` → Inquiry→Entry→…→Folio (looks rooms up by number, never creates them). **Load order: wipe → rooms → agents → bookings.** |
 | `src/index.ts` | Express bootstrap; spawns pg-boss + workers only when `RUN_WORKERS=true`. |
 | `src/db.ts` | Singleton `PrismaClient` export. Always import from here, never `new PrismaClient()`. |
 | `src/routes/admin/` | Admin route groups, one file per service. Guarded with `requireActorLevel("L4")` + `validateBody(zodSchema)`. |

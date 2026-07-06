@@ -24,7 +24,7 @@ import {
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
@@ -126,12 +126,19 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       "Cancellation terms recorded",
     ),
   );
-  const paymentM = useMutation(
-    wrap(() => {
+  const paymentM = useMutation({
+    mutationFn: () => {
       if (!folio) throw new Error("Create the folio first");
       return recordFolioPayment(session!, folio.id, { entryId: entry.id, amount: Number(paymentAmount), notes: paymentNotes.trim() || undefined });
-    }, "Advance payment recorded"),
-  );
+    },
+    onSuccess: () => {
+      toast.success("Advance payment recorded");
+      setPaymentAmount("");
+      setPaymentNotes("");
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+  });
   const reconcileM = useMutation(
     wrap(() => {
       if (!folio) throw new Error("Create the folio first");
@@ -191,8 +198,46 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Cancellation failed"),
   });
 
+  // Persistent highlight: each group stays lit once its action has run for this booking (derived
+  // from real folio / hold / invoice state). `firingKey` adds the transient "running now" pulse.
+  const activeKeys = [
+    folio ? "folio" : null,
+    disclosure ? "disclosure" : null,
+    inPayments.length > 0 || folio?.advancePaymentReconciliationComplete ? "advance" : null,
+    rawHold ? "hold" : null,
+    proformaInvoices.some((i) => i.dispatchedAt != null) ? "dispatch" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = folioM.isPending
+    ? "folio"
+    : disclosureM.isPending
+      ? "disclosure"
+      : paymentM.isPending || reconcileM.isPending || creditM.isPending
+        ? "advance"
+        : holdM.isPending
+          ? "hold"
+          : dispatchM.isPending
+            ? "dispatch"
+            : coordinatorM.isPending || milestonesM.isPending || focGmM.isPending
+              ? "group"
+              : reEntryS1M.isPending || reEntryS2M.isPending
+                ? "reentry"
+                : cancelM.isPending
+                  ? "cancel"
+                  : null;
+  const railGroups: RailGroup[] = [
+    { key: "folio", label: "On creating the folio", items: BK.folio },
+    { key: "disclosure", label: "On recording cancellation terms", items: BK.disclosure },
+    { key: "advance", label: "On recording the advance", items: BK.advance },
+    { key: "hold", label: "On placing the committed hold", items: BK.hold },
+    { key: "dispatch", label: "On dispatching the proforma", items: BK.dispatch },
+    { key: "group", label: "On group / corporate setup", items: BK.group },
+    { key: "reentry", label: "On opening a new round", items: BK.reentry },
+    { key: "cancel", label: "On cancelling the booking", items: BK.cancel },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">Do this next</div>
         <h2>Hold the rooms and set up the booking.</h2>
@@ -201,8 +246,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           advance, and a committed hold on the room. Nothing is frozen yet — that happens at Confirm.
         </p>
       </div>
-
-      <LiveBackendFeed entryId={entry.id} />
 
       {/* 1. Provisional folio & billing model */}
       <div className="block">
@@ -226,7 +269,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         <button className="btn btn-primary" disabled={folioM.isPending} onClick={() => folioM.mutate()}>
           {folioM.isPending ? "Saving…" : folio ? "Update billing model" : "Create provisional folio"}
         </button>
-        <BackendChips title="What the provisional folio triggers" items={BK.folio} />
       </div>
 
       {/* 2. Cancellation disclosure */}
@@ -251,7 +293,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             <button className="btn btn-ghost" disabled={disclosureM.isPending || !noShowStatement.trim()} onClick={() => disclosureM.mutate()}>
               {disclosureM.isPending ? "Saving…" : "Record cancellation terms"}
             </button>
-            <BackendChips title="What recording the terms triggers" items={BK.disclosure} />
           </>
         )}
       </div>
@@ -283,7 +324,17 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         <div className="frow">
           <div className="field">
             <label>Payment amount</label>
-            <input type="number" min={0.01} step="0.01" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} disabled={!folio} />
+            <input
+              type="number"
+              min={0.01}
+              step="0.01"
+              value={paymentAmount}
+              onChange={(e) => {
+                setPaymentAmount(e.target.value);
+                if (paymentM.isSuccess) paymentM.reset();
+              }}
+              disabled={!folio}
+            />
           </div>
           <div className="field">
             <label>Notes</label>
@@ -292,10 +343,18 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-ghost btn-sm" disabled={!folio || !paymentAmount || paymentM.isPending} onClick={() => paymentM.mutate()}>
-            Record payment
+            {paymentM.isPending ? "Recording…" : paymentM.isSuccess ? "✓ Payment recorded" : "Record payment"}
           </button>
-          <button className="btn btn-ghost btn-sm" disabled={!folio || reconcileM.isPending} onClick={() => reconcileM.mutate()}>
-            Mark reconciled
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={!folio || reconcileM.isPending || !!folio?.advancePaymentReconciliationComplete}
+            onClick={() => reconcileM.mutate()}
+          >
+            {reconcileM.isPending
+              ? "Reconciling…"
+              : folio?.advancePaymentReconciliationComplete || reconcileM.isSuccess
+                ? "✓ Reconciled"
+                : "Mark reconciled"}
           </button>
           <button className="btn btn-ghost btn-sm" disabled={!folio || paymentStatusQuery.isFetching} onClick={() => paymentStatusQuery.refetch()}>
             <RefreshCw style={{ width: 12, height: 12 }} />
@@ -315,8 +374,8 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 <input value={creditReason} onChange={(e) => setCreditReason(e.target.value)} />
               </div>
             </div>
-            <button className="btn btn-ghost btn-sm" disabled={creditM.isPending || !creditCeiling || !creditReason.trim() || !folio} onClick={() => creditM.mutate()}>
-              Approve credit extension
+            <button className="btn btn-ghost btn-sm" disabled={creditM.isPending || creditM.isSuccess || !creditCeiling || !creditReason.trim() || !folio} onClick={() => creditM.mutate()}>
+              {creditM.isPending ? "Approving…" : creditM.isSuccess ? "✓ Credit extension approved" : "Approve credit extension"}
             </button>
           </div>
         )}
@@ -350,7 +409,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             {!preferredRoomId && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>No preferred room — complete Inquiry first.</p>}
           </>
         )}
-        <BackendChips title="What placing the committed hold triggers" items={BK.hold} />
       </div>
 
       {/* 5. Proforma invoice */}
@@ -374,11 +432,14 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               <input value={dispatchTo} onChange={(e) => setDispatchTo(e.target.value)} />
             </div>
             <button className="btn btn-ghost" disabled={dispatchM.isPending || !proformaInvoices.some((i) => i.state === "DRAFT")} onClick={() => dispatchM.mutate()}>
-              {dispatchM.isPending ? "Dispatching…" : "Dispatch proforma invoice"}
+              {dispatchM.isPending
+                ? "Dispatching…"
+                : proformaInvoices.some((i) => i.dispatchedAt != null)
+                  ? "✓ Proforma dispatched"
+                  : "Dispatch proforma invoice"}
             </button>
           </>
         )}
-        <BackendChips title="What dispatching the proforma triggers" items={BK.dispatch} />
       </div>
 
       {/* Group / corporate (conditional) */}
@@ -398,12 +459,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: needsMilestones ? 12 : 0 }}>
-                <button className="btn btn-ghost btn-sm" disabled={coordinatorM.isPending || !coordinatorName.trim() || !coordinatorScope.trim()} onClick={() => coordinatorM.mutate()}>
-                  Confirm coordinator
+                <button className="btn btn-ghost btn-sm" disabled={coordinatorM.isPending || coordinatorM.isSuccess || !coordinatorName.trim() || !coordinatorScope.trim()} onClick={() => coordinatorM.mutate()}>
+                  {coordinatorM.isPending ? "Confirming…" : coordinatorM.isSuccess ? "✓ Coordinator confirmed" : "Confirm coordinator"}
                 </button>
                 {gm && (
-                  <button className="btn btn-ghost btn-sm" disabled={focGmM.isPending} onClick={() => focGmM.mutate()}>
-                    FOC GM approval
+                  <button className="btn btn-ghost btn-sm" disabled={focGmM.isPending || focGmM.isSuccess} onClick={() => focGmM.mutate()}>
+                    {focGmM.isPending ? "Approving…" : focGmM.isSuccess ? "✓ FOC GM approved" : "FOC GM approval"}
                   </button>
                 )}
               </div>
@@ -415,12 +476,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 <label>Payment milestone template</label>
                 <input value={milestoneTemplate} onChange={(e) => setMilestoneTemplate(e.target.value)} />
               </div>
-              <button className="btn btn-ghost btn-sm" disabled={milestonesM.isPending} onClick={() => milestonesM.mutate()}>
-                Schedule milestones
+              <button className="btn btn-ghost btn-sm" disabled={milestonesM.isPending || milestonesM.isSuccess} onClick={() => milestonesM.mutate()}>
+                {milestonesM.isPending ? "Scheduling…" : milestonesM.isSuccess ? "✓ Milestones scheduled" : "Schedule milestones"}
               </button>
             </>
           )}
-          <BackendChips title="What group / corporate setup triggers" items={BK.group} />
         </div>
       )}
 
@@ -443,7 +503,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               Reconfigure dates / room (Inquiry)
             </button>
           </div>
-          <BackendChips title="What re-opening a round triggers" items={BK.reentry} />
         </div>
       )}
 
@@ -461,8 +520,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         <button className="btn btn-ghost" style={{ borderColor: "#e2b3ac", color: "var(--stop)" }} onClick={() => setCancelOpen(true)}>
           Cancel booking
         </button>
-        <BackendChips title="What cancelling at setup triggers" items={BK.cancel} />
       </div>
+      </div>
+
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
 
       <DeskConfirmModal
         open={cancelOpen}
@@ -482,6 +543,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         onConfirm={() => cancelM.mutate()}
         onClose={() => setCancelOpen(false)}
       />
-    </>
+    </div>
   );
 }

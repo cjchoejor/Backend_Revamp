@@ -13,7 +13,7 @@ import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-stat
 import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -114,8 +114,23 @@ export function CheckInStep({
 
   const currency = folio?.lines?.[0]?.currency;
 
+  // Persistent highlight: each group stays lit once its action has run (derived from real
+  // verification / VIP / stage state). `firingKey` adds the transient "running now" pulse.
+  const activeKeys = [
+    identityVerified ? "verify" : null,
+    vipNotifications.length > 0 ? "vip" : null,
+    entry.currentStage !== "S6" ? "commit" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = verifyM.isPending ? "verify" : null;
+  const railGroups: RailGroup[] = [
+    { key: "verify", label: "On recording verification", items: BK.verify },
+    { key: "vip", label: "On VIP arrival", items: BK.vip },
+    { key: "commit", label: "On check-in & go live", items: BK.commit },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">A moment that locks</div>
         <h2>Verify identity and open the live folio.</h2>
@@ -124,8 +139,6 @@ export function CheckInStep({
           — the second point you can&rsquo;t quietly undo.
         </p>
       </div>
-
-      <LiveBackendFeed entryId={entry.id} />
 
       {/* Identity verification */}
       <div className="block">
@@ -175,7 +188,6 @@ export function CheckInStep({
           disabled={!guest?.id}
           onClick={() => verifyM.mutate()}
         />
-        <BackendChips title="What recording verification triggers" items={BK.verify} />
       </div>
 
       {isVip && (
@@ -195,7 +207,6 @@ export function CheckInStep({
               </div>
             ))
           )}
-          <BackendChips title="What VIP arrival triggers" items={BK.vip} />
         </div>
       )}
 
@@ -267,7 +278,9 @@ export function CheckInStep({
         Completing check-in converts the folio to <b>live</b>, marks the room occupied, issues the keys, and
         opens the housekeeping and F&amp;B handoffs — one governed transition.
       </p>
-      <BackendChips title="What 'Check in & go live' triggers (gate bar below)" items={BK.commit} />
-    </>
+      </div>
+
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+    </div>
   );
 }

@@ -840,9 +840,175 @@
 
   /* ───────── WORKSPACE ───────── */
   & .ws {
-    display: grid;
-    grid-template-columns: 208px 1fr 318px;
+    display: flex;
+    flex-direction: column;
     height: 100%;
+    min-height: 0;
+  }
+  /* ── Top bar: guest header + key figures, horizontal booking journey beneath ── */
+  & .ws-top {
+    flex: 0 0 auto;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+  }
+  & .ws-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px 8px;
+    flex-wrap: wrap;
+  }
+  & .jsum {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  & .jsum-i {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+  }
+  & .jsum-i .k {
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 700;
+  }
+  & .jsum-i .v {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  & .jrail {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 14px 10px;
+    overflow-x: auto;
+  }
+  & .jnode {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: var(--r-md);
+    color: var(--ink-3);
+    white-space: nowrap;
+    flex: 0 0 auto;
+    position: relative;
+  }
+  & .jnode + .jnode::before {
+    content: "";
+    position: absolute;
+    left: -3px;
+    top: 50%;
+    width: 6px;
+    height: 1.5px;
+    background: var(--line-2);
+    transform: translateY(-50%);
+  }
+  & .jnode .g {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1.5px solid var(--line-2);
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    flex: 0 0 auto;
+    background: #fff;
+  }
+  & .jnode .g svg {
+    width: 12px;
+    height: 12px;
+  }
+  & .jnode .jl {
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.1;
+  }
+  & .jnode .jl small {
+    display: block;
+    font-size: 9px;
+    color: var(--ink-3);
+    font-weight: 400;
+    margin-top: 1px;
+  }
+  & .jnode.done {
+    color: var(--ink-2);
+  }
+  & .jnode.done .g {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+  & .jnode.cur {
+    color: var(--terra-d);
+    background: var(--terra-t);
+  }
+  & .jnode.cur .g {
+    background: var(--terra);
+    border-color: var(--terra);
+    color: #fff;
+    box-shadow: 0 0 0 3px rgba(192, 125, 95, 0.18);
+  }
+  & .jnode.future {
+    color: var(--ink-3);
+    opacity: 0.72;
+  }
+  & .jnode.future .g {
+    border-style: dashed;
+  }
+  & .jnode:not(.future):not(.cur):hover {
+    background: var(--cream);
+  }
+  /* ── Body: Backend activity live (left) · operate flow + groups (right) ── */
+  & .ws-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    overflow: hidden;
+  }
+  & .ws-feed {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--line);
+    background: var(--cream);
+    padding: 14px;
+  }
+  /* Let the live-feed card fill the whole column; its event list scrolls internally. */
+  & .ws-feed .bx-feed {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
+  }
+  & .ws-feed .bx-events {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+  @media (max-width: 1100px) {
+    & .ws-body {
+      grid-template-columns: 1fr;
+      overflow-y: auto;
+    }
+    & .ws-feed {
+      overflow: visible;
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+    }
+    & .ws-feed .bx-feed {
+      flex: 0 0 auto;
+    }
+    & .ws-feed .bx-events {
+      max-height: 240px;
+    }
   }
   & .track {
     background: var(--green-d);
@@ -992,6 +1158,9 @@
     /* Reserve gutter so the workspace canvas doesn't jump sideways when a
        confirm swaps the step (different content heights toggle the scrollbar). */
     scrollbar-gutter: stable;
+    /* Keep wheel scrolling inside this pane — no chaining up to the shell's
+       .content scroller (nested scrollers were causing scroll jank here). */
+    overscroll-behavior: contain;
   }
   & .canvas {
     max-width: 660px;
@@ -1163,6 +1332,58 @@
     font-size: 12.5px;
     font-weight: 600;
     flex: 0 0 auto;
+  }
+  /* A room-type card + its expandable room list, stacked in one grid cell. */
+  & .opt-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  & .opt-wrap .opt {
+    margin-bottom: 0;
+  }
+  & .opt-detail {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--terra-d);
+    padding: 2px 5px;
+    border-radius: 5px;
+  }
+  & .opt-detail:hover {
+    background: var(--terra-t);
+  }
+  /* Individual rooms of a type — small tiles so a whole type fits on screen at a glance. */
+  & .room-box-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(50px, 1fr));
+    gap: 5px;
+    padding: 1px 1px 4px;
+  }
+  & .room-box {
+    display: grid;
+    place-items: center;
+    padding: 6px 3px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: #fff;
+    font-family: var(--deskmono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  & .room-box.deficient {
+    border-color: var(--warn);
+    background: var(--warn-t);
+    color: #8a6313;
+  }
+  & .room-box.unavail {
+    background: var(--cream);
+    color: var(--ink-3);
+    text-decoration: line-through;
   }
 
   & .gatebar {
@@ -1890,6 +2111,10 @@
     align-self: start;
     max-height: calc(100dvh - 150px);
     overflow-y: auto;
+    /* Promote to its own compositor layer so scrolling the canvas composites this
+       sticky rail (with its box-shadowed groups) instead of repainting it each frame. */
+    will-change: transform;
+    contain: paint;
     display: flex;
     flex-direction: column;
     gap: 11px;
@@ -1897,16 +2122,58 @@
   }
   & .bx-legend {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px 12px;
-    padding: 2px 2px 0;
+    flex-direction: column;
+    gap: 4px;
+    padding: 9px 11px;
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+  }
+  & .bx-legend-h {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--ink-3);
+    margin-bottom: 1px;
   }
   & .bx-legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 10px;
+    gap: 6px;
+    font-size: 10.5px;
+    color: var(--ink-2);
+  }
+  & .bx-legend-item b {
+    font-weight: 600;
+  }
+  & .bx-legend-gloss {
     color: var(--ink-3);
+    font-size: 10px;
+  }
+  & .bx-state-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 8.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 5px;
+    min-width: 34px;
+    min-height: 14px;
+    justify-content: center;
+  }
+  & .bx-state-chip.done {
+    background: var(--green);
+    color: #fff;
+  }
+  & .bx-state-chip.run {
+    background: var(--warn);
+    color: #fff;
+  }
+  & .bx-state-chip.idle {
+    background: #fff;
+    border: 1.5px solid var(--line-2);
   }
   & .bx-groups {
     display: flex;
@@ -1920,15 +2187,21 @@
     padding: 9px 10px;
     transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
   }
-  /* Persistent highlight — the action HAS run for this booking; stays lit. */
-  & .bx-g.active {
-    border-color: var(--terra);
-    background: var(--terra-t);
-    box-shadow: 0 0 0 2px rgba(192, 125, 95, 0.1);
+  /* Idle groups sit back so the ones that ran clearly stand out. */
+  & .bx-g:not(.active):not(.firing) {
+    opacity: 0.66;
   }
-  /* Firing right now — flash + a stronger ring on top of the persistent highlight. */
+  /* CONFIRMED — the action HAS run for this booking; a clear green "done" state. */
+  & .bx-g.active {
+    border-color: var(--green);
+    background: var(--green-t);
+    box-shadow: 0 0 0 2px rgba(38, 107, 69, 0.16);
+  }
+  /* RUNNING NOW — amber + pulse, overrides the green while the action is in flight. */
   & .bx-g.firing {
-    box-shadow: 0 0 0 3px rgba(192, 125, 95, 0.22);
+    border-color: var(--warn);
+    background: var(--warn-t);
+    box-shadow: 0 0 0 3px rgba(189, 136, 42, 0.28);
     animation: bxflash 0.5s ease-out;
   }
   & .bx-g-h {
@@ -1943,27 +2216,34 @@
     margin-bottom: 7px;
   }
   & .bx-g.active .bx-g-h {
-    color: var(--terra-d);
+    color: var(--green-d);
   }
+  & .bx-g.firing .bx-g-h {
+    color: #8a6313;
+  }
+  /* "✓ Ran" — green filled badge, reads as confirmed/done. */
   & .bx-g-used {
     margin-left: auto;
     font-size: 8.5px;
     font-weight: 700;
     letter-spacing: 0.04em;
-    color: var(--terra-d);
-    background: #fff;
-    border: 1px solid var(--terra);
-    padding: 1px 6px;
+    color: #fff;
+    background: var(--green);
+    padding: 2px 7px;
     border-radius: 5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
   }
+  /* "● Now" — amber filled badge with a pulsing dot. */
   & .bx-g-run {
     margin-left: auto;
     font-size: 8.5px;
     font-weight: 700;
     letter-spacing: 0.04em;
     color: #fff8f3;
-    background: var(--terra);
-    padding: 2px 6px;
+    background: var(--warn);
+    padding: 2px 7px;
     border-radius: 5px;
     display: inline-flex;
     align-items: center;
@@ -2026,14 +2306,16 @@
     box-shadow: 0 0 0 0 rgba(60, 90, 69, 0.5);
     animation: bxpulse 1.8s ease-out infinite;
   }
-  & .bx-feed-row {
+  & .bx-timers {
+    margin-top: 9px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  & .bx-timers-h {
     display: flex;
     align-items: center;
     gap: 7px;
-    flex-wrap: wrap;
-    margin-top: 9px;
-    padding-bottom: 9px;
-    border-bottom: 1px solid var(--line);
+    margin-bottom: 8px;
   }
   & .bx-feed-label {
     font-size: 10px;
@@ -2044,15 +2326,43 @@
   }
   & .bx-timer-list {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
   }
   & .bx-timer {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    flex-direction: column;
     gap: 4px;
+  }
+  & .bx-timer-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 10.5px;
     color: var(--ink-2);
+  }
+  & .bx-timer-code {
+    font-size: 10px;
+    color: var(--ink-2);
+  }
+  & .bx-timer-eta {
+    margin-left: auto;
+    font-size: 10.5px;
+  }
+  /* Progress bar — fills armed → fires; colour set inline by urgency. */
+  & .bx-timer-bar {
+    height: 4px;
+    border-radius: 3px;
+    background: var(--line-2);
+    overflow: hidden;
+  }
+  & .bx-timer-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 1s linear;
+  }
+  & .bx-timer-done {
+    opacity: 0.6;
   }
   & .bx-feed-count {
     margin-left: auto;

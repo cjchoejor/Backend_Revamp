@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Cpu, Timer } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
@@ -47,18 +48,47 @@ export function categorize(it: BackendItem): BackendCategory {
   return "other";
 }
 
-/** Legend of the category colours — shown once at the top of a BackendRail. */
+/** Plain-English gloss for each category, so the colour actually means something. */
+const CATEGORY_GLOSS: Record<BackendCategory, string> = {
+  policy: "Business rule / guard",
+  engine: "Calculation",
+  timer: "Timed background job",
+  stateMachine: "Stage transition",
+  service: "Reads / writes data",
+  handoff: "Department handoff",
+  other: "Other",
+};
+
+/**
+ * Legend at the top of a BackendRail. Two keys: colour = *what kind* of backend step,
+ * shade = *whether it has run* (the traffic-light state used on each group).
+ */
 export function CategoryLegend() {
   return (
     <div className="bx-legend">
+      <div className="bx-legend-h">Colour = kind of step</div>
       {(Object.keys(CATEGORY_STYLE) as BackendCategory[])
         .filter((k) => k !== "other")
         .map((k) => (
           <span className="bx-legend-item" key={k}>
             <span className="bx-rdot" style={{ background: CATEGORY_STYLE[k].bd }} />
-            {CATEGORY_STYLE[k].label}
+            <b>{CATEGORY_STYLE[k].label}</b>
+            <span className="bx-legend-gloss">{CATEGORY_GLOSS[k]}</span>
           </span>
         ))}
+      <div className="bx-legend-h" style={{ marginTop: 7 }}>State = has it run?</div>
+      <span className="bx-legend-item">
+        <span className="bx-state-chip done">✓ Ran</span>
+        <span className="bx-legend-gloss">already happened for this booking</span>
+      </span>
+      <span className="bx-legend-item">
+        <span className="bx-state-chip run">● Now</span>
+        <span className="bx-legend-gloss">running right now</span>
+      </span>
+      <span className="bx-legend-item">
+        <span className="bx-state-chip idle" />
+        <span className="bx-legend-gloss">not yet — waits for its step</span>
+      </span>
     </div>
   );
 }
@@ -73,12 +103,14 @@ export type RailGroup = { key: string; label: string; items: BackendItem[] };
  * - `firingKey`: the group whose action is firing right now — extra "running now" pulse on top.
  */
 export function BackendRail({
-  entryId,
   groups,
   activeKeys,
   firingKey,
 }: {
-  /** Omit on the pre-S1 intake page — no entry exists yet, so no live feed. */
+  /**
+   * Retained for call-site compatibility (steps still pass the entry id). The live feed now
+   * renders once in the workspace's left column, so the rail itself is legend + groups only.
+   */
   entryId?: string;
   groups: RailGroup[];
   activeKeys?: string[];
@@ -87,7 +119,6 @@ export function BackendRail({
   const activeSet = new Set(activeKeys ?? []);
   return (
     <div className="bx-rail">
-      {entryId && <LiveBackendFeed entryId={entryId} limit={14} />}
       <CategoryLegend />
       <div className="bx-groups">
         {groups.map((g) => {
@@ -98,9 +129,9 @@ export function BackendRail({
               <div className="bx-g-h">
                 {g.label}
                 {firing ? (
-                  <span className="bx-g-run">running now</span>
+                  <span className="bx-g-run">● Now</span>
                 ) : active ? (
-                  <span className="bx-g-used">used</span>
+                  <span className="bx-g-used">✓ Ran</span>
                 ) : null}
               </div>
               <div className="bx-g-items">
@@ -111,13 +142,13 @@ export function BackendRail({
                       className="bx-ritem"
                       key={it.name}
                       title={`${it.name}${it.ref ? ` · ${it.ref}` : ""}\n${it.detail}`}
-                      style={{
-                        borderLeftColor: c.bd,
-                        background: active ? c.bg : "#fff",
-                      }}
+                      style={{ borderLeftColor: c.bd }}
                     >
                       <span className="bx-rdot" style={{ background: c.bd }} />
-                      <span className="bx-rname" style={{ color: active ? c.fg : "var(--ink-2)", fontWeight: active ? 600 : 500 }}>
+                      <span
+                        className="bx-rname"
+                        style={{ color: active ? "var(--ink)" : "var(--ink-2)", fontWeight: active ? 600 : 500 }}
+                      >
                         {it.name}
                       </span>
                     </div>
@@ -157,13 +188,65 @@ export function BackendChips({ title, items }: { title?: string; items: BackendI
   );
 }
 
-function timeUntil(iso: string | null, now: number): string | null {
-  if (!iso) return null;
-  const ms = new Date(iso).getTime() - now;
-  const abs = Math.abs(ms);
-  const min = Math.round(abs / 60000);
-  const unit = min < 60 ? `${min} min` : min < 1440 ? `${Math.round(min / 60)} hr` : `${Math.round(min / 1440)} day`;
-  return ms >= 0 ? `in ${unit}` : `overdue ${unit}`;
+/** Format a signed millisecond delta as a countdown — seconds granularity when close. */
+function formatCountdown(ms: number): string {
+  const overdue = ms < 0;
+  let s = Math.floor(Math.abs(ms) / 1000);
+  const d = Math.floor(s / 86400);
+  s -= d * 86400;
+  const h = Math.floor(s / 3600);
+  s -= h * 3600;
+  const m = Math.floor(s / 60);
+  s -= m * 60;
+  const core =
+    d > 0
+      ? `${d}d ${h}h`
+      : h > 0
+        ? `${h}h ${String(m).padStart(2, "0")}m`
+        : `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return overdue ? `overdue ${core}` : `in ${core}`;
+}
+
+/**
+ * A live, per-second timer cell: countdown to its fire time + a progress bar that fills as it
+ * elapses (armed → fires), coloured by urgency. Isolated into its own component so the 1s tick
+ * re-renders only this cell — not the whole feed (its event list stays put).
+ */
+function LiveTimer({ timer }: { timer: TimerRecordSummary }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const start = new Date(timer.createdAt).getTime();
+  const fires = new Date(timer.firesAt).getTime();
+  const ms = fires - now;
+  const total = Math.max(1, fires - start);
+  const pct = Math.min(100, Math.max(0, ((now - start) / total) * 100));
+  // Urgency prefers the timer's own warning/critical marks; falls back to a 5-minute window.
+  const warnAt = timer.warningAt ? new Date(timer.warningAt).getTime() : null;
+  const critAt = timer.criticalAt ? new Date(timer.criticalAt).getTime() : null;
+  const level =
+    ms < 0 || (critAt != null && now >= critAt)
+      ? "crit"
+      : (warnAt != null && now >= warnAt) || ms < 5 * 60_000
+        ? "warn"
+        : "ok";
+  const color = level === "crit" ? "var(--stop)" : level === "warn" ? "var(--warn)" : "var(--green)";
+  return (
+    <div className="bx-timer" title={`${timer.status} · fires ${timer.firesAt}`}>
+      <div className="bx-timer-head">
+        <span className="bx-dot" style={{ background: color }} />
+        <span className="mono bx-timer-code">{timer.timerCode || timer.timerType}</span>
+        <span className="mono bx-timer-eta" style={{ color, fontWeight: level === "ok" ? 400 : 600 }}>
+          {formatCountdown(ms)}
+        </span>
+      </div>
+      <div className="bx-timer-bar">
+        <div className="bx-timer-bar-fill" style={{ width: `${pct}%`, background: color }} />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -203,27 +286,31 @@ export function LiveBackendFeed({ entryId, limit = 24 }: { entryId: string; limi
         <span className="bx-feed-sub">auto-refreshing · what actually fired for this booking</span>
       </div>
 
-      <div className="bx-feed-row">
-        <Timer style={{ width: 12, height: 12, color: "var(--ink-3)" }} />
-        <span className="bx-feed-label">Timers</span>
+      <div className="bx-timers">
+        <div className="bx-timers-h">
+          <Timer style={{ width: 12, height: 12, color: "var(--ink-3)" }} />
+          <span className="bx-feed-label">Timers</span>
+          <span className="bx-feed-count">{activeTimers.length} active</span>
+        </div>
         {timers.length === 0 ? (
           <span className="bx-muted">none yet</span>
         ) : (
-          <span className="bx-timer-list">
-            {timers.map((t) => (
-              <span className="bx-timer" key={t.id} title={`${t.status}${t.firesAt ? ` · ${t.firesAt}` : ""}`}>
-                <span className="bx-dot" style={{ background: TIMER_TONE[t.status] ?? "var(--ink-3)" }} />
-                <span className="mono">{t.timerCode || t.timerType}</span>
-                {t.status === "SCHEDULED" ? (
-                  <span className="bx-muted">{timeUntil(t.firesAt, now) ?? ""}</span>
-                ) : (
-                  <span className="bx-muted">{t.status.toLowerCase()}</span>
-                )}
-              </span>
-            ))}
-          </span>
+          <div className="bx-timer-list">
+            {timers.map((t) =>
+              t.status === "SCHEDULED" ? (
+                <LiveTimer key={t.id} timer={t} />
+              ) : (
+                <div className="bx-timer bx-timer-done" key={t.id} title={`${t.status}${t.firesAt ? ` · ${t.firesAt}` : ""}`}>
+                  <div className="bx-timer-head">
+                    <span className="bx-dot" style={{ background: TIMER_TONE[t.status] ?? "var(--ink-3)" }} />
+                    <span className="mono bx-timer-code">{t.timerCode || t.timerType}</span>
+                    <span className="bx-muted">{t.status.toLowerCase()}</span>
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
         )}
-        <span className="bx-feed-count">{activeTimers.length} active</span>
       </div>
 
       <div className="bx-events">

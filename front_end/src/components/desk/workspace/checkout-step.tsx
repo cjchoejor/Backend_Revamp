@@ -20,7 +20,7 @@ import {
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { progressDispute } from "@/lib/api/in-stay";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
-import { BackendChips, LiveBackendFeed } from "./backend-inline";
+import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
@@ -71,6 +71,11 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const openDisputes = disputes.filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   const currency = folioLines[0]?.currency;
   const balance = fin.outstanding ?? Math.max(0, fin.chargesTotal - fin.advanceReceived);
+  // Final-morning charges belong to the checkout day, not "today" — the checkout day is never a
+  // stay night, so it's never sealed by night audit (SIG-S8 §2.2). Using today collides with the
+  // just-audited final stay night when checkout happens on/near it (e.g. a compressed test stay).
+  const checkoutChargeDate = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
+  const checkoutChargeYmd = checkoutChargeDate ? checkoutChargeDate.slice(0, 10) : null;
 
   const [keysReturned, setKeysReturned] = useState(String(keysIssued || 1));
   const [keyReconcileNote, setKeyReconcileNote] = useState("");
@@ -114,7 +119,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     wrap(() => {
       const amt = Number.parseFloat(finalChargeAmount);
       if (!folio?.id || !Number.isFinite(amt)) throw new Error("Valid amount required");
-      return postFolioCharge(session!, folio.id, { entryId: entry.id, lineType: "F_AND_B", description: finalChargeDesc.trim() || "Final morning charge", amount: amt, chargeDate: new Date().toISOString() });
+      return postFolioCharge(session!, folio.id, { entryId: entry.id, lineType: "F_AND_B", description: finalChargeDesc.trim() || "Final morning charge", amount: amt, chargeDate: checkoutChargeDate ?? new Date().toISOString() });
     }, "Final charge posted"),
   );
   const keyReturnM = useMutation(
@@ -168,8 +173,34 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Re-entry failed"),
   });
 
+  // Persistent highlight: each group stays lit once its action has run (derived from real key /
+  // inspection / folio state). `firingKey` adds the transient "running now" pulse.
+  const activeKeys = [
+    keyReturn ? "keyReturn" : null,
+    inspection ? "inspection" : null,
+    folioSettled ? "settle" : null,
+    entry.currentStage !== "S8" ? "advance" : null,
+  ].filter(Boolean) as string[];
+  const firingKey = keyReturnM.isPending
+    ? "keyReturn"
+    : inspectionM.isPending
+      ? "inspection"
+      : settleM.isPending
+        ? "settle"
+        : reEntryM.isPending
+          ? "reentry"
+          : null;
+  const railGroups: RailGroup[] = [
+    { key: "keyReturn", label: "On recording key return", items: BK.keyReturn },
+    { key: "inspection", label: "On recording the room inspection", items: BK.inspection },
+    { key: "settle", label: "On taking payment & settling", items: BK.settle },
+    { key: "reentry", label: "On returning to Stay (S8→S7)", items: BK.reentry },
+    { key: "advance", label: "On advancing to Closed", items: BK.advance },
+  ];
+
   return (
-    <>
+    <div className="bx-split">
+      <div className="bx-main">
       <div className="speak">
         <div className="now">{folioSettled ? "Settled" : "Do this next"}</div>
         <h2>{folioSettled ? "Folio settled. Ready to close." : "Settle the folio and collect the keys."}</h2>
@@ -179,8 +210,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             : "Verify the bill, take payment for the balance, collect the keys and inspect the room. Taking payment is the last thing you can't reclaim."}
         </p>
       </div>
-
-      <LiveBackendFeed entryId={entry.id} />
 
       {/* Pre-checkout handoff */}
       {h4 && h4.state !== "FULFILLED" && !h4.isAutoFulfilled && (
@@ -228,7 +257,9 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         </div>
         {folioLive && (
           <div style={{ marginTop: 6, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Post a final-morning charge</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>
+              Post a final-morning charge{checkoutChargeYmd ? ` · dated checkout day ${checkoutChargeYmd}` : ""}
+            </div>
             <div className="frow">
               <div className="field">
                 <label>Description</label>
@@ -338,8 +369,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         )}
       </div>
 
-      <BackendChips title="What key return + room inspection trigger" items={BK.inspection} />
-
       {/* Settlement */}
       <div className="block">
         <BlockH>
@@ -423,7 +452,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             {!folioLive && <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 0 }}>Folio must be live to settle.</p>}
           </>
         )}
-        <BackendChips title="What 'Take payment & settle' triggers" items={BK.settle} />
       </div>
 
       {/* Additional charge (S8→S7) */}
@@ -441,7 +469,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
               </button>
             </div>
           </div>
-          <BackendChips title="What returning to Stay (S8→S7) triggers" items={BK.reentry} />
         </div>
       )}
 
@@ -494,6 +521,9 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           )}
         </div>
       )}
+      </div>
+
+      <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
 
       <DeskConfirmModal
         open={settleOpen}
@@ -512,14 +542,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         onConfirm={() => settleM.mutate()}
         onClose={() => setSettleOpen(false)}
       />
-
-      <div className="block">
-        <BlockH>Closing the stay</BlockH>
-        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 4px", lineHeight: 1.5 }}>
-          When you press <b>Close &amp; seal the stay</b> in the gate bar below, these run as the booking moves to S9.
-        </p>
-        <BackendChips title="What advancing S8 → S9 triggers" items={BK.advance} />
-      </div>
-    </>
+    </div>
   );
 }

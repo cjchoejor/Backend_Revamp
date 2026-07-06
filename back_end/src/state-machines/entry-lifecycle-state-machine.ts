@@ -6,6 +6,7 @@ import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import { allocateReadableId } from "../lib/readable-id.js";
 import { scheduleS6StageDwellWarningMonitor } from "../lib/schedule-s6-dwell-warning-monitor.js";
+import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
 import { cancelScheduledRoomReadinessSlaForEntry } from "../services/domain/room-assignment-service.js";
 import { issueVipArrivalNotificationAtCommencementTx } from "../services/domain/vip-arrival-notification-service.js";
 import * as checkInService from "../services/domain/check-in-service.js";
@@ -195,6 +196,23 @@ export async function progressStageS5ToS6(
         createdBy: actorId,
       },
     });
+
+    // SIG-S5 §Timer cancellations: NO_SHOW_CUTOFF is cancelled once the guest arrives and S5→S6
+    // begins ("no-show is moot once check-in commences"). PRE_ARRIVAL_COUNTDOWN is likewise moot
+    // in-house. Cancel any still-scheduled ones here so they don't fire — or linger as "overdue" —
+    // after arrival. (completeCheckInToS7 keeps a backstop for the compressed walk-in path.)
+    const mootTimers = await tx.timerRecord.findMany({
+      where: { entryId, timerCode: { in: ["NO_SHOW_CUTOFF_W5", "PRE_ARRIVAL_COUNTDOWN_W4"] }, status: "SCHEDULED" },
+      select: { id: true, pgBossJobId: true },
+    });
+    if (mootTimers.length) {
+      const engine = await getTimerEngine();
+      await Promise.all(mootTimers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+      await tx.timerRecord.updateMany({
+        where: { id: { in: mootTimers.map((t) => t.id) } },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "S5_TO_S6_GUEST_ARRIVED" },
+      });
+    }
 
     if (vipTier && entry.guestProfileId) {
       const roomNumber = entry.roomAssignments[0]?.room?.roomNumber ?? "";
@@ -477,6 +495,19 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
       data: { status: "DEFICIENT_UNRESOLVED_AT_CHECKOUT" },
     });
   });
+
+  // S8 arms no dwell monitor of its own, so the S7 dwell timer would otherwise linger as a phantom
+  // "overdue" entry in the live feed once checkout begins. Cancel it here (best-effort).
+  try {
+    await cancelEntryTimersByCode(prisma, {
+      entryId,
+      timerCodes: ["STAGE_DWELL_MONITOR"],
+      cancelledBy: _actorId ?? "SYSTEM",
+      cancelledReason: "S7→S8 checkout — S7 dwell monitor moot",
+    });
+  } catch {
+    // best-effort dwell timer cleanup
+  }
 
   return loadEntryDetail(prisma, entryId);
 }

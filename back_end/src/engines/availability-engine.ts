@@ -9,6 +9,7 @@ export type RoomAvailabilityRecord = {
   id: string;
   roomNumber: string;
   roomTypeId: string;
+  roomTypeName?: string | null;
   capacity: number;
   currentClaimState: InventoryClaimState;
   isShadowInventory?: boolean;
@@ -49,6 +50,8 @@ export type AvailabilityInput = {
 export type AvailableRoomEntry = {
   inventoryId: string;
   roomNumber: string;
+  roomTypeId: string;
+  roomTypeName?: string | null;
   claimState: InventoryClaimState;
   pricingIndicative?: unknown;
 };
@@ -56,6 +59,8 @@ export type AvailableRoomEntry = {
 export type DeficientRoomEntry = {
   inventoryId: string;
   roomNumber: string;
+  roomTypeId: string;
+  roomTypeName?: string | null;
   claimState: InventoryClaimState;
   deficientCategory?: string | null;
   deficientDescription?: string | null;
@@ -64,6 +69,8 @@ export type DeficientRoomEntry = {
 export type UnavailableRoomEntry = {
   inventoryId: string;
   roomNumber: string;
+  roomTypeId: string;
+  roomTypeName?: string | null;
   unavailabilityReason: "CLAIMED" | "MAINTENANCE_CONFLICT" | "BLOCKED" | "PHYSICAL_NOT_READY";
   /** Present when reason is CLAIMED or PHYSICAL_NOT_READY — actual inventory claim on the room. */
   claimState?: InventoryClaimState;
@@ -112,6 +119,8 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
         unavailableRooms.push({
           inventoryId: room.id,
           roomNumber: room.roomNumber,
+          roomTypeId: room.roomTypeId,
+          roomTypeName: room.roomTypeName ?? null,
           unavailabilityReason: "PHYSICAL_NOT_READY",
           claimState: room.currentClaimState,
         });
@@ -124,6 +133,8 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
       unavailableRooms.push({
         inventoryId: room.id,
         roomNumber: room.roomNumber,
+        roomTypeId: room.roomTypeId,
+        roomTypeName: room.roomTypeName ?? null,
         unavailabilityReason: "CLAIMED",
         claimState: room.currentClaimState,
       });
@@ -135,6 +146,8 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
       unavailableRooms.push({
         inventoryId: room.id,
         roomNumber: room.roomNumber,
+        roomTypeId: room.roomTypeId,
+        roomTypeName: room.roomTypeName ?? null,
         unavailabilityReason: "BLOCKED",
         blockedReason: room.blockedReason ?? null,
       });
@@ -143,7 +156,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
 
     // Hardcoded floor: maintenance with deadline within range is always conflict
     if (room.isUnderMaintenance && room.maintenanceDeadline && isDateInRangeInclusive(room.maintenanceDeadline, input.checkInDate, input.checkOutDate)) {
-      unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, unavailabilityReason: "MAINTENANCE_CONFLICT" });
+      unavailableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, roomTypeId: room.roomTypeId, roomTypeName: room.roomTypeName ?? null, unavailabilityReason: "MAINTENANCE_CONFLICT" });
       maintenanceConflicts.push({ inventoryId: room.id, maintenanceDeadline: room.maintenanceDeadline });
       continue;
     }
@@ -153,6 +166,8 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
       deficientRooms.push({
         inventoryId: room.id,
         roomNumber: room.roomNumber,
+        roomTypeId: room.roomTypeId,
+        roomTypeName: room.roomTypeName ?? null,
         claimState: room.currentClaimState,
         deficientCategory: room.deficientConditionCategory ?? null,
         deficientDescription: null,
@@ -160,7 +175,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
       continue;
     }
 
-    availableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, claimState: room.currentClaimState });
+    availableRooms.push({ inventoryId: room.id, roomNumber: room.roomNumber, roomTypeId: room.roomTypeId, roomTypeName: room.roomTypeName ?? null, claimState: room.currentClaimState });
   }
 
   return {

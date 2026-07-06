@@ -90,7 +90,9 @@ export function deriveFinancials(entry: EntryDetail): DeskFinancials {
     nights,
     advanceReceived,
     chargesTotal,
-    outstanding: folio?.outstandingBalance !== undefined ? toNum(folio.outstandingBalance) : null,
+    // `!= null` (not `!== undefined`): a null DB balance must stay null so callers fall back to
+    // (charges − advance) rather than showing a false Nu 0 balance at checkout.
+    outstanding: folio?.outstandingBalance != null ? toNum(folio.outstandingBalance) : null,
     folio: folioView(entry),
   };
 }

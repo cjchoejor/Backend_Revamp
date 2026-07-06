@@ -7,6 +7,7 @@ import { enforceCreditCeilingChargePostingGate } from "../../policies/18-credit-
 import { enforceChargeDateNotSealedByCompleteNightAudit } from "../../policies/24-night-audit/p61-charge-date-not-sealed-by-complete-night-audit.js";
 import {
   enforceEntryAtS7ForChargePosting,
+  enforceEntryAtS7OrS8ForChargePosting,
   enforceFolioLiveForS7ChargePosting,
 } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
@@ -157,7 +158,8 @@ export async function postCharge(
 
   const entry = await prisma.entry.findUnique({ where: { id: input.entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
-  enforceEntryAtS7ForChargePosting({ currentStage: entry.currentStage });
+  // Charges post at S7 (in-house) and at S8 as final-morning charges before settlement (SIG-S8 §2.2).
+  enforceEntryAtS7OrS8ForChargePosting({ currentStage: entry.currentStage });
 
   await ensureChargeDateNotSealed(prisma, chargeDate);
 
