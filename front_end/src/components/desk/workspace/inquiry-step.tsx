@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -135,19 +135,51 @@ function groupByType(
   });
 }
 
-/** The individual rooms of a type, as a compact box grid (informational — selection is by type). */
-function RoomBoxes({ group, variant }: { group: RoomTypeGroup; variant: "available" | "deficient" | "unavailable" }) {
+/**
+ * The individual rooms of a type, as a compact box grid. For available/deficient types each box is
+ * individually selectable (picks that exact room); unavailable rooms stay informational. Always shown.
+ */
+function RoomBoxes({
+  group,
+  variant,
+  onPick,
+  selectedRoomId,
+  disabled,
+}: {
+  group: RoomTypeGroup;
+  variant: "available" | "deficient" | "unavailable";
+  onPick?: (room: AvailabilityRoomResult) => void;
+  selectedRoomId?: string | null;
+  disabled?: boolean;
+}) {
+  const pickable = variant !== "unavailable" && !!onPick;
   return (
     <div className="room-box-grid">
-      {group.rooms.map((r) => (
-        <span
-          key={r.roomId}
-          className={`room-box${variant === "deficient" ? " deficient" : ""}${variant === "unavailable" ? " unavail" : ""}`}
-          title={`Room ${r.roomNumber ?? r.roomId}`}
-        >
-          {r.roomNumber ?? r.roomId.slice(0, 6)}
-        </span>
-      ))}
+      {group.rooms.map((r) => {
+        const sel = selectedRoomId != null && r.roomId === selectedRoomId;
+        const cls = `room-box${variant === "deficient" ? " deficient" : ""}${variant === "unavailable" ? " unavail" : ""}${pickable ? " pick" : ""}${sel ? " sel" : ""}`;
+        const label = r.roomNumber ?? r.roomId.slice(0, 6);
+        if (!pickable) {
+          return (
+            <span key={r.roomId} className={cls} title={`Room ${r.roomNumber ?? r.roomId}`}>
+              {label}
+            </span>
+          );
+        }
+        return (
+          <button
+            key={r.roomId}
+            type="button"
+            className={cls}
+            title={`Select room ${r.roomNumber ?? r.roomId}`}
+            disabled={disabled}
+            aria-pressed={sel}
+            onClick={() => onPick!(r)}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -158,26 +190,19 @@ function RoomTypeCard({
   selected,
   disabled,
   onSelect,
-  expanded,
-  onToggleDetail,
+  onPickRoom,
+  selectedRoomId,
 }: {
   group: RoomTypeGroup;
   variant: "available" | "deficient" | "unavailable";
   selected?: boolean;
   disabled?: boolean;
   onSelect?: () => void;
-  expanded?: boolean;
-  onToggleDetail?: () => void;
+  onPickRoom?: (room: AvailabilityRoomResult) => void;
+  selectedRoomId?: string | null;
 }) {
   const count = group.rooms.length;
   const countLabel = `${count} room${count === 1 ? "" : "s"}`;
-
-  const detailToggle = (
-    <button type="button" className="opt-detail" onClick={onToggleDetail} aria-expanded={expanded}>
-      {expanded ? "Hide rooms" : `Show ${countLabel}`}
-      <ChevronDown style={{ width: 12, height: 12, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s ease" }} />
-    </button>
-  );
 
   if (variant === "unavailable") {
     return (
@@ -189,8 +214,7 @@ function RoomTypeCard({
           </span>
           <span className="tag stop">Unavailable</span>
         </div>
-        {detailToggle}
-        {expanded && <RoomBoxes group={group} variant={variant} />}
+        <RoomBoxes group={group} variant={variant} />
       </div>
     );
   }
@@ -221,8 +245,7 @@ function RoomTypeCard({
         )}
         {price ? <span className="op">{price}</span> : null}
       </button>
-      {detailToggle}
-      {expanded && <RoomBoxes group={group} variant={variant} />}
+      <RoomBoxes group={group} variant={variant} onPick={onPickRoom} selectedRoomId={selectedRoomId} disabled={disabled} />
     </div>
   );
 }
@@ -239,8 +262,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
   const [pendingRoom, setPendingRoom] = useState<string | null>(null);
   // Which room-type cards have their room list expanded (keyed by group key).
-  const [expandedTypes, setExpandedTypes] = useState<Record<string, boolean>>({});
-  const toggleType = (key: string) => setExpandedTypes((p) => ({ ...p, [key]: !p[key] }));
 
 
   const configs = entry.availabilityConfigs ?? [];
@@ -499,8 +520,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     selected={groupSelected(group)}
                     disabled={selectMutation.isPending}
                     onSelect={() => handleSelect(group.representative, false)}
-                    expanded={!!expandedTypes[group.key]}
-                    onToggleDetail={() => toggleType(group.key)}
+                    onPickRoom={(room) => handleSelect(room, false)}
+                    selectedRoomId={pendingRoom ?? preferredRoomId}
                   />
                 ))}
               </div>
@@ -520,8 +541,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     selected={groupSelected(group)}
                     disabled={selectMutation.isPending}
                     onSelect={() => handleSelect(group.representative, true)}
-                    expanded={!!expandedTypes[group.key]}
-                    onToggleDetail={() => toggleType(group.key)}
+                    onPickRoom={(room) => handleSelect(room, true)}
+                    selectedRoomId={pendingRoom ?? preferredRoomId}
                   />
                 ))}
               </div>
@@ -538,8 +559,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     key={group.key}
                     group={group}
                     variant="unavailable"
-                    expanded={!!expandedTypes[group.key]}
-                    onToggleDetail={() => toggleType(group.key)}
                   />
                 ))}
               </div>

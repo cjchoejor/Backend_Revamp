@@ -1385,6 +1385,25 @@
     color: var(--ink-3);
     text-decoration: line-through;
   }
+  /* Selectable individual-room boxes — same size as the informational boxes, with a click
+     affordance and a terracotta selected state matching the room-type option cards. */
+  & .room-box.pick {
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+  }
+  & .room-box.pick:hover {
+    border-color: var(--terra);
+    color: var(--terra);
+  }
+  & .room-box.pick:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+  & .room-box.sel {
+    border-color: var(--terra);
+    background: var(--terra-t);
+    color: var(--terra);
+  }
 
   & .gatebar {
     flex: 0 0 auto;
