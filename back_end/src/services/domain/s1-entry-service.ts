@@ -17,6 +17,7 @@ import {
 } from "../../policies/01-availability/p01-s1-entry-status-and-stage-gates.js";
 import { enforceEntryParkAllowedForCurrentStage } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
 
 export async function createEntry(
   prisma: PrismaClient,
@@ -80,7 +81,7 @@ export async function createEntry(
     }
   }
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const entryId = await allocateReadableId(tx, "ENTRY" as const);
     const entry = await tx.entry.create({
       data: {
@@ -155,6 +156,18 @@ export async function createEntry(
 
     return entry;
   });
+
+  // SIG-S1 §1181-1208 — arm the W1 StageDwellMonitor for the S1 dwell period (warning →
+  // critical → FOM escalation + availability-staleness marking). Done post-commit so a
+  // rolled-back entry never leaves an orphaned pg-boss job, mirroring how S2 is armed after
+  // the S1→S2 transition transaction (s1-state-machine.ts). Best-effort: a dwell-timer
+  // failure must not fail entry creation.
+  try {
+    await scheduleS1StageDwellWarningMonitor(prisma, created.id, actorId);
+  } catch {
+    // swallow — the entry is created; the dwell monitor is a governance overlay, not a gate.
+  }
+  return created;
 }
 
 /** DEV-SPEC-001 Part 13 — parked entries expire 30 days from the park date (configurable). */

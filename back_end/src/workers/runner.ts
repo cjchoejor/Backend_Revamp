@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { createTimerEngine } from "../lib/timer-engine.js";
+import { getActiveConfigEntry } from "../lib/config-store.js";
 import { runStageDwellMonitor } from "./w1-stage-dwell-monitor.js";
 import { runProcessingLockExpiryWorker } from "./w16-processing-lock-expiry-worker.js";
 import { runEntryExpiryWorker } from "./w20-entry-expiry-worker.js";
@@ -97,6 +98,26 @@ export async function startWorkers() {
   if (w9CatchUp.fired > 0) {
     // eslint-disable-next-line no-console
     console.log(`[workers] Reconciled ${w9CatchUp.fired} overdue POST_CHECKOUT_INSPECTION_W9 timer(s).`);
+  }
+
+  // SIG-S7:675 — night audit (W6 / NightAuditWorker) must run automatically as a recurring
+  // nightly pg-boss job. The W6 handler is registered above, but until now nothing produced its
+  // jobs, so the audit only ran when triggered manually via POST /night-audit/run. Register a
+  // recurring schedule off the admin-configured cron (nightAudit.scheduleTime, default 02:00 UTC
+  // daily; owned by OperationalScheduleService). pg-boss upserts schedules by queue name, so this
+  // is idempotent across restarts. No operatingDate is passed in the payload: each fire uses the
+  // W6 worker's own default (the run date), and runNightAudit is idempotent per operatingDate —
+  // this activates the existing worker convention rather than introducing new posting semantics.
+  try {
+    const cronRow = await getActiveConfigEntry(prisma, "nightAudit.scheduleTime");
+    const cron =
+      typeof cronRow?.configValue === "string" && cronRow.configValue.trim() ? cronRow.configValue.trim() : "0 2 * * *";
+    await (engine.boss as any).schedule("NIGHT_AUDIT_W6", cron, { actorId: "SYSTEM" }, { tz: "UTC" });
+    // eslint-disable-next-line no-console
+    console.log(`[workers] Night audit recurring schedule registered (NIGHT_AUDIT_W6, cron="${cron}", tz=UTC).`);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[workers] Failed to register night audit recurring schedule:", e);
   }
 
   return engine;
