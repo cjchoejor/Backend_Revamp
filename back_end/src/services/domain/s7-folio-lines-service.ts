@@ -82,7 +82,7 @@ async function ensureChargeDateNotSealed(db: DbClient, chargeDate: Date) {
   });
 }
 
-async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryId: string; folioId: string; ceilingAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; actorId: string }) {
+export async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryId: string; folioId: string; ceilingAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; actorId: string }) {
   // Policy registry override: `registry.creditCeiling.advisoryThresholds` (when enabled)
   // replaces the legacy `creditCeiling.proximityThresholds` ConfigurationEntry.
   const advisoryPolicy = await getRegistryPolicy(db as any, "registry.creditCeiling.advisoryThresholds");

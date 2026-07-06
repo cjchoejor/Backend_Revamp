@@ -7,6 +7,7 @@ import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-servi
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { maybeWriteCreditCeilingEvents } from "../domain/s7-folio-lines-service.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -45,6 +46,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
     shouldPostRoomCharge: boolean;
     roomChargeAmount: number;
     shouldWriteFnbMissingAnomaly: boolean;
+    ceiling: Prisma.Decimal | null;
   }> = [];
 
   for (const entry of entries) {
@@ -64,7 +66,14 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
         : null;
       const shouldWriteFnbMissingAnomaly = expectsFnb && !hasFnb;
 
-      plan.push({ entryId: entry.id, folioId: entry.folio.id, shouldPostRoomCharge, roomChargeAmount, shouldWriteFnbMissingAnomaly });
+      plan.push({
+        entryId: entry.id,
+        folioId: entry.folio.id,
+        shouldPostRoomCharge,
+        roomChargeAmount,
+        shouldWriteFnbMissingAnomaly,
+        ceiling: entry.reservation?.creditCeilingIfExtended ?? null,
+      });
     } catch {
       notProcessed.push(entry.id);
     }
@@ -101,6 +110,19 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
           },
         });
         await recomputeFolioOutstandingBalance(tx, p.folioId);
+        // SIG-S7 Policy 45 — the credit ceiling must be evaluated "per night audit cycle", not
+        // only at point-of-service postCharge. The room charge just raised the outstanding balance,
+        // so re-check the tier thresholds and emit CreditCeilingThresholdEvent (+ W12) on crossing.
+        if (p.ceiling != null) {
+          const updatedFolio = await tx.folio.findUniqueOrThrow({ where: { id: p.folioId } });
+          await maybeWriteCreditCeilingEvents(tx, {
+            entryId: p.entryId,
+            folioId: p.folioId,
+            ceilingAmount: p.ceiling,
+            outstandingBalance: updatedFolio.outstandingBalance,
+            actorId,
+          });
+        }
       }
       if (p.shouldWriteFnbMissingAnomaly) {
         await tx.nightAuditAnomaly.create({
