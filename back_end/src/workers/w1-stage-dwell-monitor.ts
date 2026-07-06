@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { StageDwellMode } from "@prisma/client";
 import { requireActiveConfigValue } from "../lib/config-store.js";
+import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import * as notificationService from "../services/infrastructure/notification-service.js";
 import * as auditService from "../services/infrastructure/audit-service.js";
 
@@ -137,6 +138,67 @@ export async function runStageDwellMonitor(prisma: PrismaClient, input: { entryI
     });
   }
 
-  return { skipped: false, phases: { warned: shouldWarn, critical: shouldCritical, escalated: shouldEscalate }, staleMarked: staleCfgs.length } as const;
+  // --- Re-arm for the next un-fired phase ------------------------------------
+  // The dwell monitor is scheduled once (at the WARNING horizon). Without
+  // re-arming, only the warning ever fires and the CRITICAL / ESCALATION phases
+  // are unreachable. Retire the monitor record that just fired (so it doesn't
+  // linger as a phantom "SCHEDULED/overdue" timer — there is exactly one active
+  // per entry+stage) and schedule the next check at the next un-fired horizon.
+  const criticalDone = Boolean(dwell.criticalFiredAt) || shouldCritical;
+  const escalatedDone = Boolean(dwell.escalatedAt) || shouldEscalate;
+
+  let nextPhase: "CRITICAL" | "ESCALATION" | null = null;
+  let nextHorizonSec: number | null = null;
+  if (!criticalDone) {
+    nextPhase = "CRITICAL";
+    nextHorizonSec = modeCfg.critical;
+  } else if (!escalatedDone) {
+    nextPhase = "ESCALATION";
+    nextHorizonSec = modeCfg.escalation;
+  }
+
+  // Capture the currently-scheduled monitor record ids first, so the FIRED
+  // update below cannot accidentally retire the fresh record we create next.
+  const priorMonitors = await prisma.timerRecord.findMany({
+    where: { entryId: entry.id, timerCode: "STAGE_DWELL_MONITOR", stageContext: stage as any, status: "SCHEDULED" },
+    select: { id: true },
+  });
+  if (priorMonitors.length) {
+    await prisma.timerRecord.updateMany({
+      where: { id: { in: priorMonitors.map((m) => m.id) } },
+      data: { status: "FIRED", firedAt: now },
+    });
+  }
+
+  if (nextPhase && nextHorizonSec != null) {
+    // Never schedule in the past; floor at now+1s so a slightly-early pg-boss
+    // wake-up (before the horizon) simply re-checks a moment later and converges.
+    const nextFireAt = new Date(Math.max(dwell.enteredAt.getTime() + nextHorizonSec * 1000, now.getTime() + 1000));
+    const engine = await getTimerEngine();
+    const pgBossJobId = await engine.schedule("STAGE_DWELL_MONITOR", { entryId: entry.id }, { startAfter: nextFireAt });
+    await prisma.timerRecord.create({
+      data: {
+        entryId: entry.id,
+        entityType: "Entry",
+        entityId: entry.id,
+        timerType: "STAGE_DWELL_MONITOR",
+        timerCode: "STAGE_DWELL_MONITOR",
+        stageContext: stage as any,
+        dueAt: nextFireAt,
+        firesAt: nextFireAt,
+        status: "SCHEDULED",
+        createdBy: "SYSTEM",
+        pgBossJobId,
+        payload: { entryId: entry.id, stage: String(stage), dwellPhase: `${nextPhase}_WINDOW` },
+      },
+    });
+  }
+
+  return {
+    skipped: false,
+    phases: { warned: shouldWarn, critical: shouldCritical, escalated: shouldEscalate },
+    staleMarked: staleCfgs.length,
+    reArmed: nextPhase,
+  } as const;
 }
 
