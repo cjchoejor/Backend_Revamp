@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
+import { allocateReadableId } from "../src/lib/readable-id.js";
 
 type HttpMethod = "GET" | "POST" | "PATCH";
 type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;
@@ -361,8 +362,12 @@ async function main() {
     });
   }
 
+  // Assign the room that was actually committed-held + confirmed for this entry (state CONFIRMED),
+  // not an arbitrary FREE room — otherwise check-in (which only occupies a CONFIRMED room) can't
+  // occupy it and S8 settlement correctly blocks.
+  const heldHold = await prisma.committedHold.findFirst({ where: { entryId }, select: { roomId: true } });
   const rooms = await prisma.room.findMany({ orderBy: { roomNumber: "asc" }, take: 3 });
-  const roomId = rooms[0]?.id;
+  const roomId = heldHold?.roomId ?? rooms[0]?.id;
   if (!roomId) throw new Error("No rooms seeded");
   const assign = await http("POST", `/entries/${entryId}/room-assignments`, L1, { roomId, notes: "e2e" });
   const roomAssignmentId = assign.json?.id as string | undefined;
@@ -515,6 +520,7 @@ async function main() {
   if (!h4) {
     await prisma.handoffRecord.create({
       data: {
+        id: await allocateReadableId(prisma, "HANDOFF"),
         entryId,
         handoffType: "H4" as any,
         state: "CREATED" as any,
