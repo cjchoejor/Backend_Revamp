@@ -149,10 +149,18 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     const frozenRatePlanId = (accepted.commercialTerms as any)?.ratePlanId ?? (accepted.commercialTerms as any)?.resolvedRatePlanId ?? "rp-slice";
     const frozenInclusions = (accepted.commercialTerms as any)?.inclusions ?? {};
 
-    // A Reservation is unique per entry. On re-confirmation after a re-entry (e.g. room change),
-    // one already exists — update its frozen terms in place rather than creating a duplicate.
-    const existingReservation = await tx.reservation.findUnique({ where: { entryId } });
-    const reservationId = existingReservation?.id ?? (await allocateReadableId(tx, "RESERVATION" as const, now));
+    // SIG-S4 §90/§197 + AC-S4-024/025/026: exactly one immutable Reservation per SEGMENT. A second
+    // confirmation for the SAME segment is rejected; a re-entry mints a NEW segment which yields a
+    // new Reservation, leaving the prior segment's Reservation as read-only history.
+    const existingForSegment = await tx.reservation.findUnique({ where: { segmentId } });
+    if (existingForSegment) {
+      throw new PolicyGateBlockedError(
+        "RESERVATION_ALREADY_CONFIRMED_FOR_SEGMENT",
+        "A Reservation already exists for this segment; re-confirmation requires a new segment via re-entry",
+      );
+    }
+    const isReconfirmation = (await tx.reservation.count({ where: { entryId } })) > 0;
+    const reservationId = await allocateReadableId(tx, "RESERVATION" as const, now);
     const reservationData = {
       segmentId,
       frozenRate: frozenRate || 0,
@@ -168,11 +176,11 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
       confirmedBy: actorId,
       confirmationVoucherSent: true,
     };
-    const res = await tx.reservation.upsert({
-      where: { entryId },
-      create: { id: reservationId, entryId, ...reservationData },
-      update: { ...reservationData, sealedAt: null },
+    const res = await tx.reservation.create({
+      data: { id: reservationId, entryId, ...reservationData },
     });
+    // Point the entry at the newly-confirmed reservation; prior reservations remain read-only history.
+    await tx.entry.update({ where: { id: entryId }, data: { currentReservationId: res.id } });
 
     await confirmCommittedHoldTx(tx, { entryId, holdId: hold.id, actorId, inquiryId: entry.inquiryId });
 
@@ -246,11 +254,11 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
         actorLevel: "L1",
         entityType: "Reservation",
         entityId: res.id,
-        operation: existingReservation ? "UPDATE" : "CREATE",
+        operation: isReconfirmation ? "UPDATE" : "CREATE",
         timestamp: new Date(),
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { reservationId: res.id, reconfirmation: !!existingReservation },
+        payload: { reservationId: res.id, reconfirmation: isReconfirmation },
         createdBy: actorId,
       },
     });

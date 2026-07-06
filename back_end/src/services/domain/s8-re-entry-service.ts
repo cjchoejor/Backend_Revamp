@@ -127,9 +127,9 @@ export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actor
       data: { entryId, segmentNumber: nextNum, stage: Stage.S2, createdBy: actorId },
     });
 
-    if (entry.reservation) {
-      await tx.reservation.update({ where: { entryId }, data: { segmentId: newSeg.id } });
-    }
+    // SIG-S4 §197 / AC-S4-026: the prior Reservation stays attached to its (now-sealed) segment as
+    // read-only history; re-confirmation at S4 mints a new Reservation for the new segment. Do NOT
+    // mutate the existing reservation.
 
     const h4 = await tx.handoffRecord.findFirst({
       where: { entryId, handoffType: HandoffType.H4 },

@@ -886,7 +886,12 @@ model Entry {
   inquiry                 Inquiry                       @relation(fields: [inquiryId], references: [id])
   guestProfile            GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
   segments                Segment[]
-  reservation             Reservation?
+  // SIG-S4 §90/§197: Reservations are per-segment immutable history. `reservation` points at the
+  // CURRENT (latest-confirmed) Reservation via currentReservationId so existing one-to-one reads are
+  // unchanged; `reservations` is the append-only per-segment history (prior confirmations, read-only).
+  currentReservationId    String?                       @unique
+  reservation             Reservation?                  @relation("EntryCurrentReservation", fields: [currentReservationId], references: [id])
+  reservations            Reservation[]                 @relation("EntryReservations")
   folio                   Folio?
   committedHold           CommittedHold?
   handoffs                HandoffRecord[]
@@ -1346,8 +1351,8 @@ model CommittedHold {
 
 model Reservation {
   id                      String    @id @default(uuid())
-  entryId                 String    @unique
-  segmentId               String
+  entryId                 String
+  segmentId               String    @unique
   frozenRate              Decimal   @db.Decimal(15, 2)
   frozenRatePlanId        String
   frozenInclusions        Json      @default("{}")
@@ -1363,7 +1368,8 @@ model Reservation {
   sealedAt                DateTime?
   createdAt               DateTime  @default(now())
 
-  entry Entry @relation(fields: [entryId], references: [id])
+  entry          Entry  @relation("EntryReservations", fields: [entryId], references: [id])
+  currentForEntry Entry? @relation("EntryCurrentReservation")
 
   @@map("reservations")
 }

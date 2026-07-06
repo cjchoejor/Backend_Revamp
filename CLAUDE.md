@@ -275,6 +275,13 @@ Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **Corporat
 - **Front-desk picker** ([agent-corporate-picker.tsx](front_end/src/components/inquiries/agent-corporate-picker.tsx)): reusable mutually-exclusive picker (None / Travel agent / Corporate) with debounced search-by-name and click-to-select. Wired into the new-inquiry form ([new-inquiry-form.tsx](front_end/src/components/inquiries/new-inquiry-form.tsx)).
 - **Backward compatibility**: legacy `Inquiry.agentProfileId` and `Inquiry.corporateClientRef` columns remain. Pre-Phase-B inquiries still work; new intake writes to the two FK columns instead.
 
+### Reservation is per-segment immutable history (SIG-S4 §90/§197, AC-S4-024/025/026)
+
+`Reservation` is **one immutable row per segment**, not one per entry (migration `20260706063324_reservation_per_segment_history`). `Reservation.entryId` is **not** unique; `Reservation.segmentId` **is** unique (a second confirmation for the same segment is rejected). Re-entry mints a new segment → `confirmReservation` ([s4-confirmation-service.ts](back_end/src/services/domain/s4-confirmation-service.ts)) **creates a new row** (never upserts) and repoints `Entry.currentReservationId`; the prior segment's reservation stays read-only history.
+
+- **Reads unchanged**: `Entry.reservation` (via `currentReservationId` FK) still resolves the **current** (latest-confirmed) reservation — all existing `entry.reservation` / `include: { reservation: true }` sites keep working. `Entry.reservations` (relation `EntryReservations`) is the full per-segment history.
+- **Immutability enforced in [db.ts](back_end/src/db.ts)**: `reservation.update` / `updateMany` / `upsert` / `delete` all throw `RESERVATION_IMMUTABLE`. Only `reservation.create` is allowed. Re-entry paths ([s7-amendment-service.ts](back_end/src/services/application/s7-amendment-service.ts), [s8-re-entry-service.ts](back_end/src/services/domain/s8-re-entry-service.ts)) no longer re-point the old reservation's `segmentId` — the new segment gets its own reservation at re-confirmation.
+
 ### Cancellation entry points
 
 | Cancel type | Service function | Route | Stage gate | Authority |

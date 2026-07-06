@@ -28,6 +28,12 @@ const _ext = _base.$extends({
       async updateMany() {
         throwReservationMutationForbidden();
       },
+      // upsert's update branch would silently overwrite an immutable Reservation — forbid it too so
+      // re-confirmation must mint a new per-segment row (SIG-S4 §197 / AC-S4-024). Creation uses
+      // reservation.create, which stays allowed.
+      async upsert() {
+        throwReservationMutationForbidden();
+      },
       async delete() {
         throwReservationMutationForbidden();
       },

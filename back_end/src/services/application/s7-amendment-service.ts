@@ -93,10 +93,9 @@ export async function roomChangeReEntryToS1(
       data: { entryId: input.entryId, segmentNumber: entry.segmentNumber + 1, stage: Stage.S7, createdBy: actorId },
     });
 
-    // Reservation is single-row per entry; link it to the new segment.
-    if (entry.reservation) {
-      await tx.reservation.update({ where: { id: entry.reservation.id }, data: { segmentId: newSeg.id } });
-    }
+    // SIG-S4 §197 / AC-S4-025: Reservations are immutable per-segment history. The prior segment's
+    // Reservation stays attached to that (now-sealed) segment as read-only history; the new segment
+    // gets its own Reservation only upon re-confirmation at S4. Do NOT re-point the old reservation.
 
     // Room claim state transitions must be atomic with segment write.
     await tx.room.update({
