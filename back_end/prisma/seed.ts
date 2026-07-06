@@ -19,6 +19,7 @@ import {
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../src/lib/readable-id.js";
+import { ADDITIONAL_REGISTRY_POLICIES, ADDITIONAL_CONFIG_KEYS } from "./additional-registry-seed-data.js";
 
 const prisma = new PrismaClient();
 
@@ -231,6 +232,9 @@ async function main() {
     { configKey: "paymentMilestone.scheduleTemplates", configValue: {}, notes: "Milestone templates (placeholder)" },
     { configKey: "foc.configuration", configValue: { enabled: false }, notes: "FOC config (placeholder)" },
 
+    // --- Timers-workers fallback keys (base values; registry.* overrides take precedence) ---
+    ...ADDITIONAL_CONFIG_KEYS,
+
     // --- SIG-S4 required keys (Section 9) ---
     { configKey: "overbooking.maxAllowedRooms", configValue: 0, notes: "Overbooking limit (0 = no overbooking allowed)"},
     { configKey: "confirmation.authorityThresholds", configValue: { highValueAmount: 5000 }, notes: "Confirmation authority thresholds (minimal)" },
@@ -367,6 +371,16 @@ async function main() {
         isActive: true,
         createdBy: "actor-seed-system",
       },
+      // The 16 additional runtime-wired policies (single source of truth shared
+      // with scripts/seed-additional-policies.ts) so a full reseed yields all 19.
+      ...ADDITIONAL_REGISTRY_POLICIES.map((p) => ({
+        policyId: p.policyId,
+        policyClass: p.policyClass,
+        policyDefinition: p.definition,
+        version: 1,
+        isActive: true,
+        createdBy: "actor-seed-system",
+      })),
     ],
   });
 
