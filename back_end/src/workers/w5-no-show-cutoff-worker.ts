@@ -3,6 +3,7 @@ import { EntryStatus, FolioState, Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { NotFoundError } from "../lib/errors.js";
 import { allocateReadableId } from "../lib/readable-id.js";
+import { releaseRoomOnNoShowTerminalTx } from "../lib/release-room-on-no-show.js";
 
 export async function runNoShowCutoffWorker(
   prisma: PrismaClient,
@@ -15,7 +16,7 @@ export async function runNoShowCutoffWorker(
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    include: { folio: true, reservation: true, noShowDetermination: true },
+    include: { folio: true, reservation: true, noShowDetermination: true, committedHold: true },
   });
   if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
 
@@ -121,6 +122,9 @@ export async function runNoShowCutoffWorker(
         createdBy: "SYSTEM",
       },
     });
+
+    // SIG-S5 §1.5 (no-show #5) — return the held room to available inventory.
+    await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: "SYSTEM", now });
 
     if (typeof input.timerRecordId === "string") {
       await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });

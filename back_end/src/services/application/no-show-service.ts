@@ -15,6 +15,7 @@ import {
   sumAdvancePaymentInTotalForFolio,
 } from "../../policies/14-cancellation/p35-cancellation-penalty-from-commitment.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { releaseRoomOnNoShowTerminalTx } from "../../lib/release-room-on-no-show.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
 
@@ -33,7 +34,7 @@ export async function determineNoShow(
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    include: { folio: true, reservation: true, noShowDetermination: true },
+    include: { folio: true, reservation: true, noShowDetermination: true, committedHold: true },
   });
 
   if (!entry) throw new NotFoundError("Entry");
@@ -155,8 +156,9 @@ export async function determineNoShow(
 
   const noShowId = await allocateReadableId(prisma, "NO_SHOW" as const);
 
-  await prisma.$transaction([
-    prisma.noShowDeterminationRecord.create({
+  const terminalNow = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.noShowDeterminationRecord.create({
       data: {
         id: noShowId,
         entryId,
@@ -168,8 +170,8 @@ export async function determineNoShow(
         otaNotificationStatus: entry.otaSource ? "OPEN" : null,
         createdBy: fomActorId,
       },
-    }),
-    prisma.folio.update({
+    });
+    await tx.folio.update({
       where: { id: folio.id },
       data: {
         state: FolioState.NO_SHOW_CLOSED,
@@ -177,21 +179,23 @@ export async function determineNoShow(
         noShowAdvancePaymentAmount: advanceTotal,
         noShowNetPosition: net,
         noShowFomDetermination: fomActorId,
-        closedAt: new Date(),
+        closedAt: terminalNow,
         closedBy: fomActorId,
       },
-    }),
-    prisma.entry.update({
+    });
+    await tx.entry.update({
       where: { id: entryId },
       data: {
         currentStage: Stage.TERMINAL,
         status: EntryStatus.ACTIVE,
-        closedAt: new Date(),
+        closedAt: terminalNow,
         closedBy: fomActorId,
         version: { increment: 1 },
       },
-    }),
-  ]);
+    });
+    // SIG-S5 §1.5 (no-show #5) — return the held room to available inventory.
+    await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: fomActorId, now: terminalNow });
+  });
 
   if (net > 0) {
     await prisma.$transaction(async (tx) => {
