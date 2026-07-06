@@ -2,9 +2,24 @@ import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { runNightAudit } from "../services/application/s7-night-audit-service.js";
 
-export async function runNightAuditWorker(prisma: PrismaClient, input: { operatingDate?: string; actorId?: string }) {
+export async function runNightAuditWorker(
+  prisma: PrismaClient,
+  input: { operatingDate?: string; operatingDateOffsetDays?: number; actorId?: string },
+) {
   const actorId = typeof input.actorId === "string" ? input.actorId : "SYSTEM";
-  const operatingDate = typeof input.operatingDate === "string" ? input.operatingDate : new Date().toISOString();
+  // An explicit operatingDate (e.g. the manual POST /night-audit/run path) always wins. Otherwise
+  // derive it from now shifted by operatingDateOffsetDays (UTC): offset 0 = the run date (bare
+  // default, unchanged); the recurring 02:00 schedule passes -1 so the nightly audit closes the
+  // day that just ended (Convention B) rather than the freshly-started calendar day.
+  let operatingDate: string;
+  if (typeof input.operatingDate === "string") {
+    operatingDate = input.operatingDate;
+  } else {
+    const offsetDays = typeof input.operatingDateOffsetDays === "number" ? input.operatingDateOffsetDays : 0;
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    operatingDate = d.toISOString();
+  }
 
   const record = await runNightAudit(prisma, actorId, { operatingDate });
 

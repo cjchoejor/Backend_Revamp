@@ -105,16 +105,16 @@ export async function startWorkers() {
   // jobs, so the audit only ran when triggered manually via POST /night-audit/run. Register a
   // recurring schedule off the admin-configured cron (nightAudit.scheduleTime, default 02:00 UTC
   // daily; owned by OperationalScheduleService). pg-boss upserts schedules by queue name, so this
-  // is idempotent across restarts. No operatingDate is passed in the payload: each fire uses the
-  // W6 worker's own default (the run date), and runNightAudit is idempotent per operatingDate —
-  // this activates the existing worker convention rather than introducing new posting semantics.
+  // is idempotent across restarts. operatingDateOffsetDays:-1 makes each nightly fire close the
+  // day that just ended (Convention B — the traditional hotel night-audit boundary) rather than
+  // the freshly-started calendar day; runNightAudit stays idempotent per operatingDate.
   try {
     const cronRow = await getActiveConfigEntry(prisma, "nightAudit.scheduleTime");
     const cron =
       typeof cronRow?.configValue === "string" && cronRow.configValue.trim() ? cronRow.configValue.trim() : "0 2 * * *";
-    await (engine.boss as any).schedule("NIGHT_AUDIT_W6", cron, { actorId: "SYSTEM" }, { tz: "UTC" });
+    await (engine.boss as any).schedule("NIGHT_AUDIT_W6", cron, { actorId: "SYSTEM", operatingDateOffsetDays: -1 }, { tz: "UTC" });
     // eslint-disable-next-line no-console
-    console.log(`[workers] Night audit recurring schedule registered (NIGHT_AUDIT_W6, cron="${cron}", tz=UTC).`);
+    console.log(`[workers] Night audit recurring schedule registered (NIGHT_AUDIT_W6, cron="${cron}", tz=UTC, operatingDate=previous-day).`);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[workers] Failed to register night audit recurring schedule:", e);
