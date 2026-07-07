@@ -1,10 +1,11 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, PartyType } from "@prisma/client";
 import type { Entry, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { queryAvailability as availabilityEngineQuery } from "../../engines/availability-engine.js";
 import { enforceAvailabilityQueryParamsForS1 } from "../../policies/01-availability/p01-availability-query-params-s1.js";
 import { resolveIndicativePricingForS1Availability } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s1-indicative.js";
+import { resolveAgentRate } from "../../lib/agent-rate-resolution.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
 import {
   createQuotedSpaceAllocationForAvailabilityQuery,
@@ -13,10 +14,40 @@ import {
 
 type ActorLevel = "L1" | "L2" | "L3" | "L4" | "SYSTEM";
 
+/** The indicative-pricing chip shape the S1 availability result carries (mirrors p19's chip). */
+type IndicativeChip = {
+  rateAmount: number;
+  currency: string;
+  stayNights: number;
+  lineTotalIndicative: number;
+  source?: string;
+  disclaimer: "INDICATIVE_ONLY_NO_QUOTATION";
+};
+
+/**
+ * Resolve the negotiated party (travel agent / corporate account) linked to the entry's inquiry,
+ * so S1 indicative pricing can reflect the contracted rate instead of the hotel's standard plan.
+ * Returns null when the inquiry has no linked party (walk-in / direct) — caller falls back to p19.
+ */
+async function resolvePartyForEntryInquiry(
+  prisma: PrismaClient,
+  inquiryId?: string | null,
+): Promise<{ partyType: PartyType; partyId: string } | null> {
+  if (!inquiryId) return null;
+  const inq = await prisma.inquiry.findUnique({
+    where: { id: inquiryId },
+    select: { travelAgentId: true, corporateAccountId: true },
+  });
+  if (!inq) return null;
+  if (inq.travelAgentId) return { partyType: PartyType.TRAVEL_AGENT, partyId: inq.travelAgentId };
+  if (inq.corporateAccountId) return { partyType: PartyType.CORPORATE, partyId: inq.corporateAccountId };
+  return null;
+}
+
 /** Shared engine run for new queries and stale-configuration recall (SIG §6.3). */
 async function runAvailabilityEngineForEntry(
   prisma: PrismaClient,
-  entry: Pick<Entry, "id" | "guestCount" | "useType" | "otaSource">,
+  entry: Pick<Entry, "id" | "guestCount" | "useType" | "otaSource" | "inquiryId">,
   input: { roomTypeId?: string; checkInDate: string; checkOutDate: string; guestCount?: number; useType?: string },
   actorLevel: ActorLevel,
 ) {
@@ -65,13 +96,59 @@ async function runAvailabilityEngineForEntry(
     currentTimestamp: new Date(),
   });
 
+  // Standard (rack) indicative from the hotel's rate plans — used as the fallback and for walk-ins.
   const indicative = await resolveIndicativePricingForS1Availability(prisma, { checkIn, checkOut }, input.roomTypeId);
-  const engineOutRaw = indicative
-    ? {
-        ...engineRaw,
-        availableRooms: engineRaw.availableRooms.map((r) => ({ ...r, pricingIndicative: indicative })),
+
+  // Contracted-rate override (SIG-S1 §1.6 indicative; Phase B RateCard): if the inquiry is linked to
+  // a travel agent or corporate account, surface that party's negotiated per-room-type rate instead
+  // of the flat rack plan. Resolved once per distinct room type present in the result.
+  const party = await resolvePartyForEntryInquiry(prisma, entry.inquiryId);
+  const stayNights = Math.max(1, Math.ceil((checkOut.getTime() - checkIn.getTime()) / 86_400_000));
+  const agentChipByRoomType = new Map<string, IndicativeChip>();
+  if (party) {
+    const distinctTypes = new Set<string>();
+    for (const r of [...engineRaw.availableRooms, ...engineRaw.deficientRooms] as any[]) {
+      if (r.roomTypeId) distinctTypes.add(r.roomTypeId as string);
+    }
+    for (const roomTypeId of distinctTypes) {
+      const br = await resolveAgentRate(prisma, { partyType: party.partyType, partyId: party.partyId, roomTypeId });
+      if (br) {
+        agentChipByRoomType.set(roomTypeId, {
+          rateAmount: br.roomRate,
+          currency: br.currency,
+          stayNights,
+          lineTotalIndicative: br.roomRate * stayNights,
+          source: "AGENT_RATE_CARD",
+          disclaimer: "INDICATIVE_ONLY_NO_QUOTATION",
+        });
       }
-    : engineRaw;
+    }
+  }
+
+  // Per-room indicative: contracted rate for the room's type when available, else the rack indicative.
+  const chipForRoom = (r: any): IndicativeChip | null =>
+    (r.roomTypeId ? agentChipByRoomType.get(r.roomTypeId) : null) ?? (indicative as IndicativeChip | null);
+  const attachPricing = (rooms: any[]) =>
+    rooms.map((r) => {
+      const chip = chipForRoom(r);
+      return chip ? { ...r, pricingIndicative: chip } : r;
+    });
+
+  // Top-level banner: representative contracted rate when agent-linked (falls back to rack).
+  const topIndicative =
+    (party && agentChipByRoomType.size > 0
+      ? agentChipByRoomType.get((engineRaw.availableRooms[0] as any)?.roomTypeId) ??
+        agentChipByRoomType.values().next().value
+      : null) ?? indicative ?? null;
+
+  const engineOutRaw =
+    indicative || agentChipByRoomType.size > 0
+      ? {
+          ...engineRaw,
+          availableRooms: attachPricing(engineRaw.availableRooms as any[]),
+          deficientRooms: attachPricing(engineRaw.deficientRooms as any[]),
+        }
+      : engineRaw;
 
   const engineOut = {
     ...engineOutRaw,
@@ -82,7 +159,7 @@ async function runAvailabilityEngineForEntry(
 
   const resultForApi = {
     ...engineOut,
-    ...(indicative ? { indicativePricing: indicative } : {}),
+    ...(topIndicative ? { indicativePricing: topIndicative } : {}),
     availableRooms: engineOut.availableRooms.map((r: any) => ({ ...r, roomId: r.inventoryId })),
     unavailableRooms: engineOut.unavailableRooms.map((r: any) => ({ ...r, roomId: r.inventoryId })),
     deficientRooms: engineOut.deficientRooms.map((r: any) => ({ ...r, roomId: r.inventoryId })),
