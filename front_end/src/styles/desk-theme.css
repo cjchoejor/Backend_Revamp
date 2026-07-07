@@ -1272,8 +1272,9 @@
   }
   & .opt-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 9px;
+    grid-template-columns: 1fr;
+    gap: 7px;
+    align-items: start;
   }
   & .opt-grid .opt {
     margin-bottom: 0;
@@ -1286,8 +1287,8 @@
   & .opt {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px 13px;
+    gap: 7px;
+    padding: 6px 8px;
     border: 1.5px solid var(--line-2);
     border-radius: var(--r-md);
     margin-bottom: 9px;
@@ -1297,8 +1298,8 @@
     background: var(--terra-t);
   }
   & .opt .radio {
-    width: 18px;
-    height: 18px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     border: 2px solid var(--line-3);
     flex: 0 0 auto;
@@ -1310,8 +1311,8 @@
   }
   & .opt.sel .radio::after {
     content: "";
-    width: 9px;
-    height: 9px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--terra);
   }
@@ -1320,27 +1321,33 @@
     min-width: 0;
   }
   & .opt .otn {
-    font-size: 13.5px;
+    font-size: 11px;
     font-weight: 600;
   }
   & .opt .ots {
-    font-size: 11.5px;
+    font-size: 9.5px;
     color: var(--ink-3);
   }
   & .opt .op {
     font-family: var(--deskmono);
-    font-size: 12.5px;
+    font-size: 10px;
     font-weight: 600;
     flex: 0 0 auto;
   }
-  /* A room-type card + its expandable room list, stacked in one grid cell. */
+  /* One room type per row: the fixed-width room-type box on the left, its rooms filling the right. */
   & .opt-wrap {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
   }
   & .opt-wrap .opt {
     margin-bottom: 0;
+    flex: 0 0 158px;
+  }
+  & .opt-wrap .room-box-grid {
+    flex: 1;
+    min-width: 0;
   }
   & .opt-detail {
     align-self: flex-start;
