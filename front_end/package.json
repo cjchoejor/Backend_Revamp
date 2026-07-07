@@ -3,15 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "node scripts/with-port.mjs dev",
     "dev:lan": "node scripts/dev.mjs",
     "dev:all": "node scripts/dev-all.mjs",
     "dev:firewall": "powershell -ExecutionPolicy Bypass -File scripts/windows-firewall-dev.ps1",
-    "dev:fresh": "npm run clean && next dev -p 3001",
-    "dev:turbo": "npx next dev --turbopack -H 0.0.0.0 -p 3001",
+    "dev:fresh": "npm run clean && node scripts/with-port.mjs dev",
+    "dev:turbo": "node scripts/with-port.mjs dev --turbopack -H 0.0.0.0",
     "build": "next build",
-    "start": "next start -p 3001",
-    "start:lan": "next start -H 0.0.0.0 -p 3001",
+    "start": "node scripts/with-port.mjs start",
+    "start:lan": "node scripts/with-port.mjs start -H 0.0.0.0",
     "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\""
   },
   "dependencies": {

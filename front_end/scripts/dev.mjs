@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
+import { resolveLocalPort } from "./resolve-port.mjs";
 
-const PORT = process.env.PORT ?? process.env.NEXT_DEV_PORT ?? "3001";
+const PORT = resolveLocalPort();
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:4000";
 
 async function checkBackend() {
