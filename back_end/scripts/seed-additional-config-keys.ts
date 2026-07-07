@@ -13,6 +13,17 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     value: 3,
     notes: "W30 — days before a Lost & Found item's retention expiry that the approaching-expiry trace fires.",
   },
+  // Communication channels (ACIG §6.2.16) — the Channels admin page renders empty without this.
+  {
+    key: "communication.channels",
+    value: {
+      EMAIL: { enabled: true, displayName: "Email", transport: "EMAIL" },
+      WHATSAPP: { enabled: false, displayName: "WhatsApp", transport: "WHATSAPP" },
+      PHONE: { enabled: true, displayName: "Phone", transport: "VOICE" },
+      FRONT_DESK: { enabled: true, displayName: "Front desk", transport: "IN_PERSON" },
+    },
+    notes: "Admin-editable communication channel map — Channels page is empty without it.",
+  },
   // Operational keys exposed by /admin/operational that lacked seeded defaults.
   {
     key: "checkout.cutoffTime",

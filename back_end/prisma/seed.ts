@@ -225,7 +225,9 @@ async function main() {
     // --- SIG-S3 required keys (Section 9) ---
     { configKey: "advancePayment.thresholds", configValue: { DEFAULT: { amount: 1 } }, notes: "Minimal S3 advance payment thresholds (amount in BTN)" },
     { configKey: "expiry.s3.committedHoldTtlSeconds", configValue: 3600, notes: "Committed hold TTL seconds (S3)" },
-    { configKey: "creditCeiling.clientTier.thresholds", configValue: { STANDARD: 5000, DEFAULT: 5000 }, notes: "Credit ceiling thresholds per tier (minimal)" },
+    { configKey: "creditCeiling.clientTier.thresholds", configValue: { standard: 5000, preferred: 10000, caution: 2000, restricted: 0 }, notes: "Credit ceiling thresholds — all four tiers (standard/preferred/caution/restricted) required by required-control-check" },
+    { configKey: "checkout.cutoffTime", configValue: "12:00", notes: "Late-checkout escalation cutoff (HH:MM, hotel-local) — W26" },
+    { configKey: "communication.channels", configValue: { EMAIL: { enabled: true, displayName: "Email", transport: "EMAIL" }, WHATSAPP: { enabled: false, displayName: "WhatsApp", transport: "WHATSAPP" }, PHONE: { enabled: true, displayName: "Phone", transport: "VOICE" }, FRONT_DESK: { enabled: true, displayName: "Front desk", transport: "IN_PERSON" } }, notes: "Communication channels (ACIG §6.2.16) — admin-editable channel map" },
     { configKey: "proformaInvoice.templates", configValue: { DEFAULT: "proforma-v1" }, notes: "PI templates per billing model (minimal)" },
     { configKey: "advancePayment.followUpWindowSeconds", configValue: 3600, notes: "W34 tier-1 follow-up window" },
     { configKey: "advancePayment.escalationWindowSeconds", configValue: 7200, notes: "W34 tier-2 escalation window" },

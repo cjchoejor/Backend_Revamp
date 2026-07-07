@@ -20,6 +20,11 @@ export async function createDepartment(
   if (!departmentCode) throw new ValidationError("departmentCode is required");
   if (!departmentName) throw new ValidationError("departmentName is required");
 
+  // Reject a duplicate code with a clear message rather than letting the unique
+  // constraint surface as a raw 500 (the DB constraint remains the backstop).
+  const existingWithCode = await prisma.department.findFirst({ where: { departmentCode } });
+  if (existingWithCode) throw new ValidationError(`Department code "${departmentCode}" already exists`);
+
   return prisma.$transaction(async (tx) => {
     const created = await tx.department.create({
       data: {
