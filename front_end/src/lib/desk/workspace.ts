@@ -301,6 +301,66 @@ export function canProgressS8(entry: EntryDetail): boolean {
   return entry.currentStage === "S8" && s8Readiness(entry).every((c) => c.met);
 }
 
+// --- S9 loop-closure (SIG-S9 §closure) — the checks that must pass before the entry can be
+// sealed via closeEntryAtS9. Mirrors the OLD s9-workspace closureChecks. -----------------------
+function s9H5Blocking(state?: string): boolean {
+  return state === "CREATED" || state === "ASSIGNED" || state === "ACCEPTED";
+}
+function s9DeferredInspectionUnresolved(entry: EntryDetail): boolean {
+  const inspections = entry.roomInspectionRecords ?? [];
+  const latest = inspections[0];
+  if (!latest || !latest.isDeferred) return false;
+  return !inspections.some((i) => !i.isDeferred);
+}
+
+export function s9CloseReadiness(entry: EntryDetail): Precondition[] {
+  const folio = entry.folio;
+  const invoices = folio?.invoices ?? [];
+  const disputes = entry.disputes ?? [];
+  const openDisputes = disputes.filter(
+    (d) => d.status === "OPEN" || d.status === "IN_PROGRESS" || d.status === "REOPENED",
+  );
+  const draftInvoices = invoices.filter((i) => i.state === "DRAFT");
+  const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5");
+  const isNoShow = folio?.state === "NO_SHOW_CLOSED";
+  const isGovernment = folio?.billingModel === "GOVERNMENT";
+  const outstanding = deriveFinancials(entry).outstanding ?? 0;
+  const latestInvoice = invoices[0];
+  const checks: Precondition[] = [
+    { label: "All disputes terminal", met: openDisputes.length === 0 },
+    { label: "Invoices dispatched (no draft)", met: draftInvoices.length === 0 },
+    { label: "H5 fulfilled or closed", met: !s9H5Blocking(h5?.state) },
+    { label: "Deferred inspection resolved", met: !s9DeferredInspectionUnresolved(entry) },
+    {
+      label: "Folio on a closure path",
+      met:
+        isNoShow ||
+        folio?.state === "SETTLED" ||
+        folio?.state === "WRITTEN_OFF" ||
+        (folio?.state === "OUTSTANDING" && outstanding > 0),
+    },
+  ];
+  if (isGovernment) {
+    checks.push({
+      label: "Government invoice payment-tracked",
+      met:
+        !!latestInvoice &&
+        (latestInvoice.state === "PAYMENT_TRACKED" || latestInvoice.state === "RECONCILED"),
+    });
+  }
+  return checks;
+}
+
+export function canCloseS9(entry: EntryDetail, actorLevel?: string): boolean {
+  const elevated = actorLevel === "L2" || actorLevel === "L3" || actorLevel === "L4";
+  return (
+    entry.status !== "CLOSED" &&
+    entry.currentStage === "S9" &&
+    elevated &&
+    s9CloseReadiness(entry).every((c) => c.met)
+  );
+}
+
 export function stepStateFor(order: number, currentOrder: number): StepState {
   if (order < currentOrder) return "done";
   if (order === currentOrder) return "cur";

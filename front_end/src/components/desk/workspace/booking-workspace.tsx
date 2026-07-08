@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
+import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { ApiError } from "@/lib/api/client";
@@ -42,6 +43,8 @@ import {
   canProgressS7,
   s8Readiness,
   canProgressS8,
+  s9CloseReadiness,
+  canCloseS9,
   type DeskFinancials,
 } from "@/lib/desk/workspace";
 import { DeskConfirmModal } from "./confirm-modal";
@@ -52,6 +55,8 @@ import { ArrivalStep as ArrivalStepBase } from "./arrival-step";
 import { CheckInStep as CheckInStepBase } from "./checkin-step";
 import { StayStep as StayStepBase } from "./stay-step";
 import { CheckOutStep as CheckOutStepBase } from "./checkout-step";
+import { PostStayStep as PostStayStepBase } from "./closed-step";
+import { ConfirmStep as ConfirmStepBase } from "./confirm-step";
 import { BackendRail, LiveBackendFeed, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -75,6 +80,8 @@ const ArrivalStep = memo(ArrivalStepBase);
 const CheckInStep = memo(CheckInStepBase);
 const StayStep = memo(StayStepBase);
 const CheckOutStep = memo(CheckOutStepBase);
+const PostStayStep = memo(PostStayStepBase);
+const ConfirmStep = memo(ConfirmStepBase);
 
 type Epi = "cap" | "der" | "sug" | "sys";
 const EPI_MARK: Record<Epi, string> = { cap: "✎", der: "∑", sug: "◇", sys: "⚙" };
@@ -469,6 +476,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const [nightAuditOk, setNightAuditOk] = useState(false);
   const [parkOpen, setParkOpen] = useState(false);
   const [parkReason, setParkReason] = useState("");
+  const [closeOpen, setCloseOpen] = useState(false);
 
   // Native confirm/freeze — the S3→S4 commitment boundary (SIG-S4).
   const confirmMutation = useMutation({
@@ -483,6 +491,22 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
     onError: (e) => {
       toast.error(e instanceof ApiError ? e.message : "Confirmation failed");
+    },
+  });
+
+  // Native S9 seal — the discrete closeEntryAtS9 (sets status → CLOSED). The S8→S9 progression
+  // only moves the stage; this is the actual permanent seal.
+  const closeMutation = useMutation({
+    mutationFn: () => closeEntryAtS9(session!, entry!.id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["entry", entry!.id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+      setCloseOpen(false);
+      toast.success("Engagement closed — record sealed.");
+    },
+    onError: (e) => {
+      toast.error(e instanceof ApiError ? e.message : "Closure failed");
     },
   });
 
@@ -621,6 +645,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const checkInStepActive = step.key === "checkin" && entry.currentStage === "S6" && viewing === currentOrder;
   const stayStepActive = step.key === "stay" && entry.currentStage === "S7" && viewing === currentOrder;
   const checkOutStepActive = step.key === "checkout" && entry.currentStage === "S8" && viewing === currentOrder;
+  // S9 reached but not yet sealed → the actionable post-stay step (distinct from the read-only
+  // sealed canvas that shows once status === CLOSED).
+  const closedStepActive =
+    step.key === "closed" && entry.currentStage === "S9" && entry.status !== "CLOSED" && viewing === currentOrder;
   const keysValid = (parseInt(keyCount, 10) || 0) > 0;
   const canCheckIn = s6Readiness(entry).every((c) => c.met) && registrationConfirmed && keysValid;
   // After the freeze, the Confirm step (still S4 until W4 fires) offers to open pre-arrival.
@@ -666,7 +694,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 ? [...s7Readiness(entry), { label: "Night audit complete", met: nightAuditOk }]
                 : checkOutStepActive
                   ? s8Readiness(entry)
-                  : preconditionsFor(entry, step);
+                  : closedStepActive
+                    ? s9CloseReadiness(entry)
+                    : preconditionsFor(entry, step);
   const needsLabel = sealed
     ? "This booking"
     : setupStepActive
@@ -818,6 +848,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               <StayStep entry={entry} setNightAuditOk={setNightAuditOk} setSelected={setSelected} />
             ) : checkOutStepActive ? (
               <CheckOutStep entry={entry} setSelected={setSelected} />
+            ) : closedStepActive ? (
+              <PostStayStep entry={entry} />
+            ) : confirmStepActive ? (
+              <ConfirmStep entry={entry} />
             ) : (
               <StepCanvas step={step} entry={entry} fin={fin} />
             )}
@@ -923,6 +957,15 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 {advanceMutation.isPending ? "Closing…" : "Close & seal the stay"}
                 <ArrowRight />
               </button>
+            ) : closedStepActive ? (
+              <button
+                className={`adv commit${canCloseS9(entry, session?.actorLevel) ? "" : " locked"}`}
+                disabled={!canCloseS9(entry, session?.actorLevel) || closeMutation.isPending}
+                onClick={() => canCloseS9(entry, session?.actorLevel) && setCloseOpen(true)}
+              >
+                <Lock />
+                {closeMutation.isPending ? "Sealing…" : "Close & seal the record"}
+              </button>
             ) : onLiveStep ? (
               step.key === "closed" ? (
                 <button className="adv" disabled>
@@ -987,6 +1030,22 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
         pending={checkInMutation.isPending}
         onConfirm={() => checkInMutation.mutate()}
         onClose={() => setCheckInOpen(false)}
+      />
+
+      <DeskConfirmModal
+        open={closeOpen}
+        title="Close & seal the record?"
+        subtitle={`${name} · ${sub}`}
+        why="Closing permanently seals the engagement. Here is what becomes final:"
+        consequences={[
+          "The entry is marked CLOSED — the record is sealed and read-only.",
+          "Any later correction is added as a new layer on top, never a change to what is sealed.",
+          "Post-stay follow-up passes to the background workers (feedback, payment follow-up, retention).",
+        ]}
+        confirmLabel="Close & seal"
+        pending={closeMutation.isPending}
+        onConfirm={() => closeMutation.mutate()}
+        onClose={() => setCloseOpen(false)}
       />
 
       {parkOpen && (
