@@ -8,6 +8,7 @@ import { ArrowRight, Check, ChevronLeft, Layers, Lock, Pause, Play } from "lucid
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
+import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { ApiError } from "@/lib/api/client";
@@ -445,6 +446,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   });
 
   const entry = entryQuery.data ?? null;
+
+  // Authoritative advance-payment condition (payment OR FOM credit extension) for the confirm
+  // gate. The raw folio payments alone miss the credit-extension path (SIG-S3 Policy 42), so we
+  // read the server's payment-status while the booking is still at S3.
+  const paymentStatusQuery = useQuery({
+    queryKey: ["desk-payment-status", entryId],
+    queryFn: () => getPaymentStatus(session!, entryId),
+    enabled: !!session && !sessionLoading && entry?.currentStage === "S3",
+  });
+  const paymentSatisfied = paymentStatusQuery.data?.satisfied;
+
   const queryClient = useQueryClient();
   const currentOrder = entry ? currentStepOrder(entry) : 1;
   const maxReach = entry ? maxReachableOrder(entry) : 1;
@@ -561,7 +573,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   // Default the viewing pointer once loaded — land on Confirm when it's ready to freeze.
   useEffect(() => {
-    if (entry) setSelected((s) => s ?? (canConfirm(entry) ? 4 : currentStepOrder(entry)));
+    if (entry) setSelected((s) => s ?? (canConfirm(entry, { paymentSatisfied }) ? 4 : currentStepOrder(entry)));
   }, [entry]);
 
   const fin = useMemo(() => (entry ? deriveFinancials(entry) : null), [entry]);
@@ -624,7 +636,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     !stayStepActive &&
     !checkOutStepActive &&
     !confirmedS4Active;
-  const ready = canConfirm(entry);
+  const ready = canConfirm(entry, { paymentSatisfied });
   // On a sealed booking every step is read-only history — show the outcome, not pending gates.
   const sealedOutcome =
     entry.status === "CANCELLED"
@@ -635,13 +647,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const preconds = sealed
     ? [{ label: sealedOutcome, met: true }]
     : confirmStepActive
-    ? confirmReadiness(entry)
+    ? confirmReadiness(entry, { paymentSatisfied })
     : inquiryStepActive
       ? s1Readiness(entry)
       : quoteStepActive
         ? s2Readiness(entry)
         : setupStepActive
-          ? confirmReadiness(entry)
+          ? confirmReadiness(entry, { paymentSatisfied })
           : arrivalStepActive
             ? s5Readiness(entry)
             : checkInStepActive

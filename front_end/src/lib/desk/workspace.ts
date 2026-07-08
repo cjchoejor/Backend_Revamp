@@ -122,19 +122,26 @@ export function maxReachableOrder(entry: EntryDetail): number {
  * checklist. Payment "satisfied" is approximated from folio payments (the server
  * re-validates the real payment-status on confirm).
  */
-export function s3Readiness(entry: EntryDetail): Precondition[] {
+export function s3Readiness(entry: EntryDetail, opts?: { paymentSatisfied?: boolean }): Precondition[] {
   const folio = entry.folio;
   const hold = entry.committedHold;
   const inPayments = (folio?.payments ?? []).filter(
     (p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""),
   );
   const proforma = (folio?.invoices ?? []).some((i) => i.invoiceType === "PROFORMA");
+  // The advance-payment condition (SIG-S3 Policy 27 / §115) is satisfied by an actual advance
+  // payment OR an FOM credit extension (Policy 42). Prefer the authoritative server payment-status
+  // flag (which counts the credit extension); fall back to raw folio payments only when it hasn't
+  // been fetched. Using inPayments alone wrongly blocks agent/OTA/credit-extension bookings.
+  const advanceSatisfied = opts?.paymentSatisfied ?? inPayments.length > 0;
   return [
     { label: "Quote accepted", met: (entry.quotations ?? []).some((q) => q.state === "ACCEPTED") },
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
-    { label: "Advance payment taken", met: inPayments.length > 0 },
-    { label: "Advance reconciled", met: folio?.advancePaymentReconciliationComplete === true },
+    { label: "Advance settled or credit extended", met: advanceSatisfied },
+    // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
+    // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
+    // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
     { label: "Proforma invoice on folio", met: proforma },
     { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED" },
     {
@@ -145,12 +152,12 @@ export function s3Readiness(entry: EntryDetail): Precondition[] {
 }
 
 /** Alias — the confirm step's gate is exactly the S3 exit checklist. */
-export function confirmReadiness(entry: EntryDetail): Precondition[] {
-  return s3Readiness(entry);
+export function confirmReadiness(entry: EntryDetail, opts?: { paymentSatisfied?: boolean }): Precondition[] {
+  return s3Readiness(entry, opts);
 }
 
-export function canConfirm(entry: EntryDetail): boolean {
-  return entry.currentStage === "S3" && s3Readiness(entry).every((c) => c.met);
+export function canConfirm(entry: EntryDetail, opts?: { paymentSatisfied?: boolean }): boolean {
+  return entry.currentStage === "S3" && s3Readiness(entry, opts).every((c) => c.met);
 }
 
 /** S1 exit readiness (SIG-S1) — the gates before progressing to Quote (S2). */
