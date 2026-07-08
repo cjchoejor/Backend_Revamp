@@ -337,6 +337,72 @@
   color: inherit;
 }
 
+/* ════════════════════════════════════════════════════════════════
+   Layout polish (2026-07-07): the sidebar is now a floating card panel
+   with clear separation from the main content (was flush against a bare
+   border). These are the accompanying central touches — no per-page or
+   logic changes; every admin page inherits them.
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Type scale: trim the admin console's display/heading sizes about one
+   step smaller across the board, without editing each page. Only font-size
+   is set (not line-height) so leading-* utilities keep working, and body
+   sizes (text-sm / text-xs) are intentionally left alone. Scoped +
+   two-class specificity beats Tailwind's single-class utilities. ── */
+.admin-console .text-5xl { font-size: 2.5rem; }
+.admin-console .text-4xl { font-size: 2rem; }
+.admin-console .text-3xl { font-size: 1.625rem; }
+.admin-console .text-2xl { font-size: 1.375rem; }
+.admin-console .text-xl { font-size: 1.15rem; }
+.admin-console .text-lg { font-size: 1rem; }
+
+/* Stat readouts scale down with the headings */
+.admin-console .admin-stat dd {
+  font-size: 1.5rem;
+}
+
+/* Thin, themed scrollbar for the sidebar panel (long domain lists) */
+.admin-console .admin-sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--primary) 30%, transparent) transparent;
+}
+.admin-console .admin-sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.admin-console .admin-sidebar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+  border-radius: 999px;
+}
+.admin-console .admin-sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* A hair more breathing room between the nine domain drawers */
+.admin-console .admin-sidebar-group + .admin-sidebar-group {
+  margin-top: 2px;
+}
+
+/* Config tables: subtle row hover so wide registries are easier to scan */
+.admin-console table.admin-table tbody tr {
+  transition: background 0.12s ease;
+}
+.admin-console table.admin-table tbody tr:hover {
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+/* When a panel is itself a link, give it a gentle interactive lift.
+   Harmless for the static panels that make up most pages. */
+.admin-console a.admin-panel {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.admin-console a.admin-panel:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  box-shadow: 0 6px 18px rgba(32, 42, 35, 0.09);
+  transform: translateY(-1px);
+}
+
 /* Config key picker (configuration / commercial pages) */
 .admin-console .admin-key-item {
   display: block;
