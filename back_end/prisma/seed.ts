@@ -169,6 +169,11 @@ async function main() {
       ],
     },
     { configKey: "ota.sourceFlagConfig", configValue: { OTA: true } },
+    // OTA config keys read by OTAConfigService / /admin/ota-config (ACIG §6.2.23).
+    { configKey: "ota.inbox.pollingIntervalSeconds", configValue: 300, notes: "W7 OTA inbox poll cadence (seconds). 300 = 5 minutes." },
+    { configKey: "ota.conflictTriggerRules", configValue: { detectDoubleBooking: true, detectDateOverlap: true, detectRateMismatch: true }, notes: "Rules used to flag OTA conflict overbookings." },
+    { configKey: "noShow.cutoffMinutes", configValue: 120, notes: "Per-OTA-channel no-show cutoff (minutes after expected arrival)." },
+    { configKey: "noShow.penaltyStructure", configValue: { DEFAULT: { penaltyPercent: 100 }, OTA: { penaltyPercent: 100 }, DIRECT: { penaltyPercent: 100 }, AGENT: { penaltyPercent: 100 }, CORPORATE: { penaltyPercent: 100 } }, notes: "No-show penalty % by booking source (default full advance forfeiture); admin surface per ACIG §6.2.23." },
     { configKey: "availability.walkIn.ratePlanId", configValue: "rp-walkin" },
     {
       configKey: "notification.routing.operatorExpiry",

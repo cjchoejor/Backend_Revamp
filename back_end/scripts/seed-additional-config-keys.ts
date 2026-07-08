@@ -41,6 +41,35 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     value: {},
     notes: "Night audit rules for expected daily charges by line type. Empty object = no per-type expectations enforced.",
   },
+  // OTA config (ACIG §6.2.23) — keys the /admin/ota-config page reads but that were never seeded.
+  // NOTE: these are the exact keys OTAConfigService reads; the seed also carries the similarly-named
+  // `ota_email_poll_interval_seconds` and `noShow.cutoffWindowMinutes`, which are read elsewhere.
+  {
+    key: "ota.inbox.pollingIntervalSeconds",
+    value: 300,
+    notes: "W7 OTA inbox poll cadence (seconds). 300 = 5 minutes. Read by OTAConfigService / /admin/ota-config.",
+  },
+  {
+    key: "ota.conflictTriggerRules",
+    value: { detectDoubleBooking: true, detectDateOverlap: true, detectRateMismatch: true },
+    notes: "Rules used to flag OTA conflict overbookings.",
+  },
+  {
+    key: "noShow.cutoffMinutes",
+    value: 120,
+    notes: "Per-OTA-channel no-show cutoff (minutes after expected arrival before no-show treatment fires).",
+  },
+  {
+    key: "noShow.penaltyStructure",
+    value: {
+      DEFAULT: { penaltyPercent: 100 },
+      OTA: { penaltyPercent: 100 },
+      DIRECT: { penaltyPercent: 100 },
+      AGENT: { penaltyPercent: 100 },
+      CORPORATE: { penaltyPercent: 100 },
+    },
+    notes: "No-show penalty % by booking source (default full advance forfeiture). Operational no-show currently derives from the cancellation same-day tier; this is the admin surface per ACIG §6.2.23.",
+  },
 ];
 
 for (const row of ADDITIONS) {
