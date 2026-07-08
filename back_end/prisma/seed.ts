@@ -266,7 +266,7 @@ async function main() {
       ],
     },
     { configKey: "identity.retentionPeriodDays", configValue: { PASSPORT: 2555, CID: 2555, DEFAULT: 2555 } },
-    { configKey: "billingModel.availablePerSource", configValue: { LEISURE: ["GUEST_PAY"], CORPORATE: ["GUEST_PAY", "DIRECT_BILL"], GOVERNMENT: ["GOVERNMENT"] } },
+    { configKey: "billingModel.availablePerSource", configValue: { LEISURE: ["GUEST_PAY", "TOUR_OPERATOR_VOUCHER"], CORPORATE: ["GUEST_PAY", "DIRECT_BILL"], GOVERNMENT: ["GOVERNMENT"] }, notes: "TOUR_OPERATOR_VOUCHER (SIG-S3 §72) required for OTA/agent-settled bookings; validator flattens all lists into one allowlist" },
     { configKey: "vipNotification.routingPerTier", configValue: { PLATINUM: ["FOM", "GM"], GOLD: ["FOM"], DEFAULT: ["FOM"] } },
     { configKey: "noShow.cutoffWindowMinutes", configValue: 120 },
     { configKey: "noShow.awaitingConfirmationWindowMinutes", configValue: 180, notes: "Minutes to await written confirmation after no-show cutoff (S5)" },
