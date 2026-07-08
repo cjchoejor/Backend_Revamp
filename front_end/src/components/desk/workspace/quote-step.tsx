@@ -13,6 +13,7 @@ import {
   createQuotation,
   placeSpeculativeHold,
   releaseSpeculativeHold,
+  resolveQuotationAckOpenLoop,
   sendQuotation,
   supersedeQuotation,
 } from "@/lib/api/quotations";
@@ -143,8 +144,27 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     wrap(() => {
       const id = working?.id ?? sent?.id;
       if (!id) throw new Error("No quote to supersede");
-      return supersedeQuotation(session!, id, { notes: notes.trim() || undefined });
+      return supersedeQuotation(session!, id, {
+        notes: notes.trim() || undefined,
+        // Carry the renegotiated discount into the new version so the superseding round
+        // re-prices with it (matches the OLD S2 supersede behaviour).
+        requestedDiscount:
+          discountPercent.trim() !== ""
+            ? { discountPercent: Number(discountPercent), discountBasis: discountBasis.trim() || "negotiation" }
+            : undefined,
+      });
     }, "New negotiation round opened"),
+  );
+  // Resolve the acknowledgement open-loop on a sent quote (guest didn't respond in-window) by
+  // recording a custodian decision — FOM+. Without this the open loop has no desk remedy.
+  const resolveAckM = useMutation(
+    wrap(() => {
+      if (!sent) throw new Error("No sent quote");
+      return resolveQuotationAckOpenLoop(session!, sent.id, {
+        resolutionType: "CUSTODIAN_DECISION",
+        decisionReason: verbatim.trim() || "Resolved at desk",
+      });
+    }, "Acknowledgement loop resolved"),
   );
   const holdM = useMutation(
     wrap(() => {
@@ -340,7 +360,16 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             <button className="btn btn-ghost" disabled={supersedeM.isPending} onClick={() => supersedeM.mutate()}>
               New round (supersede)
             </button>
+            {isElevated(session?.actorLevel) && (
+              <button className="btn btn-ghost" disabled={resolveAckM.isPending} onClick={() => resolveAckM.mutate()}>
+                Resolve ack loop (FOM)
+              </button>
+            )}
           </div>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "7px 0 0" }}>
+            No response in-window? An FOM can resolve the acknowledgement open loop as a custodian decision
+            (uses the note above as the reason).
+          </p>
         </div>
       )}
 

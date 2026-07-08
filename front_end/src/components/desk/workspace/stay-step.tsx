@@ -90,9 +90,12 @@ export function StayStep({
   const [amount, setAmount] = useState("");
   const [chargeDate, setChargeDate] = useState("");
   const [correctLineId, setCorrectLineId] = useState("");
+  const [correctMode, setCorrectMode] = useState<"adjust" | "setNet">("adjust");
   const [correctDelta, setCorrectDelta] = useState("");
+  const [correctToAmount, setCorrectToAmount] = useState("");
   const [correctReason, setCorrectReason] = useState("");
   const [disputeTitle, setDisputeTitle] = useState("");
+  const [disputeDesc, setDisputeDesc] = useState("");
   const [h4DeficientFlag, setH4DeficientFlag] = useState("NOT_APPLICABLE");
   const [h4Checklist, setH4Checklist] = useState<Record<string, boolean>>({});
   const [naDate, setNaDate] = useState("");
@@ -168,15 +171,23 @@ export function StayStep({
   );
   const correctM = useMutation(
     wrap(() => {
-      const v = Number.parseFloat(correctDelta);
-      if (!folio?.id || !correctLineId || !Number.isFinite(v) || v === 0) throw new Error("Line and non-zero adjustment required");
-      return correctFolioCharge(session!, folio.id, {
+      if (!folio?.id || !correctLineId) throw new Error("Select a line to correct");
+      const body: Parameters<typeof correctFolioCharge>[2] = {
         entryId: entry.id,
         originalFolioLineId: correctLineId,
         reason: correctReason.trim(),
-        correctionAmount: v,
         correctionDate: new Date().toISOString(),
-      });
+      };
+      if (correctMode === "setNet") {
+        const net = Number.parseFloat(correctToAmount);
+        if (!Number.isFinite(net)) throw new Error("Enter the net amount to set the line to");
+        body.correctToAmount = net;
+      } else {
+        const v = Number.parseFloat(correctDelta);
+        if (!Number.isFinite(v) || v === 0) throw new Error("Enter a non-zero adjustment");
+        body.correctionAmount = v;
+      }
+      return correctFolioCharge(session!, folio.id, body);
     }, "Correction posted"),
   );
   const nightAuditM = useMutation(wrap(() => runNightAudit(session!, `${naDate}T00:00:00.000Z`), "Night audit run"));
@@ -192,7 +203,7 @@ export function StayStep({
   const openDisputeM = useMutation(
     wrap(() => {
       if (!folio?.id) throw new Error("No folio");
-      return openDispute(session!, { entryId: entry.id, folioId: folio.id, title: disputeTitle.trim() });
+      return openDispute(session!, { entryId: entry.id, folioId: folio.id, title: disputeTitle.trim(), description: disputeDesc.trim() || undefined });
     }, "Dispute opened"),
   );
   const deficientM = useMutation({
@@ -380,17 +391,41 @@ export function StayStep({
                 ))}
               </select>
             </div>
-            <div className="frow">
-              <div className="field">
-                <label>Adjust by ± (e.g. −50)</label>
-                <input type="number" value={correctDelta} onChange={(e) => setCorrectDelta(e.target.value)} />
+            <div className="field">
+              <label>Mode</label>
+              <div style={{ display: "flex", gap: 14, fontSize: 12.5 }}>
+                <label className="checkline" style={{ cursor: "pointer" }}>
+                  <input type="radio" name="correctMode" checked={correctMode === "adjust"} onChange={() => setCorrectMode("adjust")} />
+                  <span>Adjust by ±</span>
+                </label>
+                <label className="checkline" style={{ cursor: "pointer" }}>
+                  <input type="radio" name="correctMode" checked={correctMode === "setNet"} onChange={() => setCorrectMode("setNet")} />
+                  <span>Set net to</span>
+                </label>
               </div>
+            </div>
+            <div className="frow">
+              {correctMode === "adjust" ? (
+                <div className="field">
+                  <label>Adjust by ± (e.g. −50)</label>
+                  <input type="number" value={correctDelta} onChange={(e) => setCorrectDelta(e.target.value)} />
+                </div>
+              ) : (
+                <div className="field">
+                  <label>Set line net to</label>
+                  <input type="number" value={correctToAmount} onChange={(e) => setCorrectToAmount(e.target.value)} />
+                </div>
+              )}
               <div className="field">
                 <label>Reason</label>
                 <input value={correctReason} onChange={(e) => setCorrectReason(e.target.value)} />
               </div>
             </div>
-            <button className="btn btn-ghost btn-sm" disabled={correctM.isPending || !correctLineId || !correctDelta} onClick={() => correctM.mutate()}>
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={correctM.isPending || !correctLineId || (correctMode === "adjust" ? !correctDelta : !correctToAmount)}
+              onClick={() => correctM.mutate()}
+            >
               Post correction
             </button>
           </div>
@@ -561,6 +596,10 @@ export function StayStep({
           <div className="field">
             <label>New dispute</label>
             <input value={disputeTitle} onChange={(e) => setDisputeTitle(e.target.value)} placeholder="Title" />
+          </div>
+          <div className="field">
+            <label>Description (optional)</label>
+            <input value={disputeDesc} onChange={(e) => setDisputeDesc(e.target.value)} placeholder="What is disputed" />
           </div>
           <div className="field" style={{ alignSelf: "end" }}>
             <button className="btn btn-ghost" disabled={openDisputeM.isPending || !disputeTitle.trim()} onClick={() => openDisputeM.mutate()}>
