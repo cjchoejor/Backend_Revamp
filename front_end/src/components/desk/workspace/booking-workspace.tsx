@@ -457,8 +457,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // Authoritative advance-payment condition (payment OR FOM credit extension) for the confirm
   // gate. The raw folio payments alone miss the credit-extension path (SIG-S3 Policy 42), so we
   // read the server's payment-status while the booking is still at S3.
+  // Shares the ["payment-status", entryId] key with the Set-up step so recording a credit
+  // extension / payment there invalidates this gate's copy too (otherwise it reads stale).
   const paymentStatusQuery = useQuery({
-    queryKey: ["desk-payment-status", entryId],
+    queryKey: ["payment-status", entryId],
     queryFn: () => getPaymentStatus(session!, entryId),
     enabled: !!session && !sessionLoading && entry?.currentStage === "S3",
   });

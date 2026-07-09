@@ -112,8 +112,16 @@ export async function reconcileAdvancePayments(prisma: PrismaClient, entryId: st
     return { reconciled: true as const, expected, totalIn, alreadyComplete: true as const };
   }
 
+  // A credit extension (SIG-S3 Policy 42) satisfies the advance condition — the guest legitimately
+  // owes nothing up front (deferred / agent-settled). Reconcile cleanly rather than flagging a
+  // shortfall, mirroring evaluateAdvancePaymentCondition and the S4 confirm gate.
+  const creditExtension = await prisma.creditExtensionCeilingRecord
+    .findUnique({ where: { folioId: entry.folio.id } })
+    .catch(() => null);
+  const creditExtensionActive = !!creditExtension && creditExtension.ceilingAmount != null;
+
   const now = new Date();
-  if (totalIn >= expected) {
+  if (totalIn >= expected || creditExtensionActive) {
     await prisma.$transaction(async (tx) => {
       await tx.folio.update({
         where: { id: entry.folio!.id },
@@ -131,12 +139,12 @@ export async function reconcileAdvancePayments(prisma: PrismaClient, entryId: st
           stageContext: entry.currentStage,
           inquiryId: entry.inquiryId,
           entryId,
-          payload: { entryId, folioId: entry.folio!.id, expected, totalIn },
+          payload: { entryId, folioId: entry.folio!.id, expected, totalIn, creditExtensionActive },
           createdBy: actorId,
         },
       });
     });
-    return { reconciled: true as const, expected, totalIn };
+    return { reconciled: true as const, expected, totalIn, creditExtensionActive };
   }
 
   await prisma.traceEvent.create({

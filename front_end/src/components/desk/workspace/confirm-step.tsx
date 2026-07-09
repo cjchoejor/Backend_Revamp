@@ -107,11 +107,12 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
           <div className="block">
             <BlockH>
               <AlertTriangle style={{ width: 13, height: 13 }} />
-              Overlapping booking?
+              Overlapping booking? <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>· only if needed</span>
             </BlockH>
             <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0 }}>
-              If this guest holds another overlapping reservation, acknowledge it before confirming — the
-              freeze is blocked until you do.
+              Most bookings don&rsquo;t need this. Only if this guest already holds a <b>separate overlapping
+              reservation</b> does the freeze require an acknowledgement — if it does, the confirm will tell you.
+              Otherwise skip it; it won&rsquo;t block anything.
             </p>
             <div className="frow">
               <div className="field">
