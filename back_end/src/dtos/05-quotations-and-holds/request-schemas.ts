@@ -10,12 +10,18 @@ const belowMsrGmWaiverSchema = z.object({
   rationale: z.string().min(3).max(4000),
 });
 
+// Meal plan selection (S2). EP (room only) is represented by omitting mealPlan / null.
+const mealPlanEnum = z.enum(["CP", "MAP_LUNCH", "MAP_DINNER", "AP"]);
+
 export const createQuotationRequestSchema = z.object({
   requestedDiscount: discountShape.nullable().optional(),
   notes: z.string().optional(),
   currency: z.string().optional(),
   focRoomsRequested: z.coerce.number().int().min(1).optional(),
   belowMsrGmWaiver: belowMsrGmWaiverSchema.optional(),
+  // Phase-D meal/extra-bed (priced from the agent/corporate rate card when the booking is linked).
+  mealPlan: mealPlanEnum.nullable().optional(),
+  extraBedCount: z.coerce.number().int().min(0).max(10).optional(),
 });
 export type CreateQuotationRequestDto = z.infer<typeof createQuotationRequestSchema>;
 

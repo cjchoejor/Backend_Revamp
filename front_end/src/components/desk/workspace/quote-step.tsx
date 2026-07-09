@@ -77,6 +77,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [holdBasis, setHoldBasis] = useState("");
   const [holdTtl, setHoldTtl] = useState("900");
   const [releaseReason, setReleaseReason] = useState("");
+  const [mealPlan, setMealPlan] = useState<"" | "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP">("");
+  const [extraBedCount, setExtraBedCount] = useState("0");
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -101,6 +103,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             discountPercent.trim() !== ""
               ? { discountPercent: Number(discountPercent), discountBasis: discountBasis.trim() || "negotiation" }
               : undefined,
+          mealPlan: mealPlan || null,
+          extraBedCount: Number(extraBedCount) || 0,
         }),
       "Quote drafted",
     ),
@@ -267,6 +271,27 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
             </div>
           </div>
+          <div className="frow">
+            <div className="field">
+              <label>Meal plan</label>
+              <select value={mealPlan} onChange={(e) => setMealPlan(e.target.value as typeof mealPlan)}>
+                <option value="">EP — room only (no meals)</option>
+                <option value="CP">CP — breakfast</option>
+                <option value="MAP_LUNCH">MAP — breakfast + lunch</option>
+                <option value="MAP_DINNER">MAP — breakfast + dinner</option>
+                <option value="AP">AP — all meals</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Extra beds</label>
+              <input type="number" min={0} max={10} value={extraBedCount} onChange={(e) => setExtraBedCount(e.target.value)} />
+            </div>
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
+            Meals price per person by age (under-6 free · 6–10 at the child rate · 11+ full) and extra beds
+            per night — <b>only for agent/corporate bookings</b> with a rate card; otherwise the meal plan is
+            recorded as a label with no charge.
+          </p>
           <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
             {createM.isPending ? "Drafting…" : "Create draft quote"}
           </button>
@@ -277,9 +302,28 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         <div className="block">
           <BlockH>Adjust &amp; send · {draft.referenceNumber}</BlockH>
           <div className="field">
-            <label>Indicative total</label>
+            <label>Indicative total (per night)</label>
             <div className="val derived">{money(draft.totalAmount, draft.currency)}</div>
           </div>
+          {(() => {
+            const t = draft.commercialTerms as Record<string, unknown> | null | undefined;
+            const room = typeof t?.roomRate === "number" ? t.roomRate : null;
+            const meal = typeof t?.mealTotal === "number" ? t.mealTotal : 0;
+            const bed = typeof t?.extraBedTotal === "number" ? t.extraBedTotal : 0;
+            const plan = typeof t?.mealPlan === "string" ? t.mealPlan : null;
+            if (room == null || (meal === 0 && bed === 0 && !plan)) return null;
+            return (
+              <div style={{ fontSize: 12, color: "var(--ink-3)", margin: "-2px 0 9px", lineHeight: 1.7 }}>
+                <div>Room: {money(room, draft.currency)}</div>
+                {plan && (
+                  <div>
+                    Meals ({plan}): {meal > 0 ? money(meal, draft.currency) : "label only — no rate card"}
+                  </div>
+                )}
+                {bed > 0 && <div>Extra beds: {money(bed, draft.currency)}</div>}
+              </div>
+            );
+          })()}
           <div className="frow">
             <div className="field">
               <label>Apply discount %</label>

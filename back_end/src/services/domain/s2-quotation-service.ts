@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { ActorLevel, QuotationState, Stage } from "@prisma/client";
+import { ActorLevel, MealPlanType, QuotationState, Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -38,7 +38,7 @@ import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-
  */
 async function resolveAgentRateForEntryQuotation(
   prisma: PrismaClient,
-  args: { inquiryId: string; roomTypeId: string; asOf?: Date },
+  args: { inquiryId: string; roomTypeId: string; asOf?: Date; mealPlan?: MealPlanType | null },
 ): Promise<AgentRateBreakdown | null> {
   const inq = await prisma.inquiry.findUnique({
     where: { id: args.inquiryId },
@@ -51,6 +51,7 @@ async function resolveAgentRateForEntryQuotation(
       partyId: inq.travelAgentId,
       roomTypeId: args.roomTypeId,
       asOf: args.asOf,
+      mealPlan: args.mealPlan,
     });
   }
   if (inq.corporateAccountId) {
@@ -59,9 +60,40 @@ async function resolveAgentRateForEntryQuotation(
       partyId: inq.corporateAccountId,
       roomTypeId: args.roomTypeId,
       asOf: args.asOf,
+      mealPlan: args.mealPlan,
     });
   }
   return null;
+}
+
+/**
+ * Age-band meal total (SIG Legphel-Child-Policy §4). Per person, per night:
+ *   under 6 → free · 6–10 → cnbPercent% of the plan rate (charge fraction) · 11+ → full.
+ * `planRate` is the per-person meal-plan rate from the rate card; `childAges` are the ages
+ * declared at intake. Returns priced units and the total (planRate × units).
+ */
+function computeMealTotal(
+  planRate: number,
+  adultCount: number,
+  childAges: number[],
+  cnbPercent: number | null,
+): { units: number; total: number; breakdown: { adults: number; under6: number; child6to10: number; elevenPlus: number; childFactor: number } } {
+  const childFactor = (cnbPercent ?? 70) / 100; // fraction a 6–10 child is charged
+  let under6 = 0;
+  let child6to10 = 0;
+  let elevenPlus = 0;
+  let units = Math.max(0, adultCount);
+  for (const age of childAges ?? []) {
+    if (age < 6) under6 += 1;
+    else if (age <= 10) {
+      child6to10 += 1;
+      units += childFactor;
+    } else {
+      elevenPlus += 1;
+      units += 1;
+    }
+  }
+  return { units, total: units * planRate, breakdown: { adults: Math.max(0, adultCount), under6, child6to10, elevenPlus, childFactor } };
 }
 
 export async function createQuotation(
@@ -73,6 +105,8 @@ export async function createQuotation(
     notes?: string;
     currency?: string;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
+    mealPlan?: MealPlanType | null;
+    extraBedCount?: number;
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -110,13 +144,29 @@ export async function createQuotation(
   // rate card, override the standard pricing with the negotiated room rate (including per-room-type
   // override if present). Standard pricing stays as a reference inside commercialTerms.standardPricing
   // so the operator can see what the hotel's rate plan would have charged.
+  const mealPlan = input.mealPlan ?? null;
+  const extraBedCount = Math.max(0, Math.trunc(input.extraBedCount ?? 0));
   const agentRate = entry.inquiryId
-    ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: roomTypeId! })
+    ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: roomTypeId!, mealPlan })
     : null;
+  // effectiveRate stays the ROOM rate — MSR, discount and S4 freeze semantics depend on it.
   const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
   const resolvedNightlyRate = agentRate ? agentRate.roomRate : pricing.resolvedNightlyRate;
   const currency = agentRate ? agentRate.currency : pricing.currency;
   const resolutionPath = agentRate ? `${pricing.resolutionPath ?? ""} → AGENT_RATE_CARD` : pricing.resolutionPath;
+
+  // Meal + extra-bed pricing (Phase-D, Track A). Only priced when the booking is linked to an
+  // agent/corporate rate card (agentRate present). Meals follow the age-band child policy; extra
+  // beds are a manual per-night surcharge. For non-contracted bookings these stay label-only.
+  const mealPricing =
+    agentRate && mealPlan && agentRate.mealPlanRate != null
+      ? computeMealTotal(agentRate.mealPlanRate, entry.adultCount ?? entry.guestCount ?? 0, entry.childAges ?? [], agentRate.cnbPercent)
+      : null;
+  const extraBedRate = agentRate?.addOns.extraBed ?? null;
+  const extraBedTotal = extraBedRate != null && extraBedCount > 0 ? extraBedRate * extraBedCount : 0;
+  const mealTotal = mealPricing?.total ?? 0;
+  // Per-night total the guest is quoted = room + meal component + extra beds.
+  const perNightTotal = effectiveRate + mealTotal + extraBedTotal;
 
   const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
     // Agent rates are negotiated and not subject to MSR — only flag below-MSR when standard pricing applies.
@@ -149,7 +199,21 @@ export async function createQuotation(
     isDeterrentRateApplied: pricing.isDeterrentRateApplied,
     resolutionPath,
     currency,
-    inclusions: [],
+    // Meal plan + extra bed (Track A). `inclusions` carries the human-readable label (works even
+    // for non-contracted bookings); `mealPlanPricing` / `extraBed` / `perNightTotal` carry the
+    // priced breakdown, populated only when an agent/corporate rate card supplied the rates.
+    mealPlan,
+    inclusions: mealPlan ? [`Meal plan: ${mealPlan}`] : [],
+    ...(mealPricing
+      ? { mealPlanPricing: { planRate: agentRate!.mealPlanRate, total: mealPricing.total, units: mealPricing.units, breakdown: mealPricing.breakdown } }
+      : {}),
+    ...(extraBedCount > 0
+      ? { extraBed: { count: extraBedCount, rate: extraBedRate, total: extraBedTotal, priced: extraBedRate != null } }
+      : {}),
+    roomRate: effectiveRate,
+    mealTotal,
+    extraBedTotal,
+    perNightTotal,
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
@@ -187,7 +251,7 @@ export async function createQuotation(
         referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
-        totalAmount: effectiveRate,
+        totalAmount: perNightTotal,
         currency: input.currency?.trim() ? input.currency.trim() : currency?.trim() ? currency : "BTN",
         createdBy: actorId,
       },

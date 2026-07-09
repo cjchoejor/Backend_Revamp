@@ -11,6 +11,8 @@ export async function createQuotation(
     currency?: string;
     focRoomsRequested?: number;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string };
+    mealPlan?: "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP" | null;
+    extraBedCount?: number;
   },
 ) {
   return apiRequest<QuotationSummary>(`/api/entries/${entryId}/quotations`, {
