@@ -29,6 +29,9 @@ All design docs live in `docs/`. The canonical references:
 | `docs/SIG-S9-v1_0.md` | Stage 9 (post-stay; invoices; payment follow-up; government submission; lost & found retention). |
 | `docs/admin-console-status-report.md` | Living gap analysis. Read whenever the user asks "what's missing?" — but verify against current code; the report can lag the codebase. |
 | `docs/admin-console-visual.html` | UX/style reference. Source for the canonical 9 admin domain definitions. |
+| `docs/Legphel-Child-Policy.md` | Front-desk-facing plain-language child policy (age bands, meals, beds, capacity, supervision). Source for the defaults seeded into the 5 `registry.child.*` policies. |
+| `docs/legphel-pms-converged.html` | Static HTML prototype of the desired booking-flow layout — three-column desktop (nav + main + summary panel), sticky topbar, event/timer chips. Reference for the unified booking flow at `/inquiries/new`. |
+| `docs/policy-wiring-audit-explained.md` | Plain-language walkthrough of the 2026-06-27 policy audit (149 System-A guards + 24 System-B registry policies). Explains System A vs B, what "wired/unwired" means, the shadow-inventory dead-chain case, and shadow-inventory as a concept. Use as reference when someone asks "why is X policy not doing anything?" |
 
 When a user asks "what does the spec say about X?", the relevant document above is the source. Quote chapter and verse rather than paraphrasing.
 
@@ -53,7 +56,7 @@ Anchor these in your head before searching:
 | `src/routes/admin/` | Admin route groups, one file per service. Guarded with `requireActorLevel("L4")` + `validateBody(zodSchema)`. |
 | `src/routes/` (non-admin) | Operational route groups (stage-aware). |
 | `src/services/admin/` | The 26 ACIG admin services (`*-admin-service.ts`). Plain exported functions, prisma as first arg. |
-| `src/services/domain/` | Operational stage services (`s1-entry-service.ts`, `s2-hold-service.ts`, etc.). |
+| `src/services/domain/` | Operational stage services (`s1-entry-service.ts`, `s2-hold-service.ts`, etc.) + cross-stage services: `child-policy-service.ts` (age classification, meal rate, separate-bed charge), `capacity-validation-service.ts` (room-type capacity + composition checks). |
 | `src/services/infrastructure/` | Timer engine, audit, notification, document-generation, **email-service.ts** (Nodemailer SMTP). |
 | `src/policies/**` | 149 compiled-runtime guard modules organised by domain (`01-availability/`, `08-pricing-rate-plan/`, …). Not admin-editable. |
 | `src/state-machines/` | Per-stage transition logic (`s1-state-machine.ts`, `entry-lifecycle-state-machine.ts`). |
@@ -74,9 +77,12 @@ Anchor these in your head before searching:
 | `src/lib/api/admin.ts` | Frontend API client for every admin endpoint + type aliases (`PolicyAdmin`, `ModeAdmin`, …). |
 | `src/lib/api/client.ts` | `apiRequest()` + `ApiError` (carries HTTP `status`). |
 | `src/lib/admin/config-schemas.ts` | Typed-form metadata for known ConfigurationEntry keys (`TIMER_WORKER_CONFIG_KEYS`, `OPERATIONAL_CONFIG_SCHEMAS`). |
-| `src/lib/admin/policy-schemas.ts` | Typed-form metadata for `policy_registry` rows. |
+| `src/lib/admin/policy-schemas.ts` | Typed-form metadata for `policy_registry` rows. Field kinds: `number`, `text`, `boolean`, `json`. |
 | `src/config/admin-nav.ts` | Nav items + the canonical 9 admin domain definitions (`adminDomains`). |
 | `src/hooks/use-session.ts` | Reads the PIN-session from the operational auth layer. |
+| `src/components/booking-flow/` | Unified `/inquiries/new` page: `booking-flow.tsx` orchestrator, `step-card.tsx` primitive, `booking-context-bar.tsx` sticky breadcrumb, `booking-flow-context.tsx` embed signal, `booking-timer-panel.tsx` right-side countdown drawer. |
+| `src/components/stages/s1/availability-calendar.tsx` | Date × room-type calendar grid used inside the S1 workspace during the booking flow. |
+| `src/lib/api/child-policy.ts` | Client for `GET /api/lookups/child-policy` (drives child-age input cap). |
 
 ### Memory / Claude state
 
@@ -280,13 +286,15 @@ The admin console has been built out heavily. The state below is current as of t
 
 ### Policy registry runtime wiring (the biggest track)
 
-19 admin-editable policies in `policy_registry` are now consulted at runtime by operational code, all following the same pattern: **registry row → ConfigurationEntry fallback → TS default**. The pattern is proven and trivially repeatable.
+24 admin-editable policies exist in `policy_registry` — 23 are actively consulted at runtime; 1 (`registry.shadowInventory.l4Only`) is seeded but its only consumer (p14) is an orphan file, so the real shadow-inventory enforcement flows through the `availability.shadowInventory.visibilityRules` ConfigurationEntry path instead.
+
+All follow the same override pattern: **registry row → ConfigurationEntry fallback → TS default**.
 
 Currently wired (each editable on `/admin/policies` with typed forms):
 
 1. `registry.noShow.graceMinutes` → W4 pre-arrival activation worker
 2. `registry.duplicateInquiry.blockS1Exit` → p12 (S1 exit guard)
-3. `registry.shadowInventory.l4Only` → p14
+3. `registry.shadowInventory.l4Only` → p14 **(orphan — p14 is not imported anywhere; enforcement is via ConfigurationEntry `availability.shadowInventory.visibilityRules` in `s1-availability-service` + `s1-processing-lock-service`)**
 4. `registry.holdExpiry.minutes` → s3-hold-service / W3
 5. `registry.discount.actorCeiling` → p23 + s2-quotation-service
 6. `registry.vipArrivalAck.seconds` → entry-lifecycle state machine
@@ -297,14 +305,84 @@ Currently wired (each editable on `/admin/policies` with typed forms):
 11. `registry.s2HoldExpiry.minutes` → s2-hold-service / W2
 12. `registry.quotationValidity.days` → s2-quotation-service / W15
 13. `registry.advancePaymentFollowUp.windowSeconds` → s9-service / W34
-14. `registry.groupDetection.guestCountThreshold` → s1-entry-service / p64
+14. `registry.groupDetection.guestCountThreshold` → s1-entry-service / p64 **(now supports `includeAdults` / `includeChildren` / `includeYoungChildren` boolean flags on the same row — Policy 64 computes an effective count from the per-band breakdown when childAges is present)**
 15. `registry.creditCeiling.tier2Percent` → p44 + p45 (S5 check-in gate + S7 charge-posting gate)
 16. `registry.creditCeiling.softGatePercent` → p45 soft gate (100% threshold)
 17. `registry.creditCeiling.advisoryThresholds` → s7-folio-lines-service / W12 (tier1/tier2 advisory %)
 18. `registry.lostFound.retentionWarning.days` → W30
 19. `registry.vip.notificationRoutingPerTier` → entry-lifecycle state machine (SIG-S6 §9, blocking for S6_READINESS)
+20. `registry.child.ageBands` → child-policy-service (`classifyAge`) → capacity-validation-service, s1-entry-service group-detection band split
+21. `registry.child.mealPricing` → child-policy-service (`getMealRateMultiplier`) — NOT yet consumed by the pricing engine (pending)
+22. `registry.child.separateBedCharge` → child-policy-service (`getSeparateBedCharge`) — NOT yet consumed by the pricing engine (pending)
+23. `registry.child.unaccompaniedMinorMinAge` → capacity-validation-service (BLOCK issue `UNACCOMPANIED_MINOR`); frontend form reads via `/api/lookups/child-policy` to set the child-age input cap dynamically
+24. `registry.child.adultToChildRatio` → capacity-validation-service (WARN issue `ADULT_CHILD_RATIO_EXCEEDED`)
 
-Frontend schema registry at [`front_end/src/lib/admin/policy-schemas.ts`](front_end/src/lib/admin/policy-schemas.ts) — typed field metadata per known policy ID; supports `number`, `text`, and `json` field kinds. Adding a new policy = new schema entry + new seed row + new `getRegistryPolicy()` consumer.
+Frontend schema registry at [`front_end/src/lib/admin/policy-schemas.ts`](front_end/src/lib/admin/policy-schemas.ts) — typed field metadata per known policy ID; supports `number`, `text`, `boolean`, and `json` field kinds. `boolean` renders as a checkbox with an "On/Off" text indicator; `buildDefinition` in `/admin/policies` page coerces to a real boolean before persisting. Adding a new policy = new schema entry + new seed row + new `getRegistryPolicy()` consumer.
+
+### Unwired policy inventory (audit 2026-06-27)
+
+Audit found 17 System-A (TS guard) files whose exported functions are never imported by any service, worker, state-machine, or route — plus 6 spec-reserved placeholders. See the audit output for the full list; notable ones: `p01-s8-to-s9-room-and-keys-gates`, `p10-checkout-due`, `p14-shadow-inventory-visibility` (redundant with the ConfigurationEntry path), `p15-guest-identity-capture`, `p21-mid-stay-rate-amendment`, `p24-mid-stay-discount`, `p31-folio-provisional-required-to-convert-live`, `p32-billing-model-mid-stay-transition`, `p36-early-departure`, `p43-credit-ceiling-commitment-snapshot-carry`, `p47-deficient-surface-in-search-crossref` (placeholder), `p51-room-inspection-exists-for-s8-to-s9`, `p53-active-dispute-management`, `p58-room-change-mode-trigger`, `p59-night-audit-countdown`, `p66-group-foc-and-billing-split` (relevant to the group-billing wiring conversation), `p70-feedback-solicitation`, plus the 6 AI-agent + voice-note placeholders (`p73`–`p77`, `p47`). Each represents implemented-but-uncalled spec logic — either wire it or delete it deliberately; don't leave it drifting.
+
+### Child policy + capacity validation (2026-06-25)
+
+Two new domain services drive the child-policy runtime.
+
+**[`child-policy-service.ts`](back_end/src/services/domain/child-policy-service.ts)** — one-shot loader `loadChildPolicyBundle(prisma)` returns all 5 `registry.child.*` policies with defaults applied. Exports:
+- `classifyAge(age, bundle) → "YOUNG_CHILD" | "CHILD" | "ADULT"` — bands come from `registry.child.ageBands` (default 0–5 / 6–10 / 11+)
+- `getMealRateMultiplier(age, bundle) → 0..1` — from `registry.child.mealPricing`
+- `getSeparateBedCharge(age, bundle, roomBaseRate?)` — handles FLAT and PERCENT_OF_ROOM bases from `registry.child.separateBedCharge`
+- `summarizeChildAges(ages, bundle)` — bucket counts per band
+
+**[`capacity-validation-service.ts`](back_end/src/services/domain/capacity-validation-service.ts)** — `validateCapacity(prisma, { roomTypeId?, adults, childAges })` returns issues with codes: `OVER_MAX_OCCUPANCY`, `OVER_MAX_CHILDREN`, `TOO_FEW_ADULTS`, `ADULT_CHILD_RATIO_EXCEEDED`, `UNACCOMPANIED_MINOR`, `CHILD_AGE_ABOVE_LEGAL_MINOR`, `NO_ROOM_TYPE`. Severity `BLOCK` or `WARN`. Two independent age cuts run: pricing bands (child-policy `ageBands`) for bed/meal/room-capacity math; legal age (`unaccompaniedMinor.minimumAge`) for supervision + responsibility. Called from `s1EntryService.createEntry` + `updateEntryIntakeFields` — BLOCK issues throw `ValidationError`.
+
+### RoomType capacity columns (2026-06-26)
+
+Migration `20260626053415_add_roomtype_capacity_fields` added four columns to `RoomType`: `maxOccupancy` (default 2), `maxChildren` (default 2), `requiredAccompanyingAdults` (default 1), `maxExtraBeds` (default 0). Editable per-type on the rewritten `/admin/room-types` page (new "Edit" affordance on each row with inline numeric editors). Backend DTOs `createRoomTypeRequestSchema` + `updateRoomTypeRequestSchema` accept them; `inventoryAdminService.createRoomType` + `.updateRoomType` persist them. Consumed by `capacity-validation-service`.
+
+### Entry guest-composition columns (2026-06-25)
+
+Migration `20260625105007_add_entry_guest_breakdown` added `Entry.adultCount`, `Entry.childCount`, `Entry.childAges Int[]`. `guestCount` remains the canonical total (= adultCount + childCount). Frontend inquiry form has separate "Adults" + "Children" inputs; when children > 0, a per-child age grid appears. Backend DTO + service accept the new fields; validation of the age upper bound is done in the service against `registry.child.unaccompaniedMinorMinAge.minimumAge` (not hardcoded — the Zod schema only enforces the sanity ceiling of 150).
+
+### Unified booking flow at `/inquiries/new` (2026-06-24 → 2026-06-27)
+
+Replaces the previous standalone inquiry-form page with a **three-step vertical accordion** ([`booking-flow.tsx`](front_end/src/components/booking-flow/booking-flow.tsx)):
+
+- **Step 1** — Guest & inquiry intake (embeds `NewInquiryForm` with `keepMounted` so state survives the collapse-when-done cycle; PATCH support via new `updateEntryIntake` API + `updateEntryIntakeFields` service for editing after creation, S1-stage-gated)
+- **Step 2** — S1 workspace (availability search, seal preferred room type)
+- **Step 3** — S2 workspace (quotation, progress to S3)
+
+Key infrastructure:
+- [`step-card.tsx`](front_end/src/components/booking-flow/step-card.tsx) — locked/active/done visual states with optional `keepMounted` (keeps children mounted for state preservation), `onEdit` / `onClose` handlers, `isEditing` flag
+- [`booking-context-bar.tsx`](front_end/src/components/booking-flow/booking-context-bar.tsx) — sticky top breadcrumb rendering chips for guest, contact (email + phone), agent/corporate, dates + nights, adults/children (with child ages), sealed room, accepted quotation, and current stage
+- [`booking-flow-context.tsx`](front_end/src/components/booking-flow/booking-flow-context.tsx) — signal wrapping the embedded workspaces. `ProgressStageButton` consults it via `useIsInBookingFlow()` and skips `router.push` so stage advances stay inline; the orchestrator auto-advances steps based on entry state
+- `step2Done` gated on `entry.currentStage !== "S1"` (not just sealed config) so step 3 opens only after the operator clicks "Progress to S2"
+- Auto-fulfil button in S2 workspace is now hidden when `entry.currentStage !== "S1"` (its label was misleading — the backend requires stage S1)
+- Timezone-safe date math (`Date.UTC`-based) in the intake form — check-in change auto-fills check-out to next day and syncs a "Number of nights" field. S1 workspace's search form syncs check-in/check-out from entry via `useEffect` on entry field changes so upstream edits reflect
+
+### Availability calendar grid (Phase 2 of the booking flow)
+
+[`availability-calendar.tsx`](front_end/src/components/stages/s1/availability-calendar.tsx) replaces the flat rooms-list display in S1 workspace with a date × room-type matrix. Dates as columns (one per night), room types as rows, each cell showing available-count badge. Type filter sourced from ALL room types (not just result set) — via [`GET /api/rooms`](back_end/src/routes/availability/router.ts) which now returns `floorNumber` + `roomType { id, code, name }`. Floor filter from `Room.floorNumber`. Clicking a row selects that type (backend receives one room of the type for sealing; specific room number is assigned later at pre-arrival or check-in per user's operational preference). Per-row room chips deliberately removed — commitment at S1 is to type only.
+
+**Caveat (Phase 2.5 pending)**: current availability engine ignores reservations/holds when computing availability — it returns rooms based on present physical state. So every date column shows the same count. When the engine grows per-date conflict detection, columns will diverge without any UI change.
+
+### Booking-flow side panels (2026-06-27)
+
+Two floating right-side panels visible on `/inquiries/new` once an entry exists:
+
+- **[`booking-timer-panel.tsx`](front_end/src/components/booking-flow/booking-timer-panel.tsx)** — reads new `GET /api/entries/:id/timers` endpoint (returns SCHEDULED `TimerRecord` rows sorted by `firesAt`). Minimized state shows a labeled countdown pill (e.g. `Inquiry expiry 12:34`); expanded state lists all active timers with friendly `labelForTimer()` mapping (Inquiry expiry / Quote validity / Speculative hold / Reservation hold / Advance payment follow-up / etc). Tone-aware (amber < 30 min, red < 5 min). Countdown ticks every second regardless of open/closed state.
+- **`EntryTracePanel`** — adapted to take an optional `entryId` prop so it works outside the `/entries/[entryId]` route context.
+
+### Child policy lookup (2026-06-26)
+
+New L1-accessible endpoint [`GET /api/lookups/child-policy`](back_end/src/routes/lookups/router.ts) returns the live `ChildPolicyBundle` for the front-desk forms. Used by the booking-flow inquiry form to drive the child-age input's `max` attribute dynamically (`unaccompaniedMinor.minimumAge - 1`) — no hardcoded 17. Frontend client at [`front_end/src/lib/api/child-policy.ts`](front_end/src/lib/api/child-policy.ts).
+
+### Config-key ownership registry cleanup (2026-06-27)
+
+`expiry.s1.defaultTtlSeconds`, `expiry.s2.quotationValidityDays`, `expiry.s2.speculativeHoldTtlSeconds`, `expiry.s3.committedHoldTtlSeconds`, `expiry.defaults`, `ownership.assignmentRules`, `billingModel.availablePerSource` — all moved from `WorkflowConfigurationService` owner to `ConfigurationService` in [`config-key-registry.ts`](back_end/src/lib/admin/config-key-registry.ts). The `/admin/workflow` page was deleted earlier (100% duplicate of Timers-Workers), but the ownership registry still pointed these keys at that surface — result was a dead loop where the generic endpoint rejected writes and the "owner" surface never had a route for them. Reassigning to `ConfigurationService` lets the generic PATCH endpoint (which the Timers-Workers page uses) accept the writes. Shape validators (positiveInt, isObject, isArray) preserved.
+
+### Latent flag: `Entry.groupBillingMode`
+
+Set at S1 by Policy 64 based on effective guest count vs threshold. **Currently a write-only classification** — no downstream code branches on it. Nothing in S2–S9 consumes the flag. Effect: a booking marked `GROUP_MASTER` behaves identically to one marked `NULL`. Wiring conversation pending — candidates include S3 defaulting `Folio.billingModel = DIRECT_BILL` for groups, group-appropriate advance payment thresholds, group check-in flow, aggregate invoicing, and consuming `p66-group-foc-and-billing-split` (currently an orphaned TS policy).
 
 ### Mode registry (ACIG §2.1A.7)
 

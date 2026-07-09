@@ -17,6 +17,8 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
+import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
+import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
@@ -77,6 +79,32 @@ entriesRouter.post("/", requireActorLevel("L1"), validateBody(createEntryRequest
   try {
     const created = await s1EntryService.createEntry(prisma, req.actor!.actorId, req.actor!.level, req.body);
     res.status(201).json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * L3+ manual override of the group billing mode. Used when Policy 64's auto-classification
+ * disagrees with the operator's on-the-ground judgement. Body: { mode: "GROUP_MASTER" | null,
+ * reason: string, clearManualOverride?: boolean }. Setting clearManualOverride to true
+ * re-enables Policy 64 auto-reclassification on subsequent intake edits.
+ */
+const setGroupBillingModeSchema = z.object({
+  mode: z.enum(["GROUP_MASTER", "INDIVIDUAL_FOLIO"]).nullable(),
+  reason: z.string().trim().min(1).max(500),
+  clearManualOverride: z.boolean().optional(),
+});
+entriesRouter.patch("/:id/group-billing-mode", requireActorLevel("L3"), validateBody(setGroupBillingModeSchema), async (req, res, next) => {
+  try {
+    const updated = await setGroupBillingModeManually(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+      req.actor!.level as "L1" | "L2" | "L3" | "L4",
+      req.body,
+    );
+    res.json(updated);
   } catch (e) {
     next(e);
   }

@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { GroupBadge } from "@/components/entries/group-badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { StagePanel } from "@/components/stages/shared/stage-panel";
 import { ApiErrorAlert } from "@/components/stages/shared/api-error-alert";
@@ -87,7 +88,14 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
   const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
 
-  const [billingModel, setBillingModel] = useState(folio?.billingModel ?? "GUEST_PAY");
+  // Default billing model. If the folio already picked one, use that. Otherwise: group-classified
+  // entries (Policy 64 set groupBillingMode = GROUP_MASTER at S1) default to DIRECT_BILL — the
+  // tour operator / corporate account is billed centrally rather than each guest paying their
+  // own portion. Operator can still change it in the dropdown before creating the folio.
+  const defaultBillingModel =
+    folio?.billingModel ??
+    (entry.groupBillingMode === "GROUP_MASTER" ? "DIRECT_BILL" : "GUEST_PAY");
+  const [billingModel, setBillingModel] = useState(defaultBillingModel);
   const [noShowStatement, setNoShowStatement] = useState(
     disclosure?.noShowTreatmentStatement ?? "No-show: one night room charge plus applicable taxes.",
   );
@@ -383,6 +391,7 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
                 {folio.billingModel && (
                   <span className="ml-2 text-muted-foreground">· {folio.billingModel}</span>
                 )}
+                <GroupBadge groupBillingMode={entry.groupBillingMode} className="ml-2" />
               </div>
             )}
             <div>
@@ -398,6 +407,23 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
                   </option>
                 ))}
               </select>
+              {entry.groupBillingMode === "GROUP_MASTER" && !folio?.billingModel && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Pre-filled to <span className="font-mono">DIRECT_BILL</span> because this booking was auto-classified as a
+                  group at S1. Override if the guests are paying individually.
+                </p>
+              )}
+              {entry.groupBillingMode === "GROUP_MASTER" &&
+                billingModel !== "DIRECT_BILL" &&
+                billingModel !== "TOUR_OPERATOR_VOUCHER" &&
+                session &&
+                !isGm(session.actorLevel) && (
+                  <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                    Group bookings need L3+ (FOM / GM) authority to leave a group-friendly billing model
+                    (<span className="font-mono">DIRECT_BILL</span> or <span className="font-mono">TOUR_OPERATOR_VOUCHER</span>).
+                    Save will be rejected — ask an FOM to override.
+                  </p>
+                )}
             </div>
             <Button variant="gradient" disabled={folioMutation.isPending} onClick={() => folioMutation.mutate()}>
               {folioMutation.isPending
@@ -469,6 +495,14 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
                 {paymentStatus.creditExtensionActive && (
                   <p className="text-muted-foreground">
                     Credit extension active (ceiling {paymentStatus.ceilingAmount ?? "—"})
+                  </p>
+                )}
+                {paymentStatus.groupBoostApplied && (
+                  <p className="text-indigo-700 dark:text-indigo-300">
+                    Group booking · advance requirement boosted from{" "}
+                    <span className="font-mono">{paymentStatus.groupBoostApplied.baseAmount}</span> by{" "}
+                    <span className="font-mono">{paymentStatus.groupBoostApplied.multiplierPercent}%</span>{" "}
+                    (registry.groupBooking.advancePaymentBoost)
                   </p>
                 )}
                 {folio?.advancePaymentReconciliationComplete && (

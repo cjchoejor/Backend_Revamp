@@ -2,6 +2,7 @@
 
 import { Calendar, DoorOpen, FileText, Mail, Phone, User, Users } from "lucide-react";
 import type { AvailabilityConfigSummary, EntryDetail, QuotationSummary } from "@/types/api";
+import { GroupBadge } from "@/components/entries/group-badge";
 
 type Props = {
   entry: EntryDetail;
@@ -127,6 +128,9 @@ export function BookingContextBar({ entry, sealedConfig, acceptedQuotation }: Pr
             </span>
           </Chip>
         )}
+
+        {/* Group flag — visible signal that Policy 64 auto-classified this booking as a group */}
+        <GroupBadge groupBillingMode={entry.groupBillingMode} compact />
 
         {/* Stage indicator on the far right */}
         <span className="ml-auto rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">

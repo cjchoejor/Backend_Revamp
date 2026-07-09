@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { GroupBadge } from "@/components/entries/group-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -99,7 +100,12 @@ function EntriesContent() {
               <TableBody>
                 {items.map((entry) => (
                   <TableRow key={entry.id}>
-                    <TableCell className="font-medium">{entryListGuestName(entry)}</TableCell>
+                    <TableCell className="font-medium">
+                      <span className="inline-flex items-center gap-2">
+                        {entryListGuestName(entry)}
+                        <GroupBadge groupBillingMode={entry.groupBillingMode} compact />
+                      </span>
+                    </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{formatListId(entry.id)}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{formatListId(entry.inquiryId)}</TableCell>
                     <TableCell>

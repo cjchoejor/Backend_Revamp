@@ -21,6 +21,7 @@ import { enforceVipArrivalNotificationRecordedForCheckInCompletion } from "../..
 import { enforceH2H3NotRejectedAtS6CheckIn } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceEntryAtS6ForCheckInCompletionToS7 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { scheduleS7StageDwellWarningMonitor } from "../../lib/schedule-s7-dwell-warning-monitor.js";
+import { readHandoffChecklistContent } from "../../lib/handoff-checklist.js";
 
 export async function completeCheckInToS7(
   prisma: PrismaClient,
@@ -46,7 +47,6 @@ export async function completeCheckInToS7(
       roomAssignments: {
         include: { room: { include: { deficientConditionRecords: { where: { status: "UNRESOLVED" } } } } },
         orderBy: { createdAt: "desc" },
-        take: 1,
       },
       handoffs: { where: { handoffType: { in: [HandoffType.H1, HandoffType.H2, HandoffType.H3] } }, orderBy: { createdAt: "desc" } },
     },
@@ -65,19 +65,63 @@ export async function completeCheckInToS7(
     advancePaymentReconciliationComplete: !!entry.folio?.advancePaymentReconciliationComplete,
   });
 
-  const assignment = entry.roomAssignments[0];
+  // For non-group entries the historical behaviour is "check in the most recent room
+  // assignment". For group entries (Policy 64 → GROUP_MASTER at S1) every room assignment
+  // belongs to the same booking and all rooms need to be checked in together — one H2 and
+  // one H3 handoff per room. Deduplicate by roomId so an entry with a room-change history
+  // doesn't get double-processed.
+  const isGroupEntry = entry.groupBillingMode === "GROUP_MASTER";
+  const distinctAssignments = (() => {
+    const seen = new Set<string>();
+    const list: typeof entry.roomAssignments = [];
+    for (const a of entry.roomAssignments) {
+      if (seen.has(a.roomId)) continue;
+      seen.add(a.roomId);
+      list.push(a);
+    }
+    return list;
+  })();
+  const assignmentsToCheckIn = isGroupEntry ? distinctAssignments : entry.roomAssignments.slice(0, 1);
+  const assignment = assignmentsToCheckIn[0];
   enforceRoomAssignmentPresentForCheckInCompletion({ assignment });
 
   const room = assignment.room;
-  enforceRoomPhysicalReadyForS6CheckInCompletion({ physicalState: room.physicalState });
+  // Every room being checked in must be physically ready. Fail-fast if any room isn't —
+  // the operator has to make them all ready before batched check-in (otherwise we'd have
+  // partial success with confusing state).
+  for (const a of assignmentsToCheckIn) {
+    enforceRoomPhysicalReadyForS6CheckInCompletion({ physicalState: a.room.physicalState });
+  }
 
   const h1 = entry.handoffs.find((h) => h.handoffType === HandoffType.H1);
   enforceH1EligibleForS6CheckInCompletion({ walkInCompressed: entry.walkInCompressed, h1 });
   const isWalkIn = entry.walkInCompressed === true || !h1;
 
-  const h2Latest = entry.handoffs.find((h) => h.handoffType === HandoffType.H2 && h.stageContext === Stage.S6);
-  const h3Latest = entry.handoffs.find((h) => h.handoffType === HandoffType.H3 && h.stageContext === Stage.S6);
-  enforceH2H3NotRejectedAtS6CheckIn({ h2State: h2Latest?.state, h3State: h3Latest?.state });
+  // Loophole 5 fix: per-room H2/H3 rejection check. For group entries with multiple rooms,
+  // the reject-check must consider EACH room's own H2/H3 handoff — not just the latest at
+  // the entry level. Rejection on room A shouldn't block check-in of rooms B and C if their
+  // handoffs are fine, and rejection on any one room should still block that room. We
+  // enforce per-room; if ANY room has a rejected H2/H3, the whole batch fails (safer than
+  // silently proceeding with the un-rejected rooms).
+  const perRoomHandoffs = new Map<
+    string,
+    { h2?: (typeof entry.handoffs)[number]; h3?: (typeof entry.handoffs)[number] }
+  >();
+  for (const h of entry.handoffs) {
+    if (h.stageContext !== Stage.S6) continue;
+    // Prefer the new FK; fall back to matching by roomNumber in checklistContent so legacy
+    // rows created before the migration still work.
+    const contentRoomNumber = readHandoffChecklistContent(h.checklistContent).roomNumber;
+    const roomKey = h.roomAssignmentId ?? (contentRoomNumber ? `by-room-number:${contentRoomNumber}` : null);
+    if (!roomKey) continue;
+    const entryForRoom = perRoomHandoffs.get(roomKey) ?? {};
+    if (h.handoffType === HandoffType.H2) entryForRoom.h2 = h;
+    if (h.handoffType === HandoffType.H3) entryForRoom.h3 = h;
+    perRoomHandoffs.set(roomKey, entryForRoom);
+  }
+  for (const [, { h2, h3 }] of perRoomHandoffs) {
+    enforceH2H3NotRejectedAtS6CheckIn({ h2State: h2?.state, h3State: h3?.state });
+  }
 
   const activeDef = room.deficientConditionRecords[0];
   const deficientNote =
@@ -166,76 +210,101 @@ export async function completeCheckInToS7(
       enforceVipArrivalNotificationRecordedForCheckInCompletion({ vipTier, hasVipArrivalNotification: !!vipRow });
     }
 
-    const h2Existing = await tx.handoffRecord.findFirst({
+    // Create one H2 (housekeeping) and one H3 (F&B) per room being checked in. Dedup
+    // primarily via the new `roomAssignmentId` FK; fall back to matching by roomNumber in
+    // checklistContent so pre-migration rows keep working. Non-group entries have a
+    // single-item assignmentsToCheckIn list so this collapses to the historical behaviour.
+    const existingH2s = await tx.handoffRecord.findMany({
       where: { entryId, handoffType: HandoffType.H2, stageContext: Stage.S6 },
       orderBy: { createdAt: "desc" },
     });
-    if (!h2Existing) {
-      const slaDeadlineAt = new Date(now.getTime() + Number(h2WindowSeconds) * 1000);
-      const h2Id = await allocateReadableId(tx, "HANDOFF" as const, now);
-      await tx.handoffRecord.create({
-        data: {
-          id: h2Id,
-          entryId,
-          handoffType: HandoffType.H2,
-          state: HandoffState.CREATED,
-          fromRole: "FRONT_DESK",
-          fromActorId: actorId,
-          toRole: "HOUSEKEEPING",
-          checklistContent: {
-            roomNumber: room.roomNumber,
-            guestProfileId: entry.guestProfileId,
-            expectedStayNights: Math.max(
-              1,
-              Math.ceil(
-                ((entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? now).getTime() -
-                  (entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? now).getTime()) /
-                  86400000,
-              ),
-            ),
-          },
-          deficientConditionStatus: deficientNote,
-          createdBy: actorId,
-          stageContext: Stage.S6,
-          slaDeadlineAt,
-        },
-      });
-    }
-
-    const h3Existing = await tx.handoffRecord.findFirst({
+    const existingH3s = await tx.handoffRecord.findMany({
       where: { entryId, handoffType: HandoffType.H3, stageContext: Stage.S6 },
       orderBy: { createdAt: "desc" },
     });
-    if (!h3Existing) {
-      const slaDeadlineAt = new Date(now.getTime() + Number(h3WindowSeconds) * 1000);
-      const h3Id = await allocateReadableId(tx, "HANDOFF" as const, now);
-      await tx.handoffRecord.create({
-        data: {
-          id: h3Id,
-          entryId,
-          handoffType: HandoffType.H3,
-          state: HandoffState.CREATED,
-          fromRole: "FRONT_DESK",
-          fromActorId: actorId,
-          toRole: "F_AND_B",
-          checklistContent: {
-            guestProfileId: entry.guestProfileId,
-            roomNumber: room.roomNumber,
-            guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
-            mealPlan: "per reservation inclusions",
-            dietaryRequirements: (entry.guestProfile?.preferences as any)?.dietaryRequirements ?? null,
-            packageInclusions: (entry.reservation?.frozenInclusions as any) ?? {},
-            stayDuration: {
-              checkInDate: (entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? now).toISOString(),
-              checkOutDate: (entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? now).toISOString(),
+    const matchesAssignment = (
+      h: (typeof existingH2s)[number],
+      a: (typeof assignmentsToCheckIn)[number],
+    ): boolean => {
+      if (h.roomAssignmentId === a.id) return true;
+      const contentRoomNumber = readHandoffChecklistContent(h.checklistContent).roomNumber;
+      return h.roomAssignmentId == null && contentRoomNumber === a.room.roomNumber;
+    };
+
+    for (const a of assignmentsToCheckIn) {
+      const perRoomDeficient = a.room.deficientConditionRecords[0];
+      const perRoomDeficientNote =
+        perRoomDeficient != null
+          ? `${perRoomDeficient.category}: ${perRoomDeficient.description} (resolve by ${perRoomDeficient.resolutionDeadline.toISOString()})`
+          : null;
+
+      const alreadyH2 = existingH2s.some((h) => matchesAssignment(h, a));
+      if (!alreadyH2) {
+        const slaDeadlineAt = new Date(now.getTime() + Number(h2WindowSeconds) * 1000);
+        const h2Id = await allocateReadableId(tx, "HANDOFF" as const, now);
+        await tx.handoffRecord.create({
+          data: {
+            id: h2Id,
+            entryId,
+            roomAssignmentId: a.id,
+            handoffType: HandoffType.H2,
+            state: HandoffState.CREATED,
+            fromRole: "FRONT_DESK",
+            fromActorId: actorId,
+            toRole: "HOUSEKEEPING",
+            checklistContent: {
+              roomNumber: a.room.roomNumber,
+              guestProfileId: entry.guestProfileId,
+              expectedStayNights: Math.max(
+                1,
+                Math.ceil(
+                  ((entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? now).getTime() -
+                    (entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? now).getTime()) /
+                    86400000,
+                ),
+              ),
             },
-            cuisinePreferences: (entry.guestProfile?.preferences as any)?.cuisinePreferences ?? null,
+            deficientConditionStatus: perRoomDeficientNote,
+            createdBy: actorId,
+            stageContext: Stage.S6,
+            slaDeadlineAt,
           },
-          createdBy: actorId,
-          stageContext: Stage.S6,
-          slaDeadlineAt,
-        },
-      });
+        });
+      }
+
+      const alreadyH3 = existingH3s.some((h) => matchesAssignment(h, a));
+      if (!alreadyH3) {
+        const slaDeadlineAt = new Date(now.getTime() + Number(h3WindowSeconds) * 1000);
+        const h3Id = await allocateReadableId(tx, "HANDOFF" as const, now);
+        await tx.handoffRecord.create({
+          data: {
+            id: h3Id,
+            entryId,
+            roomAssignmentId: a.id,
+            handoffType: HandoffType.H3,
+            state: HandoffState.CREATED,
+            fromRole: "FRONT_DESK",
+            fromActorId: actorId,
+            toRole: "F_AND_B",
+            checklistContent: {
+              guestProfileId: entry.guestProfileId,
+              roomNumber: a.room.roomNumber,
+              guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
+              mealPlan: "per reservation inclusions",
+              dietaryRequirements: (entry.guestProfile?.preferences as any)?.dietaryRequirements ?? null,
+              packageInclusions: (entry.reservation?.frozenInclusions as any) ?? {},
+              stayDuration: {
+                checkInDate: (entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? now).toISOString(),
+                checkOutDate: (entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? now).toISOString(),
+              },
+              cuisinePreferences: (entry.guestProfile?.preferences as any)?.cuisinePreferences ?? null,
+            },
+            createdBy: actorId,
+            stageContext: Stage.S6,
+            slaDeadlineAt,
+          },
+        });
+      }
     }
 
     await folioService.convertToLive(tx, entryId, entry.folio!.id, actorId);
@@ -263,14 +332,20 @@ export async function completeCheckInToS7(
       });
     }
 
-    if (room.currentClaimState === InventoryClaimState.CONFIRMED) {
+    // Every room being checked in transitions CONFIRMED → OCCUPIED. For non-group entries
+    // there's only one assignment in the list; for groups this fires per room. Rooms not in
+    // CONFIRMED state (already OCCUPIED from a prior check-in, or in an unexpected state)
+    // are skipped rather than force-transitioned — the physical-ready guard above already
+    // rejected anything obviously wrong, so this branch is defensive.
+    for (const a of assignmentsToCheckIn) {
+      if (a.room.currentClaimState !== InventoryClaimState.CONFIRMED) continue;
       await tx.room.update({
-        where: { id: room.id },
+        where: { id: a.room.id },
         data: { currentClaimState: InventoryClaimState.OCCUPIED, updatedAt: now },
       });
       await tx.roomClaimStateEvent.create({
         data: {
-          roomId: room.id,
+          roomId: a.room.id,
           entryId,
           fromState: InventoryClaimState.CONFIRMED,
           toState: InventoryClaimState.OCCUPIED,

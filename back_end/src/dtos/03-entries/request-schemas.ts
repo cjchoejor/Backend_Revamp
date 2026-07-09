@@ -16,6 +16,12 @@ export const createEntryRequestSchema = z.object({
   childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
   otaSource: z.boolean().optional(),
   walkInCompressed: z.boolean().optional(),
+  // Contact person — the on-site individual travelling or leading the group. Distinct from
+  // any travel-agent or corporate-account contact fields (those describe the agency /
+  // company; this describes the human physically arriving). Optional at S1 intake, but
+  // MANDATORY before S5 — the S4→S5 progression gate blocks otherwise.
+  contactPersonName: z.string().trim().min(1).max(200).optional(),
+  contactPersonPhone: z.string().trim().min(1).max(50).optional(),
 });
 export type CreateEntryRequestDto = z.infer<typeof createEntryRequestSchema>;
 
@@ -34,6 +40,8 @@ export const updateEntryRequestSchema = z.object({
   // service. See createEntryRequestSchema for the rationale.
   childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
   useType: z.string().optional(),
+  contactPersonName: z.string().trim().max(200).optional(),
+  contactPersonPhone: z.string().trim().max(50).optional(),
   expectedVersion: z.coerce.number().int().optional(),
 });
 export type UpdateEntryRequestDto = z.infer<typeof updateEntryRequestSchema>;

@@ -8,6 +8,7 @@ import type { EntryDetail } from "@/types/api";
 import { StageBadge } from "./stage-badge";
 import { formatListId } from "@/lib/readable-id";
 import { useStageTransition } from "./stage-transition-context";
+import { GroupBadge } from "@/components/entries/group-badge";
 
 export function EntryHeader({ entry }: { entry: EntryDetail }) {
   const { startTransition } = useStageTransition();
@@ -23,6 +24,7 @@ export function EntryHeader({ entry }: { entry: EntryDetail }) {
           <StageBadge stage={entry.currentStage} />
           <Badge variant={entry.status === "PARKED" ? "secondary" : "muted"}>{entry.status}</Badge>
           <Badge variant="outline">v{entry.version}</Badge>
+          <GroupBadge groupBillingMode={entry.groupBillingMode} />
         </div>
       </div>
       {entry.currentStage && (

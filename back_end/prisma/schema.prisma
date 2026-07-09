@@ -845,6 +845,18 @@ model Entry {
   otaSource          Boolean           @default(false)
   otaReference       String?
   groupBillingMode   GroupBillingMode?
+  /// True when an L3+ actor manually overrode Policy 64's classification (either from
+  /// group→individual or vice-versa). Prevents subsequent intake edits from silently
+  /// re-classifying and undoing the operator's judgement call. Cleared only by another
+  /// explicit L3+ action.
+  groupBillingModeManualOverride Boolean @default(false)
+  /// Contact person for the on-site booking — the individual physically travelling or
+  /// leading the group. Distinct from travelAgent.contactNumber (which is the agency's
+  /// front desk) and corporateAccount contact fields (the corporate liaison). Populated at
+  /// S1 intake; MANDATORY before S5 for every booking (the S4→S5 progression gate blocks
+  /// otherwise). Business rule enforced backend-side, not just in the form.
+  contactPersonName   String?
+  contactPersonPhone  String?
   parkedAt           DateTime?
   parkedBy           String?
   parkedIndividually Boolean           @default(false)
@@ -1532,6 +1544,11 @@ model CreditExtensionCeilingRecord {
 model HandoffRecord {
   id                       String       @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("HANDOFF", ...)
   entryId                  String
+  /// For H2/H3 handoffs pinned to a specific room (group check-in creates one per room), this
+  /// FK identifies which RoomAssignment the handoff is for. NULL for entry-level handoffs (H1, H4)
+  /// and legacy pre-Phase-D rows where the association wasn't tracked. Used by the reject-check
+  /// gate + dedup logic in check-in-service so group operations reason per-room.
+  roomAssignmentId         String?
   handoffType              HandoffType
   state                    HandoffState @default(CREATED)
   fromRole                 String
@@ -1560,7 +1577,8 @@ model HandoffRecord {
   createdBy                String
   stageContext             Stage
 
-  entry Entry @relation(fields: [entryId], references: [id])
+  entry           Entry           @relation(fields: [entryId], references: [id])
+  roomAssignment  RoomAssignment? @relation(fields: [roomAssignmentId], references: [id])
 
   @@map("handoff_records")
 }
@@ -1601,8 +1619,9 @@ model RoomAssignment {
   notes                      String?
   createdAt                  DateTime  @default(now())
 
-  entry Entry @relation(fields: [entryId], references: [id])
-  room  Room  @relation(fields: [roomId], references: [id])
+  entry    Entry           @relation(fields: [entryId], references: [id])
+  room     Room            @relation(fields: [roomId], references: [id])
+  handoffs HandoffRecord[]
 
   @@map("room_assignments")
 }
@@ -1872,6 +1891,11 @@ model AmendmentEventRecord {
   newTermsSummary  String
   folioLineId      String?
   stageAtAmendment Stage
+  /// True when the amending entry has groupBillingMode = GROUP_MASTER at the moment the
+  /// amendment fires. Set by the amendment service based on `entry.groupBillingMode` — lets
+  /// downstream reporting / tour-operator notifications key off group-impacting changes
+  /// without having to re-join to Entry every time.
+  affectsGroup     Boolean       @default(false)
   createdAt        DateTime      @default(now())
 
   entry   Entry   @relation(fields: [entryId], references: [id])

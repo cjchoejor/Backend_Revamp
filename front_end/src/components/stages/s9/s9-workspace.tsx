@@ -462,16 +462,28 @@ export function S9Workspace({ entry }: S9WorkspaceProps) {
                 <div>
                   <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Invoices ({invoices.length})</p>
                   <div className="space-y-1">
-                    {invoices.map((inv) => (
-                      <div key={inv.id} className="flex items-center justify-between gap-2 border-b border-border/50 pb-1 last:border-0">
-                        <div className="min-w-0 flex-1 text-xs">
-                          <span className="font-mono">{formatListId(inv.id)}</span>
-                          <span className="ml-2">{inv.invoiceType}</span>
-                          <span className="ml-2"><StatusBadge status={inv.state} /></span>
+                    {invoices.map((inv) => {
+                      const isGroupInvoice =
+                        (inv.templateKey?.startsWith("group-") ?? false) ||
+                        (inv.metadata && (inv.metadata as Record<string, unknown>).groupBooking === true);
+                      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
+                      const roomCount = typeof meta.roomCount === "number" ? meta.roomCount : null;
+                      return (
+                        <div key={inv.id} className="flex items-center justify-between gap-2 border-b border-border/50 pb-1 last:border-0">
+                          <div className="min-w-0 flex-1 text-xs">
+                            <span className="font-mono">{formatListId(inv.id)}</span>
+                            <span className="ml-2">{inv.invoiceType}</span>
+                            <span className="ml-2"><StatusBadge status={inv.state} /></span>
+                            {isGroupInvoice && (
+                              <span className="ml-2 inline-flex items-center gap-1 rounded border border-indigo-500/40 bg-indigo-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">
+                                Group{roomCount != null ? ` · ${roomCount} rooms` : ""}
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-mono text-right text-muted-foreground">{inv.dispatchedAt ? new Date(inv.dispatchedAt).toLocaleDateString() : ""}</span>
                         </div>
-                        <span className="font-mono text-right text-muted-foreground">{inv.dispatchedAt ? new Date(inv.dispatchedAt).toLocaleDateString() : ""}</span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

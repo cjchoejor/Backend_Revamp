@@ -321,6 +321,7 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
         reason: changeReason,
         newTermsSummary: `Room change requested at check-in (from room ${room?.roomNumber ?? "—"}); new room to be selected at S1`,
         stageAtAmendment: Stage.S6,
+        affectsGroup: entry.groupBillingMode === "GROUP_MASTER",
       },
     });
 

@@ -72,6 +72,13 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
         activation.reason === "ALREADY_FIRED" ||
         (activation.reason === "NOT_AT_S4" && entry.currentStage === Stage.S5);
       if (!ok && entry.currentStage !== Stage.S5) {
+        // Special-case the contact-person block so the operator sees a clear, actionable
+        // message rather than the raw enum name.
+        if (activation.reason === "MISSING_CONTACT_PERSON") {
+          const detail = (activation as unknown as { detail?: { message?: string } }).detail;
+          next(new ValidationError(detail?.message ?? "Contact person is mandatory before S5 activation."));
+          return;
+        }
         next(new ValidationError(`Pre-arrival activation could not run: ${activation.reason ?? "unknown"}`));
         return;
       }
@@ -365,7 +372,13 @@ reservationsRouter.post(
 
 reservationsRouter.post("/entries/:id/folio/provisional", requireActorLevel("L1"), validateBody(ensureProvisionalFolioRequestSchema), async (req, res, next) => {
   try {
-    const created = await s3ReservationSetupService.ensureProvisionalFolioAndBillingModel(prisma, req.params.id, req.actor!.actorId, req.body);
+    const created = await s3ReservationSetupService.ensureProvisionalFolioAndBillingModel(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+      req.actor!.level as "L1" | "L2" | "L3" | "L4",
+      req.body,
+    );
     res.status(201).json(created);
   } catch (e) {
     next(e);

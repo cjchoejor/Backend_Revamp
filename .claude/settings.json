@@ -59,7 +59,10 @@
       "Bash(grep -nA10 \"export type PaymentRecordSummary\\\\|export type InvoiceSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')",
       "Bash(grep -nA20 \"export type EntryDetail\\\\|export type AvailabilityConfigSummary\\\\|export type QuotationSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')",
       "Bash(grep -nA3 \"export function guestDisplayName\\\\|export const guestDisplayName\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\lib\\\\api\\\\guest-profiles.ts')",
-      "Bash(grep -nA15 \"autoFulfilS2ToS3\\\\|autoFulfilToS3\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\domain\\\\s2-quotation-service.ts')"
+      "Bash(grep -nA15 \"autoFulfilS2ToS3\\\\|autoFulfilToS3\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\domain\\\\s2-quotation-service.ts')",
+      "Bash(grep -n \"^| \\\\`src/app/\\(app\\)/admin/\\\\`\\\\|^| \\\\`src/components/admin/\\\\`\\\\|^| \\\\`src/config/admin-nav\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\CLAUDE.md')",
+      "Bash(psql legphel_pms_dev -c \"SELECT \\\\\"policyId\\\\\", \\\\\"policyDefinition\\\\\" FROM policy_registry WHERE \\\\\"policyId\\\\\" = 'registry.groupBooking.advancePaymentBoost';\")",
+      "Bash(grep -nB2 -A8 \"^export type RoomAssignmentSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')"
     ]
   }
 }

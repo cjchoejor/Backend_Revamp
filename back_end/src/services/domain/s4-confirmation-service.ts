@@ -278,6 +278,14 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   const breakdown = await computeStayCharges(prisma, frozenRate, nights);
   const displayName =
     [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  // Group-oriented content when the entry is GROUP_MASTER. Room count comes from the
+  // active room assignments; group leader defaults to the on-site contact person (a group
+  // in operational terms) with fall-back to the guest profile display name.
+  const isGroup = entry.groupBillingMode === "GROUP_MASTER";
+  const roomCount = isGroup
+    ? await prisma.roomAssignment.count({ where: { entryId } })
+    : undefined;
+  const groupLeaderName = isGroup ? entry.contactPersonName ?? displayName : undefined;
   const content = renderReservationConfirmationEmail({
     guestDisplayName: displayName,
     reservationReadableId: result.reservation.id,
@@ -287,6 +295,10 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     nightlyRate: frozenRate,
     currency,
     breakdown,
+    isGroup,
+    roomCount,
+    billingModel: entry.folio?.billingModel ?? null,
+    groupLeaderName,
   });
   await dispatchStageEmailBestEffort(
     {

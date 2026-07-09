@@ -5,6 +5,7 @@ import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
+import { classifyAge, loadChildPolicyBundle } from "./child-policy-service.js";
 export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import * as notificationService from "../infrastructure/notification-service.js";
@@ -34,6 +35,8 @@ export async function createEntry(
     childAges?: number[];
     otaSource?: boolean;
     walkInCompressed?: boolean;
+    contactPersonName?: string;
+    contactPersonPhone?: string;
   },
 ) {
   if (!input.inquiryId?.trim()) throw new ValidationError("inquiryId is required");
@@ -57,9 +60,38 @@ export async function createEntry(
       : typeof thresholdRaw === "string"
         ? Number(thresholdRaw)
         : Number.MAX_SAFE_INTEGER);
+
+  // Age-band include flags. Come from the same policy row, default to "adults + children
+  // (6-10), excluding young children (0-5)". These are only consulted when the entry has a
+  // child-age breakdown; without one, we fall back to the raw guestCount to preserve legacy
+  // behavior.
+  const includeAdults = groupPolicy?.includeAdults !== false;
+  const includeChildren = groupPolicy?.includeChildren !== false;
+  const includeYoungChildren = groupPolicy?.includeYoungChildren === true;
+
+  // Derive per-band counts from the intake fields. `childAges` is the source of truth — one
+  // entry per child with their age. Classify each through the child-policy age bands so the
+  // group threshold stays consistent with the rest of the child-policy logic.
+  const bandCounts = { adult: input.adultCount ?? 0, child: 0, youngChild: 0 };
+  if (input.childAges && input.childAges.length > 0) {
+    const childBundle = await loadChildPolicyBundle(prisma);
+    for (const age of input.childAges) {
+      const band = classifyAge(age, childBundle);
+      if (band === "ADULT") bandCounts.adult++;
+      else if (band === "CHILD") bandCounts.child++;
+      else bandCounts.youngChild++;
+    }
+  }
+
   const groupBillingMode = resolveGroupBillingModeFromGuestCount({
     guestCount: input.guestCount,
+    adultCount: bandCounts.adult,
+    childCount: bandCounts.child,
+    youngChildCount: bandCounts.youngChild,
     threshold: Number.isFinite(threshold) ? threshold : Number.MAX_SAFE_INTEGER,
+    includeAdults,
+    includeChildren,
+    includeYoungChildren,
   });
 
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : null;
@@ -97,6 +129,8 @@ export async function createEntry(
         adultCount: input.adultCount ?? null,
         childCount: input.childCount ?? null,
         childAges: input.childAges ?? [],
+        contactPersonName: input.contactPersonName?.trim() || null,
+        contactPersonPhone: input.contactPersonPhone?.trim() || null,
         otaSource: input.otaSource === true,
         ...(groupBillingMode != null ? { groupBillingMode } : {}),
         createdBy: actorId,
@@ -204,6 +238,8 @@ export async function updateEntryIntakeFields(
     childCount?: number;
     childAges?: number[];
     useType?: string;
+    contactPersonName?: string;
+    contactPersonPhone?: string;
     expectedVersion?: number;
   },
 ) {
@@ -228,6 +264,60 @@ export async function updateEntryIntakeFields(
   }
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : undefined;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : undefined;
+
+  // Loophole 1 fix: re-run Policy 64 against the updated composition. When guest count
+  // moves across the threshold in either direction, groupBillingMode must follow — otherwise
+  // an edit could leave a booking mis-classified. Reuse the same threshold + include-flags
+  // resolution logic as createEntry so behaviour is symmetric. Skip when the classification
+  // was explicitly overridden by an L3+ actor (`groupBillingModeManualOverride === true`) —
+  // that operator judgement stands until another explicit override.
+  let nextGroupBillingMode: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | undefined = undefined;
+  let groupModeChanged = false;
+  if (!entry.groupBillingModeManualOverride) {
+    const groupPolicyForUpdate = await getRegistryPolicy(prisma, "registry.groupDetection.guestCountThreshold");
+    const registryThresholdForUpdate =
+      groupPolicyForUpdate && groupPolicyForUpdate.enabled !== false && typeof groupPolicyForUpdate.count === "number"
+        ? (groupPolicyForUpdate.count as number)
+        : null;
+    const configEntryForUpdate =
+      registryThresholdForUpdate === null ? await getActiveConfigEntry(prisma, "groupDetection.guestCountThreshold") : null;
+    const rawConfigForUpdate = configEntryForUpdate?.configValue;
+    const thresholdForUpdate =
+      registryThresholdForUpdate ??
+      (typeof rawConfigForUpdate === "number"
+        ? rawConfigForUpdate
+        : typeof rawConfigForUpdate === "string"
+          ? Number(rawConfigForUpdate)
+          : Number.MAX_SAFE_INTEGER);
+    const includeAdultsUpdate = groupPolicyForUpdate?.includeAdults !== false;
+    const includeChildrenUpdate = groupPolicyForUpdate?.includeChildren !== false;
+    const includeYoungChildrenUpdate = groupPolicyForUpdate?.includeYoungChildren === true;
+
+    const effectiveAdults = input.adultCount ?? entry.adultCount ?? 0;
+    const effectiveChildAges = input.childAges ?? entry.childAges ?? [];
+    const bandCountsUpdate = { adult: effectiveAdults, child: 0, youngChild: 0 };
+    if (effectiveChildAges.length > 0) {
+      const bundleUpdate = await loadChildPolicyBundle(prisma);
+      for (const age of effectiveChildAges) {
+        const band = classifyAge(age, bundleUpdate);
+        if (band === "ADULT") bandCountsUpdate.adult++;
+        else if (band === "CHILD") bandCountsUpdate.child++;
+        else bandCountsUpdate.youngChild++;
+      }
+    }
+    nextGroupBillingMode = resolveGroupBillingModeFromGuestCount({
+      guestCount: input.guestCount ?? entry.guestCount ?? null,
+      adultCount: bandCountsUpdate.adult,
+      childCount: bandCountsUpdate.child,
+      youngChildCount: bandCountsUpdate.youngChild,
+      threshold: Number.isFinite(thresholdForUpdate) ? thresholdForUpdate : Number.MAX_SAFE_INTEGER,
+      includeAdults: includeAdultsUpdate,
+      includeChildren: includeChildrenUpdate,
+      includeYoungChildren: includeYoungChildrenUpdate,
+    });
+    groupModeChanged = (nextGroupBillingMode ?? null) !== (entry.groupBillingMode ?? null);
+  }
+
   return prisma.$transaction(async (tx) => {
     const updated = await tx.entry.update({
       where: { id: entryId },
@@ -239,9 +329,26 @@ export async function updateEntryIntakeFields(
         ...(input.childCount != null ? { childCount: input.childCount } : {}),
         ...(input.childAges ? { childAges: input.childAges } : {}),
         ...(input.useType ? { useType: input.useType as any } : {}),
+        ...(input.contactPersonName !== undefined ? { contactPersonName: input.contactPersonName.trim() || null } : {}),
+        ...(input.contactPersonPhone !== undefined ? { contactPersonPhone: input.contactPersonPhone.trim() || null } : {}),
+        ...(groupModeChanged ? { groupBillingMode: nextGroupBillingMode ?? null } : {}),
         version: { increment: 1 },
       },
     });
+    if (groupModeChanged) {
+      await auditService.emit(tx as any, { actorId, actorLevel }, {
+        eventType: "ENTRY.GROUP_BILLING_MODE_RECLASSIFIED",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: updated.currentStage as any,
+        inquiryId: updated.inquiryId,
+        entryId,
+        payload: { from: entry.groupBillingMode ?? null, to: nextGroupBillingMode ?? null, trigger: "INTAKE_UPDATED" },
+        createdBy: actorId,
+      });
+    }
     await auditService.emit(tx as any, { actorId, actorLevel }, {
       eventType: "ENTRY.INTAKE_UPDATED",
       entityType: "Entry",
@@ -436,6 +543,7 @@ export async function listEntries(
       status: true,
       currentStage: true,
       guestCount: true,
+      groupBillingMode: true,
       checkInDate: true,
       checkOutDate: true,
       walkInCompressed: true,

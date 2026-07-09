@@ -21,6 +21,26 @@ export async function runPreArrivalWindowActivationWorker(
   if (entry.currentStage !== Stage.S4) return { skipped: true, reason: "NOT_AT_S4" } as const;
   enforceReservationSnapshotPresentForS5Activation({ reservation: entry.reservation });
 
+  // Cross-cutting #5: contact person is mandatory before S5. This is the business-rule
+  // gate — regardless of whether the booking is direct / OTA / travel agent / corporate, we
+  // need a name + phone of the human physically travelling. The travel agent's or corporate
+  // account's contact fields describe the agency/company, not the guest — a separate concern.
+  // Enforced here (backend, worker path) so all S4→S5 transitions honour it: manual
+  // activation via the /activate-pre-arrival endpoint AND the automatic timer-driven path.
+  const contactName = entry.contactPersonName?.trim();
+  const contactPhone = entry.contactPersonPhone?.trim();
+  if (!contactName || !contactPhone) {
+    return {
+      skipped: true,
+      reason: "MISSING_CONTACT_PERSON",
+      detail: {
+        missingName: !contactName,
+        missingPhone: !contactPhone,
+        message: "Contact person name and phone are mandatory before S5 activation. Update the entry with the on-site contact's details.",
+      },
+    } as const;
+  }
+
   // Idempotency is scoped to the CURRENT segment: after a re-entry (e.g. room change) the entry
   // has a prior activation event from its first pass through S4→S5, which must not block
   // re-activation in the new segment.

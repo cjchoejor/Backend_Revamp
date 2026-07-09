@@ -216,6 +216,11 @@ export type ReservationConfirmationEmailData = {
   breakdown: StayChargeBreakdown;
   ratePlanName?: string | null;
   roomTypeName?: string | null;
+  /** Group-specific fields — only used when isGroup === true. */
+  isGroup?: boolean;
+  roomCount?: number;
+  billingModel?: string | null;
+  groupLeaderName?: string | null;
 };
 
 export function renderReservationConfirmationEmail(d: ReservationConfirmationEmailData): StageEmailContent {
@@ -223,14 +228,31 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
   const guests = d.guestCount === 1 ? "1 guest" : `${d.guestCount} guests`;
   const subject = COMMON_SUBJECT;
 
+  // Group booking confirmation reads differently — the recipient is likely a tour operator
+  // or corporate contact rather than the guest, and the important facts are room count,
+  // billing arrangement, and who the group leader is. Fall back to the standard template
+  // when isGroup is not set.
+  const greetingName = d.isGroup && d.groupLeaderName ? d.groupLeaderName : d.guestDisplayName;
+  const openingLine = d.isGroup
+    ? "Thank you for choosing Legphel Hotel for your group booking. All rooms are confirmed."
+    : "Thank you for choosing Legphel Hotel. Your reservation is confirmed.";
+  const groupLines = d.isGroup
+    ? [
+        `Group booking · ${d.roomCount ?? "?"} room${(d.roomCount ?? 0) === 1 ? "" : "s"}`,
+        d.billingModel ? `Billing: ${d.billingModel} (charges roll up to one folio)` : null,
+        d.groupLeaderName ? `Group leader: ${d.groupLeaderName}` : null,
+      ]
+    : [];
+
   const text = [
-    `Reservation confirmed`,
+    d.isGroup ? `Group reservation confirmed` : `Reservation confirmed`,
     "",
-    `Dear ${d.guestDisplayName},`,
+    `Dear ${greetingName},`,
     "",
-    "Thank you for choosing Legphel Hotel. Your reservation is confirmed.",
+    openingLine,
     "",
     `Reservation: ${d.reservationReadableId}`,
+    ...groupLines,
     `Check-in: ${formatDate(d.checkInDate)}`,
     `Check-out: ${formatDate(d.checkOutDate)}`,
     `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
