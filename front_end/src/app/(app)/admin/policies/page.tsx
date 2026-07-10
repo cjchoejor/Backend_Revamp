@@ -121,6 +121,10 @@ export default function AdminPoliciesPage() {
             return null;
           }
           out[f.key] = n;
+        } else if (f.kind === "boolean") {
+          // Draft holds boolean directly. Also coerce "true"/"false" strings just in case
+          // a caller passed them in from the JSON fallback view.
+          out[f.key] = v === true || v === "true";
         } else if (f.kind === "json") {
           try {
             out[f.key] = JSON.parse(String(v ?? "{}"));
@@ -388,6 +392,19 @@ export default function AdminPoliciesPage() {
                           setDraft({ ...draft, params: { ...draft.params, [f.key]: e.target.value } })
                         }
                       />
+                    ) : f.kind === "boolean" ? (
+                      <label className="inline-flex items-center gap-2 py-1">
+                        <input
+                          type="checkbox"
+                          checked={draft.params[f.key] === true || draft.params[f.key] === "true"}
+                          onChange={(e) =>
+                            setDraft({ ...draft, params: { ...draft.params, [f.key]: e.target.checked } })
+                          }
+                        />
+                        <span className="text-xs">
+                          {draft.params[f.key] === true || draft.params[f.key] === "true" ? "On" : "Off"}
+                        </span>
+                      </label>
                     ) : (
                       <input
                         className="admin-input"

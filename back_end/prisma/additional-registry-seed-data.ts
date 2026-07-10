@@ -111,8 +111,20 @@ export const ADDITIONAL_REGISTRY_POLICIES: RegistryPolicySeedRow[] = [
     policyClass: "GROUP_DETECTION",
     definition: {
       enabled: true,
-      description: "Guest count at which to auto-route an entry to group billing — overrides groupDetection.guestCountThreshold.",
+      description: "Guest count at which to auto-route an entry to group billing — overrides groupDetection.guestCountThreshold. Include flags below decide which age bands count toward the threshold: adults + pricing-children (6-10) by default; young children (0-5) excluded so a family of 2 adults + 8 toddlers isn't misclassified as a group.",
       count: 6,
+      includeAdults: true,
+      includeChildren: true,
+      includeYoungChildren: false,
+    },
+  },
+  {
+    policyId: "registry.groupBooking.advancePaymentBoost",
+    policyClass: "GROUP_BILLING",
+    definition: {
+      enabled: true,
+      description: "For entries classified as GROUP_MASTER (Policy 64), multiply the required advance payment by this percentage. 200 = 2x the DEFAULT threshold amount, 150 = 1.5x, 100 = no boost. Falls back to no boost when disabled.",
+      multiplierPercent: 200,
     },
   },
   {

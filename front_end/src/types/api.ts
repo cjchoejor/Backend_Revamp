@@ -30,6 +30,8 @@ export type EntryListItem = {
   adultCount?: number | null;
   childCount?: number | null;
   childAges?: number[] | null;
+  /** Set at S1 by Policy 64. GROUP_MASTER = auto-classified as group; NULL = individual. */
+  groupBillingMode?: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
   useType?: string | null;
   segmentNumber?: number;
   createdAt: string;
@@ -128,6 +130,8 @@ export type InvoiceSummary = {
   dispatchedAt?: string | null;
   dispatchedTo?: string | null;
   createdAt: string;
+  /** JSON metadata blob. Group invoices set `{ groupBooking: true, roomCount, guestCount, groupLeader }`. */
+  metadata?: Record<string, unknown> | null;
 };
 
 export type PaymentRecordSummary = {
@@ -191,6 +195,8 @@ export type PaymentStatusSummary = {
   shortfall: number;
   creditExtensionActive: boolean;
   ceilingAmount: number | null;
+  /** Present only when the group-boost policy raised the requiredAmount above the base. */
+  groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
 };
 
 export type CancellationDisclosureSummary = {

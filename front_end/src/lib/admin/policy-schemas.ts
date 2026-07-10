@@ -9,6 +9,7 @@
 export type PolicyFieldSchema =
   | { kind: "number"; key: string; label: string; unit?: string; min?: number; max?: number; step?: number; help?: string }
   | { kind: "text"; key: string; label: string; help?: string }
+  | { kind: "boolean"; key: string; label: string; help?: string }
   | { kind: "json"; key: string; label: string; placeholder?: string; help?: string };
 
 export type PolicyKeyMeta = {
@@ -236,7 +237,8 @@ export const REGISTRY_POLICY_KEYS: PolicyKeyMeta[] = [
     policyId: "registry.groupDetection.guestCountThreshold",
     policyClass: "GROUP_DETECTION",
     title: "Group detection guest count threshold",
-    description: "Guest count at and above which an entry is auto-routed to group billing at S2 quotation.",
+    description:
+      "Guest count at and above which an entry is auto-routed to group billing. The include flags below decide which age bands count toward the threshold — so a family of 2 adults + 8 toddlers isn't mistakenly classified as a group.",
     consumedBy: ["s1-entry-service", "p64"],
     fields: [
       {
@@ -248,8 +250,52 @@ export const REGISTRY_POLICY_KEYS: PolicyKeyMeta[] = [
         step: 1,
         help: "Falls back to ConfigurationEntry `groupDetection.guestCountThreshold` (default very high → no auto-group) when disabled or missing.",
       },
+      {
+        kind: "boolean",
+        key: "includeAdults",
+        label: "Include adults",
+        help: "Count adults (guests declared in the Adults field, plus children aged 11+) toward the threshold. Default: on. Turning off means only child-band guests move the needle — rarely what you want.",
+      },
+      {
+        kind: "boolean",
+        key: "includeChildren",
+        label: "Include children (6–10)",
+        help: "Count pricing-children (ages 6–10 by default) toward the threshold. Default: on. These kids typically have own bed / meal charges so contribute to group complexity.",
+      },
+      {
+        kind: "boolean",
+        key: "includeYoungChildren",
+        label: "Include young children (0–5)",
+        help: "Count young children (ages 0–5 by default) toward the threshold. Default: off. Young children share bedding and eat free, so most hotels don't count them as group-defining.",
+      },
     ],
-    defaults: { count: 6 },
+    defaults: {
+      count: 6,
+      includeAdults: true,
+      includeChildren: true,
+      includeYoungChildren: false,
+    },
+  },
+  {
+    policyId: "registry.groupBooking.advancePaymentBoost",
+    policyClass: "GROUP_BILLING",
+    title: "Group booking advance payment boost",
+    description:
+      "For entries auto-classified as GROUP_MASTER at S1, multiply the required advance payment amount by this percentage. Groups typically warrant a higher deposit because the no-show risk on multi-room bookings is larger. Falls back to no boost when disabled.",
+    consumedBy: ["s3-payment-service.computeAdvancePaymentEvaluation"],
+    fields: [
+      {
+        kind: "number",
+        key: "multiplierPercent",
+        label: "Multiplier",
+        unit: "%",
+        min: 100,
+        max: 500,
+        step: 10,
+        help: "200 = require 2x the DEFAULT advance-payment amount for group bookings. 150 = 1.5x. 100 = no boost (same as disabling the policy).",
+      },
+    ],
+    defaults: { multiplierPercent: 200 },
   },
   {
     policyId: "registry.creditCeiling.tier2Percent",

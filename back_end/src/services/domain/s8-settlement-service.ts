@@ -31,6 +31,51 @@ export async function getFolio(prisma: PrismaClient, folioId: string) {
   return folio;
 }
 
+/**
+ * Group-aware overrides for final-invoice creation.
+ *
+ * Returns fields to merge into `tx.invoice.create({ data })` so the invoice becomes
+ * unambiguously "group" — its `templateKey` gains a `group-` prefix (invoice renderer can
+ * key off this to switch layouts / add a GROUP header / group line items by room), and its
+ * `metadata` gains `{ groupBooking: true, roomCount, guestCount, groupLeader }` describing
+ * the whole group at issue time. Non-group entries get their existing template unchanged.
+ *
+ * Kept in one place so all three FINAL invoice call sites in this file (DIRECT_BILL,
+ * VOUCHER outstanding, and the general issueInvoiceAtS8 façade) apply the same rules.
+ */
+async function resolveGroupInvoiceOverrides(
+  db: PrismaClient | Prisma.TransactionClient,
+  entryId: string,
+  baseTemplateKey: string,
+  baseMetadata: Record<string, unknown>,
+): Promise<{ templateKey: string; metadata: Prisma.InputJsonValue }> {
+  const entry = await db.entry.findUnique({ where: { id: entryId } });
+  if (!entry || entry.groupBillingMode !== "GROUP_MASTER") {
+    return { templateKey: baseTemplateKey, metadata: baseMetadata as Prisma.InputJsonValue };
+  }
+  const [profile, roomCount] = await Promise.all([
+    entry.guestProfileId
+      ? db.guestProfile.findUnique({
+          where: { id: entry.guestProfileId },
+          select: { firstName: true, lastName: true },
+        })
+      : Promise.resolve(null),
+    db.roomAssignment.count({ where: { entryId } }),
+  ]);
+  const groupLeader =
+    [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || null;
+  return {
+    templateKey: baseTemplateKey.startsWith("group-") ? baseTemplateKey : `group-${baseTemplateKey}`,
+    metadata: {
+      ...baseMetadata,
+      groupBooking: true,
+      roomCount,
+      guestCount: entry.guestCount ?? null,
+      groupLeader,
+    } as Prisma.InputJsonValue,
+  };
+}
+
 /** SIG-S8 — issue a DRAFT final invoice after settlement (cash/guest-pay paths that did not auto-create one). */
 export async function issueInvoiceAtS8(
   prisma: PrismaClient,
@@ -52,6 +97,12 @@ export async function issueInvoiceAtS8(
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
+    const { templateKey, metadata } = await resolveGroupInvoiceOverrides(
+      tx,
+      input.entryId,
+      input.templateKey?.trim() || "final-v1",
+      { basis: "S8 issueFinalInvoice", stage: Stage.S8 },
+    );
     return tx.invoice.create({
       data: {
         id: invoiceId,
@@ -59,10 +110,10 @@ export async function issueInvoiceAtS8(
         entryId: input.entryId,
         invoiceType: InvoiceType.FINAL,
         state: InvoiceState.DRAFT,
-        templateKey: input.templateKey?.trim() || "final-v1",
+        templateKey,
         issuedAt: now,
         issuedBy: actorId,
-        metadata: { basis: "S8 issueFinalInvoice", stage: Stage.S8 },
+        metadata,
       },
     });
   });
@@ -229,44 +280,51 @@ export async function initiateSettlement(
 
     // Direct bill → always OUTSTANDING and issue invoice
     if (billing === "DIRECT_BILL" || method === "DIRECT_BILL") {
+      const { templateKey, metadata } = await resolveGroupInvoiceOverrides(tx, folio.entryId, "final-v1", {
+        settlementMethod: method,
+        billingModel: billing,
+        outstandingBalance: ledgerAtIssuance.outstandingBalance.toString(),
+      });
       await tx.invoice.create({
         data: {
           folioId,
           entryId: folio.entryId,
           invoiceType: InvoiceType.FINAL,
           state: InvoiceState.DISPATCHED,
-          templateKey: "final-v1",
+          templateKey,
           issuedAt: new Date(),
           issuedBy: actorId,
           dispatchedAt: new Date(),
           dispatchedBy: actorId,
-          metadata: {
-            settlementMethod: method,
-            billingModel: billing,
-            outstandingBalance: ledgerAtIssuance.outstandingBalance.toString(),
-          },
+          metadata,
         },
       });
     }
 
     if (method === "VOUCHER" && outstandingAtIssuance > 0) {
+      const { templateKey: voucherTemplateKey, metadata: voucherMetadata } = await resolveGroupInvoiceOverrides(
+        tx,
+        folio.entryId,
+        "agent-billing-v1",
+        {
+          settlementMethod: method,
+          voucherCovered: settleAmount,
+          remaining: outstandingAtIssuance,
+          billingModel: billing,
+        },
+      );
       await tx.invoice.create({
         data: {
           folioId,
           entryId: folio.entryId,
           invoiceType: InvoiceType.FINAL,
           state: InvoiceState.DISPATCHED,
-          templateKey: "agent-billing-v1",
+          templateKey: voucherTemplateKey,
           issuedAt: new Date(),
           issuedBy: actorId,
           dispatchedAt: new Date(),
           dispatchedBy: actorId,
-          metadata: {
-            settlementMethod: method,
-            voucherCovered: settleAmount,
-            remaining: outstandingAtIssuance,
-            billingModel: billing,
-          },
+          metadata: voucherMetadata,
         },
       });
     }

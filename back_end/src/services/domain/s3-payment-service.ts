@@ -7,6 +7,7 @@ import { enforceCreditExtensionConstraints } from "../../policies/18-credit-exte
 import { enforceAdvancePaymentReconciliationRequiresPayment } from "../../policies/12-advance-payment/p27-advance-payment-reconciliation.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -23,7 +24,42 @@ async function computeAdvancePaymentEvaluation(
   if (!folio) throw new ValidationError("folioId invalid");
   if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
 
-  const requiredAmount = toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
+  // Resolve the base required amount. The config supports two shapes:
+  //   1) Flat: { amount: N }
+  //   2) Per-source: { DEFAULT: { amount: N }, OTA: { amount: M }, CORPORATE: { amount: P }, ... }
+  // When the entry has an ota/source, per-source overrides the DEFAULT; otherwise DEFAULT wins.
+  const entry = await db.entry.findUnique({
+    where: { id: input.entryId },
+    include: { inquiry: { select: { sourceChannel: true } } },
+    // groupBillingMode + sourceChannel needed for both boost and per-source resolution.
+  });
+  const isGroup = entry?.groupBillingMode === "GROUP_MASTER";
+  const sourceKey = String(entry?.inquiry?.sourceChannel ?? "").toUpperCase();
+  const perSourceAmount = sourceKey && thresholds && typeof thresholds === "object"
+    ? toNumber((thresholds as any)[sourceKey]?.amount)
+    : NaN;
+  const baseRequiredAmount = Number.isFinite(perSourceAmount) && perSourceAmount > 0
+    ? perSourceAmount
+    : toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
+
+  // Group booking boost — if the parent entry was classified as GROUP_MASTER (Policy 64),
+  // multiply the resolved base amount by the policy's `multiplierPercent`. 200 = 2x. This
+  // now boosts whichever source shape was resolved above (per-source OTA amount, per-source
+  // CORPORATE amount, or DEFAULT) — not only DEFAULT — which was the Loophole 3 bug.
+  let requiredAmount = baseRequiredAmount;
+  let boostApplied: { multiplierPercent: number; baseAmount: number } | null = null;
+  if (isGroup && Number.isFinite(baseRequiredAmount) && baseRequiredAmount > 0) {
+    const boostPolicy = await getRegistryPolicy(db as any, "registry.groupBooking.advancePaymentBoost");
+    if (boostPolicy && boostPolicy.enabled !== false && typeof boostPolicy.multiplierPercent === "number") {
+      const mult = Math.max(0, boostPolicy.multiplierPercent as number) / 100;
+      const boosted = baseRequiredAmount * mult;
+      if (boosted > baseRequiredAmount) {
+        requiredAmount = boosted;
+        boostApplied = { multiplierPercent: boostPolicy.multiplierPercent as number, baseAmount: baseRequiredAmount };
+      }
+    }
+  }
+
   const totalReceived = (folio.payments ?? [])
     .filter((p) => p.paymentDirection === PaymentDirection.IN)
     .reduce((sum, p) => sum + Number(p.amount.toString()), 0);
@@ -41,6 +77,9 @@ async function computeAdvancePaymentEvaluation(
     shortfall,
     creditExtensionActive,
     ceilingAmount: credit ? Number(credit.ceilingAmount.toString()) : null,
+    // Present only when the group boost actually raised the required amount above the base.
+    // The frontend can show a hint on the payment card explaining WHY the amount is higher.
+    ...(boostApplied ? { groupBoostApplied: boostApplied } : {}),
   };
 }
 

@@ -30,6 +30,15 @@ export async function createAmendmentEvent(
   if (!input.newTermsSummary?.trim()) throw new ValidationError("newTermsSummary is required");
 
   const amendmentId = await allocateReadableId(prisma, "AMENDMENT" as const);
+  // Cross-cutting #2: flag the amendment when the underlying entry is GROUP_MASTER so
+  // downstream reporting (tour-operator notification workflows, group revenue analytics)
+  // can filter without re-joining Entry each time. Purely additive metadata; behavior is
+  // unchanged for non-group entries.
+  const parentEntry = await prisma.entry.findUnique({
+    where: { id: input.entryId },
+    select: { groupBillingMode: true },
+  });
+  const affectsGroup = parentEntry?.groupBillingMode === "GROUP_MASTER";
   return prisma.amendmentEventRecord.create({
     data: {
       id: amendmentId,
@@ -45,6 +54,7 @@ export async function createAmendmentEvent(
       newTermsSummary: input.newTermsSummary,
       folioLineId: input.folioLineId,
       stageAtAmendment: input.stageAtAmendment,
+      affectsGroup,
     },
   });
 }
@@ -157,6 +167,9 @@ export async function roomChangeReEntryToS1(
     });
 
     const amendmentId = await allocateReadableId(tx, "AMENDMENT" as const, now);
+    // Room changes on a group entry are a big deal (tour operator may need notification, key
+    // arrangements for the whole party may cascade). Flag it so downstream can act.
+    const affectsGroup = entry.groupBillingMode === "GROUP_MASTER";
     await tx.amendmentEventRecord.create({
       data: {
         id: amendmentId,
@@ -170,6 +183,7 @@ export async function roomChangeReEntryToS1(
         reason: input.reason,
         newTermsSummary: `Room change from ${currentAssignment.room.roomNumber} to new room id ${input.newRoomId}`,
         stageAtAmendment: Stage.S7,
+        affectsGroup,
       },
     });
 
