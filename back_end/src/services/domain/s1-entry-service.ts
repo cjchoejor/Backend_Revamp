@@ -1,5 +1,5 @@
 import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
-import { EntryStatus, Stage } from "@prisma/client";
+import { EntryStatus, Stage, StageDwellMode } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
@@ -205,7 +205,10 @@ async function armParkExpiryTimersTx(
   }
   const parkExpiryDays = await resolveParkExpiryDays(tx);
   const parkDueAt = new Date(Date.now() + parkExpiryDays * 86_400_000);
-  const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId }, { startAfter: parkDueAt });
+  // `parkFollowUp: true` marks this as the genuine long-window park-expiry job. expireEntry uses it
+  // to allow expiry of a still-parked entry ONLY when this timer fires — a stale short-stage timer
+  // (payload without the flag) is skipped for a PARKED entry.
+  const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId, parkFollowUp: true }, { startAfter: parkDueAt });
   await tx.timerRecord.create({
     data: {
       entryId,
@@ -217,12 +220,22 @@ async function armParkExpiryTimersTx(
       firesAt: parkDueAt,
       dueAt: parkDueAt,
       status: "SCHEDULED",
-      payload: { entryId, parkExpiryDays },
+      payload: { entryId, parkExpiryDays, parkFollowUp: true },
       pgBossJobId: jobId,
       createdBy: actorId,
     },
   });
   return { stageTimersCancelled: active.length, parkExpiryDays };
+}
+
+/**
+ * Switch the entry's OPEN stage-dwell record(s) to a dwell mode, so the W1 StageDwellMonitor applies
+ * the matching threshold band (SIG-S1 §1187 — thresholds are mode-dependent ACTIVE/IDLE/PARKED). On
+ * park we move to the relaxed PARKED band; on unpark we return to ACTIVE. Without this the monitor
+ * keeps nagging a deliberately-parked booking on the tight active thresholds.
+ */
+async function setOpenDwellMode(tx: any, entryId: string, mode: StageDwellMode): Promise<void> {
+  await tx.stageDwellRecord.updateMany({ where: { entryId, exitedAt: null }, data: { mode } });
 }
 
 /**
@@ -295,6 +308,7 @@ export async function cascadeParkEntryTx(
     stageContext: entry.currentStage,
     actorId,
   });
+  await setOpenDwellMode(tx, entry.id, StageDwellMode.PARKED);
   await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
     eventType: "ENTRY.PARKED",
     entityType: "Entry",
@@ -320,6 +334,7 @@ export async function cascadeUnparkEntryTx(
     data: { status: EntryStatus.ACTIVE, parkedAt: null, parkedBy: null, parkedIndividually: false, version: { increment: 1 } },
   });
   await restoreStageExpiryTimersTx(tx, engine, { entryId: entry.id, stageContext: entry.currentStage, actorId });
+  await setOpenDwellMode(tx, entry.id, StageDwellMode.ACTIVE);
   await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
     eventType: "ENTRY.UNPARKED",
     entityType: "Entry",
@@ -362,6 +377,7 @@ export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: 
       stageContext: updated.currentStage,
       actorId,
     });
+    await setOpenDwellMode(tx, entryId, StageDwellMode.PARKED);
 
     await auditService.emit(tx as any, { actorId, actorLevel: "L1" }, {
       eventType: "ENTRY.PARKED",
@@ -480,38 +496,86 @@ export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId
     // Cancel the park-expiry timer and re-arm the normal stage-expiry timer (SIG-S1 §6.6). Doing
     // both inside the helper avoids the 30-day park timer and the fresh stage timer co-existing.
     await restoreStageExpiryTimersTx(tx, engine, { entryId, stageContext: updated.currentStage, actorId });
+    await setOpenDwellMode(tx, entryId, StageDwellMode.ACTIVE);
     return updated;
   });
 }
 
-export async function expireEntry(prisma: PrismaClient, entryId: string) {
+/**
+ * Terminal statuses that make expiry a no-op (idempotency, per SIG-S1 §3.4).
+ */
+function isTerminalStatus(status: EntryStatus): boolean {
+  return status === EntryStatus.EXPIRED || status === EntryStatus.CANCELLED || status === EntryStatus.CLOSED;
+}
+
+/**
+ * Decide whether an entry should be expired given the firing timer's provenance.
+ * - Terminal → skip (idempotent).
+ * - PARKED: a stale short-stage timer must NOT expire it (that defeats parking). Only the genuine
+ *   long-window park-expiry job (`fromParkFollowUp`) may expire a still-parked entry (SIG-S1 §3.4:
+ *   "a parked entry that exceeds its park-expiry threshold is expired by the same worker").
+ * - A park-follow-up timer that fires after the entry was unparked/progressed (no longer PARKED)
+ *   is stale → skip.
+ */
+function evaluateExpiryEligibility(
+  status: EntryStatus,
+  fromParkFollowUp: boolean,
+): { expire: boolean; reason?: string } {
+  if (isTerminalStatus(status)) return { expire: false, reason: "ALREADY_TERMINAL" };
+  if (status === EntryStatus.PARKED) {
+    return fromParkFollowUp ? { expire: true } : { expire: false, reason: "PARKED" };
+  }
+  // ACTIVE (or any non-terminal, non-parked): a stale park-follow-up job is not authoritative here.
+  if (fromParkFollowUp) return { expire: false, reason: "NO_LONGER_PARKED" };
+  return { expire: true };
+}
+
+export async function expireEntry(
+  prisma: PrismaClient,
+  entryId: string,
+  opts?: { fromParkFollowUp?: boolean },
+) {
   if (!entryId?.trim()) throw new ValidationError("entryId is required");
+  const fromParkFollowUp = opts?.fromParkFollowUp === true;
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
 
-  if (entry.status === EntryStatus.EXPIRED || entry.status === EntryStatus.CANCELLED || entry.status === EntryStatus.CLOSED) {
-    return { skipped: true, reason: "ALREADY_TERMINAL" } as const;
-  }
+  // Fast-path pre-check (avoids opening a transaction for the common skip cases).
+  const pre = evaluateExpiryEligibility(entry.status, fromParkFollowUp);
+  if (!pre.expire) return { skipped: true, reason: pre.reason } as const;
 
   const now = new Date();
-  await prisma.$transaction(async (tx) => {
+  // Re-verify inside the transaction to close the TOCTOU window: the entry may have been PARKED,
+  // cancelled, or progressed between the read above and this write.
+  const result = await prisma.$transaction(async (tx) => {
+    const fresh = await tx.entry.findUnique({
+      where: { id: entryId },
+      select: { status: true, currentStage: true, inquiryId: true },
+    });
+    if (!fresh) return { skipped: true as const, reason: "ENTRY_NOT_FOUND" };
+    const check = evaluateExpiryEligibility(fresh.status, fromParkFollowUp);
+    if (!check.expire) return { skipped: true as const, reason: check.reason };
+
     await tx.entry.update({
-      where: { id: entry.id },
+      where: { id: entryId },
       data: { status: EntryStatus.EXPIRED, closedAt: now, closedBy: "SYSTEM", version: { increment: 1 } },
     });
     await auditService.emit(tx as any, auditService.systemActor(), {
       eventType: "ENTRY.EXPIRED",
       entityType: "Entry",
-      entityId: entry.id,
+      entityId: entryId,
       operation: "TRANSITION",
       timestamp: now,
-      stageContext: entry.currentStage as any,
-      payload: { entryId: entry.id, fromStatus: entry.status, toStatus: "EXPIRED" },
-      inquiryId: entry.inquiryId,
-      entryId: entry.id,
+      stageContext: fresh.currentStage as any,
+      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", fromParkFollowUp },
+      inquiryId: fresh.inquiryId,
+      entryId: entryId,
       createdBy: "SYSTEM",
     });
+    return { skipped: false as const };
   });
+
+  if (result.skipped) return result;
 
   await notificationService.dispatchOperatorExpiry(prisma, {
     entityType: "Entry",

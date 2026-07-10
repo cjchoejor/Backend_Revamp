@@ -1,4 +1,13 @@
 import { PgBoss } from "pg-boss";
+// pg ships no bundled types and @types/pg is not a dependency here — type the tiny surface we use.
+// @ts-ignore
+import pgPkg from "pg";
+
+type QueryPool = {
+  query<T>(text: string, values: unknown[]): Promise<{ rows: T[] }>;
+  end(): Promise<void>;
+};
+const Pool = (pgPkg as any).Pool as new (config: { connectionString: string; max?: number }) => QueryPool;
 
 export type TimerJobName =
   | "STAGE_DWELL_MONITOR"
@@ -49,6 +58,16 @@ export type TimerEngine = {
 
 export function createTimerEngine(connectionString: string): TimerEngine {
   const boss = new PgBoss({ connectionString });
+
+  // pg-boss v10+ partitions jobs by queue, so `cancel` REQUIRES the queue name:
+  // `cancel(queueName, jobId)`. Callers only hold the opaque job id, so we resolve the queue
+  // name from pg-boss's own `job` table (its source of truth) before cancelling. A tiny dedicated
+  // pool is used for that lookup — created lazily, closed on stop().
+  let lookupPool: QueryPool | null = null;
+  function getLookupPool() {
+    if (!lookupPool) lookupPool = new Pool({ connectionString, max: 2 });
+    return lookupPool;
+  }
 
   async function schedule(jobName: TimerJobName, data: unknown, options: { startAfter: Date }) {
     // pg-boss expects startAfter as ISO string in send options.
@@ -103,15 +122,34 @@ export function createTimerEngine(connectionString: string): TimerEngine {
     },
     async stop() {
       await boss.stop();
+      if (lookupPool) {
+        const p = lookupPool;
+        lookupPool = null;
+        await p.end().catch(() => {});
+      }
     },
     schedule,
     async cancel(jobId: string) {
       if (!jobId) return;
       try {
-        // pg-boss cancel signature differs by version; in this codebase cancellation is best-effort.
-        await (boss as any).cancel(jobId);
-      } catch {
-        // Ignore cancellation errors; the TimerRecord remains the source of truth for status.
+        // Resolve the queue name for this job id (pg-boss v12 needs `cancel(queueName, jobId)`).
+        const { rows } = await getLookupPool().query<{ name: string }>(
+          `SELECT name FROM pgboss.job WHERE id = $1 LIMIT 1`,
+          [jobId],
+        );
+        const queueName = rows[0]?.name;
+        // No row → the job already left the active `job` table (completed / already cancelled /
+        // archived). Nothing to cancel; treat as a no-op.
+        if (!queueName) return;
+        await (boss as any).cancel(queueName, jobId);
+      } catch (err) {
+        // Surface the failure instead of hiding it — a silently-swallowed cancel is exactly the
+        // bug that let PARKED entries keep their live expiry timer. The TimerRecord is still marked
+        // cancelled by the caller, and the expiry worker's status guard is the backstop.
+        console.warn(
+          `[timer-engine] failed to cancel job ${jobId}:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     },
   };

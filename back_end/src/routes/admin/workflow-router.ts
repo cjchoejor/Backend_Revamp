@@ -3,6 +3,7 @@ import { prisma } from "../../db.js";
 import { saveModeRequestSchema, savePolicyRequestSchema } from "../../dtos/08-admin/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
+import { requireGmRole } from "../../lib/admin/require-gm-role.js";
 import * as workflowAdminService from "../../services/admin/workflow-admin-service.js";
 
 export const adminWorkflowRouter = Router();
@@ -36,6 +37,9 @@ adminWorkflowRouter.post("/modes", requireActorLevel("L4"), validateBody(saveMod
 
 adminWorkflowRouter.post("/modes/:id/activate", requireActorLevel("L4"), async (req, res, next) => {
   try {
+    // ACIG §6.1A.2 — custom-mode activation is a GM-specific hard requirement: re-resolve the actor
+    // against StaffUser and confirm the GM/Admin role (not just header-level L4).
+    await requireGmRole(prisma, req.actor!.actorId);
     const updated = await workflowAdminService.activateMode(prisma, req.params.id, req.actor!.actorId);
     res.json(updated);
   } catch (e) {

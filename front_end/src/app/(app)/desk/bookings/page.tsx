@@ -13,10 +13,13 @@ type Filter = { key: string; label: string; test: (b: DeskBooking) => boolean };
 
 const FILTERS: Filter[] = [
   { key: "all", label: "All", test: () => true },
-  { key: "shaping", label: "Being shaped", test: (b) => b.step.order <= 3 },
-  { key: "confirmed", label: "Confirmed", test: (b) => b.step.order >= 4 && b.step.order <= 5 },
-  { key: "inhouse", label: "In-house", test: (b) => b.step.order >= 6 && b.step.order <= 8 },
-  { key: "closed", label: "Closed", test: (b) => b.step.order === 9 },
+  // The live-phase views exclude terminally-expired bookings so a lapsed entry doesn't show up as
+  // "Being shaped" etc. — expired has its own group below (next to Closed).
+  { key: "shaping", label: "Being shaped", test: (b) => b.status !== "EXPIRED" && b.step.order <= 3 },
+  { key: "confirmed", label: "Confirmed", test: (b) => b.status !== "EXPIRED" && b.step.order >= 4 && b.step.order <= 5 },
+  { key: "inhouse", label: "In-house", test: (b) => b.status !== "EXPIRED" && b.step.order >= 6 && b.step.order <= 8 },
+  { key: "closed", label: "Closed", test: (b) => b.status !== "EXPIRED" && b.step.order === 9 },
+  { key: "expired", label: "Expired", test: (b) => b.status === "EXPIRED" },
 ];
 
 export default function DeskBookingsPage() {
@@ -120,6 +123,24 @@ export default function DeskBookingsPage() {
                         Parked
                       </span>
                     )}
+                    {b.status === "EXPIRED" && (
+                      <span
+                        style={{
+                          fontSize: 9.5,
+                          fontWeight: 700,
+                          letterSpacing: 0.3,
+                          textTransform: "uppercase",
+                          color: "#6c7169",
+                          background: "#e9e7e0",
+                          border: "1px solid var(--line-2)",
+                          borderRadius: 6,
+                          padding: "1px 6px",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Expired
+                      </span>
+                    )}
                   </div>
                   <div className="ec-sub mono">{b.party}</div>
                 </div>
@@ -132,7 +153,7 @@ export default function DeskBookingsPage() {
               </div>
               <div className="ec-foot">
                 <span className="ec-need">
-                  {b.step.label} · {b.need}
+                  {b.step.label} · {b.status === "EXPIRED" ? "no longer active" : b.need}
                 </span>
                 <span className="ec-open">
                   Open

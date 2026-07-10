@@ -186,6 +186,14 @@ The user has approved this stop/restart cycle for migrations.
 
 ## Conventions
 
+### Authentication & actor level (fixed 2026-07-09 — was the #1 Critical)
+
+The actor's LEVEL is **authenticated from the login session token**, not a client header. PIN login ([session-service.ts](back_end/src/services/infrastructure/session-service.ts)) signs a JWT carrying `{ userId, actorLevel, sessionId, terminalId }` (level from the StaffUser record). The global middleware [`authenticateActor`](back_end/src/middleware/auth.ts) (still exported as `parseActorHeaders` for the existing mount) verifies `Authorization: Bearer <jwt>` via [`verifySessionToken`](back_end/src/lib/auth-token.ts) and sets `req.actor` from the **verified payload** — the `X-Actor-Level` header is ignored. `requireActorLevel(min)` is hierarchical (L4≥L3≥L2≥L1). The frontend sends the token from `session.jwtToken` in [client.ts](front_end/src/lib/api/client.ts) `apiRequest` (the whole app routes through it).
+
+- **Secret**: `JWT_SECRET` (env, ≥16 chars; `.env` has a 64-char one). No hardcoded fallback — [auth-token.ts](back_end/src/lib/auth-token.ts) throws in production if unset, uses a loud insecure dev default otherwise.
+- **Dev/test escape hatch**: `ALLOW_HEADER_AUTH=true` re-enables the legacy `X-Actor-Id`/`X-Actor-Level` header trust (for curl/scripts). **OFF by default; never enable in a deployed/shared env** — it re-opens the spoofing hole. Backend acceptance-test scripts that hit HTTP with headers need this flag.
+- **GM carve-out**: `requireGmRole(prisma, actorId)` ([require-gm-role.ts](back_end/src/lib/admin/require-gm-role.js)) re-resolves the StaffUser and is now wired into custom-mode activation (ACIG §6.1A.2).
+
 ### Admin services (per ACIG §6.2)
 
 26 admin services in `back_end/src/services/admin/`, one file per service. Each:
@@ -347,6 +355,14 @@ Schema migrated 2026-06-01 to match ACIG §2.1A.7 — `stageRoute`, `autoFulfilm
 ### Timer / worker config coverage
 
 `/admin/timers-workers` exposes 21 typed config keys with friendly editors. `/admin/operational` covers operational-schedule keys (checkout, night audit, room assignment, housekeeping/inspection SLAs). `OPERATIONAL_CONFIG_SCHEMAS` in `config-schemas.ts` lets keys get typed editors on the operational page without polluting the timers-workers list.
+
+### Timer cancellation (fixed 2026-07-09) — `engine.cancel(jobId)` now actually cancels
+
+Historically `TimerEngine.cancel` called `boss.cancel(jobId)` with only the job id and swallowed the error. pg-boss v12 requires the **queue name**: `cancel(queueName, jobId)`. So **every** timer cancellation across the system was a silent no-op — cancelled pg-boss jobs still fired; only downstream worker state-guards saved us. [timer-engine.ts](back_end/src/lib/timer-engine.ts) now resolves the queue name from pg-boss's own `pgboss.job` table (via a small dedicated `pg.Pool`) and calls `cancel(queueName, jobId)`, and **logs** (no longer swallows) on failure. Callers still pass only `pgBossJobId` — the signature is unchanged.
+
+This was the root cause of **parked entries expiring early**: park cancels the short stage-expiry timer and arms a 30-day `PARKING_FOLLOW_UP` `ENTRY_EXPIRY` job — but the cancel no-op'd, so the short timer still fired. Defense-in-depth was also added: [`expireEntry`](back_end/src/services/domain/s1-entry-service.ts) now skips a `PARKED` entry unless the firing job is the genuine park-follow-up (its pg-boss payload carries `parkFollowUp: true`, forwarded by [w20-entry-expiry-worker.ts](back_end/src/workers/w20-entry-expiry-worker.ts)), with a tx re-check to close the TOCTOU race. Per SIG-S1 §3.4 a parked entry still expires — but only after the 30-day park-expiry threshold, never on its short stage window.
+
+Also (fixed 2026-07-10): park/unpark now switch the open `StageDwellRecord.mode` (`PARKED` on park, `ACTIVE` on unpark, in `parkEntry`/`unparkEntry` + the cascade variants) so the W1 StageDwellMonitor applies the relaxed **PARKED** threshold band per SIG-S1 §1187 (was staying `ACTIVE`, so a parked booking got "sitting too long" warnings on the tight active thresholds).
 
 ### Email (Phase 1 — SMTP test surface)
 

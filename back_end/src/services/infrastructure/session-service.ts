@@ -1,14 +1,9 @@
 import type { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { AuthorizationError, ValidationError } from "../../lib/errors.js";
 import { enforceValidPin } from "../../policies/29-session-management/p69-session-management-and-pin-authentication.js";
-
-const JWT_SECRET = process.env.JWT_SECRET ?? "dev-jwt-secret";
-
-function signJwt(payload: { sessionId: string; userId: string; actorLevel: string; terminalId: string }) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: "12h" });
-}
+import { signSessionToken } from "../../lib/auth-token.js";
+import type { ActorLevel } from "../../types/actor.js";
 
 export async function authenticate(prisma: PrismaClient, input: { pin: string; terminalId: string }) {
   if (!input.pin?.trim()) throw new ValidationError("pin is required");
@@ -28,7 +23,12 @@ export async function authenticate(prisma: PrismaClient, input: { pin: string; t
     data: { sessionId: session.id, eventType: "LOGIN", incomingActorId: user.id, terminalId: input.terminalId, occurredAt: new Date() },
   });
 
-  const jwtToken = signJwt({ sessionId: session.id, userId: user.id, actorLevel: user.actorLevel, terminalId: input.terminalId });
+  const jwtToken = signSessionToken({
+    sessionId: session.id,
+    userId: user.id,
+    actorLevel: user.actorLevel as ActorLevel,
+    terminalId: input.terminalId,
+  });
   await prisma.sessionRecord.update({ where: { id: session.id }, data: { jwtToken } });
 
   return {
