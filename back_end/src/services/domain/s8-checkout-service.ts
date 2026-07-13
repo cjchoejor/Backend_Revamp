@@ -165,40 +165,82 @@ export async function recordInspection(
 
 export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: string, actorId: string) {
   const prisma = db;
-  const { entry, room } = await getEntryWithRoom(prisma, entryId);
+  // Load ALL room assignments (not just the latest) so group entries with multiple rooms
+  // depart together. For non-group entries there's one assignment and behaviour is
+  // unchanged. Mirror of the S6 batched check-in refactor.
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: { folio: true, reservation: true, roomAssignments: { orderBy: { createdAt: "desc" }, include: { room: true } } },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.roomAssignments.length === 0) throw new ValidationError("Entry has no room assignment");
   enforceEntryAtS8ForCheckoutCompletion({ currentStage: entry.currentStage });
-  enforceRoomOccupiedForCheckoutCompletion({ currentClaimState: room.currentClaimState });
+
+  const isGroupEntry = entry.groupBillingMode === "GROUP_MASTER";
+  const distinctAssignments = (() => {
+    const seen = new Set<string>();
+    const list: typeof entry.roomAssignments = [];
+    for (const a of entry.roomAssignments) {
+      if (seen.has(a.roomId)) continue;
+      seen.add(a.roomId);
+      list.push(a);
+    }
+    return list;
+  })();
+  const assignmentsToCheckOut = isGroupEntry ? distinctAssignments : [entry.roomAssignments[0]];
+
+  // Every room must currently be OCCUPIED. Fail-fast if any isn't — the whole batch
+  // reverts and the operator sees which room is in the wrong state.
+  for (const a of assignmentsToCheckOut) {
+    enforceRoomOccupiedForCheckoutCompletion({ currentClaimState: a.room.currentClaimState });
+  }
 
   const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as any, "housekeeping.sla.windowMinutes"));
   if (!Number.isFinite(windowMinutes) || windowMinutes < 1) throw new MissingConfigurationError("housekeeping.sla.windowMinutes");
 
   const now = new Date();
   const dueAt = new Date(now.getTime() + windowMinutes * 60_000);
-
-  await prisma.room.update({ where: { id: room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
-  await prisma.roomClaimStateEvent.create({
-    data: { roomId: room.id, entryId, fromState: InventoryClaimState.OCCUPIED, toState: InventoryClaimState.DEPARTED_DIRTY, actorId, reason: "S8 checkout completion" },
-  });
-  const timerRecordId = randomUUID();
   const engine = await getTimerEngine();
-  const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId, roomId: room.id, timerRecordId }, { startAfter: dueAt });
-  await prisma.timerRecord.create({
-    data: {
-      id: timerRecordId,
-      entryId,
-      entityType: "Room",
-      entityId: room.id,
-      timerType: "HOUSEKEEPING_SLA_W24",
-      timerCode: "HOUSEKEEPING_SLA_W24",
-      dueAt,
-      firesAt: dueAt,
-      status: "SCHEDULED",
-      pgBossJobId,
-      createdBy: actorId,
-      payload: { roomId: room.id, entryId, timerRecordId },
-    },
-  });
-  return prisma.room.findUniqueOrThrow({ where: { id: room.id } });
+
+  // For each room: OCCUPIED → DEPARTED_DIRTY + audit event + housekeeping SLA timer.
+  const updatedRoomIds: string[] = [];
+  for (const a of assignmentsToCheckOut) {
+    await prisma.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+    await prisma.roomClaimStateEvent.create({
+      data: {
+        roomId: a.room.id,
+        entryId,
+        fromState: InventoryClaimState.OCCUPIED,
+        toState: InventoryClaimState.DEPARTED_DIRTY,
+        actorId,
+        reason: "S8 checkout completion",
+      },
+    });
+    const timerRecordId = randomUUID();
+    const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId, roomId: a.room.id, timerRecordId }, { startAfter: dueAt });
+    await prisma.timerRecord.create({
+      data: {
+        id: timerRecordId,
+        entryId,
+        entityType: "Room",
+        entityId: a.room.id,
+        timerType: "HOUSEKEEPING_SLA_W24",
+        timerCode: "HOUSEKEEPING_SLA_W24",
+        dueAt,
+        firesAt: dueAt,
+        status: "SCHEDULED",
+        pgBossJobId,
+        createdBy: actorId,
+        payload: { roomId: a.room.id, entryId, timerRecordId },
+      },
+    });
+    updatedRoomIds.push(a.room.id);
+  }
+
+  // Legacy return: single room for non-group entries (preserves the existing signature that
+  // callers rely on). For groups we return the first — callers rendering N rooms should
+  // fetch the fresh assignments list instead of relying on the return value.
+  return prisma.room.findUniqueOrThrow({ where: { id: updatedRoomIds[0] } });
 }
 
 export async function ensureDisputeGateClearForS9(prisma: PrismaClient, entryId: string) {

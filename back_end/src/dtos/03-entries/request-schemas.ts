@@ -14,6 +14,8 @@ export const createEntryRequestSchema = z.object({
   // layer against registry.child.unaccompaniedMinorMinAge so it stays editable as policy.
   // Shape-level we only require non-negative integers below an absurd ceiling.
   childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
+  /** Number of rooms requested — service enforces the chargeable-occupants envelope. */
+  numberOfRooms: z.coerce.number().int().min(1).max(50).optional(),
   otaSource: z.boolean().optional(),
   walkInCompressed: z.boolean().optional(),
   // Contact person — the on-site individual travelling or leading the group. Distinct from
@@ -39,6 +41,7 @@ export const updateEntryRequestSchema = z.object({
   // Upper bound is enforced policy-side (registry.child.unaccompaniedMinorMinAge - 1) in the
   // service. See createEntryRequestSchema for the rationale.
   childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
+  numberOfRooms: z.coerce.number().int().min(1).max(50).optional(),
   useType: z.string().optional(),
   contactPersonName: z.string().trim().max(200).optional(),
   contactPersonPhone: z.string().trim().max(50).optional(),

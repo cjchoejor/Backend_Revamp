@@ -286,7 +286,7 @@ The admin console has been built out heavily. The state below is current as of t
 
 ### Policy registry runtime wiring (the biggest track)
 
-24 admin-editable policies exist in `policy_registry` — 23 are actively consulted at runtime; 1 (`registry.shadowInventory.l4Only`) is seeded but its only consumer (p14) is an orphan file, so the real shadow-inventory enforcement flows through the `availability.shadowInventory.visibilityRules` ConfigurationEntry path instead.
+25 admin-editable policies exist in `policy_registry` — 24 are actively consulted at runtime; 1 (`registry.shadowInventory.l4Only`) is seeded but its only consumer (p14) is an orphan file, so the real shadow-inventory enforcement flows through the `availability.shadowInventory.visibilityRules` ConfigurationEntry path instead.
 
 All follow the same override pattern: **registry row → ConfigurationEntry fallback → TS default**.
 
@@ -316,12 +316,15 @@ Currently wired (each editable on `/admin/policies` with typed forms):
 22. `registry.child.separateBedCharge` → child-policy-service (`getSeparateBedCharge`) — NOT yet consumed by the pricing engine (pending)
 23. `registry.child.unaccompaniedMinorMinAge` → capacity-validation-service (BLOCK issue `UNACCOMPANIED_MINOR`); frontend form reads via `/api/lookups/child-policy` to set the child-age input cap dynamically
 24. `registry.child.adultToChildRatio` → capacity-validation-service (WARN issue `ADULT_CHILD_RATIO_EXCEEDED`)
+25. `registry.groupBooking.advancePaymentBoost` → s3-payment-service `computeAdvancePaymentEvaluation`. Multiplies the resolved base amount (respects per-source thresholds too) by `multiplierPercent` when parent entry is `GROUP_MASTER`. Default 200%.
 
 Frontend schema registry at [`front_end/src/lib/admin/policy-schemas.ts`](front_end/src/lib/admin/policy-schemas.ts) — typed field metadata per known policy ID; supports `number`, `text`, `boolean`, and `json` field kinds. `boolean` renders as a checkbox with an "On/Off" text indicator; `buildDefinition` in `/admin/policies` page coerces to a real boolean before persisting. Adding a new policy = new schema entry + new seed row + new `getRegistryPolicy()` consumer.
 
 ### Unwired policy inventory (audit 2026-06-27)
 
-Audit found 17 System-A (TS guard) files whose exported functions are never imported by any service, worker, state-machine, or route — plus 6 spec-reserved placeholders. See the audit output for the full list; notable ones: `p01-s8-to-s9-room-and-keys-gates`, `p10-checkout-due`, `p14-shadow-inventory-visibility` (redundant with the ConfigurationEntry path), `p15-guest-identity-capture`, `p21-mid-stay-rate-amendment`, `p24-mid-stay-discount`, `p31-folio-provisional-required-to-convert-live`, `p32-billing-model-mid-stay-transition`, `p36-early-departure`, `p43-credit-ceiling-commitment-snapshot-carry`, `p47-deficient-surface-in-search-crossref` (placeholder), `p51-room-inspection-exists-for-s8-to-s9`, `p53-active-dispute-management`, `p58-room-change-mode-trigger`, `p59-night-audit-countdown`, `p66-group-foc-and-billing-split` (relevant to the group-billing wiring conversation), `p70-feedback-solicitation`, plus the 6 AI-agent + voice-note placeholders (`p73`–`p77`, `p47`). Each represents implemented-but-uncalled spec logic — either wire it or delete it deliberately; don't leave it drifting.
+Audit found 17 System-A (TS guard) files unwired at the time. Since then **`p66-group-foc-and-billing-split`** has been wired into `s3-reservation-setup-service.ensureProvisionalFolioAndBillingModel` as part of the group-billing track (2026-07-09) — remove it from the list. The remaining unwired: `p01-s8-to-s9-room-and-keys-gates`, `p10-checkout-due`, `p14-shadow-inventory-visibility` (redundant with the ConfigurationEntry path), `p15-guest-identity-capture`, `p21-mid-stay-rate-amendment`, `p24-mid-stay-discount`, `p31-folio-provisional-required-to-convert-live`, `p32-billing-model-mid-stay-transition`, `p36-early-departure`, `p43-credit-ceiling-commitment-snapshot-carry`, `p47-deficient-surface-in-search-crossref` (placeholder), `p51-room-inspection-exists-for-s8-to-s9`, `p53-active-dispute-management`, `p58-room-change-mode-trigger`, `p59-night-audit-countdown`, `p70-feedback-solicitation`, plus the 6 AI-agent + voice-note placeholders (`p73`–`p77`, `p47`). Each represents implemented-but-uncalled spec logic — either wire it or delete it deliberately; don't leave it drifting.
+
+Plain-language explainer of the audit (System A vs B, "wired/unwired", the shadow-inventory dead-chain) lives at [`docs/policy-wiring-audit-explained.md`](docs/policy-wiring-audit-explained.md) — read it when someone asks "why is X policy not doing anything?"
 
 ### Child policy + capacity validation (2026-06-25)
 
@@ -380,9 +383,44 @@ New L1-accessible endpoint [`GET /api/lookups/child-policy`](back_end/src/routes
 
 `expiry.s1.defaultTtlSeconds`, `expiry.s2.quotationValidityDays`, `expiry.s2.speculativeHoldTtlSeconds`, `expiry.s3.committedHoldTtlSeconds`, `expiry.defaults`, `ownership.assignmentRules`, `billingModel.availablePerSource` — all moved from `WorkflowConfigurationService` owner to `ConfigurationService` in [`config-key-registry.ts`](back_end/src/lib/admin/config-key-registry.ts). The `/admin/workflow` page was deleted earlier (100% duplicate of Timers-Workers), but the ownership registry still pointed these keys at that surface — result was a dead loop where the generic endpoint rejected writes and the "owner" surface never had a route for them. Reassigning to `ConfigurationService` lets the generic PATCH endpoint (which the Timers-Workers page uses) accept the writes. Shape validators (positiveInt, isObject, isArray) preserved.
 
-### Latent flag: `Entry.groupBillingMode`
+### Group billing wiring (2026-07-09) — `Entry.groupBillingMode` is now load-bearing
 
-Set at S1 by Policy 64 based on effective guest count vs threshold. **Currently a write-only classification** — no downstream code branches on it. Nothing in S2–S9 consumes the flag. Effect: a booking marked `GROUP_MASTER` behaves identically to one marked `NULL`. Wiring conversation pending — candidates include S3 defaulting `Folio.billingModel = DIRECT_BILL` for groups, group-appropriate advance payment thresholds, group check-in flow, aggregate invoicing, and consuming `p66-group-foc-and-billing-split` (currently an orphaned TS policy).
+Was a latent flag; now wired end-to-end. Policy 64 sets `groupBillingMode = GROUP_MASTER` at S1 when effective guest count crosses the configurable threshold (include flags on `registry.groupDetection.guestCountThreshold` decide which age bands count — adults + children 6–10 by default, young children excluded). Downstream:
+
+| Stage | Group-aware behaviour |
+|---|---|
+| **S1 intake update** | `updateEntryIntakeFields` re-runs Policy 64 when guest counts change. Skipped when `groupBillingModeManualOverride === true`. Reclassification writes an audit trace `ENTRY.GROUP_BILLING_MODE_RECLASSIFIED`. |
+| **S3 folio setup** | Billing model picker pre-fills `DIRECT_BILL` with a visible hint. `enforceGroupBillingSplitConfigured` (p66) guards the transition. Changing to a non-group-friendly model (anything other than `DIRECT_BILL` / `TOUR_OPERATOR_VOUCHER`) requires L3+ authority — `s3-reservation-setup-service` throws `AuthorizationError` otherwise. |
+| **S3 payment** | `computeAdvancePaymentEvaluation` multiplies the required amount by `registry.groupBooking.advancePaymentBoost.multiplierPercent` (default 200 = 2×). Now honours per-source thresholds too (`advancePayment.thresholds.OTA.amount` etc.), not just DEFAULT. Response carries `groupBoostApplied: { multiplierPercent, baseAmount }` when the boost fired; frontend shows a hint. |
+| **S4 confirmation email** | `renderReservationConfirmationEmail` branches on `isGroup` — subject becomes "Group reservation confirmed", greeting uses `groupLeaderName` (contact person → guest profile fallback), adds "Group booking · N rooms" + "Billing: {model}" lines. |
+| **W4 pre-arrival activation (S4→S5)** | Enforces `contactPersonName` + `contactPersonPhone` are set. Returns `{ skipped: true, reason: "MISSING_CONTACT_PERSON" }` otherwise. Applies to ALL entries (not just groups) — the on-site contact is a universal requirement per the business rule. |
+| **S6 check-in** | `completeCheckInToS7` iterates ALL distinct room assignments for group entries. Per-room physical-ready enforcement (fail-fast if any room isn't ready). One H2 + one H3 handoff created per room, dedup keyed off the new `HandoffRecord.roomAssignmentId` FK (falls back to `checklistContent.roomNumber` for pre-migration rows). Per-room rejection check via `perRoomHandoffs` map. Room state CONFIRMED→OCCUPIED transitions run per room. |
+| **S7 amendments** | `AmendmentEventRecord.affectsGroup` populated from the parent entry's `groupBillingMode` at create time. Both `s7-amendment-service.recordAmendment` and `entry-lifecycle-state-machine`'s room-change flow read the flag. |
+| **S8 final invoicing** | `resolveGroupInvoiceOverrides` helper in [`s8-settlement-service.ts`](back_end/src/services/domain/s8-settlement-service.ts) applies at all 3 FINAL invoice create sites (issueInvoiceAtS8, DIRECT_BILL settle, VOUCHER settle). Prefixes `templateKey` with `group-` and adds `{ groupBooking: true, roomCount, guestCount, groupLeader }` to metadata. Frontend (S9 workspace invoice list) shows an indigo `Group · N rooms` pill. |
+| **All views** | `<GroupBadge>` component ([front_end/src/components/entries/group-badge.tsx](front_end/src/components/entries/group-badge.tsx)) — indigo pill with Users icon. Only renders when `groupBillingMode === "GROUP_MASTER"`. Placed on entry list, EntryHeader (workspace pages), S3 folio card, BookingContextBar sticky breadcrumb. |
+
+**Manual override:** `PATCH /api/entries/:id/group-billing-mode` — L3+ endpoint, Zod-validated body `{ mode: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null, reason: string, clearManualOverride?: boolean }`. Sets `Entry.groupBillingMode` explicitly + flips `Entry.groupBillingModeManualOverride = true` so subsequent intake edits don't re-classify. Setting `clearManualOverride: true` re-enables Policy 64 auto-reclassify. Audit trace `ENTRY.GROUP_BILLING_MODE_MANUALLY_SET` records reason + prior state. Service at [`back_end/src/services/admin/group-billing-mode-admin-service.ts`](back_end/src/services/admin/group-billing-mode-admin-service.ts).
+
+**Migration** `20260709091543_group_hardening_contact_person_and_handoff_fk` added:
+- `Entry.groupBillingModeManualOverride Boolean @default(false)`
+- `Entry.contactPersonName String?` + `Entry.contactPersonPhone String?`
+- `HandoffRecord.roomAssignmentId String?` + FK to `RoomAssignment`
+- `AmendmentEventRecord.affectsGroup Boolean @default(false)`
+
+Note: after applying, stop `npm run dev:workers`, run `npx prisma generate`, restart — engine binary lock (Windows EPERM) unless you bounce.
+
+### HandoffChecklistContent typed shape
+
+[`back_end/src/lib/handoff-checklist.ts`](back_end/src/lib/handoff-checklist.ts) — replaces the ad-hoc `as any` casts on `HandoffRecord.checklistContent` reads. Exports `HandoffChecklistContent` (union of every field ever written — all optional) + `readHandoffChecklistContent(value)` safe narrower. Used by check-in-service for the per-room dedup / rejection-check.
+
+### Group-billing follow-ups still pending
+
+- **Batched S8 checkout** — mirror of the check-in refactor for departure. Per-room key returns + state transitions.
+- **Night audit per-room** for group folios — currently entry-level records don't distinguish which room had the discrepancy.
+- **Group-tier credit ceiling** — `advancePaymentBoost` handled the deposit; the ceiling itself isn't group-aware yet. Needs `registry.groupBooking.creditCeilingBoost` and integration with `creditCeiling.clientTier.thresholds`.
+- **Child meal pricing engine wiring** — `child-policy-service.getMealRateMultiplier` exists but the pricing engine doesn't call it. Not group-specific but compounds on groups.
+- **Frontend UI for contact-person fields** on the booking flow's step 1 — backend gate exists; form inputs don't yet.
+- **Frontend admin UI for `PATCH /group-billing-mode`** — backend action exists; admin panel doesn't surface it yet.
 
 ### Mode registry (ACIG §2.1A.7)
 

@@ -17,6 +17,7 @@ import { BookingFlowProvider } from "./booking-flow-context";
 import { BookingTimerPanel } from "./booking-timer-panel";
 import { EntryTracePanel } from "@/components/stages/shared/entry-trace-panel";
 import type { EntryDetail, AvailabilityConfigSummary, QuotationSummary } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 type ActiveStep = 1 | 2 | 3;
 
@@ -252,11 +253,17 @@ function Step1Summary({ entry }: { entry: EntryDetail }) {
 }
 
 function Step2Summary({ config }: { config: AvailabilityConfigSummary; entry: EntryDetail | null }) {
-  const roomId = config.optionSelected?.roomId as string | undefined;
+  const roomIds = optionSelectedRoomIds(config.optionSelected);
+  const firstId = roomIds[0];
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
       <strong className="text-foreground">
-        Room sealed {roomId && <span className="font-mono text-xs text-muted-foreground">({roomId.slice(0, 8)}…)</span>}
+        {roomIds.length <= 1
+          ? "Room sealed"
+          : `${roomIds.length} rooms sealed`}
+        {firstId && roomIds.length === 1 && (
+          <span className="font-mono text-xs text-muted-foreground"> ({firstId.slice(0, 8)}…)</span>
+        )}
       </strong>
       {config.sealedAt && (
         <span className="text-xs text-muted-foreground">Sealed {new Date(config.sealedAt).toLocaleString()}</span>

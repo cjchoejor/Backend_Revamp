@@ -50,6 +50,7 @@ import type {
   PreArrivalTaskSummary,
   RoomAssignmentSummary,
 } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 type S5WorkspaceProps = {
   entry: EntryDetail;
@@ -94,8 +95,9 @@ export function S5Workspace({ entry }: S5WorkspaceProps) {
   const sealedPreferred = (entry.availabilityConfigs ?? []).find(
     (c: AvailabilityConfigSummary) => c.sealedAt && c.optionSelected,
   );
+  const sealedRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
   const defaultRoomId =
-    entry.committedHold?.roomId ?? sealedPreferred?.optionSelected?.roomId ?? "";
+    entry.committedHold?.roomId ?? sealedRoomIds[0] ?? "";
 
   const [roomId, setRoomId] = useState(defaultRoomId);
   const [assignNotes, setAssignNotes] = useState("");

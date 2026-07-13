@@ -32,6 +32,60 @@ async function runAvailabilityEngineForEntry(
   const rooms = await prisma.room.findMany({ orderBy: { roomNumber: "asc" } });
   const spaces = await prisma.space.findMany({ orderBy: { code: "asc" } });
 
+  // Fetch existing bookings + committed holds that intersect the query range. Used by the
+  // engine to compute a per-date breakdown so the S1 calendar can render per-night cells.
+  // Excludes the current entry so re-searching an already-sealed booking doesn't mark its
+  // own rooms as occupied.
+  const [reservations, committedHolds] = await Promise.all([
+    prisma.reservation.findMany({
+      where: {
+        frozenCheckInDate: { lt: checkOut },
+        frozenCheckOutDate: { gt: checkIn },
+        NOT: { entryId: entry.id },
+      },
+      select: {
+        frozenCheckInDate: true,
+        frozenCheckOutDate: true,
+        entry: { select: { roomAssignments: { select: { roomId: true } } } },
+      },
+    }),
+    prisma.committedHold.findMany({
+      where: {
+        state: { in: ["PLACED", "CONFIRMED"] },
+        roomId: { not: null },
+        NOT: { entryId: entry.id },
+        expiresAt: { gt: new Date() },
+        entry: {
+          checkInDate: { lt: checkOut },
+          checkOutDate: { gt: checkIn },
+        },
+      },
+      select: {
+        roomId: true,
+        entry: { select: { checkInDate: true, checkOutDate: true } },
+      },
+    }),
+  ]);
+  // Fan out reservations to (roomId, start, end) tuples via their entry's room assignments.
+  const roomBlockages = [
+    ...reservations.flatMap((r) =>
+      (r.entry?.roomAssignments ?? []).map((a) => ({
+        roomId: a.roomId,
+        startDate: r.frozenCheckInDate,
+        endDate: r.frozenCheckOutDate,
+        source: "RESERVED" as const,
+      })),
+    ),
+    ...committedHolds
+      .filter((h) => h.roomId && h.entry?.checkInDate && h.entry?.checkOutDate)
+      .map((h) => ({
+        roomId: h.roomId!,
+        startDate: h.entry!.checkInDate!,
+        endDate: h.entry!.checkOutDate!,
+        source: "HOLD" as const,
+      })),
+  ];
+
   const engineRaw = availabilityEngineQuery({
     checkInDate: checkIn,
     checkOutDate: checkOut,
@@ -58,6 +112,7 @@ async function runAvailabilityEngineForEntry(
       blockedReason: r.blockedReason,
     })),
     spaces: spaces.map((s) => ({ id: s.id, spaceName: s.name, defaultCapacity: s.defaultCapacity, isAvailable: s.isAvailable, isEventInProgress: s.isEventInProgress })),
+    roomBlockages,
     currentTimestamp: new Date(),
   });
 
@@ -286,43 +341,143 @@ export async function selectOption(
   prisma: PrismaClient,
   configId: string,
   actorId: string,
-  input: { roomId: string; deficientAcknowledgements?: unknown },
+  input: {
+    roomId?: string;
+    roomIds?: string[];
+    perNight?: Array<{ date: string; roomIds: string[] }>;
+    deficientAcknowledgements?: unknown;
+  },
 ) {
   const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: configId } });
   if (!cfg) throw new NotFoundError("AvailabilityConfiguration");
   if (cfg.isStale) throw new ValidationError("configuration is stale");
-  if (!input.roomId?.trim()) throw new ValidationError("roomId is required");
 
-  // Guard: selection must be from the persisted resultSet for this configuration.
+  // Normalise the three input shapes into a single flat list of distinct room ids to validate
+  // and a normalised `perNight` list (empty if the caller didn't use that shape). Downstream
+  // storage picks the richest shape available:
+  //   - perNight provided → { perNight: [...], isDeficient }
+  //   - roomIds provided  → { roomIds: [{ roomId, isDeficient }, ...], isDeficient }
+  //   - roomId  provided  → { roomId, isDeficient }  (legacy)
+  let normalisedPerNight: Array<{ date: string; roomIds: string[] }> = [];
+  let rawIds: string[] = [];
+  if (input.perNight && input.perNight.length > 0) {
+    // Dedup within each night; collect union across nights for the resultSet validation.
+    const unique = new Set<string>();
+    normalisedPerNight = input.perNight.map((n) => {
+      const distinct = Array.from(new Set(n.roomIds.map((r) => r.trim()).filter(Boolean)));
+      distinct.forEach((id) => unique.add(id));
+      return { date: n.date, roomIds: distinct };
+    });
+    rawIds = Array.from(unique);
+  } else if (input.roomIds && input.roomIds.length > 0) {
+    rawIds = input.roomIds;
+  } else if (input.roomId) {
+    rawIds = [input.roomId];
+  }
+  const selectedRoomIds = Array.from(new Set(rawIds.map((r) => r.trim()).filter(Boolean)));
+  if (selectedRoomIds.length === 0) throw new ValidationError("At least one roomId is required");
+
+  // Guard: each selection must be present in the persisted resultSet and not in the
+  // unavailable bucket. Fail-fast per id so the operator sees exactly which one's bad.
   const rs = (cfg.resultSet ?? {}) as any;
-  const selectedRoomId = input.roomId.trim();
-  const inAnyBucket =
-    (rs.availableRooms ?? []).some((r: any) => r.inventoryId === selectedRoomId || r.roomId === selectedRoomId) ||
-    (rs.deficientRooms ?? []).some((r: any) => r.inventoryId === selectedRoomId || r.roomId === selectedRoomId) ||
-    (rs.unavailableRooms ?? []).some((r: any) => r.inventoryId === selectedRoomId || r.roomId === selectedRoomId);
-  if (!inAnyBucket) {
-    throw new ValidationError("roomId must be selected from the persisted AvailabilityConfiguration resultSet");
+  const availableIds = new Set<string>(
+    [...(rs.availableRooms ?? []), ...(rs.deficientRooms ?? [])].map((r: any) => r.inventoryId ?? r.roomId),
+  );
+  const unavailableById = new Map<string, any>(
+    (rs.unavailableRooms ?? []).map((r: any) => [r.inventoryId ?? r.roomId, r]),
+  );
+  for (const id of selectedRoomIds) {
+    if (unavailableById.has(id)) {
+      const u = unavailableById.get(id);
+      throw new ValidationError(`Room ${id} is not selectable (unavailableReason=${u.unavailabilityReason ?? "UNKNOWN"})`);
+    }
+    if (!availableIds.has(id)) {
+      throw new ValidationError(`Room ${id} must be selected from the persisted AvailabilityConfiguration resultSet`);
+    }
   }
 
-  const unavailable = (rs.unavailableRooms ?? []).find((r: any) => r.inventoryId === selectedRoomId || r.roomId === selectedRoomId);
-  if (unavailable) {
-    throw new ValidationError(`roomId is not selectable (unavailableReason=${unavailable.unavailabilityReason ?? "UNKNOWN"})`);
+  // Load all selected rooms once + compute per-room deficient status.
+  const rooms = await prisma.room.findMany({
+    where: { id: { in: selectedRoomIds } },
+    include: { deficientConditionRecords: true },
+  });
+  if (rooms.length !== selectedRoomIds.length) throw new NotFoundError("Room");
+  const perRoom = selectedRoomIds.map((id) => {
+    const room = rooms.find((r) => r.id === id)!;
+    const isDeficient = (room.deficientConditionRecords ?? []).some((d) => d.status !== "RESOLVED");
+    return { roomId: id, isDeficient };
+  });
+
+  const anyDeficient = perRoom.some((r) => r.isDeficient);
+  if (anyDeficient && !input.deficientAcknowledgements) {
+    throw new ValidationError("deficientAcknowledgements is required when any selected room is DEFICIENT");
   }
 
-  const room = await prisma.room.findUnique({ where: { id: selectedRoomId }, include: { deficientConditionRecords: true } });
-  if (!room) throw new NotFoundError("Room");
-  const isDeficient = (room.deficientConditionRecords ?? []).some((d) => d.status !== "RESOLVED");
-
-  if (isDeficient && !input.deficientAcknowledgements) {
-    throw new ValidationError("deficientAcknowledgements is required when selecting a DEFICIENT room");
+  // Per-night specific validation. Every night must have the same number of picks (matching
+  // entry.numberOfRooms). Cover all nights of the stay — no gaps. Same room can be repeated
+  // across nights (guest staying in room 201 all week) but not within one night (that would
+  // be a duplicate assignment).
+  if (normalisedPerNight.length > 0) {
+    const entry = await prisma.entry.findUnique({
+      where: { id: cfg.entryId },
+      select: { numberOfRooms: true, checkInDate: true, checkOutDate: true },
+    });
+    if (!entry) throw new NotFoundError("Entry");
+    const requiredRooms = entry.numberOfRooms ?? normalisedPerNight[0].roomIds.length;
+    for (const n of normalisedPerNight) {
+      if (n.roomIds.length !== requiredRooms) {
+        throw new ValidationError(
+          `Night ${n.date} has ${n.roomIds.length} rooms selected; expected ${requiredRooms} (matching Entry.numberOfRooms).`,
+        );
+      }
+    }
+    // Verify all stay nights are covered. Skip if either check-in or check-out is missing —
+    // rare but possible for pre-Phase-D entries; we can't derive expected nights without them.
+    if (entry.checkInDate && entry.checkOutDate) {
+      const expected: string[] = [];
+      const cur = new Date(entry.checkInDate.getTime());
+      const end = new Date(entry.checkOutDate.getTime());
+      while (cur < end) {
+        expected.push(cur.toISOString().slice(0, 10));
+        cur.setUTCDate(cur.getUTCDate() + 1);
+        if (expected.length > 365) break;
+      }
+      const supplied = new Set(normalisedPerNight.map((n) => n.date));
+      const missing = expected.filter((d) => !supplied.has(d));
+      if (missing.length > 0) {
+        throw new ValidationError(`perNight is missing selections for ${missing.length} night(s): ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "…" : ""}`);
+      }
+    }
   }
 
   return prisma.$transaction(async (tx) => {
+    // Storage shape picked from richest → simplest:
+    //   1) perNight given → `{ perNight: [{ date, roomIds: [{ roomId, isDeficient }] }], isDeficient }`
+    //      — the operator committed to specific rooms per night; supports mid-stay room
+    //      changes (e.g. room 201 for night 1, room 301 for night 2).
+    //   2) roomIds given → `{ roomIds: [{ roomId, isDeficient }, ...] }` — same rooms all nights.
+    //   3) single roomId → legacy `{ roomId, isDeficient }` shape preserved.
+    const deficientLookup = new Map(perRoom.map((r) => [r.roomId, r.isDeficient]));
+    let optionSelected: Record<string, unknown>;
+    if (normalisedPerNight.length > 0) {
+      optionSelected = {
+        perNight: normalisedPerNight.map((n) => ({
+          date: n.date,
+          roomIds: n.roomIds.map((id) => ({ roomId: id, isDeficient: deficientLookup.get(id) === true })),
+        })),
+        isDeficient: anyDeficient,
+      };
+    } else if (perRoom.length === 1) {
+      optionSelected = { roomId: perRoom[0].roomId, isDeficient: perRoom[0].isDeficient };
+    } else {
+      optionSelected = { roomIds: perRoom, isDeficient: anyDeficient };
+    }
+
     const updated = await tx.availabilityConfiguration.update({
       where: { id: configId },
       data: {
-        optionSelected: { roomId: selectedRoomId, isDeficient },
-        deficientAcknowledgements: isDeficient ? (input.deficientAcknowledgements as any) : null,
+        optionSelected: optionSelected as Prisma.InputJsonValue,
+        deficientAcknowledgements: anyDeficient ? (input.deficientAcknowledgements as any) : null,
       },
     });
     await tx.traceEvent.create({
@@ -335,7 +490,11 @@ export async function selectOption(
         operation: "UPDATE",
         timestamp: new Date(),
         entryId: cfg.entryId,
-        payload: { configId, roomId: selectedRoomId },
+        payload: {
+          configId,
+          roomIds: perRoom.map((r) => r.roomId),
+          ...(normalisedPerNight.length > 0 ? { perNight: normalisedPerNight } : {}),
+        },
         createdBy: actorId,
       },
     });

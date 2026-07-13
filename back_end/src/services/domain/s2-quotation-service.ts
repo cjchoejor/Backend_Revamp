@@ -30,6 +30,7 @@ import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
+import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -137,6 +138,37 @@ export async function createQuotation(
   const nextVersion = (last?.versionNumber ?? 0) + 1;
   const now = new Date();
 
+  // Per-guest meal breakdown. Uses the base adult meal rate available on the agent rate
+  // card (or falls back to derived pricing) and applies child-policy multipliers so young
+  // children eat free, kids at reduced rate, adults full. Advisory today — attached to
+  // commercialTerms as a `perGuestMealBreakdown` block for reporting / audit. Pricing engines
+  // that want to swap the total with this per-guest sum can call the helper directly.
+  let perGuestMealBreakdown: unknown = undefined;
+  const adultMealRate = agentRate?.addOns?.breakfast ?? null; // conservative default meal-per-person
+  if (typeof adultMealRate === "number" && adultMealRate > 0 && (entry.adultCount ?? 0) + (entry.childAges ?? []).length > 0) {
+    const nightsForMeals =
+      stay && stay.checkIn && stay.checkOut
+        ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
+        : 1;
+    const bundle = await loadChildPolicyBundle(prisma);
+    const breakdown = computeGroupMealCharge(
+      {
+        adultCount: entry.adultCount ?? 0,
+        childAges: entry.childAges ?? [],
+        adultMealRate,
+        nights: nightsForMeals,
+      },
+      bundle,
+    );
+    perGuestMealBreakdown = {
+      adultMealRate,
+      nights: nightsForMeals,
+      totalMealCharge: breakdown.total,
+      perGuest: breakdown.perGuest,
+      source: "registry.child.mealPricing",
+    };
+  }
+
   const commercialTerms = {
     roomTypeId,
     useType: entry.useType,
@@ -153,6 +185,7 @@ export async function createQuotation(
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
+    ...(perGuestMealBreakdown ? { perGuestMealBreakdown } : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
     ...(agentRate
       ? {

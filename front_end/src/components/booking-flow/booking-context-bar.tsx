@@ -2,6 +2,7 @@
 
 import { Calendar, DoorOpen, FileText, Mail, Phone, User, Users } from "lucide-react";
 import type { AvailabilityConfigSummary, EntryDetail, QuotationSummary } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 import { GroupBadge } from "@/components/entries/group-badge";
 
 type Props = {
@@ -48,7 +49,8 @@ export function BookingContextBar({ entry, sealedConfig, acceptedQuotation }: Pr
   const agentLabel =
     inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? null;
 
-  const roomId = sealedConfig?.optionSelected?.roomId as string | undefined;
+  const roomIds = optionSelectedRoomIds(sealedConfig?.optionSelected);
+  const roomId = roomIds[0]; // display the first for the compact chip; count shown separately
 
   return (
     <div className="sticky top-0 z-30 -mx-4 border-b border-border bg-card/95 px-4 py-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:-mx-6 sm:px-6">
@@ -112,10 +114,10 @@ export function BookingContextBar({ entry, sealedConfig, acceptedQuotation }: Pr
           </Chip>
         )}
 
-        {/* Sealed room (step 2) */}
-        {roomId && (
+        {/* Sealed room(s) (step 2). Show a count for multi-room seals. */}
+        {roomIds.length > 0 && (
           <Chip icon={<DoorOpen className="h-3.5 w-3.5" />} tone="emerald">
-            Room {roomId.slice(0, 10)}…
+            {roomIds.length === 1 ? `Room ${roomId!.slice(0, 10)}…` : `${roomIds.length} rooms sealed`}
           </Chip>
         )}
 

@@ -32,6 +32,7 @@ import {
   formatUnavailabilityReason,
 } from "@/lib/room-inventory-status";
 import type { AvailabilityConfigSummary, EntryDetail } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 type S1WorkspaceProps = {
   entry: EntryDetail;
@@ -128,11 +129,32 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
   const [searchError, setSearchError] = useState<unknown>(null);
   const [selectError, setSelectError] = useState<unknown>(null);
   const [pendingRoomId, setPendingRoomId] = useState<string | null>(null);
+  // Per-night selections: date (YYYY-MM-DD) → list of roomIds picked for that night.
+  // Owned here so we can build the seal payload from the assembled state; the calendar
+  // renders from it and reports clicks back via onToggleCell.
+  const [selectionsByDate, setSelectionsByDate] = useState<Record<string, string[]>>({});
+  // Track which rooms were entered as DEFICIENT so we can build the acknowledgements payload
+  // at seal time. Keyed by roomId (deficiency is a property of the room, not the night).
+  const [deficientRoomIdsMap, setDeficientRoomIdsMap] = useState<Record<string, boolean>>({});
+  // True when the operator clicked "Change selection" after a save — puts the calendar back
+  // into editable mode with the previous picks pre-populated.
+  const [editingAfterSeal, setEditingAfterSeal] = useState(false);
 
   const configs: AvailabilityConfigSummary[] = entry.availabilityConfigs ?? [];
   const latestConfig = configs[0] ?? null;
   const preferredConfig = configs.find((c) => c.optionSelected != null) ?? null;
-  const preferredRoomId = preferredConfig?.optionSelected?.roomId ?? null;
+  const preferredRoomIds: string[] = optionSelectedRoomIds(preferredConfig?.optionSelected ?? null);
+  const sealedByDate: Record<string, string[]> = (() => {
+    const opt = preferredConfig?.optionSelected;
+    if (!opt) return {};
+    if ("perNight" in opt && Array.isArray(opt.perNight)) {
+      const map: Record<string, string[]> = {};
+      for (const n of opt.perNight) map[n.date] = n.roomIds.map((r) => r.roomId);
+      return map;
+    }
+    return {};
+  })();
+  const targetRoomCount = entry.numberOfRooms ?? 1;
 
   const inquiriesQuery = useQuery({
     queryKey: ["inquiries", entry.inquiryId],
@@ -167,53 +189,61 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
   const selectMutation = useMutation({
     mutationFn: async ({
       configurationId,
-      roomId,
-      isDeficient,
+      perNight,
+      deficientRoomIds,
     }: {
       configurationId: string;
-      roomId: string;
-      isDeficient: boolean;
+      perNight: Array<{ date: string; roomIds: string[] }>;
+      deficientRoomIds: string[];
     }) => {
       return selectAvailabilityOption(session!, configurationId, {
-        roomId,
-        deficientAcknowledgements: isDeficient
-          ? [
-              {
-                roomId,
-                acknowledgedAt: new Date().toISOString(),
-                note: "Acknowledged at S1 configuration selection",
-              },
-            ]
+        // Per-night shape: each night carries its own room list. Backend validates that
+        // every night has exactly entry.numberOfRooms picks + every stay date is covered.
+        perNight,
+        deficientAcknowledgements: deficientRoomIds.length > 0
+          ? deficientRoomIds.map((roomId) => ({
+              roomId,
+              acknowledgedAt: new Date().toISOString(),
+              note: "Acknowledged at S1 configuration selection",
+            }))
           : undefined,
       });
     },
     onSuccess: () => {
       setSelectError(null);
       setPendingRoomId(null);
-      toast.success("Preferred room selected");
+      setSelectionsByDate({});
+      setDeficientRoomIdsMap({});
+      setEditingAfterSeal(false);
+      toast.success("Preferred rooms saved");
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     },
     onError: (e) => {
       setSelectError(e);
-      toast.error(e instanceof ApiError ? e.message : "Could not select room");
+      setPendingRoomId(null);
+      toast.error(e instanceof ApiError ? e.message : "Could not select rooms");
     },
   });
 
   const activeConfigurationId =
     searchResult?.configurationId ?? latestConfig?.id ?? preferredConfig?.id ?? null;
 
-  const { availableRooms, deficientRooms, unavailableRooms } = useMemo(() => {
+  const { availableRooms, deficientRooms, unavailableRooms, perDate } = useMemo(() => {
     if (searchResult?.results) {
       const fromApi = roomsFromResultSet(searchResult.results);
       return {
         availableRooms: searchResult.results.availableRooms ?? fromApi.availableRooms,
         deficientRooms: searchResult.results.deficientRooms ?? fromApi.deficientRooms,
         unavailableRooms: searchResult.results.unavailableRooms ?? fromApi.unavailableRooms,
+        perDate: searchResult.results.perDate,
       };
     }
     const source = latestConfig?.resultSet ?? preferredConfig?.resultSet;
-    if (source) return roomsFromResultSet(source);
-    return { availableRooms: [], deficientRooms: [], unavailableRooms: [] };
+    if (source) {
+      const rs = source as { perDate?: typeof searchResult extends null ? never : any };
+      return { ...roomsFromResultSet(source), perDate: (rs?.perDate ?? undefined) };
+    }
+    return { availableRooms: [], deficientRooms: [], unavailableRooms: [], perDate: undefined };
   }, [searchResult, latestConfig, preferredConfig]);
 
   const hasRoomResults =
@@ -252,14 +282,92 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
     entry.currentStage === "S1" &&
     !!(entry.checkInDate && entry.checkOutDate);
 
-  const handleSelectRoom = (room: AvailabilityRoomResult, isDeficient: boolean) => {
+  // Compute stay nights on the workspace side too (for the auto-seal check + progress).
+  const stayNights: string[] = (() => {
+    const ci = checkIn || entry.checkInDate?.slice(0, 10);
+    const co = checkOut || entry.checkOutDate?.slice(0, 10);
+    if (!ci || !co) return [];
+    const re = /^(\d{4})-(\d{2})-(\d{2})$/;
+    const a = re.exec(ci);
+    const b = re.exec(co);
+    if (!a || !b) return [];
+    const aDate = new Date(Date.UTC(Number(a[1]), Number(a[2]) - 1, Number(a[3])));
+    const bDate = new Date(Date.UTC(Number(b[1]), Number(b[2]) - 1, Number(b[3])));
+    const days: string[] = [];
+    const cur = new Date(aDate);
+    while (cur < bDate) {
+      days.push(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+      if (days.length > 90) break;
+    }
+    return days;
+  })();
+
+  const handleToggleCell = (roomId: string, isoDate: string, isDeficient: boolean) => {
+    setSelectionsByDate((prev) => {
+      const currentForNight = prev[isoDate] ?? [];
+      const already = currentForNight.includes(roomId);
+      const nextForNight = already ? currentForNight.filter((id) => id !== roomId) : [...currentForNight, roomId];
+      const next = { ...prev, [isoDate]: nextForNight };
+
+      // Track deficient status per room so we can bundle acknowledgements at commit time.
+      setDeficientRoomIdsMap((m) => {
+        const copy = { ...m };
+        if (already) {
+          const stillPicked = Object.entries(next).some(([d, ids]) => d !== isoDate && ids.includes(roomId));
+          if (!stillPicked) delete copy[roomId];
+        } else if (isDeficient) {
+          copy[roomId] = true;
+        }
+        return copy;
+      });
+
+      return next;
+    });
+  };
+
+  // Explicit save — user has to click "Save selection" once every night is at target count.
+  // Kept out of the toggle handler so users can freely deselect / adjust before committing.
+  const allNightsComplete =
+    stayNights.length > 0 &&
+    stayNights.every((n) => (selectionsByDate[n] ?? []).length === targetRoomCount);
+
+  const handleSaveSelection = () => {
     const configId = searchResult?.configurationId ?? latestConfig?.id;
     if (!configId) {
       toast.error("Run availability search first");
       return;
     }
-    setPendingRoomId(room.roomId);
-    selectMutation.mutate({ configurationId: configId, roomId: room.roomId, isDeficient });
+    if (!allNightsComplete) {
+      toast.error(`Fill every night with ${targetRoomCount} room(s) before saving.`);
+      return;
+    }
+    const perNight = stayNights.map((date) => ({ date, roomIds: selectionsByDate[date] ?? [] }));
+    const deficientRoomIds = Object.keys(deficientRoomIdsMap).filter((id) =>
+      Object.values(selectionsByDate).some((ids) => ids.includes(id)),
+    );
+    setPendingRoomId(perNight[0]?.roomIds[0] ?? null);
+    selectMutation.mutate({ configurationId: configId, perNight, deficientRoomIds });
+  };
+
+  const resetSelections = () => {
+    setSelectionsByDate({});
+    setDeficientRoomIdsMap({});
+  };
+
+  // Re-open editing after a seal: copy the sealed picks back into local state so the operator
+  // can adjust them. The next "Save" call overwrites the same AvailabilityConfiguration row
+  // (backend does update, not insert), so this is safe.
+  const handleEditAfterSeal = () => {
+    setSelectionsByDate(sealedByDate);
+    // Preserve deficient map for the sealed picks — assume they were flagged the same way.
+    // Un-flagged rooms just won't have entries, which is fine.
+    setEditingAfterSeal(true);
+  };
+  const cancelEditAfterSeal = () => {
+    setSelectionsByDate({});
+    setDeficientRoomIdsMap({});
+    setEditingAfterSeal(false);
   };
 
   // The stage-mismatch gate (was: `if (entry.currentStage !== "S1") return <placeholder>`) has
@@ -352,32 +460,73 @@ export function S1Workspace({ entry }: S1WorkspaceProps) {
         {hasRoomResults && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">2. Select preferred room</CardTitle>
+              <CardTitle className="text-base">2. Select preferred rooms</CardTitle>
               <CardDescription>
-                Choose one room as the preferred configuration before progressing to S2.
+                Assign {targetRoomCount === 1 ? "1 room" : `${targetRoomCount} rooms`} per night. Different rooms per night are allowed
+                (e.g. room 201 for night 1, room 301 for night 2). The seal fires when every night is fully assigned.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {preferredRoomId && (
-                <div className="flex items-center gap-2 rounded-lg border border-[var(--success)]/40 bg-accent px-3 py-2 text-sm">
-                  <CheckCircle2 className="h-4 w-4 text-[var(--success)]" />
-                  Preferred room selected
-                  {pendingRoomId === preferredRoomId && selectMutation.isPending && " (saving…)"}
+              {/* Sealed banner. Once picks are saved, the calendar shows them as green ✓ cells
+                  and the operator can either accept them and move on, or click "Change
+                  selection" to unlock and adjust. */}
+              {preferredRoomIds.length > 0 && !editingAfterSeal && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--success)]/40 bg-accent px-3 py-2 text-sm">
+                  <span className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-[var(--success)]" />
+                    Preferred rooms saved
+                    {selectMutation.isPending && " (saving…)"}
+                  </span>
+                  <Button variant="outline" size="sm" onClick={handleEditAfterSeal} disabled={selectMutation.isPending}>
+                    Change selection
+                  </Button>
                 </div>
               )}
 
-              {/* Phase 2: replaced the flat rooms list with a date × room-type calendar grid. */}
+              {/* Editing banner — either fresh in-progress or re-opened after a seal. */}
+              {(editingAfterSeal || (preferredRoomIds.length === 0 && Object.values(selectionsByDate).some((ids) => ids.length > 0))) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+                  <span className="text-muted-foreground">
+                    {editingAfterSeal
+                      ? "Adjusting saved selection — click Save to overwrite, or Cancel to keep the previous save."
+                      : `Assign ${targetRoomCount} ${targetRoomCount === 1 ? "room" : "rooms"} per night, then click Save selection.`}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="gradient"
+                      size="sm"
+                      onClick={handleSaveSelection}
+                      disabled={!allNightsComplete || selectMutation.isPending}
+                    >
+                      {selectMutation.isPending ? "Saving…" : "Save selection"}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={editingAfterSeal ? cancelEditAfterSeal : resetSelections} disabled={selectMutation.isPending}>
+                      {editingAfterSeal ? "Cancel" : "Reset"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <AvailabilityCalendar
                 checkInDate={calendarCheckIn}
                 checkOutDate={calendarCheckOut}
                 availableRooms={availableRooms}
                 deficientRooms={deficientRooms}
                 unavailableRooms={unavailableRooms}
+                perDate={perDate}
                 allRooms={allRooms}
-                selectedRoomId={preferredRoomId}
-                pendingRoomId={pendingRoomId}
-                disabled={selectMutation.isPending || !activeConfigurationId}
-                onSelectRoomType={(room, isDeficient) => handleSelectRoom(room, isDeficient)}
+                selectionsByDate={selectionsByDate}
+                // Only render the sealed-cell green ticks when NOT re-editing — in edit mode
+                // the sealed picks live in selectionsByDate so cells behave like normal picks.
+                sealedByDate={editingAfterSeal ? {} : sealedByDate}
+                targetRoomsPerNight={targetRoomCount}
+                disabled={
+                  selectMutation.isPending ||
+                  !activeConfigurationId ||
+                  // Locked ONLY when a seal exists AND the operator hasn't asked to change it.
+                  (preferredRoomIds.length > 0 && !editingAfterSeal)
+                }
+                onToggleCell={handleToggleCell}
               />
 
               <PolicyGateAlert error={selectError} />

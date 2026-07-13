@@ -43,6 +43,9 @@ export async function createEntry(
     adultCount?: number;
     childCount?: number;
     childAges?: number[];
+    numberOfRooms?: number;
+    contactPersonName?: string;
+    contactPersonPhone?: string;
     otaSource?: boolean;
   },
 ) {
@@ -80,11 +83,34 @@ export async function updateEntryIntake(
     adultCount?: number;
     childCount?: number;
     childAges?: number[];
+    numberOfRooms?: number;
+    contactPersonName?: string;
+    contactPersonPhone?: string;
     useType?: string;
     expectedVersion?: number;
   },
 ) {
   return apiRequest<EntryDetail>(`/api/entries/${entryId}`, {
+    method: "PATCH",
+    session,
+    body,
+  });
+}
+
+/**
+ * L3+ manual override of Policy 64's auto-classification. Pass `mode = null` to clear, or
+ * `clearManualOverride: true` to re-enable auto-reclassify on subsequent intake edits.
+ */
+export async function setGroupBillingMode(
+  session: Session,
+  entryId: string,
+  body: {
+    mode: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
+    reason: string;
+    clearManualOverride?: boolean;
+  },
+) {
+  return apiRequest<EntryDetail>(`/api/entries/${entryId}/group-billing-mode`, {
     method: "PATCH",
     session,
     body,

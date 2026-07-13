@@ -26,7 +26,18 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
         blockedReason: true,
         isDeficient: true,
         isUnderMaintenance: true,
-        roomType: { select: { id: true, code: true, name: true } },
+        roomType: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            standardCapacity: true,
+            maxCapacity: true,
+            maxChildren: true,
+            requiredAccompanyingAdults: true,
+            maxExtraBeds: true,
+          },
+        },
       },
     });
     res.json({ items, count: items.length });

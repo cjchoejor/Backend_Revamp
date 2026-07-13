@@ -14,6 +14,13 @@ export type AvailabilityRoomResult = {
   pricingIndicative?: unknown;
 };
 
+export type PerDateAvailabilityResult = {
+  date: string;
+  availableRoomIds: string[];
+  occupiedRoomIds: Array<{ roomId: string; source: "RESERVED" | "HOLD" }>;
+  deficientRoomIds: string[];
+};
+
 export type AvailabilityQueryResponse = {
   configurationId: string;
   entryId: string;
@@ -23,6 +30,8 @@ export type AvailabilityQueryResponse = {
     availableRooms?: AvailabilityRoomResult[];
     deficientRooms?: AvailabilityRoomResult[];
     unavailableRooms?: AvailabilityRoomResult[];
+    /** Per-date breakdown (Phase 2.5). Absent when the backend engine ran date-blind. */
+    perDate?: PerDateAvailabilityResult[];
     indicativePricing?: unknown;
   };
 };
@@ -99,12 +108,21 @@ export async function queryAvailabilityByEntry(
 export async function selectAvailabilityOption(
   session: Session,
   configurationId: string,
-  body: { roomId: string; deficientAcknowledgements?: unknown },
+  body: {
+    roomId?: string;
+    roomIds?: string[];
+    perNight?: Array<{ date: string; roomIds: string[] }>;
+    deficientAcknowledgements?: unknown;
+  },
 ) {
   return apiRequest<{
     id: string;
     entryId: string;
-    optionSelected: { roomId: string; isDeficient?: boolean } | null;
+    optionSelected:
+      | { roomId: string; isDeficient?: boolean }
+      | { roomIds: Array<{ roomId: string; isDeficient: boolean }>; isDeficient?: boolean }
+      | { perNight: Array<{ date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> }>; isDeficient?: boolean }
+      | null;
     isStale: boolean;
     sealedAt: string | null;
   }>(`/api/availability/configurations/${configurationId}/select`, {

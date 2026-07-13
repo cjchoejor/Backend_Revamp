@@ -141,3 +141,40 @@ export function summarizeChildAges(
     bands,
   };
 }
+
+/**
+ * Total meal charge for a group of guests after applying child-age multipliers per person.
+ *
+ * Adults pay `adultMealRate * 100%`. Every age in `childAges` gets classified through the
+ * policy bands and pays the corresponding percentage (default: young child = 0% free,
+ * child = 70%, teen who classified as adult = 100%). Nights multiplies the whole thing so
+ * multi-night stays add up correctly.
+ *
+ * Callers (pricing engine, S2 quotation service, S8 settlement) should replace naive
+ * `adults * adultMealRate` calculations with this helper. Non-negative in all cases.
+ */
+export function computeGroupMealCharge(
+  input: { adultCount: number; childAges: number[]; adultMealRate: number; nights: number },
+  bundle: ChildPolicyBundle,
+): { total: number; perGuest: Array<{ classification: AgeBand; multiplier: number; charge: number }> } {
+  const nights = Math.max(1, input.nights);
+  const perGuest: Array<{ classification: AgeBand; multiplier: number; charge: number }> = [];
+
+  // Adults declared in adultCount pay full rate — no age lookup needed.
+  for (let i = 0; i < Math.max(0, input.adultCount); i++) {
+    perGuest.push({ classification: "ADULT", multiplier: 1, charge: input.adultMealRate * nights });
+  }
+
+  // Each child in childAges: classify → look up multiplier → charge.
+  for (const age of input.childAges) {
+    const multiplier = getMealRateMultiplier(age, bundle);
+    perGuest.push({
+      classification: classifyAge(age, bundle),
+      multiplier,
+      charge: input.adultMealRate * multiplier * nights,
+    });
+  }
+
+  const total = perGuest.reduce((sum, g) => sum + g.charge, 0);
+  return { total, perGuest };
+}

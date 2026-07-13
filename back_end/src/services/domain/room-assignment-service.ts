@@ -27,7 +27,17 @@ export async function assignRoom(
   actorId: string,
   notes: string | undefined,
   deficientAcknowledgement: DeficientAck | undefined,
-  opts?: { reEntryToS1?: boolean },
+  opts?: {
+    reEntryToS1?: boolean;
+    /**
+     * Optional inclusive start / exclusive end of the assignment. Populated when the
+     * caller knows the assignment applies to a specific date range (e.g., driven from a
+     * per-night sealed AvailabilityConfiguration). NULL both = whole-stay assignment
+     * (legacy behavior preserved).
+     */
+    startDate?: Date;
+    endDate?: Date;
+  },
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -86,6 +96,8 @@ export async function assignRoom(
         acknowledgementActorId,
         acknowledgementAt,
         notes,
+        ...(opts?.startDate ? { startDate: opts.startDate } : {}),
+        ...(opts?.endDate ? { endDate: opts.endDate } : {}),
       },
     });
     await maybeRegisterRoomReadinessSla(prisma, entryId, roomId, actorId, room.physicalState);
@@ -105,10 +117,116 @@ export async function assignRoom(
       assignedBy: actorId,
       deficientAtAssignment: false,
       notes,
+      ...(opts?.startDate ? { startDate: opts.startDate } : {}),
+      ...(opts?.endDate ? { endDate: opts.endDate } : {}),
     },
   });
   if (entry.currentStage === Stage.S5) {
     await maybeRegisterRoomReadinessSla(prisma, entryId, roomId, actorId, room.physicalState);
+  }
+  return created;
+}
+
+/**
+ * Bulk-assign rooms for an entry driven from a sealed per-night AvailabilityConfiguration.
+ *
+ * Reads `entry.availabilityConfigs[latest sealed].optionSelected.perNight`, folds
+ * consecutive nights of the same room into contiguous date ranges, then creates one
+ * RoomAssignment row per (roomId, contiguous-range) with startDate + endDate populated.
+ *
+ * When there's no per-night breakdown (whole-stay or single-room seals), does nothing —
+ * caller should fall back to the single-room `assignRoom` path.
+ *
+ * Returns the assignments created (empty array if the config wasn't per-night).
+ */
+export async function assignRoomsFromSealedPerNight(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+): Promise<Array<{ id: string; roomId: string; startDate: Date; endDate: Date }>> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: {
+      availabilityConfigs: {
+        where: { sealedAt: { not: null } },
+        orderBy: { sealedAt: "desc" },
+        take: 1,
+      },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  const cfg = entry.availabilityConfigs[0];
+  const opt = (cfg?.optionSelected ?? null) as
+    | { perNight?: Array<{ date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> }> }
+    | null;
+  if (!opt || !Array.isArray(opt.perNight) || opt.perNight.length === 0) return [];
+
+  // Fold: for each roomId that appears in the perNight data, find its contiguous night
+  // ranges. Example: room 201 on Jul 15+16, room 301 on Jul 17 → two ranges:
+  //   room 201: [Jul 15, Jul 17) exclusive-endDate
+  //   room 301: [Jul 17, Jul 18)
+  const nightsByRoom = new Map<string, string[]>();
+  for (const n of opt.perNight) {
+    for (const r of n.roomIds) {
+      if (!nightsByRoom.has(r.roomId)) nightsByRoom.set(r.roomId, []);
+      nightsByRoom.get(r.roomId)!.push(n.date);
+    }
+  }
+
+  const rangesToCreate: Array<{ roomId: string; startDate: Date; endDate: Date }> = [];
+  for (const [roomId, nights] of nightsByRoom) {
+    const sorted = [...new Set(nights)].sort();
+    let runStart = sorted[0];
+    let prev = sorted[0];
+    for (let i = 1; i <= sorted.length; i++) {
+      const next = i < sorted.length ? sorted[i] : null;
+      // Contiguous iff next = prev + 1 day.
+      const prevMs = Date.UTC(Number(prev.slice(0, 4)), Number(prev.slice(5, 7)) - 1, Number(prev.slice(8, 10)));
+      const expected = new Date(prevMs + 86_400_000).toISOString().slice(0, 10);
+      if (next === expected) {
+        prev = next;
+        continue;
+      }
+      // Close the run.
+      const [ys, ms, ds] = runStart.split("-").map(Number);
+      const [ye, me, de] = prev.split("-").map(Number);
+      rangesToCreate.push({
+        roomId,
+        startDate: new Date(Date.UTC(ys, ms - 1, ds)),
+        endDate: new Date(Date.UTC(ye, me - 1, de) + 86_400_000), // exclusive checkout
+      });
+      if (next) {
+        runStart = next;
+        prev = next;
+      }
+    }
+  }
+
+  const created: Array<{ id: string; roomId: string; startDate: Date; endDate: Date }> = [];
+  for (const r of rangesToCreate) {
+    // Skip when an assignment for this (entryId, roomId, startDate) already exists so the
+    // helper is idempotent on retry.
+    const existing = await prisma.roomAssignment.findFirst({
+      where: { entryId, roomId: r.roomId, startDate: r.startDate },
+    });
+    if (existing) {
+      created.push({ id: existing.id, roomId: r.roomId, startDate: r.startDate, endDate: r.endDate });
+      continue;
+    }
+    const id = await allocateReadableId(prisma, "ROOM_ASSIGNMENT" as const);
+    const row = await prisma.roomAssignment.create({
+      data: {
+        id,
+        entryId,
+        roomId: r.roomId,
+        assignedBy: actorId,
+        deficientAtAssignment: false,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        notes: "auto-created from sealed per-night configuration",
+      },
+    });
+    created.push({ id: row.id, roomId: row.roomId, startDate: r.startDate, endDate: r.endDate });
   }
   return created;
 }

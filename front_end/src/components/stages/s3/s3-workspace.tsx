@@ -45,6 +45,7 @@ import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import type { AvailabilityConfigSummary, EntryDetail } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 const BILLING_MODELS = ["GUEST_PAY", "DIRECT_BILL", "TOUR_OPERATOR_VOUCHER"] as const;
 
@@ -82,7 +83,8 @@ export function S3Workspace({ entry }: S3WorkspaceProps) {
   const sealedPreferred = (entry.availabilityConfigs ?? []).find(
     (c: AvailabilityConfigSummary) => c.sealedAt && c.optionSelected,
   );
-  const preferredRoomId = sealedPreferred?.optionSelected?.roomId ?? null;
+  const preferredRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
+  const preferredRoomId = preferredRoomIds[0] ?? null;
 
   const proformaInvoices = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";

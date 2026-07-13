@@ -47,6 +47,7 @@ import type {
   QuotationSummary,
   SpeculativeHoldSummary,
 } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 type S2WorkspaceProps = {
   entry: EntryDetail;
@@ -104,7 +105,11 @@ export function S2Workspace({ entry }: S2WorkspaceProps) {
   const sealedPreferred = (entry.availabilityConfigs ?? []).find(
     (c: AvailabilityConfigSummary) => c.sealedAt && c.optionSelected,
   );
-  const preferredRoomId = sealedPreferred?.optionSelected?.roomId ?? null;
+  // Multi-room seals put the full list in `roomIds`; the S2 workspace only needs "did the
+  // operator commit to something" so the first id is enough for the display. Pricing /
+  // quotation logic doesn't currently branch on multiple rooms.
+  const preferredRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
+  const preferredRoomId = preferredRoomIds[0] ?? null;
 
   const draftQuotation = segmentQuotations.find((q) => q.state === "DRAFT");
   const sentQuotation = segmentQuotations.find((q) => q.state === "SENT");

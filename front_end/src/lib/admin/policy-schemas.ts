@@ -298,6 +298,27 @@ export const REGISTRY_POLICY_KEYS: PolicyKeyMeta[] = [
     defaults: { multiplierPercent: 200 },
   },
   {
+    policyId: "registry.groupBooking.creditCeilingBoost",
+    policyClass: "GROUP_BILLING",
+    title: "Group booking credit ceiling boost",
+    description:
+      "For entries auto-classified as GROUP_MASTER at S1, multiply the recommended credit ceiling by this percentage. Advisory — the human approver still enters an explicit amount, but the suggestion now reflects group scale. A 20-room group has higher expected exposure than a single guest.",
+    consumedBy: ["s3-payment-service.recommendCreditCeilingForEntry"],
+    fields: [
+      {
+        kind: "number",
+        key: "multiplierPercent",
+        label: "Multiplier",
+        unit: "%",
+        min: 100,
+        max: 500,
+        step: 10,
+        help: "200 = suggest 2x the base ceiling for group bookings. 150 = 1.5x. 100 = no boost.",
+      },
+    ],
+    defaults: { multiplierPercent: 200 },
+  },
+  {
     policyId: "registry.creditCeiling.tier2Percent",
     policyClass: "CREDIT_CEILING",
     title: "Credit ceiling Tier 2 gate %",

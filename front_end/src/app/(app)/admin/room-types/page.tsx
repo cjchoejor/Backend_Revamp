@@ -11,7 +11,8 @@ import { useConfirm } from "@/components/providers/dialog-provider";
 type CreateForm = {
   code: string;
   name: string;
-  maxOccupancy: string;
+  standardCapacity: string;
+  maxCapacity: string;
   maxChildren: string;
   requiredAccompanyingAdults: string;
   maxExtraBeds: string;
@@ -20,7 +21,8 @@ type CreateForm = {
 const EMPTY_CREATE: CreateForm = {
   code: "",
   name: "",
-  maxOccupancy: "2",
+  standardCapacity: "2",
+  maxCapacity: "3",
   maxChildren: "2",
   requiredAccompanyingAdults: "1",
   maxExtraBeds: "0",
@@ -44,7 +46,8 @@ export default function AdminRoomTypesPage() {
       createRoomType(session!, {
         code: form.code.trim(),
         name: form.name.trim(),
-        maxOccupancy: numOr(form.maxOccupancy, 2),
+        standardCapacity: numOr(form.standardCapacity, 2),
+        maxCapacity: numOr(form.maxCapacity, 3),
         maxChildren: numOr(form.maxChildren, 2),
         requiredAccompanyingAdults: numOr(form.requiredAccompanyingAdults, 1),
         maxExtraBeds: numOr(form.maxExtraBeds, 0),
@@ -114,11 +117,14 @@ export default function AdminRoomTypesPage() {
             <input className="admin-input" placeholder="Deluxe Room" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
         </div>
-        <div className="grid gap-3 md:grid-cols-4">
-          <Field label="Max occupancy" hint="Total guests (A + C)">
-            <input className="admin-input" type="number" min={1} value={form.maxOccupancy} onChange={(e) => setForm({ ...form, maxOccupancy: e.target.value })} />
+        <div className="grid gap-3 md:grid-cols-5">
+          <Field label="Standard capacity" hint="Everyday config, no extra bed (typically 2)">
+            <input className="admin-input" type="number" min={1} value={form.standardCapacity} onChange={(e) => setForm({ ...form, standardCapacity: e.target.value })} />
           </Field>
-          <Field label="Max children" hint="Cap on minors">
+          <Field label="Max capacity" hint="Ceiling with extra bed (typically 3)">
+            <input className="admin-input" type="number" min={1} value={form.maxCapacity} onChange={(e) => setForm({ ...form, maxCapacity: e.target.value })} />
+          </Field>
+          <Field label="Max children" hint="Cap on kids under 11">
             <input className="admin-input" type="number" min={0} value={form.maxChildren} onChange={(e) => setForm({ ...form, maxChildren: e.target.value })} />
           </Field>
           <Field label="Required adults" hint="When kids present">
@@ -139,7 +145,8 @@ export default function AdminRoomTypesPage() {
             <tr>
               <th>Code</th>
               <th>Name</th>
-              <th>Max occ.</th>
+              <th>Std cap.</th>
+              <th>Max cap.</th>
               <th>Max children</th>
               <th>Req. adults</th>
               <th>Max extra beds</th>
@@ -161,7 +168,8 @@ export default function AdminRoomTypesPage() {
                       r.name
                     )}
                   </td>
-                  <CapacityCell value={isEditing ? ed.maxOccupancy ?? r.maxOccupancy : r.maxOccupancy} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], maxOccupancy: v } }))} />
+                  <CapacityCell value={isEditing ? ed.standardCapacity ?? r.standardCapacity : r.standardCapacity} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], standardCapacity: v } }))} />
+                  <CapacityCell value={isEditing ? ed.maxCapacity ?? r.maxCapacity : r.maxCapacity} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], maxCapacity: v } }))} />
                   <CapacityCell value={isEditing ? ed.maxChildren ?? r.maxChildren : r.maxChildren} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], maxChildren: v } }))} />
                   <CapacityCell value={isEditing ? ed.requiredAccompanyingAdults ?? r.requiredAccompanyingAdults : r.requiredAccompanyingAdults} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], requiredAccompanyingAdults: v } }))} />
                   <CapacityCell value={isEditing ? ed.maxExtraBeds ?? r.maxExtraBeds : r.maxExtraBeds} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], maxExtraBeds: v } }))} />
@@ -177,7 +185,8 @@ export default function AdminRoomTypesPage() {
                             id: r.id,
                             body: {
                               name: ed.name?.trim() || undefined,
-                              maxOccupancy: ed.maxOccupancy,
+                              standardCapacity: ed.standardCapacity,
+                              maxCapacity: ed.maxCapacity,
                               maxChildren: ed.maxChildren,
                               requiredAccompanyingAdults: ed.requiredAccompanyingAdults,
                               maxExtraBeds: ed.maxExtraBeds,

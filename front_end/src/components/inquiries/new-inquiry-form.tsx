@@ -13,8 +13,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { createGuestProfile, guestDisplayName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
 import { getChildPolicy } from "@/lib/api/child-policy";
+import { listRooms } from "@/lib/api/rooms";
 import { createInquiry } from "@/lib/api/inquiries";
 import { createEntry, updateEntryIntake } from "@/lib/api/entries";
+import { computeAllowedRoomCounts, computeChargeableOccupants } from "@/lib/chargeable-occupants";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { AgentCorporatePicker, type AgentCorporateSelection } from "@/components/inquiries/agent-corporate-picker";
@@ -69,7 +71,12 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
   const [children, setChildren] = useState<string>("0");
   // Child ages list, one entry per child. Length is synced to `children` count below.
   const [childAges, setChildAges] = useState<string[]>([]);
+  const [numberOfRooms, setNumberOfRooms] = useState<string>("1");
   const [agentSelection, setAgentSelection] = useState<AgentCorporateSelection>({ kind: "NONE" });
+  // Contact person = the on-site individual travelling / leading the group. Distinct from
+  // travelAgent/corporateAccount contact fields. MANDATORY before S5 per W4 activation gate.
+  const [contactPersonName, setContactPersonName] = useState<string>("");
+  const [contactPersonPhone, setContactPersonPhone] = useState<string>("");
 
   // ---- Date / nights sync ----
   // When check-in is set without a check-out, auto-fill check-out to the next day.
@@ -169,6 +176,50 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
   const minAdultAge = childPolicyQuery.data?.unaccompaniedMinor.minimumAge ?? 18;
   const maxChildAge = Math.max(0, minAdultAge - 1);
 
+  // Hotel-wide room list — used to compute the largest maxCapacity across all room types,
+  // which serves as the fallback for the Number-of-Rooms envelope at S1 (before the guest
+  // has picked a specific type). Per-type validation runs again at S2 seal.
+  const roomsQuery = useQuery({
+    queryKey: ["rooms", "all-with-capacity"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+    staleTime: 5 * 60_000,
+  });
+  const largestMaxCapacity = (() => {
+    let max = 3; // Sensible default if no rooms loaded yet.
+    for (const r of roomsQuery.data?.items ?? []) {
+      const cap = r.roomType?.maxCapacity;
+      if (typeof cap === "number" && cap > max) max = cap;
+    }
+    return max;
+  })();
+
+  // Chargeable occupants + allowed room-count envelope. Recomputes as adults / childAges /
+  // policy change so the dropdown values match what the backend will accept.
+  const parsedChildAges = childAges
+    .map((a) => parseInt(a || "", 10))
+    .filter((n) => Number.isFinite(n));
+  const chargeableOccupants = computeChargeableOccupants(
+    { adults: parseInt(adults || "0", 10) || 0, childAges: parsedChildAges },
+    childPolicyQuery.data ?? null,
+  );
+  const roomRange = computeAllowedRoomCounts(chargeableOccupants, largestMaxCapacity);
+  const allowedRoomCounts: number[] =
+    roomRange.min > 0 && roomRange.max >= roomRange.min
+      ? Array.from({ length: roomRange.max - roomRange.min + 1 }, (_, i) => roomRange.min + i)
+      : [];
+
+  // Keep numberOfRooms in-range when composition changes upstream (e.g. adults drop
+  // from 3 to 1 — allowed max becomes 1, so trim from 2 → 1).
+  useEffect(() => {
+    const n = parseInt(numberOfRooms || "0", 10) || 0;
+    if (allowedRoomCounts.length === 0) return;
+    if (!allowedRoomCounts.includes(n)) {
+      setNumberOfRooms(String(allowedRoomCounts[0]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chargeableOccupants, largestMaxCapacity]);
+
   const canSubmitNew =
     firstName.trim() &&
     lastName.trim() &&
@@ -210,6 +261,7 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
       const adultCount = parseInt(adults || "0", 10) || 0;
       const childCount = parseInt(children || "0", 10) || 0;
       const parsedAges = childAges.map((a) => parseInt(a || "0", 10)).filter((n) => Number.isFinite(n));
+      const requestedRooms = parseInt(numberOfRooms || "0", 10) || 0;
       const entry = await createEntry(session, {
         inquiryId: inquiry.id,
         useType: "LEISURE",
@@ -220,6 +272,9 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
         adultCount: adultCount > 0 ? adultCount : undefined,
         childCount: childCount > 0 ? childCount : undefined,
         childAges: parsedAges.length === childCount ? parsedAges : undefined,
+        numberOfRooms: requestedRooms > 0 ? requestedRooms : undefined,
+        contactPersonName: contactPersonName.trim() || undefined,
+        contactPersonPhone: contactPersonPhone.trim() || undefined,
         otaSource: sourceChannel === "OTA",
       });
 
@@ -244,6 +299,7 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
       const adultCount = parseInt(adults || "0", 10) || 0;
       const childCount = parseInt(children || "0", 10) || 0;
       const parsedAges = childAges.map((a) => parseInt(a || "0", 10)).filter((n) => Number.isFinite(n));
+      const requestedRooms = parseInt(numberOfRooms || "0", 10) || 0;
       return updateEntryIntake(session, editEntry.id, {
         checkInDate: checkIn || undefined,
         checkOutDate: checkOut || undefined,
@@ -251,6 +307,9 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
         adultCount,
         childCount,
         childAges: parsedAges.length === childCount ? parsedAges : undefined,
+        numberOfRooms: requestedRooms > 0 ? requestedRooms : undefined,
+        contactPersonName: contactPersonName.trim() || "",
+        contactPersonPhone: contactPersonPhone.trim() || "",
         expectedVersion: editEntry.version,
       });
     },
@@ -449,6 +508,30 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
               />
             </div>
           </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-muted-foreground">Number of rooms</label>
+            <select
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={numberOfRooms}
+              onChange={(e) => setNumberOfRooms(e.target.value)}
+              disabled={allowedRoomCounts.length === 0}
+            >
+              {allowedRoomCounts.length === 0 ? (
+                <option value="">—</option>
+              ) : (
+                allowedRoomCounts.map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n} {n === 1 ? "room" : "rooms"}
+                  </option>
+                ))
+              )}
+            </select>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Chargeable occupants: <span className="font-mono">{chargeableOccupants}</span>
+              {" "}(adults + children aged {maxChildAge + 1}+). Allowed range: <span className="font-mono">{roomRange.min}</span>
+              {" "}to <span className="font-mono">{roomRange.max}</span> rooms (max <span className="font-mono">{largestMaxCapacity}</span> chargeable per room).
+            </p>
+          </div>
           {childAges.length > 0 && (
             <div className="sm:col-span-2 rounded-lg border bg-muted/30 p-3">
               <p className="mb-2 text-xs text-muted-foreground">Child ages (0–{maxChildAge})</p>
@@ -480,6 +563,21 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
               </div>
             </div>
           )}
+          <div className="sm:col-span-2 rounded-lg border bg-muted/30 p-3">
+            <p className="mb-2 text-xs text-muted-foreground">
+              <strong>Contact person</strong> — the on-site individual travelling or leading the group. Distinct from the travel-agent or corporate contact. Mandatory before check-in.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs text-muted-foreground">Name</label>
+                <Input value={contactPersonName} onChange={(e) => setContactPersonName(e.target.value)} placeholder="Full name" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">Phone</label>
+                <Input value={contactPersonPhone} onChange={(e) => setContactPersonPhone(e.target.value)} placeholder="Contact number" />
+              </div>
+            </div>
+          </div>
           <div className="sm:col-span-2">
             <label className="text-xs text-muted-foreground">Notes</label>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
