@@ -10,6 +10,7 @@ import {
   acceptHandoff,
   acknowledgeCreditCeilingTier2,
   assignRoom,
+  assignRoomsFromSealedPerNight,
   buildH1FulfilmentEvidence,
   fulfilHandoff,
   getHandoffChecklist,
@@ -25,6 +26,7 @@ import { StepAction } from "./step-action";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 const BK = STAGE_ACTIONS.S5;
 
@@ -73,7 +75,13 @@ export function ArrivalStep({
   const assignments = entry.roomAssignments ?? [];
   const latestAssignment = assignments[0];
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
-  const defaultRoomId = entry.committedHold?.roomId ?? sealedPreferred?.optionSelected?.roomId ?? "";
+  const defaultRoomId = entry.committedHold?.roomId ?? optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? "";
+
+  // Multi-room bookings (party-size driven, not source channel) assign every sealed room in one
+  // bulk call rather than the single-room picker below.
+  const numberOfRooms = entry.numberOfRooms ?? 1;
+  const multiRoom = numberOfRooms > 1;
+  const sealedRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
 
   const [roomId, setRoomId] = useState(defaultRoomId);
   const [assignNotes, setAssignNotes] = useState("");
@@ -140,6 +148,14 @@ export function ArrivalStep({
     setRoomId(defaultRoomId);
   }, [defaultRoomId, roomId]);
 
+  // Room number lookup for the multi-room sealed-plan summary (before assignments materialise).
+  const roomNumberById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of preferredRooms) if (r.roomId) m.set(r.roomId, r.roomNumber ?? r.roomId);
+    for (const a of assignments) if (a.room?.roomNumber) m.set(a.roomId, a.room.roomNumber);
+    return m;
+  }, [preferredRooms, assignments]);
+
   const paymentStatusQuery = useQuery({
     queryKey: ["payment-status", entry.id],
     queryFn: () => getPaymentStatus(session!, entry.id),
@@ -157,7 +173,10 @@ export function ArrivalStep({
 
   const paymentReconciled = !!folio?.advancePaymentReconciliationComplete || paymentStatus?.satisfied === true;
   const tasksComplete = tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED");
-  const readinessConfirmed = roomReady(latestAssignment);
+  // For a multi-room booking every assigned room must be ready; single-room keeps the prior check.
+  const readinessConfirmed = multiRoom
+    ? assignments.length > 0 && assignments.every((a) => roomReady(a))
+    : roomReady(latestAssignment);
 
   const h1MandatoryComplete = h1Items.filter((i) => i.mandatory).every((i) => h1Completion[i.code] === true);
   const canAcceptH1 = h1?.state === "CREATED" && (h1Items.length === 0 || h1MandatoryComplete);
@@ -189,6 +208,13 @@ export function ArrivalStep({
   );
   const assignM = useMutation(
     wrap(() => assignRoom(session!, entry.id, { roomId: roomId.trim(), notes: assignNotes.trim() || undefined }), "Room assigned"),
+  );
+  const bulkAssignM = useMutation(
+    wrap(async () => {
+      const res = await assignRoomsFromSealedPerNight(session!, entry.id);
+      if (res.count === 0) throw new Error("No per-night selection to assign — re-seal rooms at the Inquiry step.");
+      return res;
+    }, "Rooms assigned"),
   );
   const reconcileM = useMutation(
     wrap(() => {
@@ -321,35 +347,86 @@ export function ArrivalStep({
           <BedDouble style={{ width: 13, height: 13 }} />
           Room assignment
         </BlockH>
-        {!latestAssignment && (
+        {multiRoom ? (
           <>
-            <div className="field">
-              <label>Select room</label>
-              <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-                <option value="">Choose a room…</option>
-                {roomOptions.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {formatRoomPickerLabel({ roomNumber: r.roomNumber, currentClaimState: r.currentClaimState, physicalState: r.physicalState, isBlocked: r.isBlocked })}
-                  </option>
+            <div className="fact b-transit" style={{ marginBottom: 11, padding: "6px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
+              <span>
+                {numberOfRooms} rooms needed · {assignments.length} assigned
+              </span>
+              <span className={`tag${sealedPreferred ? "" : " warn"}`}>{sealedPreferred ? "sealed plan ready" : "no sealed plan"}</span>
+            </div>
+            {assignments.length > 0 ? (
+              <div style={{ display: "grid", gap: 6, marginBottom: 11 }}>
+                {assignments.map((a) => (
+                  <div key={a.id} className="fact" style={{ justifyContent: "space-between", fontSize: 12, padding: "6px 10px" }}>
+                    <span>
+                      Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                      {a.startDate && (
+                        <span style={{ color: "var(--ink-3)" }}>
+                          {" "}· {a.startDate.slice(0, 10)} → {a.endDate?.slice(0, 10) ?? ""}
+                        </span>
+                      )}
+                    </span>
+                    <span className={`tag${roomReady(a) ? "" : " warn"}`}>{roomReady(a) ? "ready" : "not ready"}</span>
+                  </div>
                 ))}
-              </select>
-              {defaultRoomId && <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>Suggested from the committed hold / preferred option.</p>}
-            </div>
-            <div className="field">
-              <label>Notes (optional)</label>
-              <input value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)} />
-            </div>
+              </div>
+            ) : (
+              sealedRoomIds.length > 0 && (
+                <p style={{ fontSize: 12, color: "var(--ink-2)", margin: "0 0 11px" }}>
+                  Sealed plan: {sealedRoomIds.map((id) => roomNumberById.get(id) ?? id.slice(0, 6)).join(", ")}
+                  {" — assigned in one step below."}
+                </p>
+              )
+            )}
+            <StepAction
+              className="btn btn-primary"
+              label={`Assign all ${numberOfRooms} rooms`}
+              doneLabel={`${assignments.length} room${assignments.length === 1 ? "" : "s"} assigned`}
+              done={assignments.length > 0}
+              pending={bulkAssignM.isPending}
+              disabled={!sealedPreferred || assignments.length > 0}
+              onClick={() => bulkAssignM.mutate()}
+            />
+            {!sealedPreferred && (
+              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "8px 0 0" }}>
+                No sealed room plan — go back to the Inquiry step and seal {numberOfRooms} rooms first.
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            {!latestAssignment && (
+              <>
+                <div className="field">
+                  <label>Select room</label>
+                  <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                    <option value="">Choose a room…</option>
+                    {roomOptions.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {formatRoomPickerLabel({ roomNumber: r.roomNumber, currentClaimState: r.currentClaimState, physicalState: r.physicalState, isBlocked: r.isBlocked })}
+                      </option>
+                    ))}
+                  </select>
+                  {defaultRoomId && <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>Suggested from the committed hold / preferred option.</p>}
+                </div>
+                <div className="field">
+                  <label>Notes (optional)</label>
+                  <input value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)} />
+                </div>
+              </>
+            )}
+            <StepAction
+              className="btn btn-primary"
+              label="Assign room"
+              doneLabel={`${latestAssignment?.room?.roomNumber ? `Room ${latestAssignment.room.roomNumber} assigned` : "Room assigned"}${latestAssignment?.deficientAtAssignment ? " · deficient acknowledged" : ""}`}
+              done={!!latestAssignment}
+              pending={assignM.isPending}
+              disabled={!roomId.trim()}
+              onClick={() => assignM.mutate()}
+            />
           </>
         )}
-        <StepAction
-          className="btn btn-primary"
-          label="Assign room"
-          doneLabel={`${latestAssignment?.room?.roomNumber ? `Room ${latestAssignment.room.roomNumber} assigned` : "Room assigned"}${latestAssignment?.deficientAtAssignment ? " · deficient acknowledged" : ""}`}
-          done={!!latestAssignment}
-          pending={assignM.isPending}
-          disabled={!roomId.trim()}
-          onClick={() => assignM.mutate()}
-        />
       </div>
 
       {/* Pre-arrival tasks */}

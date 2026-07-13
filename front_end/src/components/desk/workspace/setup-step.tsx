@@ -27,6 +27,7 @@ import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 
 const BK = STAGE_ACTIONS.S3;
@@ -68,7 +69,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     [entry.quotations],
   );
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
-  const preferredRoomId = sealedPreferred?.optionSelected?.roomId ?? null;
+  const preferredRoomId = optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? null;
   const proformaInvoices = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";

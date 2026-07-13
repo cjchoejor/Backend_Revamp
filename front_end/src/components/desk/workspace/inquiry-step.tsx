@@ -12,7 +12,9 @@ import {
   selectAvailabilityOption,
   type AvailabilityQueryResponse,
   type AvailabilityRoomResult,
+  type PerDateAvailabilityResult,
 } from "@/lib/api/availability";
+import { MultiRoomSelect, roomMetaFromResults, type SealPayload } from "./multi-room-select";
 import { getInquiry } from "@/lib/api/inquiries";
 import { roomTypeShort } from "@/lib/desk/rooms";
 import { guestName, nightsBetween } from "@/lib/desk/model";
@@ -20,6 +22,7 @@ import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import type { BackendItem } from "@/lib/desk/backend-map";
 import type { EntryDetail } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 /**
  * Per-action "what runs in the backend" attribution for S1, surfaced inline next to
@@ -97,6 +100,22 @@ function BlockH({ children, tag }: { children: React.ReactNode; tag?: React.Reac
 }
 
 const DASH = <span style={{ color: "var(--ink-3)" }}>—</span>;
+
+/** ISO date strings for every night of a stay (check-in inclusive, check-out exclusive), UTC-safe. */
+function enumerateNights(checkIn?: string | null, checkOut?: string | null): string[] {
+  if (!checkIn || !checkOut) return [];
+  const start = new Date(`${checkIn.slice(0, 10)}T00:00:00Z`);
+  const end = new Date(`${checkOut.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+  const out: string[] = [];
+  const cur = new Date(start.getTime());
+  let safety = 0;
+  while (cur < end && safety++ < 366) {
+    out.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
 
 /** A room type with the set of individual rooms of that type returned by availability. */
 type RoomTypeGroup = {
@@ -267,7 +286,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const configs = entry.availabilityConfigs ?? [];
   const latestConfig = configs[0] ?? null;
   const preferredConfig = configs.find((c) => c.optionSelected != null) ?? null;
-  const preferredRoomId = preferredConfig?.optionSelected?.roomId ?? null;
+  const preferredRoomId = optionSelectedRoomIds(preferredConfig?.optionSelected)[0] ?? null;
   const activeConfigId = searchResult?.configurationId ?? latestConfig?.id ?? null;
 
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
@@ -326,14 +345,26 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   });
 
   const selectMutation = useMutation({
-    mutationFn: ({ roomId, isDeficient }: { roomId: string; isDeficient: boolean }) => {
+    mutationFn: (body: {
+      roomId?: string;
+      roomIds?: string[];
+      perNight?: Array<{ date: string; roomIds: string[] }>;
+      deficientRoomIds: string[];
+    }) => {
       const configId = searchResult?.configurationId ?? latestConfig?.id;
       if (!configId) throw new Error("Run availability search first");
+      const acks = body.deficientRoomIds.length
+        ? body.deficientRoomIds.map((roomId) => ({
+            roomId,
+            acknowledgedAt: new Date().toISOString(),
+            note: "Acknowledged at desk inquiry selection",
+          }))
+        : undefined;
       return selectAvailabilityOption(session!, configId, {
-        roomId,
-        deficientAcknowledgements: isDeficient
-          ? [{ roomId, acknowledgedAt: new Date().toISOString(), note: "Acknowledged at desk inquiry selection" }]
-          : undefined,
+        roomId: body.roomId,
+        roomIds: body.roomIds,
+        perNight: body.perNight,
+        deficientAcknowledgements: acks,
       });
     },
     onSuccess: () => {
@@ -383,6 +414,30 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const deficientTypes = useMemo(() => groupByType(deficientRooms, pricing), [deficientRooms, pricing]);
   const unavailableTypes = useMemo(() => groupByType(unavailableRooms, pricing), [unavailableRooms, pricing]);
 
+  // Multi-room selection is driven purely by party size (Entry.numberOfRooms), never the source
+  // channel. numberOfRooms > 1 swaps the single-select cards for the multi-room / per-night picker.
+  const numberOfRooms = entry.numberOfRooms ?? 1;
+  const multiRoom = numberOfRooms > 1;
+  const sealedIds = optionSelectedRoomIds(preferredConfig?.optionSelected);
+  const candidateRooms = useMemo(
+    () => roomMetaFromResults(availableRooms, deficientRooms),
+    [availableRooms, deficientRooms],
+  );
+  const perDate = useMemo<PerDateAvailabilityResult[] | undefined>(() => {
+    const src =
+      (searchResult?.results as { perDate?: unknown } | undefined) ??
+      (latestConfig?.resultSet as { perDate?: unknown } | undefined) ??
+      (preferredConfig?.resultSet as { perDate?: unknown } | undefined);
+    const pd = src?.perDate;
+    return Array.isArray(pd) ? (pd as PerDateAvailabilityResult[]) : undefined;
+  }, [searchResult, latestConfig, preferredConfig]);
+  // Nights come from the entry's own dates (what the backend perNight coverage check validates
+  // against), falling back to the search inputs when the entry has no saved dates.
+  const stayNights = useMemo(
+    () => enumerateNights(entry.checkInDate ?? checkIn, entry.checkOutDate ?? checkOut),
+    [entry.checkInDate, entry.checkOutDate, checkIn, checkOut],
+  );
+
   const groupSelected = (group: RoomTypeGroup) =>
     group.rooms.some((r) => r.roomId === preferredRoomId || r.roomId === pendingRoom);
 
@@ -392,7 +447,15 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       return;
     }
     setPendingRoom(room.roomId);
-    selectMutation.mutate({ roomId: room.roomId, isDeficient });
+    selectMutation.mutate({ roomId: room.roomId, deficientRoomIds: isDeficient ? [room.roomId] : [] });
+  };
+
+  const handleMultiSeal = (p: SealPayload) => {
+    if (!activeConfigId && !latestConfig?.id) {
+      toast.error("Run availability search first");
+      return;
+    }
+    selectMutation.mutate({ roomIds: p.roomIds, perNight: p.perNight, deficientRoomIds: p.deficientRoomIds });
   };
 
   // Persistent highlight: a group stays lit once its action has run for this booking (derived from
@@ -508,7 +571,35 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             </div>
           )}
 
-          {availableTypes.length > 0 && (
+          {multiRoom && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "0 0 8px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                This booking needs {numberOfRooms} rooms
+                {sealedIds.length > 0 && (
+                  <span className="tag" style={{ background: "var(--terra-wash, transparent)" }}>
+                    {sealedIds.length} sealed
+                  </span>
+                )}
+              </div>
+              {candidateRooms.length > 0 ? (
+                <MultiRoomSelect
+                  numberOfRooms={numberOfRooms}
+                  candidateRooms={candidateRooms}
+                  perDate={perDate}
+                  nights={stayNights}
+                  onSeal={handleMultiSeal}
+                  isSealing={selectMutation.isPending}
+                  sealedRoomIds={sealedIds}
+                />
+              ) : (
+                <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+                  No selectable rooms in this result — search again.
+                </p>
+              )}
+            </>
+          )}
+
+          {!multiRoom && availableTypes.length > 0 && (
             <>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "0 0 7px" }}>Available room types</div>
               <div className="opt-grid">
@@ -527,7 +618,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
               </div>
             </>
           )}
-          {deficientTypes.length > 0 && (
+          {!multiRoom && deficientTypes.length > 0 && (
             <>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--warn)", margin: "12px 0 7px" }}>
                 Deficient — acknowledgement recorded on select
@@ -565,11 +656,13 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             </>
           )}
 
-          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "10px 0 0", lineHeight: 1.5 }}>
-            These are grouped by <b>room type</b> and suggested from live availability — you pick a preferred type.
-            The price is indicative only (no quote is created at this step), and the final room is assigned at
-            arrival.
-          </p>
+          {!multiRoom && (
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "10px 0 0", lineHeight: 1.5 }}>
+              These are grouped by <b>room type</b> and suggested from live availability — you pick a preferred type.
+              The price is indicative only (no quote is created at this step), and the final room is assigned at
+              arrival.
+            </p>
+          )}
         </div>
       )}
       </div>

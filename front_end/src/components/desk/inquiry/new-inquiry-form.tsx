@@ -21,7 +21,7 @@ import {
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
 import { createEntry } from "@/lib/api/entries";
-import { getChildPolicy } from "@/lib/api/child-policy";
+import { getChildPolicy, getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { BackendRail, type RailGroup } from "@/components/desk/workspace/backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 
@@ -223,6 +223,11 @@ export function DeskNewInquiryForm() {
   const [children, setChildren] = useState("0");
   // One age per child, synced to the children count. Drives the child policy + CNB pricing.
   const [childAges, setChildAges] = useState<string[]>([]);
+  // How many rooms the party needs. Driven purely by chargeable-occupant count (adults +
+  // children old enough to need their own bed) vs the hotel's largest room capacity — NOT
+  // by the source channel. A walk-in family of 5 gets the same multi-room option a travel
+  // agent would. Kept in-range by the effect below.
+  const [numberOfRooms, setNumberOfRooms] = useState("1");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   const [today, setToday] = useState("");
@@ -267,6 +272,38 @@ export function DeskNewInquiryForm() {
     childCountNum === 0 ||
     (childAges.length === childCountNum &&
       childAges.every((a) => a.trim() !== "" && Number(a) >= 0 && Number(a) <= maxChildAge));
+
+  // Chargeable occupants + the allowed room-count envelope, computed by the backend so intake
+  // offers exactly the values the S1/S2 validation will accept (replaces the removed frontend
+  // `chargeable-occupants` mirror — the backend now owns this math for every UI). maxCapacity
+  // is omitted, so the endpoint uses its default divisor of 3; that's ≤ the hotel's largest
+  // room capacity, so the dropdown never offers a room count the create-entry check would reject.
+  const adultsNum = Math.max(0, parseInt(adults || "0", 10) || 0);
+  const parsedChildAges = childAges.map((a) => parseInt(a || "", 10)).filter((n) => Number.isFinite(n));
+  const roomCountsQuery = useQuery({
+    queryKey: ["lookup", "allowed-room-counts", adultsNum, parsedChildAges.join(",")],
+    queryFn: () => getAllowedRoomCounts(session!, { adults: adultsNum, childAges: parsedChildAges }),
+    enabled: !!session && adultsNum > 0 && agesComplete,
+  });
+  const chargeableOccupants = roomCountsQuery.data?.chargeableOccupants ?? adultsNum;
+  const largestMaxCapacity = roomCountsQuery.data?.maxCapacityUsed ?? 3;
+  const roomRange = roomCountsQuery.data?.allowedRoomCounts ?? { min: adultsNum > 0 ? 1 : 0, max: adultsNum };
+  const allowedRoomCounts = useMemo(
+    () =>
+      roomRange.min > 0 && roomRange.max >= roomRange.min
+        ? Array.from({ length: roomRange.max - roomRange.min + 1 }, (_, i) => roomRange.min + i)
+        : [],
+    [roomRange.min, roomRange.max],
+  );
+
+  // Keep numberOfRooms valid when the composition changes upstream (e.g. adults drop 3 → 1,
+  // so the allowed max drops to 1 and a stale "2" must snap back to the first valid value).
+  useEffect(() => {
+    if (allowedRoomCounts.length === 0) return;
+    const n = parseInt(numberOfRooms || "0", 10) || 0;
+    if (!allowedRoomCounts.includes(n)) setNumberOfRooms(String(allowedRoomCounts[0]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowedRoomCounts]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -356,6 +393,7 @@ export function DeskNewInquiryForm() {
         adultCount: a,
         childCount: c,
         childAges: c > 0 && parsedAges.length === c ? parsedAges : undefined,
+        numberOfRooms: Math.max(1, parseInt(numberOfRooms || "1", 10) || 1),
         otaSource: channel.channel === "OTA",
       });
     },
@@ -590,6 +628,30 @@ export function DeskNewInquiryForm() {
               </p>
             </div>
           )}
+
+          <div className="field">
+            <label>Number of rooms</label>
+            <select
+              value={numberOfRooms}
+              onChange={(e) => setNumberOfRooms(e.target.value)}
+              disabled={allowedRoomCounts.length === 0}
+            >
+              {allowedRoomCounts.length === 0 ? (
+                <option value="">—</option>
+              ) : (
+                allowedRoomCounts.map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n} {n === 1 ? "room" : "rooms"}
+                  </option>
+                ))
+              )}
+            </select>
+            <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
+              {chargeableOccupants} chargeable guest{chargeableOccupants === 1 ? "" : "s"} (adults + children aged{" "}
+              {maxChildAge + 1}+). Up to {largestMaxCapacity} per room, so {roomRange.min}–{roomRange.max} room
+              {roomRange.max === 1 ? "" : "s"} allowed. This is driven by party size only — not how the guest booked.
+            </p>
+          </div>
 
           <div className="frow">
             <div className="field">

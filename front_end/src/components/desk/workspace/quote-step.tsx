@@ -21,6 +21,7 @@ import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, QuotationState, QuotationSummary } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
 
 const BK = STAGE_ACTIONS.S2;
 
@@ -62,7 +63,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const working = draft ?? sent;
 
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
-  const preferredRoomId = sealedPreferred?.optionSelected?.roomId ?? null;
+  const preferredRoomId = optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? null;
   const holds = (entry.speculativeHolds ?? []).filter((h) => !segmentId || h.segmentId === segmentId);
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED");
 

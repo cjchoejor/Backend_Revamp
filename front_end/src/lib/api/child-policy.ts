@@ -14,3 +14,28 @@ export type ChildPolicyBundle = {
 export function getChildPolicy(session: Session) {
   return apiRequest<ChildPolicyBundle>("/api/lookups/child-policy", { session });
 }
+
+export type AllowedRoomCountsResponse = {
+  chargeableOccupants: number;
+  allowedRoomCounts: { min: number; max: number };
+  bandBreakdown: { young: number; child: number; adult: number };
+  maxCapacityUsed: number;
+};
+
+/**
+ * Backend-authoritative capacity math. Given a proposed composition + max-capacity ceiling,
+ * returns the chargeable-occupants count + the allowed number-of-rooms envelope. Replaces
+ * the frontend-only mirror in `lib/chargeable-occupants.ts` — the backend now owns the
+ * calculation so ANY frontend (main testing UI + the friend's real UI) can consume the same
+ * answer without duplicating business logic.
+ */
+export function getAllowedRoomCounts(
+  session: Session,
+  body: { adults: number; childAges: number[]; maxCapacity?: number },
+) {
+  return apiRequest<AllowedRoomCountsResponse>("/api/lookups/allowed-room-counts", {
+    method: "POST",
+    session,
+    body,
+  });
+}

@@ -330,6 +330,9 @@ export type RoomAssignmentSummary = {
   id: string;
   entryId: string;
   roomId: string;
+  /** Date-scoped assignment window (multi-room / per-night bookings). Null for whole-stay. */
+  startDate?: string | null;
+  endDate?: string | null;
   deficientAtAssignment?: boolean;
   acknowledgementActorId?: string | null;
   acknowledgementAt?: string | null;

@@ -31,6 +31,7 @@ import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
+import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -126,15 +127,25 @@ export async function createQuotation(
   const preferredCfg = entry.availabilityConfigs.find((c) => c.sealedAt != null && c.optionSelected != null) ?? null;
   enforceSealedPreferredAvailabilityConfigurationForS2Quotation({ preferred: preferredCfg });
   const preferred = preferredCfg!;
+  // Multi-room-safe read: handles legacy single-roomId, whole-stay roomIds, and per-night
+  // shapes uniformly. Was previously reading `optionSelected.roomId` directly which broke
+  // for the two newer shapes (bug reported 2026-07-13).
+  const sealed = readOptionSelected(preferred.optionSelected);
   let roomTypeId: string | undefined = (preferred.searchCriteria as any)?.roomTypeId;
   if (!roomTypeId || typeof roomTypeId !== "string") {
-    const selectedRoomId = (preferred.optionSelected as any)?.roomId;
-    if (typeof selectedRoomId === "string" && selectedRoomId.length > 0) {
-      const selectedRoom = await prisma.room.findUnique({ where: { id: selectedRoomId }, select: { roomTypeId: true } });
+    const anyRoomId = firstRoomId(sealed);
+    if (anyRoomId) {
+      const selectedRoom = await prisma.room.findUnique({ where: { id: anyRoomId }, select: { roomTypeId: true } });
       roomTypeId = selectedRoom?.roomTypeId;
     }
   }
   enforceRoomTypeResolvedForS2Quotation({ roomTypeId });
+
+  // Room count = number of distinct rooms in the seal. For per-night seals this is the total
+  // distinct rooms across all nights, which matches the operator's intent (a room-change
+  // mid-stay is still one committed room-night per room per night — the total room-nights =
+  // distinctRooms × nights).
+  const roomCount = Math.max(1, sealed.distinctRoomIds.length || (entry.numberOfRooms ?? 1));
 
   const tier = entry.guestProfile?.clientTier;
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
@@ -219,6 +230,25 @@ export async function createQuotation(
     };
   }
 
+  // Nights for pricing math. Fall back to 1 when dates aren't fixed yet so the multiplication
+  // still produces a sensible value in draft-quote scenarios.
+  const nightsForPricing =
+    stay && stay.checkIn && stay.checkOut
+      ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
+      : 1;
+
+  // Multi-room pricing block. Semantics:
+  //   - `effectiveRate` and `resolvedNightlyRate` = PER-ROOM per-night rate (unchanged semantic)
+  //   - `pricingBreakdown` = explicit total that reflects roomCount × nights so downstream
+  //     services (S3 advance-payment threshold, S4 confirmation, S9 reconciliation) can
+  //     multiply correctly without every consumer re-deriving room count on its own.
+  const pricingBreakdown = {
+    nightlyRate: effectiveRate,
+    nights: nightsForPricing,
+    roomCount,
+    subTotal: effectiveRate * nightsForPricing * roomCount,
+  };
+
   const commercialTerms = {
     roomTypeId,
     useType: entry.useType,
@@ -248,6 +278,9 @@ export async function createQuotation(
     perNightTotal,
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
+    // Multi-room-aware pricing breakdown — always present so downstream can rely on it.
+    roomCount,
+    pricingBreakdown,
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
     ...(perGuestMealBreakdown ? { perGuestMealBreakdown } : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
@@ -284,7 +317,13 @@ export async function createQuotation(
         referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
-        totalAmount: perNightTotal,
+        // Merge of two tracks: main's multi-room block pricing (room rate × roomCount) plus
+        // UI-experiment's meal/extra-bed add-ons. effectiveRate is PER-ROOM (scales by
+        // roomCount); mealTotal + extraBedTotal are BOOKING-WIDE (already computed for all
+        // guests, so added once — NOT × roomCount, which would double-count). For a single
+        // room this equals the old perNightTotal; for a non-contracted booking (no meals)
+        // it equals main's effectiveRate × roomCount. Downstream × nights = the stay total.
+        totalAmount: effectiveRate * roomCount + mealTotal + extraBedTotal,
         currency: input.currency?.trim() ? input.currency.trim() : currency?.trim() ? currency : "BTN",
         createdBy: actorId,
       },
@@ -358,17 +397,26 @@ export async function createGroupQuotation(
   const preferredCfg = entry.availabilityConfigs.find((c) => c.sealedAt != null && c.optionSelected != null) ?? null;
   enforceSealedPreferredAvailabilityConfigurationForS2Quotation({ preferred: preferredCfg });
   const preferred = preferredCfg!;
+  // Multi-room-safe: same helper as the single-party path.
+  const sealed = readOptionSelected(preferred.optionSelected);
   let roomTypeId: string | undefined = (preferred.searchCriteria as any)?.roomTypeId;
   if (!roomTypeId || typeof roomTypeId !== "string") {
-    const selectedRoomId = (preferred.optionSelected as any)?.roomId;
-    if (typeof selectedRoomId === "string" && selectedRoomId.length > 0) {
-      const selectedRoom = await prisma.room.findUnique({ where: { id: selectedRoomId }, select: { roomTypeId: true } });
+    const anyRoomId = firstRoomId(sealed);
+    if (anyRoomId) {
+      const selectedRoom = await prisma.room.findUnique({ where: { id: anyRoomId }, select: { roomTypeId: true } });
       roomTypeId = selectedRoom?.roomTypeId;
     }
   }
   enforceRoomTypeResolvedForS2Quotation({ roomTypeId });
 
-  const roomsRequested = Math.max(1, Number(entry.guestCount ?? 1));
+  // For group quotations, roomsRequested was historically guestCount — but with the new
+  // multi-room selection the operator can explicitly seal N rooms independent of guest
+  // count. Prefer the sealed room count when >0, fall back to entry.numberOfRooms, fall
+  // back to guestCount (legacy behavior).
+  const roomsRequested = Math.max(
+    1,
+    sealed.distinctRoomIds.length > 0 ? sealed.distinctRoomIds.length : entry.numberOfRooms ?? Number(entry.guestCount ?? 1),
+  );
   const focN = input.focRoomsRequested;
   if (focN != null && Number.isFinite(focN) && focN >= 1) {
     await enforceFocEntitlementForS2GroupQuotation(prisma, {
@@ -418,6 +466,18 @@ export async function createGroupQuotation(
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
     focRoomsRequested: focN != null && Number.isFinite(focN) ? Math.floor(focN) : undefined,
+    // Same multi-room-aware pricing breakdown as the single-party path.
+    roomCount: roomsRequested,
+    pricingBreakdown: {
+      nightlyRate: pricing.effectiveRate,
+      nights: stay && stay.checkIn && stay.checkOut
+        ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
+        : 1,
+      roomCount: roomsRequested,
+      subTotal: pricing.effectiveRate * (stay && stay.checkIn && stay.checkOut
+        ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
+        : 1) * roomsRequested,
+    },
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
   };
 
@@ -432,7 +492,8 @@ export async function createGroupQuotation(
         referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
-        totalAmount: pricing.effectiveRate,
+        // Group quotations: same shape as single-party — totalAmount = per-room rate × roomCount.
+        totalAmount: pricing.effectiveRate * roomsRequested,
         currency: input.currency?.trim() ? input.currency.trim() : pricing.currency?.trim() ? pricing.currency : "BTN",
         createdBy: actorId,
       },
