@@ -2,6 +2,20 @@
 
 This file is the operating reference for Claude when working in this repo. Update it whenever the codebase shape changes meaningfully (new admin services, new schema migrations, new runtime conventions, new dev commands).
 
+## ⚠️ Two frontends exist — backend must stay UI-agnostic
+
+The user (cjchoejor) maintains the frontend at `front_end/` **for testing only**. The **real production frontend** is being built by a separate developer with a different UX design and different component structure. That means:
+
+- **Business logic MUST live in the backend.** Anywhere the testing frontend has a calculation, classification, envelope check, or validation, the backend has to expose it via an endpoint or shared service. Duplicating logic in the testing frontend is fine for local convenience but the backend is always the source of truth.
+- **No backend endpoint should assume the testing UI's shape.** Endpoints take inputs (JSON) and return outputs (JSON) — don't design them around what the current form fields look like.
+- **When adding a new feature: expose a backend endpoint FIRST, then have the testing UI consume it.** The friend's frontend consumes the same endpoint with a different UI. If the calculation only lives in the testing frontend, the friend's UI can't use it and business rules diverge.
+- **When you find business logic in `front_end/` that shouldn't be there** — extract it to a backend service + lookup endpoint, delete the frontend duplicate, and update the testing UI to call the endpoint.
+
+Existing backend-authoritative endpoints that show this pattern:
+- `GET /api/lookups/child-policy` → child age bands, meal pricing, unaccompanied-minor cutoff
+- `POST /api/lookups/allowed-room-counts` → chargeable-occupants + allowed-room-count envelope
+- `POST /api/entries/:id/room-assignments/from-sealed-per-night` → bulk assignment from sealed per-night selection
+
 ## What this project is
 
 LEGPHEL PMS is a **single-tenant hotel Property Management System** with two distinct surfaces:
@@ -413,14 +427,60 @@ Note: after applying, stop `npm run dev:workers`, run `npx prisma generate`, res
 
 [`back_end/src/lib/handoff-checklist.ts`](back_end/src/lib/handoff-checklist.ts) — replaces the ad-hoc `as any` casts on `HandoffRecord.checklistContent` reads. Exports `HandoffChecklistContent` (union of every field ever written — all optional) + `readHandoffChecklistContent(value)` safe narrower. Used by check-in-service for the per-room dedup / rejection-check.
 
-### Group-billing follow-ups still pending
+### Multi-room selection at S1 + per-night persistence (2026-07-13)
 
-- **Batched S8 checkout** — mirror of the check-in refactor for departure. Per-room key returns + state transitions.
-- **Night audit per-room** for group folios — currently entry-level records don't distinguish which room had the discrepancy.
-- **Group-tier credit ceiling** — `advancePaymentBoost` handled the deposit; the ceiling itself isn't group-aware yet. Needs `registry.groupBooking.creditCeilingBoost` and integration with `creditCeiling.clientTier.thresholds`.
-- **Child meal pricing engine wiring** — `child-policy-service.getMealRateMultiplier` exists but the pricing engine doesn't call it. Not group-specific but compounds on groups.
-- **Frontend UI for contact-person fields** on the booking flow's step 1 — backend gate exists; form inputs don't yet.
-- **Frontend admin UI for `PATCH /group-billing-mode`** — backend action exists; admin panel doesn't surface it yet.
+Big body of work turning S1 room selection into a proper per-(room, night) affair — and hardening every downstream service to survive multi-room bookings that AREN'T classified as groups.
+
+**Selection model:**
+- Calendar grid: rows = individual rooms (filtered by type + floor), columns = nights. Click a cell to toggle assignment.
+- Per-night selection saved on `AvailabilityConfiguration.optionSelected` as a JSON blob. Three legal shapes:
+  1. Legacy: `{ roomId, isDeficient }`
+  2. Whole-stay multi: `{ roomIds: [{ roomId, isDeficient }], isDeficient }`
+  3. Per-night: `{ perNight: [{ date, roomIds: [{ roomId, isDeficient }] }], isDeficient }`
+- **Backend reader**: [`back_end/src/lib/option-selected-reader.ts`](back_end/src/lib/option-selected-reader.ts) `readOptionSelected(opt)` → `{ distinctRoomIds, perNight, anyDeficient }`. Every backend service that reads `optionSelected` uses this helper — no more shape-specific casts. Frontend mirror: `optionSelectedRoomIds()` in `types/api.ts`.
+- No auto-seal: operator explicitly clicks Save selection when every night reaches target count. Change selection button re-opens for editing.
+
+**Persistence extended downstream** (`20260713044307_per_night_persistence_downstream`):
+- `RoomAssignment.startDate` + `endDate` (nullable) — per-night dated assignments, one row per (roomId, contiguous range).
+- `CommittedHold.perNightBreakdown Json?` — snapshot of the sealed per-night selection so S3+ services can reconstruct intent without re-reading the availability configuration.
+- New helper `roomAssignmentService.assignRoomsFromSealedPerNight(prisma, entryId, actorId)` — folds nights into contiguous ranges and creates one `RoomAssignment` per (roomId, range). Route: `POST /entries/:id/room-assignments/from-sealed-per-night`.
+
+**Multi-room ≠ group** — the class-of-bug fix (2026-07-13):
+
+Historically, batched-processing code keyed off `groupBillingMode === "GROUP_MASTER"`. But GROUP_MASTER only fires above the guest-count threshold (default 6). A 2-room booking for 4 guests would drop into the "single room" code path and only process the first room. Fixed everywhere:
+
+| Service | Old condition | New condition |
+|---|---|---|
+| `check-in-service.completeCheckInToS7` | `groupBillingMode === "GROUP_MASTER" ? all : first` | `distinctAssignments.length > 1 ? all : first` |
+| `s8-checkout-service.completeCheckoutPhysicalDeparture` | same | same |
+| `cancellation-service.cancelEntryEarlyDepartureAfterCheckIn` (S7) | `roomAssignments[0]` only | iterate `distinctRoomsToRelease` |
+| `s3-hold-service.placeCommittedHold` (2026-07-13 hardening) | pinned only `input.roomId` to COMMITTED_HELD | reads sealed `optionSelected` and pins ALL distinct rooms |
+| `cancellation-service.cancelEntryAtS3` + `cancelEntryAtS5` | only released `hold.roomId` | iterates `hold.perNightBreakdown` + `hold.roomId` — releases every room |
+| Frontend S6 workspace banner | shown for GROUP_MASTER only, said "Group booking" | shown any time distinct rooms > 1, says "Multi-room booking" |
+
+**S2 quotation multi-room-safe pricing** (2026-07-13):
+- Was reading `optionSelected.roomId` directly, throwing "Preferred configuration missing roomTypeId" for any multi-room seal. Now goes through `readOptionSelected` + `firstRoomId` helpers.
+- `Quotation.totalAmount` = `effectiveRate × roomCount` (was just `effectiveRate` → wildly under-priced multi-room bookings). Downstream × nights gives the true stay total.
+- `commercialTerms.roomCount` and `commercialTerms.pricingBreakdown` (`{ nightlyRate, nights, roomCount, subTotal }`) explicit for downstream consumers (S3 threshold, S4 confirmation, S9 reconciliation) so they don't re-derive room count.
+- Applied at BOTH quotation entry points: `createQuotation` (single-party) + `createGroupQuotation` (group path).
+
+### Group-billing wiring — status (updated 2026-07-13)
+
+Completed since the "load-bearing" note:
+
+- ✅ **Batched S8 checkout** — done; mirror of check-in
+- ✅ **Batched multi-room check-in for non-group entries** — done via the "multi-room ≠ group" fix
+- ✅ **Contact person input fields** on booking flow step 1 — done
+- ✅ **Admin UI for `PATCH /group-billing-mode`** — `<GroupBillingModeToggle>` component on `EntryHeader`, L3+ only
+- ✅ **Group-tier credit ceiling** — `registry.groupBooking.creditCeilingBoost` policy seeded + `recommendCreditCeilingForEntry(prisma, entryId, baseAmount)` helper in s3-payment-service
+- ✅ **Per-date availability engine (Phase 2.5)** — engine consults `Reservation` + `CommittedHold` intersecting the query range; returns `perDate` breakdown; calendar cells consume it
+- ✅ **`NightAuditAnomaly.roomId`** — column added, downstream code can populate per-room anomalies
+
+Still open (short list):
+
+- **Child meal pricing engine wiring** — `computeGroupMealCharge` helper exists in child-policy-service; `s2-quotation-service` attaches `perGuestMealBreakdown` to `commercialTerms` when adult meal rate is available (via agent rate card breakfast add-on). BUT the actual pricing engine total doesn't yet consume it — still uses flat adult rate × all guests. Follow-up: replace flat meal charge with `computeGroupMealCharge(...).total`.
+- **Night audit per-room populate** — schema column exists; audit worker still records at entry-level. Follow-up: pass roomId when the discrepancy is room-scoped.
+- **Per-date availability engine consumers** — `getEntryWithRoom` (S8 helper) + `s7-amendment-service.roomChangeReEntryToS1` still use `roomAssignments: take: 1`. Correct in their contexts (they operate on ONE specific room the operator picked), but worth an audit.
 
 ### Mode registry (ACIG §2.1A.7)
 

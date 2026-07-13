@@ -145,20 +145,35 @@ export async function cancelEntryAtS3(
       });
     }
 
-    // 4. Release the committed hold, return inventory to FREE.
+    // 4. Release the committed hold, return inventory to FREE. Multi-room support: read the
+    // hold's perNightBreakdown (populated by s3-hold-service from the sealed AvailabilityConfiguration)
+    // so every room the booking held is released, not just hold.roomId. Falls back to
+    // hold.roomId for pre-Phase-D holds that don't carry the breakdown.
     const hold = entry.committedHold;
     if (hold && hold.state !== HoldState.RELEASED && hold.state !== HoldState.EXPIRED) {
-      if (hold.roomId) {
-        const room = await tx.room.findUnique({ where: { id: hold.roomId } });
-        const fromState = room?.currentClaimState;
+      const heldRoomIds = new Set<string>();
+      if (hold.roomId) heldRoomIds.add(hold.roomId);
+      const breakdown = (hold.perNightBreakdown ?? null) as
+        | Array<{ date?: string; roomIds?: Array<{ roomId?: string }> }>
+        | null;
+      if (Array.isArray(breakdown)) {
+        for (const n of breakdown) {
+          for (const r of n.roomIds ?? []) {
+            if (typeof r?.roomId === "string") heldRoomIds.add(r.roomId);
+          }
+        }
+      }
+      for (const roomId of heldRoomIds) {
+        const roomRow = await tx.room.findUnique({ where: { id: roomId } });
+        const fromState = roomRow?.currentClaimState;
         if (fromState && fromState !== InventoryClaimState.FREE) {
           await tx.room.update({
-            where: { id: hold.roomId },
+            where: { id: roomId },
             data: { currentClaimState: InventoryClaimState.FREE },
           });
           await tx.roomClaimStateEvent.create({
             data: {
-              roomId: hold.roomId,
+              roomId,
               entryId,
               fromState,
               toState: InventoryClaimState.FREE,
@@ -378,17 +393,29 @@ export async function cancelEntryAtS5(
 
     const hold = entry.committedHold;
     if (hold && hold.state !== HoldState.RELEASED && hold.state !== HoldState.EXPIRED) {
-      if (hold.roomId) {
-        const room = await tx.room.findUnique({ where: { id: hold.roomId } });
-        const fromState = room?.currentClaimState;
+      const heldRoomIds = new Set<string>();
+      if (hold.roomId) heldRoomIds.add(hold.roomId);
+      const breakdown = (hold.perNightBreakdown ?? null) as
+        | Array<{ date?: string; roomIds?: Array<{ roomId?: string }> }>
+        | null;
+      if (Array.isArray(breakdown)) {
+        for (const n of breakdown) {
+          for (const r of n.roomIds ?? []) {
+            if (typeof r?.roomId === "string") heldRoomIds.add(r.roomId);
+          }
+        }
+      }
+      for (const roomId of heldRoomIds) {
+        const roomRow = await tx.room.findUnique({ where: { id: roomId } });
+        const fromState = roomRow?.currentClaimState;
         if (fromState && fromState !== InventoryClaimState.FREE) {
           await tx.room.update({
-            where: { id: hold.roomId },
+            where: { id: roomId },
             data: { currentClaimState: InventoryClaimState.FREE },
           });
           await tx.roomClaimStateEvent.create({
             data: {
-              roomId: hold.roomId,
+              roomId,
               entryId,
               fromState,
               toState: InventoryClaimState.FREE,
@@ -456,7 +483,7 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
       folio: true,
       reservation: true,
       inquiry: true,
-      roomAssignments: { include: { room: true }, orderBy: { createdAt: "desc" }, take: 1 },
+      roomAssignments: { include: { room: true }, orderBy: { createdAt: "desc" } },
     },
   });
   if (!entry) throw new NotFoundError("Entry");
@@ -502,8 +529,18 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
     take: 50,
   });
 
-  const assignment = entry.roomAssignments[0];
-  const room = assignment?.room;
+  // Multi-room bookings need every room's state released back to FREE — not just the first
+  // one. Dedup by roomId so a room-change history doesn't double-process the same room.
+  const distinctRoomsToRelease = (() => {
+    const seen = new Set<string>();
+    const list: Array<{ id: string; currentClaimState: InventoryClaimState }> = [];
+    for (const a of entry.roomAssignments) {
+      if (seen.has(a.roomId)) continue;
+      seen.add(a.roomId);
+      list.push({ id: a.room.id, currentClaimState: a.room.currentClaimState });
+    }
+    return list;
+  })();
 
   const updated = await prisma.$transaction(async (tx) => {
     if (penalty > 0) {
@@ -538,14 +575,15 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
       },
     });
 
-    if (room && room.currentClaimState === InventoryClaimState.OCCUPIED) {
+    for (const r of distinctRoomsToRelease) {
+      if (r.currentClaimState !== InventoryClaimState.OCCUPIED) continue;
       await tx.room.update({
-        where: { id: room.id },
+        where: { id: r.id },
         data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now },
       });
       await tx.roomClaimStateEvent.create({
         data: {
-          roomId: room.id,
+          roomId: r.id,
           entryId,
           fromState: InventoryClaimState.OCCUPIED,
           toState: InventoryClaimState.FREE,

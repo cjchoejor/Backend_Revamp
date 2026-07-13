@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -89,6 +90,25 @@ export async function placeCommittedHold(
   const now = new Date();
   const expiresAt = new Date(now.getTime() + Number(ttlSeconds) * 1000);
 
+  // Multi-room support: the sealed AvailabilityConfiguration is the source of truth for
+  // "which rooms this booking is holding". Beyond input.roomId (the primary room the hold
+  // service originally pinned), we collect any OTHER distinct rooms from the sealed config
+  // and pin them all to COMMITTED_HELD. Prevents double-booking of rooms 2..N in a
+  // multi-room booking (the historical bug).
+  const sealedForHold = readOptionSelected(sealedConfig?.optionSelected);
+  const allSealedRoomIds = Array.from(new Set([input.roomId, ...sealedForHold.distinctRoomIds]));
+  const additionalRooms = allSealedRoomIds.filter((id) => id !== input.roomId);
+  // Load the additional rooms' current states so we can guard them the same way.
+  const additionalRoomRows =
+    additionalRooms.length > 0
+      ? await prisma.room.findMany({
+          where: { id: { in: additionalRooms } },
+        })
+      : [];
+  for (const r of additionalRoomRows) {
+    enforceCommittedHoldInventoryAvailable({ currentClaimState: r.currentClaimState });
+  }
+
   return prisma.$transaction(async (tx) => {
     // Upgrade speculative hold if present on this segment/room.
     const spec = await tx.speculativeHold.findFirst({
@@ -96,21 +116,27 @@ export async function placeCommittedHold(
       orderBy: { placedAt: "desc" },
     });
 
-    await tx.room.update({
-      where: { id: input.roomId },
-      data: { currentClaimState: InventoryClaimState.COMMITTED_HELD },
-    });
-    await tx.roomClaimStateEvent.create({
-      data: {
-        roomId: input.roomId,
-        entryId,
-        fromState: room.currentClaimState,
-        toState: InventoryClaimState.COMMITTED_HELD,
-        actorId: actor.actorId,
-        reason: spec ? "COMMITTED_HOLD_UPGRADE_FROM_SPECULATIVE" : "COMMITTED_HOLD_PLACED",
-        effectiveFrom: now,
-      },
-    });
+    // Pin every sealed room to COMMITTED_HELD in one pass. Room already in COMMITTED_HELD
+    // (previous partial retry) is left alone.
+    const roomsToPin: Array<{ id: string; currentClaimState: InventoryClaimState }> = [
+      { id: input.roomId, currentClaimState: room.currentClaimState },
+      ...additionalRoomRows.map((r) => ({ id: r.id, currentClaimState: r.currentClaimState })),
+    ];
+    for (const r of roomsToPin) {
+      if (r.currentClaimState === InventoryClaimState.COMMITTED_HELD) continue;
+      await tx.room.update({ where: { id: r.id }, data: { currentClaimState: InventoryClaimState.COMMITTED_HELD } });
+      await tx.roomClaimStateEvent.create({
+        data: {
+          roomId: r.id,
+          entryId,
+          fromState: r.currentClaimState,
+          toState: InventoryClaimState.COMMITTED_HELD,
+          actorId: actor.actorId,
+          reason: spec && r.id === input.roomId ? "COMMITTED_HOLD_UPGRADE_FROM_SPECULATIVE" : "COMMITTED_HOLD_PLACED",
+          effectiveFrom: now,
+        },
+      });
+    }
 
     const hold = await tx.committedHold.upsert({
       where: { entryId },

@@ -12,11 +12,14 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { createGuestProfile, guestDisplayName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
-import { getChildPolicy } from "@/lib/api/child-policy";
+import { getChildPolicy, getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { listRooms } from "@/lib/api/rooms";
 import { createInquiry } from "@/lib/api/inquiries";
 import { createEntry, updateEntryIntake } from "@/lib/api/entries";
-import { computeAllowedRoomCounts, computeChargeableOccupants } from "@/lib/chargeable-occupants";
+// NOTE: chargeable-occupants math is now backend-authoritative via
+// GET /api/lookups/allowed-room-counts (see getAllowedRoomCounts in lib/api/child-policy).
+// The old local mirror in lib/chargeable-occupants.ts has been removed — this frontend calls
+// the backend so the friend's real UI can consume the same computation identically.
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { AgentCorporatePicker, type AgentCorporateSelection } from "@/components/inquiries/agent-corporate-picker";
@@ -194,16 +197,26 @@ export function NewInquiryForm({ onCreated, hideHeader, submitLabel, editEntry, 
     return max;
   })();
 
-  // Chargeable occupants + allowed room-count envelope. Recomputes as adults / childAges /
-  // policy change so the dropdown values match what the backend will accept.
+  // Chargeable occupants + allowed room-count envelope — resolved by the backend so it stays
+  // the single source of truth. Debounced so a rapid typing burst on the age inputs doesn't
+  // hammer the endpoint.
   const parsedChildAges = childAges
     .map((a) => parseInt(a || "", 10))
     .filter((n) => Number.isFinite(n));
-  const chargeableOccupants = computeChargeableOccupants(
-    { adults: parseInt(adults || "0", 10) || 0, childAges: parsedChildAges },
-    childPolicyQuery.data ?? null,
-  );
-  const roomRange = computeAllowedRoomCounts(chargeableOccupants, largestMaxCapacity);
+  const parsedAdults = parseInt(adults || "0", 10) || 0;
+  const allowedRoomCountsQuery = useQuery({
+    queryKey: ["allowed-room-counts", parsedAdults, parsedChildAges.join(","), largestMaxCapacity],
+    queryFn: () =>
+      getAllowedRoomCounts(session!, {
+        adults: parsedAdults,
+        childAges: parsedChildAges,
+        maxCapacity: largestMaxCapacity,
+      }),
+    enabled: !!session && parsedAdults + parsedChildAges.length > 0,
+    staleTime: 5_000,
+  });
+  const chargeableOccupants = allowedRoomCountsQuery.data?.chargeableOccupants ?? 0;
+  const roomRange = allowedRoomCountsQuery.data?.allowedRoomCounts ?? { min: 0, max: 0 };
   const allowedRoomCounts: number[] =
     roomRange.min > 0 && roomRange.max >= roomRange.min
       ? Array.from({ length: roomRange.max - roomRange.min + 1 }, (_, i) => roomRange.min + i)
