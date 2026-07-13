@@ -12,7 +12,16 @@ export type RoomListItem = {
   blockedReason?: string | null;
   isDeficient?: boolean;
   isUnderMaintenance?: boolean;
-  roomType?: { id: string; code: string; name: string } | null;
+  roomType?: {
+    id: string;
+    code: string;
+    name: string;
+    standardCapacity?: number;
+    maxCapacity?: number;
+    maxChildren?: number;
+    requiredAccompanyingAdults?: number;
+    maxExtraBeds?: number;
+  } | null;
 };
 
 export async function listRooms(session: Session) {

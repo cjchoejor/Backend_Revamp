@@ -356,6 +356,25 @@ reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1")
   }
 });
 
+/**
+ * Bulk-assign rooms from the entry's sealed per-night AvailabilityConfiguration. Reads the
+ * config's `optionSelected.perNight` and creates one RoomAssignment row per contiguous
+ * (roomId, date range) slice — so a mid-stay room change is properly represented as two
+ * date-scoped rows instead of one un-dated assignment. Idempotent on retry.
+ */
+reservationsRouter.post("/entries/:id/room-assignments/from-sealed-per-night", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const created = await roomAssignmentService.assignRoomsFromSealedPerNight(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+    );
+    res.status(201).json({ assignments: created, count: created.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
 reservationsRouter.post(
   "/entries/:id/spaces/allocate",
   requireActorLevel("L1"),

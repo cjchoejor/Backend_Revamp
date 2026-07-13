@@ -842,6 +842,10 @@ model Entry {
   childCount         Int?
   /// Ages of accompanying children, ordered. Length should equal childCount; not enforced at the DB layer.
   childAges          Int[]             @default([])
+  /// Number of rooms the guest is requesting. Enforced at S1: allowed range is
+  /// ceil(chargeableOccupants / RoomType.maxCapacity) .. chargeableOccupants where
+  /// chargeableOccupants = adultCount + count(childAges where age >= legal minor age).
+  numberOfRooms      Int?
   otaSource          Boolean           @default(false)
   otaReference       String?
   groupBillingMode   GroupBillingMode?
@@ -1181,17 +1185,24 @@ model RoomType {
   name      String
   createdAt DateTime @default(now())
 
-  /// Total guests allowed in a room of this type (adults + children, infants may be excluded
-  /// per the child policy). Defaults match the legacy Room.capacity of 2 so existing rows
-  /// continue to behave the same way.
-  maxOccupancy              Int @default(2)
-  /// Max children allowed in a room of this type — independent cap on top of maxOccupancy.
-  maxChildren               Int @default(2)
+  /// Standard chargeable occupants a room of this type accommodates without an extra bed
+  /// — the "everyday" configuration (typical Standard Double: 2). Chargeable = adults +
+  /// children aged >= registry.child.unaccompaniedMinorMinAge - i.e. those old enough to
+  /// need their own bed per the child policy. Renamed from `maxOccupancy` on 2026-07-10
+  /// via schema-level @map so the DB column stays put during migration.
+  standardCapacity           Int @default(2) @map("maxOccupancy")
+  /// Absolute ceiling on chargeable occupants when the extra-bed configuration is used
+  /// (typical Standard Double: 3). Room-count validation at S1 uses this as the divisor:
+  /// minRooms = ceil(chargeableOccupants / maxCapacity).
+  maxCapacity                Int @default(3)
+  /// Max children allowed in a room of this type — independent cap on top of the capacity
+  /// fields. Applies to under-11s who share bedding.
+  maxChildren                Int @default(2)
   /// Minimum number of accompanying adults required for any children to occupy this room type.
   /// 1 = "at least one adult must be present with the children".
   requiredAccompanyingAdults Int @default(1)
   /// Max extra beds available for a room of this type (0 = no extra bed possible).
-  maxExtraBeds              Int @default(0)
+  maxExtraBeds               Int @default(0)
 
   rooms             Room[]
   committedHolds    CommittedHold[]
@@ -1352,6 +1363,12 @@ model CommittedHold {
   commercialJustification String    @default("seed")
   ttlSeconds              Int       @default(86400)
   expiresAt               DateTime
+  /// When the seal that led to this hold was per-night (guest picks room 201 for night 1,
+  /// room 301 for night 2), the full breakdown is snapshotted here so downstream services
+  /// don't lose the intent. Shape matches AvailabilityConfiguration.optionSelected.perNight:
+  ///   `[{ date: "YYYY-MM-DD", roomIds: [{ roomId, isDeficient }] }, ...]`
+  /// NULL for whole-stay holds (legacy + single-room-picked bookings).
+  perNightBreakdown       Json?
 
   entry    Entry    @relation(fields: [entryId], references: [id])
   roomType RoomType @relation(fields: [roomTypeId], references: [id])
@@ -1616,6 +1633,13 @@ model RoomAssignment {
   id                         String    @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_ASSIGNMENT", ...)
   entryId                    String
   roomId                     String
+  /// Inclusive first night this assignment applies to. NULL = whole-stay assignment
+  /// (legacy, pre-per-night work). Populated when a per-night sealed configuration
+  /// creates a room-change mid-stay, so reports can answer "which room was used on Jul 15?"
+  /// without JSON parsing.
+  startDate                  DateTime?
+  /// Exclusive checkout — the day the guest departs the room. NULL when startDate is NULL.
+  endDate                    DateTime?
   assignedAt                 DateTime  @default(now())
   assignedBy                 String
   deficientAtAssignment      Boolean   @default(false)
@@ -1775,6 +1799,10 @@ model NightAuditAnomaly {
   id                 String                @id @default(uuid())
   nightAuditRecordId String
   entryId            String?
+  /// For group entries, an anomaly attributed to a specific room within the group folio.
+  /// NULL for entry-level anomalies (single-room entries or a genuine entry-wide issue).
+  /// Lets front-desk reporting say "F&B missing for room 201" instead of just "…for entry".
+  roomId             String?
   anomalyType        NightAuditAnomalyType
   description        String
   createdAt          DateTime              @default(now())

@@ -30,6 +30,8 @@ export type EntryListItem = {
   adultCount?: number | null;
   childCount?: number | null;
   childAges?: number[] | null;
+  /** Number of rooms requested. May be null on legacy entries pre-Phase-D. */
+  numberOfRooms?: number | null;
   /** Set at S1 by Policy 64. GROUP_MASTER = auto-classified as group; NULL = individual. */
   groupBillingMode?: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
   useType?: string | null;
@@ -111,14 +113,43 @@ export type SegmentSummary = {
   sealedAt?: string | null;
 };
 
+export type AvailabilityOptionSelected =
+  /** Legacy single-room seal. */
+  | { roomId: string; isDeficient?: boolean }
+  /** Multi-room, whole-stay seal. Same rooms all nights. */
+  | { roomIds: Array<{ roomId: string; isDeficient: boolean }>; isDeficient?: boolean }
+  /** Per-night seal — different rooms allowed on different nights. */
+  | {
+      perNight: Array<{ date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> }>;
+      isDeficient?: boolean;
+    };
+
 export type AvailabilityConfigSummary = {
   id: string;
-  optionSelected: { roomId: string; isDeficient?: boolean } | null;
+  optionSelected: AvailabilityOptionSelected | null;
   isStale: boolean;
   sealedAt: string | null;
   resultSet?: unknown;
   createdAt?: string;
 };
+
+/**
+ * Normalise the three shapes to a distinct flat list of room ids. Handy for display
+ * (sticky breadcrumb "N rooms sealed") where the specific per-night assignment is not
+ * important. Callers that DO care about per-night should read `optionSelected.perNight`
+ * directly.
+ */
+export function optionSelectedRoomIds(opt: AvailabilityOptionSelected | null | undefined): string[] {
+  if (!opt) return [];
+  if ("perNight" in opt && Array.isArray(opt.perNight)) {
+    const set = new Set<string>();
+    for (const n of opt.perNight) for (const r of n.roomIds) set.add(r.roomId);
+    return Array.from(set);
+  }
+  if ("roomIds" in opt && Array.isArray(opt.roomIds)) return opt.roomIds.map((r) => r.roomId);
+  if ("roomId" in opt && typeof opt.roomId === "string") return [opt.roomId];
+  return [];
+}
 
 export type InvoiceSummary = {
   id: string;

@@ -34,6 +34,7 @@ export async function createEntry(
     adultCount?: number;
     childCount?: number;
     childAges?: number[];
+    numberOfRooms?: number;
     otaSource?: boolean;
     walkInCompressed?: boolean;
     contactPersonName?: string;
@@ -99,13 +100,25 @@ export async function createEntry(
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
 
   // Child / capacity policy enforcement. Run BLOCK-severity issues as a hard reject at S1
-  // intake — e.g. unaccompanied-minor, ratio violation, over-capacity vs a chosen room type.
-  // When no roomTypeId is known yet (typical at S1 inquiry creation — type is picked at S2),
-  // only composition-level checks run.
-  if (input.childAges && input.childAges.length > 0) {
+  // intake — e.g. unaccompanied-minor, ratio violation, over-capacity vs a chosen room type,
+  // number-of-rooms outside the chargeable-occupants envelope. When no roomTypeId is known
+  // yet (typical at S1 inquiry creation — type is picked at S2), only composition-level and
+  // envelope checks run (envelope uses `fallbackMaxCapacity` = largest hotel-wide maxCapacity).
+  const hasCompositionOrRoomCount =
+    (input.childAges && input.childAges.length > 0) ||
+    (typeof input.numberOfRooms === "number" && input.numberOfRooms > 0) ||
+    (input.adultCount != null && input.adultCount > 0);
+  if (hasCompositionOrRoomCount) {
+    // Fallback maxCapacity = largest across all room types (so the S1 envelope is generous —
+    // we don't reject a "1 room for 3 chargeable guests" combo when at least ONE room type
+    // in the hotel supports it). The per-type check re-runs when a type is picked at S2.
+    const largestMaxCapacityRow = await prisma.roomType.aggregate({ _max: { maxCapacity: true } });
+    const fallbackMaxCapacity = largestMaxCapacityRow._max.maxCapacity ?? 3;
     const { issues } = await validateCapacity(prisma, {
       adults: input.adultCount ?? 0,
-      childAges: input.childAges,
+      childAges: input.childAges ?? [],
+      numberOfRooms: input.numberOfRooms,
+      fallbackMaxCapacity,
     });
     const blocking = issues.filter((i) => i.severity === "BLOCK");
     if (blocking.length > 0) {
@@ -130,6 +143,7 @@ export async function createEntry(
         adultCount: input.adultCount ?? null,
         childCount: input.childCount ?? null,
         childAges: input.childAges ?? [],
+        numberOfRooms: input.numberOfRooms ?? null,
         contactPersonName: input.contactPersonName?.trim() || null,
         contactPersonPhone: input.contactPersonPhone?.trim() || null,
         otaSource: input.otaSource === true,
@@ -447,6 +461,7 @@ export async function updateEntryIntakeFields(
     adultCount?: number;
     childCount?: number;
     childAges?: number[];
+    numberOfRooms?: number;
     useType?: string;
     contactPersonName?: string;
     contactPersonPhone?: string;
@@ -461,11 +476,21 @@ export async function updateEntryIntakeFields(
   if (input.expectedVersion != null && entry.version !== input.expectedVersion) {
     throw new ValidationError("version mismatch");
   }
-  // Re-run capacity checks against the new composition (childAges may have changed).
-  if (input.childAges && input.childAges.length > 0) {
+  // Re-run capacity checks against the new composition. Same fallback-maxCapacity approach
+  // as createEntry — validate against the largest maxCapacity so the S1 envelope is generous;
+  // per-type check runs again at S2 seal time.
+  const compositionOrRoomCountChanged =
+    (input.childAges && input.childAges.length > 0) ||
+    (typeof input.numberOfRooms === "number" && input.numberOfRooms > 0) ||
+    (input.adultCount != null && input.adultCount !== (entry.adultCount ?? 0));
+  if (compositionOrRoomCountChanged) {
+    const largestMaxCapacityRow = await prisma.roomType.aggregate({ _max: { maxCapacity: true } });
+    const fallbackMaxCapacity = largestMaxCapacityRow._max.maxCapacity ?? 3;
     const { issues } = await validateCapacity(prisma, {
       adults: input.adultCount ?? entry.adultCount ?? 0,
-      childAges: input.childAges,
+      childAges: input.childAges ?? entry.childAges ?? [],
+      numberOfRooms: input.numberOfRooms ?? entry.numberOfRooms ?? undefined,
+      fallbackMaxCapacity,
     });
     const blocking = issues.filter((i) => i.severity === "BLOCK");
     if (blocking.length > 0) {
@@ -538,6 +563,7 @@ export async function updateEntryIntakeFields(
         ...(input.adultCount != null ? { adultCount: input.adultCount } : {}),
         ...(input.childCount != null ? { childCount: input.childCount } : {}),
         ...(input.childAges ? { childAges: input.childAges } : {}),
+        ...(input.numberOfRooms !== undefined ? { numberOfRooms: input.numberOfRooms > 0 ? input.numberOfRooms : null } : {}),
         ...(input.useType ? { useType: input.useType as any } : {}),
         ...(input.contactPersonName !== undefined ? { contactPersonName: input.contactPersonName.trim() || null } : {}),
         ...(input.contactPersonPhone !== undefined ? { contactPersonPhone: input.contactPersonPhone.trim() || null } : {}),

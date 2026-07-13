@@ -32,7 +32,8 @@ export async function createRoomType(
   input: {
     code: string;
     name: string;
-    maxOccupancy?: number;
+    standardCapacity?: number;
+    maxCapacity?: number;
     maxChildren?: number;
     requiredAccompanyingAdults?: number;
     maxExtraBeds?: number;
@@ -42,6 +43,9 @@ export async function createRoomType(
   const code = input.code.trim();
   const name = input.name.trim();
   if (!code || !name) throw new ValidationError("code and name are required");
+  if (input.standardCapacity != null && input.maxCapacity != null && input.maxCapacity < input.standardCapacity) {
+    throw new ValidationError("maxCapacity must be >= standardCapacity");
+  }
 
   return prisma.$transaction(async (tx) => {
     const id = await generateRoomTypeId(tx, code);
@@ -50,7 +54,8 @@ export async function createRoomType(
         id,
         code,
         name,
-        ...(input.maxOccupancy != null ? { maxOccupancy: input.maxOccupancy } : {}),
+        ...(input.standardCapacity != null ? { standardCapacity: input.standardCapacity } : {}),
+        ...(input.maxCapacity != null ? { maxCapacity: input.maxCapacity } : {}),
         ...(input.maxChildren != null ? { maxChildren: input.maxChildren } : {}),
         ...(input.requiredAccompanyingAdults != null ? { requiredAccompanyingAdults: input.requiredAccompanyingAdults } : {}),
         ...(input.maxExtraBeds != null ? { maxExtraBeds: input.maxExtraBeds } : {}),
@@ -62,7 +67,17 @@ export async function createRoomType(
       entityType: "RoomType",
       entityId: created.id,
       operation: "CREATE",
-      payload: { code, name, capacity: { maxOccupancy: created.maxOccupancy, maxChildren: created.maxChildren, requiredAccompanyingAdults: created.requiredAccompanyingAdults, maxExtraBeds: created.maxExtraBeds } },
+      payload: {
+        code,
+        name,
+        capacity: {
+          standardCapacity: created.standardCapacity,
+          maxCapacity: created.maxCapacity,
+          maxChildren: created.maxChildren,
+          requiredAccompanyingAdults: created.requiredAccompanyingAdults,
+          maxExtraBeds: created.maxExtraBeds,
+        },
+      },
     });
     return created;
   });
@@ -100,7 +115,8 @@ export async function updateRoomType(
   id: string,
   input: {
     name?: string;
-    maxOccupancy?: number;
+    standardCapacity?: number;
+    maxCapacity?: number;
     maxChildren?: number;
     requiredAccompanyingAdults?: number;
     maxExtraBeds?: number;
@@ -111,13 +127,20 @@ export async function updateRoomType(
   if (!existing) throw new NotFoundError("RoomType");
   const name = input.name?.trim();
   if (name !== undefined && !name) throw new ValidationError("name cannot be empty");
+  // Enforce standard <= max even when only one of the two is being changed.
+  const effectiveStandard = input.standardCapacity ?? existing.standardCapacity;
+  const effectiveMax = input.maxCapacity ?? existing.maxCapacity;
+  if (effectiveMax < effectiveStandard) {
+    throw new ValidationError("maxCapacity must be >= standardCapacity");
+  }
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.roomType.update({
       where: { id },
       data: {
         ...(name != null ? { name } : {}),
-        ...(input.maxOccupancy != null ? { maxOccupancy: input.maxOccupancy } : {}),
+        ...(input.standardCapacity != null ? { standardCapacity: input.standardCapacity } : {}),
+        ...(input.maxCapacity != null ? { maxCapacity: input.maxCapacity } : {}),
         ...(input.maxChildren != null ? { maxChildren: input.maxChildren } : {}),
         ...(input.requiredAccompanyingAdults != null ? { requiredAccompanyingAdults: input.requiredAccompanyingAdults } : {}),
         ...(input.maxExtraBeds != null ? { maxExtraBeds: input.maxExtraBeds } : {}),

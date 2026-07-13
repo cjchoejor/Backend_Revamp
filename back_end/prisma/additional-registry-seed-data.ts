@@ -128,6 +128,15 @@ export const ADDITIONAL_REGISTRY_POLICIES: RegistryPolicySeedRow[] = [
     },
   },
   {
+    policyId: "registry.groupBooking.creditCeilingBoost",
+    policyClass: "GROUP_BILLING",
+    definition: {
+      enabled: true,
+      description: "For entries classified as GROUP_MASTER, boost the recommended credit ceiling by this percentage. A group of 20 rooms has higher expected total than a single guest and warrants a proportionally higher ceiling. 200 = 2x the base tier value. Advisory — the human approver still enters an explicit amount, but the recommendation now reflects group scale.",
+      multiplierPercent: 200,
+    },
+  },
+  {
     policyId: "registry.creditCeiling.tier2Percent",
     policyClass: "CREDIT_CEILING",
     definition: {

@@ -346,7 +346,8 @@ export type RoomTypeAdmin = {
   id: string;
   code: string;
   name: string;
-  maxOccupancy?: number;
+  standardCapacity?: number;
+  maxCapacity?: number;
   maxChildren?: number;
   requiredAccompanyingAdults?: number;
   maxExtraBeds?: number;
@@ -354,7 +355,8 @@ export type RoomTypeAdmin = {
 };
 
 export type RoomTypeCapacityFields = {
-  maxOccupancy?: number;
+  standardCapacity?: number;
+  maxCapacity?: number;
   maxChildren?: number;
   requiredAccompanyingAdults?: number;
   maxExtraBeds?: number;

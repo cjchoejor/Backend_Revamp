@@ -133,6 +133,38 @@ export async function cancelScheduledAdvancePaymentFollowUpForEntry(
   return { cancelled: timers.length } as const;
 }
 
+/**
+ * Advisory: given a base tier-derived ceiling amount, return the recommended ceiling to
+ * suggest to the approving actor. For group entries (Policy 64 → GROUP_MASTER) the
+ * `registry.groupBooking.creditCeilingBoost` policy multiplies the base — a 20-room group
+ * needs a proportionally higher ceiling than a single guest. Approvers can still enter any
+ * value at `recordCreditExtensionApproval` — this is a suggestion, not a lock.
+ */
+export async function recommendCreditCeilingForEntry(
+  prisma: PrismaClient,
+  entryId: string,
+  baseCeilingAmount: number,
+): Promise<{ recommended: number; boostApplied: { multiplierPercent: number; baseAmount: number } | null }> {
+  if (!Number.isFinite(baseCeilingAmount) || baseCeilingAmount <= 0) {
+    return { recommended: baseCeilingAmount, boostApplied: null };
+  }
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { groupBillingMode: true } });
+  if (entry?.groupBillingMode !== "GROUP_MASTER") {
+    return { recommended: baseCeilingAmount, boostApplied: null };
+  }
+  const boostPolicy = await getRegistryPolicy(prisma, "registry.groupBooking.creditCeilingBoost");
+  if (!boostPolicy || boostPolicy.enabled === false || typeof boostPolicy.multiplierPercent !== "number") {
+    return { recommended: baseCeilingAmount, boostApplied: null };
+  }
+  const mult = Math.max(0, boostPolicy.multiplierPercent as number) / 100;
+  const boosted = baseCeilingAmount * mult;
+  if (boosted <= baseCeilingAmount) return { recommended: baseCeilingAmount, boostApplied: null };
+  return {
+    recommended: boosted,
+    boostApplied: { multiplierPercent: boostPolicy.multiplierPercent as number, baseAmount: baseCeilingAmount },
+  };
+}
+
 export async function recordCreditExtensionApproval(
   prisma: PrismaClient,
   input: { entryId: string; folioId: string; ceilingAmount: number; reason: string },

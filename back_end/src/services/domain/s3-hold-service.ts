@@ -1,5 +1,5 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+import { HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
@@ -24,12 +24,33 @@ export async function placeCommittedHold(
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 }, folio: true, cancellationDisclosure: true },
+    include: {
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
+      folio: true,
+      cancellationDisclosure: true,
+      // Load the sealed availability configuration so its per-night breakdown (when
+      // present) can be snapshotted onto the committed hold — no more losing the
+      // "different room per night" fact at the S1 → S3 boundary.
+      availabilityConfigs: {
+        where: { sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
+        orderBy: { sealedAt: "desc" },
+        take: 1,
+      },
+    },
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
+
+  // Extract perNight breakdown from the sealed AvailabilityConfiguration, if it's a
+  // per-night seal. Legacy single-room and whole-stay seals return null (no breakdown to
+  // preserve). Store on the hold so downstream services can reconstruct the intent.
+  const sealedConfig = entry.availabilityConfigs[0];
+  const opt = (sealedConfig?.optionSelected ?? null) as
+    | { perNight?: Array<{ date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> }> }
+    | null;
+  const perNightBreakdown = opt && Array.isArray(opt.perNight) ? opt.perNight : null;
 
   enforceCancellationDisclosurePresent({ hasCancellationDisclosure: !!entry.cancellationDisclosure });
 
@@ -104,6 +125,7 @@ export async function placeCommittedHold(
         commercialJustification: input.commercialJustification.trim(),
         ttlSeconds: Number(ttlSeconds),
         expiresAt,
+        ...(perNightBreakdown ? { perNightBreakdown: perNightBreakdown as Prisma.InputJsonValue } : {}),
       },
       update: {
         segmentId,
@@ -115,6 +137,7 @@ export async function placeCommittedHold(
         commercialJustification: input.commercialJustification.trim(),
         ttlSeconds: Number(ttlSeconds),
         expiresAt,
+        ...(perNightBreakdown ? { perNightBreakdown: perNightBreakdown as Prisma.InputJsonValue } : {}),
       },
     });
 
