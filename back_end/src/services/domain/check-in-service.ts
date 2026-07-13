@@ -65,12 +65,11 @@ export async function completeCheckInToS7(
     advancePaymentReconciliationComplete: !!entry.folio?.advancePaymentReconciliationComplete,
   });
 
-  // For non-group entries the historical behaviour is "check in the most recent room
-  // assignment". For group entries (Policy 64 → GROUP_MASTER at S1) every room assignment
-  // belongs to the same booking and all rooms need to be checked in together — one H2 and
-  // one H3 handoff per room. Deduplicate by roomId so an entry with a room-change history
-  // doesn't get double-processed.
-  const isGroupEntry = entry.groupBillingMode === "GROUP_MASTER";
+  // Batching rule: whenever the entry has multiple distinct room assignments, check in all
+  // of them together. Historically this was keyed on groupBillingMode === "GROUP_MASTER",
+  // but that misses legitimate multi-room bookings below the group threshold (e.g. 2 rooms
+  // for 4 guests never hits GROUP_MASTER but still needs both rooms checked in). Dedup by
+  // roomId so an entry with a room-change history doesn't double-process the same room.
   const distinctAssignments = (() => {
     const seen = new Set<string>();
     const list: typeof entry.roomAssignments = [];
@@ -81,7 +80,8 @@ export async function completeCheckInToS7(
     }
     return list;
   })();
-  const assignmentsToCheckIn = isGroupEntry ? distinctAssignments : entry.roomAssignments.slice(0, 1);
+  const assignmentsToCheckIn =
+    distinctAssignments.length > 1 ? distinctAssignments : entry.roomAssignments.slice(0, 1);
   const assignment = assignmentsToCheckIn[0];
   enforceRoomAssignmentPresentForCheckInCompletion({ assignment });
 

@@ -606,11 +606,11 @@ export function S6Workspace({ entry }: S6WorkspaceProps) {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {entry.groupBillingMode === "GROUP_MASTER" && (() => {
+            {(() => {
               const distinctRoomCount = new Set(assignments.map((a) => a.roomId)).size;
               return distinctRoomCount > 1 ? (
                 <div className="rounded-md border border-indigo-500/30 bg-indigo-500/5 px-3 py-2 text-xs text-indigo-800 dark:text-indigo-300">
-                  <strong>Group booking:</strong> this action will check in <span className="font-mono">{distinctRoomCount}</span> rooms in
+                  <strong>Multi-room booking:</strong> this action will check in <span className="font-mono">{distinctRoomCount}</span> rooms in
                   one transition. An H2 (housekeeping) and H3 (F&B) handoff will be created per room. Every room must be physically ready
                   or the check-in fails.
                 </div>

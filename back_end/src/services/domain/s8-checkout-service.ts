@@ -176,7 +176,10 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   if (entry.roomAssignments.length === 0) throw new ValidationError("Entry has no room assignment");
   enforceEntryAtS8ForCheckoutCompletion({ currentStage: entry.currentStage });
 
-  const isGroupEntry = entry.groupBillingMode === "GROUP_MASTER";
+  // Batching rule: whenever the entry has multiple distinct room assignments, check out
+  // all of them together. Historically this keyed on groupBillingMode === "GROUP_MASTER",
+  // but that missed multi-room bookings below the group threshold. Dedup by roomId so
+  // a room-change history doesn't double-process the same room.
   const distinctAssignments = (() => {
     const seen = new Set<string>();
     const list: typeof entry.roomAssignments = [];
@@ -187,7 +190,8 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
     }
     return list;
   })();
-  const assignmentsToCheckOut = isGroupEntry ? distinctAssignments : [entry.roomAssignments[0]];
+  const assignmentsToCheckOut =
+    distinctAssignments.length > 1 ? distinctAssignments : [entry.roomAssignments[0]];
 
   // Every room must currently be OCCUPIED. Fail-fast if any isn't — the whole batch
   // reverts and the operator sees which room is in the wrong state.
