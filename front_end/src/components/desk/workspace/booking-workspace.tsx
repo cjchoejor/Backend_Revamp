@@ -48,6 +48,7 @@ import {
   type DeskFinancials,
 } from "@/lib/desk/workspace";
 import { DeskConfirmModal } from "./confirm-modal";
+import { ReEnterMenu } from "./re-enter-menu";
 import { InquiryStep as InquiryStepBase } from "./inquiry-step";
 import { QuoteStep as QuoteStepBase } from "./quote-step";
 import { SetupStep as SetupStepBase } from "./setup-step";
@@ -775,6 +776,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 Park
               </button>
             ))}
+          <ReEnterMenu entry={entry} />
           <button
             className="btn btn-ghost btn-sm"
             onClick={() => router.push(`/desk/bookings/${entry.id}/backend`)}
