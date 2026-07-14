@@ -82,20 +82,29 @@ export async function acceptHandoff(
   });
 
   // SIG-S6: cancel W25 acceptance timer when H2/H3 accepted.
+  // Reorder for atomicity: claim (UPDATE ... WHERE status=SCHEDULED) FIRST so a new W25 scheduled
+  // between the read and update can't slip through — updateMany atomically transitions any row
+  // matching the WHERE. Then cancel the pg-boss jobs for the rows we actually claimed. If
+  // pg-boss cancel fails mid-loop, the surviving jobs fire but the worker's "no matching
+  // SCHEDULED TimerRecord" guard makes them no-ops.
   if (handoff.handoffType === HandoffType.H2 || handoff.handoffType === HandoffType.H3) {
-    const timers = await prisma.timerRecord.findMany({
-      where: { entityType: "HandoffRecord", entityId: handoffId, timerCode: "H2_H3_ACCEPTANCE_W25", status: "SCHEDULED" },
-      orderBy: { createdAt: "desc" },
-      take: 10,
+    const timers = await prisma.$transaction(async (tx) => {
+      const rows = await tx.timerRecord.findMany({
+        where: { entityType: "HandoffRecord", entityId: handoffId, timerCode: "H2_H3_ACCEPTANCE_W25", status: "SCHEDULED" },
+        select: { id: true, pgBossJobId: true },
+        take: 10,
+      });
+      if (rows.length === 0) return rows;
+      await tx.timerRecord.updateMany({
+        where: { id: { in: rows.map((r) => r.id) }, status: "SCHEDULED" },
+        data: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: actorId, cancelledReason: "Handoff accepted" },
+      });
+      return rows;
     });
     const engine = await getTimerEngine();
     for (const t of timers) {
       if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
     }
-    await prisma.timerRecord.updateMany({
-      where: { id: { in: timers.map((t) => t.id) }, status: "SCHEDULED" },
-      data: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: actorId, cancelledReason: "Handoff accepted" },
-    });
   }
 
   return updated;
@@ -358,22 +367,27 @@ export async function createH2(
     throw new MissingConfigurationError("acknowledgement.windowPerType");
   }
   const sla = new Date(Date.now() + Number(h2s) * 1000);
+  // Atomicity: handoff row + timer row must live or die together. Schedule pg-boss AFTER the DB
+  // tx commits so a rollback doesn't leave orphan jobs firing. If the timer.create fails post-
+  // schedule, the pg-boss job survives and the worker's "no matching TimerRecord" guard skips it.
   const h2Id = await allocateReadableId(prisma, "HANDOFF" as const);
-  const created = await prisma.handoffRecord.create({
-    data: {
-      id: h2Id,
-      entryId,
-      handoffType: HandoffType.H2,
-      state: HandoffState.CREATED,
-      fromRole: "FRONT_DESK",
-      fromActorId: actorId,
-      toRole: "HOUSEKEEPING",
-      checklistContent: h2Content as object,
-      deficientConditionStatus: h2Content.deficientConditionStatus,
-      createdBy: actorId,
-      stageContext: Stage.S6,
-      slaDeadlineAt: sla,
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    return tx.handoffRecord.create({
+      data: {
+        id: h2Id,
+        entryId,
+        handoffType: HandoffType.H2,
+        state: HandoffState.CREATED,
+        fromRole: "FRONT_DESK",
+        fromActorId: actorId,
+        toRole: "HOUSEKEEPING",
+        checklistContent: h2Content as object,
+        deficientConditionStatus: h2Content.deficientConditionStatus,
+        createdBy: actorId,
+        stageContext: Stage.S6,
+        slaDeadlineAt: sla,
+      },
+    });
   });
 
   const engine = await getTimerEngine();

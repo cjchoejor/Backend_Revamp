@@ -133,7 +133,9 @@ export async function runPreArrivalWindowActivationWorker(
   await scheduleS5StageDwellWarningMonitor(prisma, entryId, "SYSTEM");
 
   // Optional H1 auto-accept when configured as "same team" (SIG-S5 AC-S5-012).
-  const auto = await requireActiveConfigValue<boolean | null>(prisma, "handoff.H1.autoFulfil.enabled", { now }).catch(() => null);
+  // Bubble errors — a swallowed catch here silently disabled same-team auto-accept on any DB blip
+  // and required manual H1 acceptance the operator wouldn't know was needed.
+  const auto = await requireActiveConfigValue<boolean | null>(prisma, "handoff.H1.autoFulfil.enabled", { now });
   if (auto) {
     const h1 = await prisma.handoffRecord.findFirst({ where: { entryId, handoffType: "H1" }, orderBy: { createdAt: "desc" } });
     if (h1 && h1.state === "CREATED") {

@@ -14,7 +14,10 @@ export async function enforceFocReverificationBeforeConfirmation(
 ) {
   if (!(input.useType === "GROUP" || input.useType === "CONFERENCE")) return;
 
-  const cfg = await requireActiveConfigValue<any>(prisma, "foc.configuration").catch(() => null);
+  // FOC gate: never let a config-store hiccup silently disable re-verification. If the config
+  // genuinely isn't seeded, requireActiveConfigValue throws NotFound — that's the operator's cue
+  // to seed foc.configuration, not a signal to let unvalidated FOC through.
+  const cfg = await requireActiveConfigValue<any>(prisma, "foc.configuration");
   if (cfg?.enabled !== true) return;
   if (!(input.focRoomsRequested > 0)) return;
 

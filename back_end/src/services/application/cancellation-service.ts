@@ -314,9 +314,11 @@ export async function cancelEntryAtS5(
 
   const advanceTotal = await sumAdvancePaymentInTotalForFolio(prisma, folio.id);
 
-  const policyTiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
-    () => null as CancellationPolicyTiersConfig | null,
-  );
+  // S5 pre-arrival penalty: never let a config-store hiccup silently null out the penalty policy.
+  // Frozen cancellation terms on the reservation are the primary source; the live policyTiers is a
+  // fallback for anything not frozen. Bubble errors so the operator sees them instead of processing
+  // a zero-penalty cancellation.
+  const policyTiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers");
 
   const { rawPenalty, hoursUntilCheckIn } = computeS5PreArrivalCancellationPenalty({
     now,
@@ -516,9 +518,9 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
   const now = new Date();
 
   const advanceTotal = await sumAdvancePaymentInTotalForFolio(prisma, folio.id);
-  const policyTiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
-    () => null as CancellationPolicyTiersConfig | null,
-  );
+  // S7 post-check-in penalty: bubble config errors — silent null zeroed the penalty and let the
+  // guest walk out free.
+  const policyTiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers");
   const rawPenalty = computePostCheckInEarlyDeparturePenalty({ policyTiers });
   const cappedPenalty = capCancellationPenaltyAtAdvancePayment(rawPenalty, advanceTotal);
   const penalty = waiver ? 0 : cappedPenalty;

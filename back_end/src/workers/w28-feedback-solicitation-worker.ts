@@ -33,10 +33,21 @@ export async function runFeedbackSolicitationWorker(prisma: PrismaClient, input:
 
   const now = new Date();
 
-  // fire timer
-  await prisma.timerRecord.update({ where: { id: timer.id }, data: { status: "FIRED", firedAt: now } as any });
-
+  // Atomicity: mark the timer FIRED INSIDE the same transaction that writes the comm records
+  // and the idempotency trace. Race the other way and a rollback leaves timer=FIRED with no
+  // trace / no comm records — worker retry then sees NO_TIMER (no SCHEDULED row) and the guest
+  // never gets the solicitation. The updateMany with `status: "SCHEDULED"` filter also protects
+  // against a concurrent cancel: if the timer was cancelled between the findFirst and here,
+  // updateMany returns 0 rows and the work is skipped.
   await prisma.$transaction(async (tx) => {
+    const claimed = await tx.timerRecord.updateMany({
+      where: { id: timer.id, status: "SCHEDULED" },
+      data: { status: "FIRED", firedAt: now } as any,
+    });
+    if (claimed.count === 0) {
+      // Cancelled between findFirst and the claim — abort silently. Nothing to undo.
+      throw new Error("TIMER_ALREADY_CLAIMED_OR_CANCELLED");
+    }
     const emailId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
     const whatsappId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
     await tx.communicationRecord.createMany({
@@ -61,6 +72,9 @@ export async function runFeedbackSolicitationWorker(prisma: PrismaClient, input:
         createdBy: "SYSTEM",
       },
     });
+  }).catch((e) => {
+    if (e instanceof Error && e.message === "TIMER_ALREADY_CLAIMED_OR_CANCELLED") return;
+    throw e;
   });
 
   // Phase 3 — outbound feedback solicitation email (best-effort, post-tx).

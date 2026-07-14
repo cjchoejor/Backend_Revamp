@@ -12,6 +12,7 @@ import { enforceWriteOffConstraints } from "../../policies/13-billing-model/writ
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import {
   enforceApartmentSecurityDepositResolvedForS9Closure,
   enforceDirectBillPaymentsMatchedForS9Closure,
@@ -166,11 +167,19 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
           },
         });
 
-        const thresholds = await requireActiveConfigValue<any>(tx as any, "advancePayment.thresholds").catch(() => null);
+        // Do NOT swallow — silently defaulting requiredAmount to 0 would let the follow-up gate
+        // pass unconditionally and skip scheduling W34 tier-1/tier-2 timers. Let PI dispatch fail
+        // loudly so the operator sees a real error instead of guests silently missing follow-ups.
+        const thresholds = await requireActiveConfigValue<any>(tx as any, "advancePayment.thresholds");
         const requiredAmount = Number(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
-        const totalIn = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN").reduce((s, p) => s + Number(p.amount.toString()), 0);
-        const credit = await tx.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } }).catch(() => null);
-        const satisfied = !!credit || (Number.isFinite(requiredAmount) ? totalIn >= requiredAmount : totalIn > 0);
+        // Decimal-safe sum — float reduce compares wrong at boundary sums (0.1+0.2 pattern).
+        const inRows = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN");
+        const totalInDec = sumMoneyBy(inRows, "amount");
+        const totalIn = Number(totalInDec.toFixed(2));
+        const credit = await tx.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } });
+        // Decimal compare — never `>=` on raw JS numbers derived from money aggregates.
+        const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
+        const satisfied = !!credit || (Number.isFinite(requiredAmount) ? totalInDec.gte(requiredAmountDec) : totalInDec.gt(0));
         if (!satisfied) {
           // Policy registry override: `registry.advancePaymentFollowUp.windowSeconds` (when
           // enabled) replaces the legacy `advancePayment.followUpWindowSeconds`. Escalation
@@ -259,7 +268,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
   const entry = inv.entry;
   const displayName =
     [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
-  const paid = (inv.folio?.payments ?? []).reduce((s, p) => s + Number(p.amount.toString()), 0);
+  // Decimal-safe sum; guest-facing summary; number at boundary for template consumers.
+  const paid = Number(sumMoneyBy(inv.folio?.payments ?? [], "amount").toFixed(2));
   // Prefer the frozen reservation dates + rate (authoritative from S4); fall back to the accepted
   // quotation (S3 PI scenario — no reservation yet); final fallback is the entry / invoice totals.
   const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? new Date();
@@ -270,7 +280,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
   const quotationNightly = Number(
     quotationTerms?.nightlyRate ?? quotationTerms?.rate ?? quotationTerms?.effectiveRate ?? 0,
   );
-  const invoiceImpliedNightly = Number(inv.totalAmount?.toString?.() ?? 0) / nights;
+  // Decimal-safe divide: `totalAmount / nights`. `nights >= 1` from Math.max above so no div-by-zero.
+  const invoiceImpliedNightly = Number(toDecimal(inv.totalAmount).div(nights).toFixed(2));
   const nightlyRate = entry.reservation?.frozenRate
     ? Number(entry.reservation.frozenRate.toString())
     : quotationNightly > 0
@@ -279,7 +290,11 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         ? invoiceImpliedNightly
         : 0;
   const currency = quotationTerms?.currency ?? "BTN";
-  const breakdown = await computeStayCharges(prisma, nightlyRate, nights);
+  // Multi-room: get roomCount from the quotation's commercialTerms (single source of truth),
+  // fall back to entry.numberOfRooms, then to 1. S9 needs this so the final invoice /
+  // reconciliation reflects the total for all rooms, not just one.
+  const s9RoomCount = Math.max(1, Number((quotationTerms as any)?.roomCount) || entry.numberOfRooms || 1);
+  const breakdown = await computeStayCharges(prisma, nightlyRate, nights, s9RoomCount);
   const isPI = inv.invoiceType === InvoiceType.PROFORMA;
 
   const content = isPI
@@ -345,8 +360,13 @@ export async function recordInvoicePaymentEvent(
   const now = new Date();
   const receivedAt = input.receivedAt?.trim() ? new Date(input.receivedAt) : null;
   if (receivedAt && Number.isNaN(receivedAt.getTime())) throw new ValidationError("receivedAt must be a valid ISO date");
-  const amount = input.amount == null ? null : Number(input.amount);
-  if (amount != null && (!Number.isFinite(amount) || amount <= 0)) throw new ValidationError("amount must be a positive number when provided");
+  // Decimal-safe: parse the incoming amount (number or string) into a Decimal so a string like
+  // "1099.75" doesn't drift to 1099.7499999... via Number(). Validate on the numeric shape.
+  const amountNumeric = input.amount == null ? null : Number(input.amount);
+  if (amountNumeric != null && (!Number.isFinite(amountNumeric) || amountNumeric <= 0)) {
+    throw new ValidationError("amount must be a positive number when provided");
+  }
+  const amount = amountNumeric == null ? null : toDecimal(input.amount);
 
   return prisma.$transaction(async (tx) => {
     // SIG-S9 §8.6: record a payment event (optional in this repo for backwards compatibility).
@@ -358,7 +378,7 @@ export async function recordInvoicePaymentEvent(
           folioId: invoice.folioId,
           invoiceId: invoice.id,
           entryId: invoice.entryId,
-          amount: amount as any,
+          amount,
           paymentDirection: "IN",
           paymentMethod: input.paymentMethod?.trim() ? input.paymentMethod.trim() : "CASH",
           receivedAt: receivedAt ?? now,
@@ -373,8 +393,9 @@ export async function recordInvoicePaymentEvent(
       });
       await recomputeFolioOutstandingBalance(tx, invoice.folioId);
       const folio = await tx.folio.findUniqueOrThrow({ where: { id: invoice.folioId } });
-      const out = num(folio.outstandingBalance);
-      if (out === 0 && folio.state === FolioState.OUTSTANDING) {
+      // Decimal equals — the folio-outstanding recompute writes a 2dp Decimal, so `.equals(0)` is
+      // authoritative; using `Number(...) === 0` risked a boundary miss when the balance was 0.005.
+      if (toDecimal(folio.outstandingBalance).equals(0) && folio.state === FolioState.OUTSTANDING) {
         await tx.folio.update({
           where: { id: folio.id },
           data: { state: FolioState.SETTLED, outstandingBalance: 0 } as any,

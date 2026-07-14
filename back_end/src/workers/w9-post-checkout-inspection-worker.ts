@@ -19,7 +19,14 @@ export async function runPostCheckoutInspectionWorker(prisma: PrismaClient, inpu
   if (!timer) return { skipped: true, reason: "NO_W9_TIMER" } as const;
 
   const now = new Date();
-  await prisma.timerRecord.update({ where: { id: timer.id }, data: { status: "FIRED", firedAt: now } as any });
+  // Race safety: updateMany with `status: "SCHEDULED"` filter. If a concurrent cancel already
+  // moved this timer to CANCELLED between the findFirst and here, count === 0 and we skip the
+  // trace — the caller who cancelled owns the outcome.
+  const claimed = await prisma.timerRecord.updateMany({
+    where: { id: timer.id, status: "SCHEDULED" },
+    data: { status: "FIRED", firedAt: now } as any,
+  });
+  if (claimed.count === 0) return { skipped: true, reason: "TIMER_ALREADY_CLAIMED_OR_CANCELLED" } as const;
   await prisma.traceEvent.create({
     data: {
       eventType: "POST_CHECKOUT_INSPECTION.WINDOW_EXPIRED",

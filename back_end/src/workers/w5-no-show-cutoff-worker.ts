@@ -4,6 +4,7 @@ import type { TimerEngine } from "../lib/timer-engine.js";
 import { NotFoundError } from "../lib/errors.js";
 import { allocateReadableId } from "../lib/readable-id.js";
 import { releaseRoomOnNoShowTerminalTx } from "../lib/release-room-on-no-show.js";
+import { toDecimal } from "../lib/money.js";
 
 export async function runNoShowCutoffWorker(
   prisma: PrismaClient,
@@ -64,9 +65,15 @@ export async function runNoShowCutoffWorker(
     where: { folioId: folio.id, paymentDirection: "IN" },
     _sum: { amount: true },
   });
-  const advanceTotal = Number(agg._sum.amount?.toString() ?? "0");
-  const penalty = Math.min(penaltyRaw, advanceTotal);
-  const net = advanceTotal - penalty;
+  // Decimal-safe: aggregate → Decimal, min/sub in Decimal, coerce to number at boundary. Prevents
+  // wrongly firing / suppressing no-show at boundary sums where float drift crossed the threshold.
+  const advanceTotalDec = toDecimal(agg._sum.amount);
+  const penaltyRawDec = toDecimal(penaltyRaw);
+  const penaltyDec = penaltyRawDec.lte(advanceTotalDec) ? penaltyRawDec : advanceTotalDec;
+  const netDec = advanceTotalDec.sub(penaltyDec);
+  const advanceTotal = Number(advanceTotalDec.toFixed(2));
+  const penalty = Number(penaltyDec.toFixed(2));
+  const net = Number(netDec.toFixed(2));
 
   await prisma.$transaction(async (tx) => {
     const noShowId = await allocateReadableId(tx, "NO_SHOW" as const);

@@ -1,10 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { PaymentDirection } from "@prisma/client";
-
-function num(d: Prisma.Decimal | null | undefined): number {
-  if (d == null) return 0;
-  return Number(d.toString());
-}
+import { maxZeroSub, round2, toDecimal } from "./money.js";
 
 type Tx = Prisma.TransactionClient | PrismaClient;
 
@@ -43,11 +39,15 @@ export async function recomputeFolioOutstandingBalance(tx: Tx, folioId: string):
     }),
   ]);
 
-  const lineTotal = Number(lineAgg._sum.amount?.toString() ?? "0");
-  const inTotal = Number(inAgg._sum.amount?.toString() ?? "0");
-  const outTotal = Number(outAgg._sum.amount?.toString() ?? "0");
-  const writeOffTotal = Number(writeOffAgg._sum.writtenOffAmount?.toString() ?? "0");
-  const next = Math.max(0, lineTotal - inTotal + outTotal - writeOffTotal);
+  // Decimal-safe arithmetic — casting these aggregates to Number silently drifts money
+  // (0.1 + 0.2 = 0.30000000000000004) and mis-marks invoices OUTSTANDING vs PAID at the
+  // equality boundary in s8-settlement-service. Prisma.Decimal preserves precision.
+  const lineTotal = toDecimal(lineAgg._sum.amount);
+  const inTotal = toDecimal(inAgg._sum.amount);
+  const outTotal = toDecimal(outAgg._sum.amount);
+  const writeOffTotal = toDecimal(writeOffAgg._sum.writtenOffAmount);
+  const gross = lineTotal.sub(inTotal).add(outTotal);
+  const next = round2(maxZeroSub(gross, writeOffTotal));
 
   await tx.folio.update({
     where: { id: folioId },

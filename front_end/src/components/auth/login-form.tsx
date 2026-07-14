@@ -27,6 +27,7 @@ export function LoginForm() {
       });
     }
   }, [searchParams]);
+  const [username, setUsername] = useState("");
   const [pin, setPin] = useState("");
   const [loading, setLoading] = useState(false);
   const [shake, setShake] = useState(false);
@@ -36,25 +37,34 @@ export function LoginForm() {
 
   const handleSubmit = useCallback(
     async (completedPin: string) => {
+      if (!username.trim()) {
+        setStatusMessage({ type: "error", text: "Enter your username first." });
+        setShake(true);
+        setTimeout(() => setShake(false), 500);
+        return;
+      }
       if (completedPin.length < 4 || loading) return;
 
       setLoading(true);
       setStatusMessage({ type: "loading", text: "Signing in…" });
 
       try {
-        const res = await authenticate(completedPin, DEFAULT_TERMINAL_ID);
+        const res = await authenticate(username.trim().toLowerCase(), completedPin, DEFAULT_TERMINAL_ID);
         const session: Session = enrichSession({
           sessionId: res.sessionId,
           userId: res.userId,
+          username: res.username,
           actorLevel: res.actorLevel as Session["actorLevel"],
           terminalId: res.terminalId,
           jwtToken: res.jwtToken,
           authenticatedAt: res.authenticatedAt,
+          // Prefer full name for the welcome toast + sidebar; falls back to username, never UUID.
+          displayName: res.fullName ?? res.username,
         });
         setClientSession(session);
         await persistSessionToServer(session);
 
-        const name = session.displayName ?? session.userId;
+        const name = session.displayName ?? session.username ?? session.userId;
         setStatusMessage({ type: "success", text: `Welcome, ${name}` });
         toast.success(`Welcome, ${name}`);
 
@@ -78,7 +88,7 @@ export function LoginForm() {
         setLoading(false);
       }
     },
-    [loading, searchParams],
+    [loading, searchParams, username],
   );
 
   return (
@@ -116,7 +126,26 @@ export function LoginForm() {
             </div>
             <div className="text-center">
               <h2 className="font-display text-2xl font-semibold">Staff sign in</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Enter your PIN to continue</p>
+              <p className="mt-1 text-sm text-muted-foreground">Enter your username and PIN</p>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="username" className="block text-sm font-medium">Username</label>
+              <input
+                id="username"
+                type="text"
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                value={username}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (statusMessage?.type === "error") setStatusMessage(null);
+                }}
+                disabled={loading}
+                placeholder="frontdesk / fom / gm / admin"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              />
             </div>
 
             <PinPad

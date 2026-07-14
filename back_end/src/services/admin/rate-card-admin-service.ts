@@ -7,8 +7,7 @@
  * new RateCard version is created, the active overrides from the prior version are automatically
  * copied forward — admin only needs to re-adjust the ones that changed.
  */
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { PartyType } from "@prisma/client";
+import { Prisma, PartyType, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -42,9 +41,16 @@ export type RoomTypeRateOverrideInput = {
 
 function toDecimalOrNull(v: DecimalInput | null | undefined): string | null {
   if (v === undefined || v === null || v === "") return null;
-  const n = typeof v === "number" ? v : Number.parseFloat(v);
-  if (!Number.isFinite(n) || n < 0) throw new ValidationError(`rate must be a non-negative number, got ${v}`);
-  return n.toFixed(2);
+  // Preserve precision from string inputs — Number.parseFloat drops trailing digits when the
+  // client sends a high-precision fixed-point value. Prisma.Decimal accepts strings verbatim.
+  let dec: Prisma.Decimal;
+  try {
+    dec = typeof v === "number" ? new Prisma.Decimal(v) : new Prisma.Decimal(String(v));
+  } catch {
+    throw new ValidationError(`rate must be a non-negative number, got ${v}`);
+  }
+  if (dec.isNegative()) throw new ValidationError(`rate must be a non-negative number, got ${v}`);
+  return dec.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
 }
 
 function toDecimalRequired(v: DecimalInput, label: string): string {

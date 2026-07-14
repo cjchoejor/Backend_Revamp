@@ -5,7 +5,12 @@ export async function runProcessingLockExpiryWorker(prisma: PrismaClient, input:
   try {
     return await s1ProcessingLockService.expireLock(prisma, input.lockId);
   } catch (e: any) {
-    if (e?.name === "NotFoundError") return { skipped: true, reason: "LOCK_NOT_FOUND" } as const;
+    // Same trap as w20: verify the LOCK is actually missing before mapping to SKIPPED, so a
+    // NotFoundError from an unrelated downstream policy doesn't silently drop the expiry work.
+    if (e?.name === "NotFoundError") {
+      const lock = await prisma.processingLockRecord.findUnique({ where: { id: input.lockId }, select: { id: true } }).catch(() => null);
+      if (!lock) return { skipped: true, reason: "LOCK_NOT_FOUND" } as const;
+    }
     throw e;
   }
 }

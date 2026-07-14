@@ -1,7 +1,12 @@
 /**
  * SIG-S2 §5.1 — PricingPipelineEngine (S2 contract slice).
- * Pure logic: no Prisma. Callers inject rate plans, thresholds, and an explicit timestamp.
+ * Pure logic: no Prisma queries. Callers inject rate plans, thresholds, and an explicit timestamp.
+ * Money math routes through Prisma.Decimal (via lib/money) so uplift/discount/MSR cascades don't
+ * accumulate float drift; results serialise back to `number` at the return boundary because the
+ * public shape is `number`.
  */
+
+import { mulMoney, round2, toDecimal } from "../lib/money.js";
 
 export type RatePlanType = "INDIVIDUAL" | "PROMOTIONAL" | "TIER" | "CHANNEL" | "RACK";
 
@@ -72,7 +77,7 @@ export function resetIndicativePricingResolveCallCount() {
 
 function defaultMsr(nightly: number, explicit?: number): number {
   if (explicit != null && Number.isFinite(explicit)) return explicit;
-  return Math.round(nightly * 0.7 * 100) / 100;
+  return Number(round2(mulMoney(nightly, 0.7)).toFixed(2));
 }
 
 /**
@@ -88,39 +93,49 @@ export function resolveS2Pricing(input: S2ResolvePricingInput): S2ResolvePricing
   const selected = sorted[0]!;
   path.push({ step: "RATE_PLAN_PRIORITY", detail: `selected=${selected.id} type=${selected.type}` });
 
-  let nightly = selected.rateAmount;
+  // Decimal-safe pricing cascade: uplift → group band → discount. Each step reads/writes a Decimal
+  // and only the final display value is coerced back to number. Prevents Math.round(x*100)/100
+  // float drift cascading through deterrent × 1.15, band × 0.98, and (1 - pct/100) discount.
+  let nightlyDec = toDecimal(selected.rateAmount);
   let isDeterrent = false;
   if (input.isDeficientGuestTier) {
-    nightly = Math.round(nightly * 1.15 * 100) / 100;
+    nightlyDec = round2(mulMoney(nightlyDec, 1.15));
     isDeterrent = true;
     path.push({ step: "DETERRENT_TIER", detail: "CAUTION/RESTRICTED uplift applied (not guest-facing)" });
   }
 
   let appliedGroupBand: string | null = null;
   if (input.groupSize != null && Number.isFinite(input.groupSize) && input.groupSize > 10) {
-    nightly = Math.round(nightly * 0.98 * 100) / 100;
+    nightlyDec = round2(mulMoney(nightlyDec, 0.98));
     appliedGroupBand = "VOLUME_10_PLUS";
     path.push({ step: "GROUP_VOLUME_BAND", detail: appliedGroupBand });
   }
 
+  const nightly = Number(nightlyDec.toFixed(2));
   const msrValue = defaultMsr(nightly, selected.msr);
-  let effective = nightly;
-  let discountApplied = 0;
+  let effectiveDec = nightlyDec;
+  let discountAppliedDec = toDecimal(0);
   let discountWithinAuthorityBounds = true;
   const pct = input.discountPercentOffRequested;
   if (pct != null && pct > 0) {
     const cap = input.actorMaxDiscountPercent;
-    discountWithinAuthorityBounds = cap == null || pct <= cap + 1e-9;
+    // Authority cap comparison in Decimal — a `Number(pct)` at 25.0000000001 would slip past
+    // a Number(cap) of 25 in a float compare.
+    discountWithinAuthorityBounds = cap == null || toDecimal(pct).lte(toDecimal(cap));
     if (discountWithinAuthorityBounds) {
-      effective = Math.round(nightly * (1 - pct / 100) * 100) / 100;
-      discountApplied = Math.round((nightly - effective) * 100) / 100;
+      // effective = nightly * (1 - pct/100). Compute in Decimal.
+      const factor = toDecimal(1).sub(toDecimal(pct).div(100));
+      effectiveDec = round2(mulMoney(nightlyDec, factor));
+      discountAppliedDec = round2(nightlyDec.sub(effectiveDec));
       path.push({ step: "DISCOUNT", detail: `${pct}% applied` });
     } else {
       path.push({ step: "DISCOUNT_BLOCKED_AUTHORITY", detail: `requested=${pct} cap=${cap}` });
     }
   }
+  const effective = Number(effectiveDec.toFixed(2));
+  const discountApplied = Number(discountAppliedDec.toFixed(2));
 
-  const belowMsr = effective + 1e-9 < msrValue;
+  const belowMsr = effectiveDec.lt(toDecimal(msrValue));
   if (belowMsr) path.push({ step: "MSR_CHECK", detail: `effective=${effective} msr=${msrValue}` });
 
   return {

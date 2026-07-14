@@ -10,6 +10,7 @@ import { enforceNoShowDeterminationPrereqs, enforceNoShowDeterminationNotAlready
 import { enforceEntryAtS5ForNoShowActions } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { toDecimal } from "../../lib/money.js";
 import {
   capCancellationPenaltyAtAdvancePayment,
   sumAdvancePaymentInTotalForFolio,
@@ -148,11 +149,14 @@ export async function determineNoShow(
   if (!folio) throw new NotFoundError("Folio");
 
   const terms = (entry.reservation?.frozenCancellationTerms as { sameDayPenaltyAmount?: unknown } | null) ?? {};
-  const penaltyRaw = Number(terms.sameDayPenaltyAmount ?? 0);
+  // Decimal-safe: parse penalty through Decimal so a config value like "1500.10" doesn't drift
+  // to 1500.0999... via Number().
+  const penaltyRawDec = toDecimal((terms.sameDayPenaltyAmount as string | number | null | undefined) ?? 0);
+  const penaltyRaw = Number(penaltyRawDec.toFixed(2));
   const advanceTotal = await sumAdvancePaymentInTotalForFolio(prisma, folio.id);
   const penalty = capCancellationPenaltyAtAdvancePayment(Number.isFinite(penaltyRaw) ? penaltyRaw : 0, advanceTotal);
 
-  const net = advanceTotal - penalty;
+  const net = Number(toDecimal(advanceTotal).sub(toDecimal(penalty)).toFixed(2));
 
   const noShowId = await allocateReadableId(prisma, "NO_SHOW" as const);
 

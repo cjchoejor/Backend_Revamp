@@ -21,8 +21,10 @@ export async function runAdvancePaymentFollowUpWorker(prisma: PrismaClient, inpu
   }
 
   const totalIn = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN").reduce((sum, p) => sum + Number(p.amount.toString()), 0);
-  const credit = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } }).catch(() => null);
-  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds").catch(() => ({ DEFAULT: { amount: 0 } }));
+  // Do NOT swallow errors here — a transient DB / config-store failure with a fallback of 0 would
+  // silently mark every follow-up as satisfied and never nudge unpaid guests. Let pg-boss retry.
+  const credit = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } });
+  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds");
   const requiredAmount = toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
   const satisfied =
     !!credit || (Number.isFinite(requiredAmount) ? totalIn >= requiredAmount : totalIn > 0);

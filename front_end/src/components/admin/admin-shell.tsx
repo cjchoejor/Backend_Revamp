@@ -234,6 +234,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             expandedDomain={expandedDomain}
             setExpandedDomain={setExpandedDomain}
           />
+          {session && (
+            <div className="mt-6 border-t border-border pt-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">{session.displayName ?? session.username ?? session.userId}</p>
+              <p>{session.actorLevel} · configuration writes</p>
+            </div>
+          )}
         </aside>
 
         <main className="min-w-0 flex-1 pb-16">

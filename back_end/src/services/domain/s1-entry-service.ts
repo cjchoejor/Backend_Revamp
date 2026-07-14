@@ -819,3 +819,56 @@ export async function listEntries(
   });
 }
 
+/**
+ * Narrow update of apartment commercial fields. Was previously a raw `prisma.entry.update` in
+ * the route handler with no stage gate — an L1 could mutate `apartmentDurationNights` /
+ * `apartmentRateTierCode` on a closed / S9 entry belonging to another custodian. Route now
+ * calls this service instead: stage gate, version bump, audit trace, all in one tx.
+ */
+export async function updateApartmentContext(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  actorLevel: ActorLevel,
+  input: { apartmentDurationNights?: number | null; apartmentRateTierCode?: string | null; expectedVersion?: number },
+) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.status === EntryStatus.CANCELLED || entry.status === EntryStatus.EXPIRED || entry.status === EntryStatus.CLOSED) {
+    throw new ValidationError(`Cannot edit apartment context — entry is ${entry.status}.`);
+  }
+  // Apartment terms are commercial fields — the spec expects them locked once the entry has left
+  // pre-confirmation stages. Allow through S3 (still negotiating) but block from S4 onward.
+  const editableStages = new Set<string>([Stage.S1, Stage.S2, Stage.S3]);
+  if (!editableStages.has(entry.currentStage)) {
+    throw new ValidationError(`Cannot edit apartment context at stage ${entry.currentStage}. Use S7 amendment flow.`);
+  }
+  if (input.expectedVersion != null && entry.version !== input.expectedVersion) {
+    throw new ValidationError("version mismatch");
+  }
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.entry.update({
+      where: { id: entryId },
+      data: {
+        ...(input.apartmentDurationNights !== undefined ? { apartmentDurationNights: input.apartmentDurationNights } : {}),
+        ...(input.apartmentRateTierCode !== undefined ? { apartmentRateTierCode: input.apartmentRateTierCode } : {}),
+        version: { increment: 1 },
+      } as any,
+    });
+    await auditService.emit(tx as any, { actorId, actorLevel }, {
+      eventType: "ENTRY.APARTMENT_CONTEXT_UPDATED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      stageContext: entry.currentStage,
+      entryId,
+      inquiryId: entry.inquiryId,
+      payload: {
+        apartmentDurationNights: input.apartmentDurationNights ?? null,
+        apartmentRateTierCode: input.apartmentRateTierCode ?? null,
+      } as any,
+    } as any);
+    return updated;
+  });
+}
+

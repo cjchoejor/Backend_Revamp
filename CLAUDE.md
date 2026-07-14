@@ -46,6 +46,8 @@ All design docs live in `docs/`. The canonical references:
 | `docs/Legphel-Child-Policy.md` | Front-desk-facing plain-language child policy (age bands, meals, beds, capacity, supervision). Source for the defaults seeded into the 5 `registry.child.*` policies. |
 | `docs/legphel-pms-converged.html` | Static HTML prototype of the desired booking-flow layout — three-column desktop (nav + main + summary panel), sticky topbar, event/timer chips. Reference for the unified booking flow at `/inquiries/new`. |
 | `docs/policy-wiring-audit-explained.md` | Plain-language walkthrough of the 2026-06-27 policy audit (149 System-A guards + 24 System-B registry policies). Explains System A vs B, what "wired/unwired" means, the shadow-inventory dead-chain case, and shadow-inventory as a concept. Use as reference when someone asks "why is X policy not doing anything?" |
+| `docs/multi-room-bug-hunt.md` | Per-bug status table for the 2026-07-13 multi-room sweep (persistence, pricing, state-machine gaps). Location, description, status, fix date. Read before touching `optionSelected` / `CommittedHold` / `roomAssignments`. |
+| `docs/backend-bug-hunt.md` | Broader 2026-07-13 backend sweep (auth, money precision, atomicity, silent failures). 41 findings ranked by severity, all currently **Open**. Read before touching auth headers, folio balance math, timer scheduling, or money-typed columns. |
 
 When a user asks "what does the spec say about X?", the relevant document above is the source. Quote chapter and verse rather than paraphrasing.
 
@@ -310,6 +312,42 @@ Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **Corporat
 - **Reads unchanged**: `Entry.reservation` (via `currentReservationId` FK) still resolves the **current** (latest-confirmed) reservation — all existing `entry.reservation` / `include: { reservation: true }` sites keep working. `Entry.reservations` (relation `EntryReservations`) is the full per-segment history.
 - **Immutability enforced in [db.ts](back_end/src/db.ts)**: `reservation.update` / `updateMany` / `upsert` / `delete` all throw `RESERVATION_IMMUTABLE`. Only `reservation.create` is allowed. Re-entry paths ([s7-amendment-service.ts](back_end/src/services/application/s7-amendment-service.ts), [s8-re-entry-service.ts](back_end/src/services/domain/s8-re-entry-service.ts)) no longer re-point the old reservation's `segmentId` — the new segment gets its own reservation at re-confirmation.
 
+### Backflows / re-entry transitions (2026-07-14)
+
+The 13 spec-mandated regression paths (SIG-S2 §1.3, SIG-S4 §3.1, SIG-S5 §1.3, SIG-S7 §3.3, Part3 §3.2.4) are all wired. Six existed prior; nine were added on 2026-07-14 alongside the mode-registry runtime.
+
+**Unified helper**: [`state-machines/backflows-state-machine.ts`](back_end/src/state-machines/backflows-state-machine.ts) — `runBackflow(prisma, {entryId, fromStage, toStage, actor, reason, modeKey, hooks, cancelTimerCodes})`. Every backflow calls this. Bookkeeping (segment seal + open, dwell records, entry.currentStage bump, `ENTRY.BACKFLOW_<MODE>_<FROM>_<TO>` trace) is uniform; only side-effects (`hooks`) and timer cancellations differ.
+
+**All 13 backflows**:
+
+| # | Path | Function | Route | Authority | Mode key |
+|---|---|---|---|---|---|
+| 1 | S2 → S1 | `backflowS2ToS1` | `POST /entries/:id/backflow/s2-to-s1` | L1+ | NEW_BOOKING |
+| 2 | S3 → S1 | `s3-reentry-state-machine.initiateS3ToS1Backflow` | (existing) | L2+ | (pre-registry) |
+| 3 | S3 → S2 | `s3-reentry-state-machine.initiateS3ToS2Backflow` | (existing) | L2+ | (pre-registry) |
+| 4 | S4 → S1 | `backflowS4ToS1` | `POST /entries/:id/backflow/s4-to-s1` | L2+ | NEW_BOOKING |
+| 5 | S4 → S2 | `backflowS4ToS2` | `POST /entries/:id/backflow/s4-to-s2` | L2+ | RATE_REVISION |
+| 6 | S4 → S3 | `backflowS4ToS3` | `POST /entries/:id/backflow/s4-to-s3` | L2+ | BILLING_MODEL_CHANGE |
+| 7 | S5 → S1 | `backflowS5ToS1` | `POST /entries/:id/backflow/s5-to-s1` | L2+ | NEW_BOOKING |
+| 8 | S6 → S1 | (existing room-change amendment) | (existing) | L2+ | ROOM_CHANGE |
+| 9 | S7 → S1 | `s7-amendment-service.roomChangeReEntryToS1` | (existing) | L2+ | ROOM_CHANGE |
+| 10 | S7 → S2 | `backflowS7ToS2` | `POST /entries/:id/backflow/s7-to-s2` | **L3+** (GM only — rate revision) | RATE_REVISION |
+| 11 | S7 → S3 | `backflowS7ToS3` | `POST /entries/:id/backflow/s7-to-s3` | L2+ | BILLING_MODEL_CHANGE |
+| 12 | S7 → S4 | `backflowS7ToS4` (extra field: `newCheckOutDate`) | `POST /entries/:id/backflow/s7-to-s4` | L2+ | DATE_EXTENSION |
+| 13 | S8 → S7 | `s8-re-entry-service.reEnterS8ToS7` (NO new segment) | (existing) | L2+ | (pre-registry) |
+| 14 | S8 → S2 | `s8-re-entry-service.reEnterS8ToS2` | (existing) | L2+ | (pre-registry) |
+| 15 | Any → S2 | `backflowComplaintToS2` | `POST /entries/:id/backflow/complaint-to-s2` | L2+ | COMPLAINT_RESOLUTION |
+
+**Authority gates**: [`p01-backflow-authority.ts`](back_end/src/policies/01-availability/p01-backflow-authority.ts) — one function per backflow, error codes are stable so the frontend can pattern-match (e.g. `AUTH_REQUIRED_L3` for S7→S2).
+
+**Consequences engine**: [`re-entry-consequence-engine.ts`](back_end/src/engines/re-entry-consequence-engine.ts) now knows the side-effect set for every backflow (e.g. S4→S2 → `RESERVATION_SUPERSEDED, HOLD_RETAINED, FOLIO_CONTINUES, INVOICES_NOT_SUPERSEDED, CANCEL_W4_TIMERS`). Emits `REENTRY.CONSEQUENCES_COMPUTED` trace with the full list.
+
+**Mode registry runtime**: [`lib/mode-registry-runtime.ts`](back_end/src/lib/mode-registry-runtime.ts) — `requireActiveMode(db, modeKey)` returns the highest-version ACTIVE `ModeConfiguration` row. 30-second TTL cache; admin writes invalidate via `invalidateModeRegistryCache(modeKey)` (wired in [workflow-admin-service.ts](back_end/src/services/admin/workflow-admin-service.ts)). Every backflow calls `requireActiveMode`, so the 8 seeded modes are now load-bearing — deactivating a mode via `/admin/modes` disables the corresponding backflows.
+
+**Compatibility**: `isTransitionAllowedByMode(mode, from, to)` softly warns via `MODE.STAGEROUTE_INCONSISTENT` trace when the mode's `stageRoute` doesn't declare the requested transition. Doesn't block — the fixed backflow implementation is trusted, but the trace surfaces cases where the seed needs extending.
+
+**What still isn't there**: the frontend (testing UI) doesn't have buttons for the 9 new backflows yet. They're callable via API; front-desk-facing UI is a follow-up. Same for the friend's real production frontend — endpoints are stable so both can wire whenever.
+
 ### Cancellation entry points
 
 | Cancel type | Service function | Route | Stage gate | Authority |
@@ -506,6 +544,10 @@ Historically, batched-processing code keyed off `groupBillingMode === "GROUP_MAS
 - `commercialTerms.roomCount` and `commercialTerms.pricingBreakdown` (`{ nightlyRate, nights, roomCount, subTotal }`) explicit for downstream consumers (S3 threshold, S4 confirmation, S9 reconciliation) so they don't re-derive room count.
 - Applied at BOTH quotation entry points: `createQuotation` (single-party) + `createGroupQuotation` (group path).
 
+### Multi-room bug hunt (2026-07-13) — log moved to docs
+
+Full per-bug status table (location, description, status, fix date) lives at [`docs/multi-room-bug-hunt.md`](docs/multi-room-bug-hunt.md). Read it when hunting for regressions in the multi-room path or when adding new code that touches `optionSelected` / `CommittedHold` / `roomAssignments`. Summary: all 11 identified bugs fixed 2026-07-13; 1 suspected bug (speculative hold release) verified as single-room-by-design; 4 additional call sites also confirmed as single-room-by-design.
+
 ### Group-billing wiring — status (updated 2026-07-13)
 
 Completed since the "load-bearing" note:
@@ -526,7 +568,9 @@ Still open (short list):
 
 ### Mode registry (ACIG §2.1A.7)
 
-Schema migrated 2026-06-01 to match ACIG §2.1A.7 — `stageRoute`, `autoFulfilmentConditions`, `featureDependencies` are now typed JSON columns (was a single `config: Json` blob). The 8 canonical predefined modes are seeded (NEW_BOOKING, ROOM_CHANGE, RATE_REVISION, DATE_EXTENSION, EARLY_DEPARTURE, BILLING_MODEL_CHANGE, GUEST_COMPOSITION_CHANGE, COMPLAINT_RESOLUTION) as v1 / ACTIVE / isPredefined=true. **Operational code does NOT yet route through `ModeConfiguration`** — the modes exist but are not load-bearing.
+Schema migrated 2026-06-01 to match ACIG §2.1A.7 — `stageRoute`, `autoFulfilmentConditions`, `featureDependencies` are now typed JSON columns (was a single `config: Json` blob). The 8 canonical predefined modes are seeded (NEW_BOOKING, ROOM_CHANGE, RATE_REVISION, DATE_EXTENSION, EARLY_DEPARTURE, BILLING_MODEL_CHANGE, GUEST_COMPOSITION_CHANGE, COMPLAINT_RESOLUTION) as v1 / ACTIVE / isPredefined=true.
+
+**Load-bearing as of 2026-07-14**: [`lib/mode-registry-runtime.ts`](back_end/src/lib/mode-registry-runtime.ts) provides `requireActiveMode(db, modeKey)`, `resolveActiveMode(db, modeKey)`, `invalidateModeRegistryCache(modeKey?)`, and `isTransitionAllowedByMode(mode, from, to)`. Every backflow (see **Backflows / re-entry transitions**) calls `requireActiveMode` — deactivating a mode from `/admin/modes` immediately disables its backflow. Admin writes (`saveMode`, `activateMode`, `deactivateMode`) call `invalidateModeRegistryCache(modeKey)` so the 30-second TTL cache doesn't lag admin edits. `isTransitionAllowedByMode` emits `MODE.STAGEROUTE_INCONSISTENT` traces when a backflow's from/to isn't declared in the mode's `stageRoute` — soft signal to extend the seed. **What's NOT yet consumed**: `autoFulfilmentConditions` (backflows still fire full transitions rather than auto-skipping validated sub-stages), `featureDependencies` (informational; nothing gates on subsystem presence yet).
 
 ### Timer / worker config coverage
 

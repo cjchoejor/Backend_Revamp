@@ -225,13 +225,17 @@ entriesRouter.post(
   },
 );
 
+// Routed through the service so stage gates + version bump + audit trace apply — was previously
+// a raw prisma.entry.update that let any L1 mutate apartment terms on any-stage entries.
 entriesRouter.patch("/:id/apartment-context", requireActorLevel("L1"), validateBody(patchApartmentContextRequestSchema), async (req, res, next) => {
   try {
-    const { apartmentDurationNights, apartmentRateTierCode } = req.body;
-    const updated = await prisma.entry.update({
-      where: { id: req.params.id },
-      data: { apartmentDurationNights, apartmentRateTierCode, version: { increment: 1 } } as any,
-    });
+    const updated = await s1EntryService.updateApartmentContext(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+      req.actor!.level,
+      req.body,
+    );
     res.json(updated);
   } catch (e) {
     next(e);

@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { PaymentDirection } from "@prisma/client";
 import { StageGateBlockedError } from "../../lib/errors.js";
+import { toDecimal } from "../../lib/money.js";
 
 function num(v: unknown): number {
   if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
@@ -65,7 +66,9 @@ export async function sumAdvancePaymentInTotalForFolio(prisma: PrismaClient, fol
     where: { folioId, paymentDirection: PaymentDirection.IN },
     _sum: { amount: true },
   });
-  return Number(paid._sum.amount?.toString() ?? "0");
+  // Round to 2dp via Decimal before coercing to number — protects against float drift when
+  // a penalty is expressed as a % of this value further downstream.
+  return Number(toDecimal(paid._sum.amount).toFixed(2));
 }
 
 /** SIG invariant: penalty cannot exceed total advance payment collected (Policy 35 / Policy 57). */

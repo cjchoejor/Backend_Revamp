@@ -1,76 +1,95 @@
 import type { RequestHandler } from "express";
 import { AuthorizationError, ValidationError } from "../lib/errors.js";
+import { verifySessionJwt } from "../services/infrastructure/session-service.js";
+import { prisma } from "../db.js";
 import type { ActorLevel, RequestActor } from "../types/actor.js";
-import { verifySessionToken } from "../lib/auth-token.js";
 
 export type { ActorLevel, RequestActor };
 
 const rank: Record<ActorLevel, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
-const ALLOWED_LEVELS: ActorLevel[] = ["L1", "L2", "L3", "L4"];
 
 /**
- * Authenticate the actor for every request. The actor's LEVEL is taken from the cryptographically
- * verified session token (`Authorization: Bearer <jwt>`), which was signed from the StaffUser record
- * at login — NOT from a client-supplied `X-Actor-Level` header. This closes the self-asserted-level
- * hole (docs/issues.md C1).
+ * Auth middleware.
  *
- * Dev-only fallback: when `ALLOW_HEADER_AUTH=true`, the legacy `X-Actor-Id` / `X-Actor-Level` header
- * path is honoured (for local scripts/tests). It is OFF by default and must NEVER be enabled in a
- * deployed environment — it re-opens the spoofing hole.
+ * Primary path: `Authorization: Bearer <jwt>`. Verifies signature, looks up the SessionRecord,
+ * enforces status === ACTIVE, and populates `req.actor` from the DB row — never from headers.
+ *
+ * Legacy path (guarded by `AUTH_ALLOW_HEADER_FALLBACK=true`): the old X-Actor-Id / X-Actor-Level
+ * behaviour. Kept temporarily so the friend's production frontend can migrate at its own pace.
+ * The variable defaults to OFF. Delete this whole branch once both frontends ship Bearer tokens.
+ *
+ * Also throttles `SessionRecord.lastActiveAt` writes to at most once per 30 s per session so
+ * every-request auth doesn't hammer the DB.
  */
-export function authenticateActor(): RequestHandler {
-  const headerAuthAllowed = process.env.ALLOW_HEADER_AUTH === "true";
-  if (headerAuthAllowed) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[auth] ALLOW_HEADER_AUTH=true — actor level may be supplied via X-Actor-Level header. " +
-        "This is INSECURE and must only be used for local development/testing.",
-    );
-  }
-  return (req, _res, next) => {
-    // Primary path: verify the bearer session token and trust ONLY its signed payload.
-    const authz = req.header("authorization");
-    const bearer =
-      authz && authz.toLowerCase().startsWith("bearer ") ? authz.slice(7).trim() : null;
 
-    if (bearer) {
-      const payload = verifySessionToken(bearer);
-      if (!payload) {
-        next(new AuthorizationError("Invalid or expired session token"));
-        return;
-      }
-      req.actor = { actorId: payload.userId, level: payload.actorLevel };
-      next();
-      return;
-    }
+const lastActiveTouchAt = new Map<string, number>();
+const TOUCH_THROTTLE_MS = 30_000;
 
-    // Dev-only header fallback (opt-in).
-    if (headerAuthAllowed) {
-      const actorId = req.header("x-actor-id")?.trim();
-      const levelRaw = req.header("x-actor-level")?.trim().toUpperCase();
-      const level = ALLOWED_LEVELS.includes(levelRaw as ActorLevel) ? (levelRaw as ActorLevel) : null;
-      if (!actorId) {
-        next(new ValidationError("Missing X-Actor-Id header"));
-        return;
-      }
-      if (!level) {
-        next(new ValidationError("Missing or invalid X-Actor-Level (use L1, L2, L3, or L4)"));
-        return;
-      }
-      req.actor = { actorId, level };
-      next();
-      return;
-    }
-
-    next(new AuthorizationError("Authentication required — present a valid session token"));
-  };
+async function touchSessionLastActive(sessionId: string, now: Date): Promise<void> {
+  const last = lastActiveTouchAt.get(sessionId) ?? 0;
+  if (now.getTime() - last < TOUCH_THROTTLE_MS) return;
+  lastActiveTouchAt.set(sessionId, now.getTime());
+  await prisma.sessionRecord.update({ where: { id: sessionId }, data: { lastActiveAt: now } }).catch(() => {
+    // If update fails, drop the entry from the throttle cache so the next request retries.
+    lastActiveTouchAt.delete(sessionId);
+  });
 }
 
-/**
- * Back-compat alias. Historically the global middleware was `parseActorHeaders()`; it now
- * authenticates via the verified token. Kept so existing mount points don't need to change.
- */
-export const parseActorHeaders = authenticateActor;
+function parseHeaderFallback(actorId: string | undefined, levelRaw: string | undefined): RequestActor | null {
+  if (!actorId) return null;
+  const allowed: ActorLevel[] = ["L1", "L2", "L3", "L4"];
+  const level = (allowed.includes(levelRaw as ActorLevel) ? levelRaw : null) as ActorLevel | null;
+  if (!level) return null;
+  return { actorId, level };
+}
+
+export function parseActorHeaders(): RequestHandler {
+  const allowHeaderFallback = String(process.env.AUTH_ALLOW_HEADER_FALLBACK ?? "").toLowerCase() === "true";
+
+  return async (req, _res, next) => {
+    try {
+      // --- Primary: Bearer token ---
+      const authHeader = req.header("authorization") ?? req.header("Authorization");
+      if (authHeader && /^Bearer\s+/i.test(authHeader)) {
+        const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+        if (!token) throw new AuthorizationError("Empty bearer token");
+
+        const payload = verifySessionJwt(token);
+        const session = await prisma.sessionRecord.findUnique({
+          where: { id: payload.sessionId },
+          include: { user: { select: { id: true, actorLevel: true, isActive: true, username: true } } },
+        });
+        if (!session) throw new AuthorizationError("Session not found");
+        if (session.status !== "ACTIVE") throw new AuthorizationError(`Session is ${session.status}`);
+        if (!session.user || !session.user.isActive) throw new AuthorizationError("Staff user inactive");
+        // DB is authoritative for level — token could be stale if the admin changed it.
+        req.actor = { actorId: session.user.id, level: session.user.actorLevel as ActorLevel };
+        // Fire-and-forget lastActive touch; the caller shouldn't wait on it.
+        void touchSessionLastActive(session.id, new Date());
+        next();
+        return;
+      }
+
+      // --- Legacy: X-Actor-* headers (temporary bridge) ---
+      if (allowHeaderFallback) {
+        const actorId = req.header("x-actor-id")?.trim();
+        const levelRaw = req.header("x-actor-level")?.trim().toUpperCase();
+        const parsed = parseHeaderFallback(actorId, levelRaw);
+        if (!parsed) {
+          next(new ValidationError("Missing X-Actor-Id/X-Actor-Level headers (legacy path)"));
+          return;
+        }
+        req.actor = parsed;
+        next();
+        return;
+      }
+
+      next(new AuthorizationError("Missing Authorization: Bearer <token>"));
+    } catch (e) {
+      next(e);
+    }
+  };
+}
 
 export function requireActorLevel(min: ActorLevel): RequestHandler {
   return (req, _res, next) => {

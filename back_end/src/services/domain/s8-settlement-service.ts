@@ -19,6 +19,7 @@ import {
   enforceRoomChargeSumMatchesFrozenRateBasis,
   sumRoomChargesInStayWindowUtc,
 } from "../../policies/08-pricing-rate-plan/p22-settlement-rate-basis.js";
+import { minMoney, toDecimal } from "../../lib/money.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
@@ -227,20 +228,29 @@ export async function initiateSettlement(
     throw new ValidationError("paymentVerificationRef is required for CASH and MOBILE_PAYMENT");
   }
 
-  const partial = input.partialAmount == null ? undefined : Number(input.partialAmount);
-  if (partial != null && (!Number.isFinite(partial) || partial <= 0)) throw new ValidationError("partialAmount must be a positive number");
+  // Decimal-safe amount parsing so string inputs like "1099.75" don't drift via Number(). We keep
+  // number-typed validation locals for the guardrails (isFinite / <=0), but the amount that lands
+  // in the paymentRecord is a Decimal.
+  const partialNumeric = input.partialAmount == null ? undefined : Number(input.partialAmount);
+  if (partialNumeric != null && (!Number.isFinite(partialNumeric) || partialNumeric <= 0)) throw new ValidationError("partialAmount must be a positive number");
+  const partialDec = input.partialAmount == null ? undefined : toDecimal(input.partialAmount);
 
-  const voucherAmount = input.voucherAmount == null ? undefined : Number(input.voucherAmount);
-  if (method === "VOUCHER" && (voucherAmount == null || !Number.isFinite(voucherAmount) || voucherAmount < 0)) {
+  const voucherNumeric = input.voucherAmount == null ? undefined : Number(input.voucherAmount);
+  if (method === "VOUCHER" && (voucherNumeric == null || !Number.isFinite(voucherNumeric) || voucherNumeric < 0)) {
     throw new ValidationError("voucherAmount is required for VOUCHER and must be non-negative");
   }
+  const voucherDec = input.voucherAmount == null ? undefined : toDecimal(input.voucherAmount);
 
-  const settleAmount =
+  // outstanding here is already a number derived from the Decimal ledger. Convert both sides
+  // to Decimal for the min/settle so partial settlements never lock in float drift.
+  const outstandingDec = toDecimal(outstanding);
+  const settleAmountDec =
     method === "VOUCHER"
-      ? Math.min(voucherAmount ?? 0, outstanding)
-      : partial != null
-        ? Math.min(partial, outstanding)
-        : outstanding;
+      ? minMoney(voucherDec ?? 0, outstandingDec)
+      : partialDec != null
+        ? minMoney(partialDec, outstandingDec)
+        : outstandingDec;
+  const settleAmount = Number(settleAmountDec.toFixed(2));
 
   const out = await prisma.$transaction(async (tx) => {
     // Voucher settlement IN (mutually exclusive with generic GUEST_PAY below — same settleAmount must not post twice).
@@ -275,8 +285,11 @@ export async function initiateSettlement(
     // Ledger at issuance: standard pattern — invoice metadata snapshots **after** payments, **without** invoice rows in recompute.
     await recomputeFolioOutstandingBalance(tx, folioId);
     const ledgerAtIssuance = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { outstandingBalance: true } });
+    // Decimal `.equals(0)` — a plain `=== 0` on `Number(decimal)` would mis-close a folio whose
+    // balance is 0.005 (post-round it'd read 0.00 but the underlying Decimal is non-zero, and
+    // vice-versa). `.equals` on the Decimal itself is authoritative.
+    const balanceClosed = toDecimal(ledgerAtIssuance.outstandingBalance).equals(0);
     const outstandingAtIssuance = num(ledgerAtIssuance.outstandingBalance);
-    const balanceClosed = outstandingAtIssuance === 0;
 
     // Direct bill → always OUTSTANDING and issue invoice
     if (billing === "DIRECT_BILL" || method === "DIRECT_BILL") {
@@ -352,7 +365,7 @@ export async function initiateSettlement(
     await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
 
     // Trace settlement outcome so the audit + entry timeline show what happened.
-    const isPartial = !balanceClosed && (partial != null || (method === "VOUCHER" && (voucherAmount ?? 0) < outstanding));
+    const isPartial = !balanceClosed && (partialDec != null || (method === "VOUCHER" && (voucherDec ?? toDecimal(0)).lt(outstandingDec)));
     const finalState = updated.state;
     await tx.traceEvent.create({
       data: {

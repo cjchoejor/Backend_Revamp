@@ -5,27 +5,49 @@ export const setConfigurationRequestSchema = z.object({
   notes: z.string().optional().nullable(),
 });
 
+// Username: [a-z0-9._-]{3,32}, folded to lowercase on write. Explicit charset so we don't have
+// to reason about Unicode edge cases at the login boundary.
+const usernameSchema = z
+  .string()
+  .min(3)
+  .max(32)
+  .regex(/^[a-z0-9._-]+$/i, "username must be 3–32 chars, letters/digits/./_/- only");
+
+// PIN: exactly 4 digits. Business rule set with the user.
+const pinSchema = z.string().regex(/^\d{4}$/u, "pin must be exactly 4 digits");
+
 export const createStaffRequestSchema = z.object({
   fullName: z.string().min(1),
+  username: usernameSchema,
   email: z.string().email().optional().nullable(),
   actorLevel: z.enum(["L1", "L2", "L3", "L4"]),
   role: z.string().min(1),
-  pin: z.string().min(4),
+  // New canonical link to Role.id — readable ID like ROL-YYYYMMDD-NNNN.
+  roleId: z.string().min(1).optional(),
+  pin: pinSchema,
   idleThresholdSeconds: z.coerce.number().int().positive().optional(),
   hardLogoutThresholdSeconds: z.coerce.number().int().positive().optional(),
 });
 
 export const updateStaffRequestSchema = z.object({
   fullName: z.string().min(1).optional(),
+  username: usernameSchema.optional(),
   email: z.string().email().optional().nullable(),
   actorLevel: z.enum(["L1", "L2", "L3", "L4"]).optional(),
   role: z.string().min(1).optional(),
+  roleId: z.string().min(1).optional().nullable(),
   idleThresholdSeconds: z.coerce.number().int().positive().optional(),
   hardLogoutThresholdSeconds: z.coerce.number().int().positive().optional(),
 });
 
 export const resetStaffPinRequestSchema = z.object({
-  pin: z.string().min(4),
+  pin: pinSchema,
+});
+
+// Hard delete requires an explicit confirmation string so it can't happen by accident from a
+// misfired click. Admin UI sends { confirm: "PURGE" }.
+export const purgeStaffRequestSchema = z.object({
+  confirm: z.literal("PURGE"),
 });
 
 export const deficientCategoriesRequestSchema = z.object({
