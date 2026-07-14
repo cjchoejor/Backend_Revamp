@@ -12,6 +12,8 @@ export type ApiErrorBody = {
 export type AuthenticateResponse = {
   sessionId: string;
   userId: string;
+  username: string;
+  fullName?: string;
   actorLevel: string;
   terminalId: string;
   authenticatedAt: string;

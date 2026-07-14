@@ -2,6 +2,32 @@ import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
+
+/**
+ * Enumerate every room a `CommittedHold` is holding. Reads the (Phase-D) `perNightBreakdown`
+ * JSON snapshot when present; falls back to the legacy single `roomId` field. Result is a
+ * distinct set so a per-night mid-stay room change (room 201 → room 301) yields both ids.
+ *
+ * Used by every hold-lifecycle transition below (confirm, release-for-room-change, release-
+ * on-re-entry) so multi-room bookings' full inventory follows the state changes, not just
+ * the "primary" room in `hold.roomId`.
+ */
+function allHeldRoomIds(hold: { roomId: string | null; perNightBreakdown: unknown }): string[] {
+  const set = new Set<string>();
+  if (hold.roomId) set.add(hold.roomId);
+  const breakdown = hold.perNightBreakdown as
+    | Array<{ date?: string; roomIds?: Array<{ roomId?: string }> }>
+    | null
+    | undefined;
+  if (Array.isArray(breakdown)) {
+    for (const night of breakdown) {
+      for (const r of night.roomIds ?? []) {
+        if (typeof r?.roomId === "string") set.add(r.roomId);
+      }
+    }
+  }
+  return Array.from(set);
+}
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -233,31 +259,40 @@ export async function confirmCommittedHoldTx(
   if (hold.state !== HoldState.PLACED) {
     throw new ValidationError("CommittedHold must be PLACED to confirm");
   }
-  if (!hold.roomId) throw new ValidationError("CommittedHold.roomId is required");
+  // Multi-room-safe: legacy single-room holds satisfy this via hold.roomId; per-night
+  // multi-room holds satisfy it via the perNightBreakdown snapshot. Either provides the
+  // rooms to transition below.
+  const heldRoomIds = allHeldRoomIds(hold);
+  if (heldRoomIds.length === 0) throw new ValidationError("CommittedHold has no rooms recorded");
 
   const now = new Date();
-  const room = await tx.room.findUnique({ where: { id: hold.roomId } });
-  if (!room) throw new NotFoundError("Room");
 
   await tx.committedHold.update({
     where: { id: hold.id },
     data: { state: HoldState.CONFIRMED, confirmedAt: now, confirmedBy: input.actorId },
   });
-  await tx.room.update({
-    where: { id: hold.roomId },
-    data: { currentClaimState: InventoryClaimState.CONFIRMED },
-  });
-  await tx.roomClaimStateEvent.create({
-    data: {
-      roomId: hold.roomId,
-      entryId: input.entryId,
-      fromState: InventoryClaimState.COMMITTED_HELD,
-      toState: InventoryClaimState.CONFIRMED,
-      actorId: input.actorId,
-      reason: "S4_CONFIRMATION",
-      effectiveFrom: now,
-    },
-  });
+  // Confirm every held room in one pass — COMMITTED_HELD → CONFIRMED. Skip rooms already
+  // CONFIRMED (idempotent for retries).
+  for (const roomId of heldRoomIds) {
+    const roomRow = await tx.room.findUnique({ where: { id: roomId } });
+    if (!roomRow) throw new NotFoundError("Room");
+    if (roomRow.currentClaimState === InventoryClaimState.CONFIRMED) continue;
+    await tx.room.update({
+      where: { id: roomId },
+      data: { currentClaimState: InventoryClaimState.CONFIRMED },
+    });
+    await tx.roomClaimStateEvent.create({
+      data: {
+        roomId,
+        entryId: input.entryId,
+        fromState: InventoryClaimState.COMMITTED_HELD,
+        toState: InventoryClaimState.CONFIRMED,
+        actorId: input.actorId,
+        reason: "S4_CONFIRMATION",
+        effectiveFrom: now,
+      },
+    });
+  }
 
   const engine = await getTimerEngine();
   const timers = await tx.timerRecord.findMany({
@@ -308,12 +343,13 @@ export async function releaseCommittedHoldForRoomChange(
   if (hold.state === HoldState.RELEASED || hold.state === HoldState.EXPIRED) return hold;
   const now = new Date();
 
-  if (hold.roomId) {
-    const room = await tx.room.findUnique({ where: { id: hold.roomId } });
+  // Multi-room: release EVERY held room via the helper (reads perNightBreakdown + roomId).
+  for (const roomId of allHeldRoomIds(hold)) {
+    const room = await tx.room.findUnique({ where: { id: roomId } });
     if (room && room.currentClaimState !== InventoryClaimState.FREE) {
-      await tx.room.update({ where: { id: hold.roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
+      await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
       await tx.roomClaimStateEvent.create({
-        data: { roomId: hold.roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason, effectiveFrom: now },
+        data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason, effectiveFrom: now },
       });
     }
   }
@@ -366,14 +402,15 @@ export async function releaseOnReEntry(
   if (hold.state !== HoldState.PLACED) return hold;
   const now = new Date();
 
-  if (hold.roomId) {
-    const room = await tx.room.findUnique({ where: { id: hold.roomId } });
-    if (room) {
-      await tx.room.update({ where: { id: hold.roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
-      await tx.roomClaimStateEvent.create({
-        data: { roomId: hold.roomId, entryId, fromState: InventoryClaimState.COMMITTED_HELD, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason: "REENTRY_S3_TO_S1_HOLD_RELEASED", effectiveFrom: now },
-      });
-    }
+  // Multi-room: release every room this hold was covering.
+  for (const roomId of allHeldRoomIds(hold)) {
+    const room = await tx.room.findUnique({ where: { id: roomId } });
+    if (!room) continue;
+    if (room.currentClaimState === InventoryClaimState.FREE) continue;
+    await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
+    await tx.roomClaimStateEvent.create({
+      data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason: "REENTRY_S3_TO_S1_HOLD_RELEASED", effectiveFrom: now },
+    });
   }
 
   const engine = await getTimerEngine();

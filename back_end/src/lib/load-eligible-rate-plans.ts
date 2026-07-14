@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { type EligibleRatePlan, type RatePlanType } from "../engines/pricing-pipeline-engine.js";
+import { mulMoney, round2, toDecimal } from "./money.js";
 
 const ALLOWED_TYPES: RatePlanType[] = ["INDIVIDUAL", "PROMOTIONAL", "TIER", "CHANNEL", "RACK"];
 
@@ -48,10 +49,13 @@ export async function loadEligibleRatePlans(
 
   return rows.map((r) => {
     const type = (ALLOWED_TYPES as string[]).includes(r.type) ? (r.type as RatePlanType) : "INDIVIDUAL";
+    // Decimal-safe: base × multiplier in Decimal, then coerced to number at the boundary. The
+    // downstream pricing engine also uses Decimal internally, so this stays lossless the whole way.
+    const rateAmountDec = round2(mulMoney(toDecimal(r.baseRate), seasonMultiplier));
     return {
       id: r.id,
       type,
-      rateAmount: Number(r.baseRate) * seasonMultiplier,
+      rateAmount: Number(rateAmountDec.toFixed(2)),
       currency: r.currency,
       msr: r.msr == null ? undefined : Number(r.msr),
     };

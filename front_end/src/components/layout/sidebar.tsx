@@ -66,7 +66,7 @@ export function Sidebar({ session }: { session: Session }) {
           })}
       </nav>
       <div className="border-t p-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">{session.displayName ?? session.userId}</p>
+        <p className="font-medium text-foreground">{session.displayName ?? session.username ?? session.userId}</p>
         <p>{session.actorLevel} · {session.terminalId}</p>
       </div>
     </aside>

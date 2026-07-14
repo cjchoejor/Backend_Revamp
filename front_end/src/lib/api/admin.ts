@@ -27,9 +27,12 @@ export type ConfigurationActive = {
 export type StaffUserAdmin = {
   id: string;
   fullName: string;
+  username: string;
   email: string | null;
   actorLevel: string;
   role: string;
+  roleId: string | null;
+  roleRef?: { id: string; roleCode: string; displayName: string; actorLevel: string } | null;
   idleThresholdSeconds: number;
   hardLogoutThresholdSeconds: number;
   isActive: boolean;
@@ -140,9 +143,11 @@ export async function createStaff(
   session: Session,
   body: {
     fullName: string;
+    username: string;
     email?: string | null;
     actorLevel: "L1" | "L2" | "L3" | "L4";
     role: string;
+    roleId?: string;
     pin: string;
     idleThresholdSeconds?: number;
     hardLogoutThresholdSeconds?: number;
@@ -156,9 +161,11 @@ export async function updateStaff(
   id: string,
   body: Partial<{
     fullName: string;
+    username: string;
     email: string | null;
     actorLevel: "L1" | "L2" | "L3" | "L4";
     role: string;
+    roleId: string | null;
     idleThresholdSeconds: number;
     hardLogoutThresholdSeconds: number;
   }>,
@@ -172,6 +179,15 @@ export async function resetStaffPin(session: Session, id: string, pin: string) {
 
 export async function deactivateStaff(session: Session, id: string) {
   return apiRequest(`/api/admin/staff/${id}/deactivate`, { method: "POST", session });
+}
+
+/** Hard delete a StaffUser. Requires `{ confirm: "PURGE" }` server-side; caller must confirm intent. */
+export async function purgeStaff(session: Session, id: string) {
+  return apiRequest(`/api/admin/staff/${id}`, {
+    method: "DELETE",
+    session,
+    body: { confirm: "PURGE" as const },
+  });
 }
 
 export async function getReadiness(session: Session) {

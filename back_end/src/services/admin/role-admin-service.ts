@@ -3,6 +3,7 @@ import { ActorLevel } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
 
 const LEVELS: ActorLevel[] = [ActorLevel.L1, ActorLevel.L2, ActorLevel.L3, ActorLevel.L4];
 
@@ -29,8 +30,10 @@ export async function createRole(
   if (!LEVELS.includes(input.actorLevel)) throw new ValidationError("invalid actorLevel");
 
   return prisma.$transaction(async (tx) => {
+    const id = await allocateReadableId(tx, "ROLE" as const);
     const created = await tx.role.create({
       data: {
+        id,
         roleCode,
         displayName,
         actorLevel: input.actorLevel,

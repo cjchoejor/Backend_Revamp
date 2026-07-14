@@ -1,14 +1,16 @@
 import { z } from "zod";
 
 export const authenticateRequestSchema = z.object({
-  pin: z.string().min(1),
+  username: z.string().min(1).max(64),
+  pin: z.string().min(4).max(16),
   terminalId: z.string().min(1),
 });
 export type AuthenticateRequestDto = z.infer<typeof authenticateRequestSchema>;
 
 export const pinSwitchRequestSchema = z.object({
   outgoingActorId: z.string().min(1),
-  incomingPin: z.string().min(1),
+  incomingUsername: z.string().min(1).max(64),
+  incomingPin: z.string().min(4).max(16),
   terminalId: z.string().min(1),
 });
 export type PinSwitchRequestDto = z.infer<typeof pinSwitchRequestSchema>;

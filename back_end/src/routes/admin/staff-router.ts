@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
   createStaffRequestSchema,
+  purgeStaffRequestSchema,
   resetStaffPinRequestSchema,
   updateStaffRequestSchema,
 } from "../../dtos/08-admin/request-schemas.js";
@@ -80,3 +81,18 @@ adminStaffRouter.post("/staff/:id/deactivate", requireActorLevel("L4"), async (r
     next(e);
   }
 });
+
+// Hard delete — body { confirm: "PURGE" } required so a stray click can't destroy a row.
+adminStaffRouter.delete(
+  "/staff/:id",
+  requireActorLevel("L4"),
+  validateBody(purgeStaffRequestSchema),
+  async (req, res, next) => {
+    try {
+      const result = await staffAdminService.purgeStaff(prisma, req.params.id, req.actor!.actorId);
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
+  },
+);

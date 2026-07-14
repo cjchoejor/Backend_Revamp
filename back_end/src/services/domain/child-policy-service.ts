@@ -8,6 +8,7 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
+import { mulMoney, round2, toDecimal } from "../../lib/money.js";
 
 export type AgeBand = "YOUNG_CHILD" | "CHILD" | "ADULT";
 
@@ -158,23 +159,28 @@ export function computeGroupMealCharge(
   bundle: ChildPolicyBundle,
 ): { total: number; perGuest: Array<{ classification: AgeBand; multiplier: number; charge: number }> } {
   const nights = Math.max(1, input.nights);
+  // Decimal-safe: per-guest charges computed via Decimal and rounded at the boundary; reduce
+  // accumulates a Decimal so drift never builds up across many guests.
+  const adultRateDec = toDecimal(input.adultMealRate);
+  const nightsDec = toDecimal(nights);
   const perGuest: Array<{ classification: AgeBand; multiplier: number; charge: number }> = [];
 
-  // Adults declared in adultCount pay full rate — no age lookup needed.
+  const adultChargeDec = round2(mulMoney(adultRateDec, nightsDec));
   for (let i = 0; i < Math.max(0, input.adultCount); i++) {
-    perGuest.push({ classification: "ADULT", multiplier: 1, charge: input.adultMealRate * nights });
+    perGuest.push({ classification: "ADULT", multiplier: 1, charge: Number(adultChargeDec.toFixed(2)) });
   }
 
-  // Each child in childAges: classify → look up multiplier → charge.
   for (const age of input.childAges) {
     const multiplier = getMealRateMultiplier(age, bundle);
+    const chargeDec = round2(mulMoney(mulMoney(adultRateDec, multiplier), nightsDec));
     perGuest.push({
       classification: classifyAge(age, bundle),
       multiplier,
-      charge: input.adultMealRate * multiplier * nights,
+      charge: Number(chargeDec.toFixed(2)),
     });
   }
 
-  const total = perGuest.reduce((sum, g) => sum + g.charge, 0);
-  return { total, perGuest };
+  let totalDec = toDecimal(0);
+  for (const g of perGuest) totalDec = totalDec.add(toDecimal(g.charge));
+  return { total: Number(totalDec.toFixed(2)), perGuest };
 }

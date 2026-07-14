@@ -12,6 +12,7 @@ import {
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -172,6 +173,33 @@ export async function postCharge(
     allowSoftGateBypass: input.allowSoftGateBypass,
   });
 
+  // Multi-currency safe: fall through the strongest signal available for this folio's currency
+  // instead of unconditionally defaulting to "BTN". Prevents a USD quotation being reconciled
+  // against BTN-stamped folio lines.
+  //   1. Explicit caller-supplied currency wins.
+  //   2. Reservation's frozen currency (S4 confirmation stamped it).
+  //   3. Accepted quotation's commercialTerms.currency (S2 negotiated it — includes agent rate cards).
+  //   4. Existing folio line currency (majority) — inherit from what's already posted.
+  //   5. Fallback: BTN.
+  const acceptedQ = await prisma.quotation.findFirst({
+    where: { entryId: input.entryId, state: "ACCEPTED" as any },
+    orderBy: { versionNumber: "desc" },
+    select: { currency: true, commercialTerms: true },
+  });
+  const quotationCurrency =
+    (acceptedQ?.commercialTerms as any)?.currency ??
+    (acceptedQ?.currency ?? null);
+  const existingLine = await prisma.folioLine.findFirst({
+    where: { folioId },
+    orderBy: { chargeDate: "asc" },
+    select: { currency: true },
+  });
+  const resolvedLineCurrency =
+    (input.currency?.trim() ? input.currency.trim() : null) ??
+    (typeof quotationCurrency === "string" && quotationCurrency.trim() ? quotationCurrency.trim() : null) ??
+    (existingLine?.currency?.trim() ? existingLine.currency.trim() : null) ??
+    "BTN";
+
   const created = await prisma.$transaction(async (tx) => {
     await ensureChargeDateNotSealed(tx, chargeDate);
     const line = await tx.folioLine.create({
@@ -180,7 +208,7 @@ export async function postCharge(
         lineType: input.lineType,
         description: input.description,
         amount: input.amount,
-        currency: input.currency?.trim() ? input.currency.trim() : "BTN",
+        currency: resolvedLineCurrency,
         chargeDate,
         stage: Stage.S7,
         postedBy: actorId,
@@ -193,17 +221,21 @@ export async function postCharge(
       // on every guest-facing email (S2 quote, S3 PI, S4 confirmation, S8 final invoice).
       // Both rates come from ConfigurationEntry so the L4 admin can change them on /admin/financial.
       const { gstRate, serviceChargeRate } = await resolveChargeRates(tx as unknown as PrismaClient);
-      const lineCurrency = input.currency?.trim() ? input.currency.trim() : "BTN";
-      const subTotal = input.amount;
+      const lineCurrency = resolvedLineCurrency;
+      // Decimal-safe tax math. `Math.round(x*100)/100` on floats compounds through
+      // (subTotal + serviceCharge) * gstRate and mismatches guest-facing quotes vs invoice.
+      const subTotalDec = toDecimal(input.amount);
 
-      const serviceCharge = serviceChargeRate > 0 ? Math.round(subTotal * serviceChargeRate * 100) / 100 : 0;
-      if (serviceCharge > 0) {
+      const serviceCharge = serviceChargeRate > 0
+        ? round2(mulMoney(subTotalDec, serviceChargeRate))
+        : ZERO;
+      if (serviceCharge.gt(0)) {
         await tx.folioLine.create({
           data: {
             folioId,
             lineType: FolioLineType.SERVICE,
             description: `Service charge (${(serviceChargeRate * 100).toFixed(2)}%) on: ${input.description}`,
-            amount: new Prisma.Decimal(serviceCharge.toFixed(2)),
+            amount: serviceCharge,
             currency: lineCurrency,
             chargeDate,
             stage: Stage.S7,
@@ -212,16 +244,17 @@ export async function postCharge(
         });
       }
 
-      // GST is compound — applied to (subTotal + serviceCharge).
-      const gstBase = subTotal + serviceCharge;
-      const gst = gstRate > 0 ? Math.round(gstBase * gstRate * 100) / 100 : 0;
-      if (gst > 0) {
+      // GST is compound — applied to (subTotal + serviceCharge). Kept in Decimal to preserve
+      // precision through the compound base.
+      const gstBase = subTotalDec.add(serviceCharge);
+      const gst = gstRate > 0 ? round2(mulMoney(gstBase, gstRate)) : ZERO;
+      if (gst.gt(0)) {
         await tx.folioLine.create({
           data: {
             folioId,
             lineType: FolioLineType.OTHER,
             description: `GST (${(gstRate * 100).toFixed(2)}%) on: ${input.description}`,
-            amount: new Prisma.Decimal(gst.toFixed(2)),
+            amount: gst,
             currency: lineCurrency,
             chargeDate,
             stage: Stage.S7,

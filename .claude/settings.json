@@ -65,7 +65,9 @@
       "Bash(grep -nB2 -A8 \"^export type RoomAssignmentSummary\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\types\\\\api.ts')",
       "Bash(grep -nE \"return \\\\{ issues, classified\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\services\\\\domain\\\\capacity-validation-service.ts')",
       "Bash(grep -nA5 \"^model Quotation\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\prisma\\\\schema.prisma')",
-      "Bash(del \"d:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\lib\\\\chargeable-occupants.ts\")"
+      "Bash(del \"d:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\lib\\\\chargeable-occupants.ts\")",
+      "Bash(grep -nB2 -A2 \"roomAssignments\\\\[0\\\\]\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\state-machines\\\\entry-lifecycle-state-machine.ts')",
+      "Bash(grep -nA10 \"^model SpeculativeHold\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\prisma\\\\schema.prisma')"
     ]
   }
 }

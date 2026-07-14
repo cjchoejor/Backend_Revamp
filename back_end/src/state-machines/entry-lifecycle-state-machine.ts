@@ -60,7 +60,9 @@ export async function progressStageS5ToS6(
       folio: true,
       handoffs: { where: { handoffType: HandoffType.H1 }, orderBy: { createdAt: "desc" }, take: 1 },
       preArrivalTasks: true,
-      roomAssignments: { include: { room: true }, orderBy: { createdAt: "desc" }, take: 1 },
+      // Multi-room: fetch ALL room assignments so the gate below iterates every room's
+      // readiness (was `take: 1` which only checked the first room).
+      roomAssignments: { include: { room: true }, orderBy: { createdAt: "desc" } },
     },
   });
 
@@ -84,21 +86,35 @@ export async function progressStageS5ToS6(
   const h1 = entry.handoffs[0];
   enforceH1FulfilledBeforeCheckIn({ hasH1: !!h1, h1State: h1?.state });
 
-  const assignment = entry.roomAssignments[0];
+  // Multi-room: dedup by roomId and enforce readiness gates on EVERY room. Fail-fast if any
+  // one room is not ready — the whole S5→S6 transition holds until all rooms clear.
+  const distinctAssignments = (() => {
+    const seen = new Set<string>();
+    const list: typeof entry.roomAssignments = [];
+    for (const a of entry.roomAssignments) {
+      if (seen.has(a.roomId)) continue;
+      seen.add(a.roomId);
+      list.push(a);
+    }
+    return list;
+  })();
+  const assignment = distinctAssignments[0];
   enforceRoomAssignmentPresentForS5ToS6({ assignment });
 
-  const room = assignment.room;
   const arrival = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
-  enforceAssignedRoomPhysicalReadinessForArrival({
-    physicalState: room.physicalState,
-    expectedReadyAt: room.expectedReadyAt,
-    arrivalAt: arrival,
-  });
-  enforceDeficientAssignmentDocumented({
-    deficientAtAssignment: assignment.deficientAtAssignment,
-    acknowledgementActorId: assignment.acknowledgementActorId,
-    acknowledgementAt: assignment.acknowledgementAt,
-  });
+  for (const a of distinctAssignments) {
+    enforceAssignedRoomPhysicalReadinessForArrival({
+      physicalState: a.room.physicalState,
+      expectedReadyAt: a.room.expectedReadyAt,
+      arrivalAt: arrival,
+    });
+    enforceDeficientAssignmentDocumented({
+      deficientAtAssignment: a.deficientAtAssignment,
+      acknowledgementActorId: a.acknowledgementActorId,
+      acknowledgementAt: a.acknowledgementAt,
+    });
+  }
+  const room = assignment.room;
 
   enforceNoPendingPreArrivalTasks({ tasks: entry.preArrivalTasks.map((t) => ({ status: t.status, taskType: t.taskType })) });
 
@@ -225,11 +241,27 @@ export async function progressStageS5ToS6(
     // non-blocking: dwell thresholds may be absent in some environments
   }
   if (vipTier) {
+    // VIP arrival notification is load-bearing — a silent swallow left staff with no VIP ping.
+    // Log the schedule failure to a trace so ops can spot the gap; entry progression itself
+    // must not be blocked by pg-boss unavailability.
     try {
       const engine = await getTimerEngine();
       await engine.schedule("VIP_ARRIVAL_NOTIFICATION_W14", { entryId }, { startAfter: new Date(Date.now() + 1500) });
-    } catch {
-      // best-effort W14 follow-up
+    } catch (e) {
+      await prisma.traceEvent.create({
+        data: {
+          eventType: "VIP.ARRIVAL_NOTIFICATION_SCHEDULE_FAILED",
+          actorId: "SYSTEM",
+          actorLevel: "SYSTEM",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "ALERT",
+          timestamp: new Date(),
+          entryId,
+          payload: { entryId, vipTier, error: (e as Error)?.message ?? String(e) },
+          createdBy: "SYSTEM",
+        } as any,
+      }).catch(() => {});
     }
   }
 
@@ -360,7 +392,8 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
     where: { id: entryId },
     include: {
       reservation: true,
-      roomAssignments: { orderBy: { createdAt: "desc" }, take: 1, include: { room: true } },
+      // Multi-room: all room assignments so the OCCUPIED gate below enforces every room.
+      roomAssignments: { orderBy: { createdAt: "desc" }, include: { room: true } },
       handoffs: { where: { handoffType: HandoffType.H4 }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
@@ -368,10 +401,27 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   enforceEntryAtS7ForS7ToS8Progression({ currentStage: entry.currentStage });
   if (entry.version !== clientVersion) throw new OptimisticLockError();
 
-  const assignment = entry.roomAssignments[0];
+  // Every distinct room must be OCCUPIED for the entry to progress to S8. Deficient records
+  // are checked across ALL rooms — any room with a stuck non-terminal record blocks.
+  const distinctAssignmentsForS7 = (() => {
+    const seen = new Set<string>();
+    const list: typeof entry.roomAssignments = [];
+    for (const a of entry.roomAssignments) {
+      if (seen.has(a.roomId)) continue;
+      seen.add(a.roomId);
+      list.push(a);
+    }
+    return list;
+  })();
+  const assignment = distinctAssignmentsForS7[0];
   enforceOccupiedRoomAssignmentForS7ToS8({ assignment });
+  for (const a of distinctAssignmentsForS7) {
+    enforceOccupiedRoomAssignmentForS7ToS8({ assignment: a });
+  }
 
-  const deficient = await prisma.deficientConditionRecord.findMany({ where: { roomId: assignment!.roomId } });
+  const deficient = await prisma.deficientConditionRecord.findMany({
+    where: { roomId: { in: distinctAssignmentsForS7.map((a) => a.roomId) } },
+  });
   const bad = deficient.find((d) => d.status !== "RESOLVED" && d.status !== "UNRESOLVED");
   enforceDeficientRecordsHaveTerminalStatusForS7ToS8({ hasDeficientWithoutFinalStatus: !!bad });
 

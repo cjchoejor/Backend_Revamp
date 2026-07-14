@@ -207,27 +207,45 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   const engine = await getTimerEngine();
 
   // For each room: OCCUPIED → DEPARTED_DIRTY + audit event + housekeeping SLA timer.
-  const updatedRoomIds: string[] = [];
-  for (const a of assignmentsToCheckOut) {
-    await prisma.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
-    await prisma.roomClaimStateEvent.create({
-      data: {
-        roomId: a.room.id,
-        entryId,
-        fromState: InventoryClaimState.OCCUPIED,
-        toState: InventoryClaimState.DEPARTED_DIRTY,
-        actorId,
-        reason: "S8 checkout completion",
-      },
-    });
+  // Atomicity: DB writes wrapped in a single $transaction so a mid-loop failure rolls back
+  // ALL room state changes. If we're already inside a transaction (nested caller), reuse it —
+  // Prisma doesn't support nested $transaction. Pg-boss jobs are scheduled AFTER the tx
+  // commits so a rollback never leaves orphan jobs firing.
+  const runInTx = async (tx: Prisma.TransactionClient): Promise<string[]> => {
+    const ids: string[] = [];
+    for (const a of assignmentsToCheckOut) {
+      await tx.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+      await tx.roomClaimStateEvent.create({
+        data: {
+          roomId: a.room.id,
+          entryId,
+          fromState: InventoryClaimState.OCCUPIED,
+          toState: InventoryClaimState.DEPARTED_DIRTY,
+          actorId,
+          reason: "S8 checkout completion",
+        },
+      });
+      ids.push(a.room.id);
+    }
+    return ids;
+  };
+  const updatedRoomIds =
+    "$transaction" in prisma
+      ? await (prisma as PrismaClient).$transaction(runInTx)
+      : await runInTx(prisma as Prisma.TransactionClient);
+
+  // Post-commit: schedule the housekeeping SLA timer for each room. Any partial failure here
+  // is idempotent-safe on retry — the room states are already durably DEPARTED_DIRTY, and a
+  // caller retry will attempt to schedule again for the still-missing timers only.
+  for (const roomId of updatedRoomIds) {
     const timerRecordId = randomUUID();
-    const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId, roomId: a.room.id, timerRecordId }, { startAfter: dueAt });
+    const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId, roomId, timerRecordId }, { startAfter: dueAt });
     await prisma.timerRecord.create({
       data: {
         id: timerRecordId,
         entryId,
         entityType: "Room",
-        entityId: a.room.id,
+        entityId: roomId,
         timerType: "HOUSEKEEPING_SLA_W24",
         timerCode: "HOUSEKEEPING_SLA_W24",
         dueAt,
@@ -235,10 +253,9 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
         status: "SCHEDULED",
         pgBossJobId,
         createdBy: actorId,
-        payload: { roomId: a.room.id, entryId, timerRecordId },
+        payload: { roomId, entryId, timerRecordId },
       },
     });
-    updatedRoomIds.push(a.room.id);
   }
 
   // Legacy return: single room for non-group entries (preserves the existing signature that

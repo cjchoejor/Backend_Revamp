@@ -28,9 +28,16 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     ...headers,
   };
 
+  // JWT auth: send Authorization: Bearer <jwt>. The backend verifies the token, looks up the
+  // SessionRecord, and populates the actor from the DB (never from headers). Falls back to
+  // X-Actor-* only when the session predates the JWT switchover — safe to drop later.
   if (session) {
-    reqHeaders["X-Actor-Id"] = session.userId;
-    reqHeaders["X-Actor-Level"] = session.actorLevel;
+    if (session.jwtToken) {
+      reqHeaders["Authorization"] = `Bearer ${session.jwtToken}`;
+    } else {
+      reqHeaders["X-Actor-Id"] = session.userId;
+      reqHeaders["X-Actor-Level"] = session.actorLevel;
+    }
   }
 
   const res = await fetch(path.startsWith("/") ? path : `/api/${path}`, {

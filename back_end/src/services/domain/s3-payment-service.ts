@@ -8,6 +8,7 @@ import { enforceAdvancePaymentReconciliationRequiresPayment } from "../../polici
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
+import { maxZeroSub, sumMoneyBy, toDecimal } from "../../lib/money.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -60,21 +61,27 @@ async function computeAdvancePaymentEvaluation(
     }
   }
 
-  const totalReceived = (folio.payments ?? [])
-    .filter((p) => p.paymentDirection === PaymentDirection.IN)
-    .reduce((sum, p) => sum + Number(p.amount.toString()), 0);
+  // Decimal-safe sum — reducing Number(p.amount) with `+` produced 4999.999999999999 for
+  // three partial payments totalling exactly 5000 and wrongly blocked check-in at the gate.
+  const inPayments = (folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.IN);
+  const totalReceivedDec = sumMoneyBy(inPayments, "amount");
+  const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
 
-  const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } }).catch(() => null);
+  const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } });
   const creditExtensionActive = !!credit;
 
-  const satisfied = creditExtensionActive || (Number.isFinite(requiredAmount) ? totalReceived >= requiredAmount : totalReceived > 0);
-  const shortfall = Number.isFinite(requiredAmount) ? Math.max(0, requiredAmount - totalReceived) : 0;
+  const satisfied = creditExtensionActive
+    || (Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0));
+  const shortfallDec = Number.isFinite(requiredAmount) ? maxZeroSub(requiredAmountDec, totalReceivedDec) : toDecimal(0);
 
+  // Response uses numbers because downstream JSON consumers (frontend, other services) expect
+  // number, not Decimal. Precision loss on the SERIALISED value is fine — the GATE decision above
+  // was already made in Decimal.
   return {
     satisfied,
-    totalReceived,
-    requiredAmount: Number.isFinite(requiredAmount) ? requiredAmount : 0,
-    shortfall,
+    totalReceived: Number(totalReceivedDec.toFixed(2)),
+    requiredAmount: Number(requiredAmountDec.toFixed(2)),
+    shortfall: Number(shortfallDec.toFixed(2)),
     creditExtensionActive,
     ceilingAmount: credit ? Number(credit.ceilingAmount.toString()) : null,
     // Present only when the group boost actually raised the required amount above the base.

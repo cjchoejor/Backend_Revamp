@@ -5,7 +5,9 @@ import * as readinessAdminService from "../../services/admin/readiness-admin-ser
 
 export const adminReadinessRouter = Router();
 
-adminReadinessRouter.get("/readiness", requireActorLevel("L1"), async (_req, res, next) => {
+// L4 only per ACIG §6.2 — the readiness matrix exposes missing config, admin-writable surfaces,
+// staff counts, and S9 readiness. Was L1 by mistake (inconsistent with the sibling POST run route).
+adminReadinessRouter.get("/readiness", requireActorLevel("L4"), async (_req, res, next) => {
   try {
     const report = await readinessAdminService.runReadinessCheck(prisma);
     res.json(report);

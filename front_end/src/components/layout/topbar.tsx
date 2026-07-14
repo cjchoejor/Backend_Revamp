@@ -46,7 +46,7 @@ export function Topbar({ session, title = "Operations" }: TopbarProps) {
       <div className="flex items-center gap-2">
         <Badge variant="secondary">{session.actorLevel}</Badge>
         <span className="hidden text-sm text-muted-foreground sm:inline">
-          {session.displayName ?? session.userId}
+          {session.displayName ?? session.username ?? session.userId}
         </span>
         <ThemeToggle />
         <Button variant="ghost" size="icon" onClick={handleLock} aria-label="Lock session">

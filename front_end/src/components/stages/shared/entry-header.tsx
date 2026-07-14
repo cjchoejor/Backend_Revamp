@@ -10,6 +10,7 @@ import { formatListId } from "@/lib/readable-id";
 import { useStageTransition } from "./stage-transition-context";
 import { GroupBadge } from "@/components/entries/group-badge";
 import { GroupBillingModeToggle } from "@/components/entries/group-billing-mode-toggle";
+import { BackflowMenu } from "@/components/entries/backflow-menu";
 
 export function EntryHeader({ entry }: { entry: EntryDetail }) {
   const { startTransition } = useStageTransition();
@@ -30,21 +31,25 @@ export function EntryHeader({ entry }: { entry: EntryDetail }) {
             <GroupBillingModeToggle entryId={entry.id} currentMode={entry.groupBillingMode} />
           </div>
         </div>
-        {entry.currentStage && (
-          <Button variant="gradient" asChild>
-            <Link
-              href={stagePath(entry.id, entry.currentStage)}
-              onClick={() =>
-                startTransition({
-                  targetStage: entry.currentStage,
-                  label: `Opening ${stageById[entry.currentStage!]?.label ?? entry.currentStage}…`,
-                })
-              }
-            >
-              Current stage workspace
-            </Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Backflow menu — regression paths applicable at this stage (see BACKFLOWS_BY_STAGE) */}
+          <BackflowMenu entryId={entry.id} currentStage={entry.currentStage} />
+          {entry.currentStage && (
+            <Button variant="gradient" asChild>
+              <Link
+                href={stagePath(entry.id, entry.currentStage)}
+                onClick={() =>
+                  startTransition({
+                    targetStage: entry.currentStage,
+                    label: `Opening ${stageById[entry.currentStage!]?.label ?? entry.currentStage}…`,
+                  })
+                }
+              >
+                Current stage workspace
+              </Link>
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

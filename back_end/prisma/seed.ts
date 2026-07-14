@@ -332,12 +332,18 @@ async function main() {
     },
   });
 
+  // Departments use readable IDs (DPT-YYYYMMDD-NNNN) for consistency with the rest of the schema.
+  const departmentDefs = [
+    { departmentCode: "FRONT_OFFICE", departmentName: "Front Office" },
+    { departmentCode: "HOUSEKEEPING", departmentName: "Housekeeping" },
+    { departmentCode: "ACCOUNTS", departmentName: "Accounts" },
+  ];
+  const departmentsWithIds = [] as Array<{ id: string; departmentCode: string; departmentName: string }>;
+  for (const d of departmentDefs) {
+    departmentsWithIds.push({ id: await allocateReadableId(prisma, "DEPARTMENT" as const), ...d });
+  }
   await prisma.department.createMany({
-    data: [
-      { departmentCode: "FRONT_OFFICE", departmentName: "Front Office", isActive: true, createdBy: "actor-seed-system" },
-      { departmentCode: "HOUSEKEEPING", departmentName: "Housekeeping", isActive: true, createdBy: "actor-seed-system" },
-      { departmentCode: "ACCOUNTS", departmentName: "Accounts", isActive: true, createdBy: "actor-seed-system" },
-    ],
+    data: departmentsWithIds.map((d) => ({ ...d, isActive: true, createdBy: "actor-seed-system" })),
   });
 
   // Sample policy registry rows (versioned DB definitions — separate from TypeScript runtime guards).
@@ -419,15 +425,22 @@ async function main() {
     data: { displayName: "Legphel AI Concierge", createdBy: "actor-seed-system" },
   });
 
-  const roles = await prisma.role.createMany({
-    data: [
-      { roleCode: "FRONT_DESK", displayName: "Front Desk", actorLevel: ActorLevel.L1, isActive: true, createdBy: "actor-seed-system" },
-      { roleCode: "FOM", displayName: "Front Office Manager", actorLevel: ActorLevel.L2, isActive: true, createdBy: "actor-seed-system" },
-      { roleCode: "GM", displayName: "General Manager", actorLevel: ActorLevel.L3, isActive: true, createdBy: "actor-seed-system" },
-      { roleCode: "ADMIN", displayName: "Administrator", actorLevel: ActorLevel.L4, isActive: true, createdBy: "actor-seed-system" },
-    ],
+  // Roles now use readable IDs (ROL-YYYYMMDD-NNNN) so schema.prisma PKs are consistent with the
+  // other 20+ business entities. Allocate one at a time (allocateReadableId requires it) then
+  // insert via a single createMany.
+  const roleDefs = [
+    { roleCode: "FRONT_DESK", displayName: "Front Desk", actorLevel: ActorLevel.L1 },
+    { roleCode: "FOM", displayName: "Front Office Manager", actorLevel: ActorLevel.L2 },
+    { roleCode: "GM", displayName: "General Manager", actorLevel: ActorLevel.L3 },
+    { roleCode: "ADMIN", displayName: "Administrator", actorLevel: ActorLevel.L4 },
+  ];
+  const rolesWithIds = [] as Array<{ id: string; roleCode: string; displayName: string; actorLevel: ActorLevel }>;
+  for (const r of roleDefs) {
+    rolesWithIds.push({ id: await allocateReadableId(prisma, "ROLE" as const), ...r });
+  }
+  await prisma.role.createMany({
+    data: rolesWithIds.map((r) => ({ ...r, isActive: true, createdBy: "actor-seed-system" })),
   });
-  void roles; // createMany returns count only
 
   const seededRoles = await prisma.role.findMany({ where: { roleCode: { in: ["FRONT_DESK", "FOM", "GM", "ADMIN"] } } });
   await prisma.roleSessionConfig.createMany({
@@ -484,17 +497,42 @@ async function main() {
   }
 
   // Seed staff users for auth/session flows (SIG-S1 §8.1).
+  // Auth is now username + PIN (see session-service). Usernames stable and typeable; PINs remain
+  // 4-digit and per-user (no more global-uniqueness constraint). IDs are STF-YYYYMMDD-NNNN.
   const pinHashL1 = await bcrypt.hash("1111", 10);
   const pinHashL2 = await bcrypt.hash("2222", 10);
   const pinHashL3 = await bcrypt.hash("3333", 10);
   const pinHashL4 = await bcrypt.hash("4444", 10);
+  const roleByCode = new Map(seededRoles.map((r) => [r.roleCode, r]));
+  const staffDefs = [
+    { username: "frontdesk", fullName: "Front Desk 1", roleCode: "FRONT_DESK", actorLevel: "L1" as const, pinHash: pinHashL1 },
+    { username: "fom", fullName: "FOM 1", roleCode: "FOM", actorLevel: "L2" as const, pinHash: pinHashL2 },
+    { username: "gm", fullName: "GM 1", roleCode: "GM", actorLevel: "L3" as const, pinHash: pinHashL3 },
+    { username: "admin", fullName: "Admin 1", roleCode: "ADMIN", actorLevel: "L4" as const, pinHash: pinHashL4 },
+  ];
+  const staffWithIds = [] as Array<{
+    id: string; username: string; fullName: string; role: string; roleId: string; actorLevel: "L1" | "L2" | "L3" | "L4"; pinHash: string;
+  }>;
+  for (const s of staffDefs) {
+    const roleRow = roleByCode.get(s.roleCode);
+    if (!roleRow) throw new Error(`Seed inconsistency: role ${s.roleCode} not found`);
+    staffWithIds.push({
+      id: await allocateReadableId(prisma, "STAFF_USER" as const),
+      username: s.username,
+      fullName: s.fullName,
+      role: s.roleCode,   // legacy free-text — kept during transition
+      roleId: roleRow.id, // FK — canonical link going forward
+      actorLevel: s.actorLevel,
+      pinHash: s.pinHash,
+    });
+  }
   await prisma.staffUser.createMany({
-    data: [
-      { id: "staff-frontdesk-1", fullName: "Front Desk 1", actorLevel: "L1", role: "FRONT_DESK", pinHash: pinHashL1, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
-      { id: "staff-fom-1", fullName: "FOM 1", actorLevel: "L2", role: "FOM", pinHash: pinHashL2, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
-      { id: "staff-gm-1", fullName: "GM 1", actorLevel: "L3", role: "GM", pinHash: pinHashL3, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
-      { id: "staff-admin-1", fullName: "Admin 1", actorLevel: "L4", role: "ADMIN", pinHash: pinHashL4, idleThresholdSeconds: 600, hardLogoutThresholdSeconds: 28800, isActive: true },
-    ],
+    data: staffWithIds.map((s) => ({
+      ...s,
+      idleThresholdSeconds: 600,
+      hardLogoutThresholdSeconds: 28800,
+      isActive: true,
+    })),
   });
 
   // Seed one space for S1 conference/catering search.

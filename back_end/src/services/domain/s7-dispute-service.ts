@@ -45,6 +45,10 @@ export async function openDispute(
       openedBy: actorId,
     },
   });
+  // Dispute SLA timers are load-bearing (SIG-S7 governance). Was silently swallowed —
+  // a DB or config-store blip left the dispute open with no first-response / resolution clock.
+  // Now: log the underlying error to a TraceEvent so the operator sees the SLA is at risk,
+  // but still let the dispute row commit (dispute open must not be blocked by a pg-boss hiccup).
   try {
     await scheduleDisputeSlaW27Timers(prisma, {
       disputeId: created.id,
@@ -52,8 +56,23 @@ export async function openDispute(
       actorId,
       openedAt: created.openedAt,
     });
-  } catch {
-    // W27 registration is best-effort; dispute open must succeed without pg-boss.
+  } catch (e) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "DISPUTE.SLA_TIMER_SCHEDULE_FAILED",
+        actorId: "SYSTEM",
+        actorLevel: "SYSTEM",
+        entityType: "DisputeRecord",
+        entityId: created.id,
+        operation: "ALERT",
+        timestamp: new Date(),
+        payload: { disputeId: created.id, entryId: created.entryId, error: (e as Error)?.message ?? String(e) },
+        createdBy: "SYSTEM",
+      } as any,
+    }).catch(() => {
+      // If trace write itself fails we surrender — the dispute is already open and we can't
+      // do anything useful here without corrupting the flow.
+    });
   }
   return created;
 }
@@ -107,8 +126,22 @@ export async function progressDispute(
   });
   try {
     await cancelDisputeSlaW27Timers(prisma, disputeId, actorId, "DISPUTE_RESOLVED");
-  } catch {
-    // Best-effort.
+  } catch (e) {
+    // Surface the failure via TraceEvent — a silent swallow left SLA timers firing against
+    // RESOLVED disputes as false alarms. Dispute update itself has already committed above.
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "DISPUTE.SLA_TIMER_CANCEL_FAILED",
+        actorId: "SYSTEM",
+        actorLevel: "SYSTEM",
+        entityType: "DisputeRecord",
+        entityId: disputeId,
+        operation: "ALERT",
+        timestamp: new Date(),
+        payload: { disputeId, reason: "DISPUTE_RESOLVED", error: (e as Error)?.message ?? String(e) },
+        createdBy: "SYSTEM",
+      } as any,
+    }).catch(() => {});
   }
   return updated;
 }
@@ -125,11 +158,25 @@ export async function createGateOverride(
     data: { disputeId, targetStage: input.targetStage, freeTextReason: input.freeTextReason, createdBy: actorId },
   });
   // Cross-stage escalation monitor (docs: W32; code: existing worker implementation).
+  // Silent swallow previously let the gate-override abuse monitor skip scheduling; log to a
+  // trace so an operator can see when override monitoring drops.
   try {
     const engine = await getTimerEngine();
     await engine.schedule("FOM_OVERRIDE_FREQUENCY_W32", { now: new Date() }, { startAfter: new Date() });
-  } catch {
-    // Best-effort.
+  } catch (e) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "DISPUTE.GATE_OVERRIDE_MONITOR_SCHEDULE_FAILED",
+        actorId: "SYSTEM",
+        actorLevel: "SYSTEM",
+        entityType: "DisputeGateOverrideRecord",
+        entityId: created.id,
+        operation: "ALERT",
+        timestamp: new Date(),
+        payload: { overrideId: created.id, disputeId, error: (e as Error)?.message ?? String(e) },
+        createdBy: "SYSTEM",
+      } as any,
+    }).catch(() => {});
   }
   return created;
 }

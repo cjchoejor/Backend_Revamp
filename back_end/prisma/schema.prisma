@@ -286,22 +286,20 @@ enum StageDwellMode {
  * (HotelProfile, Department, Role, StaffUser, RatePlanRegistry, SeasonCalendar, PackageRegistry,
  * CancellationPolicyRegistry, ModeConfiguration, CommunicationTemplate, InvoiceTemplate,
  * FeedbackSurveyTemplate, HandoffChecklistTemplate, WorkOrderTemplate, VipNotificationRoutingConfig).
- *
  * Before every UPDATE through an admin endpoint that opts in (via `withEntityVersionSnapshot`),
  * the prior row state is captured here as `rowJson`. Restoring a snapshot writes its JSON back
  * to the live row and creates another snapshot capturing what was just superseded.
- *
  * Snapshots are kept forever (compliance + audit). Only L4 may write or restore.
  */
 model EntityVersionSnapshot {
-  id          String   @id @default(uuid())
-  entityType  String   // e.g. "HotelProfile", "Department"
-  entityId    String
-  version     Int      // per-entity sequence, starts at 1
-  rowJson     Json     // the full row state BEFORE the change this snapshot precedes
-  changedBy   String
-  changedAt   DateTime @default(now())
-  changeNote  String?  // optional reason / "why" text from the admin
+  id         String   @id @default(uuid())
+  entityType String // e.g. "HotelProfile", "Department"
+  entityId   String
+  version    Int // per-entity sequence, starts at 1
+  rowJson    Json // the full row state BEFORE the change this snapshot precedes
+  changedBy  String
+  changedAt  DateTime @default(now())
+  changeNote String? // optional reason / "why" text from the admin
 
   @@unique([entityType, entityId, version])
   @@index([entityType, entityId])
@@ -354,6 +352,8 @@ model HotelProfile {
 }
 
 model Department {
+  // New rows should get DPT-YYYYMMDD-NNNN via `allocateReadableId("DEPARTMENT", ...)`.
+  // uuid() default kept so existing rows work and callers that forget to allocate still get a valid id.
   id             String   @id @default(uuid())
   departmentCode String   @unique
   departmentName String
@@ -367,6 +367,8 @@ model Department {
 }
 
 model Role {
+  // New rows should get ROL-YYYYMMDD-NNNN via `allocateReadableId("ROLE", ...)`.
+  // uuid() default kept for backwards compat with existing rows and stray non-admin callers.
   id          String     @id @default(uuid())
   roleCode    String     @unique
   displayName String
@@ -378,6 +380,7 @@ model Role {
 
   permissions RolePermissionMapping[]
   sessionCfg  RoleSessionConfig?
+  staffUsers  StaffUser[]
 
   @@map("roles")
 }
@@ -633,12 +636,23 @@ model AiActorIdentity {
 // --- Staff & Sessions (SIG-S1 §6.6 SessionService / Policy 69) ---------
 
 model StaffUser {
+  // New rows should get STF-YYYYMMDD-NNNN via `allocateReadableId("STAFF_USER", ...)`.
+  // uuid() default kept so existing rows work; readable IDs are additive going forward.
   id                         String     @id @default(uuid())
   fullName                   String
+  // Login handle. Unique per active StaffUser; case-sensitive at the DB layer, folded on write
+  // by the admin service. 4-digit PIN alone can't identify a user (10k global space); username
+  // scopes the PIN check to one row.
+  username                   String     @unique
   email                      String?    @unique
   actorLevel                 ActorLevel
   pinHash                    String
+  // Legacy free-text role slug (FRONT_DESK / FOM / GM / ADMIN). Retained during the transition
+  // to the roleId FK below; new code must prefer roleId. Kept nullable so existing rows load.
   role                       String
+  // FK link to the Role registry. Nullable during the FK migration so an in-flight seed can
+  // fill it after Role rows are created. Should be required for all future writes.
+  roleId                     String?
   idleThresholdSeconds       Int        @default(600)
   hardLogoutThresholdSeconds Int        @default(28800)
   isActive                   Boolean    @default(true)
@@ -646,11 +660,14 @@ model StaffUser {
   updatedAt                  DateTime   @updatedAt
 
   sessions SessionRecord[]
+  roleRef  Role?           @relation(fields: [roleId], references: [id])
 
   @@map("staff_users")
 }
 
 model SessionRecord {
+  // New rows should get SES-YYYYMMDD-NNNN via `allocateReadableId("SESSION", ...)`.
+  // uuid() default kept for compat.
   id               String        @id @default(uuid())
   userId           String
   terminalId       String
@@ -781,12 +798,12 @@ model Inquiry {
   parkedAt                   DateTime?
   parkedBy                   String?
 
-  entries        Entry[]
-  duplicateFlags DuplicateDetectionFlag[]
-  guestProfile   GuestProfile             @relation(fields: [guestProfileId], references: [id])
-  agentProfile   AgentProfile?            @relation(fields: [agentProfileId], references: [id])
-  travelAgent      TravelAgent?           @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
-  corporateAccount CorporateAccount?      @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
+  entries          Entry[]
+  duplicateFlags   DuplicateDetectionFlag[]
+  guestProfile     GuestProfile             @relation(fields: [guestProfileId], references: [id])
+  agentProfile     AgentProfile?            @relation(fields: [agentProfileId], references: [id])
+  travelAgent      TravelAgent?             @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
+  corporateAccount CorporateAccount?        @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
 
   @@index([guestProfileId])
   @@index([travelAgentId])
@@ -824,52 +841,52 @@ model DuplicateDetectionFlag {
 }
 
 model Entry {
-  id                 String            @id @default(uuid())
-  inquiryId          String
-  guestProfileId     String?
-  segmentNumber      Int               @default(1)
-  useType            EntryUseType      @default(LEISURE)
-  status             EntryStatus       @default(ACTIVE)
-  currentStage       Stage             @default(S1)
+  id                             String            @id @default(uuid())
+  inquiryId                      String
+  guestProfileId                 String?
+  segmentNumber                  Int               @default(1)
+  useType                        EntryUseType      @default(LEISURE)
+  status                         EntryStatus       @default(ACTIVE)
+  currentStage                   Stage             @default(S1)
   /// SIG-S6 — walk-in compressed flow indicator (no prior reservations/H1).
-  walkInCompressed   Boolean           @default(false)
-  checkInDate        DateTime?
-  checkOutDate       DateTime?
-  guestCount         Int?
+  walkInCompressed               Boolean           @default(false)
+  checkInDate                    DateTime?
+  checkOutDate                   DateTime?
+  guestCount                     Int?
   /// Breakdown of the head count. guestCount remains the canonical total (adultCount + childCount when both set).
   /// adultCount/childCount are nullable for backward compatibility with pre-Phase-D inquiries.
-  adultCount         Int?
-  childCount         Int?
+  adultCount                     Int?
+  childCount                     Int?
   /// Ages of accompanying children, ordered. Length should equal childCount; not enforced at the DB layer.
-  childAges          Int[]             @default([])
+  childAges                      Int[]             @default([])
   /// Number of rooms the guest is requesting. Enforced at S1: allowed range is
   /// ceil(chargeableOccupants / RoomType.maxCapacity) .. chargeableOccupants where
   /// chargeableOccupants = adultCount + count(childAges where age >= legal minor age).
-  numberOfRooms      Int?
-  otaSource          Boolean           @default(false)
-  otaReference       String?
-  groupBillingMode   GroupBillingMode?
+  numberOfRooms                  Int?
+  otaSource                      Boolean           @default(false)
+  otaReference                   String?
+  groupBillingMode               GroupBillingMode?
   /// True when an L3+ actor manually overrode Policy 64's classification (either from
   /// group→individual or vice-versa). Prevents subsequent intake edits from silently
   /// re-classifying and undoing the operator's judgement call. Cleared only by another
   /// explicit L3+ action.
-  groupBillingModeManualOverride Boolean @default(false)
+  groupBillingModeManualOverride Boolean           @default(false)
   /// Contact person for the on-site booking — the individual physically travelling or
   /// leading the group. Distinct from travelAgent.contactNumber (which is the agency's
   /// front desk) and corporateAccount contact fields (the corporate liaison). Populated at
   /// S1 intake; MANDATORY before S5 for every booking (the S4→S5 progression gate blocks
   /// otherwise). Business rule enforced backend-side, not just in the form.
-  contactPersonName   String?
-  contactPersonPhone  String?
-  parkedAt           DateTime?
-  parkedBy           String?
-  parkedIndividually Boolean           @default(false)
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  createdBy          String
-  version            Int               @default(1)
-  closedAt           DateTime?
-  closedBy           String?
+  contactPersonName              String?
+  contactPersonPhone             String?
+  parkedAt                       DateTime?
+  parkedBy                       String?
+  parkedIndividually             Boolean           @default(false)
+  createdAt                      DateTime          @default(now())
+  updatedAt                      DateTime          @updatedAt
+  createdBy                      String
+  version                        Int               @default(1)
+  closedAt                       DateTime?
+  closedBy                       String?
 
   /// Simulates W5 no-show cutoff having fired (normally set by worker).
   noShowCutoffReachedAt DateTime?
@@ -1199,9 +1216,9 @@ model RoomType {
   /// Max extra beds available for a room of this type (0 = no extra bed possible).
   maxExtraBeds               Int @default(0)
 
-  rooms             Room[]
-  committedHolds    CommittedHold[]
-  rateOverrides     RoomTypeRateOverride[]
+  rooms          Room[]
+  committedHolds CommittedHold[]
+  rateOverrides  RoomTypeRateOverride[]
 
   @@map("room_types")
 }
@@ -1594,8 +1611,8 @@ model HandoffRecord {
   createdBy                String
   stageContext             Stage
 
-  entry           Entry           @relation(fields: [entryId], references: [id])
-  roomAssignment  RoomAssignment? @relation(fields: [roomAssignmentId], references: [id])
+  entry          Entry           @relation(fields: [entryId], references: [id])
+  roomAssignment RoomAssignment? @relation(fields: [roomAssignmentId], references: [id])
 
   @@map("handoff_records")
 }
@@ -1620,6 +1637,9 @@ model PreArrivalTask {
 
   entry Entry @relation(fields: [entryId], references: [id])
 
+  // Idempotency: one task per (entry, taskType). Prevents concurrent S4→S5 transitions from
+  // creating duplicate PreArrivalTask sets (findFirst-then-createMany race).
+  @@unique([entryId, taskType])
   @@map("pre_arrival_tasks")
 }
 
@@ -2045,7 +2065,9 @@ model HumanDecisionRecord {
 
 // --- Travel agents, corporate accounts, rate cards (Phase B) -------------
 
-/** Mode-of-contact for agent/corporate primary contact. */
+/**
+ * Mode-of-contact for agent/corporate primary contact.
+ */
 enum ContactMode {
   PHONE
   EMAIL
@@ -2054,7 +2076,9 @@ enum ContactMode {
   OTHER
 }
 
-/** Discriminator for which kind of party a RateCard belongs to. */
+/**
+ * Discriminator for which kind of party a RateCard belongs to.
+ */
 enum PartyType {
   TRAVEL_AGENT
   CORPORATE
@@ -2062,10 +2086,10 @@ enum PartyType {
 
 /**
  * Meal plan options carried on a RateCard. Mirrors the legacy `agent_rate` columns:
- *   CP         = breakfast included
- *   MAP_LUNCH  = breakfast + lunch
- *   MAP_DINNER = breakfast + dinner
- *   AP         = breakfast + lunch + dinner
+ * CP         = breakfast included
+ * MAP_LUNCH  = breakfast + lunch
+ * MAP_DINNER = breakfast + dinner
+ * AP         = breakfast + lunch + dinner
  * Standalone breakfast/lunch/dinner add-on rates live as separate fields on RateCard,
  * not as MealPlanType values.
  */
@@ -2083,18 +2107,18 @@ enum MealPlanType {
  * negotiated rate card.
  */
 model TravelAgent {
-  id              String       @id // readable TA-YYYYMMDD-NNNN
-  displayName     String
-  contactNumber   String?
-  contactEmail    String?
-  modeOfContact   ContactMode  @default(PHONE)
-  notes           String?
-  isActive        Boolean      @default(true)
-  createdAt       DateTime     @default(now())
-  createdBy       String
-  updatedAt       DateTime     @updatedAt
+  id            String      @id // readable TA-YYYYMMDD-NNNN
+  displayName   String
+  contactNumber String?
+  contactEmail  String?
+  modeOfContact ContactMode @default(PHONE)
+  notes         String?
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  createdBy     String
+  updatedAt     DateTime    @updatedAt
 
-  inquiries       Inquiry[]
+  inquiries Inquiry[]
 
   @@index([displayName])
   @@index([isActive])
@@ -2107,20 +2131,20 @@ model TravelAgent {
  * carry commission. Tracked by EntityVersionSnapshot.
  */
 model CorporateAccount {
-  id              String       @id // readable CORP-YYYYMMDD-NNNN
-  displayName     String
-  contactNumber   String?
-  contactEmail    String?
-  modeOfContact   ContactMode  @default(EMAIL)
-  gstNumber       String?
-  billingAddress  String?
-  notes           String?
-  isActive        Boolean      @default(true)
-  createdAt       DateTime     @default(now())
-  createdBy       String
-  updatedAt       DateTime     @updatedAt
+  id             String      @id // readable CORP-YYYYMMDD-NNNN
+  displayName    String
+  contactNumber  String?
+  contactEmail   String?
+  modeOfContact  ContactMode @default(EMAIL)
+  gstNumber      String?
+  billingAddress String?
+  notes          String?
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  createdBy      String
+  updatedAt      DateTime    @updatedAt
 
-  inquiries       Inquiry[]
+  inquiries Inquiry[]
 
   @@index([displayName])
   @@index([isActive])
@@ -2132,35 +2156,34 @@ model CorporateAccount {
  * versioned, same pattern as ConfigurationEntry: editing creates a new row with a new
  * effectiveFrom and closes the prior with effectiveTo. Historical bookings always look up
  * the rate card that was active at the time they were quoted.
- *
  * `partyType` + `partyId` is a polymorphic reference; no Prisma FK constraint. The admin
  * service validates the referenced party exists on every write.
  */
 model RateCard {
-  id                String       @id // readable RC-YYYYMMDD-NNNN
-  partyType         PartyType
-  partyId           String       // FK to TravelAgent.id OR CorporateAccount.id depending on partyType
+  id            String    @id // readable RC-YYYYMMDD-NNNN
+  partyType     PartyType
+  partyId       String // FK to TravelAgent.id OR CorporateAccount.id depending on partyType
   // Base + extras
-  roomBaseRate      Decimal      @db.Decimal(10, 2)
-  extraBedRate      Decimal?     @db.Decimal(10, 2)
-  cnbPercent        Int?         // 0-100 — child-no-bed discount percentage
+  roomBaseRate  Decimal   @db.Decimal(10, 2)
+  extraBedRate  Decimal?  @db.Decimal(10, 2)
+  cnbPercent    Int? // 0-100 — child-no-bed discount percentage
   // Standalone meal add-on rates (à la carte)
-  breakfastRate     Decimal?     @db.Decimal(10, 2)
-  lunchRate         Decimal?     @db.Decimal(10, 2)
-  dinnerRate        Decimal?     @db.Decimal(10, 2)
+  breakfastRate Decimal?  @db.Decimal(10, 2)
+  lunchRate     Decimal?  @db.Decimal(10, 2)
+  dinnerRate    Decimal?  @db.Decimal(10, 2)
   // Meal-plan-inclusive rates
-  cpRate            Decimal?     @db.Decimal(10, 2)
-  mapLunchRate      Decimal?     @db.Decimal(10, 2)
-  mapDinnerRate     Decimal?     @db.Decimal(10, 2)
-  apRate            Decimal?     @db.Decimal(10, 2)
-  currency          String       @default("BTN")
-  effectiveFrom     DateTime     @default(now())
-  effectiveTo       DateTime?    // null = currently active
-  notes             String?
-  createdAt         DateTime     @default(now())
-  createdBy         String
+  cpRate        Decimal?  @db.Decimal(10, 2)
+  mapLunchRate  Decimal?  @db.Decimal(10, 2)
+  mapDinnerRate Decimal?  @db.Decimal(10, 2)
+  apRate        Decimal?  @db.Decimal(10, 2)
+  currency      String    @default("BTN")
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime? // null = currently active
+  notes         String?
+  createdAt     DateTime  @default(now())
+  createdBy     String
 
-  overrides         RoomTypeRateOverride[]
+  overrides RoomTypeRateOverride[]
 
   @@index([partyType, partyId, effectiveFrom])
   @@index([effectiveTo])
@@ -2173,16 +2196,16 @@ model RateCard {
  * version, the service copies the active overrides forward.
  */
 model RoomTypeRateOverride {
-  id              String   @id @default(uuid())
-  rateCardId      String
-  roomTypeId      String
-  roomBaseRate    Decimal  @db.Decimal(10, 2)
-  notes           String?
-  createdAt       DateTime @default(now())
-  createdBy       String
+  id           String   @id @default(uuid())
+  rateCardId   String
+  roomTypeId   String
+  roomBaseRate Decimal  @db.Decimal(10, 2)
+  notes        String?
+  createdAt    DateTime @default(now())
+  createdBy    String
 
-  rateCard        RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  roomType        RoomType @relation(fields: [roomTypeId], references: [id], onUpdate: Cascade)
+  rateCard RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  roomType RoomType @relation(fields: [roomTypeId], references: [id], onUpdate: Cascade)
 
   @@unique([rateCardId, roomTypeId])
   @@index([roomTypeId])

@@ -46,8 +46,11 @@ export async function createAmendmentEvent(
       segmentId: input.segmentId,
       amendmentPath: input.amendmentPath,
       amendmentType: input.amendmentType,
+      // Audit-trail integrity: `authorisedBy` MUST be the session actor. Was previously
+      // `input.authorisedBy || actorId` which let an L2 FOM submit `authorisedBy: "gm-uuid"`
+      // in the body and impersonate GM approval. Server discards the body value.
       requestedBy: input.requestedBy || actorId,
-      authorisedBy: input.authorisedBy || actorId,
+      authorisedBy: actorId,
       authorityBasis: input.authorityBasis || "seed",
       reason: input.reason,
       priorTermsRef: input.priorTermsRef,

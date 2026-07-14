@@ -1,10 +1,10 @@
 import type { AuthenticateResponse } from "@/types/api";
 import { apiRequest } from "./client";
 
-export async function authenticate(pin: string, terminalId: string) {
+export async function authenticate(username: string, pin: string, terminalId: string) {
   return apiRequest<AuthenticateResponse>("/api/auth/authenticate", {
     method: "POST",
-    body: { pin, terminalId },
+    body: { username, pin, terminalId },
   });
 }
 

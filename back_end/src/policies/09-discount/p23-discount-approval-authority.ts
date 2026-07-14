@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
+import { toDecimal } from "../../lib/money.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -50,8 +51,10 @@ export async function enforceDiscountApprovalAuthority(
   if (!Number.isFinite(pct) || pct <= 0) throw new ValidationError("Invalid requestedDiscount.discountPercent");
 
   const ceilings = await resolveActorDiscountCeilings(prisma);
-  const needsL3 = pct > ceilings.l2MaxPercent;
-  const needsL2 = pct > ceilings.l1MaxPercent;
+  // Decimal compare — `pct > cap` on JS floats let 25.0000000001 slip past a 25 cap.
+  const pctDec = toDecimal(pct);
+  const needsL3 = pctDec.gt(toDecimal(ceilings.l2MaxPercent));
+  const needsL2 = pctDec.gt(toDecimal(ceilings.l1MaxPercent));
 
   if (needsL3 && input.actorLevel !== "L3") throw new PolicyGateBlockedError("DISCOUNT_REQUIRES_GM", "Discount exceeds GM authority band");
   if (!needsL3 && needsL2 && input.actorLevel === "L1") throw new PolicyGateBlockedError("DISCOUNT_REQUIRES_FOM", "Discount exceeds front desk authority band");

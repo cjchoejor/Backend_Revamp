@@ -32,6 +32,7 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
+import { mulMoney, round2 } from "../../lib/money.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -192,11 +193,14 @@ export async function createQuotation(
   //   - `pricingBreakdown` = explicit total that reflects roomCount × nights so downstream
   //     services (S3 advance-payment threshold, S4 confirmation, S9 reconciliation) can
   //     multiply correctly without every consumer re-deriving room count on its own.
+  // Decimal-safe: subTotal is a rounded Decimal converted to number at the boundary. Prevents
+  // float drift when effectiveRate × nights × roomCount later flows into totalAmount / S3 gate.
+  const subTotalDec = round2(mulMoney(mulMoney(effectiveRate, nightsForPricing), roomCount));
   const pricingBreakdown = {
     nightlyRate: effectiveRate,
     nights: nightsForPricing,
     roomCount,
-    subTotal: effectiveRate * nightsForPricing * roomCount,
+    subTotal: Number(subTotalDec.toFixed(2)),
   };
 
   const commercialTerms = {
@@ -256,7 +260,8 @@ export async function createQuotation(
         // totalAmount now reflects the whole booking's per-night value (per-room rate ×
         // roomCount). Downstream × nights gives the true stay total; historical single-room
         // quotations had roomCount = 1 so this is backwards-compatible for them.
-        totalAmount: effectiveRate * roomCount,
+        // Decimal-safe multiplication so 4999.99 × 3 rooms doesn't drift to ...9997.
+        totalAmount: round2(mulMoney(effectiveRate, roomCount)),
         currency: input.currency?.trim() ? input.currency.trim() : currency?.trim() ? currency : "BTN",
         createdBy: actorId,
       },
@@ -401,16 +406,19 @@ export async function createGroupQuotation(
     focRoomsRequested: focN != null && Number.isFinite(focN) ? Math.floor(focN) : undefined,
     // Same multi-room-aware pricing breakdown as the single-party path.
     roomCount: roomsRequested,
-    pricingBreakdown: {
-      nightlyRate: pricing.effectiveRate,
-      nights: stay && stay.checkIn && stay.checkOut
+    pricingBreakdown: (() => {
+      const nights = stay && stay.checkIn && stay.checkOut
         ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
-        : 1,
-      roomCount: roomsRequested,
-      subTotal: pricing.effectiveRate * (stay && stay.checkIn && stay.checkOut
-        ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
-        : 1) * roomsRequested,
-    },
+        : 1;
+      // Decimal-safe subtotal (rate × nights × rooms).
+      const subTotalDec = round2(mulMoney(mulMoney(pricing.effectiveRate, nights), roomsRequested));
+      return {
+        nightlyRate: pricing.effectiveRate,
+        nights,
+        roomCount: roomsRequested,
+        subTotal: Number(subTotalDec.toFixed(2)),
+      };
+    })(),
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
   };
 
@@ -426,7 +434,8 @@ export async function createGroupQuotation(
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
         // Group quotations: same shape as single-party — totalAmount = per-room rate × roomCount.
-        totalAmount: pricing.effectiveRate * roomsRequested,
+        // Decimal-safe.
+        totalAmount: round2(mulMoney(pricing.effectiveRate, roomsRequested)),
         currency: input.currency?.trim() ? input.currency.trim() : pricing.currency?.trim() ? pricing.currency : "BTN",
         createdBy: actorId,
       },
@@ -643,11 +652,15 @@ export async function applyDiscount(
   };
 
   const now = new Date();
+  // Preserve multi-room: totalAmount = effectiveRate × roomCount (matches createQuotation / group
+  // path shape). Before this fix, applying a discount silently collapsed the total back to a single
+  // room's rate.
+  const discountRoomCount = Number((terms as any).roomCount) || 1;
   return prisma.$transaction(async (tx) => {
     const updated = await tx.quotation.update({
       where: { id: quotationId },
       data: {
-        totalAmount: pricing.effectiveRate,
+        totalAmount: round2(mulMoney(pricing.effectiveRate, discountRoomCount)),
         currency: typeof pricing.currency === "string" && pricing.currency.trim() ? pricing.currency : q.currency,
         commercialTerms: commercialTerms as any,
       },
@@ -946,7 +959,11 @@ async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: s
   const ci = entry.checkInDate ?? q.validUntil ?? new Date();
   const co = entry.checkOutDate ?? new Date(ci.getTime() + 86400_000);
   const nights = Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400_000));
-  const breakdown = await computeStayCharges(prisma, nightly, nights);
+  // Multi-room: read roomCount from commercialTerms (populated by createQuotation +
+  // createGroupQuotation) or fall back to entry.numberOfRooms. Falls back to 1 for legacy
+  // pre-multi-room quotations that don't have the field.
+  const roomCount = Math.max(1, Number((terms as any).roomCount) || entry.numberOfRooms || 1);
+  const breakdown = await computeStayCharges(prisma, nightly, nights, roomCount);
   const displayName =
     [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
 

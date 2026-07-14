@@ -3,6 +3,7 @@ import { ModeLifecycleState } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { invalidatePolicyRegistryCache } from "../../lib/policy-registry-runtime.js";
+import { invalidateModeRegistryCache } from "../../lib/mode-registry-runtime.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 
 export async function listModes(prisma: PrismaClient) {
@@ -66,6 +67,10 @@ export async function saveMode(
         operation: "UPDATE",
         payload: { modeKey: updated.modeKey, lifecycleState: updated.lifecycleState },
       });
+      // Bust the mode-registry cache so backflow services see the new stageRoute /
+      // autoFulfilmentConditions / featureDependencies immediately (30s TTL was too long
+      // once modes became load-bearing).
+      invalidateModeRegistryCache(updated.modeKey);
       return updated;
     }
 
@@ -121,6 +126,7 @@ export async function activateMode(prisma: PrismaClient, id: string, actorId: st
       operation: "UPDATE",
       payload: { modeKey: updated.modeKey },
     });
+    invalidateModeRegistryCache(updated.modeKey);
     return updated;
   });
 }
@@ -147,6 +153,7 @@ export async function deactivateMode(prisma: PrismaClient, id: string, actorId: 
       operation: "UPDATE",
       payload: { modeKey: updated.modeKey },
     });
+    invalidateModeRegistryCache(updated.modeKey);
     return updated;
   });
 }

@@ -46,23 +46,34 @@ export async function confirmCoordinator(
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
 
   const now = new Date();
-  // Persist via WorkOrder amendment event for operational continuity.
-  const wo = await prisma.workOrder.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
-  let workOrder = wo;
-  if (!workOrder) {
-    const workOrderId = await allocateReadableId(prisma, "WORK_ORDER" as const);
-    workOrder = await prisma.workOrder.create({
-      data: { id: workOrderId, entryId, createdBy: actor.actorId },
+  // Concurrency: wrap the "get-or-create WorkOrder + record amendment" in one tx with a
+  // Postgres advisory lock keyed on entryId. Prevents two concurrent coordinator confirmations
+  // from creating two WorkOrders (there's no unique constraint on entryId because the S7 path
+  // explicitly creates WorkOrders on demand — so serialising this specific create-if-missing
+  // is the correct fix rather than a schema constraint).
+  const workOrder = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      `work-order-get-or-create:${entryId}`,
+    );
+    const wo = await tx.workOrder.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
+    let created = wo;
+    if (!created) {
+      const workOrderId = await allocateReadableId(tx, "WORK_ORDER" as const);
+      created = await tx.workOrder.create({
+        data: { id: workOrderId, entryId, createdBy: actor.actorId },
+      });
+    }
+    await tx.workOrderAmendmentEvent.create({
+      data: {
+        workOrderId: created.id,
+        amendmentType: "COORDINATOR_CONFIRMED",
+        reason: "S3 coordinator confirmation",
+        payload: { coordinatorName: input.coordinatorName.trim(), authorityScope: input.authorityScope.trim(), notes: input.notes ?? null } as any,
+        createdBy: actor.actorId,
+      },
     });
-  }
-  await prisma.workOrderAmendmentEvent.create({
-    data: {
-      workOrderId: workOrder.id,
-      amendmentType: "COORDINATOR_CONFIRMED",
-      reason: "S3 coordinator confirmation",
-      payload: { coordinatorName: input.coordinatorName.trim(), authorityScope: input.authorityScope.trim(), notes: input.notes ?? null } as any,
-      createdBy: actor.actorId,
-    },
+    return created;
   });
   await prisma.traceEvent.create({
     data: {

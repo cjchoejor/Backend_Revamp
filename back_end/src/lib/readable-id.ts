@@ -35,6 +35,11 @@ export const READABLE_ID_DEFAULT_PREFIXES = {
   TRAVEL_AGENT: "TA",
   CORPORATE_ACCOUNT: "CORP",
   RATE_CARD: "RC",
+  // Identity — staff users, roles, departments, sessions.
+  STAFF_USER: "STF",
+  ROLE: "ROL",
+  DEPARTMENT: "DPT",
+  SESSION: "SES",
 } as const;
 
 export type ReadableIdEntity = keyof typeof READABLE_ID_DEFAULT_PREFIXES;
@@ -65,6 +70,11 @@ export const READABLE_ID_ENTITIES: ReadableIdEntity[] = [
   "TRAVEL_AGENT",
   "CORPORATE_ACCOUNT",
   "RATE_CARD",
+  // Identity
+  "STAFF_USER",
+  "ROLE",
+  "DEPARTMENT",
+  "SESSION",
 ];
 
 /** Back-compat — old name kept so existing imports continue to work. */

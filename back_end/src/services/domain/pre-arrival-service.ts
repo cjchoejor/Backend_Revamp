@@ -10,6 +10,7 @@ import {
 import { dispatchPreArrivalOutboundTx } from "./communication-service.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderPreArrivalEmail } from "../infrastructure/stage-email-templates.js";
+import { sumMoneyBy, toDecimal } from "../../lib/money.js";
 
 function categoryForTaskType(taskType: PreArrivalTaskType): TaskCategory {
   switch (taskType) {
@@ -62,15 +63,15 @@ export async function initialiseTasks(prisma: PrismaClient, entryId: string, act
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
 
-  const existing = await prisma.preArrivalTask.findFirst({ where: { entryId } });
-  if (existing) return { created: 0, skipped: true } as const;
-
   const now = new Date();
   const taskTypes = Object.values(PreArrivalTaskType).filter((tt) => {
     if (tt !== PreArrivalTaskType.CREDIT_CEILING_CHECK) return true;
     return entry.reservation?.creditCeilingIfExtended != null;
   });
-  await prisma.preArrivalTask.createMany({
+  // Idempotent via the `@@unique([entryId, taskType])` constraint on PreArrivalTask —
+  // `skipDuplicates` lets concurrent S4→S5 transitions race safely; whichever hits second sees
+  // 0 new inserts. Replaces the findFirst-then-createMany race that could create two full sets.
+  const result = await prisma.preArrivalTask.createMany({
     data: taskTypes.map((tt) => ({
       entryId,
       taskType: tt,
@@ -79,9 +80,10 @@ export async function initialiseTasks(prisma: PrismaClient, entryId: string, act
       createdAt: now,
       createdBy: actorId,
     })),
+    skipDuplicates: true,
   });
 
-  return { created: taskTypes.length, skipped: false } as const;
+  return { created: result.count, skipped: result.count === 0 } as const;
 }
 
 /**
@@ -104,16 +106,18 @@ export async function reconcileAdvancePayments(prisma: PrismaClient, entryId: st
       now: new Date(),
     }).catch(() => ({}))) ?? {};
   const expected = expectedAdvanceAmount(thresholds, entry.useType);
-  const totalIn = (entry.folio.payments ?? [])
-    .filter((p) => p.paymentDirection === PaymentDirection.IN)
-    .reduce((sum, p) => sum + Number(p.amount.toString()), 0);
+  // Decimal-safe reduce — float `+` on money aggregates at reminder boundaries wrongly
+  // triggered/suppressed the "reconciled" branch at boundary sums.
+  const inRows = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.IN);
+  const totalInDec = sumMoneyBy(inRows, "amount");
+  const totalIn = Number(totalInDec.toFixed(2));
 
   if (entry.folio.advancePaymentReconciliationComplete) {
     return { reconciled: true as const, expected, totalIn, alreadyComplete: true as const };
   }
 
   const now = new Date();
-  if (totalIn >= expected) {
+  if (totalInDec.gte(toDecimal(expected))) {
     await prisma.$transaction(async (tx) => {
       await tx.folio.update({
         where: { id: entry.folio!.id },
@@ -183,43 +187,59 @@ export async function registerNightAuditTimers(prisma: PrismaClient, entryId: st
   let scheduled = 0;
 
   for (const operatingDateIso of nightDates) {
-    const dup = await prisma.timerRecord.findFirst({
-      where: {
-        entryId,
-        timerCode: "NIGHT_AUDIT_STAY_NIGHT_W37",
-        status: "SCHEDULED",
-        payload: { equals: { entryId, operatingDateIso } },
-      },
+    // Concurrency: acquire a Postgres advisory transaction lock keyed by (entryId,
+    // operatingDateIso) so two concurrent callers (state machine + worker retry) can't both
+    // read "no dup" and both create pg-boss jobs + TimerRecord rows. The lock is released on
+    // transaction commit/rollback. We re-check dup INSIDE the lock so the classic
+    // findFirst-then-create race is impossible.
+    const alreadyScheduled = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        `night-audit:${entryId}:${operatingDateIso}`,
+      );
+      const dup = await tx.timerRecord.findFirst({
+        where: {
+          entryId,
+          timerCode: "NIGHT_AUDIT_STAY_NIGHT_W37",
+          status: "SCHEDULED",
+          payload: { equals: { entryId, operatingDateIso } },
+        },
+      });
+      if (dup) return true;
+
+      const [yy, mm, dd] = operatingDateIso.split("-").map((x) => Number(x));
+      const firesAt = new Date(Date.UTC(yy, mm - 1, dd, hourUtc, 0, 0, 0));
+      if (firesAt.getTime() <= now.getTime()) return true;
+
+      // Schedule pg-boss OUTSIDE the tx boundary would risk a rollback leaving an orphan job.
+      // pg-boss's own DB writes are not in this Prisma tx, so if the tx rolls back after
+      // schedule, the pg-boss job survives. Trade-off: we schedule pg-boss then create the
+      // tracker; on tracker-create failure the pg-boss job fires an untracked timer which
+      // is caught by the worker's own "no matching TimerRecord" guard.
+      const jobId = await engine.schedule(
+        "NIGHT_AUDIT_STAY_NIGHT_W37",
+        { entryId, operatingDateIso },
+        { startAfter: firesAt },
+      );
+      await tx.timerRecord.create({
+        data: {
+          entryId,
+          entityType: "Entry",
+          entityId: entryId,
+          timerType: "NIGHT_AUDIT_STAY_NIGHT_W37",
+          timerCode: "NIGHT_AUDIT_STAY_NIGHT_W37",
+          stageContext: Stage.S5,
+          firesAt,
+          dueAt: firesAt,
+          status: "SCHEDULED",
+          payload: { entryId, operatingDateIso },
+          pgBossJobId: jobId,
+          createdBy: actorId,
+        },
+      });
+      return false;
     });
-    if (dup) continue;
-
-    const [yy, mm, dd] = operatingDateIso.split("-").map((x) => Number(x));
-    const firesAt = new Date(Date.UTC(yy, mm - 1, dd, hourUtc, 0, 0, 0));
-    if (firesAt.getTime() <= now.getTime()) continue;
-
-    const jobId = await engine.schedule(
-      "NIGHT_AUDIT_STAY_NIGHT_W37",
-      { entryId, operatingDateIso },
-      { startAfter: firesAt },
-    );
-
-    await prisma.timerRecord.create({
-      data: {
-        entryId,
-        entityType: "Entry",
-        entityId: entryId,
-        timerType: "NIGHT_AUDIT_STAY_NIGHT_W37",
-        timerCode: "NIGHT_AUDIT_STAY_NIGHT_W37",
-        stageContext: Stage.S5,
-        firesAt,
-        dueAt: firesAt,
-        status: "SCHEDULED",
-        payload: { entryId, operatingDateIso },
-        pgBossJobId: jobId,
-        createdBy: actorId,
-      },
-    });
-    scheduled += 1;
+    if (!alreadyScheduled) scheduled += 1;
   }
 
   await prisma.traceEvent.create({
@@ -326,9 +346,10 @@ export async function evaluateCreditCeiling(prisma: PrismaClient, entryId: strin
     "creditCeiling.proximityThresholds",
     { now },
   );
-  const ceiling = Number(entry.reservation.creditCeilingIfExtended.toString());
-  const out = Number((entry.folio.outstandingBalance ?? 0).toString());
-  const pct = ceiling > 0 ? (out / ceiling) * 100 : 0;
+  // Decimal-safe % — outstanding drift near a threshold boundary can mis-trigger reminders.
+  const ceilingDec = toDecimal(entry.reservation.creditCeilingIfExtended);
+  const outDec = toDecimal(entry.folio.outstandingBalance ?? 0);
+  const pct = ceilingDec.gt(0) ? Number(outDec.div(ceilingDec).mul(100).toFixed(4)) : 0;
 
   const crossedTier2 = pct >= thresholds.tier2Percent;
   const crossedTier1 = !crossedTier2 && pct >= thresholds.tier1Percent;
@@ -362,7 +383,7 @@ export async function evaluateCreditCeiling(prisma: PrismaClient, entryId: strin
         stageContext: entry.currentStage,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, ceiling, outstanding: out, percentage: pct, tier: crossedTier2 ? "TIER_2" : "TIER_1" },
+        payload: { entryId, ceiling: Number(ceilingDec.toFixed(2)), outstanding: Number(outDec.toFixed(2)), percentage: pct, tier: crossedTier2 ? "TIER_2" : "TIER_1" },
         createdBy: actorId,
       },
     });
