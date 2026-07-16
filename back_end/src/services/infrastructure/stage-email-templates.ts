@@ -271,24 +271,100 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     .filter((l) => l !== null)
     .join("\n");
 
-  const html = htmlShell(`
-${emailHeading("Reservation confirmed")}
-<p>Dear ${escapeHtml(d.guestDisplayName)},</p>
-<p>Thank you for choosing Legphel Hotel. Your reservation is confirmed.</p>
-${detailsTable([
-  tableRow("Reservation", d.reservationReadableId),
-  tableRow("Check-in", formatDate(d.checkInDate), true),
-  tableRow("Check-out", formatDate(d.checkOutDate)),
-  tableRow("Stay", `${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`, true),
-  d.roomTypeName ? tableRow("Room type", d.roomTypeName) : "",
-  d.ratePlanName ? tableRow("Rate plan", d.ratePlanName, true) : "",
-  tableRow("Nightly rate", formatMoney(d.nightlyRate, d.currency)),
-  ...breakdownRows(d.breakdown, d.currency),
-])}
-<p>If anything needs to change, just reply to this email and our front desk will take care of it.</p>
-<p>We look forward to welcoming you.</p>
-<p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
-`);
+  // HTML body mirrors `images/email_template.png` — reservation-team header, reservation-details
+  // card, cancellation / extra-guest / pet / child-age policy cards (colour-coded), footer with
+  // hotel contact. The voucher PDF is separately attached to the email so guests can archive
+  // the formal document; this HTML body is the human-readable summary.
+  const total = formatMoney(d.breakdown.total, d.currency);
+  const nightsLabel = `${nights} ${nights === 1 ? "night" : "nights"}`;
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;">
+<div style="max-width:640px;margin:0 auto;background:#fff;">
+  <!-- Reservation team header -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff;padding:20px 24px;border-bottom:1px solid #eee;">
+    <tr>
+      <td style="vertical-align:middle;">
+        <div style="font-size:20px;font-weight:800;color:#b32d2d;">LEGPHEL</div>
+        <div style="font-size:9px;letter-spacing:2px;color:#666;">H O T E L</div>
+      </td>
+      <td style="text-align:right;vertical-align:middle;font-size:11px;color:#555;line-height:1.55;">
+        <div style="font-weight:700;color:#222;">RESERVATION TEAM</div>
+        <div>(+975) 17772393</div>
+        <div>(+975) 77772393</div>
+        <div><a href="mailto:legphel.hotel@gmail.com" style="color:#b32d2d;text-decoration:none;">legphel.hotel@gmail.com</a></div>
+      </td>
+    </tr>
+  </table>
+  <div style="height:6px;background:linear-gradient(90deg,#b32d2d,#7a1a1a);"></div>
+
+  <div style="padding:24px 28px;">
+    <h1 style="font-size:22px;margin:8px 0 12px;font-weight:700;">Reservation Confirmation</h1>
+    <p style="margin:6px 0;">Dear ${escapeHtml(greetingName)},</p>
+    <p style="margin:6px 0 22px;">${escapeHtml(openingLine)} Your reservation is confirmed.</p>
+
+    <!-- Reservation details card -->
+    <div style="border:1px solid #dfe3ea;border-radius:8px;padding:16px 18px;margin:12px 0;">
+      <div style="font-weight:700;background:#f2f7fd;padding:6px 10px;margin:-16px -18px 12px;border-radius:8px 8px 0 0;color:#1a4e8f;font-size:13px;">📋 Reservation Details</div>
+      <div style="font-size:13px;line-height:1.7;">
+        <div><strong>Reservation ID:</strong> ${escapeHtml(d.reservationReadableId)}</div>
+        <div><strong>Primary Guest:</strong> ${escapeHtml(d.guestDisplayName)}</div>
+        <div><strong>Check In:</strong> ${escapeHtml(formatDate(d.checkInDate))}</div>
+        <div><strong>Check out:</strong> ${escapeHtml(formatDate(d.checkOutDate))}</div>
+        <div><strong>Rooms:</strong> ${d.roomCount ?? 1}</div>
+        <div><strong>Stay:</strong> ${escapeHtml(nightsLabel)} · ${escapeHtml(guests)}</div>
+        <div><strong>Total Payable Amount:</strong> ${escapeHtml(total)}</div>
+      </div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e2e5ec;font-size:12px;color:#555;">
+        📎 Kindly find the attachment below for detailed reservation information.
+      </div>
+    </div>
+
+    <!-- Cancellation policy (red) -->
+    <div style="border:1px solid #fbc9c9;background:#fdf2f2;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:12.5px;line-height:1.55;">
+      <div style="font-weight:700;color:#b03a2e;margin-bottom:6px;">⚠️ Cancellation Policy</div>
+      <div>• 100% refund if cancelled 45 days or more before scheduled date.</div>
+      <div>• 50% refund if cancelled between 30 and 44 days before scheduled date.</div>
+      <div>• No refund for cancellations less than 30 days before scheduled date.</div>
+    </div>
+
+    <!-- Extra guest policy (green) -->
+    <div style="border:1px solid #c5eecd;background:#f0fbf4;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:12.5px;line-height:1.55;">
+      <div style="font-weight:700;color:#0a7a5a;margin-bottom:6px;">👥 Extra Guest Policy</div>
+      <div>• Double occupancy basis per room, max 3 guests.</div>
+      <div>• Guests over 12 require an extra bed (additional charge).</div>
+      <div>• Applies to Deluxe, Executive, and Suite Rooms.</div>
+    </div>
+
+    <!-- Pet policy (blue) -->
+    <div style="border:1px solid #cddfef;background:#f2f7fd;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:12.5px;line-height:1.55;">
+      <div style="font-weight:700;color:#1a4e8f;margin-bottom:6px;">🐾 Pet Policy</div>
+      <div>No pets are allowed.</div>
+    </div>
+
+    <!-- Child age policy (purple) -->
+    <div style="border:1px solid #ddc9f0;background:#f7f2fd;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:12.5px;line-height:1.55;">
+      <div style="font-weight:700;color:#7b3aa2;margin-bottom:6px;">👶 Child Age Policy</div>
+      <div>• Below 6 years: Complimentary accommodation and food.</div>
+      <div>• 6–10 years: Charged for meals only; accommodation complimentary if sharing with guardians.</div>
+      <div>• 11+ years: Considered adults (separate bed + adult charges for food and accommodation).</div>
+    </div>
+
+    <div style="text-align:center;margin-top:24px;font-size:12.5px;color:#555;">
+      We look forward to welcoming you.<br/>
+      <strong style="color:#222;">Legphel Hotel</strong><br/>
+      Phuentsholing, Bhutan<br/>
+      (+975) 17772393 · <a href="mailto:legphel.hotel@gmail.com" style="color:#b32d2d;text-decoration:none;">legphel.hotel@gmail.com</a>
+    </div>
+  </div>
+
+  <div style="background:#b32d2d;color:#fff;text-align:center;padding:10px;font-size:12px;font-weight:600;letter-spacing:0.5px;">
+    Sewa Land Sue! · Contact our reservation team.
+  </div>
+</div>
+</body>
+</html>`;
 
   return { subject, text, html };
 }

@@ -13,6 +13,7 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
+import { generateOrLoadInvoicePdf } from "./invoice-pdf-service.js";
 import {
   enforceApartmentSecurityDepositResolvedForS9Closure,
   enforceDirectBillPaymentsMatchedForS9Closure,
@@ -317,6 +318,34 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         breakdown,
         amountPaid: paid,
       });
+
+  // Generate the invoice PDF and attach it. Idempotent — subsequent dispatches serve the
+  // stored file. Failure is non-fatal: the text email still goes out.
+  try {
+    const artifact = await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+    content.attachments = [
+      {
+        filename: artifact.filename,
+        content: artifact.bytes,
+        contentType: "application/pdf",
+      },
+    ];
+  } catch (e) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "INVOICE.PDF_RENDER_FAILED",
+        actorId,
+        actorLevel: "SYSTEM",
+        entityType: "Invoice",
+        entityId: inv.id,
+        operation: "ALERT",
+        timestamp: new Date(),
+        entryId: entry.id,
+        payload: { invoiceId: inv.id, invoiceType: inv.invoiceType, error: (e as Error)?.message ?? String(e) },
+        createdBy: actorId,
+      } as any,
+    }).catch(() => {});
+  }
 
   await dispatchStageEmailBestEffort(
     {

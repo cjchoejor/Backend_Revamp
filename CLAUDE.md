@@ -562,6 +562,61 @@ Outbound email infrastructure landed as Phase 1 of the S1–S9 communication tra
   - Skips silently with `*_EMAIL.SKIPPED` traces when the guest has no email or `EMAIL_DISABLE=true`.
 - **Deliverability hardening**: `email-service.ts` sets `Message-ID` hostname to the SMTP sender's actual domain (not a placeholder TLD), `List-Unsubscribe` + `List-Unsubscribe-Post` (RFC 8058 one-click), `Auto-Submitted: auto-generated` (RFC 3834), and `X-Auto-Response-Suppress`. These reduce spam-folder routing but the single biggest deliverability fix during Gmail→Gmail testing is the recipient marking the first email as "Not spam" + adding the sender to contacts.
 
+### PDF bill generation (2026-07-14)
+
+Every guest-facing bill is now a real PDF, rendered ONCE by Puppeteer, stored write-once, checksum-signed, and served forever from the stored file. Never re-rendered on demand. Corrections issue a new invoice with `versionNumber + 1` (append-only), never mutate the existing artifact.
+
+**Four templates in [`services/infrastructure/pdf-templates/`](back_end/src/services/infrastructure/pdf-templates/)**:
+
+| Stage | Template | Matches | Served via |
+|---|---|---|---|
+| S2 | `quotation-proforma-template.ts` — title="QUOTATION" | `images/quotation.pdf` | [`services/domain/quotation-pdf-service.ts`](back_end/src/services/domain/quotation-pdf-service.ts) → wired in `sendQuotation` |
+| S3 | `quotation-proforma-template.ts` — title="PROFORMA INVOICE" (same template, title swap) | `images/Proforma_Invoice.pdf` | [`services/domain/invoice-pdf-service.ts`](back_end/src/services/domain/invoice-pdf-service.ts) PROFORMA branch → wired in `dispatchInvoice` |
+| S4 | `confirmation-voucher-template.ts` | `images/Reservation_Confirmation_for email.pdf` | [`services/domain/confirmation-voucher-pdf-service.ts`](back_end/src/services/domain/confirmation-voucher-pdf-service.ts) → wired in `confirmReservation` |
+| S8/S9 | `room-invoice-template.ts` | `images/Commercial invoice.pdf` | [`services/domain/invoice-pdf-service.ts`](back_end/src/services/domain/invoice-pdf-service.ts) FINAL branch → filters folio lines to ROOM_CHARGE only (no F&B), computes subtotal + service charge + GST as separate totals lines, "Prepared by:" pulls session actor's `fullName` |
+
+**Infrastructure ([`lib/document-storage.ts`](back_end/src/lib/document-storage.ts) + [`services/infrastructure/pdf-render-service.ts`](back_end/src/services/infrastructure/pdf-render-service.ts))**:
+- Puppeteer 25 headless Chromium; shared browser instance kept alive across renders.
+- Storage keys `documents/YYYY/MM/<KIND>/<READABLE_ID>-vN.pdf` under `STORAGE_ROOT_DIR` (default `./storage`, gitignored).
+- Write-once: `writeDocument` rejects if the key already exists. Corrections must issue new keys via version bump.
+- Atomic writes: temp file + rename.
+- `hashSha256(bytes)` + `verifyChecksum(key, expected)` helpers.
+- [`lib/pdf-render-context.ts`](back_end/src/lib/pdf-render-context.ts) loads HotelProfile (name, address, phone, TPN, GST TPN, logo as data URI) and resolves the "Prepared by:" staff name from the session actor.
+
+**Immutability policy** ([`policies/31-invoice-integrity/p68-invoice-immutability.ts`](back_end/src/policies/31-invoice-integrity/p68-invoice-immutability.ts)) — `assertInvoiceMutationAllowed(existing, attemptedFields)` throws `PolicyGateBlockedError` if any non-dispatch field is edited on a rendered invoice. `updateIssuedInvoice(tx, id, data)` is the safe wrapper for post-issuance updates (dispatch metadata + supersede pointer only).
+
+**Schema migration `20260714120000_pdf_bills_infrastructure`** added:
+- `Invoice` + `Quotation`: `pdfStorageKey`, `pdfChecksum`, `pdfChecksumAlgo` (default "SHA-256"), `pdfRenderedAt`, `pdfRenderedBy`, `renderInputSnapshot Json`.
+- `Reservation`: parallel `confirmationVoucherStorageKey` / `Checksum` / `ChecksumAlgo` / `RenderedAt` / `RenderedBy` / `InputSnapshot`.
+- New `InvoiceLine` table — immutable line-item snapshot (particular, roomNo, nights, rate, amount, discount/service/gst subtotals, soft `folioLineId` ref).
+- New `QuotationLine` table — immutable quotation booking-table snapshot (date, occupants, mealPlan, extraBeds, tax-INCLUSIVE amount).
+- New `InvoiceIntegrityCheck` table — append-only audit log for periodic SHA-256 verifications.
+- `HotelProfile`: `accountNumber`, `tpnNumber`, `gstTpnNumber`, `logoStorageKey` (Bhutanese invoice legal fields).
+- `RateCard.rateIsTaxInclusive Boolean @default(false)` — when true, pricing engine back-solves base rate. Wired schema-side; pricing-engine consumer is a follow-up.
+
+**Quotation.id is now the readable QUO-YYYYMMDD-NNNN** (was UUID). All three `tx.quotation.create` sites in `s2-quotation-service.ts` pass `id: referenceNumber`. Downstream `QuotationLine.quotationId` FK holds the readable value, not a UUID. Follows the existing Invoice pattern.
+
+**Two rate conventions in play** (both supported):
+- **Quotation / Proforma** — row `amount` is tax-INCLUSIVE (guest summary). Template's Amount (Nu.) column shows the all-in per-night total.
+- **Room Invoice** — Rate is tax-EXCLUSIVE (base). Subtotal / Service Charge (from `billing.serviceChargeRate` config) / GST (from `billing.salesTaxRate` config) shown as separate totals lines.
+
+**Email attachments** — `StageEmailContent.attachments` (optional array of `{ filename, content: Buffer, contentType? }`) passes through `dispatchStageEmailBestEffort` → `sendEmail` → Nodemailer. Every stage service (S2 quotation, S3 proforma, S4 confirmation, S8/S9 final) attaches its PDF to the outbound email so guests receive the formal document alongside the summary body.
+
+**S4 email body** now matches `images/email_template.png` — Reservation Team header, colour-coded reservation-details card, four policy cards (Cancellation red / Extra Guest green / Pet blue / Child Age purple), "Kindly find the attachment below" hint, hotel-contact footer with "SewaLandSue!" red bar.
+
+**Download routes** ([`routes/documents/router.ts`](back_end/src/routes/documents/router.ts)) — L1+:
+- `GET /api/quotations/:id/pdf`
+- `GET /api/invoices/:id/pdf` (handles both PROFORMA and FINAL by invoice type)
+- `GET /api/reservations/:id/confirmation-voucher-pdf`
+
+Each renders on-demand if the artifact hasn't been stored yet (internal preview convenience); once stored, subsequent hits stream the file directly.
+
+**Deferred items** (see [`docs/pdf-bill-generation-todo.md`](docs/pdf-bill-generation-todo.md)):
+- **Re Check-In / Re Check-Out fields** on the confirmation voucher — related to double-entry / multi-entry booking design. Template renders placeholders for now.
+- **Monthly integrity verification worker** — the schema table exists (`InvoiceIntegrityCheck`) but the cron isn't wired yet.
+- **HotelProfile admin fields** for `accountNumber`, `tpnNumber`, `gstTpnNumber`, `logoStorageKey` — column exists but no admin UI form yet. Voucher template falls back to the reference logo in `images/legphel_logo without background.png` until admin uploads.
+- **RateCard pricing-engine consumer** for `rateIsTaxInclusive`. Column is honoured on write; pipeline back-solve when true is a follow-up.
+
 ### Editable JSON safety
 
 `SmartConfigEditor` ([`front_end/src/components/admin/smart-config-editor.tsx`](front_end/src/components/admin/smart-config-editor.tsx)) is the fallback editor when no typed schema exists. As of the recent UX pass:

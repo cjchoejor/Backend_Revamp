@@ -180,8 +180,16 @@ export function S5Workspace({ entry }: S5WorkspaceProps) {
     .filter((i) => i.mandatory)
     .every((i) => h1ChecklistCompletion[i.code] === true);
 
+  // Only enable Accept once the checklist query has RESOLVED (not just idle-empty). Was a
+  // silent divergence: if the backend `/handoffs/checklists/H1` route errored, the frontend
+  // saw an empty array, enabled Accept, sent `{}` to the accept endpoint, and the backend
+  // (re-reading the real config) rejected with H1_CHECKLIST_INCOMPLETE. Guarding on
+  // `isSuccess` + `isFetched` fixes it: no items ONLY counts as "no checklist" if the query
+  // successfully returned zero, not if it errored.
+  const h1ChecklistResolved = h1ChecklistQuery.isSuccess && h1ChecklistQuery.isFetched;
   const canAcceptH1 =
     h1?.state === "CREATED" &&
+    h1ChecklistResolved &&
     (h1ChecklistItems.length === 0 || h1MandatoryComplete);
 
   const paymentStatusQuery = useQuery({
@@ -548,6 +556,12 @@ export function S5Workspace({ entry }: S5WorkspaceProps) {
                     Record fulfilment
                   </Button>
                 </div>
+                {h1.state === "CREATED" && h1ChecklistQuery.isError && (
+                  <p className="text-xs text-destructive">
+                    Couldn&apos;t load the H1 checklist. Refresh to try again — accepting without a
+                    verified checklist would fail on the server.
+                  </p>
+                )}
                 {h1.state === "CREATED" && !canAcceptH1 && h1ChecklistItems.length > 0 && (
                   <p className="text-xs text-muted-foreground">
                     Complete all required checklist items before accepting H1.

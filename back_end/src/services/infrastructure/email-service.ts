@@ -64,6 +64,12 @@ type SendArgs = {
    * Required for stable threading; the route's caller is responsible for resolving it.
    */
   threadReadableId?: string;
+  /**
+   * PDF attachments. Each entry is a filename + bytes buffer + contentType. Used to attach
+   * quotation / proforma / confirmation-voucher / final invoice PDFs to their stage emails.
+   * Attachments carry the actual guest-facing artifact so recipients can archive it locally.
+   */
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
 };
 
 type SendResult =
@@ -182,6 +188,13 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
       inReplyTo,
       references,
       headers: extraHeaders,
+      // PDFs the guest should receive alongside the email body (quotation, proforma,
+      // confirmation voucher, final invoice). Buffer form — no disk read at send time.
+      attachments: args.attachments?.map((a) => ({
+        filename: a.filename,
+        content: a.content,
+        contentType: a.contentType ?? "application/pdf",
+      })),
     });
   } catch (e) {
     return { status: "error", message: e instanceof Error ? e.message : String(e) };
