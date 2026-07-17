@@ -74,13 +74,20 @@ export function enforceMandatoryChecklistItemsCompleted(input: {
     throw new ValidationError("checklistCompletion object is required");
   }
 
-  for (const code of input.mandatoryItemCodes) {
-    if (!completion[code]) {
-      throw new PolicyGateBlockedError(
-        `${input.handoffType}_CHECKLIST_INCOMPLETE`,
-        `Mandatory checklist item not completed: ${code}`,
-      );
-    }
+  // Aggregate all missing codes into a single error so the frontend can render each one
+  // (and auto-recover if the user simply loaded a stale checklist config). Previously we
+  // failed fast on the first missing code, which meant a client that saw an empty
+  // checklist got only the FIRST missing item back — hard to diagnose from the UI.
+  const missing = input.mandatoryItemCodes.filter((code) => !completion[code]);
+  if (missing.length > 0) {
+    const err = new PolicyGateBlockedError(
+      `${input.handoffType}_CHECKLIST_INCOMPLETE`,
+      `Mandatory checklist item${missing.length === 1 ? "" : "s"} not completed: ${missing.join(", ")}`,
+    );
+    // Attach the full missing list on the error so the frontend can inspect it and
+    // re-render the checklist with the correct items.
+    (err as unknown as { details?: unknown }).details = { missingCodes: missing };
+    throw err;
   }
 }
 

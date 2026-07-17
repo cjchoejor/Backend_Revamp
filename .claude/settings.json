@@ -67,7 +67,11 @@
       "Bash(grep -nA5 \"^model Quotation\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\prisma\\\\schema.prisma')",
       "Bash(del \"d:\\\\New Legphel Web\\\\Backend_ReVamped\\\\front_end\\\\src\\\\lib\\\\chargeable-occupants.ts\")",
       "Bash(grep -nB2 -A2 \"roomAssignments\\\\[0\\\\]\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\src\\\\state-machines\\\\entry-lifecycle-state-machine.ts')",
-      "Bash(grep -nA10 \"^model SpeculativeHold\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\prisma\\\\schema.prisma')"
+      "Bash(grep -nA10 \"^model SpeculativeHold\" 'd:\\\\New Legphel Web\\\\Backend_ReVamped\\\\back_end\\\\prisma\\\\schema.prisma')",
+      "Bash(npm list *)",
+      "Bash(npx prisma *)",
+      "Bash(mkdir -p \"d:/New Legphel Web/Backend_ReVamped/back_end/prisma/migrations/20260714120000_pdf_bills_infrastructure\")",
+      "Bash(npx tsc *)"
     ]
   }
 }

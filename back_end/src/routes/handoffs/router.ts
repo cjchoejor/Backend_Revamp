@@ -9,20 +9,34 @@ import {
 } from "../../dtos/11-handoffs/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { getActiveConfigEntry } from "../../lib/config-store.js";
 import * as handoffService from "../../services/domain/handoff-service.js";
 
 export const handoffsRouter = Router();
 
-/** Active checklist template for handoff accept (e.g. H1 at S5). */
+/**
+ * Active checklist template for handoff accept (e.g. H1 at S5).
+ *
+ * Previously wrapped the config lookup in `.catch(() => [])` which produced a critical
+ * divergence bug: the FRONTEND would see zero items and think the checklist was empty
+ * (Accept button enabled), while the BACKEND `acceptHandoff` service re-read the real
+ * config, found mandatory items, and rejected with `H1_CHECKLIST_INCOMPLETE`. Same
+ * silent-config-error pattern we fixed elsewhere in Wave A.
+ *
+ * Fix: use the non-throwing `getActiveConfigEntry` — returns `null` when the config truly
+ * isn't seeded, which is the ONLY case the frontend should treat as "no items". Any other
+ * error (malformed JSON, DB issue) propagates as 500 so ops sees the real problem instead
+ * of the client silently accepting an incomplete handoff.
+ */
 handoffsRouter.get("/handoffs/checklists/:handoffType", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const handoffType = String(req.params.handoffType ?? "").toUpperCase();
     const key = `handoff.${handoffType}.checklist`;
-    const items =
-      (await requireActiveConfigValue<
-        Array<{ code: string; mandatory: boolean; description?: string }> | undefined
-      >(prisma, key).catch(() => [])) ?? [];
+    const row = await getActiveConfigEntry(prisma, key);
+    const raw = row?.configValue ?? null;
+    const items = Array.isArray(raw)
+      ? (raw as Array<{ code: string; mandatory: boolean; description?: string }>)
+      : [];
     res.json({ handoffType, items });
   } catch (e) {
     next(e);

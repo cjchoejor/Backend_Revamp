@@ -27,6 +27,7 @@ import { incidentsAndLostFoundRouter } from "./incidents-and-lost-found/router.j
 import { deficientConditionsRouter } from "./deficient-conditions/router.js";
 import { lookupsRouter } from "./lookups/router.js";
 import { backflowsRouter } from "./backflows/router.js";
+import { documentsRouter } from "./documents/router.js";
 
 export const apiRouter = Router();
 
@@ -79,5 +80,6 @@ apiRouter.use(incidentsAndLostFoundRouter);
 apiRouter.use(deficientConditionsRouter);
 apiRouter.use(lookupsRouter);
 apiRouter.use(backflowsRouter);
+apiRouter.use(documentsRouter);
 apiRouter.use("/admin", adminRouter);
 

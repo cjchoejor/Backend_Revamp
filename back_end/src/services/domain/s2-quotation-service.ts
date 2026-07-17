@@ -33,6 +33,7 @@ import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { mulMoney, round2, sumMoney } from "../../lib/money.js";
+import { generateOrLoadQuotationPdf } from "./quotation-pdf-service.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -315,6 +316,10 @@ export async function createQuotation(
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
     const created = await tx.quotation.create({
       data: {
+        // Use the readable QUO-YYYYMMDD-NNNN as the primary key so downstream FKs
+        // (QuotationLine.quotationId) hold the readable value, not a UUID. Matches the
+        // Invoice pattern.
+        id: referenceNumber,
         entryId,
         segmentId,
         versionNumber: nextVersion,
@@ -494,6 +499,8 @@ export async function createGroupQuotation(
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
     const created = await tx.quotation.create({
       data: {
+        // Readable ID as primary key — see comment in createQuotation above.
+        id: referenceNumber,
         entryId,
         segmentId,
         versionNumber: nextVersion,
@@ -583,6 +590,8 @@ export async function supersedeQuotationWithNewDraft(
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
     const created = await tx.quotation.create({
       data: {
+        // Readable ID as primary key — see comment in createQuotation above.
+        id: referenceNumber,
         entryId: prior.entryId,
         segmentId: prior.segmentId,
         versionNumber: nextVersion,
@@ -1047,6 +1056,37 @@ async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: s
     validUntil: q.validUntil ?? new Date(),
     ratePlanName: terms.ratePlanName ?? null,
   });
+
+  // Generate the quotation PDF and attach it to the outbound email. Rendering is idempotent
+  // — if the quotation was previously sent (retry / redispatch), the stored PDF is served
+  // rather than re-rendered. Failure to render is non-fatal: the email still goes out with
+  // the text body only, and the operator can retry via the manual endpoint.
+  try {
+    const artifact = await generateOrLoadQuotationPdf(prisma, q.id, q.createdBy ?? "SYSTEM");
+    content.attachments = [
+      {
+        filename: `${artifact.invoiceNumber}-quotation.pdf`,
+        content: artifact.bytes,
+        contentType: "application/pdf",
+      },
+    ];
+  } catch (e) {
+    // Non-fatal: trace the render failure so ops sees it, then continue sending the text-only email.
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "QUOTATION.PDF_RENDER_FAILED",
+        actorId: q.createdBy ?? "SYSTEM",
+        actorLevel: "SYSTEM",
+        entityType: "Quotation",
+        entityId: q.id,
+        operation: "ALERT",
+        timestamp: new Date(),
+        entryId: entry.id,
+        payload: { quotationId: q.id, error: (e as Error)?.message ?? String(e) },
+        createdBy: q.createdBy ?? "SYSTEM",
+      } as any,
+    }).catch(() => {});
+  }
 
   await dispatchStageEmailBestEffort(
     {

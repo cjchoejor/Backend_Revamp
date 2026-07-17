@@ -28,6 +28,7 @@ import { createH1AtS4ConfirmationTx } from "./handoff-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
+import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
@@ -311,6 +312,36 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     billingModel: entry.folio?.billingModel ?? null,
     groupLeaderName,
   });
+
+  // Generate the confirmation-voucher PDF and attach it to the outbound email. Idempotent —
+  // if a voucher was already rendered (retry / resend) we serve the stored file. Failure is
+  // non-fatal: the text email still goes out, and ops sees a trace.
+  try {
+    const artifact = await generateOrLoadConfirmationVoucherPdf(prisma, result.reservation.id, actorId);
+    content.attachments = [
+      {
+        filename: artifact.filename,
+        content: artifact.bytes,
+        contentType: "application/pdf",
+      },
+    ];
+  } catch (e) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "RESERVATION.CONFIRMATION_VOUCHER_PDF_RENDER_FAILED",
+        actorId,
+        actorLevel: "SYSTEM",
+        entityType: "Reservation",
+        entityId: result.reservation.id,
+        operation: "ALERT",
+        timestamp: new Date(),
+        entryId,
+        payload: { reservationId: result.reservation.id, error: (e as Error)?.message ?? String(e) },
+        createdBy: actorId,
+      } as any,
+    }).catch(() => {});
+  }
+
   await dispatchStageEmailBestEffort(
     {
       prisma,

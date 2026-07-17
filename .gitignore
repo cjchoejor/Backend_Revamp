@@ -5,3 +5,7 @@ Documentation/
 Documentation_V2/
 BACKEND-STRUCTURAL-ATLAS-v1_1 (1).html
 LEGPHEL_Implementation_Reference_v1_1.html
+
+# Generated PDF artifacts (guest-facing bills / vouchers). One-shot write-once files —
+# they should live on durable storage (S3 / GCS) in prod, and locally in dev.
+back_end/storage/

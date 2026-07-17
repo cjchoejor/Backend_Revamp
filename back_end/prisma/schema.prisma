@@ -343,6 +343,14 @@ model HotelProfile {
   publicHolidaySchedule Json
   timeZone              String
   propertyCurrency      String
+  // Legally-required fields on Bhutanese invoices (Account No, TPN, GST TPN). Nullable
+  // during rollout; the admin fills them in on /admin/hotel-profile before first bill.
+  accountNumber         String?
+  tpnNumber             String?
+  gstTpnNumber          String?
+  // Storage key for the hotel logo used on the printed PDFs. Uploaded via the admin page
+  // and served through the document-storage layer (write-once).
+  logoStorageKey        String?
   version               Int      @default(1)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -1328,8 +1336,22 @@ model Quotation {
   createdAt             DateTime       @default(now())
   createdBy             String
 
-  entry   Entry   @relation(fields: [entryId], references: [id])
-  segment Segment @relation(fields: [segmentId], references: [id])
+  // === PDF artifact (write-once, checksum-verified) ===
+  // Populated when `renderQuotationPdf` produces the guest-facing PDF at send time.
+  // The stored file is the source of truth for what the guest actually received.
+  pdfStorageKey       String?
+  pdfChecksum         String?
+  pdfChecksumAlgo     String    @default("SHA-256")
+  pdfRenderedAt       DateTime?
+  pdfRenderedBy       String?
+  /// Frozen snapshot of the exact inputs used to render — guest name, folio lines, tax
+  /// rates, hotel profile block, template body. Lets us re-render an identical PDF from
+  /// cold years later, even after configs change.
+  renderInputSnapshot Json?
+
+  entry   Entry           @relation(fields: [entryId], references: [id])
+  segment Segment         @relation(fields: [segmentId], references: [id])
+  lines   QuotationLine[]
 
   @@index([entryId, segmentId, state])
   @@map("quotations")
@@ -1413,6 +1435,16 @@ model Reservation {
   confirmationVoucherSent Boolean   @default(false)
   sealedAt                DateTime?
   createdAt               DateTime  @default(now())
+
+  // === Confirmation voucher PDF (write-once, checksum-verified) ===
+  // Same append-only pattern as Invoice.pdfStorageKey. The stored file is the exact PDF the
+  // guest received attached to their RESERVATION_CONFIRMATION_EMAIL.
+  confirmationVoucherStorageKey    String?
+  confirmationVoucherChecksum      String?
+  confirmationVoucherChecksumAlgo  String    @default("SHA-256")
+  confirmationVoucherRenderedAt    DateTime?
+  confirmationVoucherRenderedBy    String?
+  confirmationVoucherInputSnapshot Json?
 
   entry          Entry  @relation("EntryReservations", fields: [entryId], references: [id])
   currentForEntry Entry? @relation("EntryCurrentReservation")
@@ -1499,10 +1531,109 @@ model Invoice {
   metadata       Json?
   createdAt      DateTime     @default(now())
 
-  folio Folio @relation(fields: [folioId], references: [id])
-  entry Entry @relation(fields: [entryId], references: [id])
+  // === PDF artifact (write-once, checksum-verified) ===
+  // Populated when the PROFORMA (S3) / FINAL (S8/S9) PDF is rendered. The stored file is
+  // legally authoritative — the guest received THIS file, byte-for-byte. Never re-render
+  // on demand; always serve the stored file.
+  pdfStorageKey       String?
+  pdfChecksum         String?
+  pdfChecksumAlgo     String    @default("SHA-256")
+  pdfRenderedAt       DateTime?
+  pdfRenderedBy       String?
+  /// Frozen snapshot of the render inputs (guest, hotel, folio lines at issuance, tax
+  /// rates, template body). Re-renders decades from now must produce the same bytes.
+  renderInputSnapshot Json?
+
+  folio Folio         @relation(fields: [folioId], references: [id])
+  entry Entry         @relation(fields: [entryId], references: [id])
+  lines InvoiceLine[]
 
   @@map("invoices")
+}
+
+/**
+ * Immutable line-item snapshot for an issued Invoice. `Invoice.metadata` used to hold this
+ * ad-hoc; a real table lets tax authorities audit the itemisation directly.
+ * One row per line printed on the bill. Rows are written ONCE at render time and never
+ * updated. Corrections issue a NEW Invoice + new InvoiceLine set with `versionNumber + 1`
+ * on the parent; the old lines stay for historical lookup.
+ * `folioLineId` is a soft reference (nullable, no FK) to the underlying FolioLine — lets
+ * an auditor cross-check but doesn't cascade if the source line is removed later.
+ */
+model InvoiceLine {
+  id                  String   @id @default(uuid())
+  invoiceId           String
+  lineNumber          Int
+  /// Display particular — "Room", "Extra Bed", etc. Free text so the ROOM INVOICE title
+  /// column can vary.
+  particular          String
+  /// Room number as printed (may be null for non-room lines).
+  roomNo              String?
+  nights              Int?
+  /// Rate as printed on the bill. For the ROOM INVOICE this is tax-exclusive (base);
+  /// for QUOTATION / PROFORMA rows this is tax-inclusive.
+  rate                Decimal  @db.Decimal(15, 2)
+  amount              Decimal  @db.Decimal(15, 2)
+  discountAmount      Decimal  @default(0) @db.Decimal(15, 2)
+  serviceChargeAmount Decimal  @default(0) @db.Decimal(15, 2)
+  gstAmount           Decimal  @default(0) @db.Decimal(15, 2)
+  currency            String   @default("BTN")
+  /// Optional soft reference to the FolioLine that seeded this snapshot.
+  folioLineId         String?
+  createdAt           DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@unique([invoiceId, lineNumber])
+  @@map("invoice_lines")
+}
+
+/**
+ * Same idea as InvoiceLine but for Quotation / Proforma output rows. The quotation booking
+ * table has different columns from the room invoice (Date | Occupants | Meal Plan | Extra
+ * Beds | Amount) so it gets its own snapshot table.
+ */
+model QuotationLine {
+  id          String   @id @default(uuid())
+  quotationId String
+  lineNumber  Int
+  /// Stay date (as printed).
+  date        DateTime
+  /// e.g. "2 adults, 1 children" — free text as printed.
+  occupants   String
+  /// Meal plan code + count, e.g. "2 CP" (2 guests on CP).
+  mealPlan    String?
+  /// e.g. "None" or "1 extra bed".
+  extraBeds   String?
+  /// Tax-INCLUSIVE amount for this row (matches the reference layout).
+  amount      Decimal  @db.Decimal(15, 2)
+  currency    String   @default("BTN")
+  createdAt   DateTime @default(now())
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+
+  @@unique([quotationId, lineNumber])
+  @@map("quotation_lines")
+}
+
+/**
+ * Append-only log of periodic PDF-integrity checks. The monthly worker iterates every
+ * issued Invoice, recomputes SHA-256 of the stored PDF, and writes one row per invoice
+ * per check. `matched=false` = tamper alert. Rows never mutate.
+ */
+model InvoiceIntegrityCheck {
+  id           String   @id @default(uuid())
+  invoiceId    String
+  checkedAt    DateTime @default(now())
+  expectedHash String
+  actualHash   String
+  matched      Boolean
+  /// Extra diagnostic — file present, size, storage backend name.
+  diagnostic   Json?
+
+  @@index([invoiceId, checkedAt])
+  @@index([matched, checkedAt])
+  @@map("invoice_integrity_checks")
 }
 
 model FolioLine {
@@ -2166,28 +2297,34 @@ model CorporateAccount {
  * service validates the referenced party exists on every write.
  */
 model RateCard {
-  id            String    @id // readable RC-YYYYMMDD-NNNN
-  partyType     PartyType
-  partyId       String // FK to TravelAgent.id OR CorporateAccount.id depending on partyType
+  id                 String    @id // readable RC-YYYYMMDD-NNNN
+  partyType          PartyType
+  partyId            String // FK to TravelAgent.id OR CorporateAccount.id depending on partyType
   // Base + extras
-  roomBaseRate  Decimal   @db.Decimal(10, 2)
-  extraBedRate  Decimal?  @db.Decimal(10, 2)
-  cnbPercent    Int? // 0-100 — child-no-bed discount percentage
+  roomBaseRate       Decimal   @db.Decimal(10, 2)
+  extraBedRate       Decimal?  @db.Decimal(10, 2)
+  cnbPercent         Int? // 0-100 — child-no-bed discount percentage
   // Standalone meal add-on rates (à la carte)
-  breakfastRate Decimal?  @db.Decimal(10, 2)
-  lunchRate     Decimal?  @db.Decimal(10, 2)
-  dinnerRate    Decimal?  @db.Decimal(10, 2)
+  breakfastRate      Decimal?  @db.Decimal(10, 2)
+  lunchRate          Decimal?  @db.Decimal(10, 2)
+  dinnerRate         Decimal?  @db.Decimal(10, 2)
   // Meal-plan-inclusive rates
-  cpRate        Decimal?  @db.Decimal(10, 2)
-  mapLunchRate  Decimal?  @db.Decimal(10, 2)
-  mapDinnerRate Decimal?  @db.Decimal(10, 2)
-  apRate        Decimal?  @db.Decimal(10, 2)
-  currency      String    @default("BTN")
-  effectiveFrom DateTime  @default(now())
-  effectiveTo   DateTime? // null = currently active
-  notes         String?
-  createdAt     DateTime  @default(now())
-  createdBy     String
+  cpRate             Decimal?  @db.Decimal(10, 2)
+  mapLunchRate       Decimal?  @db.Decimal(10, 2)
+  mapDinnerRate      Decimal?  @db.Decimal(10, 2)
+  apRate             Decimal?  @db.Decimal(10, 2)
+  currency           String    @default("BTN")
+  /// When true, roomBaseRate + meal-plan rates are treated as **tax-INCLUSIVE** all-in
+  /// prices. The pricing engine back-solves the pre-tax base:
+  ///   base = allInRate / (1 + serviceChargeRate + serviceChargeRate*gstRate + gstRate)
+  /// This fixes the friend's #6 concern: agents typically negotiate "3,400 Nu including
+  /// everything", and treating that as base yields 3,927 on the bill.
+  rateIsTaxInclusive Boolean   @default(false)
+  effectiveFrom      DateTime  @default(now())
+  effectiveTo        DateTime? // null = currently active
+  notes              String?
+  createdAt          DateTime  @default(now())
+  createdBy          String
 
   overrides RoomTypeRateOverride[]
 

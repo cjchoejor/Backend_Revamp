@@ -11,7 +11,13 @@
 import type { PrismaClient, Stage } from "@prisma/client";
 import { sendEmail } from "./email-service.js";
 
-export type StageEmailContent = { subject: string; text: string; html: string };
+export type StageEmailContent = {
+  subject: string;
+  text: string;
+  html: string;
+  /** Optional PDF attachments — passed straight through to sendEmail. */
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+};
 
 export type StageEmailContext = {
   prisma: PrismaClient;
@@ -43,6 +49,7 @@ export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, conte
       html: content.html,
       threadEntryId: entryId,
       threadReadableId: inquiryId,
+      attachments: content.attachments,
     });
     if (result.status === "sent") {
       await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SENT`, {
