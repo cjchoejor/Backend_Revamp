@@ -12,6 +12,8 @@ import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
 import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
+import { openConfirmationVoucherPdf } from "@/lib/api/documents";
+import { PdfButton } from "./pdf-button";
 import { StepAction } from "./step-action";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
@@ -139,6 +141,23 @@ export function CheckInStep({
           — the second point you can&rsquo;t quietly undo.
         </p>
       </div>
+
+      {/* Confirmation voucher (reprint) */}
+      {session && entry.reservation?.id && (
+        <div className="block">
+          <BlockH>
+            <ShieldCheck style={{ width: 13, height: 13 }} />
+            Confirmation voucher
+          </BlockH>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ fontSize: 12, color: "var(--ink-2)" }}>Reprint the guest&rsquo;s reservation confirmation.</span>
+            <PdfButton
+              label="Voucher PDF"
+              open={() => openConfirmationVoucherPdf(session, entry.reservation!.id)}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Identity verification */}
       <div className="block">

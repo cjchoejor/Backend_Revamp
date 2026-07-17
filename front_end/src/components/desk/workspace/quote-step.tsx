@@ -18,6 +18,8 @@ import {
   supersedeQuotation,
 } from "@/lib/api/quotations";
 import { money } from "@/lib/desk/workspace";
+import { openQuotationPdf } from "@/lib/api/documents";
+import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, QuotationState, QuotationSummary } from "@/types/api";
@@ -475,6 +477,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
 
 function QuoteRow({ q }: { q: QuotationSummary }) {
   const tag = STATE_TAG[q.state];
+  const { session } = useSession();
   return (
     <div
       style={{
@@ -491,7 +494,10 @@ function QuoteRow({ q }: { q: QuotationSummary }) {
         <b>{q.referenceNumber}</b>
         <span className={`tag ${tag.cls}`}>{tag.label}</span>
       </span>
-      <span className="mono">{money(q.totalAmount, q.currency)}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span className="mono">{money(q.totalAmount, q.currency)}</span>
+        {session && <PdfButton label="Quotation PDF" open={() => openQuotationPdf(session, q.id)} />}
+      </span>
     </div>
   );
 }

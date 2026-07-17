@@ -19,6 +19,8 @@ import {
 } from "@/lib/api/post-stay";
 import { progressDispute } from "@/lib/api/in-stay";
 import { deriveFinancials, money, s9CloseReadiness } from "@/lib/desk/workspace";
+import { openInvoicePdf } from "@/lib/api/documents";
+import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -280,6 +282,9 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
               <button className="btn btn-ghost btn-sm" disabled={dispatchM.isPending} onClick={() => dispatchM.mutate()}>
                 Dispatch draft invoice
               </button>
+            )}
+            {session && invId() && (
+              <PdfButton label="View invoice PDF" open={() => openInvoicePdf(session, invId()!)} />
             )}
           </div>
           {elevated && invoices.length > 0 && (

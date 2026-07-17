@@ -24,6 +24,8 @@ import {
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
+import { openInvoicePdf } from "@/lib/api/documents";
+import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -425,7 +427,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             {proformaInvoices.map((inv) => (
               <div key={inv.id} className="fact b-transit" style={{ marginBottom: 9, padding: "6px 11px", fontSize: 12, justifyContent: "space-between", width: "100%" }}>
                 <span className="mono">{inv.id.slice(0, 14)}…</span>
-                <span className="tag">{inv.state}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="tag">{inv.state}</span>
+                  {session && <PdfButton label="Proforma PDF" open={() => openInvoicePdf(session, inv.id)} />}
+                </span>
               </div>
             ))}
             <div className="field">

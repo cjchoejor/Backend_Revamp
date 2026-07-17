@@ -20,6 +20,8 @@ import {
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { progressDispute } from "@/lib/api/in-stay";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
+import { openInvoicePdf } from "@/lib/api/documents";
+import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -413,6 +415,13 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                   Dispatch final invoice
                 </button>
               )}
+              {session &&
+                (() => {
+                  const finalInvoice = folioInvoices.find((i) => i.invoiceType === "FINAL");
+                  return finalInvoice ? (
+                    <PdfButton label="View final invoice PDF" open={() => openInvoicePdf(session, finalInvoice.id)} />
+                  ) : null;
+                })()}
             </div>
           </>
         ) : (
