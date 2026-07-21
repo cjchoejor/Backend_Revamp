@@ -15,6 +15,7 @@ import {
   type GuestProfileSummary,
 } from "@/lib/api/guest-profiles";
 import {
+  captureCorporateContext,
   createInquiry,
   searchCorporateAccountsLookup,
   searchTravelAgentsLookup,
@@ -219,6 +220,10 @@ export function DeskNewInquiryForm() {
   // Inquiry & stay
   const [channelKey, setChannelKey] = useState<ChannelKey>("WALKIN");
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
+  // Policy 17 / SIG-S1 §100.6 — CORPORATE bookings must record a client reference + coordinator
+  // on the inquiry, else the entry can't exit S1. Captured here at intake.
+  const [corpClientRef, setCorpClientRef] = useState("");
+  const [corpCoordinator, setCorpCoordinator] = useState("");
   const [adults, setAdults] = useState("1");
   const [children, setChildren] = useState("0");
   // One age per child, synced to the children count. Drives the child policy + CNB pricing.
@@ -235,6 +240,8 @@ export function DeskNewInquiryForm() {
 
   const channel = useMemo(() => CHANNELS.find((c) => c.key === channelKey)!, [channelKey]);
   const partyKind = "party" in channel ? (channel.party as PartyKind) : null;
+  // Corporate bookings require the client-ref / coordinator context (Policy 17).
+  const needsCorporateContext = channel.channel === "CORPORATE";
 
   // Default dates client-side (today / tomorrow) to avoid SSR hydration mismatch.
   useEffect(() => {
@@ -248,6 +255,14 @@ export function DeskNewInquiryForm() {
   useEffect(() => {
     if (!partyKind) setParty(null);
   }, [partyKind]);
+
+  // Clear the corporate/government context when the channel no longer needs it.
+  useEffect(() => {
+    if (!needsCorporateContext) {
+      setCorpClientRef("");
+      setCorpCoordinator("");
+    }
+  }, [needsCorporateContext]);
 
   // Keep the child-ages list length in step with the children count.
   const childCountNum = Math.max(0, parseInt(children || "0", 10) || 0);
@@ -346,7 +361,8 @@ export function DeskNewInquiryForm() {
     selectedGuest ||
     (firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim())
   );
-  const canSubmit = (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete;
+  const corporateContextComplete = !needsCorporateContext || (corpClientRef.trim() !== "" && corpCoordinator.trim() !== "");
+  const canSubmit = (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete && corporateContextComplete;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -382,6 +398,14 @@ export function DeskNewInquiryForm() {
         travelAgentId: partyKind === "TRAVEL_AGENT" ? party?.id ?? null : null,
         corporateAccountId: partyKind === "CORPORATE" ? party?.id ?? null : null,
       });
+
+      // Corporate/government context (Policy 17) — required before the entry can exit S1.
+      if (needsCorporateContext) {
+        await captureCorporateContext(session, inquiry.id, {
+          corporateClientRef: corpClientRef.trim(),
+          corporateCoordinator: corpCoordinator.trim(),
+        });
+      }
 
       return createEntry(session, {
         inquiryId: inquiry.id,
@@ -591,6 +615,33 @@ export function DeskNewInquiryForm() {
           </div>
 
           {partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
+
+          {needsCorporateContext && (
+            <div className="frow">
+              <div className="field">
+                <label>
+                  Corporate client reference <span style={{ color: "var(--warn)" }}>*</span>
+                </label>
+                <input
+                  className="dinput"
+                  value={corpClientRef}
+                  onChange={(e) => setCorpClientRef(e.target.value)}
+                  placeholder="PO / account / authorisation ref"
+                />
+              </div>
+              <div className="field">
+                <label>
+                  Coordinator <span style={{ color: "var(--warn)" }}>*</span>
+                </label>
+                <input
+                  className="dinput"
+                  value={corpCoordinator}
+                  onChange={(e) => setCorpCoordinator(e.target.value)}
+                  placeholder="Their contact person"
+                />
+              </div>
+            </div>
+          )}
 
           <div className="frow">
             <div className="field">

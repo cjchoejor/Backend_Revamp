@@ -31,6 +31,24 @@ export async function createInquiry(
   });
 }
 
+/**
+ * Capture the corporate/government commercial context on an inquiry (SIG-S1 §100.6, Policy 17).
+ * Required for `sourceChannel` CORPORATE or GOVERNMENT before the entry can exit S1 — the backend
+ * bills the organisation, so it needs the client reference (their PO/account/authorisation ref)
+ * and the coordinator (their contact person). `PATCH /api/inquiries/:id/corporate-context` (L1+).
+ */
+export async function captureCorporateContext(
+  session: Session,
+  inquiryId: string,
+  body: { corporateClientRef: string; corporateCoordinator: string },
+) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/corporate-context`, {
+    method: "PATCH",
+    session,
+    body,
+  });
+}
+
 // ----- Phase C operational lookups (L1-accessible search) -----
 
 export type LookupPartyMatch = {
