@@ -279,7 +279,7 @@ Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **Corporat
 
 **Models** ([schema.prisma](back_end/prisma/schema.prisma)):
 - `TravelAgent` — id (`TA-YYYYMMDD-NNNN`), displayName, contactNumber, contactEmail, modeOfContact (PHONE/EMAIL/WHATSAPP/IN_PERSON/OTHER), notes, isActive
-- `CorporateAccount` — same shape + gstNumber + billingAddress
+- `CorporateAccount` — same shape + gstNumber + billingAddress + **`contractRefs String[]` + `coordinators Json?`** (migration `20260721120000`, spec-aligned with `CorporateProfile.contractRefs`/`coordinators`, DEV-SPEC-001-Part2 §2.6.2). These are the corporate commercial context (SIG-S1 §100.6 / Policy 17); the desk intake **inherits** them when an account is picked (first contractRef + first coordinator name pre-fill `Inquiry.corporateClientRef`/`corporateCoordinator` via `captureCorporateContext`), falling back to free-text for accounts with none. Editable on `/admin/corporate-accounts`; carried on the L1 lookup (`GET /api/lookups/corporate-accounts/search`) so the desk can read them.
 - `RateCard` — partyType (TRAVEL_AGENT/CORPORATE) + partyId (polymorphic, no FK), roomBaseRate, extraBedRate, cnbPercent, breakfast/lunch/dinner standalone rates, CP/MAP_LUNCH/MAP_DINNER/AP meal-plan rates, currency, effectiveFrom/effectiveTo
 - `RoomTypeRateOverride` — per-room-type roomBaseRate override on a specific RateCard. New RateCard versions automatically carry forward the active overrides from the prior version.
 

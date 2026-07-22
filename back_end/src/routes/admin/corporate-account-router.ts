@@ -11,6 +11,12 @@ const L4 = requireActorLevel("L4");
 
 const contactModeSchema = z.enum(["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"]).optional().nullable();
 
+const coordinatorSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  phone: z.string().trim().max(50).optional().nullable(),
+  email: z.string().trim().max(200).optional().nullable(),
+});
+
 const createSchema = z.object({
   displayName: z.string().trim().min(1).max(200),
   contactNumber: z.string().trim().max(50).optional().nullable(),
@@ -18,6 +24,9 @@ const createSchema = z.object({
   modeOfContact: contactModeSchema,
   gstNumber: z.string().trim().max(50).optional().nullable(),
   billingAddress: z.string().trim().max(500).optional().nullable(),
+  // Spec §2.6.2 — contract references + coordinator contacts on the standing account.
+  contractRefs: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+  coordinators: z.array(coordinatorSchema).max(50).optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
   isActive: z.boolean().optional(),
 });

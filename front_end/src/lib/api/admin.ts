@@ -1072,6 +1072,8 @@ export async function reactivateTravelAgent(session: Session, id: string) {
 
 // ----- Corporate accounts (Phase B) -----
 
+export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+
 export type CorporateAccountAdmin = {
   id: string;
   displayName: string;
@@ -1080,6 +1082,8 @@ export type CorporateAccountAdmin = {
   modeOfContact: ContactMode;
   gstNumber: string | null;
   billingAddress: string | null;
+  contractRefs: string[];
+  coordinators: CoordinatorContact[] | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1094,6 +1098,8 @@ export type CorporateAccountInput = {
   modeOfContact?: ContactMode | null;
   gstNumber?: string | null;
   billingAddress?: string | null;
+  contractRefs?: string[];
+  coordinators?: CoordinatorContact[];
   notes?: string | null;
   isActive?: boolean;
 };

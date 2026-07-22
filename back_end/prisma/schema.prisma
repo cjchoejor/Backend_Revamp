@@ -2275,6 +2275,13 @@ model CorporateAccount {
   modeOfContact  ContactMode @default(EMAIL)
   gstNumber      String?
   billingAddress String?
+  // Corporate commercial context (spec-aligned with CorporateProfile.contractRefs / coordinators,
+  // DEV-SPEC-001-Part2 §2.6.2). These live on the standing account so a booking INHERITS them at
+  // S1 intake (SIG-S1 §100.6 / Policy 17) rather than re-typing per inquiry.
+  // contractRefs: contract/PO/authorisation reference identifiers for this client.
+  contractRefs   String[]    @default([])
+  // coordinators: array of contact objects [{ name, phone?, email? }].
+  coordinators   Json?
   notes          String?
   isActive       Boolean     @default(true)
   createdAt      DateTime    @default(now())

@@ -54,6 +54,8 @@ export default function AdminCorporateAccountsPage() {
       modeOfContact: a.modeOfContact,
       gstNumber: a.gstNumber,
       billingAddress: a.billingAddress,
+      contractRefs: a.contractRefs ?? [],
+      coordinators: a.coordinators ?? [],
       notes: a.notes,
       isActive: a.isActive,
     });
@@ -172,6 +174,99 @@ export default function AdminCorporateAccountsPage() {
                     <span className="admin-muted text-xs">Billing address</span>
                     <input className="admin-input" value={draft.billingAddress ?? ""} onChange={(e) => setDraft({ ...draft, billingAddress: e.target.value })} />
                   </label>
+                  <div className="block space-y-1 sm:col-span-2">
+                    <span className="admin-muted text-xs">Contract references</span>
+                    <p className="admin-muted text-[11px]">
+                      Inherited by corporate bookings at intake (SIG-S1 §100.6 / Policy 17). PO / account /
+                      authorisation references for this client.
+                    </p>
+                    {(draft.contractRefs ?? []).map((r, i) => (
+                      <div key={i} className="flex gap-2">
+                        <input
+                          className="admin-input"
+                          value={r}
+                          placeholder="e.g. PO-2026-0042"
+                          onChange={(e) => {
+                            const next = [...(draft.contractRefs ?? [])];
+                            next[i] = e.target.value;
+                            setDraft({ ...draft, contractRefs: next });
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-ghost admin-btn-sm"
+                          onClick={() =>
+                            setDraft({ ...draft, contractRefs: (draft.contractRefs ?? []).filter((_, j) => j !== i) })
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-ghost admin-btn-sm"
+                      onClick={() => setDraft({ ...draft, contractRefs: [...(draft.contractRefs ?? []), ""] })}
+                    >
+                      + Add reference
+                    </button>
+                  </div>
+
+                  <div className="block space-y-1 sm:col-span-2">
+                    <span className="admin-muted text-xs">Coordinators</span>
+                    <p className="admin-muted text-[11px]">Contact person(s) on the client side.</p>
+                    {(draft.coordinators ?? []).map((c, i) => {
+                      const update = (patch: Partial<typeof c>) => {
+                        const next = [...(draft.coordinators ?? [])];
+                        next[i] = { ...next[i], ...patch };
+                        setDraft({ ...draft, coordinators: next });
+                      };
+                      return (
+                        <div key={i} className="flex flex-wrap gap-2">
+                          <input
+                            className="admin-input"
+                            style={{ flex: "1 1 30%" }}
+                            value={c.name}
+                            placeholder="Name"
+                            onChange={(e) => update({ name: e.target.value })}
+                          />
+                          <input
+                            className="admin-input"
+                            style={{ flex: "1 1 25%" }}
+                            value={c.phone ?? ""}
+                            placeholder="Phone"
+                            onChange={(e) => update({ phone: e.target.value })}
+                          />
+                          <input
+                            className="admin-input"
+                            style={{ flex: "1 1 25%" }}
+                            value={c.email ?? ""}
+                            placeholder="Email"
+                            onChange={(e) => update({ email: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn-ghost admin-btn-sm"
+                            onClick={() =>
+                              setDraft({ ...draft, coordinators: (draft.coordinators ?? []).filter((_, j) => j !== i) })
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-ghost admin-btn-sm"
+                      onClick={() =>
+                        setDraft({ ...draft, coordinators: [...(draft.coordinators ?? []), { name: "", phone: "", email: "" }] })
+                      }
+                    >
+                      + Add coordinator
+                    </button>
+                  </div>
+
                   <label className="block space-y-1 sm:col-span-2">
                     <span className="admin-muted text-xs">Notes</span>
                     <textarea className="admin-input min-h-[60px]" value={draft.notes ?? ""} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />

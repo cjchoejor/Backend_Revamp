@@ -256,13 +256,25 @@ export function DeskNewInquiryForm() {
     if (!partyKind) setParty(null);
   }, [partyKind]);
 
-  // Clear the corporate/government context when the channel no longer needs it.
+  // Clear the corporate context when the channel no longer needs it.
   useEffect(() => {
     if (!needsCorporateContext) {
       setCorpClientRef("");
       setCorpCoordinator("");
     }
   }, [needsCorporateContext]);
+
+  // Inherit the client reference + coordinator from the picked corporate account (spec §2.6.2):
+  // when the account carries contractRefs / coordinators, default to the first of each. Accounts
+  // with none fall through to manual free-text entry.
+  useEffect(() => {
+    if (partyKind !== "CORPORATE" || !party) return;
+    const refs = party.contractRefs ?? [];
+    const coords = party.coordinators ?? [];
+    if (refs.length > 0) setCorpClientRef(refs[0]);
+    if (coords.length > 0) setCorpCoordinator(coords[0].name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [party?.id]);
 
   // Keep the child-ages list length in step with the children count.
   const childCountNum = Math.max(0, parseInt(children || "0", 10) || 0);
@@ -616,32 +628,71 @@ export function DeskNewInquiryForm() {
 
           {partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
 
-          {needsCorporateContext && (
-            <div className="frow">
-              <div className="field">
-                <label>
-                  Corporate client reference <span style={{ color: "var(--warn)" }}>*</span>
-                </label>
-                <input
-                  className="dinput"
-                  value={corpClientRef}
-                  onChange={(e) => setCorpClientRef(e.target.value)}
-                  placeholder="PO / account / authorisation ref"
-                />
-              </div>
-              <div className="field">
-                <label>
-                  Coordinator <span style={{ color: "var(--warn)" }}>*</span>
-                </label>
-                <input
-                  className="dinput"
-                  value={corpCoordinator}
-                  onChange={(e) => setCorpCoordinator(e.target.value)}
-                  placeholder="Their contact person"
-                />
-              </div>
-            </div>
-          )}
+          {needsCorporateContext &&
+            (() => {
+              const accountRefs = party?.contractRefs ?? [];
+              const accountCoords = party?.coordinators ?? [];
+              const inheritedRefs = accountRefs.length > 0;
+              const inheritedCoords = accountCoords.length > 0;
+              return (
+                <>
+                  {party && (inheritedRefs || inheritedCoords) && (
+                    <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 6px" }}>
+                      Inherited from <b>{party.displayName}</b>&rsquo;s account.{" "}
+                      {!inheritedRefs || !inheritedCoords ? "Fill the rest below. " : ""}
+                      Manage these on the corporate account in Admin.
+                    </p>
+                  )}
+                  <div className="frow">
+                    <div className="field">
+                      <label>
+                        Corporate client reference <span style={{ color: "var(--warn)" }}>*</span>
+                      </label>
+                      {inheritedRefs ? (
+                        <select value={corpClientRef} onChange={(e) => setCorpClientRef(e.target.value)}>
+                          <option value="">— select a contract reference —</option>
+                          {accountRefs.map((r) => (
+                            <option key={r} value={r}>
+                              {r}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          className="dinput"
+                          value={corpClientRef}
+                          onChange={(e) => setCorpClientRef(e.target.value)}
+                          placeholder="PO / account / authorisation ref"
+                        />
+                      )}
+                    </div>
+                    <div className="field">
+                      <label>
+                        Coordinator <span style={{ color: "var(--warn)" }}>*</span>
+                      </label>
+                      {inheritedCoords ? (
+                        <select value={corpCoordinator} onChange={(e) => setCorpCoordinator(e.target.value)}>
+                          <option value="">— select a coordinator —</option>
+                          {accountCoords.map((c) => (
+                            <option key={c.name} value={c.name}>
+                              {c.name}
+                              {c.phone ? ` · ${c.phone}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          className="dinput"
+                          value={corpCoordinator}
+                          onChange={(e) => setCorpCoordinator(e.target.value)}
+                          placeholder="Their contact person"
+                        />
+                      )}
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
           <div className="frow">
             <div className="field">

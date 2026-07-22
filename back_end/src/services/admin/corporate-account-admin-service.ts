@@ -5,6 +5,8 @@ import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 
+export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+
 export type CorporateAccountInput = {
   displayName: string;
   contactNumber?: string | null;
@@ -12,9 +14,41 @@ export type CorporateAccountInput = {
   modeOfContact?: ContactMode | null;
   gstNumber?: string | null;
   billingAddress?: string | null;
+  /** Contract / PO / authorisation reference identifiers for this client (spec §2.6.2). */
+  contractRefs?: string[];
+  /** Coordinator contact objects [{ name, phone?, email? }] (spec §2.6.2). */
+  coordinators?: CoordinatorContact[];
   notes?: string | null;
   isActive?: boolean;
 };
+
+/** Normalise contractRefs: trimmed, non-empty, deduped. */
+function normalizeContractRefs(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of v) {
+    const s = typeof r === "string" ? r.trim() : "";
+    if (s && !seen.has(s)) { seen.add(s); out.push(s); }
+  }
+  return out;
+}
+
+/** Normalise coordinators: each must have a non-empty name; phone/email optional. */
+function normalizeCoordinators(v: unknown): CoordinatorContact[] {
+  if (!Array.isArray(v)) return [];
+  const out: CoordinatorContact[] = [];
+  for (const c of v) {
+    if (!c || typeof c !== "object") continue;
+    const obj = c as Record<string, unknown>;
+    const name = typeof obj.name === "string" ? obj.name.trim() : "";
+    if (!name) continue;
+    const phone = typeof obj.phone === "string" && obj.phone.trim() ? obj.phone.trim() : null;
+    const email = typeof obj.email === "string" && obj.email.trim() ? obj.email.trim() : null;
+    out.push({ name, phone, email });
+  }
+  return out;
+}
 
 const ALLOWED_CONTACT_MODES: ContactMode[] = [
   ContactMode.PHONE,
@@ -60,6 +94,8 @@ export async function createCorporateAccount(prisma: PrismaClient, input: Corpor
         modeOfContact: mode,
         gstNumber: input.gstNumber?.trim() || null,
         billingAddress: input.billingAddress?.trim() || null,
+        contractRefs: normalizeContractRefs(input.contractRefs),
+        coordinators: normalizeCoordinators(input.coordinators),
         notes: input.notes?.trim() || null,
         isActive: input.isActive ?? true,
         createdBy: actorId,
@@ -101,6 +137,8 @@ export async function updateCorporateAccount(
         modeOfContact: input.modeOfContact ?? undefined,
         gstNumber: input.gstNumber === undefined ? undefined : input.gstNumber?.trim() || null,
         billingAddress: input.billingAddress === undefined ? undefined : input.billingAddress?.trim() || null,
+        contractRefs: input.contractRefs === undefined ? undefined : normalizeContractRefs(input.contractRefs),
+        coordinators: input.coordinators === undefined ? undefined : normalizeCoordinators(input.coordinators),
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
         isActive: input.isActive,
       },

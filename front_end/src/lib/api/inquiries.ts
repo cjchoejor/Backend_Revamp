@@ -51,6 +51,8 @@ export async function captureCorporateContext(
 
 // ----- Phase C operational lookups (L1-accessible search) -----
 
+export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+
 export type LookupPartyMatch = {
   id: string;
   displayName: string;
@@ -58,6 +60,9 @@ export type LookupPartyMatch = {
   contactEmail: string | null;
   modeOfContact: string;
   gstNumber?: string | null;
+  /** Corporate accounts only — contract references + coordinators inherited at intake (spec §2.6.2). */
+  contractRefs?: string[];
+  coordinators?: CoordinatorContact[];
 };
 
 export async function searchTravelAgentsLookup(session: Session, q: string) {
