@@ -1,10 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, Plus, RotateCcw, Search, UserPlus, Users } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Briefcase,
+  Building2,
+  ChevronLeft,
+  DoorOpen,
+  Globe,
+  PhoneCall,
+  Plane,
+  Plus,
+  RotateCcw,
+  Search,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -17,11 +30,12 @@ import {
 import {
   captureCorporateContext,
   createInquiry,
+  getInquiry,
   searchCorporateAccountsLookup,
   searchTravelAgentsLookup,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
-import { createEntry } from "@/lib/api/entries";
+import { createEntry, getEntry, updateEntryIntake } from "@/lib/api/entries";
 import { getChildPolicy, getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { BackendRail, type RailGroup } from "@/components/desk/workspace/backend-inline";
 import { DateField, nextDayIso } from "@/components/desk/date-field";
@@ -44,6 +58,28 @@ const CHANNELS = [
 ] as const;
 
 type ChannelKey = (typeof CHANNELS)[number]["key"];
+
+/**
+ * Presentation metadata for the "Came in as" first step — one icon + one-line blurb per channel,
+ * grouped so the receptionist reads the whole list at a glance. The channel behaviour itself
+ * (sourceChannel / party / useType) still lives on CHANNELS above; this only decorates it.
+ */
+const CHANNEL_META: Record<ChannelKey, { icon: React.ComponentType<{ size?: number; className?: string }>; blurb: string }> = {
+  WALKIN: { icon: DoorOpen, blurb: "Guest arrived at the desk" },
+  DIRECT_ONLINE: { icon: Globe, blurb: "Booked through our own site or email" },
+  DIRECT_VOICE: { icon: PhoneCall, blurb: "Phoned or messaged us directly" },
+  OTA: { icon: Plane, blurb: "Booking.com, Agoda and other OTAs" },
+  CORPORATE: { icon: Building2, blurb: "Billed to a company account" },
+  AGENT: { icon: Briefcase, blurb: "Booked via a travel agent" },
+  GROUP_MICE: { icon: Users, blurb: "Group block, meeting or event" },
+};
+
+/** The three buckets the type cards are grouped under on the first step. */
+const CHANNEL_GROUPS: { label: string; keys: ChannelKey[] }[] = [
+  { label: "Individual guest", keys: ["WALKIN", "DIRECT_ONLINE", "DIRECT_VOICE", "OTA"] },
+  { label: "Partner / account", keys: ["CORPORATE", "AGENT"] },
+  { label: "Group", keys: ["GROUP_MICE"] },
+];
 
 const PHONE_CODES = ["+975", "+91", "+61"];
 const NATIONALITIES = ["Bhutanese", "Indian"];
@@ -221,7 +257,20 @@ function PartySearch({
 
 export function DeskNewInquiryForm() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { session } = useSession();
+  // Edit mode: `?edit=<entryId>` opens this same "Start a booking" page pre-filled with an existing
+  // booking. Only the stay fields (dates / composition / rooms) are editable — the guest identity
+  // and "Came in as" live on the inquiry/guest and have no update endpoint, so they show read-only.
+  // Saving PATCHes the entry (S1-only server-side) rather than creating a new one.
+  const searchParams = useSearchParams();
+  const editEntryId = searchParams.get("edit");
+  const isEdit = !!editEntryId;
+
+  // Two-step intake: pick "Came in as" first, then fill the tailored details form. The channel
+  // still lives in `channelKey` below — this only gates which screen renders. Editing skips the
+  // type picker (the channel can't change) and lands straight on the details form.
+  const [wizardStep, setWizardStep] = useState<"type" | "details">(isEdit ? "details" : "type");
   const [mode, setMode] = useState<IntakeMode>("new");
 
   // New-guest fields
@@ -258,18 +307,51 @@ export function DeskNewInquiryForm() {
   const [today, setToday] = useState("");
   const [notes, setNotes] = useState("");
 
+  // --- Edit-mode data load + one-time pre-fill ---
+  const editEntryQuery = useQuery({
+    queryKey: ["entry", editEntryId],
+    queryFn: () => getEntry(session!, editEntryId!),
+    enabled: !!session && isEdit,
+  });
+  const editEntry = editEntryQuery.data ?? null;
+  const editInquiryQuery = useQuery({
+    queryKey: ["inquiry", editEntry?.inquiryId],
+    queryFn: () => getInquiry(session!, editEntry!.inquiryId),
+    enabled: !!session && isEdit && !!editEntry?.inquiryId,
+  });
+  const editGuest =
+    editEntry?.guestProfile ?? editEntry?.inquiry?.guestProfile ?? editInquiryQuery.data?.guestProfile ?? null;
+  const editChannel = editInquiryQuery.data?.sourceChannel ?? null;
+  // Best-effort reverse map of the stored sourceChannel back to a "Came in as" option, so the
+  // (read-only) select shows the original choice. DIRECT maps to several UI options; the first
+  // match is close enough for a disabled display.
+  const editChannelKey = CHANNELS.find((c) => c.channel === editChannel)?.key ?? "WALKIN";
+  const editInited = useRef(false);
+  useEffect(() => {
+    if (!isEdit || !editEntry || editInited.current) return;
+    setAdults(String(editEntry.adultCount ?? editEntry.guestCount ?? 1));
+    setChildren(String(editEntry.childCount ?? 0));
+    setChildAges((editEntry.childAges ?? []).map(String));
+    setNumberOfRooms(String(editEntry.numberOfRooms ?? 1));
+    setCheckIn(editEntry.checkInDate?.slice(0, 10) ?? "");
+    setCheckOut(editEntry.checkOutDate?.slice(0, 10) ?? "");
+    editInited.current = true;
+  }, [isEdit, editEntry]);
+
   const channel = useMemo(() => CHANNELS.find((c) => c.key === channelKey)!, [channelKey]);
   const partyKind = "party" in channel ? (channel.party as PartyKind) : null;
   // Corporate bookings require the client-ref / coordinator context (Policy 17).
   const needsCorporateContext = channel.channel === "CORPORATE";
 
-  // Default dates client-side (today / tomorrow) to avoid SSR hydration mismatch.
+  // Default dates client-side (today / tomorrow) to avoid SSR hydration mismatch. In edit mode we
+  // keep the loaded booking's own dates — only `today` (the date-field floor) is still set.
   useEffect(() => {
     const t = new Date();
     setToday(isoDate(t));
+    if (isEdit) return;
     setCheckIn(isoDate(t));
     setCheckOut(isoDate(new Date(t.getTime() + 86_400_000)));
-  }, []);
+  }, [isEdit]);
 
   // Check-out follows check-in: picking a check-in date moves check-out to the next day, since the
   // shortest stay is one night. A check-out the operator has already pushed further out survives —
@@ -404,11 +486,31 @@ export function DeskNewInquiryForm() {
     (firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim())
   );
   const corporateContextComplete = !needsCorporateContext || (corpClientRef.trim() !== "" && corpCoordinator.trim() !== "");
-  const canSubmit = (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete && corporateContextComplete;
+  const canSubmit = isEdit
+    ? // Editing an existing booking: guest + channel are fixed, so only the stay fields gate the save.
+      !!editEntry && agesComplete && !!checkIn && !!checkOut
+    : (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete && corporateContextComplete;
 
   const mutation = useMutation({
     mutationFn: async () => {
       if (!session) throw new Error("Not signed in");
+
+      // Edit mode: PATCH the existing entry's stay fields only. Guest + channel are unchanged.
+      if (isEdit && editEntryId) {
+        const a = Math.max(1, Number(adults) || 1);
+        const c = Math.max(0, Number(children) || 0);
+        const parsedAges = childAges.map((x) => parseInt(x || "", 10)).filter((n) => Number.isFinite(n));
+        return updateEntryIntake(session, editEntryId, {
+          checkInDate: checkIn || undefined,
+          checkOutDate: checkOut || undefined,
+          adultCount: a,
+          childCount: c,
+          childAges: c > 0 ? (parsedAges.length === c ? parsedAges : undefined) : [],
+          guestCount: a + c,
+          numberOfRooms: Math.max(1, parseInt(numberOfRooms || "1", 10) || 1),
+          expectedVersion: editEntry?.version,
+        });
+      }
 
       let guestProfileId: string;
       if (selectedGuest) {
@@ -474,10 +576,20 @@ export function DeskNewInquiryForm() {
       });
     },
     onSuccess: (entry) => {
-      toast.success("Inquiry started");
+      toast.success(isEdit ? "Booking updated" : "Inquiry started");
+      // After an edit, the entry's version bumped — drop the cached copy so a second trip to this
+      // page (or the workspace) reads the fresh version, otherwise the next save sends a stale
+      // expectedVersion and the server rejects it with "version mismatch".
+      if (isEdit && editEntryId) {
+        void queryClient.invalidateQueries({ queryKey: ["entry", editEntryId] });
+        void queryClient.invalidateQueries({ queryKey: ["entry-trace", editEntryId] });
+        void queryClient.invalidateQueries({ queryKey: ["entry-timers", editEntryId] });
+        void queryClient.invalidateQueries({ queryKey: ["entries"] });
+      }
       router.push(`/desk/bookings/${entry.id}`);
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't start the inquiry"),
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.message : isEdit ? "Couldn't update the booking" : "Couldn't start the inquiry"),
   });
 
   // Rail highlight — no entry exists yet, so highlight is derived from form activity.
@@ -493,25 +605,138 @@ export function DeskNewInquiryForm() {
     { key: "create", label: "On 'Start inquiry & open booking'", items: BK.create },
   ];
 
+  // --- Step 0: "Came in as" ------------------------------------------------------------------
+  // The first thing the receptionist chooses. Picking a card sets the channel and advances to the
+  // tailored details form. Nothing is created yet — this is a pure selection screen.
+  if (wizardStep === "type") {
+    return (
+      <section className="view">
+        <Link className="ws-back" href="/desk/bookings" style={{ marginBottom: 12, display: "inline-flex" }}>
+          <ChevronLeft />
+          Bookings
+        </Link>
+        <div className="eyebrow">New booking</div>
+        <h1 className="h-lg" style={{ margin: "4px 0 6px" }}>
+          How did they come in?
+        </h1>
+        <p className="lead">
+          Pick how this booking reached us. It shapes the intake form on the next step — and travels
+          with the entry from S1 all the way through.
+        </p>
+
+        <div style={{ maxWidth: 760, margin: "18px auto 0" }}>
+          {CHANNEL_GROUPS.map((group) => (
+            <div className="block" key={group.label}>
+              <BlockH>{group.label}</BlockH>
+              <div className="eng-grid" style={{ marginTop: 0 }}>
+                {group.keys.map((key) => {
+                  const c = CHANNELS.find((x) => x.key === key)!;
+                  const Icon = CHANNEL_META[key].icon;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      className="eng-card"
+                      onClick={() => {
+                        setChannelKey(key);
+                        setWizardStep("details");
+                      }}
+                    >
+                      <div className="ec-top">
+                        <div
+                          className="ec-av"
+                          style={{ background: "var(--terra-t)", color: "var(--terra-d)", display: "flex", alignItems: "center", justifyContent: "center" }}
+                        >
+                          <Icon size={19} />
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="ec-name">{c.label}</div>
+                          <div className="ec-sub" style={{ color: "var(--ink-3)" }}>
+                            {CHANNEL_META[key].blurb}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  // --- Step 1: details ------------------------------------------------------------------------
   return (
     <section className="view">
-      <Link className="ws-back" href="/desk/bookings" style={{ marginBottom: 12, display: "inline-flex" }}>
-        <ChevronLeft />
-        Bookings
-      </Link>
-      <div className="eyebrow">New inquiry</div>
+      {isEdit ? (
+        <Link className="ws-back" href={`/desk/bookings/${editEntryId}`} style={{ marginBottom: 12, display: "inline-flex" }}>
+          <ChevronLeft />
+          Booking
+        </Link>
+      ) : (
+        <button
+          type="button"
+          className="ws-back"
+          onClick={() => setWizardStep("type")}
+          style={{ marginBottom: 12, display: "inline-flex", background: "none", border: 0, cursor: "pointer" }}
+        >
+          <ChevronLeft />
+          Booking type
+        </button>
+      )}
+      <div className="eyebrow">
+        {isEdit ? "Edit booking" : "New inquiry"} ·{" "}
+        <span style={{ color: "var(--terra-d)" }}>
+          {isEdit ? (editChannel ? editChannel.replace(/_/g, " ") : "—") : channel.label}
+        </span>
+      </div>
       <h1 className="h-lg" style={{ margin: "4px 0 6px" }}>
-        Start a booking
+        {isEdit ? "Edit the stay" : "Start a booking"}
       </h1>
       <p className="lead">
-        Capture who&rsquo;s asking and the stay they want. This opens the booking at the Inquiry step, where you
-        explore availability. No entry exists yet — the live backend timeline begins once the booking opens.
+        {isEdit
+          ? "Update the stay this booking asked for — dates, party size and rooms. The guest and how they came in stay as they were; changes save straight to the booking."
+          : "Capture who’s asking and the stay they want. This opens the booking at the Inquiry step, where you explore availability. No entry exists yet — the live backend timeline begins once the booking opens."}
       </p>
 
       <div className="bx-split" style={{ maxWidth: 1020, margin: "18px auto 0" }}>
         <div className="bx-main formwrap" style={{ margin: 0, maxWidth: "none" }}>
         <div className="block">
           <BlockH>Who is this for</BlockH>
+          {isEdit ? (
+            <>
+              <div className="field">
+                <label>Phone</label>
+                <input className="dinput" value={editGuest?.phone ?? ""} disabled readOnly />
+              </div>
+              <div className="frow">
+                <div className="field">
+                  <label>First name</label>
+                  <input value={editGuest?.firstName ?? ""} disabled readOnly />
+                </div>
+                <div className="field">
+                  <label>Last name</label>
+                  <input value={editGuest?.lastName ?? ""} disabled readOnly />
+                </div>
+              </div>
+              <div className="frow">
+                <div className="field">
+                  <label>Nationality</label>
+                  <input value={editGuest?.nationality ?? ""} disabled readOnly />
+                </div>
+                <div className="field">
+                  <label>Email</label>
+                  <input value={editGuest?.email ?? ""} disabled readOnly />
+                </div>
+              </div>
+              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+                Guest details stay as captured — they can&rsquo;t change on an existing booking. Edit the stay below.
+              </p>
+            </>
+          ) : (
+          <>
           <div className="seg" style={{ marginBottom: 13 }}>
             <button
               type="button"
@@ -649,22 +874,34 @@ export function DeskNewInquiryForm() {
               </div>
             </>
           )}
+          </>
+          )}
         </div>
 
         <div className="block">
           <BlockH>Inquiry &amp; stay</BlockH>
           <div className="field">
             <label>Came in as</label>
-            <select value={channelKey} onChange={(e) => setChannelKey(e.target.value as ChannelKey)}>
-              {CHANNELS.map((c) => (
-                <option key={c.key} value={c.key}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+            {isEdit ? (
+              <select value={editChannelKey} disabled>
+                {CHANNELS.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select value={channelKey} onChange={(e) => setChannelKey(e.target.value as ChannelKey)}>
+                {CHANNELS.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
-          {partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
+          {!isEdit && partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
 
           {needsCorporateContext &&
             (() => {
@@ -804,10 +1041,12 @@ export function DeskNewInquiryForm() {
             </div>
           </div>
 
-          <div className="field">
-            <label>Notes (optional)</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
+          {!isEdit && (
+            <div className="field">
+              <label>Notes (optional)</label>
+              <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </div>
+          )}
         </div>
 
         <button
@@ -816,7 +1055,13 @@ export function DeskNewInquiryForm() {
           disabled={!canSubmit || mutation.isPending}
           onClick={() => mutation.mutate()}
         >
-          {mutation.isPending ? "Starting…" : "Start inquiry & open booking"}
+          {mutation.isPending
+            ? isEdit
+              ? "Saving…"
+              : "Starting…"
+            : isEdit
+              ? "Save changes"
+              : "Start inquiry & open booking"}
         </button>
         </div>
 

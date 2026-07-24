@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Pencil, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -16,6 +17,7 @@ import {
 } from "@/lib/api/availability";
 import { MultiRoomSelect, roomMetaFromResults, type SealPayload } from "./multi-room-select";
 import { getInquiry } from "@/lib/api/inquiries";
+import { updateEntryIntake } from "@/lib/api/entries";
 import { roomTypeShort } from "@/lib/desk/rooms";
 import { formatDMY, guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
@@ -404,6 +406,80 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     },
   });
 
+  // --- Inline intake edit (S1 only) -----------------------------------------------------------
+  // Lets the operator go back and fix the stay details captured at intake — dates, party
+  // composition and room count — without leaving the booking. Persists to the entry via the
+  // existing PATCH /entries/:id (S1-only server-side). Kept separate from the availability-search
+  // inputs above, which only shape a search and never touch the stored entry.
+  const [isEditing, setIsEditing] = useState(false);
+  const [edCheckIn, setEdCheckIn] = useState("");
+  const [edCheckOut, setEdCheckOut] = useState("");
+  const [edAdults, setEdAdults] = useState("1");
+  const [edChildren, setEdChildren] = useState("0");
+  const [edChildAges, setEdChildAges] = useState<string[]>([]);
+  const [edRooms, setEdRooms] = useState("1");
+
+  const beginEdit = () => {
+    setEdCheckIn(entry.checkInDate?.slice(0, 10) ?? "");
+    setEdCheckOut(entry.checkOutDate?.slice(0, 10) ?? "");
+    setEdAdults(String(entry.adultCount ?? entry.guestCount ?? 1));
+    setEdChildren(String(entry.childCount ?? 0));
+    setEdChildAges((entry.childAges ?? []).map(String));
+    setEdRooms(String(entry.numberOfRooms ?? 1));
+    setIsEditing(true);
+  };
+
+  // Keep the edit form's child-age list in step with its children count.
+  const edChildCount = Math.max(0, parseInt(edChildren || "0", 10) || 0);
+  useEffect(() => {
+    setEdChildAges((prev) => {
+      const next = prev.slice(0, edChildCount);
+      while (next.length < edChildCount) next.push("");
+      return next;
+    });
+  }, [edChildCount]);
+
+  // Check-out follows check-in in the edit form too (shortest stay is one night).
+  useEffect(() => {
+    if (!isEditing || !edCheckIn) return;
+    const earliest = nextDayIso(edCheckIn);
+    if (!earliest) return;
+    setEdCheckOut((prev) => (!prev || prev < earliest ? earliest : prev));
+  }, [edCheckIn, isEditing]);
+
+  const edAgesComplete =
+    edChildCount === 0 ||
+    (edChildAges.length === edChildCount && edChildAges.every((a) => a.trim() !== "" && Number(a) >= 0));
+  const updateIntakeMutation = useMutation({
+    mutationFn: () => {
+      const a = Math.max(1, parseInt(edAdults || "1", 10) || 1);
+      const c = Math.max(0, parseInt(edChildren || "0", 10) || 0);
+      const ages = edChildAges.map((x) => parseInt(x || "", 10)).filter((n) => Number.isFinite(n));
+      return updateEntryIntake(session!, entry.id, {
+        checkInDate: edCheckIn || undefined,
+        checkOutDate: edCheckOut || undefined,
+        adultCount: a,
+        childCount: c,
+        childAges: c > 0 ? (ages.length === c ? ages : undefined) : [],
+        guestCount: a + c,
+        numberOfRooms: Math.max(1, parseInt(edRooms || "1", 10) || 1),
+        expectedVersion: entry.version,
+      });
+    },
+    onSuccess: () => {
+      setIsEditing(false);
+      toast.success("Stay details updated");
+      void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't update the details"),
+  });
+  const canSaveEdit = !!edCheckIn && !!edCheckOut && edAgesComplete && !updateIntakeMutation.isPending;
+  // Editable only while the booking is genuinely at S1 — the server rejects intake edits after that.
+  const canEditIntake = entry.currentStage === "S1";
+
   const { availableRooms, deficientRooms, unavailableRooms, pricing } = useMemo(() => {
     let rooms: ReturnType<typeof roomsFromResultSet> = {
       availableRooms: [],
@@ -503,6 +579,17 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   return (
     <div className="bx-split">
       <div className="bx-main">
+      {canEditIntake && !isEditing && (
+        <Link
+          className="ws-back"
+          href={`/desk/bookings/new?edit=${entry.id}`}
+          style={{ marginBottom: 10, display: "inline-flex" }}
+          title="Go back to the Start-a-booking page to edit this booking's stay details"
+        >
+          <ChevronLeft />
+          Start a booking
+        </Link>
+      )}
       <div className="speak">
         <div className="now">Do this next</div>
         <h2>Understand the stay, then explore availability.</h2>
@@ -513,27 +600,121 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       </div>
 
       <div className="block">
-        <BlockH>The guest</BlockH>
+        <BlockH
+          tag={
+            canEditIntake && !isEditing ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={beginEdit}
+                title="Edit the stay details captured at intake"
+              >
+                <Pencil style={{ width: 12, height: 12 }} />
+                Edit details
+              </button>
+            ) : null
+          }
+        >
+          The guest
+        </BlockH>
         <div className="frow">
           <Fact label="Primary contact" value={guestName(g)} />
           <Fact label="Came in as" value={channel?.replace(/_/g, " ") ?? DASH} />
         </div>
-        <div className="frow">
-          <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
-          <Fact label="Guests" value={guestsLabel ?? DASH} />
-        </div>
-        <div className="frow">
-          <Fact label="Check-in" value={formatDMY(entry.checkInDate) || DASH} />
-          <Fact
-            label="Check-out"
-            value={
-              formatDMY(entry.checkOutDate)
-                ? `${formatDMY(entry.checkOutDate)}${nights ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}`
-                : DASH
-            }
-          />
-        </div>
-        {!hasContact && (
+        {!isEditing ? (
+          <>
+            <div className="frow">
+              <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
+              <Fact label="Guests" value={guestsLabel ?? DASH} />
+            </div>
+            <div className="frow">
+              <Fact label="Check-in" value={formatDMY(entry.checkInDate) || DASH} />
+              <Fact
+                label="Check-out"
+                value={
+                  formatDMY(entry.checkOutDate)
+                    ? `${formatDMY(entry.checkOutDate)}${nights ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}`
+                    : DASH
+                }
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="frow">
+              <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
+              <div className="field" />
+            </div>
+            <div className="frow">
+              <div className="field">
+                <label>Check-in</label>
+                <DateField value={edCheckIn} onChange={setEdCheckIn} />
+              </div>
+              <div className="field">
+                <label>Check-out</label>
+                <DateField min={nextDayIso(edCheckIn) || undefined} value={edCheckOut} onChange={setEdCheckOut} />
+              </div>
+            </div>
+            <div className="frow">
+              <div className="field">
+                <label>Adults</label>
+                <input type="number" min={1} value={edAdults} onChange={(e) => setEdAdults(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Children</label>
+                <input type="number" min={0} value={edChildren} onChange={(e) => setEdChildren(e.target.value)} />
+              </div>
+            </div>
+            {edChildCount > 0 && (
+              <div className="field">
+                <label>Child age{edChildCount === 1 ? "" : "s"} (years)</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {edChildAges.map((age, i) => (
+                    <input
+                      key={i}
+                      type="number"
+                      min={0}
+                      className="dinput"
+                      style={{ width: 80 }}
+                      placeholder={`#${i + 1}`}
+                      value={age}
+                      onChange={(e) => setEdChildAges((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="frow">
+              <div className="field">
+                <label>Number of rooms</label>
+                <input type="number" min={1} value={edRooms} onChange={(e) => setEdRooms(e.target.value)} />
+              </div>
+              <div className="field" />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={!canSaveEdit}
+                onClick={() => updateIntakeMutation.mutate()}
+              >
+                {updateIntakeMutation.isPending ? "Saving…" : "Save details"}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={updateIntakeMutation.isPending}
+                onClick={() => setIsEditing(false)}
+              >
+                <X style={{ width: 13, height: 13 }} />
+                Cancel
+              </button>
+            </div>
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "2px 0 0", lineHeight: 1.5 }}>
+              This edits the stay the guest asked for. The availability search above is separate — re-run it
+              after changing dates or party size.
+            </p>
+          </>
+        )}
+        {!hasContact && !isEditing && (
           <p style={{ fontSize: 12, color: "var(--warn)", margin: 0 }}>
             A phone or email is required on the guest before this booking can move to Quote.
           </p>

@@ -42,7 +42,9 @@ export function labelForTimer(t: TimerLike): string {
   const code = t.timerCode || t.timerType || "";
   if (code === "ACKNOWLEDGEMENT_WINDOW_W22") {
     const msg = t.stageContext ? ACK_MESSAGE_BY_STAGE[t.stageContext] : null;
-    return msg ? `Awaiting reply · ${msg}` : "Awaiting guest reply";
+    // Embed which message we're waiting on, so "Awaiting quotation guest reply" reads clearly
+    // instead of a bare "Awaiting guest reply" that's ambiguous when several are armed at once.
+    return msg ? `Awaiting ${msg.toLowerCase()} guest reply` : "Awaiting guest reply";
   }
   return TIMER_LABELS[code] ?? code;
 }
