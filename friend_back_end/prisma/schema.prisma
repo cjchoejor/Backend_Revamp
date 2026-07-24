@@ -1,0 +1,2374 @@
+// Schema reconciled to SIG-S1 §2 (S1 authoritative) — keeps S2–S9 model surface for stage-by-stage roll-forward.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Stage {
+  S1
+  S2
+  S3
+  S4
+  S5
+  S6
+  S7
+  S8
+  S9
+  TERMINAL
+}
+
+enum EntryStatus {
+  ACTIVE
+  PARKED
+  CANCELLED
+  CLOSED
+  EXPIRED
+}
+
+enum EntryUseType {
+  LEISURE
+  CORPORATE
+  CONFERENCE
+  GROUP
+  APARTMENT
+  CATERING
+  ACCOMMODATION
+}
+
+enum GroupBillingMode {
+  GROUP_MASTER
+  INDIVIDUAL_FOLIO
+}
+
+enum HoldState {
+  PLACED
+  CONFIRMED
+  RELEASED
+  UPGRADED
+  EXPIRED
+}
+
+enum QuotationState {
+  DRAFT
+  SENT
+  ACCEPTED
+  SUPERSEDED
+  EXPIRED
+}
+
+enum InventoryClaimState {
+  FREE
+  SPECULATIVELY_HELD
+  COMMITTED_HELD
+  CONFIRMED
+  OCCUPIED
+  DEPARTED_DIRTY
+  DEPARTED_CLEAN
+}
+
+enum HandoffType {
+  H1
+  H2
+  H3
+  H4
+  H5
+}
+
+enum HandoffState {
+  CREATED
+  ACCEPTED
+  FULFILLED
+  REJECTED
+  ESCALATED
+  CANCELLED
+  CLOSED
+}
+
+enum FolioState {
+  PROVISIONAL
+  LIVE
+  NO_SHOW_CLOSED
+  SETTLED
+  OUTSTANDING
+  WRITTEN_OFF
+}
+
+enum InvoiceType {
+  PROFORMA
+  FINAL
+}
+
+enum InvoiceState {
+  DRAFT
+  DISPATCHED
+  PAYMENT_TRACKED
+  RECONCILED
+  SUPERSEDED
+}
+
+enum TimerStatus {
+  SCHEDULED
+  FIRED
+  CANCELLED
+}
+
+enum OverbookingTriggerType {
+  DELIBERATE
+  OTA_CONFLICT
+}
+
+model OtaConflictOverbookingRecord {
+  id                      String                 @id @default(uuid())
+  entryId                 String                 @unique
+  triggerType             OverbookingTriggerType
+  otaNotificationStatus   String                 @default("OPEN")
+  otaNotificationClosedAt DateTime?
+  mitigationPlanStatus    String                 @default("OPEN")
+  mitigationPlanClosedAt  DateTime?
+  gmApprovalActorId       String
+  gmApprovalAt            DateTime
+  createdAt               DateTime               @default(now())
+  createdBy               String
+
+  @@map("ota_conflict_overbooking_records")
+}
+
+enum FolioLineType {
+  ROOM_CHARGE
+  F_AND_B
+  SERVICE
+  OTHER
+  CREDIT_NOTE
+}
+
+enum FollowUpTaskStatus {
+  PENDING
+  COMPLETED
+}
+
+enum LostFoundReturnStatus {
+  HELD
+  RETURNED
+  DISPOSED
+}
+
+enum CommunicationChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum CommunicationType {
+  FEEDBACK_SOLICITATION
+  POST_STAY_CHARGE_NOTICE
+  QUOTATION
+  PROFORMA_INVOICE
+  CONFIRMATION_VOUCHER
+  INVOICE_SUPERSEDED_NOTICE
+  PRE_ARRIVAL_REMINDER
+  /// SIG-S6 — staff VIP arrival notification (per recipient role); acknowledgement via W22.
+  VIP_ARRIVAL_NOTIFICATION
+}
+
+enum NightAuditRunStatus {
+  COMPLETE
+  PARTIAL
+  FAILED
+}
+
+enum NightAuditAnomalyType {
+  MISSING_EXPECTED_CHARGE
+  AUDIT_EXCEPTION
+}
+
+enum DisputeStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum AmendmentPath {
+  PATH_1
+  PATH_2
+  PATH_3
+}
+
+enum WorkOrderToDoStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETE
+  WAIVED
+}
+
+enum PreArrivalTaskType {
+  PAYMENT_RECONCILIATION
+  CREDIT_CEILING_CHECK
+  NIGHT_AUDIT_TIMER_REGISTRATION
+  BED_CONFIGURATION_CHANGE
+  PRE_ARRIVAL_COMMUNICATION
+  SPECIAL_REQUEST_FULFILMENT
+  LATE_ARRIVAL_MEAL_COORDINATION
+  SITE_VISIT
+  UNIT_READINESS_VERIFICATION
+}
+
+enum TaskCategory {
+  ADMINISTRATIVE
+  OPERATIONAL
+  COMMUNICATION
+}
+
+enum RoomPhysicalState {
+  AVAILABLE_CLEAN
+  AVAILABLE_INSPECTED
+  DIRTY
+  UNDER_MAINTENANCE
+}
+
+enum DeficientConditionCategory {
+  HOUSEKEEPING
+  MAINTENANCE
+  SOFT_FURNISHING
+  OTHER
+}
+
+enum PaymentDirection {
+  IN
+  OUT
+}
+
+// SIG-S1 §6.6 SessionService / Policy 69
+enum ActorLevel {
+  L1
+  L2
+  L3
+  L4
+  SYSTEM
+}
+
+enum SessionStatus {
+  ACTIVE
+  IDLE_LOCKED
+  MANUALLY_LOCKED
+  HARD_LOGGED_OUT
+}
+
+enum SessionEventType {
+  LOGIN
+  PIN_SWITCH
+  IDLE_AUTO_LOCK
+  MANUAL_LOCK
+  HARD_LOGOUT
+}
+
+enum StageDwellMode {
+  ACTIVE
+  IDLE
+  PARKED
+}
+
+// --- Admin console (ACIG v1.1 core models) ------------------------------
+
+/**
+ * EntityVersionSnapshot — generic version-history table for in-place CRUD admin tables
+ * (HotelProfile, Department, Role, StaffUser, RatePlanRegistry, SeasonCalendar, PackageRegistry,
+ * CancellationPolicyRegistry, ModeConfiguration, CommunicationTemplate, InvoiceTemplate,
+ * FeedbackSurveyTemplate, HandoffChecklistTemplate, WorkOrderTemplate, VipNotificationRoutingConfig).
+ * Before every UPDATE through an admin endpoint that opts in (via `withEntityVersionSnapshot`),
+ * the prior row state is captured here as `rowJson`. Restoring a snapshot writes its JSON back
+ * to the live row and creates another snapshot capturing what was just superseded.
+ * Snapshots are kept forever (compliance + audit). Only L4 may write or restore.
+ */
+model EntityVersionSnapshot {
+  id         String   @id @default(uuid())
+  entityType String // e.g. "HotelProfile", "Department"
+  entityId   String
+  version    Int // per-entity sequence, starts at 1
+  rowJson    Json // the full row state BEFORE the change this snapshot precedes
+  changedBy  String
+  changedAt  DateTime @default(now())
+  changeNote String? // optional reason / "why" text from the admin
+
+  @@unique([entityType, entityId, version])
+  @@index([entityType, entityId])
+  @@index([changedAt])
+  @@map("entity_version_snapshots")
+}
+
+enum ModeLifecycleState {
+  DRAFT
+  VALIDATED
+  ACTIVE
+  SUPERSEDED
+}
+
+// --- Configuration ------------------------------------------------------
+
+// SIG-S1 §2.12 — ConfigurationEntry with date-range semantics. Admin writes only.
+model ConfigurationEntry {
+  id            String    @id @default(uuid())
+  configKey     String
+  configValue   Json
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  setBy         String    @default("actor-seed-system")
+  setAt         DateTime  @default(now())
+  notes         String?
+  createdAt     DateTime  @default(now())
+
+  @@index([configKey, effectiveFrom])
+  @@map("configuration_entries")
+}
+
+model HotelProfile {
+  id                    String   @id @default(uuid())
+  hotelName             String
+  registeredAddress     String
+  tradingAddress        String?
+  contactNumbers        Json
+  primaryEmail          String
+  operatingHours        Json
+  publicHolidaySchedule Json
+  timeZone              String
+  propertyCurrency      String
+  // Legally-required fields on Bhutanese invoices (Account No, TPN, GST TPN). Nullable
+  // during rollout; the admin fills them in on /admin/hotel-profile before first bill.
+  accountNumber         String?
+  tpnNumber             String?
+  gstTpnNumber          String?
+  // Storage key for the hotel logo used on the printed PDFs. Uploaded via the admin page
+  // and served through the document-storage layer (write-once).
+  logoStorageKey        String?
+  version               Int      @default(1)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  createdBy             String
+
+  @@map("hotel_profile")
+}
+
+model Department {
+  // New rows should get DPT-YYYYMMDD-NNNN via `allocateReadableId("DEPARTMENT", ...)`.
+  // uuid() default kept so existing rows work and callers that forget to allocate still get a valid id.
+  id             String   @id @default(uuid())
+  departmentCode String   @unique
+  departmentName String
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String
+
+  @@map("departments")
+}
+
+model Role {
+  // New rows should get ROL-YYYYMMDD-NNNN via `allocateReadableId("ROLE", ...)`.
+  // uuid() default kept for backwards compat with existing rows and stray non-admin callers.
+  id          String     @id @default(uuid())
+  roleCode    String     @unique
+  displayName String
+  actorLevel  ActorLevel
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  createdBy   String
+
+  permissions RolePermissionMapping[]
+  sessionCfg  RoleSessionConfig?
+  staffUsers  StaffUser[]
+
+  @@map("roles")
+}
+
+model RolePermissionMapping {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  isAllowed    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@unique([roleId, permissionId])
+  @@map("role_permission_mappings")
+}
+
+model RoleSessionConfig {
+  id                       String   @id @default(uuid())
+  roleId                   String   @unique
+  idleLockTimeoutSeconds   Int
+  hardLogoutTimeoutSeconds Int
+  manualLockAvailable      Boolean  @default(true)
+  version                  Int      @default(1)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  createdBy                String
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@map("role_session_configs")
+}
+
+model PolicyRegistry {
+  id               String   @id @default(uuid())
+  policyId         String
+  policyClass      String
+  policyDefinition Json
+  version          Int      @default(1)
+  effectiveFrom    DateTime @default(now())
+  isActive         Boolean  @default(true)
+  createdBy        String
+  createdAt        DateTime @default(now())
+
+  @@unique([policyId, version])
+  @@map("policy_registry")
+}
+
+// ACIG §2.1A.7 — operational scenario definitions (New Booking, Room Change, …).
+// `stageRoute`, `autoFulfilmentConditions`, `featureDependencies` are the spec's three typed
+// JSON columns. `displayName` keeps its pragmatic name (spec calls it `modeName`).
+model ModeConfiguration {
+  id                       String             @id @default(uuid())
+  modeKey                  String
+  displayName              String
+  description              String?
+  lifecycleState           ModeLifecycleState @default(DRAFT)
+  isActive                 Boolean            @default(false)
+  isPredefined             Boolean            @default(false)
+  stageRoute               Json               @default("[]")
+  autoFulfilmentConditions Json               @default("[]")
+  featureDependencies      Json               @default("[]")
+  version                  Int                @default(1)
+  effectiveFrom            DateTime           @default(now())
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  createdBy                String
+
+  @@unique([modeKey, version])
+  @@index([modeKey])
+  @@map("mode_configurations")
+}
+
+model CommunicationTemplate {
+  id              String   @id @default(uuid())
+  templateKey     String   @unique
+  channel         String
+  stage           Stage?
+  templateType    String
+  subjectTemplate String?
+  bodyTemplate    String
+  isActive        Boolean  @default(true)
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String
+
+  @@map("communication_templates")
+}
+
+model InvoiceTemplate {
+  id           String      @id @default(uuid())
+  templateKey  String      @unique
+  invoiceType  InvoiceType
+  title        String
+  bodyTemplate String
+  isActive     Boolean     @default(true)
+  version      Int         @default(1)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  createdBy    String
+
+  @@map("invoice_templates")
+}
+
+model FeedbackSurveyTemplate {
+  id          String   @id @default(uuid())
+  templateKey String   @unique
+  title       String
+  questions   Json
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+
+  @@map("feedback_survey_templates")
+}
+
+model VipNotificationRoutingConfig {
+  id             String   @id @default(uuid())
+  vipTier        String
+  notifyRoles    Json
+  notifyActorIds Json
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String
+
+  @@index([vipTier])
+  @@map("vip_notification_routing_configs")
+}
+
+model HandoffChecklistTemplate {
+  id             String      @id @default(uuid())
+  handoffType    HandoffType
+  version        Int         @default(1)
+  checklistItems Json
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  createdBy      String
+
+  @@unique([handoffType, version])
+  @@map("handoff_checklist_templates")
+}
+
+model WorkOrderTemplate {
+  id          String        @id @default(uuid())
+  templateKey String        @unique
+  useType     EntryUseType?
+  title       String
+  todoItems   Json
+  isActive    Boolean       @default(true)
+  version     Int           @default(1)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  createdBy   String
+
+  @@map("work_order_templates")
+}
+
+// --- Admin console (ACIG v1.1 registry models) -------------------------
+
+// ACIG §6.2.8 RatePlanService. overrideMargin = override_margin_per_rate_plan.
+// Walk-in designation is held in ConfigurationEntry key `availability.walkIn.ratePlanId`.
+// SIG-S2 §5.1 — PricingPipelineEngine reads `type` for priority resolution and `msr` (minimum
+// sell rate) as the floor that discount + override paths may not cross.
+model RatePlanRegistry {
+  id             String   @id @default(uuid())
+  name           String   @unique
+  description    String?
+  roomTypeId     String?
+  type           String   @default("INDIVIDUAL") // INDIVIDUAL | PROMOTIONAL | TIER | CHANNEL | RACK
+  baseRate       Decimal  @db.Decimal(15, 2)
+  currency       String   @default("BTN")
+  msr            Decimal? @db.Decimal(15, 2)
+  overrideMargin Decimal? @db.Decimal(5, 4)
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String
+
+  @@map("rate_plan_registry")
+}
+
+// ACIG §6.2.9 SeasonService. Active seasons may not overlap (service-validated).
+model SeasonCalendar {
+  id             String   @id @default(uuid())
+  name           String   @unique
+  startDate      DateTime
+  endDate        DateTime
+  rateMultiplier Decimal? @db.Decimal(6, 4)
+  priority       Int      @default(0)
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String
+
+  @@map("season_calendar")
+}
+
+// ACIG §6.2.10 PackageService.
+model PackageRegistry {
+  id              String   @id @default(uuid())
+  name            String   @unique
+  description     String?
+  inclusions      Json
+  priceAdjustment Decimal? @db.Decimal(15, 2)
+  currency        String   @default("BTN")
+  isActive        Boolean  @default(true)
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String
+
+  @@map("package_registry")
+}
+
+// ACIG §6.2.12 / §2.2.2 CancellationPolicyService.
+model CancellationPolicyRegistry {
+  id              String   @id @default(uuid())
+  name            String   @unique
+  penaltyTiers    Json // array of { daysBeforeArrival, penaltyPercentage }
+  noShowTreatment String
+  isActive        Boolean  @default(true)
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String
+
+  @@map("cancellation_policy_registry")
+}
+
+// ACIG §2.1A.6 — single-row AI actor identity. actorType fixed to SYSTEM.
+model AiActorIdentity {
+  id          String     @id @default(uuid())
+  displayName String
+  actorType   ActorLevel @default(SYSTEM)
+  isActive    Boolean    @default(true)
+  version     Int        @default(1)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  createdBy   String
+
+  @@map("ai_actor_identity")
+}
+
+// --- Staff & Sessions (SIG-S1 §6.6 SessionService / Policy 69) ---------
+
+model StaffUser {
+  // New rows should get STF-YYYYMMDD-NNNN via `allocateReadableId("STAFF_USER", ...)`.
+  // uuid() default kept so existing rows work; readable IDs are additive going forward.
+  id                         String     @id @default(uuid())
+  fullName                   String
+  // Login handle. Unique per active StaffUser; case-sensitive at the DB layer, folded on write
+  // by the admin service. 4-digit PIN alone can't identify a user (10k global space); username
+  // scopes the PIN check to one row.
+  username                   String     @unique
+  email                      String?    @unique
+  actorLevel                 ActorLevel
+  pinHash                    String
+  // Legacy free-text role slug (FRONT_DESK / FOM / GM / ADMIN). Retained during the transition
+  // to the roleId FK below; new code must prefer roleId. Kept nullable so existing rows load.
+  role                       String
+  // FK link to the Role registry. Nullable during the FK migration so an in-flight seed can
+  // fill it after Role rows are created. Should be required for all future writes.
+  roleId                     String?
+  idleThresholdSeconds       Int        @default(600)
+  hardLogoutThresholdSeconds Int        @default(28800)
+  isActive                   Boolean    @default(true)
+  createdAt                  DateTime   @default(now())
+  updatedAt                  DateTime   @updatedAt
+
+  sessions SessionRecord[]
+  roleRef  Role?           @relation(fields: [roleId], references: [id])
+
+  @@map("staff_users")
+}
+
+model SessionRecord {
+  // New rows should get SES-YYYYMMDD-NNNN via `allocateReadableId("SESSION", ...)`.
+  // uuid() default kept for compat.
+  id               String        @id @default(uuid())
+  userId           String
+  terminalId       String
+  status           SessionStatus @default(ACTIVE)
+  authenticatedAt  DateTime      @default(now())
+  idleLockedAt     DateTime?
+  manuallyLockedAt DateTime?
+  hardLoggedOutAt  DateTime?
+  lastActiveAt     DateTime      @default(now())
+  jwtToken         String?       @db.Text
+  createdAt        DateTime      @default(now())
+
+  user   StaffUser            @relation(fields: [userId], references: [id])
+  events SessionEventRecord[]
+
+  @@index([userId, status])
+  @@map("session_records")
+}
+
+model SessionEventRecord {
+  id              String           @id @default(uuid())
+  sessionId       String
+  eventType       SessionEventType
+  outgoingActorId String?
+  incomingActorId String?
+  terminalId      String
+  occurredAt      DateTime         @default(now())
+
+  session SessionRecord @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId, eventType])
+  @@map("session_event_records")
+}
+
+// --- Guest Profiles -----------------------------------------------------
+
+model GuestProfile {
+  id                       String    @id @default(uuid())
+  firstName                String
+  lastName                 String
+  email                    String?
+  phone                    String?
+  nationality              String?
+  vipTier                  String?
+  clientTier               String?   @default("STANDARD")
+  preferences              Json?
+  behaviouralFlags         Json?
+  observationQueue         Json?
+  stayHistorySummary       Json?
+  isActive                 Boolean   @default(true)
+  identityVerifiedAt       DateTime?
+  identityVerifiedBy       String?
+  identityVerificationPath String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  createdBy                String    @default("actor-seed-system")
+
+  entries                 Entry[]
+  identityDocuments       GuestIdentityDocument[]
+  vipArrivalNotifications VIPArrivalNotificationEvent[]
+  inquiries               Inquiry[]
+
+  @@map("guest_profiles")
+}
+
+model GuestIdentityDocument {
+  id                 String    @id @default(uuid())
+  guestProfileId     String
+  documentType       String
+  documentNumber     String
+  issuingCountry     String?
+  expiryDate         DateTime?
+  capturedAt         DateTime
+  capturedBy         String
+  retentionPeriod    Int
+  retentionExpiresAt DateTime
+  createdAt          DateTime  @default(now())
+
+  guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
+
+  @@map("guest_identity_documents")
+}
+
+model VIPArrivalNotificationEvent {
+  id                       String   @id @default(uuid())
+  entryId                  String
+  guestProfileId           String
+  roomNumber               String
+  vipTier                  String
+  preferences              Json?
+  specialNotes             String?
+  checkInInitiatedAt       DateTime
+  recipientRoles           Json
+  notificationDispatchedAt DateTime @default(now())
+  createdAt                DateTime @default(now())
+  createdBy                String
+
+  entry        Entry        @relation(fields: [entryId], references: [id])
+  guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
+
+  @@map("vip_arrival_notification_events")
+}
+
+// --- Inquiry & Entry ----------------------------------------------------
+
+model Inquiry {
+  id                         String    @id @default(uuid())
+  referenceNumber            String    @unique
+  guestProfileId             String
+  agentProfileId             String?
+  sourceChannel              String    @default("DIRECT")
+  defaultCustodianId         String
+  notes                      String?
+  /// SIG-S1 corporate/government context (required for CORP/GOV at S1→S2 exit)
+  corporateClientRef         String?
+  corporateCoordinator       String?
+  corporateContextCapturedAt DateTime?
+  corporateContextCapturedBy String?
+  /// Phase B/C — link to a Phase-B TravelAgent or CorporateAccount. At most ONE of these two
+  /// is set per inquiry; the booking inherits that party's negotiated RateCard at quotation.
+  /// The legacy `agentProfileId` and `corporateClientRef` fields stay for backward compat with
+  /// pre-Phase-B data; new intake forms write to these two FKs.
+  travelAgentId              String?
+  corporateAccountId         String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  createdBy                  String    @default("actor-seed-system")
+  parkedAt                   DateTime?
+  parkedBy                   String?
+
+  entries          Entry[]
+  duplicateFlags   DuplicateDetectionFlag[]
+  guestProfile     GuestProfile             @relation(fields: [guestProfileId], references: [id])
+  agentProfile     AgentProfile?            @relation(fields: [agentProfileId], references: [id])
+  travelAgent      TravelAgent?             @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
+  corporateAccount CorporateAccount?        @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
+
+  @@index([guestProfileId])
+  @@index([travelAgentId])
+  @@index([corporateAccountId])
+  @@map("inquiries")
+}
+
+enum DuplicateFlagStatus {
+  OPEN
+  RESOLVED
+}
+
+enum DuplicateResolutionType {
+  MERGE
+  ACKNOWLEDGE
+  DISMISS
+}
+
+model DuplicateDetectionFlag {
+  id                  String                   @id @default(uuid())
+  inquiryId           String
+  status              DuplicateFlagStatus      @default(OPEN)
+  resolutionType      DuplicateResolutionType?
+  resolutionReason    String?
+  mergedIntoInquiryId String?
+  createdAt           DateTime                 @default(now())
+  createdBy           String
+  resolvedAt          DateTime?
+  resolvedBy          String?
+
+  inquiry Inquiry @relation(fields: [inquiryId], references: [id])
+
+  @@index([inquiryId, status])
+  @@map("duplicate_detection_flags")
+}
+
+model Entry {
+  id                             String            @id @default(uuid())
+  inquiryId                      String
+  guestProfileId                 String?
+  segmentNumber                  Int               @default(1)
+  useType                        EntryUseType      @default(LEISURE)
+  status                         EntryStatus       @default(ACTIVE)
+  currentStage                   Stage             @default(S1)
+  /// SIG-S6 — walk-in compressed flow indicator (no prior reservations/H1).
+  walkInCompressed               Boolean           @default(false)
+  checkInDate                    DateTime?
+  checkOutDate                   DateTime?
+  guestCount                     Int?
+  /// Breakdown of the head count. guestCount remains the canonical total (adultCount + childCount when both set).
+  /// adultCount/childCount are nullable for backward compatibility with pre-Phase-D inquiries.
+  adultCount                     Int?
+  childCount                     Int?
+  /// Ages of accompanying children, ordered. Length should equal childCount; not enforced at the DB layer.
+  childAges                      Int[]             @default([])
+  /// Number of rooms the guest is requesting. Enforced at S1: allowed range is
+  /// ceil(chargeableOccupants / RoomType.maxCapacity) .. chargeableOccupants where
+  /// chargeableOccupants = adultCount + count(childAges where age >= legal minor age).
+  numberOfRooms                  Int?
+  otaSource                      Boolean           @default(false)
+  otaReference                   String?
+  groupBillingMode               GroupBillingMode?
+  /// True when an L3+ actor manually overrode Policy 64's classification (either from
+  /// group→individual or vice-versa). Prevents subsequent intake edits from silently
+  /// re-classifying and undoing the operator's judgement call. Cleared only by another
+  /// explicit L3+ action.
+  groupBillingModeManualOverride Boolean           @default(false)
+  /// Contact person for the on-site booking — the individual physically travelling or
+  /// leading the group. Distinct from travelAgent.contactNumber (which is the agency's
+  /// front desk) and corporateAccount contact fields (the corporate liaison). Populated at
+  /// S1 intake; MANDATORY before S5 for every booking (the S4→S5 progression gate blocks
+  /// otherwise). Business rule enforced backend-side, not just in the form.
+  contactPersonName              String?
+  contactPersonPhone             String?
+  parkedAt                       DateTime?
+  parkedBy                       String?
+  parkedIndividually             Boolean           @default(false)
+  createdAt                      DateTime          @default(now())
+  updatedAt                      DateTime          @updatedAt
+  createdBy                      String
+  version                        Int               @default(1)
+  closedAt                       DateTime?
+  closedBy                       String?
+
+  /// Simulates W5 no-show cutoff having fired (normally set by worker).
+  noShowCutoffReachedAt DateTime?
+
+  /// When credit ceiling Tier 2 applies, FOM must acknowledge before S5→S6.
+  creditCeilingTier2AcknowledgedAt DateTime?
+  creditCeilingTier2AcknowledgedBy String?
+
+  /// AWAITING_WRITTEN_CONFIRMATION sub-state blocks normal S5→S6 exit.
+  awaitingWrittenConfirmationActive Boolean @default(false)
+
+  /// Message-ID of the FIRST email sent for this entry's journey. Used by the email service to
+  /// anchor every later email (PI, confirmation, pre-arrival, invoice, feedback) into the same
+  /// Gmail thread via In-Reply-To / References headers. Null until the first email is sent.
+  emailThreadRootMessageId String?
+
+  /// SIG-S6 — key issuance recorded at check-in completion.
+  keysIssuedAt    DateTime?
+  keysIssuedCount Int?
+  keysIssuedBy    String?
+
+  /// SIG-S6 — registration snapshot at check-in completion.
+  registrationCompletedAt DateTime?
+  registrationCompletedBy String?
+
+  /// SIG-S1 apartment context (required for APARTMENT at S1→S2 exit)
+  apartmentDurationNights Int?
+  apartmentRateTierCode   String?
+
+  inquiry                 Inquiry                       @relation(fields: [inquiryId], references: [id])
+  guestProfile            GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
+  segments                Segment[]
+  // SIG-S4 §90/§197: Reservations are per-segment immutable history. `reservation` points at the
+  // CURRENT (latest-confirmed) Reservation via currentReservationId so existing one-to-one reads are
+  // unchanged; `reservations` is the append-only per-segment history (prior confirmations, read-only).
+  currentReservationId    String?                       @unique
+  reservation             Reservation?                  @relation("EntryCurrentReservation", fields: [currentReservationId], references: [id])
+  reservations            Reservation[]                 @relation("EntryReservations")
+  folio                   Folio?
+  committedHold           CommittedHold?
+  handoffs                HandoffRecord[]
+  preArrivalTasks         PreArrivalTask[]
+  roomAssignments         RoomAssignment[]
+  noShowDetermination     NoShowDeterminationRecord?
+  stageDwellRecords       StageDwellRecord[]
+  availabilityConfigs     AvailabilityConfiguration[]
+  processingLocks         ProcessingLockRecord[]
+  traceEvents             TraceEvent[]
+  spaceAllocations        SpaceAllocation[]
+  quotations              Quotation[]
+  speculativeHolds        SpeculativeHold[]
+  cancellationDisclosure  CancellationDisclosureRecord?
+  vipArrivalNotifications VIPArrivalNotificationEvent[]
+  disputes                DisputeRecord[]
+  amendmentEventRecords   AmendmentEventRecord[]
+  roomInspectionRecords   RoomInspectionRecord[]
+  keyReturnRecords        KeyReturnRecord[]
+  invoices                Invoice[]
+  timers                  TimerRecord[]
+  writeOffRecords         WriteOffRecord[]
+  followUpTasks           FollowUpTaskRecord[]
+  communications          CommunicationRecord[]
+  equipmentAllocations    EquipmentAllocation[]
+  commissionDueRecords    CommissionDueRecord[]
+
+  @@index([inquiryId])
+  @@index([currentStage, status])
+  @@map("entries")
+}
+
+// --- S9: Agent commissions ------------------------------------------------
+
+model AgentProfile {
+  id                      String           @id @default(uuid())
+  displayName             String
+  commissionRate          Decimal?         @db.Decimal(5, 4)
+  commissionBasis         CommissionBasis? // optional; if missing while rate exists => RATE_MISSING path
+  commissionEffectiveFrom DateTime? // ACIG §6.2.22 — admin-set via PostStayAndGovernanceService
+  createdAt               DateTime         @default(now())
+  createdBy               String
+
+  inquiries      Inquiry[]
+  commissionDues CommissionDueRecord[]
+
+  @@map("agent_profiles")
+}
+
+enum CommissionBasis {
+  NET_ROOM_RATE
+  GROSS_ROOM_RATE
+  TOTAL_FOLIO
+}
+
+enum CommissionDueStatus {
+  PENDING
+  RATE_MISSING
+  SETTLED
+}
+
+model CommissionDueRecord {
+  id               String              @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("COMMISSION_DUE", ...)
+  entryId          String
+  agentProfileId   String
+  commissionRate   Decimal             @db.Decimal(5, 4)
+  commissionBasis  CommissionBasis?
+  calculatedAmount Decimal?            @db.Decimal(15, 2)
+  currency         String              @default("BTN")
+  status           CommissionDueStatus @default(PENDING)
+  createdAt        DateTime            @default(now())
+  createdBy        String
+
+  entry        Entry        @relation(fields: [entryId], references: [id])
+  agentProfile AgentProfile @relation(fields: [agentProfileId], references: [id])
+
+  @@index([entryId])
+  @@index([agentProfileId])
+  @@map("commission_due_records")
+}
+
+// --- S9: Catering equipment return ---------------------------------------
+
+model EquipmentAllocation {
+  id                String    @id @default(uuid())
+  entryId           String
+  equipmentCode     String
+  allocatedAt       DateTime  @default(now())
+  allocatedBy       String
+  returnDeadlineAt  DateTime
+  returnConfirmedAt DateTime?
+  returnConfirmedBy String?
+  createdAt         DateTime  @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId])
+  @@map("equipment_allocations")
+}
+
+model Segment {
+  id            String    @id @default(uuid())
+  entryId       String
+  segmentNumber Int
+  stage         Stage     @default(S1)
+  startedAt     DateTime  @default(now())
+  sealedAt      DateTime?
+  sealedBy      String?
+  notes         String?
+  createdBy     String    @default("actor-seed-system")
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  amendmentEventRecords   AmendmentEventRecord[]
+  quotations              Quotation[]
+  speculativeHolds        SpeculativeHold[]
+  billingModelTransitions BillingModelTransitionRecord[]
+
+  @@unique([entryId, segmentNumber])
+  @@map("segments")
+}
+
+// --- S1 primary artefacts ----------------------------------------------
+
+model AvailabilityConfiguration {
+  id                        String    @id @default(uuid())
+  entryId                   String
+  segmentId                 String?
+  searchCriteria            Json
+  resultSet                 Json
+  optionSelected            Json?
+  isStale                   Boolean   @default(false)
+  stalenessAt               DateTime?
+  deficientAcknowledgements Json?
+  sealedAt                  DateTime?
+  createdAt                 DateTime  @default(now())
+  createdBy                 String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId, segmentId])
+  @@map("availability_configurations")
+}
+
+enum ProcessingLockStatus {
+  ACTIVE
+  EXPIRED
+  RELEASED
+}
+
+model ProcessingLockRecord {
+  id                 String               @id @default(uuid())
+  actorId            String
+  channel            String
+  inventoryReference String
+  entryId            String?
+  segmentId          String?
+  placedAt           DateTime             @default(now())
+  ttlSeconds         Int
+  expiresAt          DateTime
+  status             ProcessingLockStatus @default(ACTIVE)
+  expiredAt          DateTime?
+  releasedAt         DateTime?
+  revalidationCount  Int                  @default(0)
+  pgBossJobId        String?
+  createdAt          DateTime             @default(now())
+
+  entry              Entry?                    @relation(fields: [entryId], references: [id])
+  revalidationDeltas RevalidationDeltaRecord[]
+
+  @@index([inventoryReference, status])
+  @@index([status, expiresAt])
+  @@map("processing_lock_records")
+}
+
+model RevalidationDeltaRecord {
+  id                     String   @id @default(uuid())
+  processingLockId       String
+  availabilityChanged    Boolean  @default(false)
+  deficientStatusChanged Boolean  @default(false)
+  pricingChanged         Boolean  @default(false)
+  availabilityDelta      Json?
+  deficientDelta         Json?
+  pricingDelta           Json?
+  createdAt              DateTime @default(now())
+  createdBy              String
+
+  processingLock ProcessingLockRecord @relation(fields: [processingLockId], references: [id])
+
+  @@map("revalidation_delta_records")
+}
+
+// --- Trace events (append-only, free-form event type per SIG §2.11) -----
+
+model TraceEvent {
+  id             String     @id @default(uuid())
+  eventType      String
+  actorId        String     @default("actor-seed-system")
+  actorLevel     ActorLevel @default(L1)
+  entityType     String     @default("Entry")
+  entityId       String     @default("")
+  operation      String     @default("UPDATE")
+  payload        Json       @default("{}")
+  timestamp      DateTime   @default(now())
+  stageContext   Stage?
+  segmentContext String?
+  correlationId  String?
+  inquiryId      String?
+  entryId        String?
+  createdAt      DateTime   @default(now())
+  createdBy      String     @default("actor-seed-system")
+
+  entry Entry? @relation(fields: [entryId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([correlationId])
+  @@index([actorId])
+  @@index([timestamp])
+  @@index([inquiryId])
+  @@index([entryId, eventType])
+  @@map("trace_events")
+}
+
+// --- Spaces & Allocations ---------------------------------------------
+
+model Space {
+  id                    String   @id @default(uuid())
+  code                  String   @unique
+  name                  String
+  spaceType             String   @default("HALL")
+  defaultCapacity       Int      @default(0)
+  capacity              Int      @default(0)
+  seatingConfigurations Json     @default("[]")
+  expansionLinks        Json?
+  isAvailable           Boolean  @default(true)
+  isEventInProgress     Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @default(now()) @updatedAt
+
+  allocations      SpaceAllocation[]
+  speculativeHolds SpeculativeHold[]
+
+  @@map("spaces")
+}
+
+enum SpaceAllocationState {
+  QUOTED
+  HELD
+  CONFIRMED
+  RELEASED
+}
+
+model SpaceAllocation {
+  id         String               @id @default(uuid())
+  spaceId    String
+  entryId    String
+  segmentId  String?
+  state      SpaceAllocationState @default(QUOTED)
+  eventBlock Json
+  createdAt  DateTime             @default(now())
+  createdBy  String
+
+  space Space @relation(fields: [spaceId], references: [id])
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([spaceId, state])
+  @@map("space_allocations")
+}
+
+// --- Room inventory (Model 1 + Model 2) --------------------------------
+
+model RoomType {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+
+  /// Standard chargeable occupants a room of this type accommodates without an extra bed
+  /// — the "everyday" configuration (typical Standard Double: 2). Chargeable = adults +
+  /// children aged >= registry.child.unaccompaniedMinorMinAge - i.e. those old enough to
+  /// need their own bed per the child policy. Renamed from `maxOccupancy` on 2026-07-10
+  /// via schema-level @map so the DB column stays put during migration.
+  standardCapacity           Int @default(2) @map("maxOccupancy")
+  /// Absolute ceiling on chargeable occupants when the extra-bed configuration is used
+  /// (typical Standard Double: 3). Room-count validation at S1 uses this as the divisor:
+  /// minRooms = ceil(chargeableOccupants / maxCapacity).
+  maxCapacity                Int @default(3)
+  /// Max children allowed in a room of this type — independent cap on top of the capacity
+  /// fields. Applies to under-11s who share bedding.
+  maxChildren                Int @default(2)
+  /// Minimum number of accompanying adults required for any children to occupy this room type.
+  /// 1 = "at least one adult must be present with the children".
+  requiredAccompanyingAdults Int @default(1)
+  /// Max extra beds available for a room of this type (0 = no extra bed possible).
+  maxExtraBeds               Int @default(0)
+
+  rooms          Room[]
+  committedHolds CommittedHold[]
+  rateOverrides  RoomTypeRateOverride[]
+
+  @@map("room_types")
+}
+
+model Room {
+  id                String              @id @default(uuid())
+  roomNumber        String              @unique
+  roomTypeId        String
+  floorNumber       Int?
+  capacity          Int                 @default(2)
+  currentClaimState InventoryClaimState @default(FREE)
+  physicalState     RoomPhysicalState   @default(AVAILABLE_CLEAN)
+  expectedReadyAt   DateTime?
+  /// SIG-S1 shadow inventory surface for Policy 14 filtering at availability query time.
+  isShadowInventory Boolean             @default(false)
+
+  // Model 2 — Physical state fields per SIG §2.6
+  isDeficient                Boolean                     @default(false)
+  deficientConditionCategory DeficientConditionCategory?
+  deficientSince             DateTime?
+  deficientDeadline          DateTime?
+  isUnderMaintenance         Boolean                     @default(false)
+  maintenanceDeadline        DateTime?
+  cleansingRitualCompleted   Boolean                     @default(false)
+  isBlocked                  Boolean                     @default(false)
+  blockedReason              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roomType                  RoomType                   @relation(fields: [roomTypeId], references: [id])
+  deficientConditionRecords DeficientConditionRecord[]
+  speculativeHolds          SpeculativeHold[]
+  roomAssignments           RoomAssignment[]
+  claimStateEvents          RoomClaimStateEvent[]
+  roomInspectionRecords     RoomInspectionRecord[]
+  keyReturnRecords          KeyReturnRecord[]
+
+  @@map("rooms")
+}
+
+model RoomClaimStateEvent {
+  id            String              @id @default(uuid())
+  roomId        String
+  entryId       String?
+  fromState     InventoryClaimState
+  toState       InventoryClaimState
+  actorId       String
+  reason        String?
+  effectiveFrom DateTime            @default(now())
+  effectiveTo   DateTime?
+  createdAt     DateTime            @default(now())
+
+  room Room @relation(fields: [roomId], references: [id])
+
+  @@map("room_claim_state_events")
+}
+
+model DeficientConditionRecord {
+  id                 String                     @id @default(uuid())
+  roomId             String
+  category           DeficientConditionCategory
+  description        String
+  detectedAt         DateTime
+  detectedBy         String
+  resolutionDeadline DateTime
+  resolvedAt         DateTime?
+  resolvedBy         String?
+  resolutionNotes    String?
+  status             String                     @default("UNRESOLVED")
+
+  room Room @relation(fields: [roomId], references: [id])
+
+  @@map("deficient_condition_records")
+}
+
+// --- Holds, Quotations -------------------------------------------------
+
+model Quotation {
+  id                    String         @id @default(uuid())
+  entryId               String
+  segmentId             String
+  versionNumber         Int            @default(1)
+  referenceNumber       String
+  state                 QuotationState @default(DRAFT)
+  commercialTerms       Json
+  totalAmount           Decimal        @db.Decimal(15, 2)
+  currency              String         @default("BTN")
+  validUntil            DateTime?
+  sentAt                DateTime?
+  sentTo                String?
+  /// Link to the outbound communication that carried this quotation (S2).
+  communicationRecordId String?
+  supersededById        String?
+  supersededAt          DateTime?
+  expiredAt             DateTime?
+  acceptedAt            DateTime?
+  acceptedBy            String?
+  folioId               String?
+  /// Populated when S2 exits; versions become immutable beyond this point.
+  sealedAt              DateTime?
+  createdAt             DateTime       @default(now())
+  createdBy             String
+
+  // === PDF artifact (write-once, checksum-verified) ===
+  // Populated when `renderQuotationPdf` produces the guest-facing PDF at send time.
+  // The stored file is the source of truth for what the guest actually received.
+  pdfStorageKey       String?
+  pdfChecksum         String?
+  pdfChecksumAlgo     String    @default("SHA-256")
+  pdfRenderedAt       DateTime?
+  pdfRenderedBy       String?
+  /// Frozen snapshot of the exact inputs used to render — guest name, folio lines, tax
+  /// rates, hotel profile block, template body. Lets us re-render an identical PDF from
+  /// cold years later, even after configs change.
+  renderInputSnapshot Json?
+
+  entry   Entry           @relation(fields: [entryId], references: [id])
+  segment Segment         @relation(fields: [segmentId], references: [id])
+  lines   QuotationLine[]
+
+  @@index([entryId, segmentId, state])
+  @@map("quotations")
+}
+
+model SpeculativeHold {
+  id            String    @id @default(uuid())
+  entryId       String
+  segmentId     String
+  roomId        String?
+  spaceId       String?
+  state         HoldState @default(PLACED)
+  placedAt      DateTime  @default(now())
+  placedBy      String
+  ttlSeconds    Int
+  expiresAt     DateTime
+  releasedAt    DateTime?
+  releasedBy    String?
+  releaseReason String?
+  upgradedToId  String?
+  notes         String?
+  createdAt     DateTime  @default(now())
+
+  entry   Entry   @relation(fields: [entryId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+  room    Room?   @relation(fields: [roomId], references: [id])
+  space   Space?  @relation(fields: [spaceId], references: [id])
+
+  @@index([entryId, segmentId, state])
+  @@map("speculative_holds")
+}
+
+model CommittedHold {
+  id                      String    @id @default(uuid())
+  entryId                 String    @unique
+  segmentId               String
+  roomId                  String?
+  spaceId                 String?
+  roomTypeId              String
+  state                   HoldState @default(PLACED)
+  placedAt                DateTime  @default(now())
+  placedBy                String
+  confirmedAt             DateTime?
+  confirmedBy             String?
+  releasedAt              DateTime?
+  releasedBy              String?
+  releaseReason           String?
+  commercialJustification String    @default("seed")
+  ttlSeconds              Int       @default(86400)
+  expiresAt               DateTime
+  /// When the seal that led to this hold was per-night (guest picks room 201 for night 1,
+  /// room 301 for night 2), the full breakdown is snapshotted here so downstream services
+  /// don't lose the intent. Shape matches AvailabilityConfiguration.optionSelected.perNight:
+  ///   `[{ date: "YYYY-MM-DD", roomIds: [{ roomId, isDeficient }] }, ...]`
+  /// NULL for whole-stay holds (legacy + single-room-picked bookings).
+  perNightBreakdown       Json?
+
+  entry    Entry    @relation(fields: [entryId], references: [id])
+  roomType RoomType @relation(fields: [roomTypeId], references: [id])
+
+  @@map("committed_holds")
+}
+
+// --- Reservation, Folios ------------------------------------------------
+
+model Reservation {
+  id                      String    @id @default(uuid())
+  entryId                 String
+  segmentId               String    @unique
+  frozenRate              Decimal   @db.Decimal(15, 2)
+  frozenRatePlanId        String
+  frozenInclusions        Json      @default("{}")
+  frozenCancellationTerms Json      @default("{}")
+  frozenBillingModel      String
+  frozenCheckInDate       DateTime
+  frozenCheckOutDate      DateTime
+  frozenGuestCount        Int
+  creditCeilingIfExtended Decimal?  @db.Decimal(15, 2)
+  confirmedAt             DateTime
+  confirmedBy             String
+  confirmationVoucherSent Boolean   @default(false)
+  sealedAt                DateTime?
+  createdAt               DateTime  @default(now())
+
+  // === Confirmation voucher PDF (write-once, checksum-verified) ===
+  // Same append-only pattern as Invoice.pdfStorageKey. The stored file is the exact PDF the
+  // guest received attached to their RESERVATION_CONFIRMATION_EMAIL.
+  confirmationVoucherStorageKey    String?
+  confirmationVoucherChecksum      String?
+  confirmationVoucherChecksumAlgo  String    @default("SHA-256")
+  confirmationVoucherRenderedAt    DateTime?
+  confirmationVoucherRenderedBy    String?
+  confirmationVoucherInputSnapshot Json?
+
+  entry          Entry  @relation("EntryReservations", fields: [entryId], references: [id])
+  currentForEntry Entry? @relation("EntryCurrentReservation")
+
+  @@map("reservations")
+}
+
+model CancellationDisclosureRecord {
+  id                       String   @id @default(uuid())
+  entryId                  String   @unique
+  segmentId                String
+  noShowTreatmentStatement String
+  disclosedTerms           Json     @default("{}")
+  disclosedAt              DateTime @default(now())
+  disclosedBy              String   @default("actor-seed-system")
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@map("cancellation_disclosure_records")
+}
+
+model BillingModelTransitionRecord {
+  id        String   @id @default(uuid())
+  folioId   String
+  segmentId String
+  fromModel String?
+  toModel   String
+  createdAt DateTime @default(now())
+  createdBy String
+
+  folio   Folio   @relation(fields: [folioId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+
+  @@index([folioId, segmentId])
+  @@map("billing_model_transition_records")
+}
+
+model Folio {
+  id                         String     @id @default(uuid())
+  entryId                    String     @unique
+  state                      FolioState @default(PROVISIONAL)
+  billingModel               String?
+  createdAt                  DateTime   @default(now())
+  createdBy                  String
+  convertedToLiveAt          DateTime?
+  convertedBy                String?
+  closedAt                   DateTime?
+  closedBy                   String?
+  noShowPenaltyAmount        Decimal?   @db.Decimal(15, 2)
+  noShowAdvancePaymentAmount Decimal?   @db.Decimal(15, 2)
+  noShowNetPosition          Decimal?   @db.Decimal(15, 2)
+  noShowFomDetermination     String?
+
+  outstandingBalance                   Decimal @default(0) @db.Decimal(15, 2)
+  advancePaymentReconciliationComplete Boolean @default(false)
+
+  entry                   Entry                          @relation(fields: [entryId], references: [id])
+  payments                PaymentRecord[]
+  lines                   FolioLine[]
+  disputes                DisputeRecord[]
+  invoices                Invoice[]
+  writeOffRecords         WriteOffRecord[]
+  billingModelTransitions BillingModelTransitionRecord[]
+
+  @@map("folios")
+}
+
+model Invoice {
+  id             String       @id @default(uuid())
+  folioId        String
+  entryId        String
+  invoiceType    InvoiceType
+  state          InvoiceState @default(DRAFT)
+  invoiceNumber  String?      @unique
+  totalAmount    Decimal?     @db.Decimal(15, 2)
+  templateKey    String?
+  issuedAt       DateTime?
+  issuedBy       String?
+  dispatchedAt   DateTime?
+  dispatchedBy   String?
+  dispatchedTo   String?
+  supersededById String?
+  versionNumber  Int          @default(1)
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  // === PDF artifact (write-once, checksum-verified) ===
+  // Populated when the PROFORMA (S3) / FINAL (S8/S9) PDF is rendered. The stored file is
+  // legally authoritative — the guest received THIS file, byte-for-byte. Never re-render
+  // on demand; always serve the stored file.
+  pdfStorageKey       String?
+  pdfChecksum         String?
+  pdfChecksumAlgo     String    @default("SHA-256")
+  pdfRenderedAt       DateTime?
+  pdfRenderedBy       String?
+  /// Frozen snapshot of the render inputs (guest, hotel, folio lines at issuance, tax
+  /// rates, template body). Re-renders decades from now must produce the same bytes.
+  renderInputSnapshot Json?
+
+  folio Folio         @relation(fields: [folioId], references: [id])
+  entry Entry         @relation(fields: [entryId], references: [id])
+  lines InvoiceLine[]
+
+  @@map("invoices")
+}
+
+/**
+ * Immutable line-item snapshot for an issued Invoice. `Invoice.metadata` used to hold this
+ * ad-hoc; a real table lets tax authorities audit the itemisation directly.
+ * One row per line printed on the bill. Rows are written ONCE at render time and never
+ * updated. Corrections issue a NEW Invoice + new InvoiceLine set with `versionNumber + 1`
+ * on the parent; the old lines stay for historical lookup.
+ * `folioLineId` is a soft reference (nullable, no FK) to the underlying FolioLine — lets
+ * an auditor cross-check but doesn't cascade if the source line is removed later.
+ */
+model InvoiceLine {
+  id                  String   @id @default(uuid())
+  invoiceId           String
+  lineNumber          Int
+  /// Display particular — "Room", "Extra Bed", etc. Free text so the ROOM INVOICE title
+  /// column can vary.
+  particular          String
+  /// Room number as printed (may be null for non-room lines).
+  roomNo              String?
+  nights              Int?
+  /// Rate as printed on the bill. For the ROOM INVOICE this is tax-exclusive (base);
+  /// for QUOTATION / PROFORMA rows this is tax-inclusive.
+  rate                Decimal  @db.Decimal(15, 2)
+  amount              Decimal  @db.Decimal(15, 2)
+  discountAmount      Decimal  @default(0) @db.Decimal(15, 2)
+  serviceChargeAmount Decimal  @default(0) @db.Decimal(15, 2)
+  gstAmount           Decimal  @default(0) @db.Decimal(15, 2)
+  currency            String   @default("BTN")
+  /// Optional soft reference to the FolioLine that seeded this snapshot.
+  folioLineId         String?
+  createdAt           DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@unique([invoiceId, lineNumber])
+  @@map("invoice_lines")
+}
+
+/**
+ * Same idea as InvoiceLine but for Quotation / Proforma output rows. The quotation booking
+ * table has different columns from the room invoice (Date | Occupants | Meal Plan | Extra
+ * Beds | Amount) so it gets its own snapshot table.
+ */
+model QuotationLine {
+  id          String   @id @default(uuid())
+  quotationId String
+  lineNumber  Int
+  /// Stay date (as printed).
+  date        DateTime
+  /// e.g. "2 adults, 1 children" — free text as printed.
+  occupants   String
+  /// Meal plan code + count, e.g. "2 CP" (2 guests on CP).
+  mealPlan    String?
+  /// e.g. "None" or "1 extra bed".
+  extraBeds   String?
+  /// Tax-INCLUSIVE amount for this row (matches the reference layout).
+  amount      Decimal  @db.Decimal(15, 2)
+  currency    String   @default("BTN")
+  createdAt   DateTime @default(now())
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+
+  @@unique([quotationId, lineNumber])
+  @@map("quotation_lines")
+}
+
+/**
+ * Append-only log of periodic PDF-integrity checks. The monthly worker iterates every
+ * issued Invoice, recomputes SHA-256 of the stored PDF, and writes one row per invoice
+ * per check. `matched=false` = tamper alert. Rows never mutate.
+ */
+model InvoiceIntegrityCheck {
+  id           String   @id @default(uuid())
+  invoiceId    String
+  checkedAt    DateTime @default(now())
+  expectedHash String
+  actualHash   String
+  matched      Boolean
+  /// Extra diagnostic — file present, size, storage backend name.
+  diagnostic   Json?
+
+  @@index([invoiceId, checkedAt])
+  @@index([matched, checkedAt])
+  @@map("invoice_integrity_checks")
+}
+
+model FolioLine {
+  id                 String        @id @default(uuid())
+  folioId            String
+  lineType           FolioLineType
+  description        String
+  amount             Decimal       @db.Decimal(15, 2)
+  currency           String        @default("BTN")
+  chargeDate         DateTime
+  stage              Stage
+  postedBy           String
+  nightAuditRecordId String?
+  isPostStay         Boolean       @default(false)
+  postedAt           DateTime      @default(now())
+  createdAt          DateTime      @default(now())
+
+  folio            Folio             @relation(fields: [folioId], references: [id])
+  nightAuditRecord NightAuditRecord? @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
+
+  @@map("folio_lines")
+}
+
+model WriteOffRecord {
+  id               String   @id @default(uuid())
+  folioId          String
+  entryId          String
+  writtenOffAmount Decimal  @db.Decimal(15, 2)
+  currency         String   @default("BTN")
+  reason           String
+  createdAt        DateTime @default(now())
+  createdBy        String
+
+  folio Folio @relation(fields: [folioId], references: [id])
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@map("write_off_records")
+}
+
+model PaymentRecord {
+  id                    String           @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("PAYMENT", ...)
+  folioId               String
+  invoiceId             String?
+  entryId               String?
+  amount                Decimal          @db.Decimal(15, 2)
+  currency              String           @default("BTN")
+  foreignCurrencyAmount Decimal?         @db.Decimal(15, 2)
+  btnEquivalent         Decimal?         @db.Decimal(15, 2)
+  exchangeRate          Decimal?         @db.Decimal(10, 6)
+  paymentMethod         String?          @default("CASH")
+  paymentDirection      PaymentDirection
+  createdAt             DateTime         @default(now())
+  receivedAt            DateTime?
+  recordedBy            String?
+  stage                 Stage?
+  notes                 String?
+
+  folio Folio @relation(fields: [folioId], references: [id])
+
+  @@map("payment_records")
+}
+
+model CreditExtensionCeilingRecord {
+  id            String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("CREDIT_EXTENSION", ...)
+  folioId       String   @unique
+  entryId       String
+  ceilingAmount Decimal  @db.Decimal(15, 2)
+  currency      String   @default("BTN")
+  approvedBy    String
+  approvedAt    DateTime @default(now())
+  reason        String
+  createdAt     DateTime @default(now())
+
+  @@map("credit_extension_ceiling_records")
+}
+
+// --- Operational artefacts (S5–S9) --------------------------------------
+
+model HandoffRecord {
+  id                       String       @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("HANDOFF", ...)
+  entryId                  String
+  /// For H2/H3 handoffs pinned to a specific room (group check-in creates one per room), this
+  /// FK identifies which RoomAssignment the handoff is for. NULL for entry-level handoffs (H1, H4)
+  /// and legacy pre-Phase-D rows where the association wasn't tracked. Used by the reject-check
+  /// gate + dedup logic in check-in-service so group operations reason per-room.
+  roomAssignmentId         String?
+  handoffType              HandoffType
+  state                    HandoffState @default(CREATED)
+  fromRole                 String
+  fromActorId              String
+  toRole                   String
+  toActorId                String?
+  checklistContent         Json         @default("{}")
+  deficientConditionStatus String?
+  fulfilmentEvidence       Json?
+  assignedAt               DateTime?
+  acceptedAt               DateTime?
+  acceptedBy               String?
+  fulfilledAt              DateTime?
+  fulfilledBy              String?
+  closedAt                 DateTime?
+  rejectedAt               DateTime?
+  rejectedBy               String?
+  rejectionReason          String?
+  escalatedAt              DateTime?
+  cancelledAt              DateTime?
+  cancelledBy              String?
+  cancelledReason          String?
+  slaDeadlineAt            DateTime?
+  isAutoFulfilled          Boolean      @default(false)
+  createdAt                DateTime     @default(now())
+  createdBy                String
+  stageContext             Stage
+
+  entry          Entry           @relation(fields: [entryId], references: [id])
+  roomAssignment RoomAssignment? @relation(fields: [roomAssignmentId], references: [id])
+
+  @@map("handoff_records")
+}
+
+model PreArrivalTask {
+  id                 String             @id @default(uuid())
+  entryId            String
+  taskType           PreArrivalTaskType
+  category           TaskCategory       @default(ADMINISTRATIVE)
+  targetDate         DateTime?
+  status             TaskStatus         @default(PENDING)
+  assignedTo         String?
+  assignedDepartment String?
+  completedAt        DateTime?
+  completedBy        String?
+  waivedReason       String?
+  waivedBy           String?
+  sourceRecordType   String?
+  sourceRecordId     String?
+  createdAt          DateTime           @default(now())
+  createdBy          String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  // Idempotency: one task per (entry, taskType). Prevents concurrent S4→S5 transitions from
+  // creating duplicate PreArrivalTask sets (findFirst-then-createMany race).
+  @@unique([entryId, taskType])
+  @@map("pre_arrival_tasks")
+}
+
+model RoomAssignment {
+  id                         String    @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_ASSIGNMENT", ...)
+  entryId                    String
+  roomId                     String
+  /// Inclusive first night this assignment applies to. NULL = whole-stay assignment
+  /// (legacy, pre-per-night work). Populated when a per-night sealed configuration
+  /// creates a room-change mid-stay, so reports can answer "which room was used on Jul 15?"
+  /// without JSON parsing.
+  startDate                  DateTime?
+  /// Exclusive checkout — the day the guest departs the room. NULL when startDate is NULL.
+  endDate                    DateTime?
+  assignedAt                 DateTime  @default(now())
+  assignedBy                 String
+  deficientAtAssignment      Boolean   @default(false)
+  deficientConditionRecordId String?
+  acknowledgementActorId     String?
+  acknowledgementAt          DateTime?
+  notes                      String?
+  createdAt                  DateTime  @default(now())
+
+  entry    Entry           @relation(fields: [entryId], references: [id])
+  room     Room            @relation(fields: [roomId], references: [id])
+  handoffs HandoffRecord[]
+
+  @@map("room_assignments")
+}
+
+model NoShowDeterminationRecord {
+  id                      String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("NO_SHOW", ...)
+  entryId                 String   @unique
+  determinationPath       String
+  fomActorId              String
+  contactAttemptLog       Json
+  decisionReason          String
+  otaNotificationRequired Boolean  @default(false)
+  otaNotificationStatus   String?
+  determinedAt            DateTime @default(now())
+  createdAt               DateTime @default(now())
+  createdBy               String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@map("no_show_determination_records")
+}
+
+model RoomInspectionRecord {
+  id                   String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_INSPECTION", ...)
+  entryId              String
+  roomId               String
+  segmentId            String
+  inspectedBy          String
+  inspectedAt          DateTime
+  isDeferred           Boolean  @default(false)
+  deficientFlagStatus  String
+  deficientConditionId String?
+  inspectorAssessment  String?
+  damageFound          Boolean  @default(false)
+  damageNotes          String?
+  createdAt            DateTime @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+  room  Room  @relation(fields: [roomId], references: [id])
+
+  @@map("room_inspection_records")
+}
+
+model KeyReturnRecord {
+  id                 String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("KEY_RETURN", ...)
+  entryId            String
+  roomId             String
+  receivedBy         String
+  returnedAt         DateTime
+  keyCountIssued     Int
+  keyCountReturned   Int
+  countReconciled    Boolean
+  reconciliationNote String?
+  createdAt          DateTime @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+  room  Room  @relation(fields: [roomId], references: [id])
+
+  @@map("key_return_records")
+}
+
+// --- Timers, Dwell ------------------------------------------------------
+
+model TimerRecord {
+  id              String      @id @default(uuid())
+  entryId         String?
+  entityType      String      @default("Entry")
+  entityId        String      @default("")
+  timerType       String
+  timerCode       String      @default("")
+  stageContext    Stage?
+  firesAt         DateTime    @default(now())
+  dueAt           DateTime    @default(now())
+  warningAt       DateTime?
+  criticalAt      DateTime?
+  status          TimerStatus @default(SCHEDULED)
+  payload         Json?
+  pgBossJobId     String?
+  cancelledAt     DateTime?
+  cancelledBy     String?
+  cancelledReason String?
+  firedAt         DateTime?
+  createdAt       DateTime    @default(now())
+  createdBy       String
+
+  entry Entry? @relation(fields: [entryId], references: [id])
+
+  @@index([timerType, status, firesAt])
+  @@index([timerCode, status, dueAt])
+  @@index([entityType, entityId])
+  @@map("timer_records")
+}
+
+model StageDwellRecord {
+  id              String         @id @default(uuid())
+  entryId         String
+  stage           Stage
+  enteredAt       DateTime       @default(now())
+  lastActiveAt    DateTime       @default(now())
+  exitedAt        DateTime?
+  dwellSeconds    Int?
+  mode            StageDwellMode @default(ACTIVE)
+  warningFiredAt  DateTime?
+  criticalFiredAt DateTime?
+  escalatedAt     DateTime?
+  createdAt       DateTime       @default(now())
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId, stage])
+  @@map("stage_dwell_records")
+}
+
+// --- S7+ records (kept for stage-by-stage roll-forward) ----------------
+
+model CreditCeilingThresholdEvent {
+  id                 String   @id @default(uuid())
+  entryId            String
+  folioId            String
+  ceilingAmount      Decimal  @db.Decimal(15, 2)
+  outstandingBalance Decimal  @db.Decimal(15, 2)
+  thresholdPercent   Int
+  createdAt          DateTime @default(now())
+  createdBy          String
+
+  @@map("credit_ceiling_threshold_events")
+}
+
+model NightAuditRecord {
+  id                    String              @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("NIGHT_AUDIT", ...)
+  operatingDate         DateTime            @unique
+  runStatus             NightAuditRunStatus
+  entriesProcessedCount Int                 @default(0)
+  entriesNotProcessed   Json?
+  createdAt             DateTime            @default(now())
+  createdBy             String
+
+  folioLines FolioLine[]
+  anomalies  NightAuditAnomaly[]
+
+  @@map("night_audit_records")
+}
+
+model NightAuditAnomaly {
+  id                 String                @id @default(uuid())
+  nightAuditRecordId String
+  entryId            String?
+  /// For group entries, an anomaly attributed to a specific room within the group folio.
+  /// NULL for entry-level anomalies (single-room entries or a genuine entry-wide issue).
+  /// Lets front-desk reporting say "F&B missing for room 201" instead of just "…for entry".
+  roomId             String?
+  anomalyType        NightAuditAnomalyType
+  description        String
+  createdAt          DateTime              @default(now())
+  resolvedAt         DateTime?
+  resolvedBy         String?
+
+  nightAuditRecord NightAuditRecord @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
+
+  @@map("night_audit_anomalies")
+}
+
+model WorkOrder {
+  id        String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("WORK_ORDER", ...)
+  entryId   String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  createdBy String
+
+  todoItems    WorkOrderToDoItem[]
+  amendments   WorkOrderAmendmentEvent[]
+  consumptions WorkOrderConsumptionRecord[]
+
+  @@map("work_orders")
+}
+
+model WorkOrderToDoItem {
+  id           String              @id @default(uuid())
+  workOrderId  String
+  title        String
+  status       WorkOrderToDoStatus @default(PENDING)
+  dueAt        DateTime?
+  createdAt    DateTime            @default(now())
+  createdBy    String
+  updatedAt    DateTime            @updatedAt
+  updatedBy    String?
+  cancelReason String?
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onUpdate: Cascade)
+
+  @@map("work_order_todo_items")
+}
+
+model WorkOrderConsumptionRecord {
+  id                           String    @id @default(uuid())
+  workOrderId                  String
+  itemCode                     String
+  quantity                     Int
+  notes                        String?
+  isOverAllocation             Boolean   @default(false)
+  overAllocationAcknowledgedBy String?
+  overAllocationAcknowledgedAt DateTime?
+  createdAt                    DateTime  @default(now())
+  createdBy                    String
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onUpdate: Cascade)
+
+  @@map("work_order_consumption_records")
+}
+
+model WorkOrderAmendmentEvent {
+  id            String   @id @default(uuid())
+  workOrderId   String
+  amendmentType String
+  reason        String
+  payload       Json?
+  createdAt     DateTime @default(now())
+  createdBy     String
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onUpdate: Cascade)
+
+  @@map("work_order_amendment_events")
+}
+
+model DisputeRecord {
+  id            String        @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("DISPUTE", ...)
+  entryId       String
+  folioId       String
+  status        DisputeStatus @default(OPEN)
+  title         String
+  description   String?
+  openedAt      DateTime      @default(now())
+  openedBy      String
+  updatedAt     DateTime      @updatedAt
+  updatedBy     String?
+  closedAt      DateTime?
+  closedBy      String?
+  closureReason String?
+
+  entry         Entry                       @relation(fields: [entryId], references: [id])
+  folio         Folio                       @relation(fields: [folioId], references: [id])
+  gateOverrides DisputeGateOverrideRecord[]
+
+  @@map("dispute_records")
+}
+
+model DisputeGateOverrideRecord {
+  id             String   @id @default(uuid())
+  disputeId      String
+  targetStage    Stage
+  freeTextReason String
+  createdAt      DateTime @default(now())
+  createdBy      String
+
+  dispute DisputeRecord @relation(fields: [disputeId], references: [id], onUpdate: Cascade)
+
+  @@map("dispute_gate_override_records")
+}
+
+model AmendmentEventRecord {
+  id               String        @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("AMENDMENT", ...)
+  entryId          String
+  segmentId        String
+  amendmentPath    AmendmentPath
+  amendmentType    String
+  requestedBy      String
+  authorisedBy     String
+  authorityBasis   String
+  reason           String
+  priorTermsRef    String?
+  newTermsSummary  String
+  folioLineId      String?
+  stageAtAmendment Stage
+  /// True when the amending entry has groupBillingMode = GROUP_MASTER at the moment the
+  /// amendment fires. Set by the amendment service based on `entry.groupBillingMode` — lets
+  /// downstream reporting / tour-operator notifications key off group-impacting changes
+  /// without having to re-join to Entry every time.
+  affectsGroup     Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+
+  entry   Entry   @relation(fields: [entryId], references: [id])
+  segment Segment @relation(fields: [segmentId], references: [id])
+
+  @@map("amendment_event_records")
+}
+
+model FollowUpTaskRecord {
+  id          String             @id @default(uuid())
+  entryId     String
+  status      FollowUpTaskStatus @default(PENDING)
+  assignedTo  String?
+  dueAt       DateTime
+  completedAt DateTime?
+  completedBy String?
+  notes       String?
+  createdAt   DateTime           @default(now())
+  createdBy   String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@map("follow_up_task_records")
+}
+
+model LostAndFoundRecord {
+  id                 String                @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("LOST_AND_FOUND", ...)
+  entryId            String?
+  guestProfileId     String?
+  description        String
+  returnStatus       LostFoundReturnStatus @default(HELD)
+  retentionExpiresAt DateTime
+  returnedAt         DateTime?
+  disposedAt         DateTime?
+  createdAt          DateTime              @default(now())
+  createdBy          String
+
+  @@map("lost_and_found_records")
+}
+
+model CommunicationRecord {
+  id                        String               @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("COMMUNICATION", ...)
+  entryId                   String?
+  channel                   CommunicationChannel
+  commType                  CommunicationType
+  stageContext              Stage?
+  direction                 String?              @default("OUTBOUND")
+  messageId                 String?              @unique
+  sendStatus                String?              @default("PENDING")
+  acknowledgementStatus     String?              @default("PENDING")
+  acknowledgementReceivedAt DateTime?
+  acknowledgementTimeoutAt  DateTime?
+  threadId                  String?
+  inReplyToId               String?
+  contentSummary            String?
+  actorId                   String?
+  payload                   Json?
+  createdAt                 DateTime             @default(now())
+  createdBy                 String
+
+  entry     Entry?                @relation(fields: [entryId], references: [id])
+  aiDrafts  AiDraftRecord[]
+  decisions HumanDecisionRecord[]
+
+  @@index([entryId, commType, channel])
+  @@map("communication_records")
+}
+
+enum AiDraftStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model AiDraftRecord {
+  id                 String        @id @default(uuid())
+  communicationId    String
+  intentCategory     String
+  confidenceScore    Float
+  draftContent       String
+  status             AiDraftStatus @default(PENDING_REVIEW)
+  reviewTtlExpiresAt DateTime?
+  createdAt          DateTime      @default(now())
+  createdBy          String
+
+  communication CommunicationRecord   @relation(fields: [communicationId], references: [id], onUpdate: Cascade)
+  decisions     HumanDecisionRecord[]
+
+  @@index([communicationId])
+  @@index([status, reviewTtlExpiresAt])
+  @@map("ai_draft_records")
+}
+
+enum HumanDecisionType {
+  APPROVE
+  REJECT
+  ESCALATE
+}
+
+model HumanDecisionRecord {
+  id              String            @id @default(uuid())
+  aiDraftId       String?
+  communicationId String?
+  decisionType    HumanDecisionType
+  decisionReason  String?
+  decidedAt       DateTime          @default(now())
+  decidedBy       String
+  createdAt       DateTime          @default(now())
+  createdBy       String
+
+  aiDraft       AiDraftRecord?       @relation(fields: [aiDraftId], references: [id])
+  communication CommunicationRecord? @relation(fields: [communicationId], references: [id], onUpdate: Cascade)
+
+  @@index([aiDraftId])
+  @@index([communicationId])
+  @@map("human_decision_records")
+}
+
+// --- Travel agents, corporate accounts, rate cards (Phase B) -------------
+
+/**
+ * Mode-of-contact for agent/corporate primary contact.
+ */
+enum ContactMode {
+  PHONE
+  EMAIL
+  WHATSAPP
+  IN_PERSON
+  OTHER
+}
+
+/**
+ * Discriminator for which kind of party a RateCard belongs to.
+ */
+enum PartyType {
+  TRAVEL_AGENT
+  CORPORATE
+}
+
+/**
+ * Meal plan options carried on a RateCard. Mirrors the legacy `agent_rate` columns:
+ * CP         = breakfast included
+ * MAP_LUNCH  = breakfast + lunch
+ * MAP_DINNER = breakfast + dinner
+ * AP         = breakfast + lunch + dinner
+ * Standalone breakfast/lunch/dinner add-on rates live as separate fields on RateCard,
+ * not as MealPlanType values.
+ */
+enum MealPlanType {
+  CP
+  MAP_LUNCH
+  MAP_DINNER
+  AP
+}
+
+/**
+ * TravelAgent — a third-party booking agent the hotel works with. Tracked by
+ * EntityVersionSnapshot; commission rate (if any) lives on the operational AgentProfile
+ * row at the time of booking, not here. This table carries agent identity + their
+ * negotiated rate card.
+ */
+model TravelAgent {
+  id            String      @id // readable TA-YYYYMMDD-NNNN
+  displayName   String
+  contactNumber String?
+  contactEmail  String?
+  modeOfContact ContactMode @default(PHONE)
+  notes         String?
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  createdBy     String
+  updatedAt     DateTime    @updatedAt
+
+  inquiries Inquiry[]
+
+  @@index([displayName])
+  @@index([isActive])
+  @@map("travel_agents")
+}
+
+/**
+ * CorporateAccount — a company / institutional account with negotiated rates.
+ * Distinct from TravelAgent because corporates carry tax + billing fields and don't
+ * carry commission. Tracked by EntityVersionSnapshot.
+ */
+model CorporateAccount {
+  id             String      @id // readable CORP-YYYYMMDD-NNNN
+  displayName    String
+  contactNumber  String?
+  contactEmail   String?
+  modeOfContact  ContactMode @default(EMAIL)
+  gstNumber      String?
+  billingAddress String?
+  // Corporate commercial context (spec-aligned with CorporateProfile.contractRefs / coordinators,
+  // DEV-SPEC-001-Part2 §2.6.2). These live on the standing account so a booking INHERITS them at
+  // S1 intake (SIG-S1 §100.6 / Policy 17) rather than re-typing per inquiry.
+  // contractRefs: contract/PO/authorisation reference identifiers for this client.
+  contractRefs   String[]    @default([])
+  // coordinators: array of contact objects [{ name, phone?, email? }].
+  coordinators   Json?
+  notes          String?
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  createdBy      String
+  updatedAt      DateTime    @updatedAt
+
+  inquiries Inquiry[]
+
+  @@index([displayName])
+  @@index([isActive])
+  @@map("corporate_accounts")
+}
+
+/**
+ * RateCard — the rates an agent / corporate has negotiated with the hotel. Append-only
+ * versioned, same pattern as ConfigurationEntry: editing creates a new row with a new
+ * effectiveFrom and closes the prior with effectiveTo. Historical bookings always look up
+ * the rate card that was active at the time they were quoted.
+ * `partyType` + `partyId` is a polymorphic reference; no Prisma FK constraint. The admin
+ * service validates the referenced party exists on every write.
+ */
+model RateCard {
+  id                 String    @id // readable RC-YYYYMMDD-NNNN
+  partyType          PartyType
+  partyId            String // FK to TravelAgent.id OR CorporateAccount.id depending on partyType
+  // Base + extras
+  roomBaseRate       Decimal   @db.Decimal(10, 2)
+  extraBedRate       Decimal?  @db.Decimal(10, 2)
+  cnbPercent         Int? // 0-100 — child-no-bed discount percentage
+  // Standalone meal add-on rates (à la carte)
+  breakfastRate      Decimal?  @db.Decimal(10, 2)
+  lunchRate          Decimal?  @db.Decimal(10, 2)
+  dinnerRate         Decimal?  @db.Decimal(10, 2)
+  // Meal-plan-inclusive rates
+  cpRate             Decimal?  @db.Decimal(10, 2)
+  mapLunchRate       Decimal?  @db.Decimal(10, 2)
+  mapDinnerRate      Decimal?  @db.Decimal(10, 2)
+  apRate             Decimal?  @db.Decimal(10, 2)
+  currency           String    @default("BTN")
+  /// When true, roomBaseRate + meal-plan rates are treated as **tax-INCLUSIVE** all-in
+  /// prices. The pricing engine back-solves the pre-tax base:
+  ///   base = allInRate / (1 + serviceChargeRate + serviceChargeRate*gstRate + gstRate)
+  /// This fixes the friend's #6 concern: agents typically negotiate "3,400 Nu including
+  /// everything", and treating that as base yields 3,927 on the bill.
+  rateIsTaxInclusive Boolean   @default(false)
+  effectiveFrom      DateTime  @default(now())
+  effectiveTo        DateTime? // null = currently active
+  notes              String?
+  createdAt          DateTime  @default(now())
+  createdBy          String
+
+  overrides RoomTypeRateOverride[]
+
+  @@index([partyType, partyId, effectiveFrom])
+  @@index([effectiveTo])
+  @@map("rate_cards")
+}
+
+/**
+ * RoomTypeRateOverride — optional override of `RateCard.roomBaseRate` for a specific
+ * RoomType. Tied to a specific RateCard version; when the admin creates a new RateCard
+ * version, the service copies the active overrides forward.
+ */
+model RoomTypeRateOverride {
+  id           String   @id @default(uuid())
+  rateCardId   String
+  roomTypeId   String
+  roomBaseRate Decimal  @db.Decimal(10, 2)
+  notes        String?
+  createdAt    DateTime @default(now())
+  createdBy    String
+
+  rateCard RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  roomType RoomType @relation(fields: [roomTypeId], references: [id], onUpdate: Cascade)
+
+  @@unique([rateCardId, roomTypeId])
+  @@index([roomTypeId])
+  @@map("room_type_rate_overrides")
+}
+
+// --- Readable business IDs (PREFIX-YYYYMMDD-####, daily sequence) --------
+
+model ReadableIdSequence {
+  prefix       String
+  sequenceDate String @map("sequence_date")
+  lastValue    Int    @default(0) @map("last_value")
+
+  @@id([prefix, sequenceDate])
+  @@map("readable_id_sequences")
+}
