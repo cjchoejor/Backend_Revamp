@@ -24,8 +24,10 @@ import {
   runNightAudit,
 } from "@/lib/api/in-stay";
 import { listRooms } from "@/lib/api/rooms";
+import { cancelEntryEarlyDeparture } from "@/lib/api/reservation-setup";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
-import { money } from "@/lib/desk/workspace";
+import { money, moneyOrDash } from "@/lib/desk/workspace";
+import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -68,6 +70,9 @@ export function StayStep({
   const { session } = useSession();
   const queryClient = useQueryClient();
   const elevated = isElevated(session?.actorLevel);
+  const isGm = session?.actorLevel === "L3" || session?.actorLevel === "L4";
+  const [earlyDepartOpen, setEarlyDepartOpen] = useState(false);
+  const [earlyDepartWaiver, setEarlyDepartWaiver] = useState(false);
 
   const reservation = entry.reservation;
   const folio = entry.folio;
@@ -232,6 +237,17 @@ export function StayStep({
       });
     }, "Amendment recorded"),
   );
+  const earlyDepartM = useMutation({
+    mutationFn: () =>
+      cancelEntryEarlyDeparture(session!, entry.id, earlyDepartWaiver ? { penaltyWaiverRequested: true } : undefined),
+    onSuccess: () => {
+      setEarlyDepartOpen(false);
+      toast.success("Early departure recorded — stay ended, room released.");
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Early departure failed"),
+  });
   const roomChangeM = useMutation({
     mutationFn: () => roomChangeReEnterS1(session!, entry.id, { newRoomId: roomChangeId.trim(), reason: roomChangeReason.trim() }),
     onSuccess: () => {
@@ -242,7 +258,6 @@ export function StayStep({
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Room change failed"),
   });
 
-  const chargesTotal = folioLines.reduce((s, l) => s + Number(l.amount), 0);
   const openDisputes = disputes.filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   const correctable = useMemo(
     () => folioLines.filter((l) => !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for")),
@@ -333,10 +348,12 @@ export function StayStep({
               );
             })
           )}
+          {/* The server owns the folio's balance; there is no sum-of-lines field, so the running
+              total is the backend's outstandingBalance rather than a total added up here. */}
           <div className="fline total">
-            <span className="fl-mk mk der">∑</span>
-            <span className="fl-d">Running total</span>
-            <span className="fl-a">{money(chargesTotal, currency)}</span>
+            <span className="fl-mk mk sys">⚙</span>
+            <span className="fl-d">Balance due (from folio)</span>
+            <span className="fl-a">{moneyOrDash(folio?.outstandingBalance, currency)}</span>
           </div>
         </div>
 
@@ -379,11 +396,15 @@ export function StayStep({
 
         {correctable.length > 0 && (
           <div style={{ marginTop: 12, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Correct a charge (adds an offsetting line)</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 4 }}>Correct a charge</div>
+            <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "0 0 9px", lineHeight: 1.55 }}>
+              A live folio is append-only — nothing already posted can be edited or deleted. Correcting adds a
+              second, offsetting line next to the original, so the bill shows both the mistake and the fix.
+            </p>
             <div className="field">
-              <label>Charge</label>
+              <label>Which posted charge is wrong?</label>
               <select value={correctLineId} onChange={(e) => setCorrectLineId(e.target.value)}>
-                <option value="">Select line…</option>
+                <option value="">Choose a charge from the folio…</option>
                 {correctable.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.lineType} — {l.description} ({String(l.amount)})
@@ -662,9 +683,52 @@ export function StayStep({
           </div>
         </div>
       )}
+
+      {/* Early departure (post-check-in, terminal) — SIG-S7 Policy 36 */}
+      <div className="block" style={{ borderColor: "#e2b3ac" }}>
+        <BlockH>
+          <AlertTriangle style={{ width: 13, height: 13 }} />
+          Early departure
+        </BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 0, lineHeight: 1.5 }}>
+          Guest is leaving before the booked checkout. Ends the stay now, posts the disclosed penalty on the
+          live folio, releases the room and terminates the booking — there&rsquo;s no undo.
+        </p>
+        {isGm && (
+          <label className="checkline" style={{ cursor: "pointer", marginBottom: 8 }}>
+            <input type="checkbox" checked={earlyDepartWaiver} onChange={(e) => setEarlyDepartWaiver(e.target.checked)} />
+            <span>Waive the early-departure penalty (GM authority)</span>
+          </label>
+        )}
+        <button className="btn btn-ghost" style={{ borderColor: "#e2b3ac", color: "var(--stop)" }} onClick={() => setEarlyDepartOpen(true)}>
+          Record early departure
+        </button>
+      </div>
       </div>
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+
+      <DeskConfirmModal
+        open={earlyDepartOpen}
+        tone="danger"
+        title="Record early departure?"
+        subtitle={entry.id}
+        why="Ending an in-house stay early is terminal. Here is exactly what happens:"
+        consequences={[
+          "The stay ends now — the guest is checked out ahead of the booked date.",
+          <>
+            The disclosed early-departure <b>penalty</b>
+            {earlyDepartWaiver ? " is waived (GM)" : " (if any) is posted on the live folio"}.
+          </>,
+          "The room is released to housekeeping.",
+          "The booking becomes terminal — this cannot be undone.",
+        ]}
+        confirmLabel="Record early departure"
+        cancelLabel="Keep the stay"
+        pending={earlyDepartM.isPending}
+        onConfirm={() => earlyDepartM.mutate()}
+        onClose={() => setEarlyDepartOpen(false)}
+      />
     </div>
   );
 }

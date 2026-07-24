@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BedDouble, Check, Crown, KeyRound, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -55,7 +55,15 @@ export function CheckInStep({
 
   const guest = entry.guestProfile;
   const folio = entry.folio;
-  const assignment = (entry.roomAssignments ?? [])[0];
+  // A multi-room booking has one RoomAssignment per (room, date-range), so the list can hold
+  // several rows per room. Dedupe by roomId to get the rooms the guest is actually checking into
+  // — taking [0] showed a single room and silently hid the rest of an 8-room party.
+  const allAssignments = entry.roomAssignments ?? [];
+  const distinctAssignments = useMemo(
+    () => Array.from(new Map(allAssignments.map((a) => [a.roomId, a])).values()),
+    [allAssignments],
+  );
+  const assignment = distinctAssignments[0];
   const vipNotifications = entry.vipArrivalNotifications ?? [];
   const isVip = !!guest?.vipTier?.trim();
   const identityVerified = !!guest?.identityVerifiedAt;
@@ -235,27 +243,73 @@ export function CheckInStep({
           <BedDouble style={{ width: 13, height: 13 }} />
           Room
         </BlockH>
-        {assignment ? (
-          <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5 }}>
-            <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
-            Room {assignment.room?.roomNumber ?? assignment.roomId.slice(0, 8)}
-            {assignment.room?.currentClaimState ? ` · ${formatClaimState(assignment.room.currentClaimState)}` : ""}
-            {assignment.room?.physicalState ? ` · ${formatPhysicalState(assignment.room.physicalState)}` : ""}
-          </div>
+        {distinctAssignments.length > 0 ? (
+          <>
+            {distinctAssignments.length > 1 && (
+              <div className="fact b-transit" style={{ padding: "6px 11px", fontSize: 12.5, marginBottom: 8, width: "100%", justifyContent: "space-between" }}>
+                <span>
+                  {distinctAssignments.length} rooms on this booking
+                  {entry.numberOfRooms ? ` · ${entry.numberOfRooms} needed` : ""}
+                </span>
+                <span className="tag">check-in covers all</span>
+              </div>
+            )}
+            <div style={{ display: "grid", gap: 6 }}>
+              {distinctAssignments.map((a) => (
+                <div key={a.id} className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5 }}>
+                  <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
+                  Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                  {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
+                  {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
+                </div>
+              ))}
+            </div>
+          </>
         ) : (
           <p style={{ fontSize: 12, color: "var(--stop)", margin: 0 }}>No room assigned — go back to Arrival.</p>
         )}
-        {elevated && (
+        {/* There is deliberately no "pick the new room" control here: the S6 endpoint
+            (POST /entries/:id/s6-room-change/re-enter-s1) accepts only { reason }. It doesn't
+            swap a room — it releases the room claim, erases the committed hold, unseals every
+            availability config and sends the whole booking back to Inquiry, where the new room
+            is chosen. The copy below spells that out so nobody clicks it expecting a swap. */}
+        {elevated && distinctAssignments.length > 0 && (
           <div style={{ marginTop: 11, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 6 }}>Change room (L2+) — re-opens Inquiry</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 6 }}>
+              Change room (L2+) — sends this booking back to Inquiry
+            </div>
+            <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginBottom: 8, display: "block", lineHeight: 1.55 }}>
+              This doesn&rsquo;t swap one room. It releases{" "}
+              <b>
+                {distinctAssignments.length === 1
+                  ? `room ${distinctAssignments[0].room?.roomNumber ?? distinctAssignments[0].roomId.slice(0, 8)}`
+                  : `all ${distinctAssignments.length} rooms`}
+              </b>
+              , cancels the committed hold and unseals the room plan — then reopens the booking at{" "}
+              <b>Inquiry</b> so you re-select {distinctAssignments.length === 1 ? "a room" : "the rooms"} from
+              availability and walk forward again.
+              {distinctAssignments.length > 1 && (
+                <>
+                  {" "}
+                  <span style={{ color: "var(--warn)" }}>
+                    There is no way to change just one of the {distinctAssignments.length} rooms — the backend
+                    reopens the whole booking.
+                  </span>
+                </>
+              )}
+            </div>
             <div className="frow">
               <div className="field">
-                <label>Reason</label>
-                <input value={roomChangeReason} onChange={(e) => setRoomChangeReason(e.target.value)} placeholder="Why change?" />
+                <label>Reason (recorded on the audit trail)</label>
+                <input
+                  value={roomChangeReason}
+                  onChange={(e) => setRoomChangeReason(e.target.value)}
+                  placeholder="e.g. aircon fault in 302"
+                />
               </div>
               <div className="field" style={{ alignSelf: "end" }}>
                 <button className="btn btn-ghost" disabled={roomChangeM.isPending || roomChangeReason.trim().length < 3} onClick={() => roomChangeM.mutate()}>
-                  Change room → Inquiry
+                  {roomChangeM.isPending ? "Reopening…" : "Release & reopen at Inquiry"}
                 </button>
               </div>
             </div>

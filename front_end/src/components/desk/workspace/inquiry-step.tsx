@@ -17,9 +17,10 @@ import {
 import { MultiRoomSelect, roomMetaFromResults, type SealPayload } from "./multi-room-select";
 import { getInquiry } from "@/lib/api/inquiries";
 import { roomTypeShort } from "@/lib/desk/rooms";
-import { guestName, nightsBetween } from "@/lib/desk/model";
+import { formatDMY, guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
+import { DateField, nextDayIso } from "@/components/desk/date-field";
 import type { BackendItem } from "@/lib/desk/backend-map";
 import type { EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -278,6 +279,16 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const [adultsInput, setAdultsInput] = useState(String(entry.guestCount ?? 1));
   const [childrenInput, setChildrenInput] = useState("0");
   const partyInited = useRef(false);
+
+  // Same rule as intake: a check-in date drags check-out to the next day unless a later one is
+  // already set. Keeps the search window valid without overwriting a deliberate multi-night stay.
+  useEffect(() => {
+    if (!checkIn) return;
+    const earliest = nextDayIso(checkIn);
+    if (!earliest) return;
+    setCheckOut((prev) => (!prev || prev < earliest ? earliest : prev));
+  }, [checkIn]);
+
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
   const [pendingRoom, setPendingRoom] = useState<string | null>(null);
   // Which room-type cards have their room list expanded (keyed by group key).
@@ -288,6 +299,19 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const preferredConfig = configs.find((c) => c.optionSelected != null) ?? null;
   const preferredRoomId = optionSelectedRoomIds(preferredConfig?.optionSelected)[0] ?? null;
   const activeConfigId = searchResult?.configurationId ?? latestConfig?.id ?? null;
+
+  // Rooms the guest is committed to, for an at-a-glance summary. Prefer the actual room
+  // assignments (present on imported / confirmed bookings — specific room numbers), else fall
+  // back to the sealed availability selection's room count. Deduped by room number.
+  const assignedRoomNumbers = Array.from(
+    new Map((entry.roomAssignments ?? []).map((a) => [a.room?.roomNumber ?? a.roomId, a])).values(),
+  ).map((a) => a.room?.roomNumber ?? String(a.roomId).slice(0, 6));
+  const sealedRoomIds = optionSelectedRoomIds(preferredConfig?.optionSelected);
+  const roomsSelectedLabel = assignedRoomNumbers.length
+    ? assignedRoomNumbers.join(", ")
+    : sealedRoomIds.length
+      ? `${sealedRoomIds.length} room${sealedRoomIds.length === 1 ? "" : "s"} selected · specific rooms assigned at arrival`
+      : null;
 
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const hasContact = !!(g?.email || g?.phone);
@@ -498,12 +522,42 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
           <Fact label="Guests" value={guestsLabel ?? DASH} />
         </div>
+        <div className="frow">
+          <Fact label="Check-in" value={formatDMY(entry.checkInDate) || DASH} />
+          <Fact
+            label="Check-out"
+            value={
+              formatDMY(entry.checkOutDate)
+                ? `${formatDMY(entry.checkOutDate)}${nights ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}`
+                : DASH
+            }
+          />
+        </div>
         {!hasContact && (
           <p style={{ fontSize: 12, color: "var(--warn)", margin: 0 }}>
             A phone or email is required on the guest before this booking can move to Quote.
           </p>
         )}
       </div>
+
+      {roomsSelectedLabel && (
+        <div className="block">
+          <BlockH>Rooms selected</BlockH>
+          <div className="frow">
+            <Fact
+              label={`Room${assignedRoomNumbers.length === 1 ? "" : "s"}`}
+              value={roomsSelectedLabel}
+            />
+            {entry.numberOfRooms ? (
+              <Fact
+                label="Rooms needed"
+                value={`${assignedRoomNumbers.length || sealedRoomIds.length} of ${entry.numberOfRooms}`}
+                epi="der"
+              />
+            ) : null}
+          </div>
+        </div>
+      )}
 
       <div className="block">
         <BlockH>Explore availability</BlockH>
@@ -516,11 +570,11 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         <div className="frow">
           <div className="field">
             <label>Check-in</label>
-            <input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
+            <DateField value={checkIn} onChange={setCheckIn} />
           </div>
           <div className="field">
             <label>Check-out</label>
-            <input type="date" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+            <DateField min={nextDayIso(checkIn) || undefined} value={checkOut} onChange={setCheckOut} />
           </div>
         </div>
         <div className="frow">

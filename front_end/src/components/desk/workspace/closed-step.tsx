@@ -18,7 +18,8 @@ import {
   writeOffOutstanding,
 } from "@/lib/api/post-stay";
 import { progressDispute } from "@/lib/api/in-stay";
-import { deriveFinancials, money, s9CloseReadiness } from "@/lib/desk/workspace";
+import { deriveFinancials, money, moneyOrDash, s9CloseReadiness } from "@/lib/desk/workspace";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -55,7 +56,8 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
   const elevated = isElevated(session?.actorLevel);
   const gm = isGm(session?.actorLevel);
 
-  const fin = deriveFinancials(entry);
+  const paymentStatus = usePaymentStatus(entry.id, { enabled: !!entry.folio });
+  const fin = deriveFinancials(entry, { paymentStatus: paymentStatus.data });
   const folio = entry.folio;
   const invoices = folio?.invoices ?? [];
   const draftInvoices = invoices.filter((i) => i.state === "DRAFT");
@@ -241,17 +243,15 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
             <Receipt style={{ width: 13, height: 13 }} />
             The bill
           </BlockH>
-          <div className="field">
-            <label>Charges total</label>
-            <div className="val derived">{money(fin.chargesTotal, currency)}</div>
-          </div>
+          {/* Read from the backend only — no charges-total field exists on the folio, so it is
+              omitted rather than summed here. */}
           <div className="field">
             <label>Payments received</label>
-            <div className="val">{money(fin.advanceReceived, currency)}</div>
+            <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>
           </div>
           <div className="field">
             <label>Outstanding</label>
-            <div className="val derived">{money(fin.outstanding ?? Math.max(0, fin.chargesTotal - fin.advanceReceived), currency)}</div>
+            <div className="val">{moneyOrDash(fin.outstanding, currency)}</div>
           </div>
         </div>
 

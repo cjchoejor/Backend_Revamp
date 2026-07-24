@@ -17,12 +17,13 @@ import {
   patchPreArrivalTask,
 } from "@/lib/api/pre-arrival";
 import { roomsFromResultSet } from "@/lib/api/availability";
-import { getPaymentStatus, reconcileAdvancePayment } from "@/lib/api/reservation-setup";
+import { cancelEntryAtS5, getPaymentStatus, reconcileAdvancePayment } from "@/lib/api/reservation-setup";
 import { listRooms } from "@/lib/api/rooms";
 import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
+import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
@@ -87,8 +88,11 @@ export function ArrivalStep({
   const [assignNotes, setAssignNotes] = useState("");
   const [h1Completion, setH1Completion] = useState<Record<string, boolean>>({});
   const [waiveReasons, setWaiveReasons] = useState<Record<string, string>>({});
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelWaiver, setCancelWaiver] = useState(false);
 
   const elevated = isElevated(session?.actorLevel);
+  const isGm = session?.actorLevel === "L3" || session?.actorLevel === "L4";
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -164,12 +168,14 @@ export function ArrivalStep({
   const paymentStatus = paymentStatusQuery.data;
 
   const hasCreditCeiling = reservation?.creditCeilingIfExtended != null;
+  // Prompt whenever the server says a credit extension is active and no acknowledgement is on
+  // record. This used to additionally require `totalReceived >= ceilingAmount * 0.9` — a 90%
+  // advisory threshold invented here. The real thresholds live in the backend
+  // (`registry.creditCeiling.advisoryThresholds`) and payment-status doesn't report whether one
+  // has been crossed, so the desk asks on the backend booleans alone: it can prompt slightly
+  // early, but it can never skip an acknowledgement the gate requires.
   const creditNeedsAck =
-    hasCreditCeiling &&
-    paymentStatus?.creditExtensionActive &&
-    !entry.creditCeilingTier2AcknowledgedAt &&
-    paymentStatus.ceilingAmount != null &&
-    paymentStatus.totalReceived >= paymentStatus.ceilingAmount * 0.9;
+    hasCreditCeiling && paymentStatus?.creditExtensionActive && !entry.creditCeilingTier2AcknowledgedAt;
 
   const paymentReconciled = !!folio?.advancePaymentReconciliationComplete || paymentStatus?.satisfied === true;
   const tasksComplete = tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED");
@@ -225,6 +231,16 @@ export function ArrivalStep({
   const creditAckM = useMutation(
     wrap(() => acknowledgeCreditCeilingTier2(session!, entry.id), "Credit ceiling acknowledged"),
   );
+  const cancelM = useMutation({
+    mutationFn: () => cancelEntryAtS5(session!, entry.id, cancelWaiver ? { penaltyWaiverRequested: true } : undefined),
+    onSuccess: () => {
+      setCancelOpen(false);
+      toast.success("Booking cancelled — held room released, no-show timer cancelled.");
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Cancellation failed"),
+  });
   const taskM = useMutation({
     mutationFn: async ({ taskId, action }: { taskId: string; action: "COMPLETE" | "WAIVE" }) => {
       if (action === "COMPLETE") return patchPreArrivalTask(session!, taskId, { action: "COMPLETE" });
@@ -507,9 +523,49 @@ export function ArrivalStep({
           <span>The guest is physically present at the front desk (required to check in)</span>
         </label>
       </div>
+
+      {/* Cancel (pre-arrival, terminal) — SIG-S5 §1.7 / Policy 35 */}
+      <div className="block" style={{ borderColor: "#e2b3ac" }}>
+        <BlockH>Cancel this booking</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 0, lineHeight: 1.5 }}>
+          Pre-arrival cancellation. Releases the held room, cancels the no-show timer, applies the disclosed
+          penalty and refunds the net advance. The booking becomes terminal — there&rsquo;s no undo.
+        </p>
+        {isGm && (
+          <label className="checkline" style={{ cursor: "pointer", marginBottom: 8 }}>
+            <input type="checkbox" checked={cancelWaiver} onChange={(e) => setCancelWaiver(e.target.checked)} />
+            <span>Waive the cancellation penalty (GM authority)</span>
+          </label>
+        )}
+        <button className="btn btn-ghost" style={{ borderColor: "#e2b3ac", color: "var(--stop)" }} onClick={() => setCancelOpen(true)}>
+          Cancel booking
+        </button>
+      </div>
       </div>
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+
+      <DeskConfirmModal
+        open={cancelOpen}
+        tone="danger"
+        title="Cancel this booking?"
+        subtitle={entry.id}
+        why="Cancelling before arrival is terminal. Here is exactly what happens:"
+        consequences={[
+          "The held room is released — it returns to the available pool.",
+          "The no-show timer and any pre-arrival tasks are cancelled.",
+          <>
+            The disclosed cancellation <b>penalty</b>
+            {cancelWaiver ? " is waived (GM)" : " (if any) is posted"}; the net advance refunds.
+          </>,
+          "The booking becomes terminal — this cannot be undone.",
+        ]}
+        confirmLabel="Cancel booking"
+        cancelLabel="Keep booking"
+        pending={cancelM.isPending}
+        onConfirm={() => cancelM.mutate()}
+        onClose={() => setCancelOpen(false)}
+      />
     </div>
   );
 }

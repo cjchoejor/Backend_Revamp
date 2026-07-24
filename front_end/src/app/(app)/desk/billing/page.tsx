@@ -6,7 +6,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, listEntries } from "@/lib/api/entries";
 import { guestName, partyCaption, stepForStage } from "@/lib/desk/model";
-import { deriveFinancials, money } from "@/lib/desk/workspace";
+import { deriveFinancials, moneyOrDash } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 
 export default function DeskBillingPage() {
@@ -40,6 +40,9 @@ export default function DeskBillingPage() {
       .filter((d): d is EntryDetail => !!d)
       .map((entry) => {
         const fin = deriveFinancials(entry);
+        // Balance is the backend's folio.outstandingBalance, straight through. This table shows one
+        // row per booking, so it deliberately doesn't fetch each one's payment-status just to
+        // render an "advance held" figure — open the booking for that.
         let cls: "live" | "prov" | "settled";
         let balance: string;
         if (fin.folio.state === "Settled") {
@@ -47,12 +50,10 @@ export default function DeskBillingPage() {
           balance = "—";
         } else if (fin.folio.state === "Live") {
           cls = "live";
-          const bal = fin.outstanding ?? Math.max(0, fin.chargesTotal - fin.advanceReceived);
-          balance = money(bal, fin.currency);
+          balance = moneyOrDash(fin.outstanding, fin.currency);
         } else {
           cls = "prov";
-          balance =
-            fin.advanceReceived > 0 ? `${money(fin.advanceReceived, fin.currency)} held` : "Provisional";
+          balance = "Provisional";
         }
         return {
           id: entry.id,

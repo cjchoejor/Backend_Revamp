@@ -7,8 +7,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Check, ChevronLeft, Layers, Lock, Pause, Play } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
-import { getEntry, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
-import { getPaymentStatus } from "@/lib/api/reservation-setup";
+import { getEntry, getEntryTimers, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
+import { countdownTo, findParkTimer } from "@/lib/desk/timers";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
@@ -16,7 +17,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   avatarColor,
   dwellTimer,
-  formatStayRange,
+  formatStayRangeDMY,
   guestName,
   initialsOf,
   partyCaption,
@@ -31,6 +32,7 @@ import {
   deriveFinancials,
   maxReachableOrder,
   money,
+  moneyOrDash,
   preconditionsFor,
   s1Readiness,
   canProgressS1,
@@ -61,6 +63,8 @@ import { ConfirmStep as ConfirmStepBase } from "./confirm-step";
 import { BackendRail, LiveBackendFeed, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
+import { optionSelectedRoomIds } from "@/types/api";
+import { roomsFromResultSet } from "@/lib/api/availability";
 
 /**
  * The workspace lifts a few UI states (selected step, modal flags, key-count,
@@ -87,6 +91,10 @@ const ConfirmStep = memo(ConfirmStepBase);
 type Epi = "cap" | "der" | "sug" | "sys";
 const EPI_MARK: Record<Epi, string> = { cap: "✎", der: "∑", sug: "◇", sys: "⚙" };
 
+// Stable no-op passed to a read-only (past) step's setters so it can never drive navigation or
+// mutate lifted state. Kept module-level so it stays referentially stable (memo-friendly).
+const NOOP = () => {};
+
 function ValRow({ label, value, epi = "cap" }: { label: string; value: ReactNode; epi?: Epi }) {
   return (
     <div className="field">
@@ -107,7 +115,7 @@ const StepCanvas = memo(StepCanvasBase);
 function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDetail; fin: DeskFinancials }) {
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const name = guestName(g);
-  const stay = formatStayRange(entry.checkInDate, entry.checkOutDate) || "Dates not set";
+  const stay = formatStayRangeDMY(entry.checkInDate, entry.checkOutDate) || "Dates not set";
   const quote = activeQuotation(entry);
 
   switch (step.key) {
@@ -177,7 +185,14 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
             <ValRow label="Rooms held" value={held ? "Hold placed" : "No hold yet"} epi="sys" />
             <ValRow
               label="Advance payment"
-              value={fin.advanceReceived > 0 ? money(fin.advanceReceived, fin.currency) + " received" : "Not recorded yet"}
+              value={
+                fin.advanceReceived == null
+                  ? DASH
+                  : fin.advanceReceived > 0
+                    ? `${money(fin.advanceReceived, fin.currency)} received`
+                    : "Not recorded yet"
+              }
+              epi="sys"
             />
             <ValRow
               label="Cancellation terms shown to guest"
@@ -188,6 +203,31 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
       );
     }
     case "confirm": {
+      // Distinct assigned rooms (with their date window when it's a per-night / multi-segment
+      // assignment) so a confirmed reservation shows its rooms without opening the Arrival step.
+      const roomLabels = Array.from(
+        new Map(
+          (entry.roomAssignments ?? []).map((a) => [a.room?.roomNumber ?? a.roomId, a]),
+        ).values(),
+      ).map((a) => a.room?.roomNumber ?? String(a.roomId).slice(0, 6));
+      // Before rooms are formally assigned at Arrival (S5), fall back to the room(s) selected +
+      // sealed at Inquiry (S1) so the confirm summary isn't blank. Resolves ids → numbers via the
+      // sealed availability config's resultSet (same source Arrival uses). The specific room can
+      // still be changed at Arrival — this is the selection, not the final assignment.
+      const sealedCfg = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
+      const sealedRoomIds = optionSelectedRoomIds(sealedCfg?.optionSelected);
+      let sealedRoomLabels: string[] = [];
+      if (sealedCfg?.resultSet && sealedRoomIds.length) {
+        const { availableRooms, deficientRooms } = roomsFromResultSet(sealedCfg.resultSet);
+        const byId = new Map(
+          [...availableRooms, ...deficientRooms]
+            .filter((r) => r.roomId)
+            .map((r) => [r.roomId, r.roomNumber ?? r.roomId] as const),
+        );
+        sealedRoomLabels = sealedRoomIds.map((id) => byId.get(id) ?? String(id).slice(0, 6));
+      }
+      const roomsAssigned = roomLabels.length > 0;
+      const displayRooms = roomsAssigned ? roomLabels : sealedRoomLabels;
       const s4Groups: RailGroup[] = [
         { key: "confirm", label: "On freeze & confirm", items: STAGE_ACTIONS.S4.confirm },
         { key: "activate", label: "On continue to Arrival", items: STAGE_ACTIONS.S4.activate },
@@ -211,6 +251,17 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
             <BlockH>{fin.frozen ? "What's sealed" : "What gets frozen"}</BlockH>
             <ValRow label="Guest" value={name} />
             <ValRow label="Stay" value={stay} epi="der" />
+            <ValRow
+              label={`Room${displayRooms.length === 1 ? "" : "s"}${entry.numberOfRooms ? ` (${displayRooms.length}/${entry.numberOfRooms})` : ""}`}
+              value={
+                displayRooms.length === 0
+                  ? "Not assigned yet"
+                  : roomsAssigned
+                    ? displayRooms.join(", ")
+                    : `${displayRooms.join(", ")} — selected at inquiry, assigned at arrival`
+              }
+              epi="sys"
+            />
             <ValRow
               label={fin.frozen ? "Frozen rate" : "Total to be frozen"}
               value={
@@ -239,7 +290,9 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
       );
     }
     case "arrival": {
-      const ra = (entry.roomAssignments ?? [])[0];
+      const arrivalRooms = Array.from(
+        new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values(),
+      ).map((a) => a.room?.roomNumber ?? String(a.roomId).slice(0, 8));
       return (
         <>
           <Speak now="Arrival" h2="Ready the room for arrival.">
@@ -248,15 +301,31 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
           </Speak>
           <div className="block">
             <BlockH>Readiness</BlockH>
-            <ValRow label="Room assigned" value={ra?.room?.roomNumber ? `Room ${ra.room.roomNumber}` : "Not assigned yet"} epi="sys" />
+            <ValRow
+              label={arrivalRooms.length > 1 ? `Rooms assigned (${arrivalRooms.length}${entry.numberOfRooms ? `/${entry.numberOfRooms}` : ""})` : "Room assigned"}
+              value={arrivalRooms.length ? arrivalRooms.join(", ") : "Not assigned yet"}
+              epi="sys"
+            />
             <ValRow
               label="Advance reconciled"
               value={entry.folio?.advancePaymentReconciliationComplete ? "Reconciled against folio" : "Pending"}
               epi="der"
             />
             <ValRow
-              label="Room ready"
-              value={ra?.room?.physicalState ?? (ra ? "Assigned" : DASH)}
+              label={arrivalRooms.length > 1 ? "Rooms ready" : "Room ready"}
+              value={
+                arrivalRooms.length === 0
+                  ? DASH
+                  : (() => {
+                      // Every room must be ready before check-in, so report the weakest link
+                      // rather than the first row's state.
+                      const states = Array.from(
+                        new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values(),
+                      ).map((a) => a.room?.physicalState ?? "Assigned");
+                      const distinct = Array.from(new Set(states));
+                      return distinct.length === 1 ? distinct[0] : `Mixed — ${distinct.join(", ")}`;
+                    })()
+              }
               epi="sys"
             />
           </div>
@@ -265,7 +334,11 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
     }
     case "checkin": {
       const live = fin.folio.state === "Live" || fin.folio.state === "Settled";
-      const ra = (entry.roomAssignments ?? [])[0];
+      // Dedupe by roomId — per-night bookings hold one assignment row per (room, range), and a
+      // multi-room party must show every room, not just the first.
+      const checkinRooms = Array.from(
+        new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values(),
+      ).map((a) => a.room?.roomNumber ?? String(a.roomId).slice(0, 8));
       return (
         <>
           <Speak
@@ -279,7 +352,11 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
           <div className="block">
             <BlockH>Check-in</BlockH>
             <ValRow label="Guest" value={name} />
-            <ValRow label="Room" value={ra?.room?.roomNumber ? `Room ${ra.room.roomNumber}` : DASH} epi="sys" />
+            <ValRow
+              label={checkinRooms.length === 1 ? "Room" : `Rooms (${checkinRooms.length})`}
+              value={checkinRooms.length ? checkinRooms.join(", ") : DASH}
+              epi="sys"
+            />
             <ValRow
               label="Identity verified"
               value={entry.guestProfile?.identityVerifiedAt ? "Recorded" : "Not yet"}
@@ -301,7 +378,6 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
     }
     case "stay": {
       const lines = entry.folio?.lines ?? [];
-      const total = fin.chargesTotal;
       return (
         <>
           <Speak now="In-house" h2="The stay is live. Post charges as they happen.">
@@ -337,10 +413,13 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
                 );
               })
             )}
+            {/* No running total: the backend exposes no sum-of-lines field on the folio, and
+                totalling the rows here would be frontend-computed money. Balance due (below and on
+                the Check-out step) comes from the server's own outstandingBalance. */}
             <div className="fline total">
-              <span className="fl-mk mk der">∑</span>
-              <span className="fl-d">Running total</span>
-              <span className="fl-a">{money(total, fin.currency)}</span>
+              <span className="fl-mk mk sys">⚙</span>
+              <span className="fl-d">Balance due (from folio)</span>
+              <span className="fl-a">{moneyOrDash(fin.outstanding, fin.currency)}</span>
             </div>
           </div>
           <div className="reentry">
@@ -356,10 +435,6 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
     }
     case "checkout": {
       const settled = fin.folio.state === "Settled";
-      const balance =
-        fin.outstanding !== null
-          ? fin.outstanding
-          : Math.max(0, fin.chargesTotal - fin.advanceReceived);
       return (
         <>
           <Speak
@@ -372,9 +447,8 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
           </Speak>
           <div className="block">
             <BlockH>Settlement</BlockH>
-            <ValRow label="Charges total" value={money(fin.chargesTotal, fin.currency)} epi="der" />
-            <ValRow label="Advance already paid" value={money(fin.advanceReceived, fin.currency)} />
-            <ValRow label="Balance due" value={money(balance, fin.currency)} epi="der" />
+            <ValRow label="Advance already paid" value={moneyOrDash(fin.advanceReceived, fin.currency)} epi="sys" />
+            <ValRow label="Balance due" value={moneyOrDash(fin.outstanding, fin.currency)} epi="sys" />
           </div>
         </>
       );
@@ -455,17 +529,34 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   const entry = entryQuery.data ?? null;
 
-  // Authoritative advance-payment condition (payment OR FOM credit extension) for the confirm
-  // gate. The raw folio payments alone miss the credit-extension path (SIG-S3 Policy 42), so we
-  // read the server's payment-status while the booking is still at S3.
-  // Shares the ["payment-status", entryId] key with the Set-up step so recording a credit
-  // extension / payment there invalidates this gate's copy too (otherwise it reads stale).
-  const paymentStatusQuery = useQuery({
-    queryKey: ["payment-status", entryId],
-    queryFn: () => getPaymentStatus(session!, entryId),
-    enabled: !!session && !sessionLoading && entry?.currentStage === "S3",
-  });
+  // Authoritative advance-payment position from the server (payment OR FOM credit extension —
+  // raw folio payments alone miss the credit-extension path, SIG-S3 Policy 42). It supplies both
+  // the confirm gate's `satisfied` flag AND every "advance paid" figure the workspace renders, so
+  // it is fetched from the moment a folio exists rather than only at S3.
+  const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
+
+  // Park expiry — parking cancels the short stage-expiry timer and arms a long PARKING_FOLLOW_UP
+  // one in its place (SIG-S1 §3.4: a parked booking still expires, just on a 30-day window). The
+  // backend already runs that clock; the operator should be able to see it rather than assume a
+  // park is open-ended. Only fetched while the booking is actually parked.
+  const parked = entry?.status === "PARKED";
+  const timersQuery = useQuery({
+    queryKey: ["entry-timers", entryId],
+    queryFn: () => getEntryTimers(session!, entryId),
+    enabled: !!session && !sessionLoading && parked,
+    // Refresh occasionally so the countdown doesn't drift far from the server's own clock.
+    refetchInterval: parked ? 60_000 : false,
+  });
+  const parkTimer = findParkTimer(timersQuery.data?.items);
+  // Local tick so the countdown moves between refetches.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!parkTimer) return;
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [parkTimer?.id]);
+  const parkCountdown = parkTimer ? countdownTo(parkTimer.firesAt, nowTick) : null;
 
   const queryClient = useQueryClient();
   const currentOrder = entry ? currentStepOrder(entry) : 1;
@@ -576,6 +667,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       queryClient.setQueryData(["entry", entry!.id], updated);
       void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
+      // The park-expiry timer is armed inside the same transaction — pull it so the header shows
+      // the new countdown immediately instead of on the next poll.
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry!.id] });
       setParkOpen(false);
       setParkReason("");
       toast.success("Booking parked — it's paused but keeps its place.");
@@ -591,6 +685,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       queryClient.setQueryData(["entry", entry!.id], updated);
       void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry!.id] });
       toast.success("Booking resumed — back on the active desk.");
     },
     onError: (e) => {
@@ -603,7 +698,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     if (entry) setSelected((s) => s ?? (canConfirm(entry, { paymentSatisfied }) ? 4 : currentStepOrder(entry)));
   }, [entry]);
 
-  const fin = useMemo(() => (entry ? deriveFinancials(entry) : null), [entry]);
+  const fin = useMemo(
+    () => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null),
+    [entry, paymentStatusQuery.data],
+  );
 
   if (sessionLoading || entryQuery.isLoading) {
     return (
@@ -627,7 +725,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const step = DESK_STEPS[viewing - 1];
   const name = guestName(entry.guestProfile ?? entry.inquiry?.guestProfile);
   const sub = `${partyCaption(entry)}`;
-  const parked = entry.status === "PARKED";
   // Sealed = terminal, no forward action: closed stay, cancellation, or expired no-show.
   // Every step is freely browsable as read-only history; nothing nudges you onward.
   const sealed =
@@ -720,6 +817,44 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     setSelected(n);
   };
 
+  // Viewing an already-completed (earlier) step → render its FULL working surface, but read-only,
+  // rather than the compact summary. All setters are no-ops and the subtree is `inert` so nothing
+  // can be clicked, typed, or navigated. "Done" = strictly before the current step.
+  const viewingDoneStep = viewing < currentOrder;
+  const readOnlyStepBody = () => {
+    switch (step.key) {
+      case "inquiry":
+        return <InquiryStep entry={entry} />;
+      case "quote":
+        return <QuoteStep entry={entry} />;
+      case "setup":
+        return <SetupStep entry={entry} setSelected={NOOP} />;
+      case "confirm":
+        return <ConfirmStep entry={entry} />;
+      case "arrival":
+        return <ArrivalStep entry={entry} guestPresent={guestPresent} setGuestPresent={NOOP} />;
+      case "checkin":
+        return (
+          <CheckInStep
+            entry={entry}
+            keyCount={keyCount}
+            setKeyCount={NOOP}
+            registrationConfirmed={registrationConfirmed}
+            setRegistrationConfirmed={NOOP}
+            setSelected={NOOP}
+          />
+        );
+      case "stay":
+        return <StayStep entry={entry} setNightAuditOk={NOOP} setSelected={NOOP} />;
+      case "checkout":
+        return <CheckOutStep entry={entry} setSelected={NOOP} />;
+      case "closed":
+        return <PostStayStep entry={entry} />;
+      default:
+        return <StepCanvas step={step} entry={entry} fin={fin} />;
+    }
+  };
+
   return (
     <div className="ws">
       {/* top bar — guest header + key figures, with the horizontal booking journey beneath */}
@@ -744,13 +879,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               {fin.frozen ? <Check /> : null}
               {fin.frozen ? "Confirmed" : "Indicative"}
             </span>
+            {/* Confirmed bookings show the frozen PER-NIGHT rate, which is the only figure the
+                reservation carries — there is no stay total on the server (no frozenTotalAmount),
+                and multiplying by nights here silently dropped roomCount on multi-room bookings. */}
             <div className="jsum-i">
-              <span className="k">{fin.frozen ? "Frozen" : "Indicative"}</span>
+              <span className="k">{fin.frozen ? "Frozen / night" : "Indicative total"}</span>
               <span className="v mono">
-                {(() => {
-                  const amt = fin.frozen ? fin.frozenTotal ?? fin.frozenRate : fin.indicativeTotal;
-                  return amt !== null && amt !== undefined ? money(amt, fin.currency) : "—";
-                })()}
+                {moneyOrDash(fin.frozen ? fin.frozenRate : fin.indicativeTotal, fin.currency)}
               </span>
             </div>
             <div className="jsum-i">
@@ -759,9 +894,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             </div>
           </div>
           {parked && (
-            <span className="timer warn" style={{ gap: 5 }}>
+            <span
+              className={`timer ${parkCountdown?.level || "warn"}`}
+              style={{ gap: 5 }}
+              title={
+                parkTimer
+                  ? `Park expiry (PARKING_FOLLOW_UP) fires ${new Date(parkTimer.firesAt).toLocaleString()} — the booking expires then unless it's resumed.`
+                  : "Parked — paused, but it keeps its place in the journey."
+              }
+            >
               <Pause />
-              Parked
+              {parkCountdown ? `Parked · expires ${parkCountdown.text}` : "Parked"}
             </span>
           )}
           {parkable &&
@@ -812,12 +955,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       {/* body — Backend activity live (left) · operate flow + colour-coded groups (right) */}
       <div className="ws-body">
         <aside className="ws-feed">
-          <LiveBackendFeed entryId={entry.id} />
+          <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
         </aside>
         <div className="canvas-wrap">
           <div className="canvas-scroll">
           <div
             className={`canvas${
+              viewingDoneStep ||
               inquiryStepActive ||
               quoteStepActive ||
               setupStepActive ||
@@ -831,7 +975,31 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 : ""
             }`}
           >
-            {inquiryStepActive ? (
+            {viewingDoneStep ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "var(--ink-2)",
+                    background: "var(--paper-2, rgba(0,0,0,0.04))",
+                    border: "1px solid var(--line)",
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    marginBottom: 12,
+                  }}
+                >
+                  <Lock style={{ width: 12, height: 12 }} />
+                  Completed step · read-only
+                </div>
+                {/* `inert` (React 19) makes the whole subtree non-interactive + non-focusable,
+                    so the full step surface is visible but nothing can be actioned. */}
+                <div inert>{readOnlyStepBody()}</div>
+              </div>
+            ) : inquiryStepActive ? (
               <InquiryStep entry={entry} />
             ) : quoteStepActive ? (
               <QuoteStep entry={entry} />

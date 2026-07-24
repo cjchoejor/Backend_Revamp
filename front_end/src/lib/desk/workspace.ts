@@ -5,8 +5,13 @@
  * shapes it into the operator-language facts the journey canvas and summary
  * rail render. No fabrication — where the API doesn't carry a value we show
  * "—" rather than inventing one.
+ *
+ * **No money arithmetic lives in this file, or anywhere else in the frontend.** Totals, balances
+ * and rates are read straight from the API. If a figure the desk wants doesn't exist server-side,
+ * it renders "—" and the fix belongs in the backend, not here — the production frontend consumes
+ * the same endpoints and must not have to re-derive it.
  */
-import type { EntryDetail, QuotationSummary } from "@/types/api";
+import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
 import { DESK_STEPS, nightsBetween, stepForStage, type DeskStep } from "./model";
 
 export function toNum(v: string | number | null | undefined): number {
@@ -20,6 +25,14 @@ export function money(amount: string | number | null | undefined, currency?: str
   const n = toNum(amount);
   const sym = !currency || currency.toUpperCase() === "BTN" ? "Nu" : currency.toUpperCase();
   return `${sym} ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+/**
+ * Money, or an em dash when the backend supplies no value for it. Use this for every financial
+ * figure so a missing server-side field reads as "not available" instead of a confident Nu 0.
+ */
+export function moneyOrDash(amount: string | number | null | undefined, currency?: string | null): string {
+  return amount == null ? "—" : money(amount, currency);
 }
 
 /** The quotation that currently represents the offer (latest, not superseded). */
@@ -44,54 +57,59 @@ export function folioView(entry: EntryDetail): FolioView {
   return { state: "Provisional", frame: "b-transit" };
 }
 
+/**
+ * Money on the desk is **read from the backend, never computed here.**
+ *
+ * The backend is the single source of truth for every figure (CLAUDE.md — two frontends exist, and
+ * anything derived here would diverge from the production UI's own arithmetic). This type therefore
+ * carries only values the API actually returns; a field is `null` when the backend has no field for
+ * it, and callers must render "—" rather than filling the gap with a local sum or multiplication.
+ *
+ * Deliberately absent, because no endpoint supplies them today:
+ *  - a reservation stay total (only the frozen per-night `frozenRate` exists — no `frozenTotalAmount`)
+ *  - a folio charges total (only `outstandingBalance` exists — there is no sum-of-lines field)
+ */
 export type DeskFinancials = {
   currency: string;
   frozen: boolean;
-  /** Indicative offer total from the active quotation, if any. */
+  /** Backend `Quotation.totalAmount` of the active quotation. */
   indicativeTotal: number | null;
-  /** Frozen nightly rate from the reservation, if confirmed. */
+  /** Backend `Reservation.frozenRate` — a PER-NIGHT rate, not a stay total. */
   frozenRate: number | null;
-  /** Frozen rate × nights when both are known. */
-  frozenTotal: number | null;
   nights: number | null;
-  advanceReceived: number;
-  chargesTotal: number;
+  /**
+   * Backend `payment-status.totalReceived` (Decimal-safe, server-side). `null` until the caller
+   * passes a payment-status snapshot — never summed from folio payment rows here.
+   */
+  advanceReceived: number | null;
+  /** Backend `Folio.outstandingBalance`. `null` when the folio carries none. */
   outstanding: number | null;
   folio: FolioView;
 };
 
-export function deriveFinancials(entry: EntryDetail): DeskFinancials {
+export function deriveFinancials(
+  entry: EntryDetail,
+  opts?: { paymentStatus?: PaymentStatusSummary | null },
+): DeskFinancials {
   const quote = activeQuotation(entry);
   const reservation = entry.reservation ?? null;
   const folio = entry.folio ?? null;
   const currency = quote?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
 
+  // Date arithmetic, not money — used for captions like "3 nights", never to multiply a rate.
   const nights =
     nightsBetween(
       reservation?.frozenCheckInDate ?? entry.checkInDate,
       reservation?.frozenCheckOutDate ?? entry.checkOutDate,
     ) ?? null;
 
-  const frozenRate = reservation ? toNum(reservation.frozenRate) : null;
-  const frozenTotal = frozenRate !== null && nights ? frozenRate * nights : null;
-
-  const advanceReceived = (folio?.payments ?? [])
-    .filter((p) => !/OUT|REFUND/i.test(p.paymentDirection ?? ""))
-    .reduce((s, p) => s + toNum(p.amount), 0);
-
-  const chargesTotal = (folio?.lines ?? []).reduce((s, l) => s + toNum(l.amount), 0);
-
   return {
     currency,
     frozen: !!reservation,
     indicativeTotal: quote ? toNum(quote.totalAmount) : null,
-    frozenRate,
-    frozenTotal,
+    frozenRate: reservation ? toNum(reservation.frozenRate) : null,
     nights,
-    advanceReceived,
-    chargesTotal,
-    // `!= null` (not `!== undefined`): a null DB balance must stay null so callers fall back to
-    // (charges − advance) rather than showing a false Nu 0 balance at checkout.
+    advanceReceived: opts?.paymentStatus ? toNum(opts.paymentStatus.totalReceived) : null,
     outstanding: folio?.outstandingBalance != null ? toNum(folio.outstandingBalance) : null,
     folio: folioView(entry),
   };
@@ -234,19 +252,26 @@ export function canProgressS5(entry: EntryDetail, guestPresent: boolean): boolea
 /** S6 exit readiness (SIG-S6) — derivable gates before check-in completes (folio goes live → S7). */
 export function s6Readiness(entry: EntryDetail): Precondition[] {
   const g = entry.guestProfile;
-  const a = (entry.roomAssignments ?? [])[0];
-  const ps = a?.room?.physicalState;
-  const roomReady = ps
-    ? ps === "AVAILABLE_CLEAN" || ps === "AVAILABLE_INSPECTED"
-    : a?.deficientAtAssignment
-      ? !!(a.acknowledgementActorId && a.acknowledgementAt)
-      : !!a;
+  // EVERY assigned room must be ready, not just the first. `completeCheckInToS7` fails fast on the
+  // first room that isn't physically ready, so checking only [0] let the desk show a green gate
+  // that the backend then rejected on a multi-room booking. Deduped by roomId because a per-night
+  // booking holds one assignment row per (room, date-range).
+  const rooms = Array.from(new Map((entry.roomAssignments ?? []).map((x) => [x.roomId, x])).values());
+  const isReady = (a: (typeof rooms)[number]) => {
+    const ps = a.room?.physicalState;
+    if (ps) return ps === "AVAILABLE_CLEAN" || ps === "AVAILABLE_INSPECTED";
+    return a.deficientAtAssignment ? !!(a.acknowledgementActorId && a.acknowledgementAt) : true;
+  };
+  const roomReady = rooms.length > 0 && rooms.every(isReady);
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
   const h1Ok = entry.walkInCompressed === true || !h1 || h1.state === "FULFILLED" || h1.state === "CLOSED";
   const isVip = !!g?.vipTier?.trim();
   return [
     { label: "Identity verified", met: !!g?.identityVerifiedAt },
-    { label: "Room assigned & ready", met: !!a && roomReady },
+    {
+      label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",
+      met: roomReady,
+    },
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true },
     { label: "Handoff fulfilled", met: h1Ok },
     { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0 },

@@ -78,6 +78,17 @@ export async function runPreArrivalWindowActivationWorker(
     await tx.stageDwellRecord.create({ data: { entryId, stage: Stage.S5, enteredAt: now } });
     await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S5, version: { increment: 1 }, updatedAt: now } });
 
+    // Mark the pre-arrival countdown as FIRED now that it has done its job (S5 is activating).
+    // The pg-boss job payload is only `{ entryId }` (no timerRecordId), so the specific-id update
+    // below never matched on the timer-fired path — leaving the W4 timer SCHEDULED with a past
+    // firesAt, i.e. a phantom "overdue" countdown for the whole of S5 (until S5→S6 cancels it).
+    // Mark ALL scheduled W4 timers for this entry FIRED so the desk countdown clears immediately.
+    // Especially visible in compressed mode (same/next-day arrival, SIG-S5 §93) where firesAt is
+    // clamped to ~now and the timer would otherwise read overdue the instant it fires.
+    await tx.timerRecord.updateMany({
+      where: { entryId, timerCode: "PRE_ARRIVAL_COUNTDOWN_W4", status: "SCHEDULED" },
+      data: { status: "FIRED", firedAt: now },
+    });
     if (typeof input.timerRecordId === "string") {
       await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });
     }

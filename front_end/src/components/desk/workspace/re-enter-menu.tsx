@@ -12,6 +12,7 @@ import {
   COMPLAINT_APPLICABLE_STAGES,
   type BackflowDescriptor,
 } from "@/lib/api/backflows";
+import { DateField, nextDayIso } from "@/components/desk/date-field";
 import type { EntryDetail } from "@/types/api";
 import type { Session } from "@/types/session";
 
@@ -245,12 +246,11 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
               {active.needsNewCheckOutDate && (
                 <div className="field" style={{ marginTop: 12 }}>
                   <label htmlFor="reenter-checkout">New check-out date (required)</label>
-                  <input
+                  <DateField
                     id="reenter-checkout"
-                    type="date"
                     value={newCheckOutDate}
-                    min={entry.checkOutDate ? entry.checkOutDate.slice(0, 10) : undefined}
-                    onChange={(e) => setNewCheckOutDate(e.target.value)}
+                    min={nextDayIso(entry.checkOutDate) || undefined}
+                    onChange={setNewCheckOutDate}
                   />
                 </div>
               )}

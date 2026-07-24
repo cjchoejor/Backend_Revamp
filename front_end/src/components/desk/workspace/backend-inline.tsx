@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Cpu, Timer } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { getEntryTimers, getEntryTrace, type TimerRecordSummary } from "@/lib/api/entries";
+import { labelForTimer, isPassedStageAckWindow } from "@/lib/desk/timers";
 import { humanizeTrace, type TraceEvent, type TraceTone } from "@/lib/trace/humanize";
 import type { BackendItem } from "@/lib/desk/backend-map";
 
@@ -237,7 +238,7 @@ function LiveTimer({ timer }: { timer: TimerRecordSummary }) {
     <div className="bx-timer" title={`${timer.status} · fires ${timer.firesAt}`}>
       <div className="bx-timer-head">
         <span className="bx-dot" style={{ background: color }} />
-        <span className="mono bx-timer-code">{timer.timerCode || timer.timerType}</span>
+        <span className="bx-timer-code" title={timer.timerCode || timer.timerType}>{labelForTimer(timer)}</span>
         <span className="mono bx-timer-eta" style={{ color, fontWeight: level === "ok" ? 400 : 600 }}>
           {formatCountdown(ms)}
         </span>
@@ -254,7 +255,7 @@ function LiveTimer({ timer }: { timer: TimerRecordSummary }) {
  * active timers + the decision journey (TraceEvents). Drop it on a stage page so the
  * operator sees policies firing / timers arming in real time as they act.
  */
-export function LiveBackendFeed({ entryId, limit = 24 }: { entryId: string; limit?: number }) {
+export function LiveBackendFeed({ entryId, limit = 24, currentStage }: { entryId: string; limit?: number; currentStage?: string | null }) {
   const { session } = useSession();
   const now = Date.now();
 
@@ -271,7 +272,11 @@ export function LiveBackendFeed({ entryId, limit = 24 }: { entryId: string; limi
     refetchInterval: 8000,
   });
 
-  const timers = (timersQuery.data?.items ?? []) as TimerRecordSummary[];
+  const allTimers = (timersQuery.data?.items ?? []) as TimerRecordSummary[];
+  // Hide acknowledgement windows whose stage the booking has already moved past — they're moot
+  // (progression implies the guest engaged) and otherwise read as duplicate "W22" rows.
+  const hiddenPassed = allTimers.filter((t) => isPassedStageAckWindow(t, currentStage)).length;
+  const timers = allTimers.filter((t) => !isPassedStageAckWindow(t, currentStage));
   const activeTimers = timers.filter((t) => t.status === "SCHEDULED");
   const events = [...(traceQuery.data?.items ?? [])]
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -300,16 +305,21 @@ export function LiveBackendFeed({ entryId, limit = 24 }: { entryId: string; limi
               t.status === "SCHEDULED" ? (
                 <LiveTimer key={t.id} timer={t} />
               ) : (
-                <div className="bx-timer bx-timer-done" key={t.id} title={`${t.status}${t.firesAt ? ` · ${t.firesAt}` : ""}`}>
+                <div className="bx-timer bx-timer-done" key={t.id} title={`${t.timerCode || t.timerType} · ${t.status}${t.firesAt ? ` · ${t.firesAt}` : ""}`}>
                   <div className="bx-timer-head">
                     <span className="bx-dot" style={{ background: TIMER_TONE[t.status] ?? "var(--ink-3)" }} />
-                    <span className="mono bx-timer-code">{t.timerCode || t.timerType}</span>
+                    <span className="bx-timer-code">{labelForTimer(t)}</span>
                     <span className="bx-muted">{t.status.toLowerCase()}</span>
                   </div>
                 </div>
               ),
             )}
           </div>
+        )}
+        {hiddenPassed > 0 && (
+          <span className="bx-muted" style={{ fontSize: 10.5 }}>
+            +{hiddenPassed} earlier acknowledgement window{hiddenPassed === 1 ? "" : "s"} (stage passed)
+          </span>
         )}
       </div>
 

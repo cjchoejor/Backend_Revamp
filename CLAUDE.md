@@ -11,6 +11,8 @@ The user (cjchoejor) maintains the frontend at `front_end/` **for testing only**
 - **When adding a new feature: expose a backend endpoint FIRST, then have the testing UI consume it.** The friend's frontend consumes the same endpoint with a different UI. If the calculation only lives in the testing frontend, the friend's UI can't use it and business rules diverge.
 - **When you find business logic in `front_end/` that shouldn't be there** — extract it to a backend service + lookup endpoint, delete the frontend duplicate, and update the testing UI to call the endpoint.
 
+**No money arithmetic in `front_end/` (enforced 2026-07-22).** Every financial figure the desk shows is read from the API — no sums, no `rate × nights`, no balance fallbacks. `deriveFinancials` ([lib/desk/workspace.ts](front_end/src/lib/desk/workspace.ts)) is a pure *selector* over `EntryDetail` + the `payment-status` response; `moneyOrDash()` renders "—" when the backend has no field. Advance-paid always comes from `GET /api/entries/:id/payment-status` → `totalReceived` (Decimal-safe server-side) via the shared `usePaymentStatus` hook — never from summing folio payment rows. Two figures are currently dark because no endpoint supplies them: a **folio charges total** (only `outstandingBalance` exists) and a **reservation stay total** (only per-night `frozenRate`; there is no `frozenTotalAmount` column). Add those server-side rather than reintroducing the maths here.
+
 Existing backend-authoritative endpoints that show this pattern:
 - `GET /api/lookups/child-policy` → child age bands, meal pricing, unaccompanied-minor cutoff
 - `POST /api/lookups/allowed-room-counts` → chargeable-occupants + allowed-room-count envelope

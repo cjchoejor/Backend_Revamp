@@ -117,6 +117,32 @@ export function formatStayRange(checkIn?: string | null, checkOut?: string | nul
   return `${ci!.getDate()} ${MONTHS[ci!.getMonth()]} – ${co!.getDate()} ${MONTHS[co!.getMonth()]}`;
 }
 
+/**
+ * "22/07/2026" — the desk's canonical written date format (dd/mm/yyyy).
+ *
+ * Reads the calendar date straight off an ISO string rather than going through `Date`, so a
+ * date-only value like "2026-07-22" can't drift a day either way on a machine whose clock is
+ * set behind UTC. Falls back to local-time parsing for full timestamps.
+ */
+export function formatDMY(value?: string | null): string {
+  if (!value) return "";
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  const d = parseDate(value);
+  if (!d) return "";
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+/** "22/07/2026 → 25/07/2026" — the explicit form used wherever check-in and check-out are named. */
+export function formatStayRangeDMY(checkIn?: string | null, checkOut?: string | null): string {
+  const ci = formatDMY(checkIn);
+  const co = formatDMY(checkOut);
+  if (!ci && !co) return "";
+  if (ci && !co) return ci;
+  if (!ci && co) return `→ ${co}`;
+  return `${ci} → ${co}`;
+}
+
 export function nightsBetween(checkIn?: string | null, checkOut?: string | null): number | null {
   const ci = parseDate(checkIn);
   const co = parseDate(checkOut);
@@ -169,6 +195,9 @@ export type DeskBooking = {
   need: string;
   timer: DeskTimer;
   updatedAt: string;
+  createdAt: string;
+  checkInDate?: string | null;
+  checkOutDate?: string | null;
 };
 
 export function toDeskBooking(entry: EntryListItem, now: number = Date.now()): DeskBooking {
@@ -186,5 +215,8 @@ export function toDeskBooking(entry: EntryListItem, now: number = Date.now()): D
     need: step.need,
     timer: dwellTimer(entry.updatedAt, now),
     updatedAt: entry.updatedAt,
+    createdAt: entry.createdAt,
+    checkInDate: entry.checkInDate,
+    checkOutDate: entry.checkOutDate,
   };
 }

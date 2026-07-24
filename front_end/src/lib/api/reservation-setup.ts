@@ -46,6 +46,30 @@ export async function cancelEntryAtS3(
   });
 }
 
+/** SIG-S5 §1.7 / Policy 35 — pre-arrival cancellation (L2; GM required to waive the penalty).
+ *  Releases the held room, cancels the no-show timer, posts the disclosed penalty, terminates the entry. */
+export async function cancelEntryAtS5(
+  session: Session,
+  entryId: string,
+  body?: { penaltyWaiverRequested?: boolean },
+) {
+  return apiRequest<unknown>(`/api/entries/${entryId}/cancel`, { method: "POST", session, body: body ?? {} });
+}
+
+/** SIG-S6/S7 Policy 35/36 — early-departure / post-check-in cancellation (L2; GM required to waive).
+ *  Posts the penalty on the LIVE folio, releases the room(s), terminates the entry. */
+export async function cancelEntryEarlyDeparture(
+  session: Session,
+  entryId: string,
+  body?: { penaltyWaiverRequested?: boolean },
+) {
+  return apiRequest<unknown>(`/api/entries/${entryId}/cancel-early-departure`, {
+    method: "POST",
+    session,
+    body: body ?? {},
+  });
+}
+
 export async function getPaymentStatus(session: Session, entryId: string) {
   return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/payment-status`, { session });
 }

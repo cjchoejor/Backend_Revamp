@@ -10,7 +10,7 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import {
   createGuestProfile,
-  guestDisplayName,
+  guestFullName,
   searchGuestProfiles,
   type GuestProfileSummary,
 } from "@/lib/api/guest-profiles";
@@ -24,6 +24,7 @@ import {
 import { createEntry } from "@/lib/api/entries";
 import { getChildPolicy, getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { BackendRail, type RailGroup } from "@/components/desk/workspace/backend-inline";
+import { DateField, nextDayIso } from "@/components/desk/date-field";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 
 const BK = STAGE_ACTIONS.INTAKE;
@@ -50,6 +51,25 @@ const NATIONALITIES = ["Bhutanese", "Indian"];
 function isoDate(d: Date): string {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
   return z.toISOString().slice(0, 10);
+}
+
+/**
+ * One guest in a pick list. The phone always shows next to the name — a receptionist keying a
+ * number needs to see the number they matched on, and two guests can share a name where they
+ * can't share a handset. Email trails behind as the secondary detail.
+ */
+function GuestLine({ guest }: { guest: GuestProfileSummary }) {
+  return (
+    <span>
+      <b>{guestFullName(guest)}</b>
+      {guest.phone && (
+        <span className="mono" style={{ marginLeft: 8, color: "var(--ink-2)" }}>
+          {guest.phone}
+        </span>
+      )}
+      {guest.email && <span style={{ marginLeft: 8, color: "var(--ink-3)" }}>· {guest.email}</span>}
+    </span>
+  );
 }
 
 function BlockH({ children }: { children: React.ReactNode }) {
@@ -251,6 +271,16 @@ export function DeskNewInquiryForm() {
     setCheckOut(isoDate(new Date(t.getTime() + 86_400_000)));
   }, []);
 
+  // Check-out follows check-in: picking a check-in date moves check-out to the next day, since the
+  // shortest stay is one night. A check-out the operator has already pushed further out survives —
+  // only a date that would now be on or before the new check-in gets pulled forward.
+  useEffect(() => {
+    if (!checkIn) return;
+    const earliest = nextDayIso(checkIn);
+    if (!earliest) return;
+    setCheckOut((prev) => (!prev || prev < earliest ? earliest : prev));
+  }, [checkIn]);
+
   // Reset party selection when channel changes away from agent/corporate.
   useEffect(() => {
     if (!partyKind) setParty(null);
@@ -419,6 +449,14 @@ export function DeskNewInquiryForm() {
         });
       }
 
+      // On-site contact person (required at S4→S5 pre-arrival activation / W4). Default it to the
+      // guest — for a walk-in / individual the guest IS the on-site contact. A corporate/group
+      // coordinator can differ, but the guest is a sensible default and this is only set at intake
+      // (Entry.contactPerson* is S1-editable only). Falls back to the guest profile's phone for a
+      // returning guest whose number wasn't re-typed into the form.
+      const contactPersonName = `${firstName.trim()} ${lastName.trim()}`.trim();
+      const contactPersonPhone = fullPhone || selectedGuest?.phone || "";
+
       return createEntry(session, {
         inquiryId: inquiry.id,
         useType: "useType" in channel ? (channel.useType as string) : "LEISURE",
@@ -431,6 +469,8 @@ export function DeskNewInquiryForm() {
         childAges: c > 0 && parsedAges.length === c ? parsedAges : undefined,
         numberOfRooms: Math.max(1, parseInt(numberOfRooms || "1", 10) || 1),
         otaSource: channel.channel === "OTA",
+        contactPersonName: contactPersonName || undefined,
+        contactPersonPhone: contactPersonPhone || undefined,
       });
     },
     onSuccess: (entry) => {
@@ -501,7 +541,7 @@ export function DeskNewInquiryForm() {
           {selectedGuest ? (
             <div className="pickrow sel" style={{ borderRadius: "var(--r-md)", border: "1.5px solid var(--terra)" }}>
               <span>
-                <b>{guestDisplayName(selectedGuest)}</b>
+                <GuestLine guest={selectedGuest} />
                 {selectedGuest.nationality && <span className="tag" style={{ marginLeft: 8 }}>{selectedGuest.nationality}</span>}
               </span>
               <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSelectedGuest(null)}>
@@ -539,9 +579,7 @@ export function DeskNewInquiryForm() {
                     </div>
                     {phoneMatches.map((g) => (
                       <button key={g.id} type="button" className="pickrow" onClick={() => adoptGuest(g)}>
-                        <span>
-                          <b>{guestDisplayName(g)}</b>
-                        </span>
+                        <GuestLine guest={g} />
                         <span className="brow-open">Use →</span>
                       </button>
                     ))}
@@ -601,7 +639,7 @@ export function DeskNewInquiryForm() {
                   returningSearch.data!.items.map((g) => (
                     <button key={g.id} type="button" className="pickrow" onClick={() => adoptGuest(g)}>
                       <span>
-                        <b>{guestDisplayName(g)}</b>
+                        <GuestLine guest={g} />
                         {g.clientTier && <span className="tag" style={{ marginLeft: 8 }}>{g.clientTier}</span>}
                       </span>
                       <span className="brow-open">Use →</span>
@@ -758,11 +796,11 @@ export function DeskNewInquiryForm() {
           <div className="frow">
             <div className="field">
               <label>Check-in</label>
-              <input type="date" min={today} value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
+              <DateField min={today} value={checkIn} onChange={setCheckIn} />
             </div>
             <div className="field">
               <label>Check-out</label>
-              <input type="date" min={checkIn || today} value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+              <DateField min={nextDayIso(checkIn) || today} value={checkOut} onChange={setCheckOut} />
             </div>
           </div>
 

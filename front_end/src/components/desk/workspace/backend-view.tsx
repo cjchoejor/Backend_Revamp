@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, getEntryTimers, getEntryTrace, type TimerRecordSummary } from "@/lib/api/entries";
+import { labelForTimer } from "@/lib/desk/timers";
 import { guestName, stepForStage } from "@/lib/desk/model";
 import { humanizeTrace, type TraceEvent, type TraceTone } from "@/lib/trace/humanize";
 import {
@@ -102,7 +103,7 @@ function LiveTimers({ timers, now }: { timers: TimerRecordSummary[]; now: number
         return (
           <div className="bv-timer" key={t.id}>
             <span className="bv-dot" style={{ background: TIMER_TONE[t.status] ?? "var(--ink-3)" }} />
-            <span className="bv-timer-name mono">{t.timerCode || t.timerType}</span>
+            <span className="bv-timer-name" title={t.timerCode || t.timerType}>{labelForTimer(t)}</span>
             <span className={`tag ${t.status === "SCHEDULED" ? "" : "warn"}`} style={{ fontSize: 9.5 }}>
               {t.status}
             </span>

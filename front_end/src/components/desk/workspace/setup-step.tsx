@@ -319,8 +319,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
         {inPayments.length > 0 && (
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 11px" }}>
-            {inPayments.length} payment{inPayments.length === 1 ? "" : "s"} on this booking · total{" "}
-            {money(inPayments.reduce((s, p) => s + Number(p.amount), 0), folio?.lines?.[0]?.currency)}
+            {/* Count the rows here (not money), and take the total from the server's payment-status
+                above — summing the amounts in the browser drifts on partial payments. */}
+            {inPayments.length} payment{inPayments.length === 1 ? "" : "s"} on this booking
             {folio?.advancePaymentReconciliationComplete ? " · reconciled" : ""}
           </p>
         )}

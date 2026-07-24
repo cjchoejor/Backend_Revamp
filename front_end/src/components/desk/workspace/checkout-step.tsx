@@ -16,10 +16,12 @@ import {
   recordKeyReturn,
   recordRoomInspection,
   reEnterS8ToS7,
+  reEnterS8ToS2,
 } from "@/lib/api/checkout";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { progressDispute } from "@/lib/api/in-stay";
-import { deriveFinancials, money } from "@/lib/desk/workspace";
+import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -53,7 +55,8 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const elevated = isElevated(session?.actorLevel);
   const gm = isGm(session?.actorLevel);
 
-  const fin = deriveFinancials(entry);
+  const paymentStatus = usePaymentStatus(entry.id, { enabled: !!entry.folio });
+  const fin = deriveFinancials(entry, { paymentStatus: paymentStatus.data });
   const folio = entry.folio;
   const folioLines = folio?.lines ?? [];
   const folioInvoices = folio?.invoices ?? [];
@@ -72,7 +75,8 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const disputes = entry.disputes ?? [];
   const openDisputes = disputes.filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   const currency = folioLines[0]?.currency;
-  const balance = fin.outstanding ?? Math.max(0, fin.chargesTotal - fin.advanceReceived);
+  // The server's folio.outstandingBalance is the balance — never re-derived from lines/payments.
+  const balance = fin.outstanding;
   // Final-morning charges belong to the checkout day, not "today" — the checkout day is never a
   // stay night, so it's never sealed by night audit (SIG-S8 §2.2). Using today collides with the
   // just-audited final stay night when checkout happens on/near it (e.g. a compressed test stay).
@@ -95,6 +99,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const [finalChargeDesc, setFinalChargeDesc] = useState("");
   const [finalChargeAmount, setFinalChargeAmount] = useState("");
   const [reEntryReason, setReEntryReason] = useState("");
+  const [reEntryS2Reason, setReEntryS2Reason] = useState("");
   const [disputeCloseReason, setDisputeCloseReason] = useState("");
   const [h4DeficientFlag, setH4DeficientFlag] = useState("RECORDED");
   const [settleOpen, setSettleOpen] = useState(false);
@@ -174,6 +179,18 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Re-entry failed"),
   });
+  // S8 → S2 rate dispute: re-open to Quote for a full renegotiation. Seals the current segment and
+  // starts a new one at S2; the live folio persists. Backend requires L2+ + a reason (SIG-S8 §1.2).
+  const reEntryS2M = useMutation({
+    mutationFn: () => reEnterS8ToS2(session!, entry.id, entry.version, reEntryS2Reason.trim()),
+    onSuccess: () => {
+      toast.success("Re-opened to Quote for renegotiation");
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+      setSelected(2);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Rate-dispute re-entry failed"),
+  });
 
   // Persistent highlight: each group stays lit once its action has run (derived from real key /
   // inspection / folio state). `firingKey` adds the transient "running now" pulse.
@@ -245,17 +262,16 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           <Receipt style={{ width: 13, height: 13 }} />
           The bill
         </BlockH>
-        <div className="field">
-          <label>Charges total</label>
-          <div className="val derived">{money(fin.chargesTotal, currency)}</div>
-        </div>
+        {/* Every figure here is read from the backend. The folio carries no charges-total field,
+            so that row is gone rather than summed in the browser — the line list below still
+            shows each backend-priced charge individually. */}
         <div className="field">
           <label>Advance / payments received</label>
-          <div className="val">{money(fin.advanceReceived, currency)}</div>
+          <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>
         </div>
         <div className="field">
           <label>Balance due</label>
-          <div className="val derived">{money(balance, currency)}</div>
+          <div className="val">{moneyOrDash(balance, currency)}</div>
         </div>
         {folioLive && (
           <div style={{ marginTop: 6, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
@@ -475,6 +491,32 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             <div className="field" style={{ alignSelf: "end" }}>
               <button className="btn btn-ghost" disabled={reEntryM.isPending || !reEntryReason.trim()} onClick={() => reEntryM.mutate()}>
                 Return to Stay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rate dispute (S8→S2) — full renegotiation */}
+      {elevated && !folioSettled && (
+        <div className="block">
+          <BlockH>Dispute the rate?</BlockH>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 0, lineHeight: 1.5 }}>
+            Re-open the booking to Quote for a full rate renegotiation. Seals this segment and starts a fresh
+            one at Quote; the live folio carries over. Requires FOM (L2)+.
+          </p>
+          <div className="frow">
+            <div className="field">
+              <label>Reason to re-open Quote</label>
+              <input
+                value={reEntryS2Reason}
+                onChange={(e) => setReEntryS2Reason(e.target.value)}
+                placeholder="e.g. guest disputes the rate charged"
+              />
+            </div>
+            <div className="field" style={{ alignSelf: "end" }}>
+              <button className="btn btn-ghost" disabled={reEntryS2M.isPending || !reEntryS2Reason.trim()} onClick={() => reEntryS2M.mutate()}>
+                Re-open to Quote
               </button>
             </div>
           </div>
