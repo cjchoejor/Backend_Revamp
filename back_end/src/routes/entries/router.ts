@@ -22,6 +22,7 @@ import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
+import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
 
 export const entriesRouter = Router();
 
@@ -59,6 +60,22 @@ entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next)
       },
     });
     res.json({ items, count: items.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Booking journey summary — the "S1–S4 handoff summary". A read-only, staff-facing recap of
+ * everything the customer chose or did from Inquiry through Confirmation, aggregated from the
+ * records that already back each stage (no new business outcome, nothing persisted). Drives the
+ * review panel on the desk Confirm step; the S4 confirmation voucher (guest-facing) reads the
+ * same underlying records. L1+.
+ */
+entriesRouter.get("/:id/journey-summary", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const summary = await buildBookingJourneySummary(prisma, req.params.id);
+    res.json(summary);
   } catch (e) {
     next(e);
   }
