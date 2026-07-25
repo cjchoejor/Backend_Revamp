@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Check, ChevronLeft, Layers, Lock, Pause, Play } from "lucide-react";
+import { SpecialPreference } from "./special-preference";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, getEntryTimers, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
@@ -673,6 +674,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       setParkOpen(false);
       setParkReason("");
       toast.success("Booking parked — it's paused but keeps its place.");
+      // Parking is now reached only from the exit dialog, so leaving is the natural next step.
+      router.push("/desk/bookings");
     },
     onError: (e) => {
       toast.error(e instanceof ApiError ? e.message : "Couldn't park this booking");
@@ -855,12 +858,20 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     }
   };
 
+  // Exit interception: leaving a still-parkable booking (S1/S2, active, not already parked) opens
+  // the park dialog so the operator can choose to pause it on the way out — parking is a governed
+  // exit choice now, not a standalone header button. Everything else navigates straight back.
+  const handleExit = () => {
+    if (parkable && !parked) setParkOpen(true);
+    else router.push("/desk/bookings");
+  };
+
   return (
     <div className="ws">
       {/* top bar — guest header + key figures, with the horizontal booking journey beneath */}
       <div className="ws-top">
         <div className="ws-head">
-          <button className="ws-back" onClick={() => router.push("/desk/bookings")}>
+          <button className="ws-back" onClick={handleExit}>
             <ChevronLeft />
             Bookings
           </button>
@@ -907,18 +918,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               {parkCountdown ? `Parked · expires ${parkCountdown.text}` : "Parked"}
             </span>
           )}
-          {parkable &&
-            (parked ? (
-              <button className="btn btn-ghost btn-sm" disabled={unparkMutation.isPending} onClick={() => unparkMutation.mutate()}>
-                <Play />
-                {unparkMutation.isPending ? "Resuming…" : "Resume"}
-              </button>
-            ) : (
-              <button className="btn btn-ghost btn-sm" disabled={parkMutation.isPending} onClick={() => setParkOpen(true)}>
-                <Pause />
-                Park
-              </button>
-            ))}
+          {/* Park is no longer a standalone button — it's offered in the exit dialog (handleExit).
+              A parked booking still needs an in-place way back, so keep Resume. */}
+          {parkable && parked && (
+            <button className="btn btn-ghost btn-sm" disabled={unparkMutation.isPending} onClick={() => unparkMutation.mutate()}>
+              <Play />
+              {unparkMutation.isPending ? "Resuming…" : "Resume"}
+            </button>
+          )}
           <ReEnterMenu entry={entry} />
           <button
             className="btn btn-ghost btn-sm"
@@ -937,8 +944,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
               .filter(Boolean)
               .join(" ");
-            const glyph =
-              s.order < currentOrder ? <Check style={{ stroke: "#fff" }} /> : s.bound ? <Lock /> : s.order;
+            // Done steps show their stage number (white on the filled green node) rather than a
+            // tick — the number keeps the S1…S9 position legible at a glance. Locked (bound,
+            // not-yet-reached) steps still show a padlock.
+            const glyph = s.order < currentOrder ? s.order : s.bound ? <Lock /> : s.order;
             return (
               <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
                 <span className="g">{glyph}</span>
@@ -950,6 +959,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             );
           })}
         </nav>
+
+        {/* Special preference — pinned in the non-scrolling top bar so it stays on screen through
+            every stage (S1…S9). Add/edit in place; shows the saved value so it's never duplicated. */}
+        <SpecialPreference entry={entry} />
       </div>
 
       {/* body — Backend activity live (left) · operate flow + colour-coded groups (right) */}
@@ -1022,7 +1035,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               <CheckOutStep entry={entry} setSelected={setSelected} />
             ) : closedStepActive ? (
               <PostStayStep entry={entry} />
-            ) : confirmStepActive ? (
+            ) : confirmStepActive || confirmedS4Active ? (
               <ConfirmStep entry={entry} />
             ) : (
               <StepCanvas step={step} entry={entry} fin={fin} />
@@ -1231,7 +1244,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <Pause />
               </div>
               <div>
-                <h3>Park this booking?</h3>
+                <h3>Park this booking before you leave?</h3>
                 <p>
                   {name} · {sub}
                 </p>
@@ -1239,8 +1252,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             </div>
             <div className="modal-body">
               <p className="why">
-                Parking pauses this booking without losing its place. It stays at the same step and its
-                expiry timer is paused — you can resume any time. Nothing is cancelled or released.
+                You&rsquo;re about to leave this booking. Parking pauses it without losing its place — it
+                stays at the same step, its expiry timer is paused, and you can resume any time. Nothing is
+                cancelled or released. Prefer to keep it running? Leave without parking.
               </p>
               <div className="field" style={{ marginTop: 12 }}>
                 <label htmlFor="park-reason">Reason (required)</label>
@@ -1254,8 +1268,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               </div>
             </div>
             <div className="modal-foot">
-              <button className="btn btn-ghost" onClick={() => setParkOpen(false)} disabled={parkMutation.isPending}>
-                Not now
+              <button
+                className="btn btn-ghost"
+                onClick={() => router.push("/desk/bookings")}
+                disabled={parkMutation.isPending}
+              >
+                Leave without parking
               </button>
               <button
                 className="btn btn-primary"
@@ -1264,7 +1282,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 disabled={parkMutation.isPending || !parkReason.trim()}
               >
                 <Pause />
-                {parkMutation.isPending ? "Parking…" : "Park booking"}
+                {parkMutation.isPending ? "Parking…" : "Park & leave"}
               </button>
             </div>
           </div>

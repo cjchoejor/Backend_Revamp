@@ -149,6 +149,133 @@ export async function unparkEntry(session: Session, entryId: string) {
   return normalizeEntryResponse(data);
 }
 
+// --- Booking journey summary (the "S1–S4 handoff summary") --------------------------------
+// Read-only staff-facing recap of everything the customer chose/did S1→S4, aggregated backend-
+// side from the records that back each stage. Shape mirrors the backend
+// `BookingJourneySummary` in booking-journey-summary-service.ts.
+
+export type JourneySectionStatus = "COMPLETE" | "IN_PROGRESS" | "NOT_STARTED";
+export type JourneyRoomRef = {
+  roomId: string;
+  roomNumber: string | null;
+  roomTypeCode: string | null;
+  roomTypeName: string | null;
+};
+
+export type BookingJourneySummary = {
+  entryId: string;
+  inquiryReference: string | null;
+  generatedAt: string;
+  currentStage: string;
+  status: string;
+  segmentNumber: number;
+  useType: string;
+  groupBillingMode: string | null;
+  guest: {
+    name: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    phone: string | null;
+    email: string | null;
+    nationality: string | null;
+    vipTier: string | null;
+    clientTier: string | null;
+  };
+  s1Inquiry: {
+    status: JourneySectionStatus;
+    sourceChannel: string | null;
+    party: {
+      adults: number | null;
+      children: number | null;
+      childAges: number[];
+      totalGuests: number | null;
+      roomsRequested: number | null;
+    };
+    dates: { checkIn: string | null; checkOut: string | null; nights: number | null };
+    contactPerson: { name: string | null; phone: string | null };
+    commercialContext: {
+      type: "TRAVEL_AGENT" | "CORPORATE" | "NONE";
+      partyName: string | null;
+      coordinator: string | null;
+      contractRef: string | null;
+      gstNumber: string | null;
+    };
+    roomSelection: {
+      shape: "single" | "whole-stay-multi" | "per-night" | "none";
+      rooms: JourneyRoomRef[];
+      perNight: Array<{ date: string; rooms: JourneyRoomRef[] }> | null;
+      distinctRoomCount: number;
+      anyDeficient: boolean;
+    };
+    notes: string | null;
+  };
+  s2Quote: {
+    status: JourneySectionStatus;
+    hasAcceptedQuotation: boolean;
+    reference: string | null;
+    versionNumber: number | null;
+    state: string | null;
+    currency: string | null;
+    nightlyRate: number | null;
+    roomCount: number | null;
+    nights: number | null;
+    total: number | null;
+    inclusions: string[];
+    mealPlan: string | null;
+    discountRequested: unknown | null;
+    belowMsr: boolean | null;
+    agentRate: unknown | null;
+    standardPricing: unknown | null;
+    focRoomsRequested: number | null;
+    validUntil: string | null;
+    acceptedAt: string | null;
+    acceptedBy: string | null;
+    lines: Array<{
+      date: string | null;
+      occupants: string | null;
+      mealPlan: string | null;
+      extraBeds: string | null;
+      amount: number | null;
+    }>;
+  };
+  s3Setup: {
+    status: JourneySectionStatus;
+    billingModel: string | null;
+    folioState: string | null;
+    committedHold: { state: string | null; rooms: JourneyRoomRef[]; expiresAt: string | null } | null;
+    advancePayment: {
+      satisfied: boolean;
+      requiredAmount: number | null;
+      totalReceived: number | null;
+      shortfall: number | null;
+      creditExtensionActive: boolean;
+      ceilingAmount: number | null;
+    } | null;
+    cancellation: { disclosed: boolean; noShowTreatment: string | null; disclosedAt: string | null } | null;
+    proformaInvoiceRef: string | null;
+    coordinator: string | null;
+  };
+  s4Confirmation: {
+    status: JourneySectionStatus;
+    confirmed: boolean;
+    reservationId: string | null;
+    frozenRate: number | null;
+    frozenRatePlanId: string | null;
+    frozenBillingModel: string | null;
+    frozenCheckIn: string | null;
+    frozenCheckOut: string | null;
+    frozenGuestCount: number | null;
+    creditCeilingIfExtended: number | null;
+    confirmedAt: string | null;
+    confirmedBy: string | null;
+    voucherSent: boolean;
+  };
+};
+
+export async function getJourneySummary(session: Session, entryId: string) {
+  return apiRequest<BookingJourneySummary>(`/api/entries/${entryId}/journey-summary`, { session });
+}
+
 export async function progressStage(
   session: Session,
   entryId: string,

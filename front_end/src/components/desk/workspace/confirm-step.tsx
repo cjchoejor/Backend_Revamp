@@ -9,6 +9,8 @@ import { ApiError } from "@/lib/api/client";
 import { acknowledgeMultiBooking, verifyConference } from "@/lib/api/confirmation";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
+import { JourneySummaryBlock } from "./journey-summary";
+import { ConfirmationVoucherBlock } from "./confirmation-voucher";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -39,6 +41,9 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
   const elevated = isElevated(session?.actorLevel);
   const fin = deriveFinancials(entry);
   const isConference = entry.useType === "CONFERENCE";
+  // Once the reservation is confirmed, this step becomes a read-back: the journey recap + the
+  // confirmation-voucher receipt, not the pre-freeze gates.
+  const confirmed = !!entry.reservation?.confirmedAt;
 
   const [multiBookingNote, setMultiBookingNote] = useState("");
   const [conferenceChecklist, setConferenceChecklist] = useState(
@@ -81,29 +86,48 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
     <div className="bx-split">
       <div className="bx-main">
         <div className="speak">
-          <div className="now">The one moment that locks</div>
-          <h2>Ready to freeze this booking.</h2>
-          <p>
-            Confirming turns the range into a total the guest is held to, locks the rooms, and sends the
-            confirmation. Clear any pre-confirm gates below, then freeze from the bar.
-          </p>
+          {confirmed ? (
+            <>
+              <div className="now">Confirmed &amp; frozen</div>
+              <h2>This booking is locked in.</h2>
+              <p>
+                The rooms are held, the total is frozen, and the confirmation voucher has gone to the guest.
+                Below is the full record of what was agreed and what the guest received.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="now">The one moment that locks</div>
+              <h2>Ready to freeze this booking.</h2>
+              <p>
+                Confirming turns the range into a total the guest is held to, locks the rooms, and sends the
+                confirmation. Clear any pre-confirm gates below, then freeze from the bar.
+              </p>
+            </>
+          )}
         </div>
 
-        <div className="block">
-          <BlockH>
-            <Lock style={{ width: 13, height: 13 }} />
-            What gets frozen
-          </BlockH>
-          <div className="field">
-            <label>Total to be frozen</label>
-            <div className="val derived">
-              {fin.indicativeTotal !== null ? money(fin.indicativeTotal, fin.currency) : "—"}
+        <JourneySummaryBlock entryId={entry.id} />
+
+        {confirmed && <ConfirmationVoucherBlock entry={entry} />}
+
+        {!confirmed && (
+          <div className="block">
+            <BlockH>
+              <Lock style={{ width: 13, height: 13 }} />
+              What gets frozen
+            </BlockH>
+            <div className="field">
+              <label>Total to be frozen</label>
+              <div className="val derived">
+                {fin.indicativeTotal !== null ? money(fin.indicativeTotal, fin.currency) : "—"}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Multi-booking overlap acknowledgement (FOM+) */}
-        {elevated && (
+        {!confirmed && elevated && (
           <div className="block">
             <BlockH>
               <AlertTriangle style={{ width: 13, height: 13 }} />
@@ -130,7 +154,7 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
         )}
 
         {/* Conference verification (CONFERENCE use-type, FOM+) */}
-        {isConference && elevated && (
+        {!confirmed && isConference && elevated && (
           <div className="block">
             <BlockH>
               <Users style={{ width: 13, height: 13 }} />
