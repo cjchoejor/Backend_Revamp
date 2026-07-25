@@ -42,6 +42,12 @@ export const captureCorporateContextRequestSchema = z.object({
 });
 export type CaptureCorporateContextRequestDto = z.infer<typeof captureCorporateContextRequestSchema>;
 
+/** `PATCH /inquiries/:id/notes` — edit the free-text special-preference note (empty string clears it). */
+export const updateInquiryNotesRequestSchema = z.object({
+  notes: z.string().max(2000),
+});
+export type UpdateInquiryNotesRequestDto = z.infer<typeof updateInquiryNotesRequestSchema>;
+
 export const resolveDuplicateFlagRequestSchema = z.object({
   resolutionType: z.enum(["MERGE", "ACKNOWLEDGE", "DISMISS"]),
   resolutionReason: z.string().optional(),

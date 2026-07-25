@@ -169,6 +169,34 @@ export async function captureCorporateContext(
   return updated;
 }
 
+/**
+ * Edit the inquiry's free-text special-preference note in place — stage-agnostic (L1+, any stage),
+ * so the desk can add/update the guest's special preference from any step of the journey. Reuses
+ * `Inquiry.notes` (the intake note); an empty string clears it. Overwrites rather than appends so
+ * the preference is never duplicated.
+ */
+export async function updateInquiryNotes(prisma: PrismaClient, inquiryId: string, actorId: string, notes: string) {
+  const existing = await prisma.inquiry.findUnique({ where: { id: inquiryId }, select: { id: true } });
+  if (!existing) throw new NotFoundError("Inquiry");
+  const trimmed = notes.trim();
+  const now = new Date();
+  const updated = await prisma.inquiry.update({
+    where: { id: inquiryId },
+    data: { notes: trimmed.length ? trimmed : null },
+  });
+  await auditService.emit(prisma, { actorId, actorLevel: "L1" }, {
+    eventType: "INQUIRY.SPECIAL_PREFERENCE_UPDATED",
+    entityType: "Inquiry",
+    entityId: inquiryId,
+    operation: "UPDATE",
+    timestamp: now,
+    inquiryId,
+    payload: { notesLength: trimmed.length },
+    createdBy: actorId,
+  });
+  return updated;
+}
+
 export async function resolveDuplicateFlag(
   prisma: PrismaClient,
   flagId: string,

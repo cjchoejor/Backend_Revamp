@@ -6,6 +6,7 @@ import {
   createInquiryRequestSchema,
   listInquiriesQuerySchema,
   parkInquiryRequestSchema,
+  updateInquiryNotesRequestSchema,
 } from "../../dtos/02-inquiries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
@@ -84,6 +85,16 @@ inquiriesRouter.post("/:id/unpark", requireActorLevel("L1"), async (req, res, ne
 inquiriesRouter.patch("/:id/corporate-context", requireActorLevel("L1"), validateBody(captureCorporateContextRequestSchema), async (req, res, next) => {
   try {
     const updated = await s1InquiryService.captureCorporateContext(prisma, req.params.id, req.actor!.actorId, req.body);
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Edit the special-preference note (Inquiry.notes) from any stage — L1+, stage-agnostic.
+inquiriesRouter.patch("/:id/notes", requireActorLevel("L1"), validateBody(updateInquiryNotesRequestSchema), async (req, res, next) => {
+  try {
+    const updated = await s1InquiryService.updateInquiryNotes(prisma, req.params.id, req.actor!.actorId, req.body.notes);
     res.json(updated);
   } catch (e) {
     next(e);
