@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, Check, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, Check, Mail, Phone, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { AvailabilityRoomResult, PerDateAvailabilityResult } from "@/lib/api/availability";
+import type { AvailabilityRoomResult, OccupancyContext, PerDateAvailabilityResult } from "@/lib/api/availability";
 import type { RoomListItem } from "@/lib/api/rooms";
 
 type Props = {
@@ -50,6 +51,32 @@ type Props = {
  * so every date has the same availability set. When the engine grows per-date conflict
  * detection, cells will diverge naturally without a UI change.
  */
+/**
+ * The subset of OccupancyContext + source the calendar cares about per occupied cell.
+ * Type-alias so both the memo builder and RoomRow type stay in sync.
+ */
+type OccupiedCellContext = OccupancyContext & { source: "RESERVED" | "HOLD" };
+
+/**
+ * State for the "why is this room unavailable" details modal. Populated when the operator
+ * clicks a locked/occupied cell. Null → modal closed.
+ */
+type OccupancyDetailModal = {
+  roomNumber: string;
+  roomTypeLabel?: string;
+  floorLabel?: string;
+  isoDate: string;
+  dayLabel: string;
+  claimState?: string | null;
+  unavailabilityReason?: string | null;
+  isMaintenance?: boolean;
+  isBlocked?: boolean;
+  blockedReason?: string | null;
+  isDeficient?: boolean;
+  /** Multi-booking case: whole-range unavailableRooms carries an array. Prefer showing all. */
+  context: OccupiedCellContext[];
+};
+
 export function AvailabilityCalendar({
   checkInDate,
   checkOutDate,
@@ -66,6 +93,17 @@ export function AvailabilityCalendar({
 }: Props) {
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [floorFilter, setFloorFilter] = useState<number | null>(null);
+  const [detailModal, setDetailModal] = useState<OccupancyDetailModal | null>(null);
+  const [portalReady, setPortalReady] = useState(false);
+  useEffect(() => setPortalReady(true), []);
+  useEffect(() => {
+    if (!detailModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDetailModal(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detailModal]);
 
   // Whole-range bucket lookup — used as the fallback when perDate isn't supplied and as the
   // baseline "physically usable" answer regardless of date (a room that's currently in
@@ -81,6 +119,9 @@ export function AvailabilityCalendar({
   // Per-(date, roomId) lookup from Phase 2.5 breakdown. When present, this trumps the
   // whole-range answer for cell rendering — a room can be AVAILABLE overall but OCCUPIED on
   // a specific night due to another guest's reservation.
+  //
+  // Also builds a parallel map of the booking context for occupied cells so the tooltip can
+  // name the guest instead of just saying "Occupied". Same key shape as the status map.
   const perDateByDateAndRoom = useMemo(() => {
     if (!perDate || perDate.length === 0) return null;
     const map = new Map<string, Map<string, "AVAILABLE" | "OCCUPIED_RESERVED" | "OCCUPIED_HOLD" | "DEFICIENT">>();
@@ -93,6 +134,77 @@ export function AvailabilityCalendar({
     }
     return map;
   }, [perDate]);
+
+  const occupancyContextByDateAndRoom = useMemo(() => {
+    if (!perDate || perDate.length === 0) return null;
+    const map = new Map<string, Map<string, OccupiedCellContext>>();
+    for (const d of perDate) {
+      const perRoom = new Map<string, OccupiedCellContext>();
+      for (const o of d.occupiedRoomIds) {
+        perRoom.set(o.roomId, {
+          source: o.source,
+          entryReferenceNumber: o.entryReferenceNumber ?? null,
+          guestName: o.guestName ?? null,
+          guestPhone: o.guestPhone ?? null,
+          guestEmail: o.guestEmail ?? null,
+          agentType: o.agentType ?? null,
+          agentName: o.agentName ?? null,
+          agentPhone: o.agentPhone ?? null,
+          agentEmail: o.agentEmail ?? null,
+        });
+      }
+      map.set(d.date, perRoom);
+    }
+    return map;
+  }, [perDate]);
+
+  /**
+   * Whole-range fallback occupancy: when perDate is missing (older backend, stale config)
+   * OR a specific date isn't covered, but the whole-range unavailableRooms bucket carries
+   * occupiedBy context, use that instead. Preserves ALL blockages (a room can have several
+   * overlapping bookings covering different nights of the range). The tooltip uses the
+   * first one; the details modal iterates every blockage.
+   */
+  const wholeRangeOccupancyByRoomId = useMemo(() => {
+    const map = new Map<string, OccupiedCellContext[]>();
+    for (const r of unavailableRooms) {
+      const blocks = r.occupiedBy ?? [];
+      if (blocks.length === 0) continue;
+      map.set(
+        r.roomId,
+        blocks.map((primary) => ({
+          source: primary.source,
+          entryId: primary.entryId,
+          entryReferenceNumber: primary.entryReferenceNumber ?? null,
+          guestName: primary.guestName ?? null,
+          guestPhone: primary.guestPhone ?? null,
+          guestEmail: primary.guestEmail ?? null,
+          agentType: primary.agentType ?? null,
+          agentName: primary.agentName ?? null,
+          agentPhone: primary.agentPhone ?? null,
+          agentEmail: primary.agentEmail ?? null,
+        })),
+      );
+    }
+    return map;
+  }, [unavailableRooms]);
+
+  /**
+   * Whole-range status lookup keyed by roomId — used to know whether a room is unavailable
+   * because of physical state (MAINTENANCE / BLOCKED) rather than a booking. Powers the
+   * details modal's "why is this room off-limits" section.
+   */
+  const unavailabilityMetaByRoomId = useMemo(() => {
+    const map = new Map<string, { reason?: string | null; claimState?: string | null; blockedReason?: string | null }>();
+    for (const r of unavailableRooms) {
+      map.set(r.roomId, {
+        reason: r.unavailabilityReason ?? null,
+        claimState: r.claimState ?? null,
+        blockedReason: r.blockedReason ?? null,
+      });
+    }
+    return map;
+  }, [unavailableRooms]);
 
   // Room-type + floor lookups derived from the full hotel list.
   const allRoomTypes = useMemo(() => {
@@ -227,6 +339,35 @@ export function AvailabilityCalendar({
                         )
                       : null
                   }
+                  occupancyContextForRoom={
+                    occupancyContextByDateAndRoom
+                      ? Object.fromEntries(
+                          dates.map((d) => [d.iso, occupancyContextByDateAndRoom.get(d.iso)?.get(room.id) ?? null]),
+                        )
+                      : null
+                  }
+                  wholeRangeOccupancy={wholeRangeOccupancyByRoomId.get(room.id) ?? []}
+                  onOpenDetails={(iso, dayLabel) => {
+                    const perDateCtx = occupancyContextByDateAndRoom?.get(iso)?.get(room.id) ?? null;
+                    const wholeRange = wholeRangeOccupancyByRoomId.get(room.id) ?? [];
+                    const context = perDateCtx ? [perDateCtx] : wholeRange;
+                    const meta = unavailabilityMetaByRoomId.get(room.id);
+                    setDetailModal({
+                      roomNumber: room.roomNumber,
+                      roomTypeLabel: room.roomType?.name ?? undefined,
+                      floorLabel:
+                        typeof room.floorNumber === "number" ? `Floor ${room.floorNumber}` : undefined,
+                      isoDate: iso,
+                      dayLabel,
+                      claimState: meta?.claimState ?? null,
+                      unavailabilityReason: meta?.reason ?? null,
+                      isMaintenance: meta?.reason === "MAINTENANCE_CONFLICT",
+                      isBlocked: meta?.reason === "BLOCKED",
+                      blockedReason: meta?.blockedReason ?? null,
+                      isDeficient: availabilityByRoomId.get(room.id) === "DEFICIENT",
+                      context,
+                    });
+                  }}
                   selectionsByDate={selectionsByDate}
                   sealedByDate={sealedByDate}
                   targetRoomsPerNight={targetRoomsPerNight}
@@ -255,8 +396,177 @@ export function AvailabilityCalendar({
         </span>
         <span className="ml-auto italic">
           Click a cell to assign that room for that night. Different rooms per night are allowed
-          (e.g. 201 for night 1, 301 for night 2).
+          (e.g. 201 for night 1, 301 for night 2). Click a locked cell to see who holds the room.
         </span>
+      </div>
+
+      {portalReady && detailModal && createPortal(
+        <OccupancyDetailsDialog data={detailModal} onClose={() => setDetailModal(null)} />,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+/**
+ * Details modal shown when the operator clicks an occupied / blocked / maintenance / deficient
+ * cell. Renders every blockage on the room within the search range plus any physical-status
+ * reasons (blocked / maintenance). Click-outside and Escape close it.
+ */
+function OccupancyDetailsDialog({ data, onClose }: { data: OccupancyDetailModal; onClose: () => void }) {
+  const isPhysicalIssue = data.isMaintenance || data.isBlocked;
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm animate-in fade-in duration-150"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="occupancy-details-title"
+        className="w-full max-w-lg rounded-lg border border-border bg-card text-card-foreground shadow-2xl animate-in zoom-in-95 duration-150"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between border-b border-border p-5">
+          <div>
+            <h2 id="occupancy-details-title" className="text-lg font-semibold leading-tight">
+              Room {data.roomNumber}
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {[data.roomTypeLabel, data.floorLabel].filter(Boolean).join(" · ")}
+              {data.roomTypeLabel || data.floorLabel ? " · " : ""}
+              {data.dayLabel}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto p-5">
+          {/* Physical-state issues take precedence — the room is off-limits regardless of bookings */}
+          {isPhysicalIssue && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <div className="font-medium text-amber-900 dark:text-amber-200">
+                {data.isMaintenance ? "Room in maintenance" : "Room blocked"}
+              </div>
+              {data.blockedReason && (
+                <div className="mt-1 text-xs text-amber-800 dark:text-amber-300">{data.blockedReason}</div>
+              )}
+            </div>
+          )}
+          {data.isDeficient && !isPhysicalIssue && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <div className="font-medium text-amber-900 dark:text-amber-200">Room flagged deficient</div>
+              <div className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+                Selectable only with explicit acknowledgement of the deficiency.
+              </div>
+            </div>
+          )}
+
+          {/* Bookings — one card per overlapping blockage */}
+          {data.context.length === 0 && !isPhysicalIssue && !data.isDeficient && (
+            <p className="text-sm text-muted-foreground">
+              No booking context available. This room appears off-limits but the backend didn't attach
+              a source. Try refreshing the availability search.
+            </p>
+          )}
+
+          {data.context.map((ctx, idx) => (
+            <div key={idx} className="rounded-md border border-border bg-background/60 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span
+                  className={cn(
+                    "inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium",
+                    ctx.source === "HOLD"
+                      ? "bg-amber-500/15 text-amber-800 dark:text-amber-200"
+                      : "bg-sky-500/15 text-sky-800 dark:text-sky-200",
+                  )}
+                >
+                  {ctx.source === "HOLD" ? "Committed hold" : "Reserved"}
+                </span>
+                {ctx.entryReferenceNumber && (
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {ctx.entryReferenceNumber}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-start gap-2 text-sm">
+                <User className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <div>
+                  <div className="font-medium">{ctx.guestName?.trim() || "Guest"}</div>
+                  {data.claimState && idx === 0 && (
+                    <div className="text-[11px] text-muted-foreground">Room state: {data.claimState}</div>
+                  )}
+                </div>
+              </div>
+
+              {(ctx.guestPhone?.trim() || ctx.guestEmail?.trim()) && (
+                <div className="grid gap-1 pl-6 text-sm">
+                  {ctx.guestPhone?.trim() && (
+                    <a
+                      href={`tel:${ctx.guestPhone.trim()}`}
+                      className="inline-flex items-center gap-2 text-primary hover:underline"
+                    >
+                      <Phone className="h-3.5 w-3.5" /> {ctx.guestPhone.trim()}
+                    </a>
+                  )}
+                  {ctx.guestEmail?.trim() && (
+                    <a
+                      href={`mailto:${ctx.guestEmail.trim()}`}
+                      className="inline-flex items-center gap-2 text-primary hover:underline"
+                    >
+                      <Mail className="h-3.5 w-3.5" /> {ctx.guestEmail.trim()}
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {ctx.agentName?.trim() && (
+                <div className="mt-2 rounded border border-border/60 bg-muted/30 p-2 text-sm space-y-1">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {ctx.agentType === "CORPORATE" ? "Corporate account" : "Travel agent"}
+                  </div>
+                  <div className="font-medium">{ctx.agentName.trim()}</div>
+                  {ctx.agentPhone?.trim() && (
+                    <a
+                      href={`tel:${ctx.agentPhone.trim()}`}
+                      className="inline-flex items-center gap-2 text-xs text-primary hover:underline"
+                    >
+                      <Phone className="h-3 w-3" /> {ctx.agentPhone.trim()}
+                    </a>
+                  )}
+                  {ctx.agentEmail?.trim() && (
+                    <a
+                      href={`mailto:${ctx.agentEmail.trim()}`}
+                      className="inline-flex items-center gap-2 text-xs text-primary hover:underline"
+                    >
+                      <Mail className="h-3 w-3" /> {ctx.agentEmail.trim()}
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex justify-end border-t border-border p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -267,21 +577,34 @@ function RoomRow({
   dates,
   availabilityBucket,
   perDateForRoom,
+  occupancyContextForRoom,
+  wholeRangeOccupancy,
   selectionsByDate,
   sealedByDate,
   targetRoomsPerNight,
   disabled,
   onToggleCell,
+  onOpenDetails,
 }: {
   room: RoomListItem;
   dates: { iso: string; dow: string; dayLabel: string }[];
   availabilityBucket: "AVAILABLE" | "DEFICIENT" | "UNAVAILABLE";
   perDateForRoom: Record<string, "AVAILABLE" | "OCCUPIED_RESERVED" | "OCCUPIED_HOLD" | "DEFICIENT" | null> | null;
+  /** Same key shape as perDateForRoom — maps ISO date → who holds the room on that night. */
+  occupancyContextForRoom: Record<string, OccupiedCellContext | null> | null;
+  /**
+   * Fallback whole-range occupancy: every blockage on this room that overlaps the search
+   * range. Empty array when the room isn't in unavailableRooms with occupiedBy context.
+   * Used by both the tooltip (first entry) and the details modal (all entries).
+   */
+  wholeRangeOccupancy: OccupiedCellContext[];
   selectionsByDate: Record<string, string[]>;
   sealedByDate: Record<string, string[]>;
   targetRoomsPerNight: number;
   disabled?: boolean;
   onToggleCell: (roomId: string, isoDate: string, isDeficient: boolean) => void;
+  /** Called when the operator clicks an unavailable cell — opens the details modal. */
+  onOpenDetails: (isoDate: string, dayLabel: string) => void;
 }) {
   const isDeficient = availabilityBucket === "DEFICIENT";
 
@@ -317,46 +640,57 @@ function RoomRow({
         const isDeficientCell = perDateStatus === "DEFICIENT" || (perDateStatus == null && availabilityBucket === "DEFICIENT");
         const isAvailableCell = !isUnavailableCell && !isDeficientCell;
 
-        const clickable = !disabled && !isSealedHere && !isUnavailableCell && (isSelectedHere || !nightAtCapacity);
+        // Selection is only allowed when the cell is truly available. Unavailable cells
+        // remain BUTTONS (not disabled) so the operator can click them to open a
+        // "why is this room off-limits" details modal — but the click never toggles selection.
+        const clickableForSelection =
+          !disabled && !isSealedHere && !isUnavailableCell && (isSelectedHere || !nightAtCapacity);
+        // Details-modal is shown for any unavailable cell (occupied by another booking or
+        // whole-range blocked/maintenance/deficient). Sealed / selected cells don't open it.
+        const clickableForDetails = !isSealedHere && isUnavailableCell;
+        // The button is ALWAYS enabled (no `disabled` attribute) so the click event fires
+        // reliably. What the click does depends on cell state, decided in the handler:
+        //   - available + capacity → toggle selection
+        //   - unavailable → open details modal
+        //   - sealed or otherwise no-op → do nothing
+        const anyAction = clickableForSelection || clickableForDetails;
         return (
           <td key={d.iso} className="whitespace-nowrap px-1 py-1 text-center">
             <button
               type="button"
-              disabled={!clickable}
-              onClick={() => onToggleCell(room.id, d.iso, isDeficient || isDeficientCell)}
+              onClick={() => {
+                if (clickableForSelection) {
+                  onToggleCell(room.id, d.iso, isDeficient || isDeficientCell);
+                } else if (clickableForDetails) {
+                  onOpenDetails(d.iso, d.dayLabel);
+                }
+              }}
               className={cn(
                 "inline-flex h-8 w-14 items-center justify-center rounded text-[11px] font-medium ring-1 transition",
-                isSealedHere && "bg-emerald-600 text-white ring-emerald-700",
-                !isSealedHere && isSelectedHere && "bg-primary/40 text-primary-foreground ring-primary/60",
+                isSealedHere && "bg-emerald-600 text-white ring-emerald-700 cursor-default",
+                !isSealedHere && isSelectedHere && "bg-primary/40 text-primary-foreground ring-primary/60 cursor-pointer",
                 !isSealedHere &&
                   !isSelectedHere &&
                   isAvailableCell &&
-                  "bg-emerald-500/15 text-emerald-800 ring-emerald-500/30 hover:bg-emerald-500/30 dark:text-emerald-300",
+                  "bg-emerald-500/15 text-emerald-800 ring-emerald-500/30 hover:bg-emerald-500/30 dark:text-emerald-300 cursor-pointer",
                 !isSealedHere &&
                   !isSelectedHere &&
                   isDeficientCell &&
-                  "bg-amber-500/15 text-amber-800 ring-amber-500/30 hover:bg-amber-500/30 dark:text-amber-300",
+                  "bg-amber-500/15 text-amber-800 ring-amber-500/30 hover:bg-amber-500/30 dark:text-amber-300 cursor-pointer",
                 !isSealedHere &&
                   !isSelectedHere &&
                   isUnavailableCell &&
-                  "bg-muted text-muted-foreground ring-border cursor-not-allowed",
-                clickable && "cursor-pointer",
+                  "bg-muted text-muted-foreground ring-border hover:bg-muted/80 cursor-pointer",
+                !anyAction && !isUnavailableCell && "cursor-not-allowed opacity-70",
               )}
-              title={
-                isSealedHere
-                  ? `Sealed for ${d.dayLabel}`
-                  : isSelectedHere
-                    ? `Click to un-select for ${d.dayLabel}`
-                    : nightAtCapacity && !isSelectedHere
-                      ? `Night is full (${targetRoomsPerNight} rooms selected)`
-                      : perDateStatus === "OCCUPIED_RESERVED"
-                        ? "Occupied by another reservation this night"
-                        : perDateStatus === "OCCUPIED_HOLD"
-                          ? "Held by another booking this night"
-                          : isUnavailableCell
-                            ? "Occupied or blocked"
-                            : `Click to assign ${room.roomNumber} for ${d.dayLabel}`
-              }
+              title={(() => {
+                if (isSealedHere) return `Sealed for ${d.dayLabel}`;
+                if (isSelectedHere) return `Click to un-select for ${d.dayLabel}`;
+                if (nightAtCapacity && !isSelectedHere && !isUnavailableCell)
+                  return `Night is full (${targetRoomsPerNight} rooms selected)`;
+                if (isUnavailableCell) return "Click for details";
+                return `Click to assign ${room.roomNumber} for ${d.dayLabel}`;
+              })()}
             >
               {isSealedHere ? "✓" : isSelectedHere ? "●" : isUnavailableCell ? "—" : ""}
             </button>

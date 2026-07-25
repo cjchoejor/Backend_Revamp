@@ -1,6 +1,23 @@
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/**
+ * Booking context surfaced by the backend for occupied rooms (2026-07-25). Lets the desk
+ * operator see WHO holds a locked room — guest name, contact, agent/corporate info —
+ * without leaving the availability step.
+ */
+export type OccupancyContext = {
+  entryId?: string;
+  entryReferenceNumber?: string | null;
+  guestName?: string | null;
+  guestPhone?: string | null;
+  guestEmail?: string | null;
+  agentType?: "TRAVEL_AGENT" | "CORPORATE" | null;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agentEmail?: string | null;
+};
+
 export type AvailabilityRoomResult = {
   roomId: string;
   roomNumber?: string;
@@ -13,6 +30,18 @@ export type AvailabilityRoomResult = {
   unavailabilityReason?: string;
   blockedReason?: string | null;
   pricingIndicative?: unknown;
+  /**
+   * Populated when the whole-stay bucket is UNAVAILABLE because a specific booking overlaps
+   * the search range. Each entry describes one blockage — the room can have several when
+   * multiple stays cover different nights of the range.
+   */
+  occupiedBy?: Array<
+    OccupancyContext & {
+      source: "RESERVED" | "HOLD";
+      startDate: string;
+      endDate: string;
+    }
+  >;
 };
 
 export type PerDateAvailabilityResult = {
@@ -79,6 +108,9 @@ export function roomsFromResultSet(resultSet: unknown): {
     unavailabilityReason: r.unavailabilityReason as string | undefined,
     blockedReason: r.blockedReason as string | null | undefined,
     pricingIndicative: r.pricingIndicative,
+    occupiedBy: Array.isArray(r.occupiedBy)
+      ? (r.occupiedBy as AvailabilityRoomResult["occupiedBy"])
+      : undefined,
   });
   const filterValid = (rooms: AvailabilityRoomResult[]) => rooms.filter((r) => r.roomId);
   return {

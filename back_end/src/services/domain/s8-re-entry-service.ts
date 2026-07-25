@@ -1,9 +1,10 @@
 import type { PrismaClient } from "@prisma/client";
-import { FolioState, HandoffState, HandoffType, Prisma, Stage } from "@prisma/client";
+import { FolioState, HandoffState, HandoffType, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
+import { collectRoomsHeldByEntry, transitionRoomClaimState } from "../../lib/room-claim-state.js";
 
 /**
  * SIG-S8 §3.7 — S8→S7 re-entry (additional charge path).
@@ -72,6 +73,24 @@ export async function reEnterS8ToS7(
       where: { id: entryId },
       data: { currentStage: Stage.S7, version: { increment: 1 }, updatedAt: now },
     });
+
+    // Restore each room back to OCCUPIED. S8 physical departure transitioned them to
+    // DEPARTED_DIRTY; on re-entry to S7 the guest is effectively still in-house until the
+    // next checkout attempt, and the S8 exit gates (which check for OCCUPIED) would
+    // otherwise fail. Skip if the room isn't DEPARTED_DIRTY (concurrent housekeeping or
+    // partial states shouldn't be clobbered).
+    const heldRooms = await collectRoomsHeldByEntry(tx, entryId);
+    for (const roomId of heldRooms) {
+      await transitionRoomClaimState(tx, {
+        roomId,
+        toState: InventoryClaimState.OCCUPIED,
+        actorId,
+        entryId,
+        reason: "REENTRY_S8_TO_S7",
+        onlyFromStates: [InventoryClaimState.DEPARTED_DIRTY, InventoryClaimState.DEPARTED_CLEAN],
+        now,
+      });
+    }
   });
 
   return loadEntryDetail(prisma, entryId);

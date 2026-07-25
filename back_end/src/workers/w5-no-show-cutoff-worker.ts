@@ -4,6 +4,7 @@ import type { TimerEngine } from "../lib/timer-engine.js";
 import { NotFoundError } from "../lib/errors.js";
 import { allocateReadableId } from "../lib/readable-id.js";
 import { toDecimal } from "../lib/money.js";
+import { releaseEntryRoomsToFree } from "../lib/room-claim-state.js";
 
 export async function runNoShowCutoffWorker(
   prisma: PrismaClient,
@@ -112,6 +113,17 @@ export async function runNoShowCutoffWorker(
         version: { increment: 1 },
       },
     });
+
+    // Release every room this booking held. Prior to 2026-07-25 the auto-finalise path
+    // left assigned rooms stuck in CONFIRMED/OCCUPIED long after the entry went TERMINAL —
+    // Policy 26 (committed-hold placement) then refused any future booking on those rooms.
+    await releaseEntryRoomsToFree(tx, {
+      entryId,
+      actorId: "SYSTEM",
+      reason: "NO_SHOW_AUTO_FINALISED",
+      now,
+    });
+
     await tx.traceEvent.create({
       data: {
         eventType: "NO_SHOW.AUTO_FINALISED",

@@ -71,7 +71,10 @@
       "Bash(npm list *)",
       "Bash(npx prisma *)",
       "Bash(mkdir -p \"d:/New Legphel Web/Backend_ReVamped/back_end/prisma/migrations/20260714120000_pdf_bills_infrastructure\")",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(diff -r --brief --exclude=node_modules --exclude=.prisma --exclude=dist --exclude=.env --exclude=*.env.local --exclude=coverage --exclude=.next back_end friend_back_end)",
+      "Read(//tmp/**)",
+      "Bash(grep -v \"// \")"
     ]
   }
 }

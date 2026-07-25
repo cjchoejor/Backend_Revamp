@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
 import { enforceEntryAtS7ForRoomChangeReEntry } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 
 export async function createAmendmentEvent(
   prisma: PrismaClient,
@@ -111,32 +112,25 @@ export async function roomChangeReEntryToS1(
       await tx.reservation.update({ where: { id: entry.reservation.id }, data: { segmentId: newSeg.id } });
     }
 
-    // Room claim state transitions must be atomic with segment write.
-    await tx.room.update({
-      where: { id: currentAssignment.roomId },
-      data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY },
+    // Room claim state transitions must be atomic with segment write. Use the helper so
+    // the audit rows record the ACTUAL previous state (was hardcoded before — the new-room
+    // fromState claim of CONFIRMED was often wrong because at S7 room-change the new room
+    // is typically still FREE, having never been through S3/S4).
+    await transitionRoomClaimState(tx, {
+      roomId: currentAssignment.roomId,
+      toState: InventoryClaimState.DEPARTED_DIRTY,
+      actorId,
+      entryId: input.entryId,
+      reason: "S7 room change re-entry",
+      now,
     });
-    await tx.roomClaimStateEvent.create({
-      data: {
-        roomId: currentAssignment.roomId,
-        entryId: input.entryId,
-        fromState: InventoryClaimState.OCCUPIED,
-        toState: InventoryClaimState.DEPARTED_DIRTY,
-        actorId,
-        reason: "S7 room change re-entry",
-      },
-    });
-
-    await tx.room.update({ where: { id: input.newRoomId }, data: { currentClaimState: InventoryClaimState.OCCUPIED } });
-    await tx.roomClaimStateEvent.create({
-      data: {
-        roomId: input.newRoomId,
-        entryId: input.entryId,
-        fromState: InventoryClaimState.CONFIRMED,
-        toState: InventoryClaimState.OCCUPIED,
-        actorId,
-        reason: "S7 room change re-entry",
-      },
+    await transitionRoomClaimState(tx, {
+      roomId: input.newRoomId,
+      toState: InventoryClaimState.OCCUPIED,
+      actorId,
+      entryId: input.entryId,
+      reason: "S7 room change re-entry",
+      now,
     });
 
     const roomAssignmentId = await allocateReadableId(tx, "ROOM_ASSIGNMENT" as const, now);

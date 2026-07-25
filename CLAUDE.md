@@ -16,6 +16,66 @@ Existing backend-authoritative endpoints that show this pattern:
 - `POST /api/lookups/allowed-room-counts` → chargeable-occupants + allowed-room-count envelope
 - `POST /api/entries/:id/room-assignments/from-sealed-per-night` → bulk assignment from sealed per-night selection
 
+## ⚠️ Branches — main vs. integration-prod-frontend
+
+Two long-lived branches on the same GitHub repo:
+
+| Branch | Contains | Purpose |
+|---|---|---|
+| `main` | `back_end/` + user's testing `front_end/` | Daily dev branch — the user's testing UI + backend, untouched by friend's code. |
+| `integration-prod-frontend` | `back_end/` + user's `front_end/` + `friend_back_end/` + `friend_front_end/` | Integration branch. Holds the friend's production frontend + a snapshot of the friend's backend for reference. User's backend is the source of truth on both branches. |
+
+The friend pushes to his branch `UI-experiment` on the same repo. To pull his latest frontend/backend into the integration branch, use the worktree flow documented under **Working conventions → Pulling friend's latest from UI-experiment**.
+
+**Never merge integration-prod-frontend → main.** Backend changes flow `main → integration-prod-frontend`, never the other direction. Frontend changes stay branch-local.
+
+## Wired: friend's production frontend runs on user's backend (2026-07-14)
+
+The friend's frontend (at `friend_front_end/` on the integration branch) is wired to run against **user's backend** (at `back_end/`). Both were forked from the same base, so the auth contract, endpoint shapes, and DTO structure are byte-equivalent — **no code changes** were needed on his frontend. The wiring is purely config:
+
+**How it works**:
+- Friend's `next.config.ts` proxies `/api/*` to `http://127.0.0.1:4000` (user's backend default port) via the `BACKEND_URL` env var. Default already matches — no override needed.
+- Friend's `apiRequest` client at [`friend_front_end/src/lib/api/client.ts`](friend_front_end/src/lib/api/client.ts) already sends `Authorization: Bearer <jwt>` from the stored session — matches user's JWT auth middleware.
+- Friend's login form calls `POST /api/auth/authenticate` with `{ username, pin, terminalId }` — matches user's endpoint shape exactly.
+- Friend's session shape (`{ sessionId, userId, username, actorLevel, terminalId, jwtToken, ... }`) matches what user's `session-service.authenticate` returns.
+
+**How to run both frontends against the same backend simultaneously**:
+
+```bash
+# Terminal 1 — user's backend (port 4000)
+cd back_end
+npm run dev:workers            # or npm run dev
+
+# Terminal 2 — user's testing frontend (port 3001, default)
+cd front_end
+npm run dev
+
+# Terminal 3 — friend's production frontend on a DIFFERENT port
+cd friend_front_end
+npm install                    # first time only — his deps aren't installed yet
+PORT=3002 npm run dev          # override the 3001 default to avoid collision
+```
+
+Then open:
+- `http://localhost:3001` — user's testing UI (talks to backend at :4000)
+- `http://localhost:3002` — friend's production UI (talks to same backend at :4000)
+
+Log in with the seeded users (`admin` / `4444`, `gm` / `3333`, `fom` / `2222`, `frontdesk` / `1111`).
+
+**Cleanup plan when validation is done**:
+Once friend's frontend is confirmed working end-to-end against user's backend, delete the two temporary references:
+```bash
+git rm -r friend_back_end
+git rm -r front_end   # ONLY if user decides to retire the testing frontend
+git commit -m "Retire scaffolding: friend's backend + user's testing frontend"
+```
+
+The friend's `friend_back_end/` is reference-only — user does NOT wire against it. It stays on the integration branch as a diff target: "if friend's frontend expects a shape user's backend doesn't provide, `friend_back_end/` shows what he originally built against."
+
+**Auth env vars now documented** in [`back_end/.env.example`](back_end/.env.example):
+- `JWT_SECRET` — set in production; dev falls back to `"dev-jwt-secret"` with a console warning
+- `AUTH_ALLOW_HEADER_FALLBACK` — set to `true` only if you need to accept legacy `X-Actor-Id`/`X-Actor-Level` headers (off by default, JWT is authoritative)
+
 ## What this project is
 
 LEGPHEL PMS is a **single-tenant hotel Property Management System** with two distinct surfaces:
@@ -672,3 +732,33 @@ If a particular tab is still slow in production, the bottleneck is almost always
 If the change is single-file and contained (e.g., bugfix in one route handler), no CLAUDE.md update is required.
 
 When updating: edit the relevant section in place rather than appending — keep the file scannable. If a section grows past ~15 rows, split it into sub-sections rather than letting it bloat.
+
+### Pulling friend's latest from UI-experiment (integration branch only)
+
+When the friend pushes updates to `origin/UI-experiment`, sync them into `friend_back_end/` and `friend_front_end/` on the `integration-prod-frontend` branch. Uses a temporary `git worktree` — no submodules or subtrees.
+
+```bash
+# Make sure you're on the integration branch
+git checkout integration-prod-frontend
+git fetch origin UI-experiment
+
+# 1. Create a temporary parallel checkout of his branch at ../friend-tmp
+git worktree add ../friend-tmp origin/UI-experiment
+
+# 2. Wipe current friend_* folders so removed files on his side actually go away
+rm -rf friend_back_end friend_front_end
+
+# 3. Copy his latest back_end/ and front_end/ into your working tree under NEW names
+cp -r ../friend-tmp/back_end ./friend_back_end
+cp -r ../friend-tmp/front_end ./friend_front_end
+
+# 4. Remove the temporary worktree
+git worktree remove ../friend-tmp
+
+# 5. Commit + push
+git add -A friend_back_end friend_front_end
+git commit -m "Sync friend_back_end + friend_front_end from UI-experiment"
+git push
+```
+
+The reason for the temp worktree: git can only check out ONE branch per folder. To grab friend's files with a DIFFERENT folder name (so both his and yours can coexist), we need a second working tree pointed at his branch, then copy from it and throw it away. See the branch-management section for why this workflow exists.

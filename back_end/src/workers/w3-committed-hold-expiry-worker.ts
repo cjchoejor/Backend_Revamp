@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
-import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
+import { HoldState, Stage } from "@prisma/client";
 import { enforceCommittedHoldEligibleForExpiryTransition } from "../policies/11-committed-hold/p08-committed-hold-expiry-policy-slice.js";
+import { releaseEntryRoomsToFree } from "../lib/room-claim-state.js";
 
 export async function runCommittedHoldExpiryWorker(prisma: PrismaClient, input: { committedHoldId?: string; timerRecordId?: string }) {
   const now = new Date();
@@ -18,20 +19,16 @@ export async function runCommittedHoldExpiryWorker(prisma: PrismaClient, input: 
       data: { state: HoldState.RELEASED, releasedAt: now, releasedBy: "SYSTEM", releaseReason: "EXPIRY" },
     });
 
-    if (hold.roomId) {
-      await tx.room.update({ where: { id: hold.roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
-      await tx.roomClaimStateEvent.create({
-        data: {
-          roomId: hold.roomId,
-          entryId: hold.entryId,
-          fromState: InventoryClaimState.COMMITTED_HELD,
-          toState: InventoryClaimState.FREE,
-          actorId: "SYSTEM",
-          reason: "COMMITTED_HOLD_EXPIRED",
-          effectiveFrom: now,
-        },
-      });
-    }
+    // Release EVERY room the hold pinned — not just hold.roomId. Multi-room bookings
+    // (s3-hold-service pins all sealed rooms since 2026-07-13) were leaking rooms 2..N
+    // on TTL expiry because this worker only touched the primary. See the 2026-07-25 gap
+    // analysis (repair-stuck-room-states.ts).
+    await releaseEntryRoomsToFree(tx, {
+      entryId: hold.entryId,
+      actorId: "SYSTEM",
+      reason: "COMMITTED_HOLD_EXPIRED",
+      now,
+    });
 
     if (typeof input.timerRecordId === "string") {
       await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });

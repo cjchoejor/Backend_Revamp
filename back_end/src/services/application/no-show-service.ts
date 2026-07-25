@@ -16,6 +16,7 @@ import {
   sumAdvancePaymentInTotalForFolio,
 } from "../../policies/14-cancellation/p35-cancellation-penalty-from-commitment.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
 
@@ -159,8 +160,12 @@ export async function determineNoShow(
 
   const noShowId = await allocateReadableId(prisma, "NO_SHOW" as const);
 
-  await prisma.$transaction([
-    prisma.noShowDeterminationRecord.create({
+  // Converted from array-form to callback-form so `releaseEntryRoomsToFree` can run
+  // inside the same transaction — otherwise the entry closes but its rooms stay pinned
+  // in CONFIRMED and block future bookings (2026-07-25 gap analysis).
+  const closedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.noShowDeterminationRecord.create({
       data: {
         id: noShowId,
         entryId,
@@ -172,8 +177,8 @@ export async function determineNoShow(
         otaNotificationStatus: entry.otaSource ? "OPEN" : null,
         createdBy: fomActorId,
       },
-    }),
-    prisma.folio.update({
+    });
+    await tx.folio.update({
       where: { id: folio.id },
       data: {
         state: FolioState.NO_SHOW_CLOSED,
@@ -181,21 +186,27 @@ export async function determineNoShow(
         noShowAdvancePaymentAmount: advanceTotal,
         noShowNetPosition: net,
         noShowFomDetermination: fomActorId,
-        closedAt: new Date(),
+        closedAt,
         closedBy: fomActorId,
       },
-    }),
-    prisma.entry.update({
+    });
+    await tx.entry.update({
       where: { id: entryId },
       data: {
         currentStage: Stage.TERMINAL,
         status: EntryStatus.ACTIVE,
-        closedAt: new Date(),
+        closedAt,
         closedBy: fomActorId,
         version: { increment: 1 },
       },
-    }),
-  ]);
+    });
+    await releaseEntryRoomsToFree(tx, {
+      entryId,
+      actorId: fomActorId,
+      reason: "NO_SHOW_FOM_FINALISED",
+      now: closedAt,
+    });
+  });
 
   if (net > 0) {
     await prisma.$transaction(async (tx) => {

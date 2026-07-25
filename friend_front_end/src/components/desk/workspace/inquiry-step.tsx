@@ -156,8 +156,9 @@ function groupByType(
 }
 
 /**
- * The individual rooms of a type, as a compact box grid. For available/deficient types each box is
- * individually selectable (picks that exact room); unavailable rooms stay informational. Always shown.
+ * The individual rooms of a type, as a compact box grid. Available / deficient boxes pick
+ * that specific room. Unavailable boxes open an occupancy-details dialog showing WHO holds
+ * the room (guest, phone, email, agent) so the operator can reach out without leaving S1.
  */
 function RoomBoxes({
   group,
@@ -165,12 +166,14 @@ function RoomBoxes({
   onPick,
   selectedRoomId,
   disabled,
+  onShowOccupancy,
 }: {
   group: RoomTypeGroup;
   variant: "available" | "deficient" | "unavailable";
   onPick?: (room: AvailabilityRoomResult) => void;
   selectedRoomId?: string | null;
   disabled?: boolean;
+  onShowOccupancy?: (room: AvailabilityRoomResult) => void;
 }) {
   const pickable = variant !== "unavailable" && !!onPick;
   return (
@@ -179,11 +182,19 @@ function RoomBoxes({
         const sel = selectedRoomId != null && r.roomId === selectedRoomId;
         const cls = `room-box${variant === "deficient" ? " deficient" : ""}${variant === "unavailable" ? " unavail" : ""}${pickable ? " pick" : ""}${sel ? " sel" : ""}`;
         const label = r.roomNumber ?? r.roomId.slice(0, 6);
-        if (!pickable) {
+        if (variant === "unavailable") {
+          // Unavailable rooms are now clickable — opens a modal showing who holds the room.
           return (
-            <span key={r.roomId} className={cls} title={`Room ${r.roomNumber ?? r.roomId}`}>
+            <button
+              key={r.roomId}
+              type="button"
+              className={cls}
+              title="Click to see who holds this room"
+              onClick={() => onShowOccupancy?.(r)}
+              style={{ cursor: "pointer" }}
+            >
               {label}
-            </span>
+            </button>
           );
         }
         return (
@@ -204,6 +215,152 @@ function RoomBoxes({
   );
 }
 
+/**
+ * Modal shown when the operator clicks an unavailable room. Renders each overlapping
+ * booking (guest, contact links, agent/corporate) plus any physical-status reason.
+ * Escape + click-outside + Close button all dismiss.
+ */
+function OccupancyDetailsModal({ room, onClose }: { room: AvailabilityRoomResult; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const blockages = room.occupiedBy ?? [];
+  const reason = room.unavailabilityReason;
+  const isPhysicalIssue = reason === "MAINTENANCE_CONFLICT" || reason === "BLOCKED";
+
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        role="dialog" aria-modal="true"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface, #fff)", color: "var(--ink-1, #111)",
+          borderRadius: 10, maxWidth: 520, width: "100%",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)", border: "1px solid var(--line, #e6e0d4)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--line, #e6e0d4)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2 }}>Room {room.roomNumber ?? room.roomId.slice(0, 6)}</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-3, #7a6a52)", marginTop: 3 }}>
+              {[room.roomTypeName, room.claimState ? `state ${room.claimState}` : null].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: 0, cursor: "pointer", fontSize: 20, color: "var(--ink-3, #7a6a52)", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 20, maxHeight: "70vh", overflowY: "auto" }}>
+          {isPhysicalIssue && (
+            <div style={{ padding: 12, borderRadius: 6, background: "#fff4e5", border: "1px solid #f5c37e", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                {reason === "MAINTENANCE_CONFLICT" ? "Room in maintenance" : "Room blocked"}
+              </div>
+              {room.blockedReason && (
+                <div style={{ fontSize: 12, color: "#7a5a20", marginTop: 4 }}>{room.blockedReason}</div>
+              )}
+            </div>
+          )}
+
+          {blockages.length === 0 && !isPhysicalIssue && (
+            <p style={{ fontSize: 13, color: "var(--ink-3, #7a6a52)" }}>
+              This room is off-limits but the backend didn&apos;t attach booking details. Try refreshing the availability search.
+            </p>
+          )}
+
+          {blockages.map((b, idx) => (
+            <div key={idx} style={{
+              border: "1px solid var(--line, #e6e0d4)", borderRadius: 8,
+              padding: 14, marginBottom: 10, background: "var(--surface-2, #fafaf5)",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{
+                  fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4,
+                  background: b.source === "HOLD" ? "#fff4e5" : "#e5f0ff",
+                  color: b.source === "HOLD" ? "#7a5a20" : "#1e4b8f",
+                }}>
+                  {b.source === "HOLD" ? "Committed hold" : "Reserved"}
+                </span>
+                {b.entryReferenceNumber && (
+                  <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--ink-3, #7a6a52)" }}>
+                    {b.entryReferenceNumber}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
+                {b.guestName?.trim() || "Guest"}
+              </div>
+
+              {(b.guestPhone || b.guestEmail) && (
+                <div style={{ display: "grid", gap: 4, fontSize: 13, marginBottom: 8 }}>
+                  {b.guestPhone && (
+                    <a href={`tel:${b.guestPhone}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>
+                      📞 {b.guestPhone}
+                    </a>
+                  )}
+                  {b.guestEmail && (
+                    <a href={`mailto:${b.guestEmail}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>
+                      ✉ {b.guestEmail}
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {b.agentName && (
+                <div style={{
+                  marginTop: 10, padding: 10, borderRadius: 6, background: "var(--surface, #fff)",
+                  border: "1px solid var(--line, #e6e0d4)",
+                }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--ink-3, #7a6a52)", marginBottom: 3 }}>
+                    {b.agentType === "CORPORATE" ? "Corporate account" : "Travel agent"}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{b.agentName}</div>
+                  {b.agentPhone && (
+                    <div style={{ fontSize: 12, marginTop: 3 }}>
+                      <a href={`tel:${b.agentPhone}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>📞 {b.agentPhone}</a>
+                    </div>
+                  )}
+                  {b.agentEmail && (
+                    <div style={{ fontSize: 12, marginTop: 3 }}>
+                      <a href={`mailto:${b.agentEmail}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>✉ {b.agentEmail}</a>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: "12px 20px", borderTop: "1px solid var(--line, #e6e0d4)", display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--line, #e6e0d4)",
+              background: "var(--surface, #fff)", color: "var(--ink-1, #111)", cursor: "pointer", fontSize: 13,
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RoomTypeCard({
   group,
   variant,
@@ -212,6 +369,7 @@ function RoomTypeCard({
   onSelect,
   onPickRoom,
   selectedRoomId,
+  onShowOccupancy,
 }: {
   group: RoomTypeGroup;
   variant: "available" | "deficient" | "unavailable";
@@ -220,6 +378,7 @@ function RoomTypeCard({
   onSelect?: () => void;
   onPickRoom?: (room: AvailabilityRoomResult) => void;
   selectedRoomId?: string | null;
+  onShowOccupancy?: (room: AvailabilityRoomResult) => void;
 }) {
   const count = group.rooms.length;
   const countLabel = `${count} room${count === 1 ? "" : "s"}`;
@@ -234,7 +393,7 @@ function RoomTypeCard({
           </span>
           <span className="tag stop">Unavailable</span>
         </div>
-        <RoomBoxes group={group} variant={variant} />
+        <RoomBoxes group={group} variant={variant} onShowOccupancy={onShowOccupancy} />
       </div>
     );
   }
@@ -291,6 +450,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
 
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
   const [pendingRoom, setPendingRoom] = useState<string | null>(null);
+  // Room whose occupancy-details modal is currently open (null → closed).
+  const [occupancyModalRoom, setOccupancyModalRoom] = useState<AvailabilityRoomResult | null>(null);
   // Which room-type cards have their room list expanded (keyed by group key).
 
 
@@ -704,6 +865,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     key={group.key}
                     group={group}
                     variant="unavailable"
+                    onShowOccupancy={(room) => setOccupancyModalRoom(room)}
                   />
                 ))}
               </div>
@@ -722,6 +884,13 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       </div>
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+
+      {occupancyModalRoom && (
+        <OccupancyDetailsModal
+          room={occupancyModalRoom}
+          onClose={() => setOccupancyModalRoom(null)}
+        />
+      )}
     </div>
   );
 }
