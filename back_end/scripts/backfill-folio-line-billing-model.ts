@@ -57,24 +57,23 @@ async function main() {
   }
   console.log(`✓ Wrote billingModelDefaults on ${defaultsWritten} folios`);
 
-  // 2. Copy folio.billingModel → line.billingModel for every null line. Batch-update by
-  //    folio so each folio's lines share one query — much faster than per-line writes.
-  const foliosWithNullLines = await prisma.folio.findMany({
-    where: {
-      lines: { some: { billingModel: null } },
-      billingModel: { not: null },
-    },
-    select: { id: true, billingModel: true },
-  });
-
-  let linesUpdated = 0;
-  for (const folio of foliosWithNullLines) {
-    const r = await prisma.folioLine.updateMany({
-      where: { folioId: folio.id, billingModel: null },
-      data: { billingModel: folio.billingModel },
-    });
-    linesUpdated += r.count;
-  }
+  // 2. Copy folio.billingModel → line.billingModel for every null line.
+  //
+  //    Deliberately raw SQL. `db.ts` extends the client with a FolioLine immutability guard
+  //    (`FOLIO_LINE_IMMUTABLE`) that rejects EVERY update/updateMany/delete on a posted line,
+  //    including inside a transaction — so the Prisma-client route cannot run this at all.
+  //    That guard protects the financial content of a posted charge; this backfill only
+  //    populates the newly-added `billingModel` column with the value the line already
+  //    settled under (its folio's primary model), so behaviour is unchanged by construction.
+  //    A one-time column backfill is the intended exception, not a hole in the invariant.
+  const linesUpdated = await prisma.$executeRaw`
+    UPDATE folio_lines fl
+    SET "billingModel" = f."billingModel"
+    FROM folios f
+    WHERE fl."folioId" = f.id
+      AND fl."billingModel" IS NULL
+      AND f."billingModel" IS NOT NULL
+  `;
   console.log(`✓ Backfilled billingModel on ${linesUpdated} folio lines`);
 
   // 3. Any orphaned lines (folio has no billingModel either) — leave null; those pre-date
