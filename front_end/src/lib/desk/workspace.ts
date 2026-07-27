@@ -156,11 +156,11 @@ export function s3Readiness(entry: EntryDetail, opts?: { paymentSatisfied?: bool
     { label: "Quote accepted", met: (entry.quotations ?? []).some((q) => q.state === "ACCEPTED") },
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
+    { label: "Proforma invoice on folio", met: proforma },
     { label: "Advance settled or credit extended", met: advanceSatisfied },
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
-    { label: "Proforma invoice on folio", met: proforma },
     { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED" },
     {
       label: "Guest contact on file",

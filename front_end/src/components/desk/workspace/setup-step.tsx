@@ -78,6 +78,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
 
   const [billingModel, setBillingModel] = useState(folio?.billingModel ?? "GUEST_PAY");
+  // Billing-model section collapses to a settled "Updated ✓ / Change" row once a model is on
+  // the folio (same pattern as the disclosure block below). The form shows only on first
+  // setup or after the operator clicks Change.
+  const [editingBilling, setEditingBilling] = useState(false);
   const [noShowStatement, setNoShowStatement] = useState(
     disclosure?.noShowTreatmentStatement ?? "No-show: one night room charge plus applicable taxes.",
   );
@@ -259,25 +263,61 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       {/* 1. Provisional folio & billing model */}
       <div className="block">
         <BlockH>Provisional folio &amp; billing model</BlockH>
-        {folio && (
-          <div className="fact b-transit" style={{ marginBottom: 11, padding: "7px 11px", fontSize: 12.5 }}>
-            Folio {folio.state}
-            {folio.billingModel ? ` · ${BILLING_LABEL[folio.billingModel] ?? folio.billingModel}` : ""}
+        {folio?.billingModel && !editingBilling ? (
+          <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5, alignItems: "center", gap: 8 }}>
+            <Check style={{ width: 14, height: 14, color: "var(--green-d)", flex: "0 0 auto" }} />
+            <span style={{ flex: "1 1 auto" }}>
+              {BILLING_LABEL[folio.billingModel] ?? folio.billingModel} — <b>Updated</b>
+              <span style={{ display: "block", color: "var(--ink-3)", fontSize: 11, marginTop: 2 }}>
+                Folio {folio.state}
+              </span>
+            </span>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                // Re-seed the select from the folio so Change always opens on the saved value,
+                // not whatever the select held before a cancelled edit.
+                setBillingModel(folio.billingModel ?? "GUEST_PAY");
+                setEditingBilling(true);
+              }}
+            >
+              Change
+            </button>
           </div>
+        ) : (
+          <>
+            {folio && (
+              <div className="fact b-transit" style={{ marginBottom: 11, padding: "7px 11px", fontSize: 12.5 }}>
+                Folio {folio.state}
+                {folio.billingModel ? ` · currently ${BILLING_LABEL[folio.billingModel] ?? folio.billingModel}` : ""}
+              </div>
+            )}
+            <div className="field">
+              <label>Billing model</label>
+              <select value={billingModel} onChange={(e) => setBillingModel(e.target.value)}>
+                {BILLING_MODELS.map((m) => (
+                  <option key={m} value={m}>
+                    {BILLING_LABEL[m]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                className="btn btn-primary"
+                disabled={folioM.isPending}
+                onClick={() => folioM.mutate(undefined, { onSuccess: () => setEditingBilling(false) })}
+              >
+                {folioM.isPending ? "Saving…" : folio ? "Update billing model" : "Create provisional folio"}
+              </button>
+              {editingBilling && (
+                <button className="btn btn-ghost" onClick={() => setEditingBilling(false)}>
+                  Cancel
+                </button>
+              )}
+            </div>
+          </>
         )}
-        <div className="field">
-          <label>Billing model</label>
-          <select value={billingModel} onChange={(e) => setBillingModel(e.target.value)}>
-            {BILLING_MODELS.map((m) => (
-              <option key={m} value={m}>
-                {BILLING_LABEL[m]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button className="btn btn-primary" disabled={folioM.isPending} onClick={() => folioM.mutate()}>
-          {folioM.isPending ? "Saving…" : folio ? "Update billing model" : "Create provisional folio"}
-        </button>
       </div>
 
       {/* 2. Cancellation disclosure */}
@@ -306,7 +346,45 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 3. Advance payment */}
+      {/* 3. Proforma invoice — ready with the folio; emailing it is optional */}
+      <div className="block">
+        <BlockH>
+          <FileCheck style={{ width: 13, height: 13 }} />
+          Proforma invoice
+        </BlockH>
+        {proformaInvoices.length === 0 ? (
+          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>A proforma draft is created with the folio.</p>
+        ) : (
+          <>
+            {proformaInvoices.map((inv) => (
+              <div key={inv.id} className="fact b-transit" style={{ marginBottom: 9, padding: "6px 11px", fontSize: 12, justifyContent: "space-between", width: "100%" }}>
+                <span className="mono">{inv.id.slice(0, 14)}…</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="tag">{inv.state}</span>
+                  {session && <PdfButton label="Proforma PDF" open={() => openInvoicePdf(session, inv.id)} />}
+                </span>
+              </div>
+            ))}
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
+              The proforma already counts for the confirm checklist — emailing it to the guest is
+              <b> optional</b>, only if they ask for it.
+            </p>
+            <div className="field">
+              <label>Dispatch to (optional)</label>
+              <input value={dispatchTo} onChange={(e) => setDispatchTo(e.target.value)} />
+            </div>
+            <button className="btn btn-ghost" disabled={dispatchM.isPending || !proformaInvoices.some((i) => i.state === "DRAFT")} onClick={() => dispatchM.mutate()}>
+              {dispatchM.isPending
+                ? "Dispatching…"
+                : proformaInvoices.some((i) => i.dispatchedAt != null)
+                  ? "✓ Proforma dispatched"
+                  : "Dispatch proforma invoice"}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* 4. Advance payment */}
       <div className="block">
         <BlockH>
           <Banknote style={{ width: 13, height: 13 }} />
@@ -391,7 +469,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 4. Committed hold */}
+      {/* 5. Committed hold */}
       <div className="block">
         <BlockH>
           <Lock style={{ width: 13, height: 13 }} />
@@ -417,40 +495,6 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             </button>
             {!disclosure && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>Record cancellation terms before placing the hold.</p>}
             {!preferredRoomId && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>No preferred room — complete Inquiry first.</p>}
-          </>
-        )}
-      </div>
-
-      {/* 5. Proforma invoice */}
-      <div className="block">
-        <BlockH>
-          <FileCheck style={{ width: 13, height: 13 }} />
-          Proforma invoice
-        </BlockH>
-        {proformaInvoices.length === 0 ? (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>A proforma draft is created with the folio.</p>
-        ) : (
-          <>
-            {proformaInvoices.map((inv) => (
-              <div key={inv.id} className="fact b-transit" style={{ marginBottom: 9, padding: "6px 11px", fontSize: 12, justifyContent: "space-between", width: "100%" }}>
-                <span className="mono">{inv.id.slice(0, 14)}…</span>
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="tag">{inv.state}</span>
-                  {session && <PdfButton label="Proforma PDF" open={() => openInvoicePdf(session, inv.id)} />}
-                </span>
-              </div>
-            ))}
-            <div className="field">
-              <label>Dispatch to</label>
-              <input value={dispatchTo} onChange={(e) => setDispatchTo(e.target.value)} />
-            </div>
-            <button className="btn btn-ghost" disabled={dispatchM.isPending || !proformaInvoices.some((i) => i.state === "DRAFT")} onClick={() => dispatchM.mutate()}>
-              {dispatchM.isPending
-                ? "Dispatching…"
-                : proformaInvoices.some((i) => i.dispatchedAt != null)
-                  ? "✓ Proforma dispatched"
-                  : "Dispatch proforma invoice"}
-            </button>
           </>
         )}
       </div>

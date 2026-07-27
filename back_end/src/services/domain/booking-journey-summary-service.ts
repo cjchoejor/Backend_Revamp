@@ -28,7 +28,13 @@ import { getPaymentStatus } from "./s3-payment-service.js";
 
 type Db = PrismaClient;
 
-export type SectionStatus = "COMPLETE" | "IN_PROGRESS" | "NOT_STARTED";
+/**
+ * READY = the entry is still ON this stage but every piece of evidence the stage needs is
+ * already in place — "done, awaiting the transition". Distinguished from IN_PROGRESS so the
+ * desk can say "Ready to confirm" instead of a misleading "In progress" once the operator
+ * has finished the S3 checklist but hasn't frozen yet.
+ */
+export type SectionStatus = "COMPLETE" | "READY" | "IN_PROGRESS" | "NOT_STARTED";
 
 export type RoomRef = { roomId: string; roomNumber: string | null; roomTypeCode: string | null; roomTypeName: string | null };
 
@@ -394,7 +400,23 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
     },
 
     s3Setup: {
-      status: stageStatus(entry.currentStage, "S3"),
+      // Upgrade IN_PROGRESS -> READY when all S3 evidence exists (mirrors the S4 confirm
+      // gates: accepted quote, folio + billing model, disclosure, live hold, proforma —
+      // plus the advance-payment condition when it is known).
+      status: (() => {
+        const base = stageStatus(entry.currentStage, "S3");
+        if (base !== "IN_PROGRESS") return base;
+        const holdLive = entry.committedHold?.state === "PLACED" || entry.committedHold?.state === "UPGRADED";
+        const evidence =
+          !!acceptedQuote &&
+          !!entry.folio &&
+          !!billingModel &&
+          !!entry.cancellationDisclosure &&
+          holdLive &&
+          !!proforma &&
+          (advancePayment == null || advancePayment.satisfied);
+        return evidence ? "READY" : "IN_PROGRESS";
+      })(),
       billingModel,
       folioState: entry.folio?.state ?? null,
       committedHold: entry.committedHold

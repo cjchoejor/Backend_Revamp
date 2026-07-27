@@ -154,7 +154,7 @@ export async function unparkEntry(session: Session, entryId: string) {
 // side from the records that back each stage. Shape mirrors the backend
 // `BookingJourneySummary` in booking-journey-summary-service.ts.
 
-export type JourneySectionStatus = "COMPLETE" | "IN_PROGRESS" | "NOT_STARTED";
+export type JourneySectionStatus = "COMPLETE" | "READY" | "IN_PROGRESS" | "NOT_STARTED";
 export type JourneyRoomRef = {
   roomId: string;
   roomNumber: string | null;

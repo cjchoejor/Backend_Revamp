@@ -16,6 +16,7 @@ import { moneyOrDash } from "@/lib/desk/workspace";
 
 const STATUS_STYLE: Record<JourneySectionStatus, { bg: string; fg: string; label: string }> = {
   COMPLETE: { bg: "var(--green-t)", fg: "var(--green)", label: "Done" },
+  READY: { bg: "var(--green-t)", fg: "var(--green-d)", label: "Ready to confirm" },
   IN_PROGRESS: { bg: "var(--warn-t)", fg: "var(--warn)", label: "In progress" },
   NOT_STARTED: { bg: "var(--cream-2)", fg: "var(--ink-3)", label: "Not started" },
 };
