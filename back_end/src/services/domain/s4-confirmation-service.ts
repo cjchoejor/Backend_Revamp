@@ -168,6 +168,10 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
       confirmedAt: new Date(),
       confirmedBy: actorId,
       confirmationVoucherSent: true,
+      // Snapshot the FULL commercialTerms (including per-room `roomCompositions` if the S2
+      // quote was built with them). Legal record + source of truth for downstream
+      // hydration into RoomAssignment rows at S5 (Phase C, 2026-07-27).
+      frozenCommercialTerms: (accepted.commercialTerms ?? null) as any,
     };
     const res = await tx.reservation.upsert({
       where: { entryId },

@@ -2,6 +2,39 @@ import type { QuotationSummary, SpeculativeHoldSummary } from "@/types/api";
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/**
+ * Per-room composition captured at S2 quotation build (per-room track Phase B/E, 2026-07-27).
+ * Mirrors the backend's `roomCompositionInputSchema` DTO. All fields optional so the operator
+ * can progressively fill the form.
+ */
+export type RoomCompositionInput = {
+  roomId: string;
+  startDate?: string;
+  endDate?: string;
+  occupantCount?: number;
+  adultCount?: number;
+  cnb11PlusCount?: number;
+  cnb6To10Count?: number;
+  cnbUnder6Count?: number;
+  extraBedCount?: number;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
+  mealPlanOthersCount?: number;
+  othersBreakfastPax?: number;
+  othersLunchPax?: number;
+  othersDinnerPax?: number;
+  negotiatedRoomRate?: number;
+  negotiatedExtraBedRate?: number;
+  negotiatedBreakfastRate?: number;
+  negotiatedLunchRate?: number;
+  negotiatedDinnerRate?: number;
+  serviceChargeApplies?: boolean;
+  gstApplies?: boolean;
+  isFoc?: boolean;
+};
+
 export async function createQuotation(
   session: Session,
   entryId: string,
@@ -13,6 +46,8 @@ export async function createQuotation(
     belowMsrGmWaiver?: { acknowledged: true; rationale: string };
     mealPlan?: "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP" | null;
     extraBedCount?: number;
+    /** Per-room composition (Phase B/E). When supplied, backend uses per-room iteration. */
+    roomCompositions?: RoomCompositionInput[];
   },
 ) {
   return apiRequest<QuotationSummary>(`/api/entries/${entryId}/quotations`, {

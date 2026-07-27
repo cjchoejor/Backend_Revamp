@@ -74,7 +74,10 @@
       "Bash(npx tsc *)",
       "Bash(diff -r --brief --exclude=node_modules --exclude=.prisma --exclude=dist --exclude=.env --exclude=*.env.local --exclude=coverage --exclude=.next back_end friend_back_end)",
       "Read(//tmp/**)",
-      "Bash(grep -v \"// \")"
+      "Bash(grep -v \"// \")",
+      "Bash(git cherry-pick *)",
+      "Bash(git push *)",
+      "Bash(git add *)"
     ]
   }
 }

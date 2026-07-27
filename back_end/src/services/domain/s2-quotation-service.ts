@@ -32,8 +32,17 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
-import { mulMoney, round2 } from "../../lib/money.js";
+import { mulMoney, round2, toDecimal } from "../../lib/money.js";
 import { generateOrLoadQuotationPdf } from "./quotation-pdf-service.js";
+import {
+  computeQuotationCompositionTotals,
+  type RoomCompositionInput,
+  type RoomCompositionRateContext,
+} from "../../lib/room-composition.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { Prisma } from "@prisma/client";
+import { enforceExtraBedForCnb11Plus } from "../../policies/34-room-composition/p78-extra-bed-required-for-cnb11plus.js";
+import { enforceCompositionCountsConsistent } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -68,6 +77,36 @@ async function resolveAgentRateForEntryQuotation(
   return null;
 }
 
+/** Shape mirrors the Zod `roomCompositionInputSchema` DTO. Kept as a local type so the
+ *  service doesn't depend on the DTO layer. */
+export type RoomCompositionServiceInput = {
+  roomId: string;
+  startDate?: string;
+  endDate?: string;
+  occupantCount?: number;
+  adultCount?: number;
+  cnb11PlusCount?: number;
+  cnb6To10Count?: number;
+  cnbUnder6Count?: number;
+  extraBedCount?: number;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
+  mealPlanOthersCount?: number;
+  othersBreakfastPax?: number;
+  othersLunchPax?: number;
+  othersDinnerPax?: number;
+  negotiatedRoomRate?: number;
+  negotiatedExtraBedRate?: number;
+  negotiatedBreakfastRate?: number;
+  negotiatedLunchRate?: number;
+  negotiatedDinnerRate?: number;
+  serviceChargeApplies?: boolean;
+  gstApplies?: boolean;
+  isFoc?: boolean;
+};
+
 export async function createQuotation(
   prisma: PrismaClient,
   entryId: string,
@@ -77,6 +116,13 @@ export async function createQuotation(
     notes?: string;
     currency?: string;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
+    /**
+     * Per-room compositions (Phase B, 2026-07-27). When supplied, pricing is computed via
+     * per-room iteration (`computeQuotationCompositionTotals`) — including negotiated
+     * per-room rates, meal-plan distribution, FOC waivers. When omitted, falls back to the
+     * flat `effectiveRate × nights × roomCount` model for backward compat.
+     */
+    roomCompositions?: RoomCompositionServiceInput[];
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -204,6 +250,107 @@ export async function createQuotation(
     subTotal: Number(subTotalDec.toFixed(2)),
   };
 
+  // ─── Per-room composition path (Phase B, 2026-07-27) ─────────────────────────
+  // When compositions are provided, replace the flat-total pricing with per-room iteration.
+  // Rate defaults come from the agent rate card (when linked) or the resolved rate plan;
+  // per-room negotiated overrides on each composition take precedence over these defaults.
+  // Backward-compat: when `roomCompositions` is empty/undefined, the flat model above is
+  // authoritative and nothing here runs.
+  let compositionTotals: ReturnType<typeof computeQuotationCompositionTotals> | null = null;
+  if (Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0) {
+    // Fetch charge rates + hydrate room numbers for the perRoom breakdown.
+    const { serviceChargeRate, gstRate } = await resolveChargeRates(prisma);
+    const roomIds = input.roomCompositions.map((c) => c.roomId);
+    const roomRows = await prisma.room.findMany({
+      where: { id: { in: roomIds } },
+      select: { id: true, roomNumber: true },
+    });
+    const numberByRoomId = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
+
+    // Default meal / extra-bed rates come from the agent rate card's add-ons when present;
+    // otherwise 0. Operators can still enter per-room negotiatedBreakfast/Lunch/DinnerRate
+    // to override in the composition payload.
+    const defaultBreakfast = toDecimal(agentRate?.addOns?.breakfast ?? 0);
+    const defaultLunch = toDecimal(agentRate?.addOns?.lunch ?? 0);
+    const defaultDinner = toDecimal(agentRate?.addOns?.dinner ?? 0);
+    const defaultExtraBed = toDecimal(agentRate?.addOns?.extraBed ?? 0);
+    const defaultRoomRate = toDecimal(resolvedNightlyRate ?? effectiveRate ?? 0);
+
+    // Validate each room's composition BEFORE pricing so we reject early with a friendly
+    // error (rather than persisting bad data). Both policies are no-ops when key fields
+    // are null so partially-filled draft submissions can still succeed.
+    for (const c of input.roomCompositions) {
+      const roomNumber = numberByRoomId.get(c.roomId) ?? null;
+      enforceExtraBedForCnb11Plus({
+        roomNumber,
+        adultCount: c.adultCount,
+        cnb11PlusCount: c.cnb11PlusCount,
+        extraBedCount: c.extraBedCount,
+        isFoc: c.isFoc,
+      });
+      enforceCompositionCountsConsistent({
+        roomNumber,
+        occupantCount: c.occupantCount,
+        adultCount: c.adultCount,
+        cnb11PlusCount: c.cnb11PlusCount,
+        cnb6To10Count: c.cnb6To10Count,
+        cnbUnder6Count: c.cnbUnder6Count,
+        mealPlanCpCount: c.mealPlanCpCount,
+        mealPlanMaplCount: c.mealPlanMaplCount,
+        mealPlanMapdCount: c.mealPlanMapdCount,
+        mealPlanApCount: c.mealPlanApCount,
+        mealPlanOthersCount: c.mealPlanOthersCount,
+      });
+    }
+
+    const rooms = input.roomCompositions.map((c) => {
+      const compositionInput: RoomCompositionInput = {
+        occupantCount: c.occupantCount,
+        adultCount: c.adultCount,
+        cnb11PlusCount: c.cnb11PlusCount,
+        cnb6To10Count: c.cnb6To10Count,
+        cnbUnder6Count: c.cnbUnder6Count,
+        extraBedCount: c.extraBedCount,
+        mealPlanCpCount: c.mealPlanCpCount,
+        mealPlanMaplCount: c.mealPlanMaplCount,
+        mealPlanMapdCount: c.mealPlanMapdCount,
+        mealPlanApCount: c.mealPlanApCount,
+        mealPlanOthersCount: c.mealPlanOthersCount,
+        othersBreakfastPax: c.othersBreakfastPax,
+        othersLunchPax: c.othersLunchPax,
+        othersDinnerPax: c.othersDinnerPax,
+        negotiatedRoomRate: c.negotiatedRoomRate != null ? new Prisma.Decimal(c.negotiatedRoomRate) : null,
+        negotiatedExtraBedRate: c.negotiatedExtraBedRate != null ? new Prisma.Decimal(c.negotiatedExtraBedRate) : null,
+        negotiatedBreakfastRate: c.negotiatedBreakfastRate != null ? new Prisma.Decimal(c.negotiatedBreakfastRate) : null,
+        negotiatedLunchRate: c.negotiatedLunchRate != null ? new Prisma.Decimal(c.negotiatedLunchRate) : null,
+        negotiatedDinnerRate: c.negotiatedDinnerRate != null ? new Prisma.Decimal(c.negotiatedDinnerRate) : null,
+        serviceChargeApplies: c.serviceChargeApplies,
+        gstApplies: c.gstApplies,
+        isFoc: c.isFoc,
+        // Per-room date range: use explicit if supplied, else stay-wide dates.
+        startDate: c.startDate ? new Date(c.startDate) : stay?.checkIn ?? null,
+        endDate: c.endDate ? new Date(c.endDate) : stay?.checkOut ?? null,
+      };
+      const ctx: RoomCompositionRateContext = {
+        defaultRoomRate,
+        defaultExtraBedRate: defaultExtraBed,
+        defaultBreakfastRate: defaultBreakfast,
+        defaultLunchRate: defaultLunch,
+        defaultDinnerRate: defaultDinner,
+        serviceChargeRate,
+        gstRate,
+        nights: nightsForPricing,
+      };
+      return {
+        input: compositionInput,
+        ctx,
+        roomId: c.roomId,
+        roomNumber: numberByRoomId.get(c.roomId) ?? null,
+      };
+    });
+    compositionTotals = computeQuotationCompositionTotals(rooms);
+  }
+
   const commercialTerms = {
     roomTypeId,
     useType: entry.useType,
@@ -224,6 +371,39 @@ export async function createQuotation(
     pricingBreakdown,
     ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
     ...(perGuestMealBreakdown ? { perGuestMealBreakdown } : {}),
+    // Per-room composition track (Phase B, 2026-07-27). When populated, downstream services
+    // (S4 confirmation freeze, S5 RoomAssignment hydration, S8 settlement, PDF renderers)
+    // should prefer these numbers over the flat pricingBreakdown above.
+    ...(input.roomCompositions && input.roomCompositions.length > 0
+      ? {
+          roomCompositions: input.roomCompositions,
+          compositionTotals: compositionTotals
+            ? {
+                subtotal: Number(compositionTotals.subtotal.toFixed(2)),
+                serviceCharge: Number(compositionTotals.serviceCharge.toFixed(2)),
+                gst: Number(compositionTotals.gst.toFixed(2)),
+                total: Number(compositionTotals.total.toFixed(2)),
+                perRoom: compositionTotals.perRoom.map((r) => ({
+                  roomId: r.roomId,
+                  roomNumber: r.roomNumber,
+                  nights: r.nights,
+                  effectiveBreakfastPax: r.effectiveBreakfastPax,
+                  effectiveLunchPax: r.effectiveLunchPax,
+                  effectiveDinnerPax: r.effectiveDinnerPax,
+                  roomRate: Number(r.roomRate.toFixed(2)),
+                  extraBedRate: Number(r.extraBedRate.toFixed(2)),
+                  breakfastRate: Number(r.breakfastRate.toFixed(2)),
+                  lunchRate: Number(r.lunchRate.toFixed(2)),
+                  dinnerRate: Number(r.dinnerRate.toFixed(2)),
+                  subtotal: Number(r.subtotal.toFixed(2)),
+                  serviceCharge: Number(r.serviceCharge.toFixed(2)),
+                  gst: Number(r.gst.toFixed(2)),
+                  total: Number(r.total.toFixed(2)),
+                })),
+              }
+            : null,
+        }
+      : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
     ...(agentRate
       ? {
@@ -262,11 +442,15 @@ export async function createQuotation(
         referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
-        // totalAmount now reflects the whole booking's per-night value (per-room rate ×
-        // roomCount). Downstream × nights gives the true stay total; historical single-room
-        // quotations had roomCount = 1 so this is backwards-compatible for them.
+        // totalAmount:
+        //   - When per-room compositions were supplied → stay-total (composition sum, tax-inclusive).
+        //     This is what the guest will actually pay across the whole stay.
+        //   - Otherwise legacy: per-night per-booking value (per-room rate × roomCount) — downstream
+        //     services multiply × nights for the true stay total.
         // Decimal-safe multiplication so 4999.99 × 3 rooms doesn't drift to ...9997.
-        totalAmount: round2(mulMoney(effectiveRate, roomCount)),
+        totalAmount: compositionTotals
+          ? round2(compositionTotals.total)
+          : round2(mulMoney(effectiveRate, roomCount)),
         currency: input.currency?.trim() ? input.currency.trim() : currency?.trim() ? currency : "BTN",
         createdBy: actorId,
       },

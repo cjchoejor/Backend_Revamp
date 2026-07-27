@@ -23,6 +23,12 @@ export type QuotationProformaLine = {
   mealPlan: string | null;
   extraBeds: string | null;
   amount: string | number;
+  /**
+   * Room number for per-room rows (Phase D of per-room track, 2026-07-27). When populated
+   * on ANY line, the template renders an extra `Room No.` column. Legacy per-night rows
+   * omit this field and the column stays hidden.
+   */
+  roomNo?: string | null;
 };
 
 export type QuotationProformaTemplateInput = {
@@ -68,11 +74,15 @@ export function renderQuotationProformaHtml(input: QuotationProformaTemplateInpu
     ? `<img src="${hotel.logoDataUri}" alt="Legphel Hotel" style="width:90px;height:auto;" />`
     : "";
 
+  // Show the Room No. column when ANY row has one — keeps the legacy per-night rendering
+  // (no room column) untouched for callers that haven't been rewired.
+  const showRoomCol = lines.some((l) => l.roomNo != null && l.roomNo !== "");
   const linesHtml = lines
     .map(
-      (l, i) => `
+      (l) => `
     <tr class="data-row">
       <td>${htmlEscape(formatDate(l.date))}</td>
+      ${showRoomCol ? `<td>${htmlEscape(l.roomNo ?? "")}</td>` : ""}
       <td>${htmlEscape(l.occupants)}</td>
       <td>${htmlEscape(l.mealPlan ?? "None")}</td>
       <td>${htmlEscape(l.extraBeds ?? "None")}</td>
@@ -151,6 +161,7 @@ export function renderQuotationProformaHtml(input: QuotationProformaTemplateInpu
     <thead>
       <tr>
         <th>Date</th>
+        ${showRoomCol ? "<th>Room No.</th>" : ""}
         <th>Occupants</th>
         <th>Meal Plan</th>
         <th>Extra Beds</th>

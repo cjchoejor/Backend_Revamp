@@ -16,7 +16,9 @@ import {
   resolveQuotationAckOpenLoop,
   sendQuotation,
   supersedeQuotation,
+  type RoomCompositionInput,
 } from "@/lib/api/quotations";
+import { RoomCompositionsEditor } from "./room-compositions-editor";
 import { money } from "@/lib/desk/workspace";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
@@ -91,6 +93,11 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [releaseReason, setReleaseReason] = useState("");
   const [mealPlan, setMealPlan] = useState<"" | "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP">("");
   const [extraBedCount, setExtraBedCount] = useState("0");
+  // Per-room composition (Phase E of per-room track, 2026-07-27). Managed by the
+  // `RoomCompositionsEditor` child; parent just holds the current array and forwards it
+  // in the createQuotation body.
+  const [roomCompositions, setRoomCompositions] = useState<RoomCompositionInput[]>([]);
+  const sealedRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -117,6 +124,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               : undefined,
           mealPlan: mealPlan || null,
           extraBedCount: Number(extraBedCount) || 0,
+          // Send per-room compositions when the operator filled the composition editor.
+          // Backend uses per-room iteration when this is non-empty; falls back to booking-
+          // level meal plan / extra bed otherwise.
+          roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
         }),
       "Quote drafted",
     ),
@@ -284,27 +295,42 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
             </div>
           </div>
-          <div className="frow">
-            <div className="field">
-              <label>Meal plan</label>
-              <select value={mealPlan} onChange={(e) => setMealPlan(e.target.value as typeof mealPlan)}>
-                <option value="">EP — room only (no meals)</option>
-                <option value="CP">CP — breakfast</option>
-                <option value="MAP_LUNCH">MAP — breakfast + lunch</option>
-                <option value="MAP_DINNER">MAP — breakfast + dinner</option>
-                <option value="AP">AP — all meals</option>
-              </select>
+          <div style={{ marginTop: 10, marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 6 }}>
+              PER-ROOM COMPOSITION
             </div>
-            <div className="field">
-              <label>Extra beds</label>
-              <input type="number" min={0} max={10} value={extraBedCount} onChange={(e) => setExtraBedCount(e.target.value)} />
-            </div>
+            <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
+              Set adults / children per room, meal-plan distribution, and negotiated rates. Falls back to the
+              booking-level meal plan below if left empty.
+            </p>
+            <RoomCompositionsEditor
+              sealedRoomIds={sealedRoomIds}
+              entryCheckIn={entry.checkInDate ?? null}
+              entryCheckOut={entry.checkOutDate ?? null}
+              onChange={setRoomCompositions}
+            />
           </div>
-          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
-            Meals price per person by age (under-6 free · 6–10 at the child rate · 11+ full) and extra beds
-            per night — <b>only for agent/corporate bookings</b> with a rate card; otherwise the meal plan is
-            recorded as a label with no charge.
-          </p>
+          <details style={{ marginBottom: 10 }}>
+            <summary style={{ fontSize: 11.5, color: "var(--ink-3)", cursor: "pointer" }}>
+              Legacy booking-level meal plan (used when per-room composition is empty)
+            </summary>
+            <div className="frow" style={{ marginTop: 8 }}>
+              <div className="field">
+                <label>Meal plan</label>
+                <select value={mealPlan} onChange={(e) => setMealPlan(e.target.value as typeof mealPlan)}>
+                  <option value="">EP — room only (no meals)</option>
+                  <option value="CP">CP — breakfast</option>
+                  <option value="MAP_LUNCH">MAP — breakfast + lunch</option>
+                  <option value="MAP_DINNER">MAP — breakfast + dinner</option>
+                  <option value="AP">AP — all meals</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Extra beds</label>
+                <input type="number" min={0} max={10} value={extraBedCount} onChange={(e) => setExtraBedCount(e.target.value)} />
+              </div>
+            </div>
+          </details>
           <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
             {createM.isPending ? "Drafting…" : "Create draft quote"}
           </button>

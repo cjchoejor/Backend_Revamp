@@ -1424,6 +1424,14 @@ model Reservation {
   frozenCheckInDate       DateTime
   frozenCheckOutDate      DateTime
   frozenGuestCount        Int
+  /// Snapshot of the accepted quotation's full `commercialTerms` (Phase C, 2026-07-27).
+  /// Includes `roomCompositions` array + `compositionTotals` when per-room composition was
+  /// supplied at S2, otherwise the flat pricingBreakdown. Legal record — never mutated after
+  /// confirmation. Consumed by:
+  ///   - room-assignment-service to hydrate per-room composition into RoomAssignment at S5
+  ///   - PDF renderers (voucher, invoice) to show per-room breakdown
+  ///   - Reports / audit trails
+  frozenCommercialTerms   Json?
   creditCeilingIfExtended Decimal?  @db.Decimal(15, 2)
   confirmedAt             DateTime
   confirmedBy             String
@@ -1793,6 +1801,67 @@ model RoomAssignment {
   acknowledgementAt          DateTime?
   notes                      String?
   createdAt                  DateTime  @default(now())
+
+  // ─── Per-Room Composition Track — Phase A (2026-07-27) ───────────────────────
+  // Captured at S2 quotation build; frozen at S4 confirmation. All nullable /
+  // defaulted so existing rows stay valid and the pricing engine can fall back to
+  // booking-level totals until Phase B rewires it.
+
+  // === Composition (who's in the room) ===
+  /// Total physical guests in this room. `adultCount + all CNB counts` should equal this.
+  occupantCount  Int?
+  /// Paying adults — each gets a bed by default.
+  adultCount     Int?
+  /// Children 11 and older. If ≥2 adults are in the same room with any CNB 11+, an extra
+  /// bed is required (enforced by `enforceExtraBedForCnb11Plus`).
+  cnb11PlusCount Int?
+  /// Pricing-children (age band 6–10 per registry.child.ageBands).
+  cnb6To10Count  Int?
+  /// Infants (age band 0–5). Typically shares parent's bed, usually free.
+  cnbUnder6Count Int?
+  /// Extra beds installed IN THIS ROOM (independent of any per-guest CNB flags).
+  extraBedCount  Int?
+
+  // === Meal plan distribution (guests per plan category in this room) ===
+  /// A single room can carry a MIX of meal plans (e.g., 1 guest on CP + 1 on MAPL).
+  /// The auto-computed effective pax per meal is derived from these counts:
+  ///   breakfastPax = cp + mapl + mapd + ap + (othersBreakfastPax ?? 0)
+  ///   lunchPax     = mapl + ap + (othersLunchPax ?? 0)
+  ///   dinnerPax    = mapd + ap + (othersDinnerPax ?? 0)
+  mealPlanCpCount     Int  @default(0)
+  mealPlanMaplCount   Int  @default(0)
+  mealPlanMapdCount   Int  @default(0)
+  mealPlanApCount     Int  @default(0)
+  /// Guests in the OTHERS category — no bundled plan; their meal consumption is entered
+  /// à-la-carte via the `others*Pax` fields below.
+  mealPlanOthersCount Int  @default(0)
+  othersBreakfastPax  Int?
+  othersLunchPax      Int?
+  othersDinnerPax     Int?
+
+  // === Negotiated rates (nullable = fall back to rate card / rate plan default) ===
+  /// Per-room negotiated room rate. Overrides RateCard.roomBaseRate for THIS room only.
+  negotiatedRoomRate      Decimal? @db.Decimal(15, 2)
+  negotiatedExtraBedRate  Decimal? @db.Decimal(15, 2)
+  negotiatedBreakfastRate Decimal? @db.Decimal(15, 2)
+  negotiatedLunchRate     Decimal? @db.Decimal(15, 2)
+  negotiatedDinnerRate    Decimal? @db.Decimal(15, 2)
+
+  // === Room-level toggles ===
+  /// Whether the hotel's service charge % applies to THIS room's charges.
+  serviceChargeApplies Boolean @default(true)
+  /// Whether GST applies to THIS room's charges. Uncommon to differ across rooms but
+  /// supported for mixed diplomatic / corporate exemption bookings.
+  gstApplies           Boolean @default(true)
+  /// Full free-of-cost waiver — room rate + extra bed + meals + tax all Nu 0 for this room.
+  isFoc                Boolean @default(false)
+
+  // === Frozen totals (snapshotted at S4 confirmation) ===
+  /// Snapshot at S4 for the LEGAL record. Nullable pre-confirmation; live-computed for the
+  /// quotation UI via `computeRoomComposition(assignment, rateContext)`.
+  frozenSubtotal Decimal? @db.Decimal(15, 2)
+  /// = frozenSubtotal + serviceCharge + gst (or 0 when isFoc).
+  frozenTotal    Decimal? @db.Decimal(15, 2)
 
   entry    Entry           @relation(fields: [entryId], references: [id])
   room     Room            @relation(fields: [roomId], references: [id])

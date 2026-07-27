@@ -109,25 +109,65 @@ export async function generateOrLoadConfirmationVoucherPdf(
     Math.round((checkOut.getTime() - checkIn.getTime()) / 86_400_000),
   );
 
-  // Booking-details rows — one row per stay night with the room number(s) assigned. For a
-  // single-room booking we emit one row per night with the same room number. For multi-room
-  // we emit rows per (night × room). If no room is assigned yet the row is empty.
+  // Booking-details rows — one row per (night × room assignment).
+  //
+  // Phase D of per-room track (2026-07-27): rooms are no longer collapsed into a joined
+  // string. When RoomAssignment carries composition (Phase A/C), each row shows that
+  // assignment's own occupants, meal-plan distribution, and extra beds. Falls back to
+  // entry-level totals for assignments with no composition.
   const bookingRows: ConfirmationVoucherLine[] = [];
-  const adultCount = entry.adultCount ?? Number(entry.guestCount ?? 1) ?? 1;
-  const childCount = entry.childCount ?? 0;
-  const occupantsString = `${adultCount} adult${adultCount === 1 ? "" : "s"}, ${childCount} child${childCount === 1 ? "" : "ren"}`;
-  const mealPlanCode = "1 MAPD"; // TODO: pull from commercialTerms.mealPlan once voucher render integrates.
-  const rooms = entry.roomAssignments.map((a) => a.room.roomNumber).filter(Boolean);
-  const roomNoDisplay = rooms.length > 0 ? rooms.join(", ") : "";
+  const fallbackAdults = entry.adultCount ?? Number(entry.guestCount ?? 1) ?? 1;
+  const fallbackChildren = entry.childCount ?? 0;
+  const fallbackOccupants = `${fallbackAdults} adult${fallbackAdults === 1 ? "" : "s"}, ${fallbackChildren} child${fallbackChildren === 1 ? "" : "ren"}`;
 
-  for (let i = 0; i < nights; i++) {
-    bookingRows.push({
-      date: new Date(checkIn.getTime() + i * 86_400_000),
-      roomNo: roomNoDisplay,
-      occupants: occupantsString,
-      mealPlan: mealPlanCode,
-      extraBeds: "None",
-    });
+  // Helper: describe a single assignment's meal-plan distribution as "1 CP · 2 MAPL" etc.
+  const describeMealPlan = (a: (typeof entry.roomAssignments)[number]): string => {
+    const parts: string[] = [];
+    if (a.mealPlanCpCount > 0) parts.push(`${a.mealPlanCpCount} CP`);
+    if (a.mealPlanMaplCount > 0) parts.push(`${a.mealPlanMaplCount} MAPL`);
+    if (a.mealPlanMapdCount > 0) parts.push(`${a.mealPlanMapdCount} MAPD`);
+    if (a.mealPlanApCount > 0) parts.push(`${a.mealPlanApCount} AP`);
+    if (a.mealPlanOthersCount > 0) parts.push(`${a.mealPlanOthersCount} Others`);
+    return parts.length > 0 ? parts.join(" · ") : "None";
+  };
+  const describeOccupants = (a: (typeof entry.roomAssignments)[number]): string => {
+    if (a.occupantCount == null && a.adultCount == null) return fallbackOccupants;
+    const adults = a.adultCount ?? 0;
+    const kids = (a.cnb11PlusCount ?? 0) + (a.cnb6To10Count ?? 0) + (a.cnbUnder6Count ?? 0);
+    return `${adults} adult${adults === 1 ? "" : "s"}${kids > 0 ? `, ${kids} child${kids === 1 ? "" : "ren"}` : ""}`;
+  };
+  const describeExtraBeds = (a: (typeof entry.roomAssignments)[number]): string =>
+    a.extraBedCount && a.extraBedCount > 0
+      ? `${a.extraBedCount} extra bed${a.extraBedCount === 1 ? "" : "s"}`
+      : "None";
+
+  for (const a of entry.roomAssignments) {
+    // Determine the nights this assignment covers.
+    const aStart = a.startDate ?? checkIn;
+    const aEnd = a.endDate ?? checkOut;
+    const aNights = Math.max(1, Math.round((aEnd.getTime() - aStart.getTime()) / 86_400_000));
+    for (let i = 0; i < aNights; i++) {
+      bookingRows.push({
+        date: new Date(aStart.getTime() + i * 86_400_000),
+        roomNo: a.room.roomNumber ?? "",
+        occupants: describeOccupants(a),
+        mealPlan: describeMealPlan(a),
+        extraBeds: describeExtraBeds(a),
+      });
+    }
+  }
+  // Defensive: if no assignments at all, emit one blank row per night so the voucher still
+  // has something in the booking table (matches legacy behaviour for empty bookings).
+  if (bookingRows.length === 0) {
+    for (let i = 0; i < nights; i++) {
+      bookingRows.push({
+        date: new Date(checkIn.getTime() + i * 86_400_000),
+        roomNo: "",
+        occupants: fallbackOccupants,
+        mealPlan: "None",
+        extraBeds: "None",
+      });
+    }
   }
 
   const now = new Date();
