@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check, ChevronLeft, Layers, Lock, Pause, Play } from "lucide-react";
+import { Activity, ArrowRight, Check, ChevronLeft, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -61,7 +61,7 @@ import { StayStep as StayStepBase } from "./stay-step";
 import { CheckOutStep as CheckOutStepBase } from "./checkout-step";
 import { PostStayStep as PostStayStepBase } from "./closed-step";
 import { ConfirmStep as ConfirmStepBase } from "./confirm-step";
-import { BackendRail, LiveBackendFeed, type RailGroup } from "./backend-inline";
+import { BackendRail, BackendRailSlotContext, LiveBackendFeed, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -151,7 +151,7 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
     case "quote": {
       return (
         <>
-          <Speak now="The quote" h2="Shape the price and send the quote.">
+          <Speak now="Negotiation" h2="Shape the price and send the quote.">
             The figure is still a range — nothing here binds the guest yet.
           </Speak>
           <div className="block">
@@ -542,14 +542,24 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // backend already runs that clock; the operator should be able to see it rather than assume a
   // park is open-ended. Only fetched while the booking is actually parked.
   const parked = entry?.status === "PARKED";
+  // Timers now also feed the floating live pill (active-timer count), so they're fetched for
+  // every booking — not just parked ones. The drawer's LiveBackendFeed shares this key at 8s.
   const timersQuery = useQuery({
     queryKey: ["entry-timers", entryId],
     queryFn: () => getEntryTimers(session!, entryId),
-    enabled: !!session && !sessionLoading && parked,
+    enabled: !!session && !sessionLoading,
     // Refresh occasionally so the countdown doesn't drift far from the server's own clock.
-    refetchInterval: parked ? 60_000 : false,
+    refetchInterval: 30_000,
   });
   const parkTimer = findParkTimer(timersQuery.data?.items);
+
+  // Backend side column (live feed + what-runs) — one permanent, always-visible panel with two
+  // tabs, replacing the old separate left feed + right rail. The rail slot is the portal target
+  // each step's BackendRail teleports into; it stays mounted across tab switches.
+  const [sideTab, setSideTab] = useState<"live" | "runs">("live");
+  const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
+  // Readiness popover on the journey-row gate cluster (replaces the bottom gate bar's list).
+  const [needsOpen, setNeedsOpen] = useState(false);
   // Local tick so the countdown moves between refetches.
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
@@ -605,7 +615,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
   });
 
-  // Routine forward step (no commitment boundary) — e.g. Inquiry → Quote.
+  // Routine forward step (no commitment boundary) — e.g. Inquiry → Negotiation.
   const advanceMutation = useMutation({
     mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean }) =>
       progressStage(session!, entry!.id, {
@@ -866,7 +876,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     else router.push("/desk/bookings");
   };
 
+  const metCount = preconds.filter((p) => p.met).length;
+  const allMet = metCount === preconds.length;
+
   return (
+    <BackendRailSlotContext.Provider value={railSlot}>
     <div className="ws">
       {/* top bar — guest header + key figures, with the horizontal booking journey beneath */}
       <div className="ws-top">
@@ -886,6 +900,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           </div>
           <div className="topspace" />
           <div className="jsum">
+            {/* Readable business IDs — Entry (ENT-…) over its originating Inquiry (INQ-…),
+                as a labelled column alongside the other key figures. */}
+            <div className="jsum-i" title="Entry number · Inquiry number">
+              <span className="k">Reference</span>
+              <span className="v mono" style={{ fontSize: 12 }}>{entry.id}</span>
+              {entry.inquiryId && (
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)", fontWeight: 500 }}>
+                  {entry.inquiryId}
+                </span>
+              )}
+            </div>
             <span className={`commit-tag ${fin.frozen ? "frozen" : "indic"}`}>
               {fin.frozen ? <Check /> : null}
               {fin.frozen ? "Confirmed" : "Indicative"}
@@ -938,38 +963,171 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           <span className={`timer ${timer?.level ?? ""}`}>{fin.frozen ? "Confirmed" : timer?.text}</span>
         </div>
 
-        <nav className="jrail">
-          {DESK_STEPS.map((s) => {
-            const future = s.order > maxReach;
-            const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
-              .filter(Boolean)
-              .join(" ");
-            // Done steps show their stage number (white on the filled green node) rather than a
-            // tick — the number keeps the S1…S9 position legible at a glance. Locked (bound,
-            // not-yet-reached) steps still show a padlock.
-            const glyph = s.order < currentOrder ? s.order : s.bound ? <Lock /> : s.order;
-            return (
-              <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
-                <span className="g">{glyph}</span>
-                <span className="jl">
-                  {s.label}
-                  <small>{s.sub}</small>
-                </span>
+        <div className="jrow">
+          <nav className="jrail">
+            {DESK_STEPS.map((s) => {
+              const future = s.order > maxReach;
+              const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
+                .filter(Boolean)
+                .join(" ");
+              // Done steps show their stage number (white on the filled green node) rather than a
+              // tick — the number keeps the S1…S9 position legible at a glance. Locked (bound,
+              // not-yet-reached) steps still show a padlock.
+              const glyph = s.order < currentOrder ? s.order : s.bound ? <Lock /> : s.order;
+              return (
+                <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
+                  <span className="g">{glyph}</span>
+                  <span className="jl">
+                    {s.label}
+                    <small>{s.sub}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Gate cluster — the old bottom gate bar, relocated onto the journey row: a readiness
+              chip (click → checklist popover) + the step's advance / commit CTA. */}
+          <div className="jgate">
+            <button
+              type="button"
+              className={`jgate-chip${allMet ? " ready" : ""}`}
+              onClick={() => setNeedsOpen((o) => !o)}
+              title={needsLabel}
+            >
+              <ListChecks style={{ width: 13, height: 13 }} />
+              {metCount}/{preconds.length} ready
+            </button>
+            {needsOpen && (
+              <div className="jgate-pop" onMouseLeave={() => setNeedsOpen(false)}>
+                <div className="needs">
+                  <span className="nl">{needsLabel}</span>
+                  {preconds.map((p) => (
+                    <span key={p.label} className={`need${p.met ? " met" : ""}`}>
+                      <span className="nd" />
+                      {p.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sealed ? (
+              <button className="adv" disabled>
+                <Lock />
+                Sealed · read-only
               </button>
-            );
-          })}
-        </nav>
+            ) : parked ? (
+              <button
+                className="adv"
+                disabled={unparkMutation.isPending}
+                onClick={() => unparkMutation.mutate()}
+              >
+                <Play />
+                {unparkMutation.isPending ? "Resuming…" : "Resume to continue"}
+              </button>
+            ) : confirmStepActive ? (
+              <button
+                className={`adv commit${ready ? "" : " locked"}`}
+                disabled={!ready}
+                onClick={() => ready && setConfirmOpen(true)}
+              >
+                <Lock />
+                Freeze &amp; confirm
+              </button>
+            ) : inquiryStepActive ? (
+              <button
+                className={`adv${canProgressS1(entry) ? "" : " locked"}`}
+                disabled={!canProgressS1(entry) || advanceMutation.isPending}
+                onClick={() => advanceMutation.mutate({ targetStage: "S2" })}
+              >
+                {advanceMutation.isPending ? "Moving…" : "Continue to Negotiation"}
+                <ArrowRight />
+              </button>
+            ) : quoteStepActive ? (
+              <button
+                className={`adv${canProgressS2(entry) ? "" : " locked"}`}
+                disabled={!canProgressS2(entry) || advanceMutation.isPending}
+                onClick={() => advanceMutation.mutate({ targetStage: "S3" })}
+              >
+                {advanceMutation.isPending ? "Moving…" : "Continue to Set up"}
+                <ArrowRight />
+              </button>
+            ) : setupStepActive ? (
+              <button className="adv commit" onClick={() => setSelected(4)}>
+                <Lock />
+                Review &amp; confirm
+              </button>
+            ) : confirmedS4Active ? (
+              <button className="adv" disabled={activateMutation.isPending} onClick={() => activateMutation.mutate()}>
+                {activateMutation.isPending ? "Opening…" : "Continue to Arrival"}
+                <ArrowRight />
+              </button>
+            ) : arrivalStepActive ? (
+              <button
+                className={`adv${canProgressS5(entry, guestPresent) ? "" : " locked"}`}
+                disabled={!canProgressS5(entry, guestPresent) || advanceMutation.isPending}
+                onClick={() => advanceMutation.mutate({ targetStage: "S6", guestPhysicallyPresent: true })}
+              >
+                {advanceMutation.isPending ? "Moving…" : "Continue to Check-in"}
+                <ArrowRight />
+              </button>
+            ) : checkInStepActive ? (
+              <button
+                className={`adv commit${canCheckIn ? "" : " locked"}`}
+                disabled={!canCheckIn}
+                onClick={() => canCheckIn && setCheckInOpen(true)}
+              >
+                <Lock />
+                Check in &amp; go live
+              </button>
+            ) : stayStepActive ? (
+              <button
+                className={`adv${canProgressS7(entry, nightAuditOk) ? "" : " locked"}`}
+                disabled={!canProgressS7(entry, nightAuditOk) || advanceMutation.isPending}
+                onClick={() => advanceMutation.mutate({ targetStage: "S8" })}
+              >
+                {advanceMutation.isPending ? "Moving…" : "Continue to Check-out"}
+                <ArrowRight />
+              </button>
+            ) : checkOutStepActive ? (
+              <button
+                className={`adv${canProgressS8(entry) ? "" : " locked"}`}
+                disabled={!canProgressS8(entry) || advanceMutation.isPending}
+                onClick={() => advanceMutation.mutate({ targetStage: "S9" })}
+              >
+                {advanceMutation.isPending ? "Closing…" : "Close & seal the stay"}
+                <ArrowRight />
+              </button>
+            ) : closedStepActive ? (
+              <button
+                className={`adv commit${canCloseS9(entry, session?.actorLevel) ? "" : " locked"}`}
+                disabled={!canCloseS9(entry, session?.actorLevel) || closeMutation.isPending}
+                onClick={() => canCloseS9(entry, session?.actorLevel) && setCloseOpen(true)}
+              >
+                <Lock />
+                {closeMutation.isPending ? "Sealing…" : "Close & seal the record"}
+              </button>
+            ) : onLiveStep && step.key === "closed" ? (
+              <button className="adv" disabled>
+                <Lock />
+                Sealed · read-only
+              </button>
+            ) : (
+              <button className="adv" onClick={() => setSelected(currentOrder)}>
+                Go to current step
+                <ArrowRight />
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* Special preference — pinned in the non-scrolling top bar so it stays on screen through
             every stage (S1…S9). Add/edit in place; shows the saved value so it's never duplicated. */}
         <SpecialPreference entry={entry} />
       </div>
 
-      {/* body — Backend activity live (left) · operate flow + colour-coded groups (right) */}
+      {/* body — full-width canvas; the live feed + backend rail live in the right drawer */}
       <div className="ws-body">
-        <aside className="ws-feed">
-          <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
-        </aside>
         <div className="canvas-wrap">
           <div className="canvas-scroll">
           <div
@@ -1043,135 +1201,31 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           </div>
         </div>
 
-        {/* gate bar */}
-        <div className="gatebar">
-          <div className="gate-inner">
-            <div className="needs">
-              <span className="nl">{needsLabel}</span>
-              {preconds.map((p) => (
-                <span key={p.label} className={`need${p.met ? " met" : ""}`}>
-                  <span className="nd" />
-                  {p.label}
-                </span>
-              ))}
+        </div>
+
+        {/* Backend side column — always on screen: Live activity + What runs here as tabs.
+            The runs tab is the portal slot each step's BackendRail teleports into; both tab
+            bodies stay mounted so neither loses state (nor the portal target) on switch. */}
+        <aside className="ws-side">
+          <div className="ws-side-h">
+            <div className="seg">
+              <button type="button" className={sideTab === "live" ? "on" : ""} onClick={() => setSideTab("live")}>
+                <Activity style={{ width: 13, height: 13 }} />
+                Live activity
+              </button>
+              <button type="button" className={sideTab === "runs" ? "on" : ""} onClick={() => setSideTab("runs")}>
+                <Layers style={{ width: 13, height: 13 }} />
+                What runs
+              </button>
             </div>
-            {sealed ? (
-              <button className="adv" disabled>
-                <Lock />
-                Sealed · read-only
-              </button>
-            ) : parked ? (
-              <button
-                className="adv"
-                disabled={unparkMutation.isPending}
-                onClick={() => unparkMutation.mutate()}
-              >
-                <Play />
-                {unparkMutation.isPending ? "Resuming…" : "Resume to continue"}
-              </button>
-            ) : confirmStepActive ? (
-              <button
-                className={`adv commit${ready ? "" : " locked"}`}
-                disabled={!ready}
-                onClick={() => ready && setConfirmOpen(true)}
-              >
-                <Lock />
-                Freeze &amp; confirm
-              </button>
-            ) : inquiryStepActive ? (
-              <button
-                className={`adv${canProgressS1(entry) ? "" : " locked"}`}
-                disabled={!canProgressS1(entry) || advanceMutation.isPending}
-                onClick={() => advanceMutation.mutate({ targetStage: "S2" })}
-              >
-                {advanceMutation.isPending ? "Moving…" : "Continue to Quote"}
-                <ArrowRight />
-              </button>
-            ) : quoteStepActive ? (
-              <button
-                className={`adv${canProgressS2(entry) ? "" : " locked"}`}
-                disabled={!canProgressS2(entry) || advanceMutation.isPending}
-                onClick={() => advanceMutation.mutate({ targetStage: "S3" })}
-              >
-                {advanceMutation.isPending ? "Moving…" : "Continue to Set up"}
-                <ArrowRight />
-              </button>
-            ) : setupStepActive ? (
-              <button className="adv commit" onClick={() => setSelected(4)}>
-                <Lock />
-                Review &amp; confirm
-              </button>
-            ) : confirmedS4Active ? (
-              <button className="adv" disabled={activateMutation.isPending} onClick={() => activateMutation.mutate()}>
-                {activateMutation.isPending ? "Opening…" : "Continue to Arrival"}
-                <ArrowRight />
-              </button>
-            ) : arrivalStepActive ? (
-              <button
-                className={`adv${canProgressS5(entry, guestPresent) ? "" : " locked"}`}
-                disabled={!canProgressS5(entry, guestPresent) || advanceMutation.isPending}
-                onClick={() => advanceMutation.mutate({ targetStage: "S6", guestPhysicallyPresent: true })}
-              >
-                {advanceMutation.isPending ? "Moving…" : "Continue to Check-in"}
-                <ArrowRight />
-              </button>
-            ) : checkInStepActive ? (
-              <button
-                className={`adv commit${canCheckIn ? "" : " locked"}`}
-                disabled={!canCheckIn}
-                onClick={() => canCheckIn && setCheckInOpen(true)}
-              >
-                <Lock />
-                Check in &amp; go live
-              </button>
-            ) : stayStepActive ? (
-              <button
-                className={`adv${canProgressS7(entry, nightAuditOk) ? "" : " locked"}`}
-                disabled={!canProgressS7(entry, nightAuditOk) || advanceMutation.isPending}
-                onClick={() => advanceMutation.mutate({ targetStage: "S8" })}
-              >
-                {advanceMutation.isPending ? "Moving…" : "Continue to Check-out"}
-                <ArrowRight />
-              </button>
-            ) : checkOutStepActive ? (
-              <button
-                className={`adv${canProgressS8(entry) ? "" : " locked"}`}
-                disabled={!canProgressS8(entry) || advanceMutation.isPending}
-                onClick={() => advanceMutation.mutate({ targetStage: "S9" })}
-              >
-                {advanceMutation.isPending ? "Closing…" : "Close & seal the stay"}
-                <ArrowRight />
-              </button>
-            ) : closedStepActive ? (
-              <button
-                className={`adv commit${canCloseS9(entry, session?.actorLevel) ? "" : " locked"}`}
-                disabled={!canCloseS9(entry, session?.actorLevel) || closeMutation.isPending}
-                onClick={() => canCloseS9(entry, session?.actorLevel) && setCloseOpen(true)}
-              >
-                <Lock />
-                {closeMutation.isPending ? "Sealing…" : "Close & seal the record"}
-              </button>
-            ) : onLiveStep ? (
-              step.key === "closed" ? (
-                <button className="adv" disabled>
-                  <Lock />
-                  Sealed · read-only
-                </button>
-              ) : (
-                <button className="adv" onClick={() => setSelected(currentOrder)}>
-                  Go to current step
-                  <ArrowRight />
-                </button>
-              )
-            ) : (
-              <button className="adv" onClick={() => setSelected(currentOrder)}>
-                Go to current step
-                <ArrowRight />
-              </button>
-            )}
           </div>
-        </div>
-        </div>
+          <div className="ws-side-body">
+            <div style={{ display: sideTab === "live" ? "block" : "none" }}>
+              <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
+            </div>
+            <div style={{ display: sideTab === "runs" ? "block" : "none" }} ref={setRailSlot} />
+          </div>
+        </aside>
       </div>
 
       <DeskConfirmModal
@@ -1289,5 +1343,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
         </div>
       )}
     </div>
+    </BackendRailSlotContext.Provider>
   );
 }

@@ -179,12 +179,12 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Re-entry failed"),
   });
-  // S8 → S2 rate dispute: re-open to Quote for a full renegotiation. Seals the current segment and
-  // starts a new one at S2; the live folio persists. Backend requires L2+ + a reason (SIG-S8 §1.2).
+  // S8 → S2 rate dispute: re-open to Negotiation for a full renegotiation. Seals the current segment
+  // and starts a new one at S2; the live folio persists. Backend requires L2+ + a reason (SIG-S8 §1.2).
   const reEntryS2M = useMutation({
     mutationFn: () => reEnterS8ToS2(session!, entry.id, entry.version, reEntryS2Reason.trim()),
     onSuccess: () => {
-      toast.success("Re-opened to Quote for renegotiation");
+      toast.success("Re-opened to Negotiation for renegotiation");
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
       setSelected(2);
@@ -502,12 +502,12 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         <div className="block">
           <BlockH>Dispute the rate?</BlockH>
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 0, lineHeight: 1.5 }}>
-            Re-open the booking to Quote for a full rate renegotiation. Seals this segment and starts a fresh
-            one at Quote; the live folio carries over. Requires FOM (L2)+.
+            Re-open the booking to Negotiation for a full rate renegotiation. Seals this segment and starts a
+            fresh one at Negotiation; the live folio carries over. Requires FOM (L2)+.
           </p>
           <div className="frow">
             <div className="field">
-              <label>Reason to re-open Quote</label>
+              <label>Reason to re-open Negotiation</label>
               <input
                 value={reEntryS2Reason}
                 onChange={(e) => setReEntryS2Reason(e.target.value)}
@@ -516,7 +516,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             </div>
             <div className="field" style={{ alignSelf: "end" }}>
               <button className="btn btn-ghost" disabled={reEntryS2M.isPending || !reEntryS2Reason.trim()} onClick={() => reEntryS2M.mutate()}>
-                Re-open to Quote
+                Re-open to Negotiation
               </button>
             </div>
           </div>

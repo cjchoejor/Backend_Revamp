@@ -180,7 +180,9 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
         )}
       </div>
 
-      <BackendRail entryId={entry.id} groups={s4Groups} activeKeys={[]} firingKey={null} />
+      {/* "✓ Ran" only when the freeze actually happened — confirmed derives from the real
+          reservation row, so before the freeze the group correctly sits unlit. */}
+      <BackendRail entryId={entry.id} groups={s4Groups} activeKeys={confirmed ? ["confirm"] : []} firingKey={null} />
     </div>
   );
 }

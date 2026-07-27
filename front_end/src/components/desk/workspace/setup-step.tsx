@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, Check, FileCheck, Lock, RefreshCw, Shield } from "lucide-react";
@@ -87,7 +87,13 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const [creditCeiling, setCreditCeiling] = useState("");
   const [creditReason, setCreditReason] = useState("");
   const [holdJustification, setHoldJustification] = useState("Reservation setup — committed inventory hold");
-  const [dispatchTo, setDispatchTo] = useState(entry.guestProfile?.email ?? "");
+  // Guest email for the proforma dispatch. Same robust auto-pull as the S2 send field — resolve
+  // across the profile chain and fill via an effect so a late-loading profile still populates it.
+  const guestEmail = entry.guestProfile?.email ?? entry.inquiry?.guestProfile?.email ?? "";
+  const [dispatchTo, setDispatchTo] = useState(guestEmail);
+  useEffect(() => {
+    if (guestEmail) setDispatchTo((prev) => prev || guestEmail);
+  }, [guestEmail]);
   const [coordinatorName, setCoordinatorName] = useState("");
   const [coordinatorScope, setCoordinatorScope] = useState("");
   const [milestoneTemplate, setMilestoneTemplate] = useState("DEFAULT");
@@ -175,7 +181,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const reEntryS2M = useMutation({
     mutationFn: () => initiateS3ReEntryToS2(session!, entry.id, { reason: reEntryReason.trim() || undefined }),
     onSuccess: () => {
-      toast.success("Re-opened for renegotiation (Quote)");
+      toast.success("Re-opened for renegotiation (Negotiation)");
       invalidate();
       setSelected(2);
     },
@@ -504,7 +510,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn btn-ghost btn-sm" disabled={reEntryS2M.isPending} onClick={() => reEntryS2M.mutate()}>
-              Renegotiate rate (Quote)
+              Renegotiate rate (Negotiation)
             </button>
             <button className="btn btn-ghost btn-sm" disabled={reEntryS1M.isPending} onClick={() => reEntryS1M.mutate()}>
               Reconfigure dates / room (Inquiry)

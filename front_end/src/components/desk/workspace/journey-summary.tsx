@@ -222,8 +222,8 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
         {s1.notes ? <Row label="Notes">{s1.notes}</Row> : null}
       </Card>
 
-      {/* S2 — Quote */}
-      <Card title="Quote — the price they agreed to" status={s2.status}>
+      {/* S2 — Negotiation */}
+      <Card title="Negotiation — the price they agreed to" status={s2.status}>
         <Row label="Quotation">
           {s2.reference ? `${s2.reference}${s2.versionNumber ? ` · v${s2.versionNumber}` : ""}${s2.state ? ` · ${s2.state}` : ""}` : "—"}
         </Row>

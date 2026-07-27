@@ -32,9 +32,15 @@ async function openPdf(session: Session, path: string): Promise<void> {
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
-  const win = window.open(url, "_blank", "noopener,noreferrer");
-  if (!win) {
-    // Popup blocked — fall back to a same-tab navigation so the operator still sees the PDF.
+  // NB: passing "noopener"/"noreferrer" to window.open makes it ALWAYS return null (per spec),
+  // which used to trip the popup-blocked fallback below and open the PDF in BOTH a new tab and
+  // the current one. Open without the feature string so the return value actually signals whether
+  // the tab opened, then sever the opener manually (blob: URLs are same-origin, so this is safe).
+  const win = window.open(url, "_blank");
+  if (win) {
+    win.opener = null;
+  } else {
+    // Genuinely popup-blocked — fall back to a same-tab navigation so the operator still sees it.
     window.location.href = url;
   }
   // Revoke after a delay so the opened tab has time to load the blob.

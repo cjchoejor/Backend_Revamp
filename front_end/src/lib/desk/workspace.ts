@@ -178,7 +178,7 @@ export function canConfirm(entry: EntryDetail, opts?: { paymentSatisfied?: boole
   return entry.currentStage === "S3" && s3Readiness(entry, opts).every((c) => c.met);
 }
 
-/** S1 exit readiness (SIG-S1) — the gates before progressing to Quote (S2). */
+/** S1 exit readiness (SIG-S1) — the gates before progressing to Negotiation (S2). */
 export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = entry.availabilityConfigs ?? [];
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);

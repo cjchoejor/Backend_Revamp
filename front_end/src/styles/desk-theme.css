@@ -880,6 +880,19 @@
     font-weight: 600;
     color: var(--ink);
   }
+  /* Journey row = scrollable step rail (left) + gate cluster (right, outside the scroller
+     so its readiness popover isn't clipped). */
+  & .jrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px 10px;
+  }
+  & .jrow .jrail {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+  }
   & .jrail {
     display: flex;
     align-items: center;
@@ -969,8 +982,200 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 300px 1fr;
+    /* Dominant canvas + ONE permanent backend column (live feed / what-runs as tabs) —
+       replaces the old separate left feed and right rail. */
+    grid-template-columns: 1fr 320px;
     overflow: hidden;
+  }
+  /* ── Backend side column (always visible) ── */
+  & .ws-side {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-left: 1px solid var(--line);
+    background: var(--cream);
+    /* Its live countdowns repaint every second — keep that off the canvas' scroll frames. */
+    contain: layout paint;
+    will-change: transform;
+  }
+  & .ws-side-h {
+    flex: 0 0 auto;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  & .ws-side-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 12px;
+  }
+  & .ws-side .bx-rail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    will-change: auto;
+  }
+  & .ws-side .bx-feed {
+    margin-bottom: 0;
+  }
+  & .ws-side .bx-events {
+    max-height: none;
+  }
+  /* Inside the workspace the rail is portaled into the drawer, so steps' bx-split
+     collapses to a single full-width column. (The intake page, outside .ws, keeps
+     its inline two-column bx-split.) */
+  & .ws .bx-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* ── Gate cluster on the journey row (replaces the bottom gate bar) ── */
+  & .jgate {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex: 0 0 auto;
+    position: relative;
+    padding-left: 12px;
+  }
+  & .jgate .adv {
+    padding: 8px 14px;
+    font-size: 12.5px;
+  }
+  & .jgate-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    border: 1.5px solid var(--line-2);
+    background: #fff;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  & .jgate-chip.ready {
+    border-color: var(--green-t2);
+    background: var(--green-t);
+    color: var(--green-d);
+  }
+  & .jgate-pop {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 75;
+    width: 300px;
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    box-shadow: var(--sh-lg);
+    padding: 12px 14px;
+  }
+
+  /* ── Right "Backend" drawer (live feed + what-runs) ── */
+  & .bx-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100dvh;
+    width: min(380px, 92vw);
+    background: var(--paper);
+    border-left: 1px solid var(--line-2);
+    box-shadow: var(--sh-lg);
+    z-index: 80;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(105%);
+    transition: transform 0.24s ease;
+  }
+  & .bx-drawer.open {
+    transform: none;
+  }
+  & .bx-drawer-h {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+  }
+  & .bx-drawer-h .seg {
+    flex: 1;
+  }
+  & .bx-drawer-x {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+  & .bx-drawer-x:hover {
+    background: var(--cream);
+    color: var(--ink);
+  }
+  & .bx-drawer-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 12px;
+  }
+  /* Panels keep their own styling but lose column-context constraints in the drawer. */
+  & .bx-drawer .bx-rail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    will-change: auto;
+  }
+  & .bx-drawer .bx-feed {
+    margin-bottom: 0;
+  }
+  & .bx-drawer .bx-events {
+    max-height: none;
+  }
+
+  /* ── Floating live pill (the always-on-screen backend presence) ── */
+  & .bx-pill {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 74;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: min(420px, 70vw);
+    padding: 9px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--green-dd);
+    background: var(--green-d);
+    color: #e9efe9;
+    font-size: 12px;
+    font-weight: 600;
+    box-shadow: var(--sh-md);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  & .bx-pill:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--sh-lg);
+  }
+  & .bx-pill .ev {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  & .bx-pill .tcount {
+    flex: 0 0 auto;
+    font-family: var(--deskmono);
+    font-size: 11px;
+    color: #bcd3c2;
   }
   & .ws-feed {
     display: flex;
@@ -979,6 +1184,10 @@
     border-right: 1px solid var(--line);
     background: var(--cream);
     padding: 14px;
+    /* The feed repaints every second (live timer countdowns). Contain those repaints to its
+       own layer so they can't cause frame drops while the main canvas is scrolling. */
+    contain: layout paint;
+    will-change: transform;
   }
   /* Let the live-feed card fill the whole column; its event list scrolls internally. */
   & .ws-feed .bx-feed {
@@ -1161,14 +1370,19 @@
     /* Keep wheel scrolling inside this pane — no chaining up to the shell's
        .content scroller (nested scrollers were causing scroll jank here). */
     overscroll-behavior: contain;
+    /* Compositor hint for the scroll itself. NOTE: deliberately NOT a transform-type
+       promotion (will-change: transform / translateZ) — step components render
+       position:fixed modals inside this subtree and a transformed ancestor would
+       re-anchor them to the scroller instead of the viewport. */
+    will-change: scroll-position;
   }
   & .canvas {
-    max-width: 660px;
+    max-width: 760px;
     margin: 0 auto;
   }
   /* Steps that show the side-by-side Backend rail use the full pane width. */
   & .canvas.canvas-wide {
-    max-width: 1040px;
+    max-width: none;
   }
   /* When the pane gets tight, stack the rail under the operate flow. */
   @media (max-width: 1180px) {
@@ -1410,6 +1624,151 @@
     border-color: var(--terra);
     background: var(--terra-t);
     color: var(--terra);
+  }
+
+  /* Room-status table — legacy-PMS-style rooms × dates grid for S1 selection.
+     Rows = individual rooms, columns = nights, cells = Vacant / Reserved chips. */
+  & .rst-wrap {
+    overflow: auto;
+    /* Own scrollport so the date header can stick while long room lists scroll under it. */
+    max-height: min(62vh, 560px);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: #fff;
+    /* Same nested-scroller treatment as .canvas-scroll / .bx-rail — without these, wheel
+       chaining + repaints from this inner scroller made the whole canvas scroll stutter. */
+    overscroll-behavior: contain;
+    contain: paint;
+    will-change: transform;
+  }
+  & .rst {
+    width: 100%;
+    /* `separate` (not `collapse`) — collapse + position:sticky forces Chrome to repaint the
+       entire table every scroll frame, which is what made scrolling feel rough. Borders are
+       per-cell (border-bottom) so nothing visually changes. */
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+  }
+  & .rst th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--cream);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line-2);
+    /* border-collapse drops sticky cell borders while scrolled — keep the line via shadow. */
+    box-shadow: 0 1px 0 var(--line-2);
+    white-space: nowrap;
+  }
+  & .rst td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  & .rst tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  & .rst .rst-no {
+    font-family: var(--deskmono);
+    font-weight: 700;
+    color: var(--ink);
+  }
+  & .rst .rst-type {
+    color: var(--ink-2);
+  }
+  & .rst .rst-beds {
+    text-align: center;
+    color: var(--ink-2);
+    font-family: var(--deskmono);
+  }
+  & .rst tr.pick {
+    cursor: pointer;
+  }
+  & .rst tr.pick:hover td {
+    background: var(--cream);
+  }
+  & .rst tr.sel td {
+    background: var(--terra-t);
+  }
+  & .rst tr.sel .rst-no {
+    color: var(--terra-d);
+  }
+  & .rst tr.dis {
+    cursor: default;
+  }
+  & .rst tr.dis .rst-no,
+  & .rst tr.dis .rst-type {
+    color: var(--ink-3);
+  }
+  & .rst-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 74px;
+    padding: 3px 10px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  & .rst-chip.vacant {
+    background: var(--green-t);
+    border-color: var(--green-t2);
+    color: var(--green-d);
+  }
+  & .rst-chip.reserved {
+    background: var(--stop);
+    border-color: var(--stop);
+    color: #fdf6f4;
+  }
+  & .rst-chip.deficient {
+    background: var(--warn-t);
+    border-color: #e6cf9a;
+    color: #8a6313;
+  }
+  & .rst-chip.blocked {
+    background: var(--stop-t);
+    border-color: #e2b3ac;
+    color: var(--stop);
+  }
+  & .rst-chip.sel {
+    background: var(--terra);
+    border-color: var(--terra);
+    color: #fff8f3;
+  }
+  /* Per-night mode — individual cells are the click targets. */
+  & button.rst-chip {
+    cursor: pointer;
+    transition: box-shadow 0.12s ease, border-color 0.12s ease;
+  }
+  & button.rst-chip:hover {
+    border-color: var(--terra);
+    box-shadow: 0 0 0 1.5px var(--terra-t);
+  }
+  & button.rst-chip:disabled {
+    cursor: default;
+    opacity: 0.55;
+    box-shadow: none;
+  }
+  & .rst .rst-nightcount {
+    display: block;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink-3);
+    margin-top: 2px;
+  }
+  & .rst .rst-nightcount.done {
+    color: var(--green-d);
   }
 
   & .gatebar {
@@ -2124,8 +2483,9 @@
   /* Side-by-side split: operate flow left, sticky Backend rail right. */
   & .bx-split {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
-    gap: 20px;
+    /* Main working surface dominates; the backend rail stays a slim side column. */
+    grid-template-columns: minmax(0, 1fr) 250px;
+    gap: 18px;
     align-items: start;
   }
   & .bx-main {
@@ -2141,6 +2501,9 @@
        sticky rail (with its box-shadowed groups) instead of repainting it each frame. */
     will-change: transform;
     contain: paint;
+    /* It's a nested scroller — keep its wheel events from chaining into the canvas
+       mid-gesture (same treatment as .canvas-scroll / .rst-wrap). */
+    overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
     gap: 11px;

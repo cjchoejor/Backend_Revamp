@@ -89,6 +89,20 @@ function isoDate(d: Date): string {
   return z.toISOString().slice(0, 10);
 }
 
+/** ISO date `n` nights after `iso` (UTC-safe). */
+function addNightsIso(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Whole nights between two ISO dates (checkOut exclusive); 0 when invalid. */
+function diffNightsIso(a: string, b: string): number {
+  const ms = new Date(`${b}T00:00:00Z`).getTime() - new Date(`${a}T00:00:00Z`).getTime();
+  return Number.isFinite(ms) ? Math.round(ms / 86_400_000) : 0;
+}
+
 /**
  * One guest in a pick list. The phone always shows next to the name — a receptionist keying a
  * number needs to see the number they matched on, and two guests can share a name where they
@@ -304,6 +318,9 @@ export function DeskNewInquiryForm() {
   const [numberOfRooms, setNumberOfRooms] = useState("1");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
+  // Number of nights — the primary stay-length input. Check-out derives from check-in + nights;
+  // picking a check-out date manually recomputes nights (two-way sync).
+  const [nightsStr, setNightsStr] = useState("1");
   const [today, setToday] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -333,8 +350,12 @@ export function DeskNewInquiryForm() {
     setChildren(String(editEntry.childCount ?? 0));
     setChildAges((editEntry.childAges ?? []).map(String));
     setNumberOfRooms(String(editEntry.numberOfRooms ?? 1));
-    setCheckIn(editEntry.checkInDate?.slice(0, 10) ?? "");
-    setCheckOut(editEntry.checkOutDate?.slice(0, 10) ?? "");
+    const ci = editEntry.checkInDate?.slice(0, 10) ?? "";
+    const co = editEntry.checkOutDate?.slice(0, 10) ?? "";
+    setCheckIn(ci);
+    setCheckOut(co);
+    // Seed nights from the loaded stay so the derive-checkout effect reproduces the same dates.
+    if (ci && co) setNightsStr(String(Math.max(1, diffNightsIso(ci, co))));
     editInited.current = true;
   }, [isEdit, editEntry]);
 
@@ -343,25 +364,31 @@ export function DeskNewInquiryForm() {
   // Corporate bookings require the client-ref / coordinator context (Policy 17).
   const needsCorporateContext = channel.channel === "CORPORATE";
 
-  // Default dates client-side (today / tomorrow) to avoid SSR hydration mismatch. In edit mode we
-  // keep the loaded booking's own dates — only `today` (the date-field floor) is still set.
+  // Default check-in to TODAY client-side (avoids SSR hydration mismatch). In edit mode the
+  // loaded booking's own dates win — only `today` (the date-field floor) is still set.
   useEffect(() => {
     const t = new Date();
     setToday(isoDate(t));
     if (isEdit) return;
     setCheckIn(isoDate(t));
-    setCheckOut(isoDate(new Date(t.getTime() + 86_400_000)));
   }, [isEdit]);
 
-  // Check-out follows check-in: picking a check-in date moves check-out to the next day, since the
-  // shortest stay is one night. A check-out the operator has already pushed further out survives —
-  // only a date that would now be on or before the new check-in gets pulled forward.
+  // Check-out derives from check-in + nights, so setting the check-in date and typing a night
+  // count auto-selects the check-out date.
   useEffect(() => {
     if (!checkIn) return;
-    const earliest = nextDayIso(checkIn);
-    if (!earliest) return;
-    setCheckOut((prev) => (!prev || prev < earliest ? earliest : prev));
-  }, [checkIn]);
+    const n = Math.max(1, parseInt(nightsStr || "1", 10) || 1);
+    setCheckOut(addNightsIso(checkIn, n));
+  }, [checkIn, nightsStr]);
+
+  // Manual check-out pick — keep, and recompute nights from the chosen date.
+  const onCheckOutChange = (v: string) => {
+    setCheckOut(v);
+    if (checkIn && v) {
+      const d = diffNightsIso(checkIn, v);
+      if (d >= 1) setNightsStr(String(d));
+    }
+  };
 
   // Reset party selection when channel changes away from agent/corporate.
   useEffect(() => {
@@ -592,9 +619,11 @@ export function DeskNewInquiryForm() {
       toast.error(e instanceof ApiError ? e.message : isEdit ? "Couldn't update the booking" : "Couldn't start the inquiry"),
   });
 
-  // Rail highlight — no entry exists yet, so highlight is derived from form activity.
+  // Rail highlight — "✓ Ran" only when the backend actually did something. The lookups group
+  // lights once real fetches ran (child policy / phone match / party search). The create group
+  // NEVER pre-lights on form validity — it only pulses while the create actually fires.
   const lookupsUsed = !!childPolicyQuery.data || phoneMatches.length > 0 || !!party;
-  const railActiveKeys = [lookupsUsed ? "lookups" : null, canSubmit ? "create" : null].filter(Boolean) as string[];
+  const railActiveKeys = [lookupsUsed ? "lookups" : null].filter(Boolean) as string[];
   const railFiringKey = mutation.isPending
     ? "create"
     : phoneMatch.isFetching || returningSearch.isFetching || childPolicyQuery.isFetching
@@ -1030,14 +1059,24 @@ export function DeskNewInquiryForm() {
             </p>
           </div>
 
-          <div className="frow">
+          <div className="frow" style={{ gridTemplateColumns: "1fr 90px 1fr" }}>
             <div className="field">
               <label>Check-in</label>
               <DateField min={today} value={checkIn} onChange={setCheckIn} />
             </div>
             <div className="field">
+              <label>Nights</label>
+              <input
+                type="number"
+                min={1}
+                value={nightsStr}
+                onChange={(e) => setNightsStr(e.target.value)}
+                title="Check-out auto-selects from check-in + nights"
+              />
+            </div>
+            <div className="field">
               <label>Check-out</label>
-              <DateField min={nextDayIso(checkIn) || today} value={checkOut} onChange={setCheckOut} />
+              <DateField min={nextDayIso(checkIn) || today} value={checkOut} onChange={onCheckOutChange} />
             </div>
           </div>
 

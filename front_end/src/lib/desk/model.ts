@@ -1,7 +1,7 @@
 /**
  * Front-desk (/desk) view model.
  *
- * The mockup speaks operator language — Inquiry, Quote, Set up, Confirm,
+ * The mockup speaks operator language — Inquiry, Negotiation, Set up, Confirm,
  * Arrival, Check-in, Stay, Check-out, Closed — never stage numbers. This
  * module is the single translation layer between the backend's S1–S9
  * `EntryListItem` data and that operator vocabulary. Keep all stage→step
@@ -37,7 +37,7 @@ export type DeskStep = {
 
 export const DESK_STEPS: DeskStep[] = [
   { order: 1, key: "inquiry", stage: "S1", label: "Inquiry", sub: "understand the stay", need: "Capture the stay and explore availability" },
-  { order: 2, key: "quote", stage: "S2", label: "Quote", sub: "shape the price", need: "Shape the price and send the quote" },
+  { order: 2, key: "quote", stage: "S2", label: "Negotiation", sub: "shape the price", need: "Negotiate the price and send the quote" },
   { order: 3, key: "setup", stage: "S3", label: "Set up", sub: "hold & deposit", need: "Hold the rooms and record the advance" },
   { order: 4, key: "confirm", stage: "S4", label: "Confirm", sub: "freeze the booking", bound: true, need: "Everything's ready — confirm to freeze" },
   { order: 5, key: "arrival", stage: "S5", label: "Arrival", sub: "ready the room", need: "Ready the room for arrival" },
