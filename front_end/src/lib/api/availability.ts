@@ -1,6 +1,24 @@
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/**
+ * Booking context surfaced next to each occupied room so the operator can see WHO holds
+ * the room. Populated from the backend's blockage enrichment (2026-07-24, extended 2026-07-25
+ * with contact details + agent/corporate info). Fields are optional so older backend versions
+ * still typecheck.
+ */
+export type OccupancyContext = {
+  entryId?: string;
+  entryReferenceNumber?: string | null; // e.g. "INQ-20260716-0005"
+  guestName?: string | null;
+  guestPhone?: string | null;
+  guestEmail?: string | null;
+  agentType?: "TRAVEL_AGENT" | "CORPORATE" | null;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agentEmail?: string | null;
+};
+
 export type AvailabilityRoomResult = {
   roomId: string;
   roomNumber?: string;
@@ -13,12 +31,26 @@ export type AvailabilityRoomResult = {
   unavailabilityReason?: string;
   blockedReason?: string | null;
   pricingIndicative?: unknown;
+  /**
+   * Present when the whole-stay UNAVAILABLE room has one or more overlapping bookings.
+   * Frontend can show a list of "Occupied by X (INQ-…) 25/07-26/07" tooltips.
+   */
+  occupiedBy?: Array<
+    OccupancyContext & {
+      source: "RESERVED" | "HOLD";
+      startDate: string; // ISO
+      endDate: string; // ISO (exclusive)
+    }
+  >;
 };
 
 export type PerDateAvailabilityResult = {
   date: string;
   availableRoomIds: string[];
-  occupiedRoomIds: Array<{ roomId: string; source: "RESERVED" | "HOLD" }>;
+  /** Each occupied cell carries WHO holds it so the calendar tooltip can name the guest. */
+  occupiedRoomIds: Array<
+    OccupancyContext & { roomId: string; source: "RESERVED" | "HOLD" }
+  >;
   deficientRoomIds: string[];
 };
 
@@ -79,6 +111,9 @@ export function roomsFromResultSet(resultSet: unknown): {
     unavailabilityReason: r.unavailabilityReason as string | undefined,
     blockedReason: r.blockedReason as string | null | undefined,
     pricingIndicative: r.pricingIndicative,
+    occupiedBy: Array.isArray(r.occupiedBy)
+      ? (r.occupiedBy as AvailabilityRoomResult["occupiedBy"])
+      : undefined,
   });
   const filterValid = (rooms: AvailabilityRoomResult[]) => rooms.filter((r) => r.roomId);
   return {

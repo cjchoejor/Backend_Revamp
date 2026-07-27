@@ -70,6 +70,31 @@ async function runAvailabilityEngineForEntry(
   // engine to compute a per-date breakdown so the S1 calendar can render per-night cells.
   // Excludes the current entry so re-searching an already-sealed booking doesn't mark its
   // own rooms as occupied.
+  //
+  // 2026-07-24: pulls entry.id (readable ENT-…), entry.inquiryId (readable INQ-…) and the
+  // guest's first + last name so the frontend can show WHO holds each occupied room, not
+  // just that it's taken. Both queries carry the same enrichment shape so the fan-out below
+  // can be uniform.
+  //
+  // 2026-07-25: also pulls guest email/phone and the linked travel agent / corporate account
+  // (name + contact) so the S1 calendar hover can show the operator who to contact about the
+  // blocking booking.
+  const contactSelect = {
+    id: true,
+    inquiryId: true,
+    contactPersonName: true,
+    contactPersonPhone: true,
+    guestProfile: {
+      select: { firstName: true, lastName: true, email: true, phone: true },
+    },
+    inquiry: {
+      select: {
+        travelAgent: { select: { displayName: true, contactNumber: true, contactEmail: true } },
+        corporateAccount: { select: { displayName: true, contactNumber: true, contactEmail: true } },
+      },
+    },
+  } as const;
+
   const [reservations, committedHolds] = await Promise.all([
     prisma.reservation.findMany({
       where: {
@@ -80,7 +105,13 @@ async function runAvailabilityEngineForEntry(
       select: {
         frozenCheckInDate: true,
         frozenCheckOutDate: true,
-        entry: { select: { roomAssignments: { select: { roomId: true } } } },
+        entryId: true,
+        entry: {
+          select: {
+            ...contactSelect,
+            roomAssignments: { select: { roomId: true } },
+          },
+        },
       },
     }),
     prisma.committedHold.findMany({
@@ -96,11 +127,84 @@ async function runAvailabilityEngineForEntry(
       },
       select: {
         roomId: true,
-        entry: { select: { checkInDate: true, checkOutDate: true } },
+        entryId: true,
+        entry: {
+          select: {
+            ...contactSelect,
+            checkInDate: true,
+            checkOutDate: true,
+          },
+        },
       },
     }),
   ]);
-  // Fan out reservations to (roomId, start, end) tuples via their entry's room assignments.
+
+  /** Compose "First Last" or fall back to "Guest" when both names are missing. */
+  const guestNameOf = (g: { firstName?: string | null; lastName?: string | null } | null | undefined) => {
+    if (!g) return "Guest";
+    const combined = [g.firstName, g.lastName].filter((v): v is string => !!v?.trim()).join(" ").trim();
+    return combined || "Guest";
+  };
+
+  /**
+   * Common contact-context extractor for both Reservation and CommittedHold entry payloads.
+   * Guest phone falls back to Entry.contactPersonPhone (the on-site contact captured at intake)
+   * when the guest profile has none. Agent info comes from the inquiry's linked travel-agent
+   * or corporate account — exactly one of those is populated per Phase-C wiring.
+   */
+  const contextFromEntry = (
+    e:
+      | (Partial<{
+          contactPersonName: string | null;
+          contactPersonPhone: string | null;
+          guestProfile: { firstName?: string | null; lastName?: string | null; email?: string | null; phone?: string | null } | null;
+          inquiry: {
+            travelAgent: { displayName: string; contactNumber?: string | null; contactEmail?: string | null } | null;
+            corporateAccount: { displayName: string; contactNumber?: string | null; contactEmail?: string | null } | null;
+          } | null;
+        }>)
+      | null
+      | undefined,
+  ) => {
+    const guest = e?.guestProfile ?? null;
+    const guestPhone = guest?.phone ?? e?.contactPersonPhone ?? null;
+    const guestEmail = guest?.email ?? null;
+    const ta = e?.inquiry?.travelAgent;
+    const ca = e?.inquiry?.corporateAccount;
+    if (ta) {
+      return {
+        guestName: guestNameOf(guest),
+        guestPhone,
+        guestEmail,
+        agentType: "TRAVEL_AGENT" as const,
+        agentName: ta.displayName,
+        agentPhone: ta.contactNumber ?? null,
+        agentEmail: ta.contactEmail ?? null,
+      };
+    }
+    if (ca) {
+      return {
+        guestName: guestNameOf(guest),
+        guestPhone,
+        guestEmail,
+        agentType: "CORPORATE" as const,
+        agentName: ca.displayName,
+        agentPhone: ca.contactNumber ?? null,
+        agentEmail: ca.contactEmail ?? null,
+      };
+    }
+    return {
+      guestName: guestNameOf(guest),
+      guestPhone,
+      guestEmail,
+      agentType: null,
+      agentName: null,
+      agentPhone: null,
+      agentEmail: null,
+    };
+  };
+
+  // Fan out reservations to (roomId, start, end, contact-context) tuples via room assignments.
   const roomBlockages = [
     ...reservations.flatMap((r) =>
       (r.entry?.roomAssignments ?? []).map((a) => ({
@@ -108,6 +212,9 @@ async function runAvailabilityEngineForEntry(
         startDate: r.frozenCheckInDate,
         endDate: r.frozenCheckOutDate,
         source: "RESERVED" as const,
+        entryId: r.entryId,
+        entryReferenceNumber: r.entry?.inquiryId ?? null,
+        ...contextFromEntry(r.entry),
       })),
     ),
     ...committedHolds
@@ -117,6 +224,9 @@ async function runAvailabilityEngineForEntry(
         startDate: h.entry!.checkInDate!,
         endDate: h.entry!.checkOutDate!,
         source: "HOLD" as const,
+        entryId: h.entryId,
+        entryReferenceNumber: h.entry?.inquiryId ?? null,
+        ...contextFromEntry(h.entry),
       })),
   ];
 

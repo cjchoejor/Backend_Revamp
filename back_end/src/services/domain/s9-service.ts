@@ -14,6 +14,7 @@ import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastr
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { generateOrLoadInvoicePdf } from "./invoice-pdf-service.js";
+import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import {
   enforceApartmentSecurityDepositResolvedForS9Closure,
   enforceDirectBillPaymentsMatchedForS9Closure,
@@ -779,9 +780,16 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
     await maybeCreateFollowUpTask(tx, { id: entryId, useType: entry.useType }, "system");
     await maybeCreateCommissionDue(tx, entryId, "SYSTEM");
 
-    // Release room inventory claim at closure (AC-S9-016). In this slice, claim is on Room.currentClaimState.
-    const ra = await tx.roomAssignment.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
-    if (ra) await tx.room.update({ where: { id: ra.roomId }, data: { currentClaimState: "FREE" } });
+    // AC-S9-016: release the room inventory claim at closure. Previously only released the
+    // latest single RoomAssignment and skipped the audit event entirely. For multi-room
+    // bookings or entries that went through a room-change (multiple assignments), extra
+    // rooms leaked. Since no housekeeping DEPARTED_DIRTY → DEPARTED_CLEAN → FREE service
+    // exists yet, S9 closure is also the only place that unsticks DEPARTED_DIRTY rooms.
+    await releaseEntryRoomsToFree(tx, {
+      entryId,
+      actorId,
+      reason: "S9_ENTRY_CLOSED",
+    });
 
     const retentionPeriodDays = await resolveGuestDataRetentionPeriodDays(tx);
     const closedAtInstant = new Date();

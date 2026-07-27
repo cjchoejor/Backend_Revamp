@@ -12,6 +12,7 @@ import { issueVipArrivalNotificationAtCommencementTx } from "../services/domain/
 import * as checkInService from "../services/domain/check-in-service.js";
 import * as disputeService from "../services/domain/s7-dispute-service.js";
 import { releaseCommittedHoldForRoomChange } from "../services/domain/s3-hold-service.js";
+import { releaseEntryRoomsToFree } from "../lib/room-claim-state.js";
 import { loadEntryDetail } from "../lib/entry-detail-include.js";
 import { enforceDisputeGateAllowsProgress } from "../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { enforceNoPendingPreArrivalTasks } from "../policies/03-expiry-parking/p09-s5-normal-exit-pre-arrival-tasks-terminal.js";
@@ -329,14 +330,16 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
       });
     }
 
-    // Release original room claim (CONFIRMED/OCCUPIED → FREE).
-    if (room && room.currentClaimState !== "FREE") {
-      const fromState = room.currentClaimState;
-      await tx.room.update({ where: { id: room.id }, data: { currentClaimState: "FREE", updatedAt: now } });
-      await tx.roomClaimStateEvent.create({
-        data: { roomId: room.id, entryId, fromState: fromState as any, toState: "FREE", actorId, reason: "REENTRY_S6_TO_S1", effectiveFrom: now },
-      });
-    }
+    // Release ALL rooms the entry references — the primary assignment plus any additional
+    // rooms held via CommittedHold.perNightBreakdown (multi-room bookings). Previously only
+    // freed roomAssignments[0].room and relied on releaseCommittedHoldForRoomChange below
+    // to catch the rest; the helper collapses both into one idempotent sweep.
+    await releaseEntryRoomsToFree(tx, {
+      entryId,
+      actorId,
+      reason: "REENTRY_S6_TO_S1",
+      now,
+    });
 
     // Erase the committed hold bound to the old room (any state) so the old room is fully released
     // and a fresh hold can be placed for the newly chosen room at S3. Traced for audit.

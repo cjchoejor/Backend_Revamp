@@ -1,0 +1,59 @@
+{
+  "name": "legphel-pms-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:workers": "cross-env RUN_WORKERS=true tsx watch src/index.ts",
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "npm run clean && tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "db:reset-night-audit": "tsx scripts/reset-night-audit.ts",
+    "test:s1": "npm run db:seed && npx tsx scripts/s1-acceptance-tests.ts",
+    "test:s6": "npm run db:seed && npx tsx scripts/s6-acceptance-tests.ts",
+    "test:s7": "npm run db:seed && npx tsx scripts/s7-acceptance-tests.ts",
+    "test:s8": "npm run db:seed && npx tsx scripts/run-s8-acceptance-with-server.ts",
+    "test:s9": "npm run db:seed && npx tsx scripts/run-s9-acceptance-with-server.ts",
+    "test:revamp:s1": "npm run db:seed && npx tsx Test_ReVamp/stage-1/run-scenarios.ts",
+    "test:revamp:s2": "npx tsx Test_ReVamp/stage-2/run-scenarios.ts",
+    "test:revamp:s3": "npx tsx Test_ReVamp/stage-3/run-scenarios.ts",
+    "test:revamp:s4": "npx tsx Test_ReVamp/stage-4/run-scenarios.ts",
+    "test:revamp:s5": "npx tsx Test_ReVamp/stage-5/run-scenarios.ts",
+    "test:revamp:s6": "npx tsx Test_ReVamp/stage-6/run-scenarios.ts",
+    "test:revamp:s7": "npx tsx Test_ReVamp/stage-7/run-scenarios.ts",
+    "test:revamp:s8": "npx tsx Test_ReVamp/stage-8/run-scenarios.ts",
+    "test:revamp:s9": "npx tsx Test_ReVamp/stage-9/run-scenarios.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.6.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^8.0.10",
+    "pg-boss": "^12.16.0",
+    "puppeteer": "^25.3.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.14.1",
+    "@types/nodemailer": "^8.0.0",
+    "cross-env": "^7.0.3",
+    "node-fetch": "^3.3.2",
+    "prisma": "^6.6.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

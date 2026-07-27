@@ -17,6 +17,7 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import type { ActorLevel as RequestActorLevel } from "../../types/actor.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 
 /**
  * SIG-S3 §6.5 — pre-confirmation cancellation at S3: release the committed hold, cancel timers,
@@ -577,22 +578,19 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
       },
     });
 
+    // Release EVERY assigned room, whatever state it's in — not just OCCUPIED. Prior guard
+    // (only-if-OCCUPIED) silently skipped rooms already flipped to DEPARTED_DIRTY by a
+    // concurrent S8 attempt or partial retry, leaving the audit trail incomplete and the
+    // room stuck. The helper reads the real fromState and is idempotent (returns without
+    // doing anything if the room is already FREE), so it's safe on races.
     for (const r of distinctRoomsToRelease) {
-      if (r.currentClaimState !== InventoryClaimState.OCCUPIED) continue;
-      await tx.room.update({
-        where: { id: r.id },
-        data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now },
-      });
-      await tx.roomClaimStateEvent.create({
-        data: {
-          roomId: r.id,
-          entryId,
-          fromState: InventoryClaimState.OCCUPIED,
-          toState: InventoryClaimState.FREE,
-          actorId,
-          reason: "S7_EARLY_DEPARTURE_CANCELLATION",
-          effectiveFrom: now,
-        },
+      await transitionRoomClaimState(tx, {
+        roomId: r.id,
+        toState: InventoryClaimState.FREE,
+        actorId,
+        entryId,
+        reason: "S7_EARLY_DEPARTURE_CANCELLATION",
+        now,
       });
     }
 

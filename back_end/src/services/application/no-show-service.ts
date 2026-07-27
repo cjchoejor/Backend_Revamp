@@ -17,6 +17,7 @@ import {
 } from "../../policies/14-cancellation/p35-cancellation-penalty-from-commitment.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { releaseRoomOnNoShowTerminalTx } from "../../lib/release-room-on-no-show.js";
+import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
 
@@ -160,7 +161,10 @@ export async function determineNoShow(
 
   const noShowId = await allocateReadableId(prisma, "NO_SHOW" as const);
 
-  const terminalNow = new Date();
+  // Converted from array-form to callback-form so `releaseEntryRoomsToFree` can run
+  // inside the same transaction — otherwise the entry closes but its rooms stay pinned
+  // in CONFIRMED and block future bookings (2026-07-25 gap analysis).
+  const closedAt = new Date();
   await prisma.$transaction(async (tx) => {
     await tx.noShowDeterminationRecord.create({
       data: {
@@ -183,7 +187,7 @@ export async function determineNoShow(
         noShowAdvancePaymentAmount: advanceTotal,
         noShowNetPosition: net,
         noShowFomDetermination: fomActorId,
-        closedAt: terminalNow,
+        closedAt,
         closedBy: fomActorId,
       },
     });
@@ -192,13 +196,20 @@ export async function determineNoShow(
       data: {
         currentStage: Stage.TERMINAL,
         status: EntryStatus.ACTIVE,
-        closedAt: terminalNow,
+        closedAt,
         closedBy: fomActorId,
         version: { increment: 1 },
       },
     });
-    // SIG-S5 §1.5 (no-show #5) — return the held room to available inventory.
-    await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: fomActorId, now: terminalNow });
+    await releaseEntryRoomsToFree(tx, {
+      entryId,
+      actorId: fomActorId,
+      reason: "NO_SHOW_FOM_FINALISED",
+      now: closedAt,
+    });
+    // SIG-S5 §1.5 (no-show #5) — the room release above puts inventory back to FREE; this
+    // additionally closes out the CommittedHold record, which `releaseEntryRoomsToFree` leaves alone.
+    await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: fomActorId, now: closedAt });
   });
 
   if (net > 0) {

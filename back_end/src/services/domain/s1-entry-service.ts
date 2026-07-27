@@ -9,6 +9,7 @@ import { classifyAge, loadChildPolicyBundle } from "./child-policy-service.js";
 export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import * as notificationService from "../infrastructure/notification-service.js";
+import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
 import { resolveGroupBillingModeFromGuestCount } from "../../policies/26-group-foc-billing/p64-group-detection-at-entry-creation.js";
 import {
@@ -692,6 +693,15 @@ export async function expireEntry(
     await tx.entry.update({
       where: { id: entryId },
       data: { status: EntryStatus.EXPIRED, closedAt: now, closedBy: "SYSTEM", version: { increment: 1 } },
+    });
+    // Release any rooms the (usually stage-S1/S2/S3) entry was still holding. Prior to
+    // 2026-07-25 an entry could expire while its SPECULATIVELY_HELD / COMMITTED_HELD /
+    // CONFIRMED rooms stayed pinned — Policy 26 then refused subsequent bookings on them.
+    await releaseEntryRoomsToFree(tx, {
+      entryId: entry.id,
+      actorId: "SYSTEM",
+      reason: "ENTRY_EXPIRED",
+      now,
     });
     await auditService.emit(tx as any, auditService.systemActor(), {
       eventType: "ENTRY.EXPIRED",

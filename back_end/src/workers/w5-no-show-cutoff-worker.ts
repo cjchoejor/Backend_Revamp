@@ -5,6 +5,7 @@ import { NotFoundError } from "../lib/errors.js";
 import { allocateReadableId } from "../lib/readable-id.js";
 import { releaseRoomOnNoShowTerminalTx } from "../lib/release-room-on-no-show.js";
 import { toDecimal } from "../lib/money.js";
+import { releaseEntryRoomsToFree } from "../lib/room-claim-state.js";
 
 export async function runNoShowCutoffWorker(
   prisma: PrismaClient,
@@ -113,6 +114,17 @@ export async function runNoShowCutoffWorker(
         version: { increment: 1 },
       },
     });
+
+    // Release every room this booking held. Prior to 2026-07-25 the auto-finalise path
+    // left assigned rooms stuck in CONFIRMED/OCCUPIED long after the entry went TERMINAL —
+    // Policy 26 (committed-hold placement) then refused any future booking on those rooms.
+    await releaseEntryRoomsToFree(tx, {
+      entryId,
+      actorId: "SYSTEM",
+      reason: "NO_SHOW_AUTO_FINALISED",
+      now,
+    });
+
     await tx.traceEvent.create({
       data: {
         eventType: "NO_SHOW.AUTO_FINALISED",
@@ -130,7 +142,8 @@ export async function runNoShowCutoffWorker(
       },
     });
 
-    // SIG-S5 §1.5 (no-show #5) — return the held room to available inventory.
+    // SIG-S5 §1.5 (no-show #5) — `releaseEntryRoomsToFree` above already returned the rooms to
+    // FREE; this closes out the CommittedHold record, which that helper does not touch.
     await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: "SYSTEM", now });
 
     if (typeof input.timerRecordId === "string") {
