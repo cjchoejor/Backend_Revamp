@@ -51,6 +51,8 @@ export async function initiateSettlement(
     fomAcknowledgementRef?: string;
     nightAuditFomAcknowledgementRef?: string;
     voucherAmount?: number;
+    /** Split-billing target bucket (Phase 3, 2026-07-25). Omit for whole-folio (legacy). */
+    billingModel?: string;
   },
 ) {
   return apiRequest<unknown>(`/api/folios/${folioId}/settle`, {
@@ -65,11 +67,12 @@ export async function issueFinalInvoice(
   folioId: string,
   entryId: string,
   templateKey?: string,
+  billingModel?: string,
 ) {
   return apiRequest<unknown>(`/api/folios/${folioId}/invoices`, {
     method: "POST",
     session,
-    body: { entryId, templateKey },
+    body: { entryId, templateKey, ...(billingModel ? { billingModel } : {}) },
   });
 }
 

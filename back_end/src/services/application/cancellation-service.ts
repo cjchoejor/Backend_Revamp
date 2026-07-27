@@ -18,6 +18,7 @@ import type { ActorLevel as RequestActorLevel } from "../../types/actor.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
+import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 
 /**
  * SIG-S3 §6.5 — pre-confirmation cancellation at S3: release the committed hold, cancel timers,
@@ -102,6 +103,7 @@ export async function cancelEntryAtS3(
   const updated = await prisma.$transaction(async (tx) => {
     // 1. Penalty line (only if non-zero).
     if (penalty > 0) {
+      const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({
         data: {
           folioId: folio.id,
@@ -112,6 +114,7 @@ export async function cancelEntryAtS3(
           chargeDate: now,
           stage: Stage.S3,
           postedBy: actorId,
+          billingModel: penaltyBillingModel,
         },
       });
     }
@@ -339,6 +342,7 @@ export async function cancelEntryAtS5(
 
   const updated = await prisma.$transaction(async (tx) => {
     if (penalty > 0) {
+      const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({
         data: {
           folioId: folio.id,
@@ -349,6 +353,7 @@ export async function cancelEntryAtS5(
           chargeDate: now,
           stage: Stage.S5,
           postedBy: actorId,
+          billingModel: penaltyBillingModel,
         },
       });
     }
@@ -547,6 +552,7 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
 
   const updated = await prisma.$transaction(async (tx) => {
     if (penalty > 0) {
+      const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({
         data: {
           folioId: folio.id,
@@ -557,6 +563,7 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
           chargeDate: now,
           stage: Stage.S7,
           postedBy: actorId,
+          billingModel: penaltyBillingModel,
         },
       });
     }

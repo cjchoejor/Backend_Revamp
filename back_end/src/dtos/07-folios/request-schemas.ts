@@ -10,6 +10,13 @@ export type RecordFolioPaymentRequestDto = z.infer<typeof recordFolioPaymentRequ
 export const issueProformaInvoiceRequestSchema = z.object({
   entryId: z.string().min(1),
   templateKey: z.string().optional(),
+  /**
+   * Split-billing bucket (Phase 3, 2026-07-25). At S8/S9 this tags the new FINAL invoice
+   * with a specific `billingModel` so the PDF renderer only includes matching folio lines
+   * and downstream settlement scopes payments per-bucket. Ignored at S3 (proforma is always
+   * whole-folio at fixation time). Omit to fall back to legacy whole-folio behaviour.
+   */
+  billingModel: z.string().optional(),
 });
 export type IssueProformaInvoiceRequestDto = z.infer<typeof issueProformaInvoiceRequestSchema>;
 
@@ -84,6 +91,13 @@ export type PostCreditNoteRequestDto = z.infer<typeof postCreditNoteRequestSchem
 export const initiateSettlementRequestSchema = z.object({
   settlementMethod: z.string().min(1),
   billingModelConfirmation: z.string().min(1),
+  /**
+   * Split-billing target bucket (Phase 3, 2026-07-25). When present, settlement scopes to
+   * ONLY the folio lines with this `billingModel`; a per-bucket invoice + per-bucket payment
+   * are produced. When omitted → legacy whole-folio behaviour (uses `folio.billingModel`).
+   * The value must match one of the folio's line-level `billingModel` values.
+   */
+  billingModel: z.string().optional(),
   paymentVerificationRef: z.string().optional(),
   partialAmount: z.coerce.number().optional(),
   fomAcknowledgementRef: z.string().optional(),
@@ -126,3 +140,47 @@ export const postStayChargeRequestSchema = z.object({
   isPostStay: z.literal(true),
 });
 export type PostStayChargeRequestDto = z.infer<typeof postStayChargeRequestSchema>;
+
+// ─── Split-billing (Phase 2) ────────────────────────────────────────────────────
+// Values must match `SPLIT_BILLING_ALLOWED_VALUES` in the policy file. Kept as a plain
+// string enum here to avoid an import cycle between DTOs and services; the service
+// re-validates via `enforceSplitBillingValueAllowed`.
+const splitBillingModelSchema = z.enum(["GUEST_PAY", "DIRECT_BILL", "GOVERNMENT"]);
+const folioLineTypeSchema = z.enum(["ROOM_CHARGE", "F_AND_B", "SERVICE", "OTHER", "CREDIT_NOTE"]);
+
+/**
+ * Update the folio's per-line-type default map. Partial — only the keys you send get merged
+ * into the existing map. `reason` is optional (defaults update is a system-level operator
+ * choice, not tied to a specific guest event).
+ */
+export const updateBillingModelDefaultsRequestSchema = z.object({
+  defaults: z.record(folioLineTypeSchema, splitBillingModelSchema).refine(
+    (obj) => Object.keys(obj).length > 0,
+    "At least one line-type default must be supplied",
+  ),
+  reason: z.string().optional(),
+});
+export type UpdateBillingModelDefaultsRequestDto = z.infer<typeof updateBillingModelDefaultsRequestSchema>;
+
+/** Reassign ONE folio line to a different billing model. `reason` mandatory — this is a
+ *  per-line override with money implications; audit trail requires context. */
+export const reassignFolioLineBillingModelRequestSchema = z.object({
+  billingModel: splitBillingModelSchema,
+  reason: z.string().min(1, "reason is required"),
+});
+export type ReassignFolioLineBillingModelRequestDto = z.infer<typeof reassignFolioLineBillingModelRequestSchema>;
+
+/** Reassign many folio lines at once. Same reason required; applies to all updates in this
+ *  batch (typical use: "agent agreed to cover F&B — flip all F_AND_B lines for this stay"). */
+export const reassignFolioLinesBulkRequestSchema = z.object({
+  updates: z
+    .array(
+      z.object({
+        folioLineId: z.string().min(1),
+        billingModel: splitBillingModelSchema,
+      }),
+    )
+    .min(1, "At least one update is required"),
+  reason: z.string().min(1, "reason is required"),
+});
+export type ReassignFolioLinesBulkRequestDto = z.infer<typeof reassignFolioLinesBulkRequestSchema>;

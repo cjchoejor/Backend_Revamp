@@ -165,6 +165,10 @@ export type InvoiceSummary = {
   createdAt: string;
   /** JSON metadata blob. Group invoices set `{ groupBooking: true, roomCount, guestCount, groupLeader }`. */
   metadata?: Record<string, unknown> | null;
+  /** Split-billing bucket this invoice covers (Phase 3, 2026-07-25). Null = whole-folio (legacy). */
+  billingModel?: string | null;
+  /** Populated for split invoices at issue time (per-bucket outstanding). */
+  totalAmount?: string | number | null;
 };
 
 export type PaymentRecordSummary = {
@@ -174,6 +178,8 @@ export type PaymentRecordSummary = {
   currency: string;
   receivedAt: string;
   notes?: string | null;
+  /** Split-billing bucket this payment settles (Phase 3, 2026-07-25). Null = whole-folio (legacy). */
+  billingModel?: string | null;
 };
 
 export type WriteOffRecordSummary = {
@@ -195,13 +201,22 @@ export type FolioLineSummary = {
   stage: string;
   postedAt: string;
   nightAuditRecordId?: string | null;
+  /** Split-billing bucket this line belongs to (Phase 1, 2026-07-25). Null on pre-Phase-1 lines. */
+  billingModel?: string | null;
 };
+
+/** Per-line-type default map. Populated at S3 fixation; adjustable at S3/S5-S9. */
+export type BillingModelDefaults = Partial<
+  Record<"ROOM_CHARGE" | "F_AND_B" | "SERVICE" | "OTHER" | "CREDIT_NOTE", string>
+>;
 
 export type FolioDetail = {
   id: string;
   entryId: string;
   state: string;
   billingModel?: string | null;
+  /** Split-billing per-line-type defaults (Phase 1, 2026-07-25). Consumed by the settlement UI. */
+  billingModelDefaults?: BillingModelDefaults | null;
   outstandingBalance?: string | number;
   advancePaymentReconciliationComplete?: boolean;
   convertedToLiveAt?: string | null;
@@ -218,6 +233,10 @@ export type FolioDetail = {
     fromModel?: string | null;
     toModel: string;
     createdAt: string;
+    /** Populated on per-line overrides (Phase 2). Null on folio-level transitions. */
+    folioLineId?: string | null;
+    reason?: string | null;
+    changeSource?: string | null;
   }>;
 };
 

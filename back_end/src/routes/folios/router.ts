@@ -9,9 +9,12 @@ import {
   postCreditNoteRequestSchema,
   postFolioChargesBodySchema,
   postStayChargeRequestSchema,
+  reassignFolioLineBillingModelRequestSchema,
+  reassignFolioLinesBulkRequestSchema,
   recordCreditExtensionRequestSchema,
   recordFolioPaymentRequestSchema,
   recordInvoicePaymentEventRequestSchema,
+  updateBillingModelDefaultsRequestSchema,
   writeOffOutstandingBalanceRequestSchema,
 } from "../../dtos/07-folios/request-schemas.js";
 import { AuthorizationError, NotFoundError } from "../../lib/errors.js";
@@ -22,6 +25,7 @@ import * as s3FolioService from "../../services/domain/s3-folio-service.js";
 import * as s3PaymentService from "../../services/domain/s3-payment-service.js";
 import * as s8SettlementService from "../../services/domain/s8-settlement-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
+import * as splitBillingService from "../../services/domain/split-billing-service.js";
 import { Stage } from "@prisma/client";
 
 export const foliosRouter = Router();
@@ -42,14 +46,16 @@ foliosRouter.post(
   validateBody(issueProformaInvoiceRequestSchema),
   async (req, res, next) => {
     try {
-      const { entryId, templateKey } = req.body;
+      const { entryId, templateKey, billingModel } = req.body;
       const entry = await prisma.entry.findUnique({ where: { id: entryId } });
       if (!entry) throw new NotFoundError("Entry");
+      // `billingModel` is only meaningful at S8/S9 — the proforma at S3 is always whole-folio
+      // per the fixation model.
       const inv =
         entry.currentStage === Stage.S9
-          ? await s9Service.issueInvoiceAtS9(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey })
+          ? await s9Service.issueInvoiceAtS9(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey, billingModel })
           : entry.currentStage === Stage.S8
-            ? await s8SettlementService.issueInvoiceAtS8(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey })
+            ? await s8SettlementService.issueInvoiceAtS8(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey, billingModel })
             : await s3FolioService.issueInvoice(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey });
       res.status(201).json(inv);
     } catch (e) {
@@ -232,6 +238,69 @@ foliosRouter.post(
     try {
       const updated = await s9Service.recordInvoicePaymentEvent(prisma, req.params.id, req.actor!.actorId, req.body);
       res.json(updated);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// ─── Split-billing (Phase 2) ────────────────────────────────────────────────────
+// Router-level auth is L1 minimum — the service escalates to L2+ when the folio's entry
+// is at S8/S9 (settlement/closure). All three routes go through the same policy
+// (`enforceSplitBillingEditAllowed`) which does the stage-aware authority check.
+
+foliosRouter.patch(
+  "/folios/:id/billing-model-defaults",
+  requireActorLevel("L1"),
+  validateBody(updateBillingModelDefaultsRequestSchema),
+  async (req, res, next) => {
+    try {
+      const updated = await splitBillingService.updateBillingModelDefaults(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.json(updated);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+foliosRouter.patch(
+  "/folios/:id/lines/:lineId/billing-model",
+  requireActorLevel("L1"),
+  validateBody(reassignFolioLineBillingModelRequestSchema),
+  async (req, res, next) => {
+    try {
+      const updated = await splitBillingService.reassignFolioLineBillingModel(
+        prisma,
+        req.params.id,
+        req.params.lineId,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.json(updated);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+foliosRouter.patch(
+  "/folios/:id/lines/billing-model-bulk",
+  requireActorLevel("L1"),
+  validateBody(reassignFolioLinesBulkRequestSchema),
+  async (req, res, next) => {
+    try {
+      const summary = await splitBillingService.reassignFolioLinesBillingModelBulk(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.json(summary);
     } catch (e) {
       next(e);
     }

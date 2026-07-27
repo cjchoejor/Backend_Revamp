@@ -14,6 +14,7 @@ import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-fr
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
+import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -204,6 +205,10 @@ export async function postCharge(
 
   const created = await prisma.$transaction(async (tx) => {
     await ensureChargeDateNotSealed(tx, chargeDate);
+    // Resolve billing model for the primary line + any auto-generated tax/service lines.
+    // Tax + service inherit the primary line's line-type mapping (they're derivative
+    // charges on the same billable event).
+    const primaryBillingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType);
     const line = await tx.folioLine.create({
       data: {
         folioId,
@@ -214,6 +219,7 @@ export async function postCharge(
         chargeDate,
         stage: Stage.S7,
         postedBy: actorId,
+        billingModel: primaryBillingModel,
       },
     });
 
@@ -242,6 +248,8 @@ export async function postCharge(
             chargeDate,
             stage: Stage.S7,
             postedBy: actorId,
+            // Service charge inherits the primary line's billing model — same guest event.
+            billingModel: primaryBillingModel,
           },
         });
       }
@@ -261,6 +269,7 @@ export async function postCharge(
             chargeDate,
             stage: Stage.S7,
             postedBy: actorId,
+            billingModel: primaryBillingModel,
           },
         });
       }
@@ -404,6 +413,12 @@ export async function correctCharge(
   return prisma.$transaction(async (tx) => {
     await ensureChargeDateNotSealed(tx, correctionDate);
 
+    // A correction inherits the ORIGINAL line's billing model — the correction adjusts a
+    // charge that was already assigned to a specific payer, so the delta must go to the
+    // same payer. Falls back to the resolver if the original had no billing model
+    // (pre-Phase-1 line pre-dating the backfill).
+    const correctionBillingModel =
+      original.billingModel ?? (await resolveBillingModelForNewLine(tx, folioId, original.lineType));
     const correctionLine = await tx.folioLine.create({
       data: {
         folioId,
@@ -414,6 +429,7 @@ export async function correctCharge(
         chargeDate: correctionDate,
         stage: Stage.S7,
         postedBy: actorId,
+        billingModel: correctionBillingModel,
       },
     });
 
@@ -447,6 +463,7 @@ export async function correctCharge(
               chargeDate: correctionDate,
               stage: Stage.S7,
               postedBy: actorId,
+              billingModel: correctionBillingModel,
             },
           });
         }

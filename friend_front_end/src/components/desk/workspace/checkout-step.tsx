@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Handshake, KeyRound, Receipt, Scale, Search, Wallet } from "lucide-react";
 import { toast } from "sonner";
@@ -26,8 +26,15 @@ import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
-import type { EntryDetail } from "@/types/api";
+import type { BillingModelDefaults, EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
+import {
+  updateBillingModelDefaults,
+  SPLIT_BILLING_MODELS,
+  FOLIO_LINE_TYPES,
+  type SplitBillingModel,
+  type FolioLineTypeKey,
+} from "@/lib/api/split-billing";
 
 const BK = STAGE_ACTIONS.S8;
 
@@ -77,6 +84,46 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const currency = folioLines[0]?.currency;
   // The server's folio.outstandingBalance is the balance — never re-derived from lines/payments.
   const balance = fin.outstanding;
+  // Split-billing settle-bucket state (declared here so the useMemo / useEffect below can see it).
+  const [settleBucket, setSettleBucket] = useState<string>("");
+  const [defaultsEditorOpen, setDefaultsEditorOpen] = useState(false);
+  // Split-billing per-bucket derivation (same logic as StayStep — keep in sync). Derives from
+  // line.billingModel + payment.billingModel with NULL→primary rollup. Used by the settlement
+  // form's bucket picker so operator can settle each payer independently.
+  const bucketSummary = useMemo(() => {
+    const primary = folio?.billingModel?.trim() ?? null;
+    const bucketOf = (m: string | null | undefined) => (m?.trim() || null) ?? primary;
+    const map = new Map<string, { charges: number; paymentsIn: number; paymentsOut: number; lineCount: number }>();
+    const bump = (key: string | null, fn: (b: { charges: number; paymentsIn: number; paymentsOut: number; lineCount: number }) => void) => {
+      if (!key) return;
+      const b = map.get(key) ?? { charges: 0, paymentsIn: 0, paymentsOut: 0, lineCount: 0 };
+      fn(b);
+      map.set(key, b);
+    };
+    for (const l of folio?.lines ?? []) bump(bucketOf(l.billingModel), (b) => { b.charges += Number(l.amount); b.lineCount += 1; });
+    for (const p of folio?.payments ?? []) {
+      const k = bucketOf(p.billingModel);
+      if (p.paymentDirection === "IN") bump(k, (b) => { b.paymentsIn += Number(p.amount); });
+      else if (p.paymentDirection === "OUT") bump(k, (b) => { b.paymentsOut += Number(p.amount); });
+    }
+    return Array.from(map.entries())
+      .map(([billingModel, b]) => ({
+        billingModel,
+        lineCount: b.lineCount,
+        outstanding: Math.max(0, b.charges - b.paymentsIn + b.paymentsOut),
+      }))
+      .sort((a, b) => a.billingModel.localeCompare(b.billingModel));
+  }, [folio?.billingModel, folio?.lines, folio?.payments]);
+  const isSplitBilled = bucketSummary.length > 1;
+  // Default bucket pick: an outstanding bucket that isn't already zero (skip already-settled ones);
+  // prefer GUEST_PAY (guests usually settle first at the desk). Runs on mount + when buckets change.
+  useEffect(() => {
+    if (!isSplitBilled) { setSettleBucket(""); return; }
+    if (settleBucket && bucketSummary.some((b) => b.billingModel === settleBucket && b.outstanding > 0)) return;
+    const preferGuest = bucketSummary.find((b) => b.billingModel === "GUEST_PAY" && b.outstanding > 0);
+    const anyUnsettled = bucketSummary.find((b) => b.outstanding > 0);
+    setSettleBucket((preferGuest ?? anyUnsettled)?.billingModel ?? "");
+  }, [isSplitBilled, bucketSummary, settleBucket]);
   // Final-morning charges belong to the checkout day, not "today" — the checkout day is never a
   // stay night, so it's never sealed by night audit (SIG-S8 §2.2). Using today collides with the
   // just-audited final stay night when checkout happens on/near it (e.g. a compressed test stay).
@@ -96,6 +143,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const [paymentRef, setPaymentRef] = useState("");
   const [partialAmount, setPartialAmount] = useState("");
   const [fomAckRef, setFomAckRef] = useState("");
+  // settleBucket + defaultsEditorOpen states declared earlier (above bucketSummary derivation).
   const [finalChargeDesc, setFinalChargeDesc] = useState("");
   const [finalChargeAmount, setFinalChargeAmount] = useState("");
   const [reEntryReason, setReEntryReason] = useState("");
@@ -155,7 +203,15 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const settleM = useMutation({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("Folio or billing model missing");
-      const body: Parameters<typeof initiateSettlement>[2] = { settlementMethod, billingModelConfirmation: folio.billingModel };
+      // Split-billing: when a specific bucket is picked, target that; confirmation must match
+      // the target (not the folio's primary). Legacy single-bucket path passes folio.billingModel.
+      const targetBucket = isSplitBilled && settleBucket ? settleBucket : null;
+      const confirmation = targetBucket ?? folio.billingModel;
+      const body: Parameters<typeof initiateSettlement>[2] = {
+        settlementMethod,
+        billingModelConfirmation: confirmation,
+        ...(targetBucket ? { billingModel: targetBucket } : {}),
+      };
       if (paymentRef.trim()) body.paymentVerificationRef = paymentRef.trim();
       const partial = Number.parseFloat(partialAmount);
       if (Number.isFinite(partial) && partial > 0) body.partialAmount = partial;
@@ -164,10 +220,31 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     },
     onSuccess: () => {
       setSettleOpen(false);
-      toast.success("Settled — folio closed, room released to housekeeping");
+      // Split-billing: only celebrate "folio closed" when the whole folio is done. A
+      // per-bucket settlement leaves other buckets outstanding — softer toast.
+      const remainingBuckets = bucketSummary.filter((b) => b.outstanding > 0 && b.billingModel !== settleBucket);
+      const stillOwed = isSplitBilled && remainingBuckets.length > 0;
+      toast.success(
+        stillOwed
+          ? `${settleBucket || "Bucket"} settled — ${remainingBuckets.length} bucket${remainingBuckets.length === 1 ? "" : "s"} still owed`
+          : "Settled — folio closed, room released to housekeeping",
+      );
       invalidate();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Settlement failed"),
+  });
+  // Split-billing: update the folio's per-line-type defaults. Body sourced from the modal.
+  const defaultsM = useMutation({
+    mutationFn: (arg: { defaults: BillingModelDefaults; reason?: string }) => {
+      if (!folio?.id) throw new Error("No folio");
+      return updateBillingModelDefaults(session!, folio.id, arg);
+    },
+    onSuccess: () => {
+      toast.success("Defaults updated — future charges will use the new map");
+      setDefaultsEditorOpen(false);
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Update failed"),
   });
   const fulfilH4M = useMutation(wrap(() => fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(h4DeficientFlag)), "Handoff fulfilled"));
   const reEntryM = useMutation({
@@ -442,6 +519,66 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           </>
         ) : (
           <>
+            {isSplitBilled && (
+              <div style={{
+                padding: "10px 12px", borderRadius: 8, border: "1px solid var(--line, #e6e0d4)",
+                background: "var(--surface-2, #fafaf5)", marginBottom: 12,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-3, #7a6a52)" }}>
+                    Split billing — this folio has multiple payers. Settle each bucket separately.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDefaultsEditorOpen(true)}
+                    style={{
+                      padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer",
+                      border: "1px solid var(--line, #e6e0d4)", background: "var(--surface, #fff)",
+                    }}
+                  >
+                    Edit defaults
+                  </button>
+                </div>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {bucketSummary.map((b) => {
+                    const selected = settleBucket === b.billingModel;
+                    const isPaid = b.outstanding <= 0;
+                    return (
+                      <label
+                        key={b.billingModel}
+                        style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "6px 10px", borderRadius: 6, cursor: isPaid ? "default" : "pointer",
+                          border: selected ? "1px solid var(--accent, #a44f2b)" : "1px solid var(--line, #e6e0d4)",
+                          background: selected ? "rgba(164, 79, 43, 0.06)" : "var(--surface, #fff)",
+                          opacity: isPaid ? 0.55 : 1,
+                        }}
+                      >
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                          <input
+                            type="radio"
+                            name="settle-bucket"
+                            value={b.billingModel}
+                            checked={selected}
+                            disabled={isPaid}
+                            onChange={() => setSettleBucket(b.billingModel)}
+                            style={{ margin: 0 }}
+                          />
+                          <b>{b.billingModel}</b>
+                          <span style={{ color: "var(--ink-3, #7a6a52)", fontSize: 11 }}>
+                            · {b.lineCount} charge{b.lineCount === 1 ? "" : "s"}
+                          </span>
+                          {isPaid && <span style={{ color: "var(--green, #1e6b3f)", fontSize: 11 }}>· settled</span>}
+                        </span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", fontSize: 13 }}>
+                          {isPaid ? "—" : money(b.outstanding, currency ?? "BTN")}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="frow">
               <div className="field">
                 <label>Settlement method</label>
@@ -593,6 +730,164 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         onConfirm={() => settleM.mutate()}
         onClose={() => setSettleOpen(false)}
       />
+
+      {defaultsEditorOpen && (
+        <BillingModelDefaultsEditor
+          current={folio?.billingModelDefaults ?? null}
+          primary={folio?.billingModel ?? null}
+          pending={defaultsM.isPending}
+          onClose={() => setDefaultsEditorOpen(false)}
+          onSubmit={(defaults, reason) => defaultsM.mutate({ defaults, reason })}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Modal for editing the folio's per-line-type billing-model defaults map. Renders one radio
+ * group per line-type (ROOM_CHARGE, F_AND_B, SERVICE, OTHER); operator picks a billing-model
+ * per row. Submitting sends a partial merge — existing lines are NOT retroactively updated
+ * (backend enforces future-only), so the operator gets a warning about that expectation.
+ */
+function BillingModelDefaultsEditor({
+  current,
+  primary,
+  pending,
+  onSubmit,
+  onClose,
+}: {
+  current: BillingModelDefaults | null;
+  primary: string | null;
+  pending: boolean;
+  onSubmit: (defaults: BillingModelDefaults, reason?: string) => void;
+  onClose: () => void;
+}) {
+  const initial: Record<FolioLineTypeKey, SplitBillingModel> = useMemo(() => {
+    const fallback = (primary as SplitBillingModel) || "GUEST_PAY";
+    return {
+      ROOM_CHARGE: (current?.ROOM_CHARGE as SplitBillingModel) || fallback,
+      F_AND_B: (current?.F_AND_B as SplitBillingModel) || fallback,
+      SERVICE: (current?.SERVICE as SplitBillingModel) || fallback,
+      OTHER: (current?.OTHER as SplitBillingModel) || fallback,
+      CREDIT_NOTE: (current?.CREDIT_NOTE as SplitBillingModel) || fallback,
+    };
+  }, [current, primary]);
+  const [values, setValues] = useState<Record<FolioLineTypeKey, SplitBillingModel>>(initial);
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const editableTypes: FolioLineTypeKey[] = ["ROOM_CHARGE", "F_AND_B", "SERVICE", "OTHER"];
+
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        role="dialog" aria-modal="true"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface, #fff)", color: "var(--ink-1, #111)",
+          borderRadius: 10, maxWidth: 560, width: "100%",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)", border: "1px solid var(--line, #e6e0d4)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line, #e6e0d4)" }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Split-billing defaults</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-3, #7a6a52)", marginTop: 3 }}>
+            Which payer gets each type of charge? Changes affect NEW charges only — already-posted
+            lines keep their current payer.
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 18px", display: "grid", gap: 10 }}>
+          {editableTypes.map((lt) => (
+            <div key={lt} style={{
+              display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 12,
+              padding: "6px 0",
+            }}>
+              <div style={{ fontSize: 12.5, fontWeight: 500 }}>{lt}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {SPLIT_BILLING_MODELS.map((m) => (
+                  <label key={m} style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+                    border: values[lt] === m ? "1px solid var(--accent, #a44f2b)" : "1px solid var(--line, #e6e0d4)",
+                    background: values[lt] === m ? "rgba(164, 79, 43, 0.06)" : "var(--surface, #fff)",
+                    fontSize: 11.5,
+                  }}>
+                    <input
+                      type="radio"
+                      name={`default-${lt}`}
+                      value={m}
+                      checked={values[lt] === m}
+                      onChange={() => setValues((v) => ({ ...v, [lt]: m }))}
+                      style={{ margin: 0 }}
+                    />
+                    {m}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <div style={{ marginTop: 6 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 4 }}>
+              Reason (optional)
+            </label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Agent will now cover F&B too"
+              style={{
+                width: "100%", padding: "7px 10px", borderRadius: 6,
+                border: "1px solid var(--line, #e6e0d4)", background: "var(--surface, #fff)",
+                fontSize: 13,
+              }}
+            />
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid var(--line, #e6e0d4)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--line, #e6e0d4)",
+              background: "var(--surface, #fff)", cursor: "pointer", fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSubmit(values, reason.trim() || undefined)}
+            disabled={pending}
+            style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent, #a44f2b)",
+              background: pending ? "var(--surface-2, #fafaf5)" : "var(--accent, #a44f2b)",
+              color: pending ? "var(--ink-3, #7a6a52)" : "#fff",
+              cursor: pending ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 500,
+            }}
+          >
+            {pending ? "Saving…" : "Save defaults"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
