@@ -107,7 +107,13 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   // `RoomCompositionsEditor` child; parent just holds the current array and forwards it
   // in the createQuotation body.
   const [roomCompositions, setRoomCompositions] = useState<RoomCompositionInput[]>([]);
-  const sealedRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
+  // Memoised — a fresh array identity every render re-fired the composition editor's
+  // sealedRoomIds-keyed effects in a render loop (max update depth). The underlying
+  // optionSelected object is stable between refetches, so keying on it is safe.
+  const sealedRoomIds = useMemo(
+    () => optionSelectedRoomIds(sealedPreferred?.optionSelected),
+    [sealedPreferred?.optionSelected],
+  );
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -317,6 +323,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               sealedRoomIds={sealedRoomIds}
               entryCheckIn={entry.checkInDate ?? null}
               entryCheckOut={entry.checkOutDate ?? null}
+              entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+              entryChildAges={entry.childAges ?? null}
               onChange={setRoomCompositions}
             />
           </div>

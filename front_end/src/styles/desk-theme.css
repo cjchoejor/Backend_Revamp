@@ -1715,6 +1715,211 @@
   & .rst tr.dis .rst-type {
     color: var(--ink-3);
   }
+  /* ---- S2 per-room composition editor (room-compositions-editor.tsx) ---- */
+  & .rce {
+    display: grid;
+    gap: 10px;
+  }
+  & .rce .ln {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--line);
+    min-width: 8px;
+  }
+  & .rce-bar {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  & .rce-tally {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--green-d);
+  }
+  & .rce-tally.off {
+    color: var(--warn);
+  }
+  & .rce-room {
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: #fff;
+    padding: 10px 12px;
+  }
+  & .rce-room.foc {
+    opacity: 0.72;
+    background: var(--cream);
+  }
+  & .rce-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 9px;
+  }
+  & .rce-roomno {
+    font-family: var(--deskmono);
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  & .rce-tog {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  & .rce-tog input {
+    margin: 0;
+  }
+  & .rce-grid {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  & .rce-grid.six {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  & .rce-grid.five {
+    grid-template-columns: repeat(5, 1fr);
+  }
+  & .rce-grid.three {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  & .rce-f {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  & .rce-f label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  & .rce-f input {
+    width: 100%;
+    padding: 4px 6px;
+    font-size: 12px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: #fff;
+    color: var(--ink);
+  }
+  & .rce-meals {
+    border-top: 1px dashed var(--line);
+    padding-top: 8px;
+    margin-bottom: 6px;
+  }
+  & .rce-meals-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 7px;
+  }
+  & .rce-lbl {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  & .rce-seg {
+    display: inline-grid;
+    grid-template-columns: auto auto;
+    gap: 3px;
+    padding: 2px;
+    margin: 0;
+  }
+  & .rce-seg button {
+    padding: 3px 9px;
+    font-size: 10.5px;
+    gap: 4px;
+  }
+  & .rce-allsel {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 3px 6px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: #fff;
+    color: var(--ink-2);
+  }
+  & .rce-guests {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 6px;
+  }
+  & .rce-guest {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    padding: 4px 7px;
+  }
+  & .rce-guest > span {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  & .rce-guest select {
+    font-size: 11px;
+    padding: 2px 4px;
+    border: 1px solid var(--line-2);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--ink);
+    max-width: 110px;
+  }
+  & .rce-others {
+    padding: 6px;
+    background: var(--cream);
+    border-radius: var(--r-sm);
+  }
+  & .rce-adv {
+    font-size: 11px;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--terra-d);
+    padding: 0;
+    margin-bottom: 6px;
+  }
+  & .rce-hint {
+    font-size: 11px;
+    color: var(--ink-3);
+    line-height: 1.5;
+    margin: 0;
+  }
+  & .rce-warns {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--warn);
+    background: var(--warn-t);
+    border: 1px solid #e6cf9a;
+    border-radius: var(--r-sm);
+    padding: 5px 9px;
+    margin-bottom: 8px;
+  }
+  & .rce-block {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--stop);
+    background: var(--stop-t);
+    border: 1px solid #e2b3ac;
+    border-radius: var(--r-sm);
+    padding: 6px 9px;
+    margin: 0;
+  }
+
   /* Frozen identity columns — a 20-night stay scrolls far past the room number, so Room No /
      Type / Ext. Beds / Booked by stay put while the nights scroll under them. Offsets come from
      the component (sum of the preceding pinned widths); this just makes them stick and opaque. */
