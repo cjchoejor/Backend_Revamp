@@ -1654,12 +1654,14 @@
     position: sticky;
     top: 0;
     z-index: 2;
-    background: var(--cream);
-    font-size: 10px;
+    /* Header is the row/column key for a dense grid — it carries real weight, so it reads at
+       full ink on a deeper fill rather than as faint grey labels. */
+    background: var(--cream-3);
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
-    color: var(--ink-3);
+    color: var(--ink);
     text-align: left;
     padding: 8px 10px;
     border-bottom: 1px solid var(--line-2);
@@ -1691,10 +1693,16 @@
   & .rst tr.pick {
     cursor: pointer;
   }
-  & .rst tr.pick:hover td {
+  /* Row tint lives on the ROW, not the cell, so the frozen identity columns can pick it up with
+     `background: inherit`. Set it per-cell and a sticky cell would keep its own opaque fill and
+     miss hover/selected states entirely. */
+  & .rst tbody tr {
+    background: #fff;
+  }
+  & .rst tr.pick:hover {
     background: var(--cream);
   }
-  & .rst tr.sel td {
+  & .rst tr.sel {
     background: var(--terra-t);
   }
   & .rst tr.sel .rst-no {
@@ -1706,6 +1714,28 @@
   & .rst tr.dis .rst-no,
   & .rst tr.dis .rst-type {
     color: var(--ink-3);
+  }
+  /* Frozen identity columns — a 20-night stay scrolls far past the room number, so Room No /
+     Type / Ext. Beds / Booked by stay put while the nights scroll under them. Offsets come from
+     the component (sum of the preceding pinned widths); this just makes them stick and opaque. */
+  & .rst .rst-pin {
+    position: sticky;
+    z-index: 1;
+    background: inherit;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Header cells stick in BOTH axes and must sit above the body's pinned cells. */
+  & .rst th.rst-pin {
+    z-index: 3;
+    background: var(--cream-3);
+  }
+  /* Separator on the last frozen column so the seam reads as a boundary once scrolled. */
+  & .rst .rst-pin-edge {
+    box-shadow: 1px 0 0 var(--line-2);
+  }
+  & .rst th.rst-pin-edge {
+    box-shadow: 1px 0 0 var(--line-2), 0 1px 0 var(--line-2);
   }
   & .rst-chip {
     display: inline-flex;
@@ -1728,6 +1758,13 @@
     background: var(--stop);
     border-color: var(--stop);
     color: #fdf6f4;
+  }
+  & .rst-chip.held {
+    /* A hold is softer than a reservation — it can expire and free the room. Amber, outlined,
+       deliberately not the solid "Reserved" red so the operator reads the difference at a glance. */
+    background: var(--warn-t);
+    border-color: #d9a441;
+    color: #8a5a13;
   }
   & .rst-chip.deficient {
     background: var(--warn-t);
@@ -1758,13 +1795,178 @@
     opacity: 0.55;
     box-shadow: none;
   }
+  /* Expanded room-status view — lifts the same table to a full-screen layer so the whole
+     property (27 rooms on real data) is readable at once instead of scrolling the canvas. */
+  & .rst-expandwrap.on {
+    position: fixed;
+    inset: 0;
+    /* Above the backend rail's pill (74) and drawer (80), below the modal scrim (90) — the
+       expanded grid is meant to own the screen while it's open. */
+    z-index: 85;
+    background: var(--paper);
+    overflow: auto;
+    padding: 8px 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  & .rst-expandbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--ink);
+    flex: 0 0 auto;
+  }
+  & .rst-expandwrap.on .rst-tools {
+    margin-bottom: 0;
+  }
+  & .rst-expandbar .ln {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--line);
+  }
+  /* The base .rst-wrap caps itself at 62vh so it scrolls inside the canvas column. In the
+     expanded layer that cap is what we're trying to escape — give it the whole viewport minus
+     the bar and footer controls. Dense rows put 27 rooms well inside that. */
+  & .rst-expandwrap.on .rst-wrap {
+    max-height: calc(100vh - 96px);
+  }
+  & .rst-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  & .rst-tools .ln {
+    flex: 1 1 auto;
+    min-width: 8px;
+  }
+  /* The mode switch sits in a toolbar here, not as a full-width block — size it to its labels
+     and trim the padding so it reads as a control rather than a banner. Scoped to .rst-tools so
+     the taller .seg on the other desk surfaces is untouched. */
+  & .rst-tools .seg {
+    margin-bottom: 0;
+    display: inline-grid;
+    grid-template-columns: auto auto;
+    gap: 3px;
+    padding: 2px;
+  }
+  & .rst-tools .seg button {
+    padding: 4px 9px;
+    font-size: 11px;
+    gap: 5px;
+  }
+  & .btn.btn-sm {
+    padding: 4px 9px;
+    font-size: 11.5px;
+    gap: 5px;
+  }
+  & .btn.btn-ghost.on {
+    background: var(--terra-t);
+    border-color: var(--terra);
+    color: var(--terra-d);
+  }
+  /* Dense mode — sized in vh so the same 27 rooms fit a 13" laptop AND grow to readable text on
+     a large external monitor, instead of one fixed size that only suits one of them. The clamp
+     floors keep it legible on very short viewports and the ceilings stop it ballooning on tall
+     ones. Row height lands around 2.7vh, so ~28 rows sit inside the overlay's usable height. */
+  & .rst-wrap.dense {
+    --rst-fs: clamp(9px, 1.05vh, 12.5px);
+    --rst-py: clamp(1px, 0.16vh, 3px);
+    --rst-chip-py: clamp(1px, 0.2vh, 3px);
+  }
+  & .rst-wrap.dense .rst th,
+  & .rst-wrap.dense .rst td {
+    padding: var(--rst-py) clamp(4px, 0.5vw, 10px);
+  }
+  /* Header keeps its emphasis in the expanded view too — slightly ABOVE the cell size, not
+     below it, so the date columns stay scannable while the rows compress. */
+  & .rst-wrap.dense .rst th {
+    font-size: calc(var(--rst-fs) * 1.05);
+    color: var(--ink);
+    padding-top: calc(var(--rst-py) * 2);
+    padding-bottom: calc(var(--rst-py) * 2);
+  }
+  & .rst-wrap.dense .rst .rst-no,
+  & .rst-wrap.dense .rst .rst-type,
+  & .rst-wrap.dense .rst .rst-beds {
+    font-size: var(--rst-fs);
+  }
+  & .rst-wrap.dense .rst-chip {
+    min-width: clamp(42px, 4.3vw, 70px);
+    padding: var(--rst-chip-py) clamp(3px, 0.4vw, 8px);
+    font-size: var(--rst-fs);
+    border-radius: 4px;
+  }
+  & .rst-wrap.dense .rst .rst-bookedby {
+    max-width: clamp(140px, 14vw, 230px);
+    font-size: var(--rst-fs);
+  }
+  & .rst-wrap.dense .rst .rst-nightcount {
+    font-size: calc(var(--rst-fs) * 0.75);
+    margin-top: 0;
+  }
+  /* Names printed in-cell: the chip keeps the status colour, the text carries the identity. */
+  & .rst-chip.named {
+    display: inline-block;
+    max-width: 132px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-weight: 600;
+  }
+  & .rst-wrap.dense .rst-chip.named {
+    max-width: clamp(76px, 8vw, 150px);
+  }
+
+  /* "Booked by" attribution column — who holds an already-taken room. */
+  & .rst .rst-bookedby {
+    max-width: 230px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-2);
+  }
+  & .rst .rst-bookedby-none {
+    color: var(--ink-3);
+  }
+  & .rst .rst-who {
+    font-weight: 600;
+    color: var(--ink);
+  }
+  & .rst .rst-holdtag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--warn-t);
+    border: 1px solid #d9a441;
+    color: #8a5a13;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    vertical-align: 1px;
+  }
+  & .rst .rst-more {
+    margin-left: 6px;
+    color: var(--ink-3);
+    font-size: 10px;
+  }
+  & .rst .rst-oos {
+    color: var(--stop);
+    font-size: 11px;
+  }
   & .rst .rst-nightcount {
     display: block;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: 0;
     text-transform: none;
-    color: var(--ink-3);
+    /* Sub-label under a now-dark header — stays the quieter of the two, but no longer washes
+       out against the deeper fill. */
+    color: var(--ink-2);
     margin-top: 2px;
   }
   & .rst .rst-nightcount.done {

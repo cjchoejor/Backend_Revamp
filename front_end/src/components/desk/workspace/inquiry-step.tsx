@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronLeft, Pencil, Search, Sparkles, X } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Maximize2, Minimize2, Pencil, Search, Sparkles, UserCheck, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -19,6 +19,7 @@ import { type SealPayload } from "./multi-room-select";
 import { RoomStatusTable, roomStatusRows, type RoomStatusRow } from "./room-status-table";
 import { listRooms } from "@/lib/api/rooms";
 import { getInquiry } from "@/lib/api/inquiries";
+import { getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { updateEntryIntake } from "@/lib/api/entries";
 import { formatDMY, guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
@@ -106,6 +107,26 @@ function BlockH({ children, tag }: { children: React.ReactNode; tag?: React.Reac
 const DASH = <span style={{ color: "var(--ink-3)" }}>—</span>;
 
 /** ISO date strings for every night of a stay (check-in inclusive, check-out exclusive), UTC-safe. */
+/**
+ * The check-in/check-out the most recent availability search actually ran with.
+ *
+ * `AvailabilityConfiguration.searchCriteria` is written server-side on every search
+ * (s1-availability-service), and `availabilityConfigs` arrives newest-first, so [0] is the
+ * latest run. Returns empty when the entry has never been searched — caller falls back to the
+ * entry's own intake dates.
+ */
+function lastSearchedWindow(entry: EntryDetail): { checkIn?: string; checkOut?: string } {
+  const sc = (entry.availabilityConfigs ?? [])[0]?.searchCriteria as
+    | { checkInDate?: unknown; checkOutDate?: unknown }
+    | null
+    | undefined;
+  const iso = (v: unknown) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : undefined);
+  const checkIn = iso(sc?.checkInDate);
+  const checkOut = iso(sc?.checkOutDate);
+  // Both or neither — a half-restored window would fight the nights/check-out sync effect.
+  return checkIn && checkOut ? { checkIn, checkOut } : {};
+}
+
 function enumerateNights(checkIn?: string | null, checkOut?: string | null): string[] {
   if (!checkIn || !checkOut) return [];
   const start = new Date(`${checkIn.slice(0, 10)}T00:00:00Z`);
@@ -128,17 +149,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
 
-  const [checkIn, setCheckIn] = useState(entry.checkInDate?.slice(0, 10) ?? "");
-  const [checkOut, setCheckOut] = useState(entry.checkOutDate?.slice(0, 10) ?? "");
+  // The search form is seeded from the LAST SEARCH THAT ACTUALLY RAN, not from the entry's
+  // intake dates. Every search persists its inputs to `AvailabilityConfiguration.searchCriteria`
+  // server-side, so leaving the step and coming back restores the window the operator was
+  // working in — previously the component remounted and snapped back to the intake dates,
+  // silently discarding a changed night count.
+  const searched = lastSearchedWindow(entry);
+  const seedCheckIn = searched.checkIn ?? entry.checkInDate?.slice(0, 10) ?? "";
+  const seedCheckOut = searched.checkOut ?? entry.checkOutDate?.slice(0, 10) ?? "";
+
+  const [checkIn, setCheckIn] = useState(seedCheckIn);
+  const [checkOut, setCheckOut] = useState(seedCheckOut);
   // Nights — check-out derives from check-in + nights; a manual check-out pick recomputes nights.
-  const [nightsStr, setNightsStr] = useState(() => {
-    const ci = entry.checkInDate?.slice(0, 10);
-    const co = entry.checkOutDate?.slice(0, 10);
-    return String(Math.max(1, ci && co ? enumerateNights(ci, co).length : 1));
-  });
+  const [nightsStr, setNightsStr] = useState(() =>
+    String(Math.max(1, seedCheckIn && seedCheckOut ? enumerateNights(seedCheckIn, seedCheckOut).length : 1)),
+  );
   // Rooms required for the search — lives on the ENTRY (the seal validates each night against
   // entry.numberOfRooms), so a changed value is PATCHed to the entry when the search runs.
   const [roomsInput, setRoomsInput] = useState(String(entry.numberOfRooms ?? 1));
+  const roomsNum = Math.max(0, parseInt(roomsInput || "0", 10) || 0);
 
   useEffect(() => {
     if (!checkIn) return;
@@ -309,6 +338,62 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const edAgesComplete =
     edChildCount === 0 ||
     (edChildAges.length === edChildCount && edChildAges.every((a) => a.trim() !== "" && Number(a) >= 0));
+
+  // How many rooms this party actually needs. Backend-authoritative — POST
+  // /api/lookups/allowed-room-counts owns the chargeable-occupant + capacity maths so every
+  // frontend gets the same answer (the intake form at /desk/bookings/new uses it too). While
+  // editing, the envelope tracks the values being typed; otherwise it reflects the saved entry.
+  const roomEnvAdults = isEditing
+    ? Math.max(1, parseInt(edAdults || "1", 10) || 1)
+    : Math.max(1, entry.adultCount ?? entry.guestCount ?? 1);
+  const roomEnvChildAges = isEditing
+    ? edChildAges.map((x) => parseInt(x || "", 10)).filter((n) => Number.isFinite(n))
+    : entry.childAges ?? [];
+  const roomEnvelopeQuery = useQuery({
+    queryKey: ["lookup", "allowed-room-counts", roomEnvAdults, roomEnvChildAges.join(",")],
+    queryFn: () => getAllowedRoomCounts(session!, { adults: roomEnvAdults, childAges: roomEnvChildAges }),
+    enabled: !!session && roomEnvAdults > 0,
+  });
+  const roomEnvelope = roomEnvelopeQuery.data ?? null;
+  const roomMin = roomEnvelope?.allowedRoomCounts.min ?? null;
+
+  /**
+   * Auto-set both room inputs to the minimum the party needs, and let the operator raise it
+   * from there (a guest may want more rooms than capacity strictly requires).
+   *
+   * Keyed on the MINIMUM changing, not on every render — otherwise clearing the field to type
+   * "10" would momentarily read as 0, trip the bump, and fight the keystroke. A value already
+   * at or above the minimum is a deliberate choice and is left alone; only a value below it
+   * gets pulled up.
+   */
+  const appliedRoomMinRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (roomMin == null) return;
+    if (appliedRoomMinRef.current === roomMin) return;
+    appliedRoomMinRef.current = roomMin;
+    const raise = (prev: string) => {
+      const cur = parseInt(prev || "0", 10) || 0;
+      return cur >= roomMin ? prev : String(roomMin);
+    };
+    setRoomsInput(raise);
+    setEdRooms(raise);
+  }, [roomMin]);
+  const roomEnvelopeHint = roomEnvelope ? (
+    <p style={{ fontSize: 11, color: "var(--ink-2)", margin: "5px 0 0", lineHeight: 1.45 }}>
+      {roomEnvelope.chargeableOccupants} chargeable guest
+      {roomEnvelope.chargeableOccupants === 1 ? "" : "s"} · up to {roomEnvelope.maxCapacityUsed} per room →{" "}
+      <b>
+        minimum {roomEnvelope.allowedRoomCounts.min} room
+        {roomEnvelope.allowedRoomCounts.min === 1 ? "" : "s"}
+      </b>
+      {roomEnvelope.allowedRoomCounts.max > roomEnvelope.allowedRoomCounts.min
+        ? ` (up to ${roomEnvelope.allowedRoomCounts.max} allowed)`
+        : ""}
+      {roomEnvelope.allowedRoomCounts.max > roomEnvelope.allowedRoomCounts.min
+        ? " — set to the minimum; raise it if the guest wants more."
+        : ""}
+    </p>
+  ) : null;
   const updateIntakeMutation = useMutation({
     mutationFn: () => {
       const a = Math.max(1, parseInt(edAdults || "1", 10) || 1);
@@ -402,16 +487,16 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     () => enumerateNights(entry.checkInDate ?? checkIn, entry.checkOutDate ?? checkOut),
     [entry.checkInDate, entry.checkOutDate, checkIn, checkOut],
   );
-  // Nights the table displays. A fresh search may use different dates than the entry's saved
-  // stay — the table must follow the search (that's the window the operator just asked about),
-  // so nights come from the search result's own per-date breakdown, falling back to the searched
-  // inputs. Without a fresh search (e.g. on reload) the entry's own nights are shown.
+  // Nights the table displays. A search may use different dates than the entry's saved stay —
+  // the table must follow the search (that's the window the operator asked about). `perDate`
+  // already resolves to the fresh search's breakdown, else the last SAVED search's, so the
+  // columns keep matching the restored search window across a leave-and-return instead of
+  // snapping back to the entry's intake dates while the form shows the searched ones.
   const displayNights = useMemo(() => {
-    const pd = (searchResult?.results as { perDate?: Array<{ date: string }> } | undefined)?.perDate;
-    if (pd && pd.length > 0) return pd.map((p) => p.date);
+    if (perDate && perDate.length > 0) return perDate.map((p) => p.date);
     if (searchResult) return enumerateNights(checkIn, checkOut);
     return stayNights;
-  }, [searchResult, checkIn, checkOut, stayNights]);
+  }, [perDate, searchResult, checkIn, checkOut, stayNights]);
 
   const handleMultiSeal = (p: SealPayload) => {
     if (!activeConfigId && !latestConfig?.id) {
@@ -457,6 +542,48 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   // single-room bookings (a mid-stay room change is one room per night, different rooms).
   const [assignMode, setAssignMode] = useState<"same" | "vary">("same");
   const varyActive = assignMode === "vary" && displayNights.length > 1;
+
+  // Expanded view — the room list is the full property (27 rooms on real data), which does not
+  // fit the canvas column. Expanding lifts the same table to a full-screen layer with compact
+  // rows so every room is visible at once. `showNames` prints the holder in the cell instead of
+  // leaving it to a hover tooltip, which is unusable when scanning the whole grid.
+  const [expanded, setExpanded] = useState(false);
+  const [showNames, setShowNames] = useState(false);
+  // Both survive a reload. Read in an effect rather than a useState initialiser so the server
+  // render and the first client render agree (sessionStorage doesn't exist during SSR).
+  const viewPrefsKey = `desk:rst-view:${entry.id}`;
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(viewPrefsKey);
+      if (!raw) return;
+      const v = JSON.parse(raw) as { expanded?: boolean; showNames?: boolean };
+      if (v.expanded) setExpanded(true);
+      if (v.showNames) setShowNames(true);
+    } catch {
+      /* private mode / corrupt value — fall back to the collapsed default */
+    }
+  }, [viewPrefsKey]);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(viewPrefsKey, JSON.stringify({ expanded, showNames }));
+    } catch {
+      /* non-fatal — the view just won't persist */
+    }
+  }, [viewPrefsKey, expanded, showNames]);
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    // Stop the page behind the overlay scrolling with it.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [expanded]);
   const [varySel, setVarySel] = useState<Record<string, string[]>>({});
   const toggleVaryCell = (row: RoomStatusRow, night: string) => {
     setVarySel((prev) => {
@@ -479,6 +606,32 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     );
     handleMultiSeal({ perNight, deficientRoomIds });
   };
+
+  // The commit action + progress counter. Rendered below the table normally, hoisted into the
+  // toolbar when expanded so nothing but the grid occupies the screen.
+  const sealReady = varyActive ? varyComplete : tableSel.length === numberOfRooms;
+  const sealControls = (
+    <>
+      <button
+        className="btn btn-primary btn-sm"
+        disabled={!sealReady || selectMutation.isPending}
+        onClick={varyActive ? sealVarySelection : sealTableSelection}
+      >
+        {selectMutation.isPending
+          ? "Saving…"
+          : varyActive
+            ? "Seal per-night rooms"
+            : numberOfRooms === 1
+              ? "Save room selection"
+              : `Seal ${numberOfRooms} rooms`}
+      </button>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: sealReady ? "var(--green-d)" : "var(--ink-3)" }}>
+        {varyActive
+          ? `${nightsAssigned} of ${displayNights.length} nights assigned`
+          : `${tableSel.length} of ${numberOfRooms} selected`}
+      </span>
+    </>
+  );
 
   // Persistent highlight: a group stays lit once its action has run for this booking (derived from
   // real state, so it survives reloads). `firingKey` adds the transient "running now" pulse.
@@ -611,7 +764,13 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             <div className="frow">
               <div className="field">
                 <label>Number of rooms</label>
-                <input type="number" min={1} value={edRooms} onChange={(e) => setEdRooms(e.target.value)} />
+                <input
+                  type="number"
+                  min={roomEnvelope?.allowedRoomCounts.min ?? 1}
+                  value={edRooms}
+                  onChange={(e) => setEdRooms(e.target.value)}
+                />
+                {roomEnvelopeHint}
               </div>
               <div className="field" />
             </div>
@@ -695,7 +854,19 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         <div className="frow">
           <div className="field">
             <label>Rooms required</label>
-            <input type="number" min={1} value={roomsInput} onChange={(e) => setRoomsInput(e.target.value)} />
+            <input
+              type="number"
+              min={roomEnvelope?.allowedRoomCounts.min ?? 1}
+              value={roomsInput}
+              onChange={(e) => setRoomsInput(e.target.value)}
+            />
+            {roomEnvelopeHint}
+            {roomEnvelope && roomsNum > 0 && roomsNum < roomEnvelope.allowedRoomCounts.min && (
+              <p style={{ fontSize: 11, color: "var(--warn)", margin: "4px 0 0", fontWeight: 600 }}>
+                {roomEnvelope.chargeableOccupants} guests will not fit in {roomsNum} room
+                {roomsNum === 1 ? "" : "s"}.
+              </p>
+            )}
             <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>
               Saved to the booking when you search — the selection below asks for exactly this many rooms.
             </p>
@@ -752,17 +923,55 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           )}
 
           {statusRows.length > 0 ? (
-            <>
-              {displayNights.length > 1 && (
-                <div className="seg" style={{ marginBottom: 10 }}>
-                  <button type="button" className={assignMode === "same" ? "on" : ""} onClick={() => setAssignMode("same")}>
-                    Same room{numberOfRooms === 1 ? "" : "s"} every night
-                  </button>
-                  <button type="button" className={assignMode === "vary" ? "on" : ""} onClick={() => setAssignMode("vary")}>
-                    Different rooms per night
+            <div className={expanded ? "rst-expandwrap on" : "rst-expandwrap"}>
+              {expanded && (
+                <div className="rst-expandbar">
+                  <b>Room status · {statusRows.length} rooms</b>
+                  <span className="ln" />
+                  <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)}>
+                    <Minimize2 style={{ width: 13, height: 13 }} /> Close
                   </button>
                 </div>
               )}
+              <div className="rst-tools">
+                {displayNights.length > 1 && (
+                  <div className="seg">
+                    <button type="button" className={assignMode === "same" ? "on" : ""} onClick={() => setAssignMode("same")}>
+                      Same room{numberOfRooms === 1 ? "" : "s"} every night
+                    </button>
+                    <button type="button" className={assignMode === "vary" ? "on" : ""} onClick={() => setAssignMode("vary")}>
+                      Different rooms per night
+                    </button>
+                  </div>
+                )}
+                <span className="ln" />
+                <button
+                  type="button"
+                  className={`btn btn-ghost btn-sm${showNames ? " on" : ""}`}
+                  onClick={() => setShowNames((v) => !v)}
+                  title={
+                    showNames
+                      ? "Show status words (Reserved / Held) in the cells"
+                      : "Print the guest or agent name on each taken room instead of hovering"
+                  }
+                >
+                  {showNames ? <UserCheck style={{ width: 13, height: 13 }} /> : <Users style={{ width: 13, height: 13 }} />}
+                  {showNames ? "Names on" : "Show names"}
+                </button>
+                {!expanded && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setExpanded(true)}
+                    title="Expand to full screen — fits every room on one screen"
+                  >
+                    <Maximize2 style={{ width: 13, height: 13 }} /> Expand
+                  </button>
+                )}
+                {/* Expanded view puts the commit action up here so the grid owns the rest of
+                    the screen — no controls below the table competing for vertical space. */}
+                {expanded && sealControls}
+              </div>
               <RoomStatusTable
                 rows={statusRows}
                 nights={displayNights}
@@ -774,42 +983,29 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                 onToggle={toggleTableRow}
                 onToggleCell={toggleVaryCell}
                 disabled={selectMutation.isPending}
+                dense={expanded}
+                showNames={showNames}
               />
-              <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-                <button
-                  className="btn btn-primary"
-                  disabled={(varyActive ? !varyComplete : tableSel.length !== numberOfRooms) || selectMutation.isPending}
-                  onClick={varyActive ? sealVarySelection : sealTableSelection}
-                >
-                  {selectMutation.isPending
-                    ? "Saving…"
-                    : varyActive
-                      ? "Seal per-night rooms"
-                      : numberOfRooms === 1
-                        ? "Save room selection"
-                        : `Seal ${numberOfRooms} rooms`}
-                </button>
-                <span
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: (varyActive ? varyComplete : tableSel.length === numberOfRooms)
-                      ? "var(--green-d)"
-                      : "var(--ink-3)",
-                  }}
-                >
-                  {varyActive
-                    ? `${nightsAssigned} of ${displayNights.length} nights assigned`
-                    : `${tableSel.length} of ${numberOfRooms} selected`}
-                </span>
-              </div>
-              {statusRows.some((r) => r.bucket === "deficient") && (
+              {!expanded && (
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+                  {sealControls}
+                </div>
+              )}
+              {!expanded && statusRows.some((r) => r.bucket === "deficient") && (
                 <p style={{ fontSize: 11, color: "var(--warn)", margin: "10px 0 0", display: "inline-flex", gap: 5, alignItems: "center" }}>
                   <AlertTriangle style={{ width: 12, height: 12 }} />
                   Deficient rooms are selectable — an acknowledgement is recorded when you save.
                 </p>
               )}
-              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "10px 0 0", lineHeight: 1.5 }}>
+              <p
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--ink-3)",
+                  margin: "10px 0 0",
+                  lineHeight: 1.5,
+                  display: expanded ? "none" : undefined,
+                }}
+              >
                 {varyActive ? (
                   <>
                     Click a <b>Vacant</b> cell to assign that room for that night — each night needs{" "}
@@ -832,7 +1028,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                 Nothing is recorded until you save. The price is indicative only, and the final room is confirmed
                 at arrival.
               </p>
-            </>
+            </div>
           ) : (
             <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
               No rooms in this result — search again.

@@ -132,6 +132,12 @@ export type AvailabilityConfigSummary = {
   isStale: boolean;
   sealedAt: string | null;
   resultSet?: unknown;
+  /**
+   * The inputs this search ran with — `{ checkInDate, checkOutDate, guestCount, useType, … }`.
+   * Persisted server-side on every search, so the desk can restore the search form to what was
+   * last actually run instead of snapping back to the entry's intake dates.
+   */
+  searchCriteria?: unknown;
   createdAt?: string;
 };
 
