@@ -1461,18 +1461,29 @@ model CancellationDisclosureRecord {
 }
 
 model BillingModelTransitionRecord {
-  id        String   @id @default(uuid())
-  folioId   String
-  segmentId String
-  fromModel String?
-  toModel   String
-  createdAt DateTime @default(now())
-  createdBy String
+  id           String   @id @default(uuid())
+  folioId      String
+  segmentId    String
+  fromModel    String?
+  toModel      String
+  createdAt    DateTime @default(now())
+  createdBy    String
+  /// When populated, this transition reassigned ONE specific line rather than changing the
+  /// folio-level primary model. Null → folio-level (S3 initial-set, S4→S3 backflow, etc.).
+  folioLineId  String?
+  /// Free-text reason captured from the operator on manual per-line reassignment. Optional
+  /// for folio-level system-driven transitions; required for the per-line PATCH endpoint.
+  reason       String?
+  /// Machine-readable category so audit queries can distinguish system events
+  /// from operator overrides: INITIAL_FIXATION | BACKFLOW | PER_LINE_OVERRIDE | DEFAULTS_UPDATE.
+  changeSource String?
 
-  folio   Folio   @relation(fields: [folioId], references: [id])
-  segment Segment @relation(fields: [segmentId], references: [id])
+  folio     Folio      @relation(fields: [folioId], references: [id])
+  segment   Segment    @relation(fields: [segmentId], references: [id])
+  folioLine FolioLine? @relation(fields: [folioLineId], references: [id], onDelete: SetNull)
 
   @@index([folioId, segmentId])
+  @@index([folioLineId])
   @@map("billing_model_transition_records")
 }
 
@@ -1481,6 +1492,11 @@ model Folio {
   entryId                    String     @unique
   state                      FolioState @default(PROVISIONAL)
   billingModel               String?
+  /// Per-line-type default mapping for split billing. Populated at S3 alongside billingModel.
+  /// Shape: `{ ROOM_CHARGE: "DIRECT_BILL", F_AND_B: "GUEST_PAY", SERVICE: "GUEST_PAY", OTHER: "GUEST_PAY" }`.
+  /// New FolioLine posts inherit their `billingModel` from this map. Changing the map affects
+  /// FUTURE posts only — existing lines keep their assigned model unless explicitly reassigned.
+  billingModelDefaults       Json?
   createdAt                  DateTime   @default(now())
   createdBy                  String
   convertedToLiveAt          DateTime?
@@ -1514,6 +1530,11 @@ model Invoice {
   state          InvoiceState @default(DRAFT)
   invoiceNumber  String?      @unique
   totalAmount    Decimal?     @db.Decimal(15, 2)
+  /// Split-billing bucket this invoice represents (Phase 3, 2026-07-25). When populated,
+  /// the invoice covers ONLY folio lines whose `billingModel` matches this value; the PDF
+  /// renderer filters accordingly. Null on pre-Phase-3 invoices → covers all folio lines
+  /// (legacy whole-folio behaviour).
+  billingModel   String?
   templateKey    String?
   issuedAt       DateTime?
   issuedBy       String?
@@ -1644,9 +1665,16 @@ model FolioLine {
   isPostStay         Boolean       @default(false)
   postedAt           DateTime      @default(now())
   createdAt          DateTime      @default(now())
+  /// Which billing model settles this line. Populated at post-time from the folio's
+  /// `billingModelDefaults` map. Nullable for pre-Phase-1 lines (the one-time backfill
+  /// copies `Folio.billingModel` into this column). Reassignable per-line via
+  /// `PATCH /api/folios/:id/lines/:lineId/billing-model`; every change writes a
+  /// `BillingModelTransitionRecord` with `folioLineId` populated.
+  billingModel       String?
 
-  folio            Folio             @relation(fields: [folioId], references: [id])
-  nightAuditRecord NightAuditRecord? @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
+  folio                   Folio                          @relation(fields: [folioId], references: [id])
+  nightAuditRecord        NightAuditRecord?              @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
+  billingModelTransitions BillingModelTransitionRecord[]
 
   @@map("folio_lines")
 }
@@ -1684,6 +1712,10 @@ model PaymentRecord {
   recordedBy            String?
   stage                 Stage?
   notes                 String?
+  /// Which split-billing bucket this payment settles (Phase 3, 2026-07-25). When populated,
+  /// the payment applies ONLY to its bucket's outstanding (per-bucket ledger); when null,
+  /// the payment applies to the folio's whole-folio outstanding (legacy behaviour).
+  billingModel          String?
 
   folio Folio @relation(fields: [folioId], references: [id])
 

@@ -254,19 +254,46 @@ export async function generateOrLoadInvoicePdf(
 
   // ================================================================
   // FINAL / ROOM INVOICE branch — layout matches `Commercial invoice.pdf` reference.
-  // Room lines only (no F&B) — filters folio lines by lineType so SERVICE / OTHER don't
-  // pollute the PARTICULAR table.
+  //
+  // Split-billing (Phase 3, 2026-07-25): when `inv.billingModel` is populated, the invoice
+  // covers ONLY folio lines whose `billingModel` matches — so an agent-DIRECT_BILL invoice
+  // shows just the agent's charges, a guest-GUEST_PAY invoice shows just guest charges.
+  // Additionally the lineType filter is DROPPED for split invoices so F&B / SERVICE /
+  // OTHER lines appear on the guest invoice (previously stripped as "room-only" filter).
+  // Legacy whole-folio invoices keep the room-only filter for backward compat.
   // ================================================================
   const gstRate = Number(await requireActiveConfigValue<number>(prisma, "billing.salesTaxRate")) || 0.05;
   const svcRate = Number(await requireActiveConfigValue<number>(prisma, "billing.serviceChargeRate")) || 0.10;
 
-  // Room lines = STAY / ROOM_CHARGE lineType. Non-room lines (F&B / OTHER / SERVICE) filtered
-  // out per boss's instruction: "the thing here is this should only show the room bill".
+  // Two independent filters:
+  //   1. Split-billing filter: only lines whose billingModel matches this invoice's bucket.
+  //      For legacy invoices (invoice.billingModel = null) all lines pass this filter.
+  //      NULL-billingModel lines (pre-Phase-1 backfill data) pass through to whichever
+  //      invoice bucket the folio's primary model resolves to — matching the ledger's
+  //      NULL→primary rollup rule in `computeOutstandingForBillingModel`.
+  //   2. Line-type filter: ROOM_CHARGE / STAY only, but ONLY for legacy invoices. Split
+  //      invoices show all their bucket's lines regardless of type.
+  const invoiceBucket = inv.billingModel ?? null;
+  const primaryModel = inv.folio?.billingModel?.trim() ?? null;
+  const isBucketScoped = !!invoiceBucket;
   const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
-  const roomFolioLines = (inv.folio?.lines ?? []).filter((l) => roomLineTypes.has(l.lineType));
+  const bucketMatches = (lineModel: string | null | undefined) => {
+    if (!isBucketScoped) return true;
+    const trimmed = lineModel?.trim() ?? null;
+    if (trimmed === invoiceBucket) return true;
+    // Legacy NULL-model lines belong to the folio's primary model bucket.
+    if (trimmed == null && primaryModel === invoiceBucket) return true;
+    return false;
+  };
+  const filteredFolioLines = (inv.folio?.lines ?? []).filter((l) => {
+    if (!bucketMatches(l.billingModel)) return false;
+    if (!isBucketScoped) return roomLineTypes.has(l.lineType);
+    return true;
+  });
 
-  // If folio has no ROOM_CHARGE (e.g. checkout not yet posted), synthesise from the accepted
-  // quotation so the PDF still shows a sensible bill.
+  // Synthesise from quotation ONLY for legacy whole-folio invoices where NO room charges
+  // exist yet (guest hasn't checked out; PDF is a preview). Split invoices never synthesise —
+  // if a bucket has zero lines, that's a real "nothing to bill this bucket" state.
   type RoomLineDisplay = {
     particular: string;
     roomNo: string;
@@ -276,19 +303,22 @@ export async function generateOrLoadInvoicePdf(
     folioLineId: string | null;
   };
   const roomLines: RoomLineDisplay[] = [];
-  if (roomFolioLines.length > 0) {
-    for (const l of roomFolioLines) {
+  if (filteredFolioLines.length > 0) {
+    for (const l of filteredFolioLines) {
+      // Particular label = "Room" for room-lines (legacy visual), otherwise the folio line's
+      // description (so F&B / SERVICE / OTHER lines self-identify on split invoices).
+      const particular = roomLineTypes.has(l.lineType) ? "Room" : l.description;
       roomLines.push({
-        particular: "Room",
+        particular,
         roomNo: (l.description.match(/room\s+(\S+)/i)?.[1] ?? "").trim(),
-        nights: 1, // one folio line = one night of stay charge; if the schema evolves to carry nights we adopt it
+        nights: 1,
         rate: Number(toDecimal(l.amount).toFixed(2)),
         amount: Number(toDecimal(l.amount).toFixed(2)),
         folioLineId: l.id,
       });
     }
-  } else {
-    // Fallback: use accepted quotation's rate for each night.
+  } else if (!isBucketScoped) {
+    // Legacy synthesise-from-quote fallback (only for whole-folio invoices).
     for (let i = 0; i < nights; i++) {
       roomLines.push({
         particular: "Room",
@@ -307,7 +337,19 @@ export async function generateOrLoadInvoicePdf(
   const gstAmount = Number(((subtotal + serviceCharge) * gstRate).toFixed(2));
   const totalBeforeAdvance = subtotal - discountAmount + serviceCharge + gstAmount;
 
-  const inPayments = (inv.folio?.payments ?? []).filter((p) => p.paymentDirection === "IN");
+  // Advance-payment attribution:
+  //   - Legacy whole-folio invoice: all IN payments count toward this invoice's advance.
+  //   - Split invoice: only payments whose `billingModel` matches this bucket count.
+  //     NULL-model payments (pre-Phase-3 records) roll up to the primary bucket, mirroring
+  //     the ledger. Prevents double-counting when two invoices are issued for one folio.
+  const inPayments = (inv.folio?.payments ?? []).filter((p) => {
+    if (p.paymentDirection !== "IN") return false;
+    if (!isBucketScoped) return true;
+    const pModel = p.billingModel?.trim() ?? null;
+    if (pModel === invoiceBucket) return true;
+    if (pModel == null && primaryModel === invoiceBucket) return true;
+    return false;
+  });
   const advanceAmount = inPayments.reduce((s, p) => s + Number(toDecimal(p.amount).toFixed(2)), 0);
   const focAmount = 0;
   const totalPayable = Number((totalBeforeAdvance - advanceAmount - focAmount).toFixed(2));

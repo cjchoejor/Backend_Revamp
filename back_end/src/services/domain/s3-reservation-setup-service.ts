@@ -7,6 +7,7 @@ import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billin
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-billing/p66-group-foc-and-billing-split.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
 
 export { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 
@@ -75,8 +76,24 @@ export async function ensureProvisionalFolioAndBillingModel(
       await tx.folio.update({ where: { id: folio.id }, data: { billingModel: input.billingModel.trim() } });
     }
 
+    // Populate the per-type split-billing defaults map. When the entry has a linked travel
+    // agent or corporate account, ROOM_CHARGE → primaryModel while F_AND_B / SERVICE / OTHER
+    // → GUEST_PAY. This drives what `resolveBillingModelForNewLine` returns for future posts.
+    const initialDefaults = await buildInitialBillingModelDefaults(tx, folio.id, input.billingModel);
+    await tx.folio.update({
+      where: { id: folio.id },
+      data: { billingModelDefaults: initialDefaults },
+    });
+
     await tx.billingModelTransitionRecord.create({
-      data: { folioId: folio.id, segmentId, fromModel: null, toModel: input.billingModel.trim(), createdBy: actorId },
+      data: {
+        folioId: folio.id,
+        segmentId,
+        fromModel: null,
+        toModel: input.billingModel.trim(),
+        createdBy: actorId,
+        changeSource: "INITIAL_FIXATION",
+      },
     });
 
     const invoiceId = await allocateReadableId(tx, "INVOICE" as const);

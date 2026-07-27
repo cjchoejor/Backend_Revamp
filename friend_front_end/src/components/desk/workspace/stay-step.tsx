@@ -30,7 +30,12 @@ import { money, moneyOrDash } from "@/lib/desk/workspace";
 import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
-import type { EntryDetail } from "@/types/api";
+import type { EntryDetail, FolioLineSummary } from "@/types/api";
+import {
+  reassignFolioLineBillingModel,
+  SPLIT_BILLING_MODELS,
+  type SplitBillingModel,
+} from "@/lib/api/split-billing";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -86,6 +91,50 @@ export function StayStep({
   const deficientRecords = assignment?.room?.deficientConditionRecords ?? [];
   const disputes = entry.disputes ?? [];
   const currency = folioLines[0]?.currency;
+  // Split-billing per-bucket subtotals derived client-side from folio lines + payments.
+  //   - Lines sum by line.billingModel; NULL-model lines roll up to the folio's primary (matches
+  //     the backend ledger's NULL→primary rule in `computeOutstandingForBillingModel`).
+  //   - Payments IN reduce the bucket's balance; OUT increases it. Same NULL→primary rollup.
+  // Used both for the subtotal rows above "Balance due" and for the settlement bucket picker.
+  const bucketSummary = useMemo(() => {
+    const primary = folio?.billingModel?.trim() ?? null;
+    const lines = folio?.lines ?? [];
+    const payments = folio?.payments ?? [];
+    const bucketOf = (m: string | null | undefined): string | null => {
+      const t = m?.trim() || null;
+      if (t) return t;
+      return primary;
+    };
+    const map = new Map<string, { charges: number; paymentsIn: number; paymentsOut: number; lineCount: number }>();
+    const bump = (key: string | null, patch: (b: { charges: number; paymentsIn: number; paymentsOut: number; lineCount: number }) => void) => {
+      if (!key) return;
+      const b = map.get(key) ?? { charges: 0, paymentsIn: 0, paymentsOut: 0, lineCount: 0 };
+      patch(b);
+      map.set(key, b);
+    };
+    for (const l of lines) {
+      const b = bucketOf(l.billingModel);
+      bump(b, (row) => {
+        row.charges += Number(l.amount);
+        row.lineCount += 1;
+      });
+    }
+    for (const p of payments) {
+      const b = bucketOf(p.billingModel);
+      bump(b, (row) => {
+        if (p.paymentDirection === "IN") row.paymentsIn += Number(p.amount);
+        else if (p.paymentDirection === "OUT") row.paymentsOut += Number(p.amount);
+      });
+    }
+    return Array.from(map.entries())
+      .map(([billingModel, b]) => ({
+        billingModel,
+        lineCount: b.lineCount,
+        outstanding: Math.max(0, b.charges - b.paymentsIn + b.paymentsOut),
+      }))
+      .sort((a, b) => a.billingModel.localeCompare(b.billingModel));
+  }, [folio?.billingModel, folio?.lines, folio?.payments]);
+  const isSplitBilled = bucketSummary.length > 1;
 
   const checkOutIso = reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? "";
   const lastNightYmd = checkOutIso ? lastStayNightYmd(checkOutIso) : "";
@@ -98,6 +147,8 @@ export function StayStep({
   const [correctMode, setCorrectMode] = useState<"adjust" | "setNet">("adjust");
   const [correctDelta, setCorrectDelta] = useState("");
   const [correctToAmount, setCorrectToAmount] = useState("");
+  // Split-billing per-line reassign modal state — null when closed.
+  const [reassignLine, setReassignLine] = useState<FolioLineSummary | null>(null);
   const [correctReason, setCorrectReason] = useState("");
   const [disputeTitle, setDisputeTitle] = useState("");
   const [disputeDesc, setDisputeDesc] = useState("");
@@ -195,6 +246,22 @@ export function StayStep({
       return correctFolioCharge(session!, folio.id, body);
     }, "Correction posted"),
   );
+  // Split-billing: per-line reassignment. Uses useMutation directly (not the local `wrap`)
+  // because the mutation takes an argument — wrap's thunk shape doesn't fit.
+  const reassignBillingModelM = useMutation({
+    mutationFn: (arg: { lineId: string; billingModel: SplitBillingModel; reason: string }) => {
+      if (!folio?.id) throw new Error("No folio");
+      return reassignFolioLineBillingModel(session!, folio.id, arg.lineId, {
+        billingModel: arg.billingModel,
+        reason: arg.reason,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Line billing reassigned");
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Reassign failed"),
+  });
   const nightAuditM = useMutation(wrap(() => runNightAudit(session!, `${naDate}T00:00:00.000Z`), "Night audit run"));
   const createH4M = useMutation(wrap(() => createH4Handoff(session!, entry.id, { notes: "Pre-checkout coordination" }), "Pre-checkout handoff created"));
   const acceptH4M = useMutation(
@@ -333,6 +400,9 @@ export function StayStep({
           ) : (
             folioLines.map((l) => {
               const sys = !!l.nightAuditRecordId;
+              // Only show the billing-model chip once a folio is actually split across buckets;
+              // for single-bucket folios the chip is redundant clutter.
+              const effectiveModel = l.billingModel?.trim() || folio?.billingModel?.trim() || null;
               return (
                 <div className="fline" key={l.id}>
                   <span className={`fl-mk mk ${sys ? "sys" : "cap"}`}>{sys ? "⚙" : "✎"}</span>
@@ -343,11 +413,43 @@ export function StayStep({
                       {sys ? " · audit" : ""}
                     </small>
                   </span>
+                  {isSplitBilled && effectiveModel && (
+                    <span
+                      onClick={() => folioLive && setReassignLine(l)}
+                      title={folioLive ? "Click to reassign this charge to another payer" : "Folio must be live to reassign"}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        padding: "2px 6px",
+                        borderRadius: 4,
+                        marginRight: 8,
+                        background: effectiveModel === "DIRECT_BILL" ? "#e5f0ff" : effectiveModel === "GOVERNMENT" ? "#f0e5ff" : "#e5faee",
+                        color: effectiveModel === "DIRECT_BILL" ? "#1e4b8f" : effectiveModel === "GOVERNMENT" ? "#4b1e8f" : "#1e6b3f",
+                        cursor: folioLive ? "pointer" : "default",
+                        userSelect: "none",
+                      }}
+                    >
+                      {effectiveModel}
+                    </span>
+                  )}
                   <span className="fl-a">{money(l.amount, l.currency)}</span>
                 </div>
               );
             })
           )}
+          {/* Per-bucket subtotals (Phase 4): show one row per split bucket so the operator sees
+              at a glance who owes what. Hidden when the folio isn't split — no clutter. */}
+          {isSplitBilled &&
+            bucketSummary.map((b) => (
+              <div className="fline" key={`bucket-${b.billingModel}`} style={{ background: "var(--surface-2, #fafaf5)", fontWeight: 500 }}>
+                <span className="fl-mk mk sys">Σ</span>
+                <span className="fl-d">
+                  {b.billingModel} subtotal
+                  <small>{b.lineCount} charge{b.lineCount === 1 ? "" : "s"}</small>
+                </span>
+                <span className="fl-a">{money(b.outstanding, currency ?? "BTN")}</span>
+              </div>
+            ))}
           {/* The server owns the folio's balance; there is no sum-of-lines field, so the running
               total is the backend's outstandingBalance rather than a total added up here. */}
           <div className="fline total">
@@ -729,6 +831,154 @@ export function StayStep({
         onConfirm={() => earlyDepartM.mutate()}
         onClose={() => setEarlyDepartOpen(false)}
       />
+
+      {reassignLine && (
+        <ReassignBillingModelModal
+          line={reassignLine}
+          currentPrimary={folio?.billingModel ?? null}
+          pending={reassignBillingModelM.isPending}
+          onClose={() => setReassignLine(null)}
+          onConfirm={(billingModel, reason) => {
+            reassignBillingModelM.mutate(
+              { lineId: reassignLine.id, billingModel, reason },
+              { onSuccess: () => setReassignLine(null) },
+            );
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Compact modal for reassigning ONE folio line's billing model. Renders the line's
+ * particulars, the target-model radio group (GUEST_PAY / DIRECT_BILL / GOVERNMENT), and a
+ * required reason field. Escape / click-outside dismiss.
+ */
+function ReassignBillingModelModal({
+  line,
+  currentPrimary,
+  pending,
+  onConfirm,
+  onClose,
+}: {
+  line: FolioLineSummary;
+  currentPrimary: string | null;
+  pending: boolean;
+  onConfirm: (billingModel: SplitBillingModel, reason: string) => void;
+  onClose: () => void;
+}) {
+  const currentModel = (line.billingModel?.trim() || currentPrimary || "GUEST_PAY") as SplitBillingModel;
+  const [target, setTarget] = useState<SplitBillingModel>(currentModel);
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const canSubmit = reason.trim().length > 0 && target !== currentModel && !pending;
+
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        role="dialog" aria-modal="true"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface, #fff)", color: "var(--ink-1, #111)",
+          borderRadius: 10, maxWidth: 460, width: "100%",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)", border: "1px solid var(--line, #e6e0d4)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line, #e6e0d4)" }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Reassign charge</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-3, #7a6a52)", marginTop: 3 }}>
+            {line.description}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", marginTop: 2 }}>
+            {line.lineType} · {String(line.amount)} {line.currency}
+            {" · currently "}<b>{currentModel}</b>
+          </div>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 6 }}>
+            Move to
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            {SPLIT_BILLING_MODELS.map((m) => (
+              <label key={m} style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "6px 10px", borderRadius: 6, cursor: "pointer",
+                border: target === m ? "1px solid var(--accent, #a44f2b)" : "1px solid var(--line, #e6e0d4)",
+                background: target === m ? "rgba(164, 79, 43, 0.06)" : "var(--surface, #fff)",
+                fontSize: 12.5,
+              }}>
+                <input
+                  type="radio"
+                  name="target-billing-model"
+                  value={m}
+                  checked={target === m}
+                  onChange={() => setTarget(m)}
+                  style={{ margin: 0 }}
+                />
+                {m}
+              </label>
+            ))}
+          </div>
+
+          <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 4 }}>
+            Reason (required)
+          </label>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Agent agreed to cover this dinner"
+            style={{
+              width: "100%", padding: "7px 10px", borderRadius: 6,
+              border: "1px solid var(--line, #e6e0d4)", background: "var(--surface, #fff)",
+              fontSize: 13,
+            }}
+          />
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid var(--line, #e6e0d4)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--line, #e6e0d4)",
+              background: "var(--surface, #fff)", cursor: "pointer", fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => canSubmit && onConfirm(target, reason.trim())}
+            disabled={!canSubmit}
+            style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent, #a44f2b)",
+              background: canSubmit ? "var(--accent, #a44f2b)" : "var(--surface-2, #fafaf5)",
+              color: canSubmit ? "#fff" : "var(--ink-3, #7a6a52)",
+              cursor: canSubmit ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 500,
+            }}
+          >
+            {pending ? "Reassigning…" : "Reassign"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

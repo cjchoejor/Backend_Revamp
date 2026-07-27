@@ -7,6 +7,7 @@ import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-servi
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
+import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -87,6 +88,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
 
     for (const p of plan) {
       if (p.shouldPostRoomCharge) {
+        const billingModel = await resolveBillingModelForNewLine(tx, p.folioId, FolioLineType.ROOM_CHARGE);
         await tx.folioLine.create({
           data: {
             folioId: p.folioId,
@@ -98,6 +100,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
             stage: Stage.S7,
             postedBy: actorId,
             nightAuditRecordId: recordId,
+            billingModel,
           },
         });
         await recomputeFolioOutstandingBalance(tx, p.folioId);

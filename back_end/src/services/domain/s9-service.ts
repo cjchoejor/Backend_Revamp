@@ -15,6 +15,8 @@ import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { generateOrLoadInvoicePdf } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
+import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
+import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
 import {
   enforceApartmentSecurityDepositResolvedForS9Closure,
   enforceDirectBillPaymentsMatchedForS9Closure,
@@ -73,7 +75,7 @@ export async function issueInvoiceAtS9(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; templateKey?: string },
+  input: { entryId: string; templateKey?: string; billingModel?: string },
 ) {
   const folio = await prisma.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
   if (!folio?.entry) throw new NotFoundError("Folio");
@@ -83,9 +85,22 @@ export async function issueInvoiceAtS9(
     throw new ValidationError("Cannot issue S9 invoice on a provisional folio");
   }
 
+  const targetBucket = input.billingModel?.trim() || null;
+  if (targetBucket) {
+    const buckets = await listBillingModelBucketsForFolio(prisma, folioId);
+    if (!buckets.includes(targetBucket)) {
+      throw new ValidationError(
+        `No folio lines assigned to billingModel "${targetBucket}". Present buckets: ${buckets.join(", ") || "(none)"}.`,
+      );
+    }
+  }
+
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
+    const totalAmount = targetBucket
+      ? await computeOutstandingForBillingModel(tx, folioId, targetBucket)
+      : null;
     return tx.invoice.create({
       data: {
         id: invoiceId,
@@ -94,9 +109,15 @@ export async function issueInvoiceAtS9(
         invoiceType: InvoiceType.FINAL,
         state: InvoiceState.DRAFT,
         templateKey: input.templateKey?.trim() || "final-v1",
+        billingModel: targetBucket,
+        totalAmount: totalAmount ?? undefined,
         issuedAt: now,
         issuedBy: actorId,
-        metadata: { basis: "S9 issueInvoice", stage: Stage.S9 },
+        metadata: {
+          basis: "S9 issueInvoice",
+          stage: Stage.S9,
+          ...(targetBucket ? { billingModel: targetBucket } : {}),
+        },
       },
     });
   });
@@ -884,6 +905,7 @@ export async function postStayCharge(
   if (folio.entryId !== input.entryId) throw new ValidationError("Folio does not belong to this entry");
 
   const created = await prisma.$transaction(async (tx) => {
+    const billingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType as any);
     const line = await tx.folioLine.create({
       data: {
         folioId,
@@ -896,6 +918,7 @@ export async function postStayCharge(
         postedBy: actorId,
         isPostStay: true,
         postedAt,
+        billingModel,
       },
     });
     const noticeCommId = await allocateReadableId(tx, "COMMUNICATION" as const, postedAt);

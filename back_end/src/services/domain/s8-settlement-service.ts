@@ -20,6 +20,7 @@ import {
   sumRoomChargesInStayWindowUtc,
 } from "../../policies/08-pricing-rate-plan/p22-settlement-rate-basis.js";
 import { minMoney, toDecimal } from "../../lib/money.js";
+import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
@@ -77,12 +78,20 @@ async function resolveGroupInvoiceOverrides(
   };
 }
 
-/** SIG-S8 — issue a DRAFT final invoice after settlement (cash/guest-pay paths that did not auto-create one). */
+/**
+ * SIG-S8 — issue a DRAFT final invoice after settlement (cash/guest-pay paths that did not
+ * auto-create one).
+ *
+ * Split-billing (Phase 3, 2026-07-25): when `input.billingModel` is provided, tag the
+ * invoice with that bucket so the PDF renderer only includes matching lines and the
+ * per-bucket outstanding is stamped as `totalAmount`. When omitted, produces a
+ * whole-folio invoice (legacy behaviour).
+ */
 export async function issueInvoiceAtS8(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; templateKey?: string },
+  input: { entryId: string; templateKey?: string; billingModel?: string },
 ) {
   const folio = await prisma.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
   if (!folio?.entry) throw new NotFoundError("Folio");
@@ -95,14 +104,34 @@ export async function issueInvoiceAtS8(
     throw new ValidationError(`Cannot issue final invoice when folio is ${folio.state}`);
   }
 
+  const targetBucket = input.billingModel?.trim() || null;
+  if (targetBucket) {
+    // Sanity check: the requested bucket must actually exist on this folio (either an
+    // explicit line.billingModel match or lines that roll up to the primary).
+    const buckets = await listBillingModelBucketsForFolio(prisma, folioId);
+    if (!buckets.includes(targetBucket)) {
+      throw new ValidationError(
+        `No folio lines assigned to billingModel "${targetBucket}". Present buckets: ${buckets.join(", ") || "(none)"}.`,
+      );
+    }
+  }
+
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
+    // Per-bucket totalAmount when a specific bucket was requested; whole-folio otherwise.
+    const totalAmount = targetBucket
+      ? await computeOutstandingForBillingModel(tx, folioId, targetBucket)
+      : null;
     const { templateKey, metadata } = await resolveGroupInvoiceOverrides(
       tx,
       input.entryId,
       input.templateKey?.trim() || "final-v1",
-      { basis: "S8 issueFinalInvoice", stage: Stage.S8 },
+      {
+        basis: "S8 issueFinalInvoice",
+        stage: Stage.S8,
+        ...(targetBucket ? { billingModel: targetBucket } : {}),
+      },
     );
     return tx.invoice.create({
       data: {
@@ -112,6 +141,8 @@ export async function issueInvoiceAtS8(
         invoiceType: InvoiceType.FINAL,
         state: InvoiceState.DRAFT,
         templateKey,
+        billingModel: targetBucket,
+        totalAmount: totalAmount ?? undefined,
         issuedAt: now,
         issuedBy: actorId,
         metadata,
@@ -120,6 +151,21 @@ export async function issueInvoiceAtS8(
   });
 }
 
+/**
+ * S8 settlement.
+ *
+ * Split-billing (Phase 3, 2026-07-25): when `input.billingModel` is present, the settlement
+ * scopes to that bucket only:
+ *   - Outstanding = per-bucket sum (via `computeOutstandingForBillingModel`)
+ *   - PaymentRecord created stamped with `billingModel = X`
+ *   - Invoice created stamped with `billingModel = X`
+ *   - Folio state transitions to SETTLED only when the WHOLE folio (all buckets combined)
+ *     reaches zero; otherwise it becomes / stays OUTSTANDING
+ * When `input.billingModel` is absent → legacy whole-folio behaviour.
+ *
+ * `billingModelConfirmation` must match the target bucket (either `input.billingModel` when
+ * provided, else `folio.billingModel`). This is the operator's typo-protection acknowledgement.
+ */
 export async function initiateSettlement(
   prisma: PrismaClient,
   folioId: string,
@@ -127,6 +173,8 @@ export async function initiateSettlement(
   input: {
     settlementMethod: string;
     billingModelConfirmation: string;
+    /** Target bucket for split-billing settlement. Omit for whole-folio (legacy). */
+    billingModel?: string;
     paymentVerificationRef?: string;
     partialAmount?: number;
     fomAcknowledgementRef?: string;
@@ -141,13 +189,34 @@ export async function initiateSettlement(
   if (!folio) throw new NotFoundError("Folio");
   enforceFolioLiveForS8Settlement({ folioState: folio.state });
   if (!folio.billingModel?.trim()) throw new MissingConfigurationError("Folio.billingModel");
-  enforceBillingModelConfirmationMatches({ billingModelConfirmation: input.billingModelConfirmation, billingModel: folio.billingModel });
+
+  // Split-billing: resolve the TARGET bucket for this settlement call.
+  //   - When `input.billingModel` is provided, it's the target (must exist on the folio).
+  //   - Otherwise the folio's primary model is the target (legacy whole-folio).
+  // The `billingModelConfirmation` typo-guard is verified against the target, not the
+  // folio's primary — so an agent-bucket settlement expects operator to type "DIRECT_BILL".
+  const targetBucket = input.billingModel?.trim() || folio.billingModel;
+  if (input.billingModel?.trim()) {
+    const buckets = await listBillingModelBucketsForFolio(prisma, folioId);
+    if (!buckets.includes(targetBucket)) {
+      throw new ValidationError(
+        `No folio lines assigned to billingModel "${targetBucket}". Present buckets: ${buckets.join(", ") || "(none)"}.`,
+      );
+    }
+  }
+  enforceBillingModelConfirmationMatches({ billingModelConfirmation: input.billingModelConfirmation, billingModel: targetBucket });
 
   const entry = await prisma.entry.findUnique({ where: { id: folio.entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS8ForSettlementOperations({ currentStage: entry.currentStage });
 
-  const outstanding = num(folio.outstandingBalance);
+  // Outstanding scope: whole-folio when settling everything, per-bucket when settling a
+  // specific `input.billingModel`. Both paths must be Decimal-safe (never Number() drift).
+  const isBucketScoped = !!input.billingModel?.trim();
+  const outstandingDecScoped = isBucketScoped
+    ? await computeOutstandingForBillingModel(prisma, folioId, targetBucket)
+    : toDecimal(folio.outstandingBalance);
+  const outstanding = Number(outstandingDecScoped.toFixed(2));
   if (outstanding < 0) throw new ValidationError("Folio outstandingBalance cannot be negative at settlement");
 
   let incompleteNightAuditDates: string[] = [];
@@ -219,9 +288,11 @@ export async function initiateSettlement(
     });
   }
 
-  // Settlement method compatibility (minimal policy gate)
+  // Settlement method compatibility — reads from the TARGET bucket, not the folio's primary,
+  // so that in a split folio the agent-bucket settlement is checked for DIRECT_BILL and the
+  // guest-bucket settlement is checked for GUEST_PAY separately.
   const method = input.settlementMethod.trim();
-  const billing = folio.billingModel;
+  const billing = targetBucket;
   enforceSettlementMethodCompatibility({ billingModel: billing, settlementMethod: method });
 
   if ((method === "CASH" || method === "MOBILE_PAYMENT") && !input.paymentVerificationRef?.trim()) {
@@ -241,9 +312,8 @@ export async function initiateSettlement(
   }
   const voucherDec = input.voucherAmount == null ? undefined : toDecimal(input.voucherAmount);
 
-  // outstanding here is already a number derived from the Decimal ledger. Convert both sides
-  // to Decimal for the min/settle so partial settlements never lock in float drift.
-  const outstandingDec = toDecimal(outstanding);
+  // Bucket-scoped outstanding is authoritative for split settlements; whole-folio otherwise.
+  const outstandingDec = outstandingDecScoped;
   const settleAmountDec =
     method === "VOUCHER"
       ? minMoney(voucherDec ?? 0, outstandingDec)
@@ -251,6 +321,11 @@ export async function initiateSettlement(
         ? minMoney(partialDec, outstandingDec)
         : outstandingDec;
   const settleAmount = Number(settleAmountDec.toFixed(2));
+
+  // Bucket tag stamped on every write below. `null` when running whole-folio (legacy),
+  // otherwise the target bucket string — routes payments/invoices to their bucket-scoped
+  // ledger.
+  const bucketTag = isBucketScoped ? targetBucket : null;
 
   const out = await prisma.$transaction(async (tx) => {
     // Voucher settlement IN (mutually exclusive with generic GUEST_PAY below — same settleAmount must not post twice).
@@ -264,6 +339,7 @@ export async function initiateSettlement(
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,
             notes: `VOUCHER:${settleAmount}`,
+            billingModel: bucketTag,
           },
         });
       }
@@ -277,26 +353,35 @@ export async function initiateSettlement(
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,
             notes: `${method}${input.paymentVerificationRef ? `:${input.paymentVerificationRef}` : ""}`,
+            billingModel: bucketTag,
           },
         });
       }
     }
 
-    // Ledger at issuance: standard pattern — invoice metadata snapshots **after** payments, **without** invoice rows in recompute.
+    // Whole-folio ledger recompute (always — the aggregate `Folio.outstandingBalance` field
+    // remains the master total across all buckets). Per-bucket sub-totals are computed
+    // on-demand via `computeOutstandingForBillingModel`.
     await recomputeFolioOutstandingBalance(tx, folioId);
     const ledgerAtIssuance = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { outstandingBalance: true } });
-    // Decimal `.equals(0)` — a plain `=== 0` on `Number(decimal)` would mis-close a folio whose
-    // balance is 0.005 (post-round it'd read 0.00 but the underlying Decimal is non-zero, and
-    // vice-versa). `.equals` on the Decimal itself is authoritative.
-    const balanceClosed = toDecimal(ledgerAtIssuance.outstandingBalance).equals(0);
+    const wholeFolioBalanceClosed = toDecimal(ledgerAtIssuance.outstandingBalance).equals(0);
     const outstandingAtIssuance = num(ledgerAtIssuance.outstandingBalance);
+    // For bucket-scoped settlements, also compute the target bucket's post-payment balance
+    // so we can decide whether to mark this bucket's invoice as DISPATCHED (bucket cleared)
+    // vs OUTSTANDING (bucket still owes something).
+    const bucketAfterDec = isBucketScoped
+      ? await computeOutstandingForBillingModel(tx, folioId, targetBucket)
+      : outstandingDecScoped.sub(toDecimal(settleAmount));
+    const bucketClosedAfter = bucketAfterDec.equals(0);
+    const bucketAfter = Number(bucketAfterDec.toFixed(2));
 
-    // Direct bill → always OUTSTANDING and issue invoice
+    // Direct bill → always OUTSTANDING and issue invoice (bucket-tagged when split)
     if (billing === "DIRECT_BILL" || method === "DIRECT_BILL") {
       const { templateKey, metadata } = await resolveGroupInvoiceOverrides(tx, folio.entryId, "final-v1", {
         settlementMethod: method,
         billingModel: billing,
         outstandingBalance: ledgerAtIssuance.outstandingBalance.toString(),
+        ...(isBucketScoped ? { bucketOutstanding: bucketAfter } : {}),
       });
       await tx.invoice.create({
         data: {
@@ -305,6 +390,8 @@ export async function initiateSettlement(
           invoiceType: InvoiceType.FINAL,
           state: InvoiceState.DISPATCHED,
           templateKey,
+          billingModel: bucketTag,
+          totalAmount: isBucketScoped ? outstandingDecScoped : undefined,
           issuedAt: new Date(),
           issuedBy: actorId,
           dispatchedAt: new Date(),
@@ -314,7 +401,7 @@ export async function initiateSettlement(
       });
     }
 
-    if (method === "VOUCHER" && outstandingAtIssuance > 0) {
+    if (method === "VOUCHER" && bucketAfter > 0) {
       const { templateKey: voucherTemplateKey, metadata: voucherMetadata } = await resolveGroupInvoiceOverrides(
         tx,
         folio.entryId,
@@ -322,7 +409,7 @@ export async function initiateSettlement(
         {
           settlementMethod: method,
           voucherCovered: settleAmount,
-          remaining: outstandingAtIssuance,
+          remaining: bucketAfter,
           billingModel: billing,
         },
       );
@@ -333,6 +420,8 @@ export async function initiateSettlement(
           invoiceType: InvoiceType.FINAL,
           state: InvoiceState.DISPATCHED,
           templateKey: voucherTemplateKey,
+          billingModel: bucketTag,
+          totalAmount: bucketAfterDec,
           issuedAt: new Date(),
           issuedBy: actorId,
           dispatchedAt: new Date(),
@@ -342,12 +431,21 @@ export async function initiateSettlement(
       });
     }
 
+    // Folio state transitions:
+    //   - Whole-folio balance closed → SETTLED (the folio is done regardless of scope).
+    //   - Whole-folio balance > 0    → OUTSTANDING (something still owed on some bucket).
+    // A bucket-scoped settlement that fully clears its bucket but leaves others unpaid
+    // stays OUTSTANDING at the folio level — which is correct: the folio isn't done yet.
     const isDirectBillPath = billing === "DIRECT_BILL" || method === "DIRECT_BILL";
     const nextState = isDirectBillPath
       ? FolioState.OUTSTANDING
-      : balanceClosed
+      : wholeFolioBalanceClosed
         ? FolioState.SETTLED
         : FolioState.OUTSTANDING;
+    // Preserve original `balanceClosed` name for trace payload below.
+    const balanceClosed = wholeFolioBalanceClosed;
+    // Suppress unused-var complaint on bucketClosedAfter (kept for potential future use).
+    void bucketClosedAfter;
     // Prisma extension `enforceFolioSettledOutstandingGuard` reads `_base` (non-interactive client),
     // so it does not see `recomputeFolioOutstandingBalance` writes on `tx`. Passing explicit zero
     // lets the guard use `data.outstandingBalance` when closing to SETTLED.
@@ -361,8 +459,15 @@ export async function initiateSettlement(
       },
     });
 
-    // Physical checkout: room becomes DEPARTED_DIRTY + W24 timer (AC-S8-01/03)
-    await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
+    // Physical checkout: room becomes DEPARTED_DIRTY + W24 timer (AC-S8-01/03).
+    //
+    // Split-billing (Phase 3): only fire physical departure when the WHOLE folio has
+    // settled. A bucket-scoped settlement (e.g., just the agent side) leaves the guest
+    // still in-house; the room stays OCCUPIED until every bucket is done. Legacy
+    // whole-folio calls hit `wholeFolioBalanceClosed` the same as before.
+    if (wholeFolioBalanceClosed || isDirectBillPath) {
+      await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
+    }
 
     // Trace settlement outcome so the audit + entry timeline show what happened.
     const isPartial = !balanceClosed && (partialDec != null || (method === "VOUCHER" && (voucherDec ?? toDecimal(0)).lt(outstandingDec)));
@@ -391,6 +496,10 @@ export async function initiateSettlement(
           outstandingBefore: outstanding,
           outstandingAfter: outstandingAtIssuance,
           folioState: finalState,
+          // Split-billing metadata: which bucket this call targeted + its post-payment balance.
+          bucketScoped: isBucketScoped,
+          bucketTargeted: bucketTag,
+          bucketOutstandingAfter: bucketAfter,
         },
         createdBy: actorId,
       },
