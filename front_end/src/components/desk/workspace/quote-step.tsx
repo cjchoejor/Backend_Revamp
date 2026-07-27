@@ -16,7 +16,9 @@ import {
   resolveQuotationAckOpenLoop,
   sendQuotation,
   supersedeQuotation,
+  type RoomCompositionInput,
 } from "@/lib/api/quotations";
+import { RoomCompositionsEditor } from "./room-compositions-editor";
 import { money } from "@/lib/desk/workspace";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
@@ -88,10 +90,24 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [acceptMethod, setAcceptMethod] = useState<"VERBAL" | "WRITTEN">("VERBAL");
   const [verbatim, setVerbatim] = useState("");
   const [holdBasis, setHoldBasis] = useState("");
-  const [holdTtl, setHoldTtl] = useState("900");
+  // Hold TTL as three inputs (days / hours / minutes). Default 15 minutes = 0d 0h 15m.
+  // Backend API still takes `ttlSeconds`; we derive it at submit time. Strings so operator can
+  // type "0.5" or backspace-to-empty without React fighting them.
+  const [holdDays, setHoldDays] = useState("0");
+  const [holdHours, setHoldHours] = useState("0");
+  const [holdMinutes, setHoldMinutes] = useState("15");
+  const holdTtlSeconds =
+    Math.max(0, Math.floor(Number(holdDays) || 0)) * 86_400
+    + Math.max(0, Math.floor(Number(holdHours) || 0)) * 3_600
+    + Math.max(0, Math.floor(Number(holdMinutes) || 0)) * 60;
   const [releaseReason, setReleaseReason] = useState("");
   const [mealPlan, setMealPlan] = useState<"" | "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP">("");
   const [extraBedCount, setExtraBedCount] = useState("0");
+  // Per-room composition (Phase E of per-room track, 2026-07-27). Managed by the
+  // `RoomCompositionsEditor` child; parent just holds the current array and forwards it
+  // in the createQuotation body.
+  const [roomCompositions, setRoomCompositions] = useState<RoomCompositionInput[]>([]);
+  const sealedRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -118,6 +134,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               : undefined,
           mealPlan: mealPlan || null,
           extraBedCount: Number(extraBedCount) || 0,
+          // Send per-room compositions when the operator filled the composition editor.
+          // Backend uses per-room iteration when this is non-empty; falls back to booking-
+          // level meal plan / extra bed otherwise.
+          roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
         }),
       "Quote drafted",
     ),
@@ -187,9 +207,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     wrap(() => {
       if (!preferredRoomId) throw new Error("No preferred room from Inquiry");
       if (!holdBasis.trim()) throw new Error("A reason for the hold is required");
+      if (holdTtlSeconds <= 0) throw new Error("Hold duration must be at least one minute");
       return placeSpeculativeHold(session!, entry.id, {
         roomId: preferredRoomId,
-        ttlSeconds: Number(holdTtl) || 900,
+        ttlSeconds: holdTtlSeconds,
         commercialBasis: holdBasis.trim(),
       });
     }, "Hold placed"),
@@ -284,27 +305,42 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
             </div>
           </div>
-          <div className="frow">
-            <div className="field">
-              <label>Meal plan</label>
-              <select value={mealPlan} onChange={(e) => setMealPlan(e.target.value as typeof mealPlan)}>
-                <option value="">EP — room only (no meals)</option>
-                <option value="CP">CP — breakfast</option>
-                <option value="MAP_LUNCH">MAP — breakfast + lunch</option>
-                <option value="MAP_DINNER">MAP — breakfast + dinner</option>
-                <option value="AP">AP — all meals</option>
-              </select>
+          <div style={{ marginTop: 10, marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 6 }}>
+              PER-ROOM COMPOSITION
             </div>
-            <div className="field">
-              <label>Extra beds</label>
-              <input type="number" min={0} max={10} value={extraBedCount} onChange={(e) => setExtraBedCount(e.target.value)} />
-            </div>
+            <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
+              Set adults / children per room, meal-plan distribution, and negotiated rates. Falls back to the
+              booking-level meal plan below if left empty.
+            </p>
+            <RoomCompositionsEditor
+              sealedRoomIds={sealedRoomIds}
+              entryCheckIn={entry.checkInDate ?? null}
+              entryCheckOut={entry.checkOutDate ?? null}
+              onChange={setRoomCompositions}
+            />
           </div>
-          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
-            Meals price per person by age (under-6 free · 6–10 at the child rate · 11+ full) and extra beds
-            per night — <b>only for agent/corporate bookings</b> with a rate card; otherwise the meal plan is
-            recorded as a label with no charge.
-          </p>
+          <details style={{ marginBottom: 10 }}>
+            <summary style={{ fontSize: 11.5, color: "var(--ink-3)", cursor: "pointer" }}>
+              Legacy booking-level meal plan (used when per-room composition is empty)
+            </summary>
+            <div className="frow" style={{ marginTop: 8 }}>
+              <div className="field">
+                <label>Meal plan</label>
+                <select value={mealPlan} onChange={(e) => setMealPlan(e.target.value as typeof mealPlan)}>
+                  <option value="">EP — room only (no meals)</option>
+                  <option value="CP">CP — breakfast</option>
+                  <option value="MAP_LUNCH">MAP — breakfast + lunch</option>
+                  <option value="MAP_DINNER">MAP — breakfast + dinner</option>
+                  <option value="AP">AP — all meals</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Extra beds</label>
+                <input type="number" min={0} max={10} value={extraBedCount} onChange={(e) => setExtraBedCount(e.target.value)} />
+              </div>
+            </div>
+          </details>
           <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
             {createM.isPending ? "Drafting…" : "Create draft quote"}
           </button>
@@ -469,10 +505,52 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               <input value={holdBasis} onChange={(e) => setHoldBasis(e.target.value)} placeholder="Commercial basis" />
             </div>
             <div className="field">
-              <label>Hold for (seconds)</label>
-              <input type="number" value={holdTtl} onChange={(e) => setHoldTtl(e.target.value)} />
+              <label>Hold for</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div>
+                  <input
+                    type="number"
+                    min={0}
+                    value={holdDays}
+                    onChange={(e) => setHoldDays(e.target.value)}
+                    aria-label="Days"
+                  />
+                  <div style={{ fontSize: 10.5, color: "var(--ink-3, #7a6a52)", textAlign: "center", marginTop: 2 }}>days</div>
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={holdHours}
+                    onChange={(e) => setHoldHours(e.target.value)}
+                    aria-label="Hours"
+                  />
+                  <div style={{ fontSize: 10.5, color: "var(--ink-3, #7a6a52)", textAlign: "center", marginTop: 2 }}>hours</div>
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={holdMinutes}
+                    onChange={(e) => setHoldMinutes(e.target.value)}
+                    aria-label="Minutes"
+                  />
+                  <div style={{ fontSize: 10.5, color: "var(--ink-3, #7a6a52)", textAlign: "center", marginTop: 2 }}>minutes</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", marginTop: 6 }}>
+                {holdTtlSeconds > 0
+                  ? `= ${holdTtlSeconds.toLocaleString()} seconds total`
+                  : "Set at least one minute."}
+              </div>
             </div>
-            <button className="btn btn-ghost" disabled={holdM.isPending || !preferredRoomId || !holdBasis.trim()} onClick={() => holdM.mutate()}>
+            <button
+              className="btn btn-ghost"
+              disabled={holdM.isPending || !preferredRoomId || !holdBasis.trim() || holdTtlSeconds <= 0}
+              onClick={() => holdM.mutate()}
+            >
               {holdM.isPending ? "Placing…" : "Place hold on preferred room"}
             </button>
           </>

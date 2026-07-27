@@ -97,19 +97,84 @@ export async function generateOrLoadQuotationPdf(
   const perNightBreakdown = await computeStayCharges(prisma, nightlyRate, 1, roomCount);
   const perNightAmount = perNightBreakdown.total;
 
+  // Per-room composition path (Phase D of per-room track, 2026-07-27). When the quotation
+  // was built via the composition flow (Phase B), commercialTerms carries
+  // `compositionTotals.perRoom[]` — one entry per room with its own tax-inclusive total.
+  // We render one PDF row per room. Falls back to the legacy per-night rendering when no
+  // composition is present.
+  const compositionPerRoom = (terms as unknown as {
+    compositionTotals?: {
+      perRoom?: Array<{
+        roomId: string;
+        roomNumber: string | null;
+        nights: number;
+        effectiveBreakfastPax: number;
+        effectiveLunchPax: number;
+        effectiveDinnerPax: number;
+        total: number;
+      }>;
+      total?: number;
+    };
+    roomCompositions?: Array<{
+      roomId: string;
+      adultCount?: number;
+      cnb11PlusCount?: number;
+      cnb6To10Count?: number;
+      cnbUnder6Count?: number;
+      extraBedCount?: number;
+      mealPlanCpCount?: number;
+      mealPlanMaplCount?: number;
+      mealPlanMapdCount?: number;
+      mealPlanApCount?: number;
+      mealPlanOthersCount?: number;
+    }>;
+  })?.compositionTotals?.perRoom;
+
   const linesForTemplate: QuotationProformaLine[] = [];
-  for (let i = 0; i < nights; i++) {
-    const date = new Date(checkIn.getTime() + i * 86_400_000);
-    linesForTemplate.push({
-      date,
-      occupants: occupantsString,
-      mealPlan: mealPlanDisplay || null,
-      extraBeds,
-      amount: perNightAmount,
-    });
+  let totalAmount = 0;
+  if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
+    // One row per room summarising the whole stay for that room.
+    const inputsByRoomId = new Map(
+      ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
+    );
+    for (const r of compositionPerRoom) {
+      const raw = inputsByRoomId.get(r.roomId) as any;
+      const adults = raw?.adultCount ?? 0;
+      const cnb = (raw?.cnb11PlusCount ?? 0) + (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
+      const roomOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
+      const planParts: string[] = [];
+      if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);
+      if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAPL`);
+      if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAPD`);
+      if (raw?.mealPlanApCount) planParts.push(`${raw.mealPlanApCount} AP`);
+      if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
+      const planStr = planParts.length > 0 ? planParts.join(" · ") : null;
+      const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
+      linesForTemplate.push({
+        date: checkIn,
+        roomNo: r.roomNumber ?? r.roomId.slice(0, 6),
+        occupants: roomOccupants,
+        mealPlan: planStr,
+        extraBeds: eb,
+        amount: r.total,
+      });
+      totalAmount += Number(r.total);
+    }
+  } else {
+    // Legacy: one row per stay night. Kept for backward compat.
+    for (let i = 0; i < nights; i++) {
+      const date = new Date(checkIn.getTime() + i * 86_400_000);
+      linesForTemplate.push({
+        date,
+        occupants: occupantsString,
+        mealPlan: mealPlanDisplay || null,
+        extraBeds,
+        amount: perNightAmount,
+      });
+    }
+    totalAmount = perNightAmount * nights;
   }
 
-  const totalAmount = perNightAmount * nights;
   const advanceAmount = 0; // No advance recorded on S2 quotations
   const focAmount = 0;
   const totalPayable = totalAmount - advanceAmount - focAmount;
@@ -146,7 +211,9 @@ export async function generateOrLoadQuotationPdf(
 
   // Persist snapshot + artifact metadata + write QuotationLine rows atomically.
   await prisma.$transaction(async (tx) => {
-    // QuotationLine snapshot — one row per booking-table row, immutable.
+    // QuotationLine snapshot — one row per booking-table row, immutable. Uses each line's
+    // own amount so per-room composition rows carry their true tax-inclusive stay total,
+    // not the legacy per-night value.
     const lineData: Prisma.QuotationLineCreateManyInput[] = linesForTemplate.map((l, i) => ({
       quotationId: q.id,
       lineNumber: i + 1,
@@ -154,7 +221,7 @@ export async function generateOrLoadQuotationPdf(
       occupants: l.occupants,
       mealPlan: l.mealPlan,
       extraBeds: l.extraBeds,
-      amount: new Prisma.Decimal(perNightAmount.toFixed(2)),
+      amount: new Prisma.Decimal(Number(l.amount).toFixed(2)),
       currency: "BTN",
     }));
     // deleteMany covers the rare case where a prior partial render left orphan rows.

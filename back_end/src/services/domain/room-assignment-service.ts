@@ -5,6 +5,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { requireDeficientRoomAcknowledgement } from "../../policies/19-deficient-condition/p48-deficient-room-assignment-decision.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { hydrateRoomAssignmentComposition } from "../../lib/hydrate-room-assignment-composition.js";
 import {
   enforceArrivalDatePresentForRoomAssignment,
   enforceCommittedHoldPresentForRoomAssignment,
@@ -81,6 +82,11 @@ export async function assignRoom(
   const activeDef = room.deficientConditionRecords[0];
   const isDeficient = !!activeDef;
 
+  // Hydrate per-room composition from the accepted quotation (Phase C, 2026-07-27).
+  // Returns null when no accepted quotation exists or the room wasn't in the composition —
+  // in that case the assignment is created without composition fields (legacy path).
+  const compositionFields = await hydrateRoomAssignmentComposition(prisma, entryId, roomId);
+
   if (isDeficient) {
     const { acknowledgementAt } = requireDeficientRoomAcknowledgement(deficientAcknowledgement);
     const acknowledgementActorId = deficientAcknowledgement!.acknowledgementActorId;
@@ -98,6 +104,7 @@ export async function assignRoom(
         notes,
         ...(opts?.startDate ? { startDate: opts.startDate } : {}),
         ...(opts?.endDate ? { endDate: opts.endDate } : {}),
+        ...(compositionFields ?? {}),
       },
     });
     await maybeRegisterRoomReadinessSla(prisma, entryId, roomId, actorId, room.physicalState);
@@ -119,6 +126,7 @@ export async function assignRoom(
       notes,
       ...(opts?.startDate ? { startDate: opts.startDate } : {}),
       ...(opts?.endDate ? { endDate: opts.endDate } : {}),
+      ...(compositionFields ?? {}),
     },
   });
   if (entry.currentStage === Stage.S5) {
@@ -214,6 +222,10 @@ export async function assignRoomsFromSealedPerNight(
       continue;
     }
     const id = await allocateReadableId(prisma, "ROOM_ASSIGNMENT" as const);
+    // Hydrate composition from the accepted quotation (Phase C). One hydration call per
+    // room in the loop is fine — the accepted quotation lookup is small + the loop typically
+    // runs 1–5 iterations for a real booking.
+    const compositionFields = await hydrateRoomAssignmentComposition(prisma, entryId, r.roomId);
     const row = await prisma.roomAssignment.create({
       data: {
         id,
@@ -224,6 +236,7 @@ export async function assignRoomsFromSealedPerNight(
         startDate: r.startDate,
         endDate: r.endDate,
         notes: "auto-created from sealed per-night configuration",
+        ...(compositionFields ?? {}),
       },
     });
     created.push({ id: row.id, roomId: row.roomId, startDate: r.startDate, endDate: r.endDate });

@@ -121,23 +121,62 @@ export async function generateOrLoadInvoicePdf(
   // PROFORMA branch — same template as quotation.
   // ================================================================
   if (inv.invoiceType === InvoiceType.PROFORMA) {
+    // Per-room composition path (Phase D, 2026-07-27). When frozenCommercialTerms carries
+    // compositions, render one row per room. Falls back to legacy per-night rendering when
+    // no composition (older bookings + non-composition callers).
+    const compositionPerRoom = (terms as unknown as {
+      compositionTotals?: {
+        perRoom?: Array<{ roomId: string; roomNumber: string | null; total: number }>;
+      };
+      roomCompositions?: Array<any>;
+    })?.compositionTotals?.perRoom;
+
     // Per-row Amount (Nu.) on Proforma is tax-INCLUSIVE — matches the Quotation convention.
-    // `computeStayCharges` with nights=1 yields the per-night tax-inclusive total for the
-    // full room count. Bottom-of-page Total Amount = per-row × nights.
     const perNightBreakdown = await computeStayCharges(prisma, nightlyRate, 1, roomCount);
     const perNightAmount = perNightBreakdown.total;
     const linesForTemplate: QuotationProformaLine[] = [];
-    for (let i = 0; i < nights; i++) {
-      const date = new Date(checkIn.getTime() + i * 86_400_000);
-      linesForTemplate.push({
-        date,
-        occupants: occupantsString,
-        mealPlan: mealPlanDisplay || null,
-        extraBeds,
-        amount: perNightAmount,
-      });
+    let totalAmount = 0;
+    if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
+      const inputsByRoomId = new Map(
+        ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
+      );
+      for (const r of compositionPerRoom) {
+        const raw = inputsByRoomId.get(r.roomId) as any;
+        const adults = raw?.adultCount ?? 0;
+        const cnb = (raw?.cnb11PlusCount ?? 0) + (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
+        const rowOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
+        const planParts: string[] = [];
+        if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);
+        if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAPL`);
+        if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAPD`);
+        if (raw?.mealPlanApCount) planParts.push(`${raw.mealPlanApCount} AP`);
+        if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
+        const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
+        linesForTemplate.push({
+          date: checkIn,
+          roomNo: r.roomNumber ?? r.roomId.slice(0, 6),
+          occupants: rowOccupants,
+          mealPlan: planParts.length > 0 ? planParts.join(" · ") : null,
+          extraBeds: eb,
+          amount: r.total,
+        });
+        totalAmount += Number(r.total);
+      }
+    } else {
+      // Legacy per-night rendering.
+      for (let i = 0; i < nights; i++) {
+        const date = new Date(checkIn.getTime() + i * 86_400_000);
+        linesForTemplate.push({
+          date,
+          occupants: occupantsString,
+          mealPlan: mealPlanDisplay || null,
+          extraBeds,
+          amount: perNightAmount,
+        });
+      }
+      totalAmount = perNightAmount * nights;
     }
-    const totalAmount = perNightAmount * nights;
+
     // Advance and FoC pulled from the folio's payments (IN) for a real total-payable calc.
     const inPayments = (inv.folio?.payments ?? []).filter((p) => p.paymentDirection === "IN");
     const advanceAmount = inPayments.reduce((s, p) => s + Number(toDecimal(p.amount).toFixed(2)), 0);
@@ -173,10 +212,11 @@ export async function generateOrLoadInvoicePdf(
         invoiceId: inv.id,
         lineNumber: i + 1,
         particular: "Room",
-        roomNo: null,
+        // Per-room path stamps the room number; legacy per-night rows leave it null.
+        roomNo: l.roomNo ?? null,
         nights: 1,
-        rate: new Prisma.Decimal(perNightAmount.toFixed(2)),
-        amount: new Prisma.Decimal(perNightAmount.toFixed(2)),
+        rate: new Prisma.Decimal(Number(l.amount).toFixed(2)),
+        amount: new Prisma.Decimal(Number(l.amount).toFixed(2)),
         currency: "BTN",
       }));
       await tx.invoiceLine.deleteMany({ where: { invoiceId: inv.id } });

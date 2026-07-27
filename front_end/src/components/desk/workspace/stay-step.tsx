@@ -31,6 +31,7 @@ import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
+import { RoomCompositionSummary } from "./room-composition-summary";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -309,6 +310,17 @@ export function StayStep({
           themselves each night in the audit; you post the rest.
         </p>
       </div>
+
+      {/* Per-room composition summary (Phase F of per-room track, 2026-07-27).
+          Renders one card per room with occupants, meal-plan distribution, extra beds,
+          negotiated rates, and per-room frozen total. Hidden on legacy bookings without
+          composition data. */}
+      {entry.roomAssignments && entry.roomAssignments.length > 0 && (
+        <div className="block">
+          <BlockH>Per-room composition</BlockH>
+          <RoomCompositionSummary assignments={entry.roomAssignments} currency={currency} />
+        </div>
+      )}
 
       {/* Live folio */}
       <div className="block">

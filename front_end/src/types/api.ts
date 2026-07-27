@@ -359,6 +359,32 @@ export type RoomAssignmentSummary = {
     expectedReadyAt?: string | null;
     deficientConditionRecords?: DeficientConditionSummary[];
   };
+  // Per-room composition (Phase A of per-room track, 2026-07-27). Populated when the
+  // quotation was built via per-room composition; null on legacy bookings.
+  occupantCount?: number | null;
+  adultCount?: number | null;
+  cnb11PlusCount?: number | null;
+  cnb6To10Count?: number | null;
+  cnbUnder6Count?: number | null;
+  extraBedCount?: number | null;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
+  mealPlanOthersCount?: number;
+  othersBreakfastPax?: number | null;
+  othersLunchPax?: number | null;
+  othersDinnerPax?: number | null;
+  negotiatedRoomRate?: string | number | null;
+  negotiatedExtraBedRate?: string | number | null;
+  negotiatedBreakfastRate?: string | number | null;
+  negotiatedLunchRate?: string | number | null;
+  negotiatedDinnerRate?: string | number | null;
+  serviceChargeApplies?: boolean;
+  gstApplies?: boolean;
+  isFoc?: boolean;
+  frozenSubtotal?: string | number | null;
+  frozenTotal?: string | number | null;
 };
 
 export type KeyReturnSummary = {
