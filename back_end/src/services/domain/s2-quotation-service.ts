@@ -70,36 +70,6 @@ async function resolveAgentRateForEntryQuotation(
   return null;
 }
 
-/**
- * Age-band meal total (SIG Legphel-Child-Policy §4). Per person, per night:
- *   under 6 → free · 6–10 → cnbPercent% of the plan rate (charge fraction) · 11+ → full.
- * `planRate` is the per-person meal-plan rate from the rate card; `childAges` are the ages
- * declared at intake. Returns priced units and the total (planRate × units).
- */
-function computeMealTotal(
-  planRate: number,
-  adultCount: number,
-  childAges: number[],
-  cnbPercent: number | null,
-): { units: number; total: number; breakdown: { adults: number; under6: number; child6to10: number; elevenPlus: number; childFactor: number } } {
-  const childFactor = (cnbPercent ?? 70) / 100; // fraction a 6–10 child is charged
-  let under6 = 0;
-  let child6to10 = 0;
-  let elevenPlus = 0;
-  let units = Math.max(0, adultCount);
-  for (const age of childAges ?? []) {
-    if (age < 6) under6 += 1;
-    else if (age <= 10) {
-      child6to10 += 1;
-      units += childFactor;
-    } else {
-      elevenPlus += 1;
-      units += 1;
-    }
-  }
-  return { units, total: units * planRate, breakdown: { adults: Math.max(0, adultCount), under6, child6to10, elevenPlus, childFactor } };
-}
-
 export async function createQuotation(
   prisma: PrismaClient,
   entryId: string,
@@ -170,13 +140,33 @@ export async function createQuotation(
   const resolutionPath = agentRate ? `${pricing.resolutionPath ?? ""} → AGENT_RATE_CARD` : pricing.resolutionPath;
 
   // Meal + extra-bed pricing (Phase-D, Track A). Only priced when the booking is linked to an
-  // agent/corporate rate card (agentRate present). Meals follow the age-band child policy; extra
-  // beds are a manual per-night surcharge. For non-contracted bookings these stay label-only.
+  // agent/corporate rate card (agentRate present). Extra beds are a manual per-night surcharge.
+  // For non-contracted bookings these stay label-only.
+  //
+  // Meals are priced by `computeGroupMealCharge` — the age-band child policy from
+  // `registry.child.*` (young child free / child 70% / adult 100% by default, admin-editable).
+  // It previously used the rate card's `cnbPercent`, which is the child-NO-BED *room* discount,
+  // not a meal rate: docs/Legphel-Child-Policy.md §4 states the child meal rate "applies to the
+  // per-person meal component of the plan or package, not the room". That mismatch billed
+  // 6–10-year-olds free on any contract with cnbPercent = 0. `cnbPercent` belongs to the
+  // separate-bed charge (getSeparateBedCharge), which is still awaiting a confirmed rate.
+  //
+  // nights: 1 — this figure feeds `perNightTotal`; the stay multiplication happens downstream.
+  const childPolicyBundle = await loadChildPolicyBundle(prisma);
   const mealPricing =
     agentRate && mealPlan && agentRate.mealPlanRate != null
-      ? computeMealTotal(agentRate.mealPlanRate, entry.adultCount ?? entry.guestCount ?? 0, entry.childAges ?? [], agentRate.cnbPercent)
+      ? computeGroupMealCharge(
+          {
+            adultCount: entry.adultCount ?? entry.guestCount ?? 0,
+            childAges: entry.childAges ?? [],
+            adultMealRate: agentRate.mealPlanRate,
+            nights: 1,
+          },
+          childPolicyBundle,
+        )
       : null;
   const extraBedRate = agentRate?.addOns.extraBed ?? null;
+
   const extraBedTotal = extraBedRate != null && extraBedCount > 0 ? extraBedRate * extraBedCount : 0;
   const mealTotal = mealPricing?.total ?? 0;
   // Per-night total the guest is quoted = room + meal component + extra beds.
@@ -213,7 +203,6 @@ export async function createQuotation(
       stay && stay.checkIn && stay.checkOut
         ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
         : 1;
-    const bundle = await loadChildPolicyBundle(prisma);
     const breakdown = computeGroupMealCharge(
       {
         adultCount: entry.adultCount ?? 0,
@@ -221,7 +210,7 @@ export async function createQuotation(
         adultMealRate,
         nights: nightsForMeals,
       },
-      bundle,
+      childPolicyBundle,
     );
     perGuestMealBreakdown = {
       adultMealRate,
@@ -272,7 +261,17 @@ export async function createQuotation(
     mealPlan,
     inclusions: mealPlan ? [`Meal plan: ${mealPlan}`] : [],
     ...(mealPricing
-      ? { mealPlanPricing: { planRate: agentRate!.mealPlanRate, total: mealPricing.total, units: mealPricing.units, breakdown: mealPricing.breakdown } }
+      ? {
+          mealPlanPricing: {
+            planRate: agentRate!.mealPlanRate,
+            total: mealPricing.total,
+            // Chargeable meal units = the age-band multipliers summed (2 adults + one 6–10 child
+            // at 70% = 2.7). Kept for downstream consumers that read `units`.
+            units: mealPricing.perGuest.reduce((sum, g) => sum + g.multiplier, 0),
+            perGuest: mealPricing.perGuest,
+            source: "registry.child.mealPricing",
+          },
+        }
       : {}),
     ...(extraBedCount > 0
       ? { extraBed: { count: extraBedCount, rate: extraBedRate, total: extraBedTotal, priced: extraBedRate != null } }
