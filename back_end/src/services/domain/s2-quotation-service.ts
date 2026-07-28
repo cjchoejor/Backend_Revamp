@@ -317,7 +317,15 @@ async function prepareQuotationDraft(
     const defaultLunch = toDecimal(agentRate?.addOns?.lunch ?? 0);
     const defaultDinner = toDecimal(agentRate?.addOns?.dinner ?? 0);
     const defaultExtraBed = toDecimal(agentRate?.addOns?.extraBed ?? 0);
-    const defaultRoomRate = toDecimal(resolvedNightlyRate ?? effectiveRate ?? 0);
+    // Cost the composition from the EFFECTIVE (post-discount) rate, not the resolved base.
+    // Fixed 2026-07-28: this previously read `resolvedNightlyRate`, which is the rate BEFORE
+    // any discount is applied — so on a composition-priced quote the discount reached
+    // `effectiveRate` in commercialTerms but never reached the rooms, and the total came out
+    // identical to the undiscounted one (observed on ENT-20260728-0013: effectiveRate 1530,
+    // roomRate 1700, total unchanged at 1963.50 across three rounds).
+    // `effectiveRate` equals `resolvedNightlyRate` when no discount is in play, so this is a
+    // no-op for undiscounted quotes.
+    const defaultRoomRate = toDecimal(effectiveRate ?? resolvedNightlyRate ?? 0);
 
     // Validate each room's composition BEFORE pricing so we reject early with a friendly
     // error (rather than persisting bad data). Both policies are no-ops when key fields
@@ -406,6 +414,11 @@ async function prepareQuotationDraft(
     inclusions: [],
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
+    // The pipeline now genuinely folds the discount into the resolved rate on every path
+    // (create / supersede / applyDiscount), so record what was actually applied here rather
+    // than leaving it to whichever caller happened to set it — previously only applyDiscount
+    // wrote this field, so a superseded round silently dropped it.
+    ...(requested ? { discountAppliedPercent: requested.discountPercent } : {}),
     // Multi-room-aware pricing breakdown — always present so downstream can rely on it.
     roomCount,
     pricingBreakdown,
