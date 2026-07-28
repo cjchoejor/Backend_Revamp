@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { EntryStatus, Stage } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
+import { readOptionSelected } from "../../lib/option-selected-reader.js";
 
 /**
  * SEGMENT HISTORY — the entry's per-pass record (LEGPHEL Implementation Reference §1.2 / §6.2).
@@ -17,7 +18,7 @@ import { NotFoundError } from "../../lib/errors.js";
  *   - Quotation / SpeculativeHold / AmendmentEventRecord / BillingModelTransitionRecord (segmentId FKs)
  *   - ENTRY.BACKFLOW_* traces — the mode + operator reason that OPENED each re-entry segment
  *     (the Segment row's own open-reason is overwritten by the seal cause when it later seals,
- *     so the trace payload is the durable source for "why did round N start")
+ *     so the trace payload is the durable source for "why did segment N open")
  *
  * MONEY: read from the DB (Decimal) and returned as numbers — no re-summing (CLAUDE.md money rule).
  */
@@ -62,6 +63,27 @@ export interface SegmentBillingTransitionRef {
   createdAt: string;
 }
 
+/**
+ * The S1 work done inside one segment — what was searched and which rooms were chosen.
+ * `AvailabilityConfiguration` carries `segmentId`, so unlike the folio / committed hold /
+ * cancellation disclosure (all `entryId @unique` singletons) this IS genuine per-segment history.
+ */
+export interface SegmentAvailabilityConfigRef {
+  id: string;
+  checkInDate: string | null;
+  checkOutDate: string | null;
+  guestCount: number | null;
+  roomTypeId: string | null;
+  selectionShape: "single" | "whole-stay-multi" | "per-night" | "none";
+  rooms: Array<{ roomId: string; roomNumber: string | null; roomTypeName: string | null }>;
+  perNight: Array<{ date: string; rooms: Array<{ roomId: string; roomNumber: string | null }> }> | null;
+  sealedAt: string | null;
+  isStale: boolean;
+  createdAt: string;
+  /** Set when this configuration was produced by reusing an earlier segment's basis (§59 recall). */
+  recalledFromSegmentNumber: number | null;
+}
+
 export interface SegmentHistoryItem {
   id: string;
   segmentNumber: number;
@@ -86,6 +108,8 @@ export interface SegmentHistoryItem {
   sealCause: string | null;
   /** Stages walked during this pass, in order, reconstructed from dwell records. */
   stagePath: Stage[];
+  /** The S1 searches + room selections made inside this segment, oldest first. */
+  availabilityConfigs: SegmentAvailabilityConfigRef[];
   reservation: SegmentReservationRef | null;
   quotations: SegmentQuotationRef[];
   amendments: SegmentAmendmentRef[];
@@ -140,7 +164,7 @@ export async function buildSegmentHistory(prisma: Db, entryId: string): Promise<
   });
   if (!entry) throw new NotFoundError("Entry");
 
-  const [segments, dwells, backflowTraces] = await Promise.all([
+  const [segments, dwells, backflowTraces, configs] = await Promise.all([
     prisma.segment.findMany({
       where: { entryId },
       orderBy: { segmentNumber: "asc" },
@@ -165,13 +189,28 @@ export async function buildSegmentHistory(prisma: Db, entryId: string): Promise<
       orderBy: { enteredAt: "asc" },
       select: { stage: true, enteredAt: true },
     }),
-    // The durable "why did round N start" source: the backflow trace payload carries the NEW
+    // The durable "why did segment N open" source: the backflow trace payload carries the NEW
     // segment's number + the operator reason + mode. (Older S3/S8 re-entry machines emit their
     // own event types without segmentNumber — those segments fall back to Segment.notes.)
     prisma.traceEvent.findMany({
       where: { entryId, eventType: { startsWith: "ENTRY.BACKFLOW_" } },
       orderBy: { timestamp: "asc" },
       select: { payload: true },
+    }),
+    // Per-segment S1 work. AvailabilityConfiguration has no relation to Segment (only to Entry),
+    // so it's fetched flat and grouped by segmentId below.
+    prisma.availabilityConfiguration.findMany({
+      where: { entryId },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        segmentId: true,
+        searchCriteria: true,
+        optionSelected: true,
+        sealedAt: true,
+        isStale: true,
+        createdAt: true,
+      },
     }),
   ]);
 
@@ -206,6 +245,59 @@ export async function buildSegmentHistory(prisma: Db, entryId: string): Promise<
     ? await prisma.staffUser.findMany({ where: { id: { in: actorIds } }, select: { id: true, fullName: true } })
     : [];
   const nameOf = new Map(staff.map((s) => [s.id, s.fullName]));
+
+  // Resolve every room referenced by any segment's selection in ONE query, so the drill-in can
+  // show room numbers rather than uuids.
+  const selByConfig = new Map(configs.map((c) => [c.id, readOptionSelected(c.optionSelected ?? null)]));
+  const allSelectedRoomIds = Array.from(new Set(Array.from(selByConfig.values()).flatMap((s) => s.distinctRoomIds)));
+  const roomRows = allSelectedRoomIds.length
+    ? await prisma.room.findMany({
+        where: { id: { in: allSelectedRoomIds } },
+        select: { id: true, roomNumber: true, roomType: { select: { name: true } } },
+      })
+    : [];
+  const roomById = new Map(roomRows.map((r) => [r.id, r]));
+  const roomRef = (roomId: string) => ({
+    roomId,
+    roomNumber: roomById.get(roomId)?.roomNumber ?? null,
+    roomTypeName: roomById.get(roomId)?.roomType?.name ?? null,
+  });
+
+  // Group the segment's S1 configurations by segmentId.
+  const configsBySegment = new Map<string, SegmentAvailabilityConfigRef[]>();
+  for (const c of configs) {
+    if (!c.segmentId) continue;
+    const sel = selByConfig.get(c.id)!;
+    const sc = (c.searchCriteria ?? {}) as Record<string, unknown>;
+    const recalledFrom = typeof sc.recalledFromSegmentNumber === "number" ? sc.recalledFromSegmentNumber : null;
+    const list = configsBySegment.get(c.segmentId) ?? [];
+    list.push({
+      id: c.id,
+      checkInDate: typeof sc.checkInDate === "string" ? sc.checkInDate : null,
+      checkOutDate: typeof sc.checkOutDate === "string" ? sc.checkOutDate : null,
+      guestCount: typeof sc.guestCount === "number" ? sc.guestCount : null,
+      roomTypeId: typeof sc.roomTypeId === "string" ? sc.roomTypeId : null,
+      selectionShape: sel.perNight
+        ? "per-night"
+        : sel.distinctRoomIds.length > 1
+          ? "whole-stay-multi"
+          : sel.distinctRoomIds.length === 1
+            ? "single"
+            : "none",
+      rooms: sel.distinctRoomIds.map(roomRef),
+      perNight: sel.perNight
+        ? sel.perNight.map((n) => ({
+            date: n.date,
+            rooms: n.roomIds.map((id) => ({ roomId: id, roomNumber: roomById.get(id)?.roomNumber ?? null })),
+          }))
+        : null,
+      sealedAt: iso(c.sealedAt),
+      isStale: c.isStale,
+      createdAt: c.createdAt.toISOString(),
+      recalledFromSegmentNumber: recalledFrom,
+    });
+    configsBySegment.set(c.segmentId, list);
+  }
 
   // Time-window the dwell records into segments: a dwell belongs to the last segment whose
   // startedAt <= enteredAt (both are stamped in the same transaction on transitions, so the
@@ -250,6 +342,7 @@ export async function buildSegmentHistory(prisma: Db, entryId: string): Promise<
       openedBy: backflow ? { modeKey: backflow.modeKey, fromStage: backflow.fromStage, toStage: backflow.toStage } : null,
       sealCause: isActive ? null : s.notes,
       stagePath: pathBySegment.get(s.id) ?? [s.stage],
+      availabilityConfigs: configsBySegment.get(s.id) ?? [],
       reservation: res
         ? {
             id: res.id,

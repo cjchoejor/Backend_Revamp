@@ -96,7 +96,7 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
-      toast.success(`Re-entered to ${active?.toStage} — a new round is open.`);
+      toast.success(`Re-entered to ${active?.toStage} — a new segment is open.`);
       setActive(null);
       setReason("");
       setNewCheckOutDate("");
@@ -240,7 +240,7 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
             </div>
             <div className="modal-body">
               <p className="why">
-                This opens a <b>new round</b> at {active.toStage}. What&rsquo;s already sealed stays as read-only
+                This opens a <b>new segment</b> at {active.toStage}. What&rsquo;s already sealed stays as read-only
                 history — this doesn&rsquo;t quietly edit it. The reason is recorded on the audit trail.
               </p>
               {active.needsNewCheckOutDate && (

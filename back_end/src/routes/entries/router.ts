@@ -24,6 +24,7 @@ import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
 import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
+import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 
 export const entriesRouter = Router();
 
@@ -92,6 +93,72 @@ entriesRouter.get("/:id/segments", requireActorLevel("L1"), async (req, res, nex
   try {
     const history = await buildSegmentHistory(prisma, req.params.id);
     res.json(history);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Reuse a prior segment's room configuration as the current segment's basis — Canon Block 10 §59
+ * "Availability Configuration and Recall". This is a recall-plus-revalidate, not a copy: the
+ * prior (sealed) configuration is never modified; the engine re-runs against present state, and
+ * a NEW configuration derived from it is written on the current segment.
+ *
+ * `apply: false` (default) previews — it runs every viability check and records the evidence but
+ * writes no configuration. `apply: true` commits. Any material change (room no longer available,
+ * DEFICIENT flag moved, indicative rate moved) requires L2/FOM authority per §59 M.4 and comes
+ * back as PolicyGateBlockedError `AUTH_REQUIRED_L2` for L1 actors. L1+ to preview.
+ */
+entriesRouter.post("/:id/segments/:segmentNumber/recall", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const fromSegmentNumber = Number(req.params.segmentNumber);
+    if (!Number.isInteger(fromSegmentNumber) || fromSegmentNumber < 1) {
+      throw new ValidationError("segmentNumber must be a positive integer");
+    }
+    const body = z
+      .object({ apply: z.boolean().optional(), reason: z.string().max(500).optional() })
+      .parse(req.body ?? {});
+    const outcome = await recallSegmentConfiguration(prisma, {
+      entryId: req.params.id,
+      fromSegmentNumber,
+      actor: { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      apply: body.apply,
+      reason: body.reason,
+    });
+    res.json(outcome);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Duplicate a segment — open a NEW segment and carry a prior segment's basis into it. One
+ * operator action composed of two governed operations: a re-entry (which is what actually creates
+ * the segment, with its own authority gate + consequence engine) followed by a
+ * recall-plus-revalidate of the source segment's configuration (Canon Block 10 §59).
+ *
+ * `toStage` is the stage the new segment opens at, and must be a legal re-entry target from the
+ * entry's current stage. Authority is enforced by the underlying backflow (e.g. S4→S1 needs FOM).
+ * If the re-entry succeeds but the recall is blocked by the FOM gate, the response carries
+ * `prefilled: false` + `recallBlocked` — the new segment is real, the basis just needs approval.
+ */
+entriesRouter.post("/:id/segments/:segmentNumber/duplicate", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const fromSegmentNumber = Number(req.params.segmentNumber);
+    if (!Number.isInteger(fromSegmentNumber) || fromSegmentNumber < 1) {
+      throw new ValidationError("segmentNumber must be a positive integer");
+    }
+    const body = z
+      .object({ toStage: z.enum(["S1", "S2", "S3"]), reason: z.string().trim().min(1).max(500) })
+      .parse(req.body ?? {});
+    const outcome = await duplicateSegmentIntoNew(prisma, {
+      entryId: req.params.id,
+      fromSegmentNumber,
+      toStage: body.toStage,
+      actor: { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      reason: body.reason,
+    });
+    res.json(outcome);
   } catch (e) {
     next(e);
   }

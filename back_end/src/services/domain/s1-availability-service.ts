@@ -44,8 +44,12 @@ async function resolvePartyForEntryInquiry(
   return null;
 }
 
-/** Shared engine run for new queries and stale-configuration recall (SIG §6.3). */
-async function runAvailabilityEngineForEntry(
+/**
+ * Shared engine run for new queries and stale-configuration recall (SIG §6.3).
+ * Exported for cross-segment recall (`segment-recall-service`), which revalidates a prior
+ * segment's configuration against present state (Canon Block 10 §59).
+ */
+export async function runAvailabilityEngineForEntry(
   prisma: PrismaClient,
   entry: Pick<Entry, "id" | "guestCount" | "useType" | "otaSource" | "inquiryId">,
   input: { roomTypeId?: string; checkInDate: string; checkOutDate: string; guestCount?: number; useType?: string },
@@ -450,6 +454,18 @@ export async function recallConfiguration(prisma: PrismaClient, configurationId:
   if (!cfg) throw new NotFoundError("AvailabilityConfiguration");
   if (!cfg.isStale) {
     throw new ValidationError("configuration is not stale; recall applies only to stale configurations");
+  }
+  // This path REWRITES the configuration in place (clearing its selection and stale flag), so it
+  // must never be pointed at a configuration belonging to an earlier, sealed segment — that would
+  // mutate sealed commercial history, the pattern the segment model exists to prevent
+  // (Implementation Reference §6.6; Canon Block 10 §59 M.9 "the recalled configuration is not
+  // modified"). Cross-segment reuse goes through `segment-recall-service` instead, which derives
+  // a NEW configuration on the current segment.
+  const currentSegmentId = cfg.entry.segments[0]?.id ?? null;
+  if (cfg.segmentId && currentSegmentId && cfg.segmentId !== currentSegmentId) {
+    throw new ValidationError(
+      "That configuration belongs to an earlier segment and is read-only. Use the segment-reuse route (POST /api/entries/:id/segments/:segmentNumber/recall) to revalidate it onto the current segment.",
+    );
   }
 
   const sc = (cfg.searchCriteria ?? {}) as Record<string, unknown>;

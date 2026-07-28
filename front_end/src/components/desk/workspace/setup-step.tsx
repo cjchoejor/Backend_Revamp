@@ -244,7 +244,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     { key: "hold", label: "On placing the committed hold", items: BK.hold },
     { key: "dispatch", label: "On dispatching the proforma", items: BK.dispatch },
     { key: "group", label: "On group / corporate setup", items: BK.group },
-    { key: "reentry", label: "On opening a new round", items: BK.reentry },
+    { key: "reentry", label: "On opening a new segment", items: BK.reentry },
     { key: "cancel", label: "On cancelling the booking", items: BK.cancel },
   ];
 
@@ -546,7 +546,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         <div className="block">
           <BlockH>
             <Shield style={{ width: 13, height: 13 }} />
-            Open a new round (FOM+)
+            Open a new segment (FOM+)
           </BlockH>
           <div className="field">
             <label>Reason</label>

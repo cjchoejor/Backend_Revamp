@@ -246,7 +246,7 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
             h2={fin.frozen ? "This booking is frozen and live." : "Ready to freeze this booking."}
           >
             {fin.frozen
-              ? "Terms are held to the guest. Any change now opens a fresh round rather than editing what's sealed."
+              ? "Terms are held to the guest. Any change now opens a fresh segment rather than editing what's sealed."
               : "Confirming turns the range into a total the guest is held to, locks the rooms, and sends the confirmation."}
           </Speak>
           <div className="block">
@@ -428,7 +428,7 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
             <div className="rh">Need to change something?</div>
             <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
               A confirmed stay can&rsquo;t be edited in place. Room changes, rate revisions and extensions each
-              open a <b>new round</b> from an earlier step — the current stay seals as history. Use the working
+              open a <b>new segment</b> from an earlier step — the current stay seals as history. Use the working
               tools below to start one.
             </p>
           </div>
@@ -557,7 +557,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // Backend side column (live feed + what-runs) — one permanent, always-visible panel with two
   // tabs, replacing the old separate left feed + right rail. The rail slot is the portal target
   // each step's BackendRail teleports into; it stays mounted across tab switches.
-  const [sideTab, setSideTab] = useState<"live" | "runs" | "rounds">("live");
+  const [sideTab, setSideTab] = useState<"live" | "runs">("live");
+  // Segments is a top-level view rather than a side tab: on a re-entered booking the operator
+  // needs the FULL sealed detail of an earlier segment (and the reuse action), which doesn't fit
+  // the narrow side column. Toggled from the header chip; replaces the step canvas while open.
+  const [segmentsOpen, setSegmentsOpen] = useState(false);
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Readiness popover on the journey-row gate cluster (replaces the bottom gate bar's list).
   const [needsOpen, setNeedsOpen] = useState(false);
@@ -953,6 +957,16 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             </button>
           )}
           <ReEnterMenu entry={entry} />
+          {/* Segments — sealed history of every prior pass through the journey, plus the
+              recall-and-revalidate action to reuse an earlier segment's basis (Canon §59). */}
+          <button
+            className={`btn btn-sm ${segmentsOpen ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setSegmentsOpen((o) => !o)}
+            title="See every segment this booking has been through — and reuse an earlier one as the basis"
+          >
+            <History />
+            {(entry.segmentNumber ?? 1) > 1 ? `Segments · ${entry.segmentNumber}` : "Segments"}
+          </button>
           <button
             className="btn btn-ghost btn-sm"
             onClick={() => router.push(`/desk/bookings/${entry.id}/backend`)}
@@ -1133,6 +1147,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           <div className="canvas-scroll">
           <div
             className={`canvas${
+              segmentsOpen ||
               viewingDoneStep ||
               inquiryStepActive ||
               quoteStepActive ||
@@ -1147,7 +1162,20 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 : ""
             }`}
           >
-            {viewingDoneStep ? (
+            {segmentsOpen ? (
+              <>
+                <div className="speak">
+                  <div className="now">Segments</div>
+                  <h2>Every pass this booking has been through.</h2>
+                  <p>
+                    A change after confirmation never edits what came before — it seals the current segment as history
+                    and opens a fresh one. Earlier segments are read-only, and reusing one re-checks it against today
+                    before it becomes the basis.
+                  </p>
+                </div>
+                <SegmentHistoryPanel entryId={entry.id} currentStage={entry.currentStage} />
+              </>
+            ) : viewingDoneStep ? (
               <div style={{ position: "relative" }}>
                 <div
                   style={{
@@ -1218,10 +1246,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <Layers style={{ width: 13, height: 13 }} />
                 What runs
               </button>
-              <button type="button" className={sideTab === "rounds" ? "on" : ""} onClick={() => setSideTab("rounds")}>
-                <History style={{ width: 13, height: 13 }} />
-                Rounds
-              </button>
             </div>
           </div>
           <div className="ws-side-body">
@@ -1229,12 +1253,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
             </div>
             <div style={{ display: sideTab === "runs" ? "block" : "none" }} ref={setRailSlot} />
-            {/* Segment history — one card per pass through the stages (a "round"); re-entry
-                seals the old round and opens a new one. Mounted lazily so the query only
-                fires once the operator opens the tab. */}
-            <div style={{ display: sideTab === "rounds" ? "block" : "none" }}>
-              {sideTab === "rounds" ? <SegmentHistoryPanel entryId={entry.id} /> : null}
-            </div>
           </div>
         </aside>
       </div>
@@ -1255,7 +1273,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           "The rooms lock — no longer offerable to anyone else.",
           "A confirmation goes to the guest automatically.",
           <>
-            Any later change opens a <b>new round</b> — it won&rsquo;t quietly edit what&rsquo;s sealed.
+            Any later change opens a <b>new segment</b> — it won&rsquo;t quietly edit what&rsquo;s sealed.
           </>,
         ]}
         confirmLabel="Freeze & confirm"

@@ -252,7 +252,7 @@ export function StayStep({
   const roomChangeM = useMutation({
     mutationFn: () => roomChangeReEnterS1(session!, entry.id, { newRoomId: roomChangeId.trim(), reason: roomChangeReason.trim() }),
     onSuccess: () => {
-      toast.success("Room change — re-opened at Inquiry for a new round");
+      toast.success("Room change — re-opened at Inquiry for a new segment");
       invalidate();
       setSelected(1);
     },
@@ -671,7 +671,7 @@ export function StayStep({
             Record amendment
           </button>
           <div style={{ borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Room change (re-opens Inquiry, new round)</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Room change (re-opens Inquiry, new segment)</div>
             <div className="frow">
               <div className="field">
                 <label>New room</label>

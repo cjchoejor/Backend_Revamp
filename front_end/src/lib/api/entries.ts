@@ -295,6 +295,21 @@ export type SegmentHistoryItem = {
   openedBy: { modeKey: string | null; fromStage: string | null; toStage: string | null } | null;
   sealCause: string | null;
   stagePath: string[];
+  /** The S1 searches + room selections made inside this segment, oldest first. */
+  availabilityConfigs: Array<{
+    id: string;
+    checkInDate: string | null;
+    checkOutDate: string | null;
+    guestCount: number | null;
+    roomTypeId: string | null;
+    selectionShape: "single" | "whole-stay-multi" | "per-night" | "none";
+    rooms: Array<{ roomId: string; roomNumber: string | null; roomTypeName: string | null }>;
+    perNight: Array<{ date: string; rooms: Array<{ roomId: string; roomNumber: string | null }> }> | null;
+    sealedAt: string | null;
+    isStale: boolean;
+    createdAt: string;
+    recalledFromSegmentNumber: number | null;
+  }>;
   reservation: {
     id: string;
     frozenRate: number | null;
@@ -343,6 +358,110 @@ export type SegmentHistory = {
 
 export async function getSegmentHistory(session: Session, entryId: string) {
   return apiRequest<SegmentHistory>(`/api/entries/${entryId}/segments`, { session });
+}
+
+// --- Cross-segment configuration recall ("reuse a prior segment") ------------------------------
+// Canon Block 10 §59: recall-plus-revalidate, never a blind copy. The prior segment's sealed
+// configuration is never modified; the engine re-runs against present state and a NEW
+// configuration derived from it lands on the current segment. Any material change requires
+// L2/FOM authority to apply (backend returns PolicyGateBlockedError `AUTH_REQUIRED_L2`).
+
+export type RecallViabilityDelta = {
+  availabilityChanged: boolean;
+  deficientStatusChanged: boolean;
+  pricingChanged: boolean;
+  availabilityDelta: Array<{ roomId: string; roomNumber: string | null; was: string; now: string }> | null;
+  deficientDelta: Array<{
+    roomId: string;
+    roomNumber: string | null;
+    wasDeficient: boolean;
+    nowDeficient: boolean;
+    category: string | null;
+  }> | null;
+  pricingDelta: Array<{
+    roomId: string;
+    roomNumber: string | null;
+    wasRate: number | null;
+    nowRate: number | null;
+    currency: string | null;
+  }> | null;
+};
+
+export type SegmentRecallOutcome = {
+  entryId: string;
+  fromSegmentNumber: number;
+  toSegmentNumber: number;
+  sourceConfigurationId: string;
+  recalledSelection: {
+    shape: "single" | "whole-stay-multi" | "per-night" | "none";
+    rooms: Array<{ roomId: string; roomNumber: string | null; roomTypeName: string | null }>;
+    distinctRoomCount: number;
+  };
+  searchCriteria: Record<string, unknown>;
+  delta: RecallViabilityDelta;
+  requiresFomDecision: boolean;
+  materialChanges: string[];
+  droppedRooms: Array<{ roomId: string; roomNumber: string | null; reason: string }>;
+  applied: boolean;
+  newConfigurationId: string | null;
+  result: unknown;
+};
+
+/**
+ * Revalidate a prior segment's configuration. `apply: false` (default) previews — runs every
+ * viability check and returns the delta without writing. `apply: true` commits the derived
+ * configuration onto the current segment.
+ */
+export async function recallSegment(
+  session: Session,
+  entryId: string,
+  fromSegmentNumber: number,
+  body?: { apply?: boolean; reason?: string },
+) {
+  return apiRequest<SegmentRecallOutcome>(`/api/entries/${entryId}/segments/${fromSegmentNumber}/recall`, {
+    method: "POST",
+    session,
+    body: body ?? {},
+  });
+}
+
+/**
+ * Duplicate a segment: open a NEW segment (via a governed re-entry) and carry the source
+ * segment's basis into it (via recall-plus-revalidate). `prefilled: false` + `recallBlocked`
+ * means the new segment WAS created but the basis needs FOM approval before it carries over.
+ */
+export type SegmentDuplicateOutcome = {
+  entryId: string;
+  fromSegmentNumber: number;
+  newSegmentNumber: number;
+  fromStage: string;
+  toStage: string;
+  duplicated: true;
+  prefilled: boolean;
+  recall: SegmentRecallOutcome | null;
+  recallBlocked: { code: string | null; message: string; materialChanges: string[] } | null;
+};
+
+/** Legal stages a duplicate can open at, keyed by the entry's current stage (mirrors backend). */
+export const DUPLICATE_ROUTES: Record<string, string[]> = {
+  S2: ["S1"],
+  S3: ["S1", "S2"],
+  S4: ["S1", "S2", "S3"],
+  S5: ["S1"],
+  S7: ["S2", "S3"],
+};
+
+export async function duplicateSegment(
+  session: Session,
+  entryId: string,
+  fromSegmentNumber: number,
+  body: { toStage: string; reason: string },
+) {
+  return apiRequest<SegmentDuplicateOutcome>(`/api/entries/${entryId}/segments/${fromSegmentNumber}/duplicate`, {
+    method: "POST",
+    session,
+    body,
+  });
 }
 
 export async function progressStage(
