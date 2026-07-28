@@ -143,7 +143,7 @@ export async function generateOrLoadInvoicePdf(
       for (const r of compositionPerRoom) {
         const raw = inputsByRoomId.get(r.roomId) as any;
         const adults = raw?.adultCount ?? 0;
-        const cnb = (raw?.cnb11PlusCount ?? 0) + (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
+        const cnb = (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
         const rowOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
         const planParts: string[] = [];
         if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);

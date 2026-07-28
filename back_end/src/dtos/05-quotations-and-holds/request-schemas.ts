@@ -28,10 +28,9 @@ export const roomCompositionInputSchema = z.object({
    */
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
-  // composition counts
+  // composition counts. Anyone 11+ counts as an adult (registry.child.ageBands default).
   occupantCount: z.coerce.number().int().min(0).optional(),
   adultCount: z.coerce.number().int().min(0).optional(),
-  cnb11PlusCount: z.coerce.number().int().min(0).optional(),
   cnb6To10Count: z.coerce.number().int().min(0).optional(),
   cnbUnder6Count: z.coerce.number().int().min(0).optional(),
   extraBedCount: z.coerce.number().int().min(0).optional(),

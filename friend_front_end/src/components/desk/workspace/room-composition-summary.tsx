@@ -49,7 +49,6 @@ function RoomCompositionCard({ assignment, currency }: { assignment: RoomAssignm
   const a = assignment;
   const rn = a.room?.roomNumber ?? a.roomId.slice(0, 6);
   const adults = a.adultCount ?? 0;
-  const cnb11 = a.cnb11PlusCount ?? 0;
   const cnb6 = a.cnb6To10Count ?? 0;
   const cnb0 = a.cnbUnder6Count ?? 0;
   const extraBeds = a.extraBedCount ?? 0;
@@ -91,7 +90,6 @@ function RoomCompositionCard({ assignment, currency }: { assignment: RoomAssignm
         <div>
           <span style={{ color: "var(--ink-3, #7a6a52)" }}>Occupants: </span>
           {adults} adult{adults === 1 ? "" : "s"}
-          {cnb11 > 0 && `, ${cnb11} CNB 11+`}
           {cnb6 > 0 && `, ${cnb6} CNB 6-10`}
           {cnb0 > 0 && `, ${cnb0} CNB <6`}
           {extraBeds > 0 && ` · ${extraBeds} extra bed${extraBeds === 1 ? "" : "s"}`}

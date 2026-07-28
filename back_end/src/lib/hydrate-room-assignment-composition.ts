@@ -63,7 +63,6 @@ export async function hydrateRoomAssignmentComposition(
   const compositionInput: RoomCompositionInput = {
     occupantCount: numOrUndef("occupantCount"),
     adultCount: numOrUndef("adultCount"),
-    cnb11PlusCount: numOrUndef("cnb11PlusCount"),
     cnb6To10Count: numOrUndef("cnb6To10Count"),
     cnbUnder6Count: numOrUndef("cnbUnder6Count"),
     extraBedCount: numOrUndef("extraBedCount"),
@@ -105,10 +104,9 @@ export async function hydrateRoomAssignmentComposition(
   const computed = computeRoomComposition(compositionInput, ctx);
 
   return {
-    // composition counts
+    // composition counts (11+ counted as adult)
     occupantCount: compositionInput.occupantCount ?? null,
     adultCount: compositionInput.adultCount ?? null,
-    cnb11PlusCount: compositionInput.cnb11PlusCount ?? null,
     cnb6To10Count: compositionInput.cnb6To10Count ?? null,
     cnbUnder6Count: compositionInput.cnbUnder6Count ?? null,
     extraBedCount: compositionInput.extraBedCount ?? null,

@@ -52,12 +52,13 @@ function dayToIso(v?: string | null): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-/** Guest slots a room's counts imply, in a stable order so plan picks survive count edits. */
+/** Guest slots a room's counts imply, in a stable order so plan picks survive count edits.
+ *  Anyone aged 11+ is counted as an adult per registry.child.ageBands (default) — no
+ *  separate "Child 11+" slot. */
 function slotsFor(f: Record<string, string>): Array<{ key: string; label: string }> {
   const n = (k: string) => Math.max(0, parseInt(f[k] || "0", 10) || 0);
   const out: Array<{ key: string; label: string }> = [];
   for (let i = 0; i < n("adultCount"); i++) out.push({ key: `A${i}`, label: `Adult ${i + 1}` });
-  for (let i = 0; i < n("cnb11PlusCount"); i++) out.push({ key: `T${i}`, label: `Child 11+ · ${i + 1}` });
   for (let i = 0; i < n("cnb6To10Count"); i++) out.push({ key: `C${i}`, label: `Child 6–10 · ${i + 1}` });
   for (let i = 0; i < n("cnbUnder6Count"); i++) out.push({ key: `U${i}`, label: `Under-6 · ${i + 1}` });
   return out;
@@ -138,7 +139,6 @@ export function RoomCompositionsEditor({
   const EMPTY_FIELDS: FieldMap = {
     occupantCount: "",
     adultCount: "",
-    cnb11PlusCount: "",
     cnb6To10Count: "",
     cnbUnder6Count: "",
     extraBedCount: "0",
@@ -187,11 +187,15 @@ export function RoomCompositionsEditor({
   const autoAssign = () => {
     const n = sealedRoomIds.length;
     if (n === 0) return;
-    const adults = Math.max(0, entryAdults ?? 0);
     const ages = entryChildAges ?? [];
+    // Anyone above the child age band (default > 10) counts as an adult per
+    // registry.child.ageBands — roll them into the adult count so the room composition
+    // reflects the correct pricing category. The intake form may have accepted them as
+    // "children"; the composition editor normalises.
+    const c11plus = ages.filter((a) => a > childMax).length;
+    const adults = Math.max(0, (entryAdults ?? 0) + c11plus);
     const under6 = ages.filter((a) => a <= youngMax).length;
     const c6to10 = ages.filter((a) => a > youngMax && a <= childMax).length;
-    const c11plus = ages.filter((a) => a > childMax).length;
     const base = Math.floor(adults / n);
     const rem = adults % n;
 
@@ -199,14 +203,13 @@ export function RoomCompositionsEditor({
       const next = { ...prev };
       sealedRoomIds.forEach((id, i) => {
         const a = base + (i < rem ? 1 : 0);
-        const kidsHere = i === 0 ? { u: under6, c: c6to10, t: c11plus } : { u: 0, c: 0, t: 0 };
+        const kidsHere = i === 0 ? { u: under6, c: c6to10 } : { u: 0, c: 0 };
         next[id] = {
           ...(next[id] ?? { ...EMPTY_FIELDS }),
           adultCount: String(a),
           cnbUnder6Count: String(kidsHere.u),
           cnb6To10Count: String(kidsHere.c),
-          cnb11PlusCount: String(kidsHere.t),
-          occupantCount: String(a + kidsHere.u + kidsHere.c + kidsHere.t),
+          occupantCount: String(a + kidsHere.u + kidsHere.c),
         };
       });
       return next;
@@ -276,7 +279,6 @@ export function RoomCompositionsEditor({
           endDate: dayToIso(entryCheckOut),
           occupantCount: num("occupantCount"),
           adultCount: num("adultCount"),
-          cnb11PlusCount: num("cnb11PlusCount"),
           cnb6To10Count: num("cnb6To10Count"),
           cnbUnder6Count: num("cnbUnder6Count"),
           extraBedCount: num("extraBedCount"),
@@ -318,7 +320,7 @@ export function RoomCompositionsEditor({
         const f = state[id];
         if (!f) return sum;
         const n = (k: string) => Math.max(0, parseInt(f[k] || "0", 10) || 0);
-        return sum + n("adultCount") + n("cnb11PlusCount") + n("cnb6To10Count") + n("cnbUnder6Count");
+        return sum + n("adultCount") + n("cnb6To10Count") + n("cnbUnder6Count");
       }, 0),
     [state, sealedRoomIds],
   );
@@ -379,7 +381,7 @@ export function RoomCompositionsEditor({
         // Per-guest mode can't violate (2) by construction — one plan per guest.
         const cnt = (k: string) => Math.max(0, parseInt(f[k] || "0", 10) || 0);
         const occupants = f.occupantCount === "" ? null : cnt("occupantCount");
-        const peopleAssigned = cnt("adultCount") + cnt("cnb11PlusCount") + cnt("cnb6To10Count") + cnt("cnbUnder6Count");
+        const peopleAssigned = cnt("adultCount") + cnt("cnb6To10Count") + cnt("cnbUnder6Count");
         const planTotal =
           mode === "guests"
             ? slots.filter((sl) => (picks[sl.key] ?? "NONE") !== "NONE").length
@@ -391,7 +393,7 @@ export function RoomCompositionsEditor({
         // would push its group past Occupants clamps to whatever still fits. Raising Occupants
         // first unlocks more, so the operator is never boxed in. With the cap in place the
         // over-count warnings can only appear via lowering Occupants afterwards.
-        const bandKeys = ["adultCount", "cnb11PlusCount", "cnb6To10Count", "cnbUnder6Count"];
+        const bandKeys = ["adultCount", "cnb6To10Count", "cnbUnder6Count"];
         const mealKeys = ["mealPlanCpCount", "mealPlanMaplCount", "mealPlanMapdCount", "mealPlanApCount", "mealPlanOthersCount"];
         const cappedChange = (key: string, group: "band" | "meal") => (v: string) => {
           if (occupants != null && v !== "") {
@@ -432,11 +434,11 @@ export function RoomCompositionsEditor({
               </label>
             </div>
 
-            {/* Occupants + CNB counts */}
-            <div className="rce-grid six">
+            {/* Occupants + CNB counts. Anyone aged 11+ counts as an Adult per the
+                 age-band policy (default 11+ = adult); no separate CNB 11+ input. */}
+            <div className="rce-grid five">
               <NumField label="Occupants" value={f.occupantCount} onChange={(v) => setField(id, "occupantCount", v)} />
-              <NumField label="Adults" value={f.adultCount} onChange={cappedChange("adultCount", "band")} />
-              <NumField label="CNB 11+" value={f.cnb11PlusCount} onChange={cappedChange("cnb11PlusCount", "band")} />
+              <NumField label="Adults (11+)" value={f.adultCount} onChange={cappedChange("adultCount", "band")} />
               <NumField label="CNB 6–10" value={f.cnb6To10Count} onChange={cappedChange("cnb6To10Count", "band")} />
               <NumField label="CNB <6" value={f.cnbUnder6Count} onChange={cappedChange("cnbUnder6Count", "band")} />
               <NumField label="Extra beds" value={f.extraBedCount} onChange={(v) => setField(id, "extraBedCount", v)} />

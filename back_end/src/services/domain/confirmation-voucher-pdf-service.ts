@@ -133,7 +133,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
   const describeOccupants = (a: (typeof entry.roomAssignments)[number]): string => {
     if (a.occupantCount == null && a.adultCount == null) return fallbackOccupants;
     const adults = a.adultCount ?? 0;
-    const kids = (a.cnb11PlusCount ?? 0) + (a.cnb6To10Count ?? 0) + (a.cnbUnder6Count ?? 0);
+    const kids = (a.cnb6To10Count ?? 0) + (a.cnbUnder6Count ?? 0);
     return `${adults} adult${adults === 1 ? "" : "s"}${kids > 0 ? `, ${kids} child${kids === 1 ? "" : "ren"}` : ""}`;
   };
   const describeExtraBeds = (a: (typeof entry.roomAssignments)[number]): string =>
