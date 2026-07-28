@@ -18,7 +18,7 @@ import {
   supersedeQuotation,
   type RoomCompositionInput,
 } from "@/lib/api/quotations";
-import { RoomCompositionsEditor } from "./room-compositions-editor";
+import { RoomCompositionPlanner } from "./room-compositions-board";
 import { money } from "@/lib/desk/workspace";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
@@ -316,10 +316,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               PER-ROOM COMPOSITION
             </div>
             <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
-              Set adults / children per room, meal-plan distribution, and negotiated rates. Falls back to the
-              booking-level meal plan below if left empty.
+              Place each guest in a room and pick their meal plan — tap to select, tap a room to place, or drag.
+              Falls back to the booking-level meal plan below if left empty.
             </p>
-            <RoomCompositionsEditor
+            <RoomCompositionPlanner
               sealedRoomIds={sealedRoomIds}
               entryCheckIn={entry.checkInDate ?? null}
               entryCheckOut={entry.checkOutDate ?? null}

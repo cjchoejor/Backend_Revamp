@@ -1919,6 +1919,415 @@
     padding: 6px 9px;
     margin: 0;
   }
+  /* ---- S2 guest-board composition planner (room-compositions-board.tsx) ---- */
+  & .rcb {
+    display: grid;
+    gap: 10px;
+  }
+  & .rcb .ln {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--line);
+    min-width: 8px;
+  }
+  & .rcb-planbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 9px;
+    border: 1px solid var(--green);
+    border-radius: var(--r-sm);
+    background: var(--green-t);
+  }
+  & .rcb-planbar .cnt {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--green-d);
+  }
+  & .rcb-planbar .lbl {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  & .rcb-planbar button {
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  & .rcb-planbar button:hover {
+    border-color: var(--green);
+    color: var(--green-d);
+  }
+  & .rcb-planbar button.ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-color: transparent;
+    background: transparent;
+    font-weight: 600;
+  }
+  & .rcb-tray {
+    border: 1.5px dashed var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--cream);
+    padding: 8px 10px;
+  }
+  & .rcb-tray.drop {
+    border-color: var(--green);
+    background: var(--green-t);
+  }
+  & .rcb-tray-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 7px;
+  }
+  & .rcb-tray-note {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    margin-left: auto;
+  }
+  & .rcb-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  & .rcb-mini:hover {
+    border-color: var(--green);
+    color: var(--green-d);
+  }
+  & .rcb-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  & .rcb-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1.5px solid var(--line);
+    border-radius: 999px;
+    background: #fff;
+    cursor: grab;
+    user-select: none;
+  }
+  & .rcb-chip:active {
+    cursor: grabbing;
+  }
+  & .rcb-chip .b {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 9.5px;
+    font-weight: 800;
+    background: var(--cream-3);
+    color: var(--ink-2);
+  }
+  & .rcb-chip.band-c6to10 .b {
+    background: var(--warn-t);
+    color: var(--warn);
+  }
+  & .rcb-chip.band-under6 .b {
+    background: var(--terra-t);
+    color: var(--terra-d);
+  }
+  & .rcb-chip .n {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  & .rcb-chip select {
+    font-size: 10.5px;
+    padding: 1px 3px;
+    border: 1px solid var(--line-2);
+    border-radius: 4px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  & .rcb-chip.sel {
+    border-color: var(--green);
+    background: var(--green-t);
+    box-shadow: 0 0 0 1px var(--green);
+  }
+  & .rcb-chip.sel .n {
+    color: var(--green-d);
+  }
+  & .rcb-rooms {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 10px;
+  }
+  & .rcb-room {
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: #fff;
+    padding: 9px 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  & .rcb-room.foc {
+    opacity: 0.72;
+    background: var(--cream);
+  }
+  & .rcb-room.drop {
+    border-color: var(--green);
+    box-shadow: 0 0 0 1.5px var(--green);
+    background: var(--green-t);
+  }
+  & .rcb-room-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  & .rcb-type {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  & .rcb-occ {
+    font-family: var(--deskmono);
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  & .rcb-occ.over {
+    color: var(--warn);
+  }
+  & .rcb-place {
+    border: 1.5px dashed var(--green);
+    border-radius: var(--r-sm);
+    background: var(--green-t);
+    color: var(--green-d);
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 5px;
+    cursor: pointer;
+  }
+  & .rcb-place:hover {
+    background: var(--green);
+    color: #fff;
+  }
+  & .rcb-empty {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin: 0;
+    padding: 6px 0;
+  }
+  & .rcb-overcap {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--warn);
+    margin: 0;
+  }
+  & .rcb-foot {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    border-top: 1px dashed var(--line);
+    padding-top: 7px;
+    margin-top: auto;
+  }
+  & .rcb-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  & .rcb-step label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  & .rcb-step button {
+    width: 18px;
+    height: 18px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid var(--line-2);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  & .rcb-step b {
+    font-family: var(--deskmono);
+    font-size: 12px;
+    min-width: 14px;
+    text-align: center;
+  }
+  /* ---- S2 spreadsheet composition table (room-compositions-table.tsx) ---- */
+  & .rct {
+    display: grid;
+    gap: 10px;
+  }
+  & .rct .ln {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--line);
+    min-width: 8px;
+  }
+  & .rct-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: #fff;
+  }
+  & .rct-t {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 11.5px;
+  }
+  & .rct-t th,
+  & .rct-t td {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 0;
+    text-align: center;
+    white-space: nowrap;
+  }
+  & .rct-t th:last-child,
+  & .rct-t td:last-child {
+    border-right: 0;
+  }
+  & .rct-t thead tr.grp th {
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--cream-3);
+    padding: 3px 6px;
+  }
+  & .rct-t thead tr:not(.grp) th {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    background: var(--cream);
+    padding: 4px 5px;
+  }
+  & .rct-t th.ratebtn {
+    background: var(--cream);
+    padding: 0 6px;
+  }
+  /* First column (room identity) sticks so wide tables scroll under it. */
+  & .rct-t .room {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--cream);
+    text-align: left;
+    padding: 3px 8px;
+    border-right: 1.5px solid var(--line-2);
+  }
+  & .rct-t tbody .room {
+    background: #fff;
+    font-family: var(--deskmono);
+  }
+  & .rct-t tbody .room b {
+    font-size: 12px;
+    color: var(--ink);
+  }
+  & .rct-t tbody .room span {
+    margin-left: 6px;
+    font-size: 9.5px;
+    color: var(--ink-3);
+  }
+  /* Derived occupancy cell — read-only, mono, visually "computed". */
+  & .rct-t .occ {
+    font-family: var(--deskmono);
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--green-d);
+    background: var(--green-t);
+    min-width: 34px;
+  }
+  & .rct-t .occ.over,
+  & .rct-t .occ.off {
+    color: var(--warn);
+    background: var(--warn-t);
+  }
+  /* Cells ARE the inputs — borderless, filling the cell, spreadsheet-style. */
+  & .rct-t td input[type="text"] {
+    width: 40px;
+    border: 0;
+    background: transparent;
+    text-align: center;
+    font-size: 12px;
+    font-family: var(--deskmono);
+    color: var(--ink);
+    padding: 5px 2px;
+    outline: none;
+  }
+  & .rct-t td input[type="text"].wide {
+    width: 68px;
+  }
+  & .rct-t td:focus-within {
+    outline: 1.5px solid var(--green);
+    outline-offset: -1.5px;
+    background: var(--green-t);
+  }
+  & .rct-t td.warn {
+    background: var(--warn-t);
+  }
+  & .rct-t td.warn input {
+    color: var(--warn);
+    font-weight: 700;
+  }
+  & .rct-t td.ck {
+    padding: 0 6px;
+  }
+  & .rct-t td.ck input {
+    margin: 0;
+    vertical-align: middle;
+  }
+  & .rct-t tbody tr.foc td {
+    background: var(--cream);
+  }
+  & .rct-t tbody tr.foc td:not(.room) {
+    opacity: 0.72;
+  }
+  & .rct-t tfoot td {
+    font-family: var(--deskmono);
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--ink-2);
+    background: var(--cream);
+    padding: 4px 5px;
+    border-bottom: 0;
+  }
+  & .rct-t tfoot .room {
+    background: var(--cream);
+    font-size: 12px;
+  }
 
   /* Frozen identity columns — a 20-night stay scrolls far past the room number, so Room No /
      Type / Ext. Beds / Booked by stay put while the nights scroll under them. Offsets come from
