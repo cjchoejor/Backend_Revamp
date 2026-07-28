@@ -356,6 +356,42 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   });
   const roomEnvelope = roomEnvelopeQuery.data ?? null;
   const roomMin = roomEnvelope?.allowedRoomCounts.min ?? null;
+  const roomMax = roomEnvelope?.allowedRoomCounts.max ?? null;
+
+  // Cap BOTH rooms inputs at the envelope max instead of letting the backend bounce the
+  // search with a raw ValidationError. An increase past the max clamps to it and flashes an
+  // explanation under the field; decreases and everything at/below max pass through.
+  const [roomsCapMsg, setRoomsCapMsg] = useState<string | null>(null);
+  // Bumped on EVERY clamp, including repeats — used as the note's React key so the glow
+  // animation restarts when the operator keeps clicking the spinner past the limit.
+  const [roomsCapPulse, setRoomsCapPulse] = useState(0);
+  const roomsCapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const roomsChange = (setter: (v: string) => void) => (v: string) => {
+    if (roomMax != null && v !== "") {
+      const n = parseInt(v, 10) || 0;
+      if (n > roomMax) {
+        setter(String(roomMax));
+        const guests = roomEnvelope?.chargeableOccupants ?? 0;
+        setRoomsCapMsg(
+          `Can't book more rooms than guests — ${guests} chargeable guest${guests === 1 ? "" : "s"} allow${guests === 1 ? "s" : ""} at most ${roomMax} room${roomMax === 1 ? "" : "s"} (every room needs someone in it). Add guests first to book more rooms.`,
+        );
+        setRoomsCapPulse((n) => n + 1);
+        if (roomsCapTimer.current) clearTimeout(roomsCapTimer.current);
+        roomsCapTimer.current = setTimeout(() => setRoomsCapMsg(null), 5000);
+        return;
+      }
+    }
+    setter(v);
+  };
+  const roomsCapNotice = roomsCapMsg ? (
+    <p
+      key={roomsCapPulse}
+      className="cap-note"
+      style={{ fontSize: 11, color: "var(--warn)", margin: "4px 0 0", fontWeight: 600, lineHeight: 1.45 }}
+    >
+      {roomsCapMsg}
+    </p>
+  ) : null;
 
   /**
    * Auto-set both room inputs to the minimum the party needs, and let the operator raise it
@@ -768,9 +804,12 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   type="number"
                   min={roomEnvelope?.allowedRoomCounts.min ?? 1}
                   value={edRooms}
-                  onChange={(e) => setEdRooms(e.target.value)}
+                  max={roomMax ?? undefined}
+                  onChange={(e) => roomsChange(setEdRooms)(e.target.value)}
                 />
                 {roomEnvelopeHint}
+            {roomsCapNotice}
+                {roomsCapNotice}
               </div>
               <div className="field" />
             </div>
@@ -858,7 +897,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
               type="number"
               min={roomEnvelope?.allowedRoomCounts.min ?? 1}
               value={roomsInput}
-              onChange={(e) => setRoomsInput(e.target.value)}
+              max={roomMax ?? undefined}
+              onChange={(e) => roomsChange(setRoomsInput)(e.target.value)}
             />
             {roomEnvelopeHint}
             {roomEnvelope && roomsNum > 0 && roomsNum < roomEnvelope.allowedRoomCounts.min && (

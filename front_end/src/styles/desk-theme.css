@@ -3643,6 +3643,30 @@
   }
 }
 
+/* Cap-message attention pulse — re-triggered (via React key remount) each time the operator
+   keeps pushing past a clamped limit, so the explanation visibly reacts to every extra click. */
+@keyframes capglow {
+  0% {
+    background: var(--warn-t);
+    box-shadow: 0 0 0 3px var(--warn-t);
+  }
+  35% {
+    background: #f6dfae;
+    box-shadow: 0 0 0 3px #e6cf9a;
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.desk-root .cap-note {
+  display: inline-block;
+  border-radius: 5px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  animation: capglow 0.9s ease;
+}
+
 @keyframes deskfade {
   from {
     opacity: 0;

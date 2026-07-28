@@ -1123,6 +1123,9 @@ export async function sendQuotation(
         entityId: comm.id,
         timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
         timerCode: "ACKNOWLEDGEMENT_WINDOW_W22",
+        // Which outbound message this window waits on — the desk labels the timer from it
+        // ("Awaiting quotation guest reply"). S4/S5 senders already stamp theirs.
+        stageContext: Stage.S2,
         dueAt: ackFireAt,
         firesAt: ackFireAt,
         status: "SCHEDULED",

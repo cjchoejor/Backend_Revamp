@@ -125,9 +125,13 @@ export function RoomCompositionsEditor({
   // Transient per-room notice shown when a typed increase hits the Occupants cap and the
   // field was clamped — the silent clamp confused operators. Cleared after a few seconds.
   const [capMsg, setCapMsg] = useState<Record<string, string | null>>({});
+  // Bumped on every clamp so the message's key changes and the glow animation restarts —
+  // repeated clicks past the limit visibly re-flash instead of looking ignored.
+  const [capPulse, setCapPulse] = useState(0);
   const capTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const flashCapMsg = (roomId: string, msg: string) => {
     setCapMsg((prev) => ({ ...prev, [roomId]: msg }));
+    setCapPulse((n) => n + 1);
     clearTimeout(capTimerRef.current[roomId]);
     capTimerRef.current[roomId] = setTimeout(() => {
       setCapMsg((prev) => ({ ...prev, [roomId]: null }));
@@ -440,7 +444,7 @@ export function RoomCompositionsEditor({
 
             {(breakdownOff || plansOver || capMsg[id]) && (
               <div className="rce-warns">
-                {capMsg[id] && <span>{capMsg[id]}</span>}
+                {capMsg[id] && <span key={capPulse} className="cap-note">{capMsg[id]}</span>}
                 {breakdownOff && (
                   <span>
                     Adults + children = {peopleAssigned}, but Occupants says {occupants} — they must match.

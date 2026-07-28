@@ -18,23 +18,48 @@ const ACK_MESSAGE_BY_STAGE: Record<string, string> = {
   S5: "Pre-arrival reminder",
 };
 
+// Covers every code the backend timer engine can emit (lib/timer-engine.ts TimerCode union) —
+// an unmapped code falls back to its raw name, which is exactly the "cryptic label" bug this
+// map exists to prevent. Keep the two lists in step.
 const TIMER_LABELS: Record<string, string> = {
+  STAGE_DWELL_MONITOR: "Stage dwell monitor",
+  PROCESSING_LOCK_TTL: "Processing lock expiry",
+  ENTRY_EXPIRY: "Inquiry expiry",
+  OTA_EMAIL_PARSER_POLL: "OTA email poll",
+  QUOTATION_VALIDITY_W15: "Quote validity",
+  QUOTATION_ACK_TRACKER: "Quotation acknowledgement tracker",
+  SPECULATIVE_HOLD_EXPIRY_W2: "Speculative hold expiry",
+  COMMITTED_HOLD_EXPIRY_W3: "Committed hold expiry",
+  ADVANCE_PAYMENT_FOLLOW_UP_W34: "Advance payment follow-up",
   PRE_ARRIVAL_COUNTDOWN_W4: "Pre-arrival countdown",
   NO_SHOW_CUTOFF_W5: "No-show cutoff",
   AWAITING_WRITTEN_CONFIRMATION_W5: "Awaiting written confirmation",
-  STAGE_DWELL_MONITOR: "Stage dwell monitor",
-  SPECULATIVE_HOLD_EXPIRY_W2: "Speculative hold expiry",
-  COMMITTED_HOLD_EXPIRY_W3: "Committed hold expiry",
-  ENTRY_EXPIRY: "Inquiry expiry",
+  ROOM_READINESS_SLA_W23: "Room readiness SLA",
+  VIP_ARRIVAL_NOTIFICATION_W14: "VIP arrival notification",
+  H2_H3_ACCEPTANCE_W25: "Check-in handoff acceptance (H2/H3)",
+  H4_ACCEPTANCE_W25: "Pre-checkout handoff acceptance (H4)",
+  NIGHT_AUDIT_W6: "Night audit",
+  NIGHT_AUDIT_STAY_NIGHT_W37: "Night audit (stay night)",
+  PAYMENT_FOLLOW_UP_W8: "Post-stay payment follow-up",
+  POST_CHECKOUT_INSPECTION_W9: "Post-checkout inspection",
+  DEFICIENT_RESOLUTION_DEADLINE_W10: "Deficient-room resolution deadline",
+  COMMISSION_RATE_MISSING_W11: "Commission rate missing",
+  CREDIT_CEILING_MONITORING_W12: "Credit ceiling monitoring",
+  AI_AUDIT_SUPPLEMENT_W18: "AI audit supplement",
+  PAYMENT_MILESTONE_W21: "Payment milestone",
+  HOUSEKEEPING_SLA_W24: "Housekeeping SLA",
+  CHECKOUT_TIME_W26: "Checkout time",
+  DISPUTE_SLA_W27: "Dispute SLA",
+  FEEDBACK_SOLICITATION_W28: "Feedback solicitation",
+  EQUIPMENT_RETURN_W29: "Equipment return",
+  GUEST_DATA_RETENTION_P18: "Guest data retention",
+  LOST_FOUND_RETENTION_W30: "Lost & found retention",
+  FOM_OVERRIDE_FREQUENCY_W32: "FOM override frequency check",
   // Armed on park in place of the short stage-expiry timer: a parked booking still expires, but
   // only after the long park window (expiry.parking.followUpDays, 30d default) — SIG-S1 §3.4.
   PARKING_FOLLOW_UP: "Park expiry",
-  QUOTATION_EXPIRY_W15: "Quote validity",
-  ADVANCE_PAYMENT_FOLLOW_UP_W34: "Advance payment follow-up",
-  NIGHT_AUDIT_STAY_NIGHT_W37: "Night audit (stay night)",
-  ROOM_READINESS_SLA_W23: "Room readiness SLA",
+  // Legacy alias kept for rows created before the W25 codes were split per handoff type.
   HANDOFF_ACCEPTANCE_W25: "Handoff acceptance",
-  PAYMENT_MILESTONE_W21: "Payment milestone",
 };
 
 /** Friendly, human label for a timer. Falls back to the raw code when unmapped. */
