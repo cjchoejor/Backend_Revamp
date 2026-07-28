@@ -75,6 +75,15 @@ export type CreateQuotationRequestDto = z.infer<typeof createQuotationRequestSch
 export const supersedeQuotationRequestSchema = z.object({
   notes: z.string().optional(),
   requestedDiscount: discountShape.nullable().optional(),
+  currency: z.string().optional(),
+  /** GM waiver when the renegotiated rate falls below MSR (same shape as create). */
+  belowMsrGmWaiver: z.object({ acknowledged: z.literal(true), rationale: z.string().min(3).max(4000) }).optional(),
+  /**
+   * Renegotiated per-room compositions (2026-07-28). When supplied, the new draft is
+   * re-priced with these; when omitted, the prior version's compositions carry forward
+   * unchanged — a discount-only renegotiation never silently drops the composition.
+   */
+  roomCompositions: z.array(roomCompositionInputSchema).optional(),
 });
 export type SupersedeQuotationRequestDto = z.infer<typeof supersedeQuotationRequestSchema>;
 

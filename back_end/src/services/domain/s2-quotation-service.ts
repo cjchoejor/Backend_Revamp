@@ -106,23 +106,33 @@ export type RoomCompositionServiceInput = {
   isFoc?: boolean;
 };
 
-export async function createQuotation(
+/** Input shape shared by `createQuotation` and `supersedeQuotationWithNewDraft`. */
+export type QuotationDraftInput = {
+  requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+  notes?: string;
+  currency?: string;
+  belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
+  /**
+   * Per-room compositions (Phase B, 2026-07-27). When supplied, pricing is computed via
+   * per-room iteration (`computeQuotationCompositionTotals`) — including negotiated
+   * per-room rates, meal-plan distribution, FOC waivers. When omitted, falls back to the
+   * flat `effectiveRate × nights × roomCount` model for backward compat.
+   */
+  roomCompositions?: RoomCompositionServiceInput[];
+};
+
+/**
+ * Shared pricing pipeline for S2 quotation drafts (extracted 2026-07-28 so regeneration /
+ * supersede re-runs the EXACT same pipeline as first-time creation — rate-plan resolution,
+ * agent rate cards, MSR waiver, discount authority bands, per-room composition validation
+ * and totals). Returns everything the create-transaction needs; performs NO writes itself
+ * (the MSR-waiver resolution may write its own trace, as before).
+ */
+async function prepareQuotationDraft(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  input: {
-    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
-    notes?: string;
-    currency?: string;
-    belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
-    /**
-     * Per-room compositions (Phase B, 2026-07-27). When supplied, pricing is computed via
-     * per-room iteration (`computeQuotationCompositionTotals`) — including negotiated
-     * per-room rates, meal-plan distribution, FOC waivers. When omitted, falls back to the
-     * flat `effectiveRate × nights × roomCount` model for backward compat.
-     */
-    roomCompositions?: RoomCompositionServiceInput[];
-  },
+  input: QuotationDraftInput,
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -424,6 +434,29 @@ export async function createQuotation(
       : {}),
   };
 
+  return {
+    entry,
+    segmentId,
+    nextVersion,
+    now,
+    msrWaiver,
+    commercialTerms,
+    compositionTotals,
+    effectiveRate,
+    roomCount,
+    currency,
+  };
+}
+
+export async function createQuotation(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: QuotationDraftInput,
+) {
+  const { segmentId, nextVersion, now, msrWaiver, commercialTerms, compositionTotals, effectiveRate, roomCount, currency } =
+    await prepareQuotationDraft(prisma, entryId, actorId, input);
+
   return prisma.$transaction(async (tx) => {
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
     const created = await tx.quotation.create({
@@ -665,25 +698,137 @@ export async function createGroupQuotation(
   });
 }
 
+/**
+ * Field-level diff between two commercialTerms blobs for the supersede audit trail
+ * (2026-07-28). Shallow-compares every top-level key; when `roomCompositions` differs,
+ * additionally produces a per-room breakdown of exactly which fields moved (keyed by
+ * roomId) so an auditor can read "room 202: mealPlanCpCount 1→2" without JSON-diffing
+ * the snapshots by hand.
+ */
+function diffQuotationTerms(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown> | null,
+): {
+  changedFields: string[];
+  changes: Record<string, { before: unknown; after: unknown }>;
+  roomCompositionChanges?: Record<string, Record<string, { before: unknown; after: unknown }>>;
+} {
+  const b = before ?? {};
+  const a = after ?? {};
+  const keys = new Set([...Object.keys(b), ...Object.keys(a)]);
+  const changedFields: string[] = [];
+  const changes: Record<string, { before: unknown; after: unknown }> = {};
+  for (const k of keys) {
+    if (JSON.stringify((b as any)[k]) !== JSON.stringify((a as any)[k])) {
+      changedFields.push(k);
+      // Snapshots of large sub-objects (roomCompositions, compositionTotals) are still
+      // included — trace payloads are JSONB and these are the fields the auditor cares about.
+      changes[k] = { before: (b as any)[k] ?? null, after: (a as any)[k] ?? null };
+    }
+  }
+
+  let roomCompositionChanges: Record<string, Record<string, { before: unknown; after: unknown }>> | undefined;
+  if (changedFields.includes("roomCompositions")) {
+    const beforeRooms = new Map(
+      (Array.isArray((b as any).roomCompositions) ? (b as any).roomCompositions : []).map((r: any) => [r.roomId, r]),
+    );
+    const afterRooms = new Map(
+      (Array.isArray((a as any).roomCompositions) ? (a as any).roomCompositions : []).map((r: any) => [r.roomId, r]),
+    );
+    roomCompositionChanges = {};
+    for (const roomId of new Set([...beforeRooms.keys(), ...afterRooms.keys()])) {
+      const br = (beforeRooms.get(roomId) ?? {}) as Record<string, unknown>;
+      const ar = (afterRooms.get(roomId) ?? {}) as Record<string, unknown>;
+      const fieldKeys = new Set([...Object.keys(br), ...Object.keys(ar)]);
+      const roomDiff: Record<string, { before: unknown; after: unknown }> = {};
+      for (const fk of fieldKeys) {
+        if (fk === "roomId") continue;
+        if (JSON.stringify(br[fk]) !== JSON.stringify(ar[fk])) {
+          roomDiff[fk] = { before: br[fk] ?? null, after: ar[fk] ?? null };
+        }
+      }
+      if (Object.keys(roomDiff).length > 0) roomCompositionChanges[String(roomId)] = roomDiff;
+    }
+  }
+
+  return { changedFields, changes, ...(roomCompositionChanges ? { roomCompositionChanges } : {}) };
+}
+
+/**
+ * Regenerate the quotation as a fresh DRAFT version (SIG-S2 renegotiation round).
+ *
+ * 2026-07-28 rebuild: instead of copying the prior version's commercialTerms verbatim,
+ * this now re-runs the FULL pricing pipeline (`prepareQuotationDraft` — the same one
+ * `createQuotation` uses) with the renegotiated inputs, so discount changes AND per-room
+ * composition changes (meal plans, extra beds, negotiated rates, FOC) re-price correctly.
+ *
+ * Merge semantics (regenerate = prior + deltas):
+ *  - `roomCompositions` omitted → prior version's compositions carry forward unchanged.
+ *  - `requestedDiscount` omitted → prior's carries forward; explicit `null` clears it.
+ *  - `notes` omitted → prior's notes carry forward.
+ *
+ * The prior version: marked SUPERSEDED, linked to the successor via `supersededById`, all
+ * its timers cancelled — INCLUDING the CommunicationRecord-anchored ACKNOWLEDGEMENT_WINDOW_W22
+ * from its send (previously leaked as a ghost "Awaiting guest reply" chip, same class of bug
+ * fixed in acceptQuotation).
+ *
+ * Audit: the `S2.QUOTATION.SUPERSEDED` trace carries a field-level diff (`changedFields`,
+ * per-field before/after, and per-room composition changes) so the DB records exactly what
+ * was renegotiated, by whom, and when.
+ *
+ * The new DRAFT then goes through the normal send flow — fresh QUO-… reference number, fresh
+ * PDF render, fresh email + acknowledgement window.
+ */
 export async function supersedeQuotationWithNewDraft(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
-  input: { notes?: string; requestedDiscount?: { discountPercent: number; discountBasis: string } | null },
+  input: {
+    notes?: string;
+    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    currency?: string;
+    belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
+    roomCompositions?: RoomCompositionServiceInput[];
+  },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
   enforceQuotationSupersedeAllowedState({ state: q.state });
 
-  const last = await prisma.quotation.findFirst({ where: { entryId: q.entryId, segmentId: q.segmentId }, orderBy: { versionNumber: "desc" } });
-  const nextVersion = (last?.versionNumber ?? q.versionNumber ?? 0) + 1;
+  const priorTerms = (q.commercialTerms ?? {}) as Record<string, unknown>;
+
+  // Regenerate = prior + deltas. Carry forward what the caller didn't touch so a
+  // discount-only renegotiation doesn't silently drop the per-room composition (and vice versa).
+  const mergedInput: QuotationDraftInput = {
+    notes: input.notes?.trim() ? input.notes.trim() : ((priorTerms.notes as string | undefined) ?? undefined),
+    requestedDiscount:
+      input.requestedDiscount === undefined
+        ? ((priorTerms.requestedDiscount as { discountPercent: number; discountBasis: string } | undefined) ?? null)
+        : input.requestedDiscount,
+    currency: input.currency,
+    belowMsrGmWaiver: input.belowMsrGmWaiver ?? null,
+    roomCompositions:
+      input.roomCompositions !== undefined
+        ? input.roomCompositions
+        : ((priorTerms.roomCompositions as RoomCompositionServiceInput[] | undefined) ?? undefined),
+  };
+
+  // Full re-price with the same pipeline createQuotation uses (validations included).
+  const prep = await prepareQuotationDraft(prisma, q.entryId, actorId, mergedInput);
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
-    // Cancel timers for the prior version if any exist.
+    // Cancel every timer belonging to the prior version — both the Quotation-anchored ones
+    // (validity + ack tracker) and the CommunicationRecord-anchored acknowledgement window
+    // from its send (the "Awaiting guest reply" chip).
     const engine = await getTimerEngine();
+    const commClause = q.communicationRecordId
+      ? [{ entityType: "CommunicationRecord", entityId: q.communicationRecordId, status: "SCHEDULED" as const }]
+      : [];
     const timers = await tx.timerRecord.findMany({
-      where: { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" },
+      where: {
+        OR: [{ entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" }, ...commClause],
+      },
       select: { id: true, pgBossJobId: true },
     });
     await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
@@ -697,9 +842,6 @@ export async function supersedeQuotationWithNewDraft(
       data: { state: QuotationState.SUPERSEDED, supersededAt: now },
     });
 
-    const terms = { ...(prior.commercialTerms as any), notes: input.notes?.trim() ? input.notes.trim() : (prior.commercialTerms as any)?.notes };
-    if (input.requestedDiscount) terms.requestedDiscount = input.requestedDiscount;
-
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
     const created = await tx.quotation.create({
       data: {
@@ -707,30 +849,45 @@ export async function supersedeQuotationWithNewDraft(
         id: referenceNumber,
         entryId: prior.entryId,
         segmentId: prior.segmentId,
-        versionNumber: nextVersion,
+        versionNumber: prep.nextVersion,
         referenceNumber,
         state: QuotationState.DRAFT,
-        commercialTerms: terms as any,
-        totalAmount: prior.totalAmount,
-        currency: prior.currency,
+        commercialTerms: prep.commercialTerms as any,
+        // Re-priced total (same rule as createQuotation): composition stay-total when
+        // compositions present, else legacy per-night × roomCount.
+        totalAmount: prep.compositionTotals
+          ? round2(prep.compositionTotals.total)
+          : round2(mulMoney(prep.effectiveRate, prep.roomCount)),
+        currency: input.currency?.trim() ? input.currency.trim() : prep.currency?.trim() ? prep.currency : prior.currency,
         supersededById: null,
         createdBy: actorId,
       },
     });
 
     await tx.quotation.update({ where: { id: prior.id }, data: { supersededById: created.id } });
+
+    // Field-level audit of exactly what the renegotiation changed.
+    const diff = diffQuotationTerms(priorTerms, prep.commercialTerms as Record<string, unknown>);
     await tx.traceEvent.create({
       data: {
         eventType: "S2.QUOTATION.SUPERSEDED",
         actorId,
-        actorLevel: "L1",
+        actorLevel: prep.msrWaiver ? ActorLevel.L3 : ActorLevel.L1,
         entityType: "Quotation",
         entityId: prior.id,
         operation: "UPDATE",
         timestamp: now,
         stageContext: Stage.S2,
         entryId: prior.entryId,
-        payload: { priorQuotationId: prior.id, newQuotationId: created.id },
+        payload: {
+          priorQuotationId: prior.id,
+          newQuotationId: created.id,
+          priorVersion: prior.versionNumber,
+          newVersion: prep.nextVersion,
+          priorTotalAmount: prior.totalAmount?.toString?.() ?? null,
+          newTotalAmount: created.totalAmount?.toString?.() ?? null,
+          ...diff,
+        } as any,
         createdBy: actorId,
       },
     });
