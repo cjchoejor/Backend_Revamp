@@ -24,7 +24,10 @@ export function toNum(v: string | number | null | undefined): number {
 export function money(amount: string | number | null | undefined, currency?: string | null): string {
   const n = toNum(amount);
   const sym = !currency || currency.toUpperCase() === "BTN" ? "Nu" : currency.toUpperCase();
-  return `${sym} ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  // Always two decimals. Money is never rounded to whole units for display — Nu 1963.50 must
+  // read as "Nu 1,963.50", and a whole amount reads "Nu 1,964.00". Rounding only ever happens
+  // at the 2dp boundary in the backend's Decimal math (1963.544 → 1963.54), never here.
+  return `${sym} ${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /**

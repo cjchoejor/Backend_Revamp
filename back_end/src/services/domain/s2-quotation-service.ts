@@ -43,6 +43,7 @@ import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { Prisma } from "@prisma/client";
 import { enforceExtraBedForThirdAdult } from "../../policies/34-room-composition/p78-extra-bed-required-for-third-adult.js";
 import { enforceCompositionCountsConsistent } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
+import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-pdf.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -119,6 +120,12 @@ export type QuotationDraftInput = {
    * flat `effectiveRate × nights × roomCount` model for backward compat.
    */
   roomCompositions?: RoomCompositionServiceInput[];
+  /**
+   * When supplied, the requested discount is capped at this actor's ceiling and the call
+   * throws `DISCOUNT_AUTHORITY` if it exceeds it. Omit on the plain create path, where the
+   * discount is recorded and approved separately via `approveDiscount`.
+   */
+  actorLevel?: "L1" | "L2" | "L3" | "L4";
 };
 
 /**
@@ -173,7 +180,42 @@ async function prepareQuotationDraft(
   const tier = entry.guestProfile?.clientTier;
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
   const stay = entry.checkInDate && entry.checkOutDate ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate } : undefined;
-  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { isDeficientGuestTier, roomTypeId, stay });
+
+  // Discount is resolved BEFORE pricing so it actually reduces the resolved rate (fixed
+  // 2026-07-28 — previously the requested discount was recorded on commercialTerms but never
+  // passed to the pricing engine on the create path, so a quote created with a discount was
+  // priced at full rate; only the separate applyDiscount endpoint re-priced, and it did so
+  // with a different, room-type-blind rate resolution).
+  const requested = input.requestedDiscount ?? null;
+  if (requested) {
+    await validateDiscountRequestAgainstAuthorityBands(prisma, {
+      discountPercent: requested.discountPercent,
+      discountBasis: requested.discountBasis,
+    });
+  }
+  // Actor ceiling only applies when the caller identified an actor level (applyDiscount /
+  // supersede-with-discount). The plain create path records the request and defers approval
+  // to `approveDiscount`, so it passes no cap.
+  let actorMaxDiscountPercent: number | undefined;
+  if (requested && input.actorLevel) {
+    const ceilings = await resolveActorDiscountCeilings(prisma);
+    actorMaxDiscountPercent =
+      input.actorLevel === "L1" ? ceilings.l1MaxPercent : input.actorLevel === "L2" ? ceilings.l2MaxPercent : ceilings.l3MaxPercent;
+  }
+
+  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, {
+    isDeficientGuestTier,
+    roomTypeId,
+    stay,
+    discountPercentOffRequested: requested?.discountPercent,
+    actorMaxDiscountPercent,
+  });
+  if (requested && !pricing.discountWithinAuthorityBounds) {
+    throw new PolicyGateBlockedError(
+      "DISCOUNT_AUTHORITY",
+      "Requested discount exceeds the acting user's maximum discount authority",
+    );
+  }
 
   // Phase C — if the inquiry is linked to a travel agent or corporate account with an active
   // rate card, override the standard pricing with the negotiated room rate (including per-room-type
@@ -193,14 +235,6 @@ async function prepareQuotationDraft(
     actorId,
     waiver: input.belowMsrGmWaiver ?? null,
   });
-
-  const requested = input.requestedDiscount ?? null;
-  if (requested) {
-    await validateDiscountRequestAgainstAuthorityBands(prisma, {
-      discountPercent: requested.discountPercent,
-      discountBasis: requested.discountBasis,
-    });
-  }
 
   const last = await prisma.quotation.findFirst({ where: { entryId, segmentId }, orderBy: { versionNumber: "desc" } });
   const nextVersion = (last?.versionNumber ?? 0) + 1;
@@ -923,94 +957,82 @@ export async function approveDiscount(prisma: PrismaClient, quotationId: string,
   return { ok: true } as const;
 }
 
-/** SIG-S2 §6.1 — Policy 23: apply discount to a DRAFT quotation (re-prices total from basis rate). */
+/**
+ * SIG-S2 §6.1 — Policy 23: apply a discount to a DRAFT quotation, re-pricing in place.
+ *
+ * 2026-07-28 rebuild. The previous implementation had four defects that together produced a
+ * quotation whose stored total, whose commercialTerms, and whose already-rendered PDF all
+ * disagreed with each other:
+ *
+ *  1. It ignored per-room composition entirely — recomputing `totalAmount` as
+ *     `effectiveRate × roomCount` (a PRE-TAX NIGHTLY figure) and overwriting a
+ *     composition-derived stay total that was tax-INCLUSIVE. The two numbers weren't
+ *     comparable quantities, so the "discount" could appear to raise or slash the price
+ *     arbitrarily.
+ *  2. It left `commercialTerms.compositionTotals` untouched, so the row carried a stale
+ *     pre-discount breakdown alongside the new total.
+ *  3. It re-resolved the rate plan WITHOUT `roomTypeId` / `stay`, silently selecting a
+ *     different (room-type-blind, season-blind) plan than creation had used — the base rate
+ *     could move on its own before the discount was even applied.
+ *  4. It never invalidated the rendered PDF, so a quote previewed before the discount was
+ *     emailed to the guest showing the old price.
+ *
+ * Now it re-runs `prepareQuotationDraft` — the same pipeline `createQuotation` and
+ * `supersedeQuotationWithNewDraft` use — with the prior version's compositions plus the new
+ * discount, then writes the result in place and detaches any stale PDF.
+ */
 export async function applyDiscount(
   prisma: PrismaClient,
   quotationId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
   input: { discountPercent: number; discountBasis: string; belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null },
 ) {
-  const q = await prisma.quotation.findUnique({
-    where: { id: quotationId },
-    include: { entry: { include: { guestProfile: true } } },
-  });
+  const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
   if (q.state !== QuotationState.DRAFT) {
     throw new StateTransitionError("Discounts may only be applied to DRAFT quotations");
   }
-  await validateDiscountRequestAgainstAuthorityBands(prisma, {
-    discountPercent: input.discountPercent,
-    discountBasis: input.discountBasis,
-  });
   await enforceDiscountApprovalAuthority(prisma, { actorLevel: actor.actorLevel, discountPercent: input.discountPercent });
 
-  const terms = (q.commercialTerms as any) ?? {};
+  const priorTerms = (q.commercialTerms ?? {}) as Record<string, unknown>;
   const priorTotal = Number(q.totalAmount);
-  if (!Number.isFinite(priorTotal) || priorTotal <= 0) {
-    throw new ValidationError("Quotation has no resolved base amount for discount application");
-  }
 
-  const ceilings = await resolveActorDiscountCeilings(prisma);
-  const actorMaxDiscountPercent =
-    actor.actorLevel === "L1"
-      ? ceilings.l1MaxPercent
-      : actor.actorLevel === "L2"
-        ? ceilings.l2MaxPercent
-        : ceilings.l3MaxPercent;
-
-  const groupSize = typeof terms.groupSize === "number" && Number.isFinite(terms.groupSize) ? terms.groupSize : undefined;
-  const tier = q.entry?.guestProfile?.clientTier;
-  const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
-
-  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, {
-    groupSize,
-    discountPercentOffRequested: input.discountPercent,
-    actorMaxDiscountPercent,
-    isDeficientGuestTier,
-  });
-  if (!pricing.discountWithinAuthorityBounds) {
-    throw new PolicyGateBlockedError(
-      "DISCOUNT_AUTHORITY",
-      "Requested discount exceeds the acting user's maximum discount authority",
-    );
-  }
-  const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
-    belowMsr: pricing.belowMsr,
-    actorId: actor.actorId,
+  // Re-price through the shared pipeline: correct rate plan (room type + season aware),
+  // discount folded into the rate, per-room compositions carried forward and re-costed with
+  // the discounted room rate, service charge and GST recomputed on the new base.
+  const prep = await prepareQuotationDraft(prisma, q.entryId, actor.actorId, {
+    notes: (priorTerms.notes as string | undefined) ?? undefined,
+    requestedDiscount: { discountPercent: input.discountPercent, discountBasis: input.discountBasis },
+    belowMsrGmWaiver: input.belowMsrGmWaiver ?? null,
+    roomCompositions: (priorTerms.roomCompositions as RoomCompositionServiceInput[] | undefined) ?? undefined,
     actorLevel: actor.actorLevel,
-    waiver: input.belowMsrGmWaiver ?? null,
   });
 
   const commercialTerms = {
-    ...terms,
-    requestedDiscount: { discountPercent: input.discountPercent, discountBasis: input.discountBasis },
+    ...prep.commercialTerms,
     discountAppliedPercent: input.discountPercent,
-    resolvedRatePlanId: pricing.resolvedRatePlanId,
-    resolvedRatePlanType: pricing.resolvedRatePlanType,
-    resolvedNightlyRate: pricing.resolvedNightlyRate,
-    effectiveRate: pricing.effectiveRate,
-    msrValue: pricing.msrValue,
-    belowMsr: pricing.belowMsr,
-    resolutionPath: pricing.resolutionPath,
-    currency: pricing.currency,
-    appliedGroupBand: pricing.appliedGroupBand,
-    ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
   };
+  const newTotal = prep.compositionTotals
+    ? round2(prep.compositionTotals.total)
+    : round2(mulMoney(prep.effectiveRate, prep.roomCount));
 
   const now = new Date();
-  // Preserve multi-room: totalAmount = effectiveRate × roomCount (matches createQuotation / group
-  // path shape). Before this fix, applying a discount silently collapsed the total back to a single
-  // room's rate.
-  const discountRoomCount = Number((terms as any).roomCount) || 1;
   return prisma.$transaction(async (tx) => {
     const updated = await tx.quotation.update({
       where: { id: quotationId },
       data: {
-        totalAmount: round2(mulMoney(pricing.effectiveRate, discountRoomCount)),
-        currency: typeof pricing.currency === "string" && pricing.currency.trim() ? pricing.currency : q.currency,
+        totalAmount: newTotal,
+        currency: prep.currency?.trim() ? prep.currency : q.currency,
         commercialTerms: commercialTerms as any,
       },
     });
+
+    // The price moved — any PDF rendered from the old numbers (e.g. the desk's preview
+    // button) must not be what the guest receives. Detaching bumps the render revision so
+    // the next render writes a fresh artifact rather than colliding with write-once storage.
+    await invalidateQuotationPdfArtifact(tx, quotationId);
+
+    const msrWaiver = prep.msrWaiver;
     await tx.traceEvent.create({
       data: {
         eventType: "QUOTATION.DISCOUNT_APPLIED",
@@ -1028,11 +1050,20 @@ export async function applyDiscount(
           discountPercent: input.discountPercent,
           discountBasis: input.discountBasis,
           priorTotal,
-          newTotal: pricing.effectiveRate,
-          resolvedNightlyRate: pricing.resolvedNightlyRate,
-          msrValue: pricing.msrValue,
+          newTotal: Number(newTotal.toFixed(2)),
+          pricedFrom: prep.compositionTotals ? "PER_ROOM_COMPOSITION" : "FLAT_RATE",
+          resolvedNightlyRate: (prep.commercialTerms as any).resolvedNightlyRate,
+          effectiveRate: prep.effectiveRate,
+          msrValue: (prep.commercialTerms as any).msrValue,
           msrGmWaiver: Boolean(msrWaiver),
-        },
+          ...(prep.compositionTotals
+            ? {
+                compositionSubtotal: Number(prep.compositionTotals.subtotal.toFixed(2)),
+                compositionServiceCharge: Number(prep.compositionTotals.serviceCharge.toFixed(2)),
+                compositionGst: Number(prep.compositionTotals.gst.toFixed(2)),
+              }
+            : {}),
+        } as any,
         createdBy: actor.actorId,
       },
     });

@@ -205,7 +205,12 @@ export async function generateOrLoadQuotationPdf(
   const bytes = await renderHtmlToPdf(html);
   const checksum = hashSha256(bytes);
   const now = new Date();
-  const storageKey = buildStorageKey("quotation", `${q.referenceNumber}-v${q.versionNumber}`, now);
+  // Revision suffix so a re-render after a price change (operator previewed, then applied a
+  // discount) lands on a NEW key instead of colliding with the write-once stored file.
+  // Revision 1 keeps the legacy key shape so existing artifacts stay reachable.
+  const revision = q.pdfRenderRevision ?? 1;
+  const keyBase = revision > 1 ? `${q.referenceNumber}-v${q.versionNumber}-r${revision}` : `${q.referenceNumber}-v${q.versionNumber}`;
+  const storageKey = buildStorageKey("quotation", keyBase, now);
   await writeDocument(storageKey, bytes);
 
   // Persist snapshot + artifact metadata + write QuotationLine rows atomically.
