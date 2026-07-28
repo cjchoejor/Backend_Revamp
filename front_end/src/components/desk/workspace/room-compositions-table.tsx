@@ -112,12 +112,42 @@ function dayToIso(v?: string | null): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
+/** Rebuild a row's field state from an emitted composition — used when the planner hands
+ *  this editor the other mode's last snapshot so a mode switch resumes, not resets. */
+function rowFromComposition(c: RoomCompositionInput): RowState {
+  const s = (v: number | undefined | null, blankWhenNull = false): string =>
+    v == null ? (blankWhenNull ? "" : "0") : String(v);
+  return {
+    ad: s(c.adultCount),
+    c6: s(c.cnb6To10Count),
+    u6: s(c.cnbUnder6Count),
+    bed: s(c.extraBedCount),
+    cp: s(c.mealPlanCpCount),
+    ml: s(c.mealPlanMaplCount),
+    md: s(c.mealPlanMapdCount),
+    ap: s(c.mealPlanApCount),
+    ot: s(c.mealPlanOthersCount),
+    obf: s(c.othersBreakfastPax, true),
+    olu: s(c.othersLunchPax, true),
+    odi: s(c.othersDinnerPax, true),
+    rRoom: s(c.negotiatedRoomRate, true),
+    rBed: s(c.negotiatedExtraBedRate, true),
+    rBf: s(c.negotiatedBreakfastRate, true),
+    rLu: s(c.negotiatedLunchRate, true),
+    rDi: s(c.negotiatedDinnerRate, true),
+    sc: c.serviceChargeApplies ?? true,
+    gst: c.gstApplies ?? true,
+    foc: c.isFoc ?? false,
+  };
+}
+
 export function RoomCompositionsTable({
   sealedRoomIds,
   entryCheckIn,
   entryCheckOut,
   entryAdults,
   entryChildAges,
+  initial,
   onChange,
 }: {
   sealedRoomIds: string[];
@@ -125,6 +155,9 @@ export function RoomCompositionsTable({
   entryCheckOut?: string | null;
   entryAdults?: number | null;
   entryChildAges?: number[] | null;
+  /** Snapshot from the other planner mode — mount-time seed so switching modes resumes
+   *  from the same data. Read once on mount; later prop changes are ignored. */
+  initial?: RoomCompositionInput[];
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const { session } = useSession();
@@ -153,22 +186,36 @@ export function RoomCompositionsTable({
   });
   const roomMin = roomEnvelopeQuery.data?.allowedRoomCounts.min ?? null;
 
+  // Mount-time copy of the seed snapshot — deliberately not reactive.
+  const initialRef = useRef(initial);
   const [rows, setRows] = useState<Record<string, RowState>>({});
-  const [ratesOpen, setRatesOpen] = useState(false);
+  const [ratesOpen, setRatesOpen] = useState(
+    () => (initial ?? []).some((c) =>
+      [c.negotiatedRoomRate, c.negotiatedExtraBedRate, c.negotiatedBreakfastRate, c.negotiatedLunchRate, c.negotiatedDinnerRate].some((v) => v != null),
+    ),
+  );
   // Plans the operator switched on. A plan column is VISIBLE when toggled on OR when any
   // row carries pax for it — a column with data can never silently disappear.
   const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
   // CNB columns exist automatically when the intake party has children; the manual
   // toggle covers quoted occupancies that differ from intake (incl. no-party entries).
   const hasKids = (entryChildAges?.length ?? 0) > 0;
-  const [childColsManual, setChildColsManual] = useState(false);
+  const [childColsManual, setChildColsManual] = useState(
+    () => !hasKids && (initial ?? []).some((c) => (c.cnb6To10Count ?? 0) > 0 || (c.cnbUnder6Count ?? 0) > 0),
+  );
   const childColsVisible = hasKids || childColsManual;
 
   useEffect(() => {
     setRows((prev) => {
       if (sealedRoomIds.every((id) => prev[id])) return prev;
+      const seedById = new Map((initialRef.current ?? []).map((c) => [c.roomId, c]));
       const next = { ...prev };
-      for (const id of sealedRoomIds) if (!next[id]) next[id] = { ...EMPTY_ROW };
+      for (const id of sealedRoomIds) {
+        if (!next[id]) {
+          const seed = seedById.get(id);
+          next[id] = seed ? rowFromComposition(seed) : { ...EMPTY_ROW };
+        }
+      }
       return next;
     });
   }, [sealedRoomIds]);

@@ -116,12 +116,35 @@ const EMPTY_EXTRAS: RoomExtras = {
   ratesOpen: false,
 };
 
+/** Rebuild a room's extras from an emitted composition — used when the planner hands the
+ *  board the table's last snapshot so a mode switch resumes, not resets. */
+function extrasFromComposition(c: RoomCompositionInput): RoomExtras {
+  const s = (v: number | undefined | null): string => (v == null ? "" : String(v));
+  const anyRate = [c.negotiatedRoomRate, c.negotiatedExtraBedRate, c.negotiatedBreakfastRate, c.negotiatedLunchRate, c.negotiatedDinnerRate].some((v) => v != null);
+  return {
+    extraBed: String(c.extraBedCount ?? 0),
+    sc: c.serviceChargeApplies ?? true,
+    gst: c.gstApplies ?? true,
+    foc: c.isFoc ?? false,
+    othersB: s(c.othersBreakfastPax),
+    othersL: s(c.othersLunchPax),
+    othersD: s(c.othersDinnerPax),
+    rateRoom: s(c.negotiatedRoomRate),
+    rateBed: s(c.negotiatedExtraBedRate),
+    rateBf: s(c.negotiatedBreakfastRate),
+    rateLu: s(c.negotiatedLunchRate),
+    rateDi: s(c.negotiatedDinnerRate),
+    ratesOpen: anyRate,
+  };
+}
+
 export function RoomCompositionsBoard({
   sealedRoomIds,
   entryCheckIn,
   entryCheckOut,
   entryAdults,
   entryChildAges,
+  initial,
   onChange,
 }: {
   sealedRoomIds: string[];
@@ -129,6 +152,9 @@ export function RoomCompositionsBoard({
   entryCheckOut?: string | null;
   entryAdults?: number | null;
   entryChildAges?: number[] | null;
+  /** Snapshot from the other planner mode — mount-time seed so switching modes resumes
+   *  from the same data. Read once on mount; later prop changes are ignored. */
+  initial?: RoomCompositionInput[];
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const { session } = useSession();
@@ -179,6 +205,8 @@ export function RoomCompositionsBoard({
   }, [entryAdults, entryChildAges, youngMax, childMax]);
   const guestByKey = new Map(guests.map((g) => [g.key, g]));
 
+  // Mount-time copy of the seed snapshot — deliberately not reactive.
+  const initialRef = useRef(initial);
   // guestKey → roomId; missing/"" = unplaced tray.
   const [assign, setAssign] = useState<Record<string, string>>({});
   const [plans, setPlans] = useState<Record<string, PlanPick>>({});
@@ -186,12 +214,21 @@ export function RoomCompositionsBoard({
   const [extras, setExtras] = useState<Record<string, RoomExtras>>({});
   // Drop-target highlight while dragging: roomId or "tray".
   const [dragOver, setDragOver] = useState<string | null>(null);
+  // Set when the seed counted more people than the intake party has chips for — the
+  // board is party-bound, so the overflow can't be represented and gets dropped.
+  const [seedShortfall, setSeedShortfall] = useState(false);
 
   useEffect(() => {
     setExtras((prev) => {
       if (sealedRoomIds.every((id) => prev[id])) return prev;
+      const seedById = new Map((initialRef.current ?? []).map((c) => [c.roomId, c]));
       const next = { ...prev };
-      for (const id of sealedRoomIds) if (!next[id]) next[id] = { ...EMPTY_EXTRAS };
+      for (const id of sealedRoomIds) {
+        if (!next[id]) {
+          const seed = seedById.get(id);
+          next[id] = seed ? extrasFromComposition(seed) : { ...EMPTY_EXTRAS };
+        }
+      }
       return next;
     });
   }, [sealedRoomIds]);
@@ -216,8 +253,59 @@ export function RoomCompositionsBoard({
     setAssign(next);
   };
 
-  // First-open auto-assign, once, while nothing has been placed — the operator lands on
-  // a sensible split instead of an empty board. Ref-guarded against re-renders.
+  /**
+   * Rebuild placement + plans from the other mode's snapshot. Counts don't say WHICH
+   * same-band guest sits where, so chips are seated deterministically (pool order per
+   * band) — interchangeable for pricing, though a specific child's room may swap.
+   * Plans fill each room's guests in seat order until the tallies are spent. Rooms the
+   * seed counted fuller than the party allows set `seedShortfall` (overflow dropped).
+   */
+  const deriveFromSeed = (comps: RoomCompositionInput[]) => {
+    const pool: Record<Band, string[]> = {
+      ADULT: guests.filter((g) => g.band === "ADULT").map((g) => g.key),
+      C6TO10: guests.filter((g) => g.band === "C6TO10").map((g) => g.key),
+      UNDER6: guests.filter((g) => g.band === "UNDER6").map((g) => g.key),
+    };
+    const nextAssign: Record<string, string> = {};
+    const nextPlans: Record<string, PlanPick> = {};
+    let short = false;
+    for (const id of sealedRoomIds) {
+      const c = comps.find((x) => x.roomId === id);
+      if (!c) continue;
+      const seated: string[] = [];
+      const take = (band: Band, n: number) => {
+        for (let i = 0; i < n; i++) {
+          const key = pool[band].shift();
+          if (!key) {
+            short = true;
+            return;
+          }
+          nextAssign[key] = id;
+          seated.push(key);
+        }
+      };
+      take("ADULT", c.adultCount ?? 0);
+      take("C6TO10", c.cnb6To10Count ?? 0);
+      take("UNDER6", c.cnbUnder6Count ?? 0);
+      let seat = 0;
+      const planCounts: Array<[PlanPick, number]> = [
+        ["CP", c.mealPlanCpCount ?? 0],
+        ["MAPL", c.mealPlanMaplCount ?? 0],
+        ["MAPD", c.mealPlanMapdCount ?? 0],
+        ["AP", c.mealPlanApCount ?? 0],
+        ["OTHERS", c.mealPlanOthersCount ?? 0],
+      ];
+      for (const [plan, n] of planCounts) {
+        for (let i = 0; i < n && seat < seated.length; i++) nextPlans[seated[seat++]] = plan;
+      }
+    }
+    setAssign(nextAssign);
+    setPlans(nextPlans);
+    setSeedShortfall(short);
+  };
+
+  // First open, once: resume from the other mode's snapshot when it carries people,
+  // otherwise auto-assign a sensible split. Ref-guarded against re-renders.
   const autoRanRef = useRef(false);
   useEffect(() => {
     if (autoRanRef.current || sealedRoomIds.length === 0 || guests.length === 0) return;
@@ -226,7 +314,12 @@ export function RoomCompositionsBoard({
       return;
     }
     autoRanRef.current = true;
-    autoAssign();
+    const seed = initialRef.current ?? [];
+    const seedHasPeople = seed.some(
+      (c) => (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) > 0,
+    );
+    if (seedHasPeople) deriveFromSeed(seed);
+    else autoAssign();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sealedRoomIds, guests.length]);
 
@@ -417,6 +510,12 @@ export function RoomCompositionsBoard({
           least {roomMin}.
         </p>
       )}
+      {seedShortfall && (
+        <p className="rce-warns" style={{ marginBottom: 0 }}>
+          The table counted more guests than this booking&rsquo;s party has — the board can only place real
+          party members, so the extra seats were dropped. Check the placement before continuing.
+        </p>
+      )}
 
       {/* Plan bar — appears with a selection; the one place bulk actions live. */}
       {selected.size > 0 && (
@@ -586,11 +685,17 @@ function MiniNum({ label, value, onChange }: { label: string; value?: string; on
  * navigation, bulk fills) and the guest board above (chips into bins). The board needs
  * the intake party breakdown, so its toggle hides when the entry has none; the table
  * works either way (raw counts entry — also the path when quoted occupancy differs
- * from the intake party). Only the active mode is mounted — both auto-emit on mount,
- * and keeping both alive would race the parent's single `roomCompositions` state;
- * switching starts the new mode fresh. The pre-2026-07-28 per-room-cards editor
- * (`RoomCompositionsEditor`) is retired from this wrapper — the table covers the same
- * counts-first entry in one grid.
+ * from the intake party).
+ *
+ * State carries ACROSS mode switches (2026-07-28): every emission is kept in
+ * `snapshotRef`, and the mode mounting next receives it as its `initial` seed — board
+ * work shows up in the table (a room with 3×CP + 1×MAP+L shows both columns) and vice
+ * versa. Table → board is a derivation, not a copy: counts can't say which same-band
+ * guest sits where, so the board seats chips deterministically to match the tallies
+ * (and flags when the table counted more people than the party has). Only the active
+ * mode is mounted — both auto-emit on mount, so co-mounting would race the parent's
+ * single `roomCompositions` state. The pre-2026-07-28 per-room-cards editor
+ * (`RoomCompositionsEditor`) is retired from this wrapper.
  */
 export function RoomCompositionPlanner(props: {
   sealedRoomIds: string[];
@@ -602,6 +707,14 @@ export function RoomCompositionPlanner(props: {
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
   const [mode, setMode] = useState<"table" | "board">("table");
+  // Last emitted compositions — the seed for whichever mode mounts next. A ref, not
+  // state: emissions must not re-render the planner (the active editor already did).
+  const snapshotRef = useRef<RoomCompositionInput[]>([]);
+  const { onChange } = props;
+  const handleChange = (compositions: RoomCompositionInput[]) => {
+    snapshotRef.current = compositions;
+    onChange(compositions);
+  };
   if (!canBoard) return <RoomCompositionsTable {...props} />;
   return (
     <div style={{ display: "grid", gap: 8 }}>
@@ -610,7 +723,7 @@ export function RoomCompositionPlanner(props: {
           type="button"
           className={mode === "table" ? "on" : ""}
           onClick={() => setMode("table")}
-          title="Spreadsheet grid — one row per room, arrow keys move between cells, Occ is derived"
+          title="Spreadsheet grid — one row per room, arrow keys move between cells, Occ is derived. Carries the board's entries over."
         >
           Table
         </button>
@@ -618,12 +731,16 @@ export function RoomCompositionPlanner(props: {
           type="button"
           className={mode === "board" ? "on" : ""}
           onClick={() => setMode("board")}
-          title="Place each guest in a room and pick their meal plan — counts are derived. Switching resets entries."
+          title="Place each guest in a room and pick their meal plan — counts are derived. Carries the table's entries over."
         >
           Guest board
         </button>
       </div>
-      {mode === "table" ? <RoomCompositionsTable {...props} /> : <RoomCompositionsBoard {...props} />}
+      {mode === "table" ? (
+        <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current} />
+      ) : (
+        <RoomCompositionsBoard {...props} onChange={handleChange} initial={snapshotRef.current} />
+      )}
     </div>
   );
 }
