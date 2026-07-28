@@ -49,6 +49,19 @@ export async function captureCorporateContext(
   });
 }
 
+/**
+ * Edit the free-text special-preference note (`Inquiry.notes`) from any stage. Stage-agnostic
+ * (L1+); an empty string clears it. Overwrites in place so the preference is never duplicated.
+ * `PATCH /api/inquiries/:id/notes`.
+ */
+export async function updateInquiryNotes(session: Session, inquiryId: string, notes: string) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/notes`, {
+    method: "PATCH",
+    session,
+    body: { notes },
+  });
+}
+
 // ----- Phase C operational lookups (L1-accessible search) -----
 
 export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };

@@ -19,6 +19,13 @@ export type BackendItem = {
   ref?: string;
   /** One-line plain-English explanation of what it does at this stage. */
   detail: string;
+  /**
+   * Optional case-insensitive regex over the entry's recorded TraceEvent.eventType values.
+   * When present, this item's "ran" state is driven by an ACTUAL matching backend event for
+   * this booking (per-item truth), instead of inheriting the whole group's state. Items
+   * without a pattern (in-transaction guards that emit no event) inherit the group.
+   */
+  trace?: string;
 };
 
 export type StageBackend = {
@@ -84,7 +91,7 @@ const S1: StageBackend = {
 
 const S2: StageBackend = {
   stage: "S2",
-  deskStep: "Quote",
+  deskStep: "Negotiation",
   summary: "Quotation lifecycle (draft → send → acceptance), discounts within authority, optional speculative hold.",
   stateMachines: [
     { name: "S2 quotation state machine", ref: "state-machines/s2-quotation-state-machine.ts", detail: "DRAFT → SENT → ACCEPTED / SUPERSEDED / EXPIRED." },

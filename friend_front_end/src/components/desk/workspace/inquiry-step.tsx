@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Maximize2, Minimize2, Pencil, Search, Sparkles, UserCheck, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -14,9 +15,12 @@ import {
   type AvailabilityRoomResult,
   type PerDateAvailabilityResult,
 } from "@/lib/api/availability";
-import { MultiRoomSelect, roomMetaFromResults, type SealPayload } from "./multi-room-select";
+import { type SealPayload } from "./multi-room-select";
+import { RoomStatusTable, roomStatusRows, type RoomStatusRow } from "./room-status-table";
+import { listRooms } from "@/lib/api/rooms";
 import { getInquiry } from "@/lib/api/inquiries";
-import { roomTypeShort } from "@/lib/desk/rooms";
+import { getAllowedRoomCounts } from "@/lib/api/child-policy";
+import { updateEntryIntake } from "@/lib/api/entries";
 import { formatDMY, guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -32,10 +36,10 @@ import { optionSelectedRoomIds } from "@/types/api";
  */
 const S1_BACKEND: Record<string, BackendItem[]> = {
   intake: [
-    { name: "Policy 3 — custodian assignment", ref: "p03-initial-custodian-assignment.ts", detail: "Assigns the owning actor from the inquiry's sourceChannel (throws on an unknown channel)." },
-    { name: "Policy 64 — group detection", ref: "p64 · registry.groupDetection.guestCountThreshold", detail: "Flags the entry GROUP when guest count crosses the threshold." },
+    { name: "Policy 3 — custodian assignment", ref: "p03-initial-custodian-assignment.ts", detail: "Assigns the owning actor from the inquiry's sourceChannel (throws on an unknown channel).", trace: "^OWNERSHIP_ASSIGNED$" },
+    { name: "Policy 64 — group detection", ref: "p64 · registry.groupDetection.guestCountThreshold", detail: "Flags the entry GROUP when guest count crosses the threshold.", trace: "GROUP_BILLING_MODE" },
     { name: "Child / capacity validation", ref: "capacity-validation-service.ts", detail: "BLOCK checks: unaccompanied-minor, adult:child ratio, over-capacity vs room type." },
-    { name: "s1-entry-service.createEntry", ref: "services/domain/s1-entry-service.ts", detail: "Creates the Entry and records the head-count breakdown." },
+    { name: "s1-entry-service.createEntry", ref: "services/domain/s1-entry-service.ts", detail: "Creates the Entry and records the head-count breakdown.", trace: "^ENTRY\\.CREATED$" },
     { name: "W20 — ENTRY_EXPIRY armed", ref: "ENTRY_EXPIRY · w20-entry-expiry-worker.ts", detail: "Arms the S1 expiry timer (registry.s1Expiry.minutes)." },
     { name: "S1 state machine", ref: "state-machines/s1-state-machine.ts", detail: "Sets the (ACTIVE, S1) composite state." },
   ],
@@ -44,17 +48,17 @@ const S1_BACKEND: Record<string, BackendItem[]> = {
     { name: "Availability engine", ref: "engines/availability-engine.ts", detail: "Computes available / deficient / unavailable rooms for the window." },
     { name: "Pricing pipeline (indicative)", ref: "engines/pricing-pipeline-engine.ts", detail: "Attaches an indicative-only nightly rate (not a quote)." },
     { name: "s1-availability-service", ref: "services/domain/s1-availability-service.ts", detail: "Persists the AvailabilityConfiguration result set." },
-    { name: "W1 — dwell / staleness", ref: "STAGE_DWELL_MONITOR · w1-stage-dwell-monitor.ts", detail: "Marks the result stale after the staleness window; fires dwell warnings." },
+    { name: "W1 — dwell / staleness", ref: "STAGE_DWELL_MONITOR · w1-stage-dwell-monitor.ts", detail: "Marks the result stale after the staleness window; fires dwell warnings.", trace: "^STAGE_DWELL\\." },
   ],
   select: [
-    { name: "s1-availability-service.selectOption", ref: "services/domain/s1-availability-service.ts", detail: "Records the preferred room on the configuration." },
+    { name: "s1-availability-service.selectOption", ref: "services/domain/s1-availability-service.ts", detail: "Records the preferred room on the configuration.", trace: "^CONFIGURATION_SELECTED$" },
     { name: "Deficiency acknowledgement", ref: "availability deficiency policy", detail: "A deficient room requires an explicit acknowledgement, captured on select." },
   ],
   advance: [
     { name: "Optimistic-lock match", ref: "p01-entry-version-optimistic-lock-match.ts", detail: "Rejects S1→S2 if the entry version is stale." },
-    { name: "Policy 12 — duplicate-inquiry S1 exit", ref: "p12 · registry.duplicateInquiry.blockS1Exit", detail: "May block S1 exit when a duplicate inquiry is detected." },
+    { name: "Policy 12 — duplicate-inquiry S1 exit", ref: "p12 · registry.duplicateInquiry.blockS1Exit", detail: "May block S1 exit when a duplicate inquiry is detected.", trace: "^INQUIRY\\.DUPLICATE_FLAGGED$" },
     { name: "S1 state machine — S1→S2 guard", ref: "state-machines/s1-state-machine.ts", detail: "Requires all S1 exit evidence; no unresolved open loops." },
-    { name: "Entry lifecycle state machine", ref: "state-machines/entry-lifecycle-state-machine.ts", detail: "Advances the composite state to (ACTIVE, S2)." },
+    { name: "Entry lifecycle state machine", ref: "state-machines/entry-lifecycle-state-machine.ts", detail: "Advances the composite state to (ACTIVE, S2).", trace: "^ENTRY\\.STAGE_TRANSITION$" },
   ],
 };
 
@@ -103,6 +107,26 @@ function BlockH({ children, tag }: { children: React.ReactNode; tag?: React.Reac
 const DASH = <span style={{ color: "var(--ink-3)" }}>—</span>;
 
 /** ISO date strings for every night of a stay (check-in inclusive, check-out exclusive), UTC-safe. */
+/**
+ * The check-in/check-out the most recent availability search actually ran with.
+ *
+ * `AvailabilityConfiguration.searchCriteria` is written server-side on every search
+ * (s1-availability-service), and `availabilityConfigs` arrives newest-first, so [0] is the
+ * latest run. Returns empty when the entry has never been searched — caller falls back to the
+ * entry's own intake dates.
+ */
+function lastSearchedWindow(entry: EntryDetail): { checkIn?: string; checkOut?: string } {
+  const sc = (entry.availabilityConfigs ?? [])[0]?.searchCriteria as
+    | { checkInDate?: unknown; checkOutDate?: unknown }
+    | null
+    | undefined;
+  const iso = (v: unknown) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : undefined);
+  const checkIn = iso(sc?.checkInDate);
+  const checkOut = iso(sc?.checkOutDate);
+  // Both or neither — a half-restored window would fight the nights/check-out sync effect.
+  return checkIn && checkOut ? { checkIn, checkOut } : {};
+}
+
 function enumerateNights(checkIn?: string | null, checkOut?: string | null): string[] {
   if (!checkIn || !checkOut) return [];
   const start = new Date(`${checkIn.slice(0, 10)}T00:00:00Z`);
@@ -118,340 +142,51 @@ function enumerateNights(checkIn?: string | null, checkOut?: string | null): str
   return out;
 }
 
-/** A room type with the set of individual rooms of that type returned by availability. */
-type RoomTypeGroup = {
-  key: string;
-  label: string;
-  rooms: AvailabilityRoomResult[];
-  /** The room a selection acts on (final room is assigned at arrival anyway). */
-  representative: AvailabilityRoomResult;
-  capacity?: number;
-  pricing: IndicativePricing | null;
-};
-
-/** Collapse individual rooms into one card per room type (the final room is picked at arrival). */
-function groupByType(
-  rooms: AvailabilityRoomResult[],
-  pricingFallback: IndicativePricing | null,
-): RoomTypeGroup[] {
-  const map = new Map<string, AvailabilityRoomResult[]>();
-  for (const r of rooms) {
-    const key = r.roomTypeId ?? "__untyped__";
-    const list = map.get(key);
-    if (list) list.push(r);
-    else map.set(key, [r]);
-  }
-  return Array.from(map.entries()).map(([key, list]) => {
-    const rep = list[0];
-    const capacity = Math.max(0, ...list.map((r) => r.capacity ?? 0)) || undefined;
-    return {
-      key,
-      label: rep.roomTypeName ?? (rep.roomTypeId ? roomTypeShort(rep.roomTypeId) : "Room"),
-      rooms: list,
-      representative: rep,
-      capacity,
-      pricing: readPricing(rep.pricingIndicative) ?? pricingFallback,
-    };
-  });
-}
-
-/**
- * The individual rooms of a type, as a compact box grid. Available / deficient boxes pick
- * that specific room. Unavailable boxes open an occupancy-details dialog showing WHO holds
- * the room (guest, phone, email, agent) so the operator can reach out without leaving S1.
- */
-function RoomBoxes({
-  group,
-  variant,
-  onPick,
-  selectedRoomId,
-  disabled,
-  onShowOccupancy,
-}: {
-  group: RoomTypeGroup;
-  variant: "available" | "deficient" | "unavailable";
-  onPick?: (room: AvailabilityRoomResult) => void;
-  selectedRoomId?: string | null;
-  disabled?: boolean;
-  onShowOccupancy?: (room: AvailabilityRoomResult) => void;
-}) {
-  const pickable = variant !== "unavailable" && !!onPick;
-  return (
-    <div className="room-box-grid">
-      {group.rooms.map((r) => {
-        const sel = selectedRoomId != null && r.roomId === selectedRoomId;
-        const cls = `room-box${variant === "deficient" ? " deficient" : ""}${variant === "unavailable" ? " unavail" : ""}${pickable ? " pick" : ""}${sel ? " sel" : ""}`;
-        const label = r.roomNumber ?? r.roomId.slice(0, 6);
-        if (variant === "unavailable") {
-          // Unavailable rooms are now clickable — opens a modal showing who holds the room.
-          return (
-            <button
-              key={r.roomId}
-              type="button"
-              className={cls}
-              title="Click to see who holds this room"
-              onClick={() => onShowOccupancy?.(r)}
-              style={{ cursor: "pointer" }}
-            >
-              {label}
-            </button>
-          );
-        }
-        return (
-          <button
-            key={r.roomId}
-            type="button"
-            className={cls}
-            title={`Select room ${r.roomNumber ?? r.roomId}`}
-            disabled={disabled}
-            aria-pressed={sel}
-            onClick={() => onPick!(r)}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Modal shown when the operator clicks an unavailable room. Renders each overlapping
- * booking (guest, contact links, agent/corporate) plus any physical-status reason.
- * Escape + click-outside + Close button all dismiss.
- */
-function OccupancyDetailsModal({ room, onClose }: { room: AvailabilityRoomResult; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const blockages = room.occupiedBy ?? [];
-  const reason = room.unavailabilityReason;
-  const isPhysicalIssue = reason === "MAINTENANCE_CONFLICT" || reason === "BLOCKED";
-
-  return (
-    <div
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      style={{
-        position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.5)",
-        display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-        backdropFilter: "blur(4px)",
-      }}
-    >
-      <div
-        role="dialog" aria-modal="true"
-        onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          background: "var(--surface, #fff)", color: "var(--ink-1, #111)",
-          borderRadius: 10, maxWidth: 520, width: "100%",
-          boxShadow: "0 20px 50px rgba(0,0,0,0.25)", border: "1px solid var(--line, #e6e0d4)",
-          overflow: "hidden",
-        }}
-      >
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--line, #e6e0d4)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2 }}>Room {room.roomNumber ?? room.roomId.slice(0, 6)}</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-3, #7a6a52)", marginTop: 3 }}>
-              {[room.roomTypeName, room.claimState ? `state ${room.claimState}` : null].filter(Boolean).join(" · ")}
-            </div>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: 0, cursor: "pointer", fontSize: 20, color: "var(--ink-3, #7a6a52)", lineHeight: 1 }}>×</button>
-        </div>
-
-        <div style={{ padding: 20, maxHeight: "70vh", overflowY: "auto" }}>
-          {isPhysicalIssue && (
-            <div style={{ padding: 12, borderRadius: 6, background: "#fff4e5", border: "1px solid #f5c37e", marginBottom: 12 }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>
-                {reason === "MAINTENANCE_CONFLICT" ? "Room in maintenance" : "Room blocked"}
-              </div>
-              {room.blockedReason && (
-                <div style={{ fontSize: 12, color: "#7a5a20", marginTop: 4 }}>{room.blockedReason}</div>
-              )}
-            </div>
-          )}
-
-          {blockages.length === 0 && !isPhysicalIssue && (
-            <p style={{ fontSize: 13, color: "var(--ink-3, #7a6a52)" }}>
-              This room is off-limits but the backend didn&apos;t attach booking details. Try refreshing the availability search.
-            </p>
-          )}
-
-          {blockages.map((b, idx) => (
-            <div key={idx} style={{
-              border: "1px solid var(--line, #e6e0d4)", borderRadius: 8,
-              padding: 14, marginBottom: 10, background: "var(--surface-2, #fafaf5)",
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{
-                  fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4,
-                  background: b.source === "HOLD" ? "#fff4e5" : "#e5f0ff",
-                  color: b.source === "HOLD" ? "#7a5a20" : "#1e4b8f",
-                }}>
-                  {b.source === "HOLD" ? "Committed hold" : "Reserved"}
-                </span>
-                {b.entryReferenceNumber && (
-                  <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--ink-3, #7a6a52)" }}>
-                    {b.entryReferenceNumber}
-                  </span>
-                )}
-              </div>
-
-              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
-                {b.guestName?.trim() || "Guest"}
-              </div>
-
-              {(b.guestPhone || b.guestEmail) && (
-                <div style={{ display: "grid", gap: 4, fontSize: 13, marginBottom: 8 }}>
-                  {b.guestPhone && (
-                    <a href={`tel:${b.guestPhone}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>
-                      📞 {b.guestPhone}
-                    </a>
-                  )}
-                  {b.guestEmail && (
-                    <a href={`mailto:${b.guestEmail}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>
-                      ✉ {b.guestEmail}
-                    </a>
-                  )}
-                </div>
-              )}
-
-              {b.agentName && (
-                <div style={{
-                  marginTop: 10, padding: 10, borderRadius: 6, background: "var(--surface, #fff)",
-                  border: "1px solid var(--line, #e6e0d4)",
-                }}>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--ink-3, #7a6a52)", marginBottom: 3 }}>
-                    {b.agentType === "CORPORATE" ? "Corporate account" : "Travel agent"}
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{b.agentName}</div>
-                  {b.agentPhone && (
-                    <div style={{ fontSize: 12, marginTop: 3 }}>
-                      <a href={`tel:${b.agentPhone}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>📞 {b.agentPhone}</a>
-                    </div>
-                  )}
-                  {b.agentEmail && (
-                    <div style={{ fontSize: 12, marginTop: 3 }}>
-                      <a href={`mailto:${b.agentEmail}`} style={{ color: "var(--accent, #a44f2b)", textDecoration: "none" }}>✉ {b.agentEmail}</a>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ padding: "12px 20px", borderTop: "1px solid var(--line, #e6e0d4)", display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--line, #e6e0d4)",
-              background: "var(--surface, #fff)", color: "var(--ink-1, #111)", cursor: "pointer", fontSize: 13,
-            }}
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RoomTypeCard({
-  group,
-  variant,
-  selected,
-  disabled,
-  onSelect,
-  onPickRoom,
-  selectedRoomId,
-  onShowOccupancy,
-}: {
-  group: RoomTypeGroup;
-  variant: "available" | "deficient" | "unavailable";
-  selected?: boolean;
-  disabled?: boolean;
-  onSelect?: () => void;
-  onPickRoom?: (room: AvailabilityRoomResult) => void;
-  selectedRoomId?: string | null;
-  onShowOccupancy?: (room: AvailabilityRoomResult) => void;
-}) {
-  const count = group.rooms.length;
-  const countLabel = `${count} room${count === 1 ? "" : "s"}`;
-
-  if (variant === "unavailable") {
-    return (
-      <div className="opt-wrap">
-        <div className="opt unavail">
-          <span className="ot">
-            <span className="otn">{group.label}</span>
-            <span className="ots">{countLabel} unavailable</span>
-          </span>
-          <span className="tag stop">Unavailable</span>
-        </div>
-        <RoomBoxes group={group} variant={variant} onShowOccupancy={onShowOccupancy} />
-      </div>
-    );
-  }
-
-  const sub = [`${countLabel} ${variant === "deficient" ? "deficient" : "available"}`, group.capacity != null ? `up to ${group.capacity} guests` : null]
-    .filter(Boolean)
-    .join(" · ");
-  const price = group.pricing?.rateAmount != null ? `${money(group.pricing.rateAmount, group.pricing.currency)}/night` : null;
-
-  return (
-    <div className="opt-wrap">
-      <button
-        type="button"
-        className={`opt${selected ? " sel" : ""}${variant === "deficient" ? " deficient" : ""}`}
-        disabled={disabled}
-        onClick={onSelect}
-      >
-        <span className="radio" />
-        <span className="ot">
-          <span className="otn">{group.label}</span>
-          <span className="ots">{sub}</span>
-        </span>
-        {variant === "deficient" && (
-          <span className="tag warn">
-            <AlertTriangle style={{ width: 11, height: 11 }} />
-            Deficient
-          </span>
-        )}
-        {price ? <span className="op">{price}</span> : null}
-      </button>
-      <RoomBoxes group={group} variant={variant} onPick={onPickRoom} selectedRoomId={selectedRoomId} disabled={disabled} />
-    </div>
-  );
-}
+// (The old per-type card grid — RoomTypeCard/RoomBoxes/groupByType — was replaced by the
+// legacy-PMS-style RoomStatusTable in ./room-status-table.tsx: rows = rooms, columns = nights.)
 
 export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
 
-  const [checkIn, setCheckIn] = useState(entry.checkInDate?.slice(0, 10) ?? "");
-  const [checkOut, setCheckOut] = useState(entry.checkOutDate?.slice(0, 10) ?? "");
-  const [adultsInput, setAdultsInput] = useState(String(entry.guestCount ?? 1));
-  const [childrenInput, setChildrenInput] = useState("0");
-  const partyInited = useRef(false);
+  // The search form is seeded from the LAST SEARCH THAT ACTUALLY RAN, not from the entry's
+  // intake dates. Every search persists its inputs to `AvailabilityConfiguration.searchCriteria`
+  // server-side, so leaving the step and coming back restores the window the operator was
+  // working in — previously the component remounted and snapped back to the intake dates,
+  // silently discarding a changed night count.
+  const searched = lastSearchedWindow(entry);
+  const seedCheckIn = searched.checkIn ?? entry.checkInDate?.slice(0, 10) ?? "";
+  const seedCheckOut = searched.checkOut ?? entry.checkOutDate?.slice(0, 10) ?? "";
 
-  // Same rule as intake: a check-in date drags check-out to the next day unless a later one is
-  // already set. Keeps the search window valid without overwriting a deliberate multi-night stay.
+  const [checkIn, setCheckIn] = useState(seedCheckIn);
+  const [checkOut, setCheckOut] = useState(seedCheckOut);
+  // Nights — check-out derives from check-in + nights; a manual check-out pick recomputes nights.
+  const [nightsStr, setNightsStr] = useState(() =>
+    String(Math.max(1, seedCheckIn && seedCheckOut ? enumerateNights(seedCheckIn, seedCheckOut).length : 1)),
+  );
+  // Rooms required for the search — lives on the ENTRY (the seal validates each night against
+  // entry.numberOfRooms), so a changed value is PATCHed to the entry when the search runs.
+  const [roomsInput, setRoomsInput] = useState(String(entry.numberOfRooms ?? 1));
+  const roomsNum = Math.max(0, parseInt(roomsInput || "0", 10) || 0);
+
   useEffect(() => {
     if (!checkIn) return;
-    const earliest = nextDayIso(checkIn);
-    if (!earliest) return;
-    setCheckOut((prev) => (!prev || prev < earliest ? earliest : prev));
-  }, [checkIn]);
+    const n = Math.max(1, parseInt(nightsStr || "1", 10) || 1);
+    const d = new Date(`${checkIn}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return;
+    d.setUTCDate(d.getUTCDate() + n);
+    setCheckOut(d.toISOString().slice(0, 10));
+  }, [checkIn, nightsStr]);
+
+  const onCheckOutChange = (v: string) => {
+    setCheckOut(v);
+    if (checkIn && v) {
+      const d = enumerateNights(checkIn, v).length;
+      if (d >= 1) setNightsStr(String(d));
+    }
+  };
 
   const [searchResult, setSearchResult] = useState<AvailabilityQueryResponse | null>(null);
-  const [pendingRoom, setPendingRoom] = useState<string | null>(null);
-  // Room whose occupancy-details modal is currently open (null → closed).
-  const [occupancyModalRoom, setOccupancyModalRoom] = useState<AvailabilityRoomResult | null>(null);
   // Which room-type cards have their room list expanded (keyed by group key).
 
 
@@ -497,29 +232,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         ? `${entry.guestCount} guest${entry.guestCount === 1 ? "" : "s"}`
         : null;
 
-  // Pre-fill the adults/children search inputs once from the entry's recorded composition.
-  useEffect(() => {
-    if (partyInited.current) return;
-    setAdultsInput(String(adults ?? entry.guestCount ?? 1));
-    setChildrenInput(String(childCount ?? 0));
-    partyInited.current = true;
-  }, [adults, childCount, entry.guestCount]);
-
-  const totalGuests = (Number(adultsInput) || 0) + (Number(childrenInput) || 0);
-
   const searchMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!checkIn || !checkOut) throw new Error("Check-in and check-out dates required");
+      // Save a changed rooms-required to the entry FIRST — the selection cap and the seal's
+      // per-night validation both read entry.numberOfRooms, so search and entry must agree.
+      const rooms = Math.max(1, parseInt(roomsInput || "1", 10) || 1);
+      if (rooms !== (entry.numberOfRooms ?? 1)) {
+        await updateEntryIntake(session!, entry.id, { numberOfRooms: rooms, expectedVersion: entry.version });
+      }
+      // Guest count comes from the entry's own recorded composition — not a search-form input.
       return queryAvailabilityByEntry(session!, entry.id, {
         checkInDate: checkIn,
         checkOutDate: checkOut,
-        guestCount: totalGuests || undefined,
+        guestCount: entry.guestCount ?? undefined,
         useType: entry.useType ?? undefined,
       });
     },
     onSuccess: (data) => {
       setSearchResult(data);
-      setPendingRoom(null);
       toast.success("Availability saved — pick a preferred option");
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
       // Refresh the live backend feed so the new trace events / timers show immediately.
@@ -553,17 +284,145 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       });
     },
     onSuccess: () => {
-      setPendingRoom(null);
       toast.success("Preferred option selected");
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
       void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
       void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
     },
     onError: (e) => {
-      setPendingRoom(null);
       toast.error(e instanceof ApiError ? e.message : "Could not select option");
     },
   });
+
+  // --- Inline intake edit (S1 only) -----------------------------------------------------------
+  // Lets the operator go back and fix the stay details captured at intake — dates, party
+  // composition and room count — without leaving the booking. Persists to the entry via the
+  // existing PATCH /entries/:id (S1-only server-side). Kept separate from the availability-search
+  // inputs above, which only shape a search and never touch the stored entry.
+  const [isEditing, setIsEditing] = useState(false);
+  const [edCheckIn, setEdCheckIn] = useState("");
+  const [edCheckOut, setEdCheckOut] = useState("");
+  const [edAdults, setEdAdults] = useState("1");
+  const [edChildren, setEdChildren] = useState("0");
+  const [edChildAges, setEdChildAges] = useState<string[]>([]);
+  const [edRooms, setEdRooms] = useState("1");
+
+  const beginEdit = () => {
+    setEdCheckIn(entry.checkInDate?.slice(0, 10) ?? "");
+    setEdCheckOut(entry.checkOutDate?.slice(0, 10) ?? "");
+    setEdAdults(String(entry.adultCount ?? entry.guestCount ?? 1));
+    setEdChildren(String(entry.childCount ?? 0));
+    setEdChildAges((entry.childAges ?? []).map(String));
+    setEdRooms(String(entry.numberOfRooms ?? 1));
+    setIsEditing(true);
+  };
+
+  // Keep the edit form's child-age list in step with its children count.
+  const edChildCount = Math.max(0, parseInt(edChildren || "0", 10) || 0);
+  useEffect(() => {
+    setEdChildAges((prev) => {
+      const next = prev.slice(0, edChildCount);
+      while (next.length < edChildCount) next.push("");
+      return next;
+    });
+  }, [edChildCount]);
+
+  // Check-out follows check-in in the edit form too (shortest stay is one night).
+  useEffect(() => {
+    if (!isEditing || !edCheckIn) return;
+    const earliest = nextDayIso(edCheckIn);
+    if (!earliest) return;
+    setEdCheckOut((prev) => (!prev || prev < earliest ? earliest : prev));
+  }, [edCheckIn, isEditing]);
+
+  const edAgesComplete =
+    edChildCount === 0 ||
+    (edChildAges.length === edChildCount && edChildAges.every((a) => a.trim() !== "" && Number(a) >= 0));
+
+  // How many rooms this party actually needs. Backend-authoritative — POST
+  // /api/lookups/allowed-room-counts owns the chargeable-occupant + capacity maths so every
+  // frontend gets the same answer (the intake form at /desk/bookings/new uses it too). While
+  // editing, the envelope tracks the values being typed; otherwise it reflects the saved entry.
+  const roomEnvAdults = isEditing
+    ? Math.max(1, parseInt(edAdults || "1", 10) || 1)
+    : Math.max(1, entry.adultCount ?? entry.guestCount ?? 1);
+  const roomEnvChildAges = isEditing
+    ? edChildAges.map((x) => parseInt(x || "", 10)).filter((n) => Number.isFinite(n))
+    : entry.childAges ?? [];
+  const roomEnvelopeQuery = useQuery({
+    queryKey: ["lookup", "allowed-room-counts", roomEnvAdults, roomEnvChildAges.join(",")],
+    queryFn: () => getAllowedRoomCounts(session!, { adults: roomEnvAdults, childAges: roomEnvChildAges }),
+    enabled: !!session && roomEnvAdults > 0,
+  });
+  const roomEnvelope = roomEnvelopeQuery.data ?? null;
+  const roomMin = roomEnvelope?.allowedRoomCounts.min ?? null;
+
+  /**
+   * Auto-set both room inputs to the minimum the party needs, and let the operator raise it
+   * from there (a guest may want more rooms than capacity strictly requires).
+   *
+   * Keyed on the MINIMUM changing, not on every render — otherwise clearing the field to type
+   * "10" would momentarily read as 0, trip the bump, and fight the keystroke. A value already
+   * at or above the minimum is a deliberate choice and is left alone; only a value below it
+   * gets pulled up.
+   */
+  const appliedRoomMinRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (roomMin == null) return;
+    if (appliedRoomMinRef.current === roomMin) return;
+    appliedRoomMinRef.current = roomMin;
+    const raise = (prev: string) => {
+      const cur = parseInt(prev || "0", 10) || 0;
+      return cur >= roomMin ? prev : String(roomMin);
+    };
+    setRoomsInput(raise);
+    setEdRooms(raise);
+  }, [roomMin]);
+  const roomEnvelopeHint = roomEnvelope ? (
+    <p style={{ fontSize: 11, color: "var(--ink-2)", margin: "5px 0 0", lineHeight: 1.45 }}>
+      {roomEnvelope.chargeableOccupants} chargeable guest
+      {roomEnvelope.chargeableOccupants === 1 ? "" : "s"} · up to {roomEnvelope.maxCapacityUsed} per room →{" "}
+      <b>
+        minimum {roomEnvelope.allowedRoomCounts.min} room
+        {roomEnvelope.allowedRoomCounts.min === 1 ? "" : "s"}
+      </b>
+      {roomEnvelope.allowedRoomCounts.max > roomEnvelope.allowedRoomCounts.min
+        ? ` (up to ${roomEnvelope.allowedRoomCounts.max} allowed)`
+        : ""}
+      {roomEnvelope.allowedRoomCounts.max > roomEnvelope.allowedRoomCounts.min
+        ? " — set to the minimum; raise it if the guest wants more."
+        : ""}
+    </p>
+  ) : null;
+  const updateIntakeMutation = useMutation({
+    mutationFn: () => {
+      const a = Math.max(1, parseInt(edAdults || "1", 10) || 1);
+      const c = Math.max(0, parseInt(edChildren || "0", 10) || 0);
+      const ages = edChildAges.map((x) => parseInt(x || "", 10)).filter((n) => Number.isFinite(n));
+      return updateEntryIntake(session!, entry.id, {
+        checkInDate: edCheckIn || undefined,
+        checkOutDate: edCheckOut || undefined,
+        adultCount: a,
+        childCount: c,
+        childAges: c > 0 ? (ages.length === c ? ages : undefined) : [],
+        guestCount: a + c,
+        numberOfRooms: Math.max(1, parseInt(edRooms || "1", 10) || 1),
+        expectedVersion: entry.version,
+      });
+    },
+    onSuccess: () => {
+      setIsEditing(false);
+      toast.success("Stay details updated");
+      void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't update the details"),
+  });
+  const canSaveEdit = !!edCheckIn && !!edCheckOut && edAgesComplete && !updateIntakeMutation.isPending;
+  // Editable only while the booking is genuinely at S1 — the server rejects intake edits after that.
+  const canEditIntake = entry.currentStage === "S1";
 
   const { availableRooms, deficientRooms, unavailableRooms, pricing } = useMemo(() => {
     let rooms: ReturnType<typeof roomsFromResultSet> = {
@@ -595,19 +454,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const hasResults = availableRooms.length + deficientRooms.length + unavailableRooms.length > 0;
   const stale = latestConfig?.isStale || searchResult?.isStale;
 
-  const availableTypes = useMemo(() => groupByType(availableRooms, pricing), [availableRooms, pricing]);
-  const deficientTypes = useMemo(() => groupByType(deficientRooms, pricing), [deficientRooms, pricing]);
-  const unavailableTypes = useMemo(() => groupByType(unavailableRooms, pricing), [unavailableRooms, pricing]);
-
+  // Ext-bed counts per room come from the rooms catalog — the availability result doesn't carry
+  // them, and the legacy room-status layout shows an Ext. Beds column.
+  const roomsCatalog = useQuery({ queryKey: ["rooms"], queryFn: () => listRooms(session!), enabled: !!session });
+  const extBedsByRoomId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of roomsCatalog.data?.items ?? []) {
+      if (typeof r.roomType?.maxExtraBeds === "number") m.set(r.id, r.roomType.maxExtraBeds);
+    }
+    return m;
+  }, [roomsCatalog.data]);
+  const statusRows = useMemo(
+    () => roomStatusRows(availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId),
+    [availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId],
+  );
   // Multi-room selection is driven purely by party size (Entry.numberOfRooms), never the source
   // channel. numberOfRooms > 1 swaps the single-select cards for the multi-room / per-night picker.
   const numberOfRooms = entry.numberOfRooms ?? 1;
   const multiRoom = numberOfRooms > 1;
   const sealedIds = optionSelectedRoomIds(preferredConfig?.optionSelected);
-  const candidateRooms = useMemo(
-    () => roomMetaFromResults(availableRooms, deficientRooms),
-    [availableRooms, deficientRooms],
-  );
   const perDate = useMemo<PerDateAvailabilityResult[] | undefined>(() => {
     const src =
       (searchResult?.results as { perDate?: unknown } | undefined) ??
@@ -622,18 +487,16 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     () => enumerateNights(entry.checkInDate ?? checkIn, entry.checkOutDate ?? checkOut),
     [entry.checkInDate, entry.checkOutDate, checkIn, checkOut],
   );
-
-  const groupSelected = (group: RoomTypeGroup) =>
-    group.rooms.some((r) => r.roomId === preferredRoomId || r.roomId === pendingRoom);
-
-  const handleSelect = (room: AvailabilityRoomResult, isDeficient: boolean) => {
-    if (!activeConfigId && !latestConfig?.id) {
-      toast.error("Run availability search first");
-      return;
-    }
-    setPendingRoom(room.roomId);
-    selectMutation.mutate({ roomId: room.roomId, deficientRoomIds: isDeficient ? [room.roomId] : [] });
-  };
+  // Nights the table displays. A search may use different dates than the entry's saved stay —
+  // the table must follow the search (that's the window the operator asked about). `perDate`
+  // already resolves to the fresh search's breakdown, else the last SAVED search's, so the
+  // columns keep matching the restored search window across a leave-and-return instead of
+  // snapping back to the entry's intake dates while the form shows the searched ones.
+  const displayNights = useMemo(() => {
+    if (perDate && perDate.length > 0) return perDate.map((p) => p.date);
+    if (searchResult) return enumerateNights(checkIn, checkOut);
+    return stayNights;
+  }, [perDate, searchResult, checkIn, checkOut, stayNights]);
 
   const handleMultiSeal = (p: SealPayload) => {
     if (!activeConfigId && !latestConfig?.id) {
@@ -643,10 +506,139 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     selectMutation.mutate({ roomIds: p.roomIds, perNight: p.perNight, deficientRoomIds: p.deficientRoomIds });
   };
 
+  // --- Room-status-table selection ------------------------------------------------------------
+  // The table is THE selection surface (legacy-PMS layout). Clicks toggle a LOCAL selection for
+  // every mode — click a room to select it, click another to switch (single-room replaces),
+  // click the selected one to unselect — then "Save" commits. Local-first because the backend's
+  // select endpoint requires at least one room: a saved selection can't be cleared server-side,
+  // but an unsaved click can simply be taken back.
+  const [tableSel, setTableSel] = useState<string[]>(() => sealedIds.filter(Boolean).slice(0, numberOfRooms));
+  const toggleTableRow = (row: RoomStatusRow) => {
+    setTableSel((prev) =>
+      prev.includes(row.roomId)
+        ? prev.filter((x) => x !== row.roomId) // clicked the selected room → unselect
+        : numberOfRooms === 1
+          ? [row.roomId] // single-room → switch to the clicked room
+          : prev.length < numberOfRooms
+            ? [...prev, row.roomId]
+            : prev,
+    );
+  };
+  const sealTableSelection = () => {
+    const deficientRoomIds = tableSel.filter(
+      (id) => statusRows.find((r) => r.roomId === id)?.bucket === "deficient",
+    );
+    // Same expansion the old whole-stay picker used: per-night payload (identical rooms each
+    // night) so downstream arrival assignment consumes one uniform shape.
+    if (stayNights.length === 0) {
+      handleMultiSeal({ roomIds: tableSel, deficientRoomIds });
+      return;
+    }
+    handleMultiSeal({ perNight: stayNights.map((date) => ({ date, roomIds: [...tableSel] })), deficientRoomIds });
+  };
+
+  // Per-night assignment ("Different rooms per night") — cells become the click targets and each
+  // night needs exactly numberOfRooms rooms. Available on any multi-night stay, including
+  // single-room bookings (a mid-stay room change is one room per night, different rooms).
+  const [assignMode, setAssignMode] = useState<"same" | "vary">("same");
+  const varyActive = assignMode === "vary" && displayNights.length > 1;
+
+  // Expanded view — the room list is the full property (27 rooms on real data), which does not
+  // fit the canvas column. Expanding lifts the same table to a full-screen layer with compact
+  // rows so every room is visible at once. `showNames` prints the holder in the cell instead of
+  // leaving it to a hover tooltip, which is unusable when scanning the whole grid.
+  const [expanded, setExpanded] = useState(false);
+  const [showNames, setShowNames] = useState(false);
+  // Both survive a reload. Read in an effect rather than a useState initialiser so the server
+  // render and the first client render agree (sessionStorage doesn't exist during SSR).
+  const viewPrefsKey = `desk:rst-view:${entry.id}`;
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(viewPrefsKey);
+      if (!raw) return;
+      const v = JSON.parse(raw) as { expanded?: boolean; showNames?: boolean };
+      if (v.expanded) setExpanded(true);
+      if (v.showNames) setShowNames(true);
+    } catch {
+      /* private mode / corrupt value — fall back to the collapsed default */
+    }
+  }, [viewPrefsKey]);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(viewPrefsKey, JSON.stringify({ expanded, showNames }));
+    } catch {
+      /* non-fatal — the view just won't persist */
+    }
+  }, [viewPrefsKey, expanded, showNames]);
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    // Stop the page behind the overlay scrolling with it.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [expanded]);
+  const [varySel, setVarySel] = useState<Record<string, string[]>>({});
+  const toggleVaryCell = (row: RoomStatusRow, night: string) => {
+    setVarySel((prev) => {
+      const cur = prev[night] ?? [];
+      const next = cur.includes(row.roomId)
+        ? cur.filter((x) => x !== row.roomId)
+        : cur.length < numberOfRooms
+          ? [...cur, row.roomId]
+          : cur;
+      return { ...prev, [night]: next };
+    });
+  };
+  const nightsAssigned = displayNights.filter((n) => (varySel[n] ?? []).length === numberOfRooms).length;
+  const varyComplete = displayNights.length > 0 && nightsAssigned === displayNights.length;
+  const sealVarySelection = () => {
+    const perNight = displayNights.map((date) => ({ date, roomIds: varySel[date] ?? [] }));
+    const allIds = new Set(perNight.flatMap((p) => p.roomIds));
+    const deficientRoomIds = Array.from(allIds).filter(
+      (id) => statusRows.find((r) => r.roomId === id)?.bucket === "deficient",
+    );
+    handleMultiSeal({ perNight, deficientRoomIds });
+  };
+
+  // The commit action + progress counter. Rendered below the table normally, hoisted into the
+  // toolbar when expanded so nothing but the grid occupies the screen.
+  const sealReady = varyActive ? varyComplete : tableSel.length === numberOfRooms;
+  const sealControls = (
+    <>
+      <button
+        className="btn btn-primary btn-sm"
+        disabled={!sealReady || selectMutation.isPending}
+        onClick={varyActive ? sealVarySelection : sealTableSelection}
+      >
+        {selectMutation.isPending
+          ? "Saving…"
+          : varyActive
+            ? "Seal per-night rooms"
+            : numberOfRooms === 1
+              ? "Save room selection"
+              : `Seal ${numberOfRooms} rooms`}
+      </button>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: sealReady ? "var(--green-d)" : "var(--ink-3)" }}>
+        {varyActive
+          ? `${nightsAssigned} of ${displayNights.length} nights assigned`
+          : `${tableSel.length} of ${numberOfRooms} selected`}
+      </span>
+    </>
+  );
+
   // Persistent highlight: a group stays lit once its action has run for this booking (derived from
   // real state, so it survives reloads). `firingKey` adds the transient "running now" pulse.
   const searchUsed = hasResults || !!latestConfig;
-  const selectUsed = !!preferredRoomId || !!pendingRoom;
+  // Persist-light only from the STORED selection — unsaved table clicks are local, and the save
+  // itself is covered by firingKey's "● Now" pulse, so a failed save never leaves a false "✓ Ran".
+  const selectUsed = !!preferredRoomId || sealedIds.length > 0;
   const activeKeys = [
     "intake",
     searchUsed ? "search" : null,
@@ -658,12 +650,23 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     { key: "intake", label: "When the booking was created", items: S1_BACKEND.intake },
     { key: "search", label: "On availability search", items: S1_BACKEND.search },
     { key: "select", label: "On picking a room type", items: S1_BACKEND.select },
-    { key: "advance", label: "On advancing to Quote", items: S1_BACKEND.advance },
+    { key: "advance", label: "On advancing to Negotiation", items: S1_BACKEND.advance },
   ];
 
   return (
     <div className="bx-split">
       <div className="bx-main">
+      {canEditIntake && !isEditing && (
+        <Link
+          className="ws-back"
+          href={`/desk/bookings/new?edit=${entry.id}`}
+          style={{ marginBottom: 10, display: "inline-flex" }}
+          title="Go back to the Start-a-booking page to edit this booking's stay details"
+        >
+          <ChevronLeft />
+          Start a booking
+        </Link>
+      )}
       <div className="speak">
         <div className="now">Do this next</div>
         <h2>Understand the stay, then explore availability.</h2>
@@ -674,29 +677,129 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       </div>
 
       <div className="block">
-        <BlockH>The guest</BlockH>
+        <BlockH
+          tag={
+            canEditIntake && !isEditing ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={beginEdit}
+                title="Edit the stay details captured at intake"
+              >
+                <Pencil style={{ width: 12, height: 12 }} />
+                Edit details
+              </button>
+            ) : null
+          }
+        >
+          The guest
+        </BlockH>
         <div className="frow">
           <Fact label="Primary contact" value={guestName(g)} />
           <Fact label="Came in as" value={channel?.replace(/_/g, " ") ?? DASH} />
         </div>
-        <div className="frow">
-          <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
-          <Fact label="Guests" value={guestsLabel ?? DASH} />
-        </div>
-        <div className="frow">
-          <Fact label="Check-in" value={formatDMY(entry.checkInDate) || DASH} />
-          <Fact
-            label="Check-out"
-            value={
-              formatDMY(entry.checkOutDate)
-                ? `${formatDMY(entry.checkOutDate)}${nights ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}`
-                : DASH
-            }
-          />
-        </div>
-        {!hasContact && (
+        {!isEditing ? (
+          <>
+            <div className="frow">
+              <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
+              <Fact label="Guests" value={guestsLabel ?? DASH} />
+            </div>
+            <div className="frow">
+              <Fact label="Check-in" value={formatDMY(entry.checkInDate) || DASH} />
+              <Fact
+                label="Check-out"
+                value={
+                  formatDMY(entry.checkOutDate)
+                    ? `${formatDMY(entry.checkOutDate)}${nights ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}`
+                    : DASH
+                }
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="frow">
+              <Fact label="Phone / email" value={g?.phone || g?.email || DASH} />
+              <div className="field" />
+            </div>
+            <div className="frow">
+              <div className="field">
+                <label>Check-in</label>
+                <DateField value={edCheckIn} onChange={setEdCheckIn} />
+              </div>
+              <div className="field">
+                <label>Check-out</label>
+                <DateField min={nextDayIso(edCheckIn) || undefined} value={edCheckOut} onChange={setEdCheckOut} />
+              </div>
+            </div>
+            <div className="frow">
+              <div className="field">
+                <label>Adults</label>
+                <input type="number" min={1} value={edAdults} onChange={(e) => setEdAdults(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Children</label>
+                <input type="number" min={0} value={edChildren} onChange={(e) => setEdChildren(e.target.value)} />
+              </div>
+            </div>
+            {edChildCount > 0 && (
+              <div className="field">
+                <label>Child age{edChildCount === 1 ? "" : "s"} (years)</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {edChildAges.map((age, i) => (
+                    <input
+                      key={i}
+                      type="number"
+                      min={0}
+                      className="dinput"
+                      style={{ width: 80 }}
+                      placeholder={`#${i + 1}`}
+                      value={age}
+                      onChange={(e) => setEdChildAges((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="frow">
+              <div className="field">
+                <label>Number of rooms</label>
+                <input
+                  type="number"
+                  min={roomEnvelope?.allowedRoomCounts.min ?? 1}
+                  value={edRooms}
+                  onChange={(e) => setEdRooms(e.target.value)}
+                />
+                {roomEnvelopeHint}
+              </div>
+              <div className="field" />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={!canSaveEdit}
+                onClick={() => updateIntakeMutation.mutate()}
+              >
+                {updateIntakeMutation.isPending ? "Saving…" : "Save details"}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={updateIntakeMutation.isPending}
+                onClick={() => setIsEditing(false)}
+              >
+                <X style={{ width: 13, height: 13 }} />
+                Cancel
+              </button>
+            </div>
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "2px 0 0", lineHeight: 1.5 }}>
+              This edits the stay the guest asked for. The availability search above is separate — re-run it
+              after changing dates or party size.
+            </p>
+          </>
+        )}
+        {!hasContact && !isEditing && (
           <p style={{ fontSize: 12, color: "var(--warn)", margin: 0 }}>
-            A phone or email is required on the guest before this booking can move to Quote.
+            A phone or email is required on the guest before this booking can move to Negotiation.
           </p>
         )}
       </div>
@@ -728,25 +831,47 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             dates — set them when creating the inquiry.
           </p>
         )}
-        <div className="frow">
+        <div className="frow" style={{ gridTemplateColumns: "1fr 90px 1fr" }}>
           <div className="field">
             <label>Check-in</label>
             <DateField value={checkIn} onChange={setCheckIn} />
           </div>
           <div className="field">
+            <label>Nights</label>
+            <input
+              type="number"
+              min={1}
+              value={nightsStr}
+              onChange={(e) => setNightsStr(e.target.value)}
+              title="Check-out auto-selects from check-in + nights"
+            />
+          </div>
+          <div className="field">
             <label>Check-out</label>
-            <DateField min={nextDayIso(checkIn) || undefined} value={checkOut} onChange={setCheckOut} />
+            <DateField min={nextDayIso(checkIn) || undefined} value={checkOut} onChange={onCheckOutChange} />
           </div>
         </div>
         <div className="frow">
           <div className="field">
-            <label>Adults</label>
-            <input type="number" min={1} value={adultsInput} onChange={(e) => setAdultsInput(e.target.value)} />
+            <label>Rooms required</label>
+            <input
+              type="number"
+              min={roomEnvelope?.allowedRoomCounts.min ?? 1}
+              value={roomsInput}
+              onChange={(e) => setRoomsInput(e.target.value)}
+            />
+            {roomEnvelopeHint}
+            {roomEnvelope && roomsNum > 0 && roomsNum < roomEnvelope.allowedRoomCounts.min && (
+              <p style={{ fontSize: 11, color: "var(--warn)", margin: "4px 0 0", fontWeight: 600 }}>
+                {roomEnvelope.chargeableOccupants} guests will not fit in {roomsNum} room
+                {roomsNum === 1 ? "" : "s"}.
+              </p>
+            )}
+            <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>
+              Saved to the booking when you search — the selection below asks for exactly this many rooms.
+            </p>
           </div>
-          <div className="field">
-            <label>Children</label>
-            <input type="number" min={0} value={childrenInput} onChange={(e) => setChildrenInput(e.target.value)} />
-          </div>
+          <div className="field" />
         </div>
         <button className="btn btn-primary" disabled={searchMutation.isPending} onClick={() => searchMutation.mutate()}>
           <Search />
@@ -787,96 +912,126 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           )}
 
           {multiRoom && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "0 0 8px", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                This booking needs {numberOfRooms} rooms
-                {sealedIds.length > 0 && (
-                  <span className="tag" style={{ background: "var(--terra-wash, transparent)" }}>
-                    {sealedIds.length} sealed
-                  </span>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "0 0 8px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              This booking needs {numberOfRooms} rooms
+              {sealedIds.length > 0 && (
+                <span className="tag" style={{ background: "var(--terra-wash, transparent)" }}>
+                  {sealedIds.length} sealed
+                </span>
+              )}
+            </div>
+          )}
+
+          {statusRows.length > 0 ? (
+            <div className={expanded ? "rst-expandwrap on" : "rst-expandwrap"}>
+              {expanded && (
+                <div className="rst-expandbar">
+                  <b>Room status · {statusRows.length} rooms</b>
+                  <span className="ln" />
+                  <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)}>
+                    <Minimize2 style={{ width: 13, height: 13 }} /> Close
+                  </button>
+                </div>
+              )}
+              <div className="rst-tools">
+                {displayNights.length > 1 && (
+                  <div className="seg">
+                    <button type="button" className={assignMode === "same" ? "on" : ""} onClick={() => setAssignMode("same")}>
+                      Same room{numberOfRooms === 1 ? "" : "s"} every night
+                    </button>
+                    <button type="button" className={assignMode === "vary" ? "on" : ""} onClick={() => setAssignMode("vary")}>
+                      Different rooms per night
+                    </button>
+                  </div>
                 )}
+                <span className="ln" />
+                <button
+                  type="button"
+                  className={`btn btn-ghost btn-sm${showNames ? " on" : ""}`}
+                  onClick={() => setShowNames((v) => !v)}
+                  title={
+                    showNames
+                      ? "Show status words (Reserved / Held) in the cells"
+                      : "Print the guest or agent name on each taken room instead of hovering"
+                  }
+                >
+                  {showNames ? <UserCheck style={{ width: 13, height: 13 }} /> : <Users style={{ width: 13, height: 13 }} />}
+                  {showNames ? "Names on" : "Show names"}
+                </button>
+                {!expanded && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setExpanded(true)}
+                    title="Expand to full screen — fits every room on one screen"
+                  >
+                    <Maximize2 style={{ width: 13, height: 13 }} /> Expand
+                  </button>
+                )}
+                {/* Expanded view puts the commit action up here so the grid owns the rest of
+                    the screen — no controls below the table competing for vertical space. */}
+                {expanded && sealControls}
               </div>
-              {candidateRooms.length > 0 ? (
-                <MultiRoomSelect
-                  numberOfRooms={numberOfRooms}
-                  candidateRooms={candidateRooms}
-                  perDate={perDate}
-                  nights={stayNights}
-                  onSeal={handleMultiSeal}
-                  isSealing={selectMutation.isPending}
-                  sealedRoomIds={sealedIds}
-                />
-              ) : (
-                <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                  No selectable rooms in this result — search again.
+              <RoomStatusTable
+                rows={statusRows}
+                nights={displayNights}
+                perDate={perDate}
+                mode={varyActive ? "vary" : "same"}
+                selectedIds={tableSel}
+                perNightSel={varySel}
+                maxSelect={numberOfRooms}
+                onToggle={toggleTableRow}
+                onToggleCell={toggleVaryCell}
+                disabled={selectMutation.isPending}
+                dense={expanded}
+                showNames={showNames}
+              />
+              {!expanded && (
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+                  {sealControls}
+                </div>
+              )}
+              {!expanded && statusRows.some((r) => r.bucket === "deficient") && (
+                <p style={{ fontSize: 11, color: "var(--warn)", margin: "10px 0 0", display: "inline-flex", gap: 5, alignItems: "center" }}>
+                  <AlertTriangle style={{ width: 12, height: 12 }} />
+                  Deficient rooms are selectable — an acknowledgement is recorded when you save.
                 </p>
               )}
-            </>
-          )}
-
-          {!multiRoom && availableTypes.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "0 0 7px" }}>Available room types</div>
-              <div className="opt-grid">
-                {availableTypes.map((group) => (
-                  <RoomTypeCard
-                    key={group.key}
-                    group={group}
-                    variant="available"
-                    selected={groupSelected(group)}
-                    disabled={selectMutation.isPending}
-                    onSelect={() => handleSelect(group.representative, false)}
-                    onPickRoom={(room) => handleSelect(room, false)}
-                    selectedRoomId={pendingRoom ?? preferredRoomId}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-          {!multiRoom && deficientTypes.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--warn)", margin: "12px 0 7px" }}>
-                Deficient — acknowledgement recorded on select
-              </div>
-              <div className="opt-grid">
-                {deficientTypes.map((group) => (
-                  <RoomTypeCard
-                    key={group.key}
-                    group={group}
-                    variant="deficient"
-                    selected={groupSelected(group)}
-                    disabled={selectMutation.isPending}
-                    onSelect={() => handleSelect(group.representative, true)}
-                    onPickRoom={(room) => handleSelect(room, true)}
-                    selectedRoomId={pendingRoom ?? preferredRoomId}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-          {unavailableTypes.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "12px 0 7px" }}>
-                Unavailable ({unavailableRooms.length})
-              </div>
-              <div className="opt-grid">
-                {unavailableTypes.map((group) => (
-                  <RoomTypeCard
-                    key={group.key}
-                    group={group}
-                    variant="unavailable"
-                    onShowOccupancy={(room) => setOccupancyModalRoom(room)}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-
-          {!multiRoom && (
-            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "10px 0 0", lineHeight: 1.5 }}>
-              These are grouped by <b>room type</b> and suggested from live availability — you pick a preferred type.
-              The price is indicative only (no quote is created at this step), and the final room is assigned at
-              arrival.
+              <p
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--ink-3)",
+                  margin: "10px 0 0",
+                  lineHeight: 1.5,
+                  display: expanded ? "none" : undefined,
+                }}
+              >
+                {varyActive ? (
+                  <>
+                    Click a <b>Vacant</b> cell to assign that room for that night — each night needs{" "}
+                    {numberOfRooms} room{numberOfRooms === 1 ? "" : "s"}. Rooms may differ night to night (a
+                    mid-stay room change).
+                  </>
+                ) : multiRoom ? (
+                  <>
+                    Click a room&rsquo;s row to add it to the selection; click a selected room to unselect it.
+                    <b> Reserved</b> means the room is taken on that night; a room must be free on every night to be
+                    picked here.
+                  </>
+                ) : (
+                  <>
+                    Click a room to select it, click another to switch, or click the selected room again to
+                    unselect. <b>Reserved</b> means the room is taken on that night; a room must be free on every
+                    night to be picked here.
+                  </>
+                )}{" "}
+                Nothing is recorded until you save. The price is indicative only, and the final room is confirmed
+                at arrival.
+              </p>
+            </div>
+          ) : (
+            <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+              No rooms in this result — search again.
             </p>
           )}
         </div>
@@ -884,13 +1039,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       </div>
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
-
-      {occupancyModalRoom && (
-        <OccupancyDetailsModal
-          room={occupancyModalRoom}
-          onClose={() => setOccupancyModalRoom(null)}
-        />
-      )}
     </div>
   );
 }

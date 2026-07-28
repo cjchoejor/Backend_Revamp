@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Cpu, Timer } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
@@ -90,11 +91,24 @@ export function CategoryLegend() {
         <span className="bx-state-chip idle" />
         <span className="bx-legend-gloss">not yet — waits for its step</span>
       </span>
+      <span className="bx-legend-item">
+        <span style={{ color: "var(--green)", fontWeight: 700, fontSize: 10 }}>✓</span>
+        <span className="bx-legend-gloss">on a row = its own backend event is recorded for this booking</span>
+      </span>
     </div>
   );
 }
 
 export type RailGroup = { key: string; label: string; items: BackendItem[] };
+
+/**
+ * Portal target for the rail. The booking workspace provides a slot element inside its
+ * "Backend" drawer; when present, every BackendRail rendered by a step teleports its UI
+ * there instead of occupying a side column — the step keeps owning the DATA (groups /
+ * active / firing), the workspace owns WHERE it shows. Pages without a slot (e.g. the
+ * intake page) keep the inline side-by-side rail.
+ */
+export const BackendRailSlotContext = createContext<HTMLElement | null>(null);
 
 /**
  * Side-by-side "Backend" rail for a stage: the live feed (when there's an entry) + the stage's
@@ -104,21 +118,47 @@ export type RailGroup = { key: string; label: string; items: BackendItem[] };
  * - `firingKey`: the group whose action is firing right now — extra "running now" pulse on top.
  */
 export function BackendRail({
+  entryId,
   groups,
   activeKeys,
   firingKey,
 }: {
   /**
-   * Retained for call-site compatibility (steps still pass the entry id). The live feed now
-   * renders once in the workspace's left column, so the rail itself is legend + groups only.
+   * When present, per-item "ran" state is resolved against the entry's ACTUAL trace events
+   * (shared query with the live feed — no extra fetch). Absent (e.g. intake, no entry yet),
+   * items inherit their group's state.
    */
   entryId?: string;
   groups: RailGroup[];
   activeKeys?: string[];
   firingKey?: string | null;
 }) {
+  const { session } = useSession();
+  const railSlot = useContext(BackendRailSlotContext);
   const activeSet = new Set(activeKeys ?? []);
-  return (
+
+  // Same queryKey as LiveBackendFeed → served from the shared cache / its 8s refetch.
+  const traceQuery = useQuery({
+    queryKey: ["entry-trace", entryId],
+    queryFn: () => getEntryTrace(session!, entryId!, 80),
+    enabled: !!session && !!entryId,
+    refetchInterval: 8000,
+  });
+  const eventTypes = (traceQuery.data?.items ?? []).map((e: { eventType?: string }) => e.eventType ?? "");
+
+  /** Per-item truth: a `trace` pattern resolves against real recorded events; else inherit group. */
+  const itemRan = (it: BackendItem, groupActive: boolean): { ran: boolean; matched: boolean } => {
+    if (!it.trace || !entryId) return { ran: groupActive, matched: false };
+    try {
+      const re = new RegExp(it.trace, "i");
+      const matched = eventTypes.some((t) => re.test(t));
+      return { ran: matched, matched };
+    } catch {
+      return { ran: groupActive, matched: false };
+    }
+  };
+
+  const rail = (
     <div className="bx-rail">
       <CategoryLegend />
       <div className="bx-groups">
@@ -138,20 +178,28 @@ export function BackendRail({
               <div className="bx-g-items">
                 {g.items.map((it) => {
                   const c = CATEGORY_STYLE[categorize(it)];
+                  const { ran, matched } = itemRan(it, active);
                   return (
                     <div
                       className="bx-ritem"
                       key={it.name}
-                      title={`${it.name}${it.ref ? ` · ${it.ref}` : ""}\n${it.detail}`}
+                      title={`${it.name}${it.ref ? ` · ${it.ref}` : ""}\n${it.detail}${
+                        it.trace ? (matched ? "\n✓ its backend event is recorded for this booking" : "\n○ no matching backend event recorded yet") : ""
+                      }`}
                       style={{ borderLeftColor: c.bd }}
                     >
                       <span className="bx-rdot" style={{ background: c.bd }} />
                       <span
                         className="bx-rname"
-                        style={{ color: active ? "var(--ink)" : "var(--ink-2)", fontWeight: active ? 600 : 500 }}
+                        style={{ color: ran ? "var(--ink)" : "var(--ink-2)", fontWeight: ran ? 600 : 500 }}
                       >
                         {it.name}
                       </span>
+                      {matched && (
+                        <span style={{ marginLeft: "auto", color: "var(--green)", fontSize: 10, fontWeight: 700, flex: "0 0 auto" }}>
+                          ✓
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -162,6 +210,9 @@ export function BackendRail({
       </div>
     </div>
   );
+
+  // Teleport into the workspace drawer when a slot exists; otherwise render inline.
+  return railSlot ? createPortal(rail, railSlot) : rail;
 }
 
 /**

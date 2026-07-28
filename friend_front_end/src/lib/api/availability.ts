@@ -2,13 +2,14 @@ import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
 /**
- * Booking context surfaced by the backend for occupied rooms (2026-07-25). Lets the desk
- * operator see WHO holds a locked room — guest name, contact, agent/corporate info —
- * without leaving the availability step.
+ * Booking context surfaced next to each occupied room so the operator can see WHO holds
+ * the room. Populated from the backend's blockage enrichment (2026-07-24, extended 2026-07-25
+ * with contact details + agent/corporate info). Fields are optional so older backend versions
+ * still typecheck.
  */
 export type OccupancyContext = {
   entryId?: string;
-  entryReferenceNumber?: string | null;
+  entryReferenceNumber?: string | null; // e.g. "INQ-20260716-0005"
   guestName?: string | null;
   guestPhone?: string | null;
   guestEmail?: string | null;
@@ -31,15 +32,14 @@ export type AvailabilityRoomResult = {
   blockedReason?: string | null;
   pricingIndicative?: unknown;
   /**
-   * Populated when the whole-stay bucket is UNAVAILABLE because a specific booking overlaps
-   * the search range. Each entry describes one blockage — the room can have several when
-   * multiple stays cover different nights of the range.
+   * Present when the whole-stay UNAVAILABLE room has one or more overlapping bookings.
+   * Frontend can show a list of "Occupied by X (INQ-…) 25/07-26/07" tooltips.
    */
   occupiedBy?: Array<
     OccupancyContext & {
       source: "RESERVED" | "HOLD";
-      startDate: string;
-      endDate: string;
+      startDate: string; // ISO
+      endDate: string; // ISO (exclusive)
     }
   >;
 };
@@ -47,7 +47,10 @@ export type AvailabilityRoomResult = {
 export type PerDateAvailabilityResult = {
   date: string;
   availableRoomIds: string[];
-  occupiedRoomIds: Array<{ roomId: string; source: "RESERVED" | "HOLD" }>;
+  /** Each occupied cell carries WHO holds it so the calendar tooltip can name the guest. */
+  occupiedRoomIds: Array<
+    OccupancyContext & { roomId: string; source: "RESERVED" | "HOLD" }
+  >;
   deficientRoomIds: string[];
 };
 

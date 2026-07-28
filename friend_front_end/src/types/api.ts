@@ -132,6 +132,12 @@ export type AvailabilityConfigSummary = {
   isStale: boolean;
   sealedAt: string | null;
   resultSet?: unknown;
+  /**
+   * The inputs this search ran with — `{ checkInDate, checkOutDate, guestCount, useType, … }`.
+   * Persisted server-side on every search, so the desk can restore the search form to what was
+   * last actually run instead of snapping back to the entry's intake dates.
+   */
+  searchCriteria?: unknown;
   createdAt?: string;
 };
 
@@ -264,6 +270,13 @@ export type ReservationSummary = {
   confirmedAt: string;
   confirmedBy: string;
   confirmationVoucherSent: boolean;
+  // Confirmation-voucher PDF artifact (write-once, checksum-signed). Returned by the entry-detail
+  // endpoint (reservation scalars); null until the PDF has been rendered at least once.
+  confirmationVoucherStorageKey?: string | null;
+  confirmationVoucherChecksum?: string | null;
+  confirmationVoucherChecksumAlgo?: string | null;
+  confirmationVoucherRenderedAt?: string | null;
+  confirmationVoucherRenderedBy?: string | null;
 };
 
 export type HandoffSummary = {
@@ -452,7 +465,7 @@ export type EntryDetail = EntryListItem & {
   commissionDueRecords?: CommissionDueSummary[];
   followUpTasks?: FollowUpTaskSummary[];
   noShowDetermination?: NoShowDeterminationSummary | null;
-  inquiry?: { agentProfile?: AgentProfileSummary | null } | null;
+  inquiry?: { notes?: string | null; agentProfile?: AgentProfileSummary | null } | null;
   closedAt?: string | null;
   closedBy?: string | null;
   walkInCompressed?: boolean;

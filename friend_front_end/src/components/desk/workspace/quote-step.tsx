@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Mail, Percent, Timer } from "lucide-react";
 import { toast } from "sonner";
@@ -76,7 +76,17 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [discountBasis, setDiscountBasis] = useState("negotiation");
   const [sendChannel, setSendChannel] = useState("EMAIL");
   const [validDays, setValidDays] = useState("2");
-  const [recipient, setRecipient] = useState(entry.guestProfile?.email ?? entry.guestProfile?.phone ?? "");
+  // Guest contact for the send-to field. Falls back across the same profile chain the rest of the
+  // workspace uses, preferring email. Resolved every render so it survives the entry being briefly
+  // replaced by a lighter object (e.g. progressStage's setQueryData) before the refetch restores it.
+  const guestContact = entry.guestProfile?.email ?? entry.inquiry?.guestProfile?.email ?? entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "";
+  const [recipient, setRecipient] = useState(guestContact);
+  // Auto-pull the guest contact once it's available — a plain useState initializer only reads at
+  // mount and could capture an empty value if the profile hadn't loaded yet. Only fills when the
+  // field is still empty, so an operator's manual edit is never overwritten.
+  useEffect(() => {
+    if (guestContact) setRecipient((prev) => prev || guestContact);
+  }, [guestContact]);
   const [acceptMethod, setAcceptMethod] = useState<"VERBAL" | "WRITTEN">("VERBAL");
   const [verbatim, setVerbatim] = useState("");
   const [holdBasis, setHoldBasis] = useState("");
@@ -97,7 +107,13 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   // `RoomCompositionsEditor` child; parent just holds the current array and forwards it
   // in the createQuotation body.
   const [roomCompositions, setRoomCompositions] = useState<RoomCompositionInput[]>([]);
-  const sealedRoomIds = optionSelectedRoomIds(sealedPreferred?.optionSelected);
+  // Memoised — a fresh array identity every render re-fired the composition editor's
+  // sealedRoomIds-keyed effects in a render loop (max update depth). The underlying
+  // optionSelected object is stable between refetches, so keying on it is safe.
+  const sealedRoomIds = useMemo(
+    () => optionSelectedRoomIds(sealedPreferred?.optionSelected),
+    [sealedPreferred?.optionSelected],
+  );
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -307,6 +323,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               sealedRoomIds={sealedRoomIds}
               entryCheckIn={entry.checkInDate ?? null}
               entryCheckOut={entry.checkOutDate ?? null}
+              entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+              entryChildAges={entry.childAges ?? null}
               onChange={setRoomCompositions}
             />
           </div>

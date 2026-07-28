@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check, ChevronLeft, Layers, Lock, Pause, Play } from "lucide-react";
+import { Activity, ArrowRight, Check, ChevronLeft, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
+import { SpecialPreference } from "./special-preference";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, getEntryTimers, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
@@ -60,7 +61,7 @@ import { StayStep as StayStepBase } from "./stay-step";
 import { CheckOutStep as CheckOutStepBase } from "./checkout-step";
 import { PostStayStep as PostStayStepBase } from "./closed-step";
 import { ConfirmStep as ConfirmStepBase } from "./confirm-step";
-import { BackendRail, LiveBackendFeed, type RailGroup } from "./backend-inline";
+import { BackendRail, BackendRailSlotContext, LiveBackendFeed, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -150,7 +151,7 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
     case "quote": {
       return (
         <>
-          <Speak now="The quote" h2="Shape the price and send the quote.">
+          <Speak now="Negotiation" h2="Shape the price and send the quote.">
             The figure is still a range — nothing here binds the guest yet.
           </Speak>
           <div className="block">
@@ -541,14 +542,24 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // backend already runs that clock; the operator should be able to see it rather than assume a
   // park is open-ended. Only fetched while the booking is actually parked.
   const parked = entry?.status === "PARKED";
+  // Timers now also feed the floating live pill (active-timer count), so they're fetched for
+  // every booking — not just parked ones. The drawer's LiveBackendFeed shares this key at 8s.
   const timersQuery = useQuery({
     queryKey: ["entry-timers", entryId],
     queryFn: () => getEntryTimers(session!, entryId),
-    enabled: !!session && !sessionLoading && parked,
+    enabled: !!session && !sessionLoading,
     // Refresh occasionally so the countdown doesn't drift far from the server's own clock.
-    refetchInterval: parked ? 60_000 : false,
+    refetchInterval: 30_000,
   });
   const parkTimer = findParkTimer(timersQuery.data?.items);
+
+  // Backend side column (live feed + what-runs) — one permanent, always-visible panel with two
+  // tabs, replacing the old separate left feed + right rail. The rail slot is the portal target
+  // each step's BackendRail teleports into; it stays mounted across tab switches.
+  const [sideTab, setSideTab] = useState<"live" | "runs">("live");
+  const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
+  // Readiness popover on the journey-row gate cluster (replaces the bottom gate bar's list).
+  const [needsOpen, setNeedsOpen] = useState(false);
   // Local tick so the countdown moves between refetches.
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
@@ -604,7 +615,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
   });
 
-  // Routine forward step (no commitment boundary) — e.g. Inquiry → Quote.
+  // Routine forward step (no commitment boundary) — e.g. Inquiry → Negotiation.
   const advanceMutation = useMutation({
     mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean }) =>
       progressStage(session!, entry!.id, {
@@ -673,6 +684,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       setParkOpen(false);
       setParkReason("");
       toast.success("Booking parked — it's paused but keeps its place.");
+      // Parking is now reached only from the exit dialog, so leaving is the natural next step.
+      router.push("/desk/bookings");
     },
     onError: (e) => {
       toast.error(e instanceof ApiError ? e.message : "Couldn't park this booking");
@@ -855,12 +868,24 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     }
   };
 
+  // Exit interception: leaving a still-parkable booking (S1/S2, active, not already parked) opens
+  // the park dialog so the operator can choose to pause it on the way out — parking is a governed
+  // exit choice now, not a standalone header button. Everything else navigates straight back.
+  const handleExit = () => {
+    if (parkable && !parked) setParkOpen(true);
+    else router.push("/desk/bookings");
+  };
+
+  const metCount = preconds.filter((p) => p.met).length;
+  const allMet = metCount === preconds.length;
+
   return (
+    <BackendRailSlotContext.Provider value={railSlot}>
     <div className="ws">
       {/* top bar — guest header + key figures, with the horizontal booking journey beneath */}
       <div className="ws-top">
         <div className="ws-head">
-          <button className="ws-back" onClick={() => router.push("/desk/bookings")}>
+          <button className="ws-back" onClick={handleExit}>
             <ChevronLeft />
             Bookings
           </button>
@@ -875,6 +900,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           </div>
           <div className="topspace" />
           <div className="jsum">
+            {/* Readable business IDs — Entry (ENT-…) over its originating Inquiry (INQ-…),
+                as a labelled column alongside the other key figures. */}
+            <div className="jsum-i" title="Entry number · Inquiry number">
+              <span className="k">Reference</span>
+              <span className="v mono" style={{ fontSize: 12 }}>{entry.id}</span>
+              {entry.inquiryId && (
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)", fontWeight: 500 }}>
+                  {entry.inquiryId}
+                </span>
+              )}
+            </div>
             <span className={`commit-tag ${fin.frozen ? "frozen" : "indic"}`}>
               {fin.frozen ? <Check /> : null}
               {fin.frozen ? "Confirmed" : "Indicative"}
@@ -907,18 +943,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               {parkCountdown ? `Parked · expires ${parkCountdown.text}` : "Parked"}
             </span>
           )}
-          {parkable &&
-            (parked ? (
-              <button className="btn btn-ghost btn-sm" disabled={unparkMutation.isPending} onClick={() => unparkMutation.mutate()}>
-                <Play />
-                {unparkMutation.isPending ? "Resuming…" : "Resume"}
-              </button>
-            ) : (
-              <button className="btn btn-ghost btn-sm" disabled={parkMutation.isPending} onClick={() => setParkOpen(true)}>
-                <Pause />
-                Park
-              </button>
-            ))}
+          {/* Park is no longer a standalone button — it's offered in the exit dialog (handleExit).
+              A parked booking still needs an in-place way back, so keep Resume. */}
+          {parkable && parked && (
+            <button className="btn btn-ghost btn-sm" disabled={unparkMutation.isPending} onClick={() => unparkMutation.mutate()}>
+              <Play />
+              {unparkMutation.isPending ? "Resuming…" : "Resume"}
+            </button>
+          )}
           <ReEnterMenu entry={entry} />
           <button
             className="btn btn-ghost btn-sm"
@@ -931,117 +963,54 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           <span className={`timer ${timer?.level ?? ""}`}>{fin.frozen ? "Confirmed" : timer?.text}</span>
         </div>
 
-        <nav className="jrail">
-          {DESK_STEPS.map((s) => {
-            const future = s.order > maxReach;
-            const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
-              .filter(Boolean)
-              .join(" ");
-            const glyph =
-              s.order < currentOrder ? <Check style={{ stroke: "#fff" }} /> : s.bound ? <Lock /> : s.order;
-            return (
-              <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
-                <span className="g">{glyph}</span>
-                <span className="jl">
-                  {s.label}
-                  <small>{s.sub}</small>
-                </span>
-              </button>
-            );
-          })}
-        </nav>
-      </div>
+        <div className="jrow">
+          <nav className="jrail">
+            {DESK_STEPS.map((s) => {
+              const future = s.order > maxReach;
+              const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
+                .filter(Boolean)
+                .join(" ");
+              // Done steps show their stage number (white on the filled green node) rather than a
+              // tick — the number keeps the S1…S9 position legible at a glance. Locked (bound,
+              // not-yet-reached) steps still show a padlock.
+              const glyph = s.order < currentOrder ? s.order : s.bound ? <Lock /> : s.order;
+              return (
+                <button key={s.order} className={cls} onClick={() => gotoStep(s.order)}>
+                  <span className="g">{glyph}</span>
+                  <span className="jl">
+                    {s.label}
+                    <small>{s.sub}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
 
-      {/* body — Backend activity live (left) · operate flow + colour-coded groups (right) */}
-      <div className="ws-body">
-        <aside className="ws-feed">
-          <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
-        </aside>
-        <div className="canvas-wrap">
-          <div className="canvas-scroll">
-          <div
-            className={`canvas${
-              viewingDoneStep ||
-              inquiryStepActive ||
-              quoteStepActive ||
-              setupStepActive ||
-              arrivalStepActive ||
-              checkInStepActive ||
-              stayStepActive ||
-              checkOutStepActive ||
-              step.key === "confirm" ||
-              step.key === "closed"
-                ? " canvas-wide"
-                : ""
-            }`}
-          >
-            {viewingDoneStep ? (
-              <div style={{ position: "relative" }}>
-                <div
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "var(--ink-2)",
-                    background: "var(--paper-2, rgba(0,0,0,0.04))",
-                    border: "1px solid var(--line)",
-                    borderRadius: 999,
-                    padding: "4px 10px",
-                    marginBottom: 12,
-                  }}
-                >
-                  <Lock style={{ width: 12, height: 12 }} />
-                  Completed step · read-only
+          {/* Gate cluster — the old bottom gate bar, relocated onto the journey row: a readiness
+              chip (click → checklist popover) + the step's advance / commit CTA. */}
+          <div className="jgate">
+            <button
+              type="button"
+              className={`jgate-chip${allMet ? " ready" : ""}`}
+              onClick={() => setNeedsOpen((o) => !o)}
+              title={needsLabel}
+            >
+              <ListChecks style={{ width: 13, height: 13 }} />
+              {metCount}/{preconds.length} ready
+            </button>
+            {needsOpen && (
+              <div className="jgate-pop" onMouseLeave={() => setNeedsOpen(false)}>
+                <div className="needs">
+                  <span className="nl">{needsLabel}</span>
+                  {preconds.map((p) => (
+                    <span key={p.label} className={`need${p.met ? " met" : ""}`}>
+                      <span className="nd" />
+                      {p.label}
+                    </span>
+                  ))}
                 </div>
-                {/* `inert` (React 19) makes the whole subtree non-interactive + non-focusable,
-                    so the full step surface is visible but nothing can be actioned. */}
-                <div inert>{readOnlyStepBody()}</div>
               </div>
-            ) : inquiryStepActive ? (
-              <InquiryStep entry={entry} />
-            ) : quoteStepActive ? (
-              <QuoteStep entry={entry} />
-            ) : setupStepActive ? (
-              <SetupStep entry={entry} setSelected={setSelected} />
-            ) : arrivalStepActive ? (
-              <ArrivalStep entry={entry} guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
-            ) : checkInStepActive ? (
-              <CheckInStep
-                entry={entry}
-                keyCount={keyCount}
-                setKeyCount={setKeyCount}
-                registrationConfirmed={registrationConfirmed}
-                setRegistrationConfirmed={setRegistrationConfirmed}
-                setSelected={setSelected}
-              />
-            ) : stayStepActive ? (
-              <StayStep entry={entry} setNightAuditOk={setNightAuditOk} setSelected={setSelected} />
-            ) : checkOutStepActive ? (
-              <CheckOutStep entry={entry} setSelected={setSelected} />
-            ) : closedStepActive ? (
-              <PostStayStep entry={entry} />
-            ) : confirmStepActive ? (
-              <ConfirmStep entry={entry} />
-            ) : (
-              <StepCanvas step={step} entry={entry} fin={fin} />
             )}
-          </div>
-        </div>
-
-        {/* gate bar */}
-        <div className="gatebar">
-          <div className="gate-inner">
-            <div className="needs">
-              <span className="nl">{needsLabel}</span>
-              {preconds.map((p) => (
-                <span key={p.label} className={`need${p.met ? " met" : ""}`}>
-                  <span className="nd" />
-                  {p.label}
-                </span>
-              ))}
-            </div>
             {sealed ? (
               <button className="adv" disabled>
                 <Lock />
@@ -1071,7 +1040,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 disabled={!canProgressS1(entry) || advanceMutation.isPending}
                 onClick={() => advanceMutation.mutate({ targetStage: "S2" })}
               >
-                {advanceMutation.isPending ? "Moving…" : "Continue to Quote"}
+                {advanceMutation.isPending ? "Moving…" : "Continue to Negotiation"}
                 <ArrowRight />
               </button>
             ) : quoteStepActive ? (
@@ -1138,18 +1107,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <Lock />
                 {closeMutation.isPending ? "Sealing…" : "Close & seal the record"}
               </button>
-            ) : onLiveStep ? (
-              step.key === "closed" ? (
-                <button className="adv" disabled>
-                  <Lock />
-                  Sealed · read-only
-                </button>
-              ) : (
-                <button className="adv" onClick={() => setSelected(currentOrder)}>
-                  Go to current step
-                  <ArrowRight />
-                </button>
-              )
+            ) : onLiveStep && step.key === "closed" ? (
+              <button className="adv" disabled>
+                <Lock />
+                Sealed · read-only
+              </button>
             ) : (
               <button className="adv" onClick={() => setSelected(currentOrder)}>
                 Go to current step
@@ -1158,7 +1120,112 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             )}
           </div>
         </div>
+
+        {/* Special preference — pinned in the non-scrolling top bar so it stays on screen through
+            every stage (S1…S9). Add/edit in place; shows the saved value so it's never duplicated. */}
+        <SpecialPreference entry={entry} />
+      </div>
+
+      {/* body — full-width canvas; the live feed + backend rail live in the right drawer */}
+      <div className="ws-body">
+        <div className="canvas-wrap">
+          <div className="canvas-scroll">
+          <div
+            className={`canvas${
+              viewingDoneStep ||
+              inquiryStepActive ||
+              quoteStepActive ||
+              setupStepActive ||
+              arrivalStepActive ||
+              checkInStepActive ||
+              stayStepActive ||
+              checkOutStepActive ||
+              step.key === "confirm" ||
+              step.key === "closed"
+                ? " canvas-wide"
+                : ""
+            }`}
+          >
+            {viewingDoneStep ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "var(--ink-2)",
+                    background: "var(--paper-2, rgba(0,0,0,0.04))",
+                    border: "1px solid var(--line)",
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    marginBottom: 12,
+                  }}
+                >
+                  <Lock style={{ width: 12, height: 12 }} />
+                  Completed step · read-only
+                </div>
+                {/* `inert` (React 19) makes the whole subtree non-interactive + non-focusable,
+                    so the full step surface is visible but nothing can be actioned. */}
+                <div inert>{readOnlyStepBody()}</div>
+              </div>
+            ) : inquiryStepActive ? (
+              <InquiryStep entry={entry} />
+            ) : quoteStepActive ? (
+              <QuoteStep entry={entry} />
+            ) : setupStepActive ? (
+              <SetupStep entry={entry} setSelected={setSelected} />
+            ) : arrivalStepActive ? (
+              <ArrivalStep entry={entry} guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
+            ) : checkInStepActive ? (
+              <CheckInStep
+                entry={entry}
+                keyCount={keyCount}
+                setKeyCount={setKeyCount}
+                registrationConfirmed={registrationConfirmed}
+                setRegistrationConfirmed={setRegistrationConfirmed}
+                setSelected={setSelected}
+              />
+            ) : stayStepActive ? (
+              <StayStep entry={entry} setNightAuditOk={setNightAuditOk} setSelected={setSelected} />
+            ) : checkOutStepActive ? (
+              <CheckOutStep entry={entry} setSelected={setSelected} />
+            ) : closedStepActive ? (
+              <PostStayStep entry={entry} />
+            ) : confirmStepActive || confirmedS4Active ? (
+              <ConfirmStep entry={entry} />
+            ) : (
+              <StepCanvas step={step} entry={entry} fin={fin} />
+            )}
+          </div>
         </div>
+
+        </div>
+
+        {/* Backend side column — always on screen: Live activity + What runs here as tabs.
+            The runs tab is the portal slot each step's BackendRail teleports into; both tab
+            bodies stay mounted so neither loses state (nor the portal target) on switch. */}
+        <aside className="ws-side">
+          <div className="ws-side-h">
+            <div className="seg">
+              <button type="button" className={sideTab === "live" ? "on" : ""} onClick={() => setSideTab("live")}>
+                <Activity style={{ width: 13, height: 13 }} />
+                Live activity
+              </button>
+              <button type="button" className={sideTab === "runs" ? "on" : ""} onClick={() => setSideTab("runs")}>
+                <Layers style={{ width: 13, height: 13 }} />
+                What runs
+              </button>
+            </div>
+          </div>
+          <div className="ws-side-body">
+            <div style={{ display: sideTab === "live" ? "block" : "none" }}>
+              <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
+            </div>
+            <div style={{ display: sideTab === "runs" ? "block" : "none" }} ref={setRailSlot} />
+          </div>
+        </aside>
       </div>
 
       <DeskConfirmModal
@@ -1231,7 +1298,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <Pause />
               </div>
               <div>
-                <h3>Park this booking?</h3>
+                <h3>Park this booking before you leave?</h3>
                 <p>
                   {name} · {sub}
                 </p>
@@ -1239,8 +1306,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             </div>
             <div className="modal-body">
               <p className="why">
-                Parking pauses this booking without losing its place. It stays at the same step and its
-                expiry timer is paused — you can resume any time. Nothing is cancelled or released.
+                You&rsquo;re about to leave this booking. Parking pauses it without losing its place — it
+                stays at the same step, its expiry timer is paused, and you can resume any time. Nothing is
+                cancelled or released. Prefer to keep it running? Leave without parking.
               </p>
               <div className="field" style={{ marginTop: 12 }}>
                 <label htmlFor="park-reason">Reason (required)</label>
@@ -1254,8 +1322,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               </div>
             </div>
             <div className="modal-foot">
-              <button className="btn btn-ghost" onClick={() => setParkOpen(false)} disabled={parkMutation.isPending}>
-                Not now
+              <button
+                className="btn btn-ghost"
+                onClick={() => router.push("/desk/bookings")}
+                disabled={parkMutation.isPending}
+              >
+                Leave without parking
               </button>
               <button
                 className="btn btn-primary"
@@ -1264,12 +1336,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 disabled={parkMutation.isPending || !parkReason.trim()}
               >
                 <Pause />
-                {parkMutation.isPending ? "Parking…" : "Park booking"}
+                {parkMutation.isPending ? "Parking…" : "Park & leave"}
               </button>
             </div>
           </div>
         </div>
       )}
     </div>
+    </BackendRailSlotContext.Provider>
   );
 }
