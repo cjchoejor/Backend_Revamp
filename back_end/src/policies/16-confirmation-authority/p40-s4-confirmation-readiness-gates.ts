@@ -32,31 +32,32 @@ export function enforceProformaInvoicePresentForS4Confirmation(input: { hasProfo
 }
 
 /**
- * Policy 33 (2026-07-28) — when the booking requires an advance payment, the proforma invoice
- * must have been DISPATCHED to the guest before the reservation can be confirmed.
+ * Policy 33 (2026-07-28) — once a guest has actually PAID an advance, the proforma invoice
+ * must have been DISPATCHED to them before the reservation can be confirmed.
  *
- * Business rule: you cannot ask a guest for a deposit without first sending them the invoice
- * to pay against. So the moment the resolved advance requirement is above zero, a merely
- * DRAFT proforma sitting on the folio is not enough — it has to have gone out.
+ * Business rule: money changing hands has to be documented to the guest. The moment any
+ * advance payment lands on the folio, a merely DRAFT proforma is not enough — the guest is
+ * owed the invoice their payment sits against.
  *
- * The trigger is the REQUIRED amount (`advancePayment.thresholds`, per-source + group boost
- * resolved), not the amount received. Setting the threshold to 0 means "no deposit for this
- * booking shape", and then dispatch stays optional — the existing presence-only rule applies.
+ * The trigger is the amount RECEIVED, deliberately not the configured requirement. Those come
+ * apart in practice: `advancePayment.thresholds` may be 0 for a booking shape (no deposit
+ * demanded) and the guest still chooses to pay something up front. That voluntary payment
+ * needs documenting exactly as much as a demanded one does.
  *
  * A proforma counts as dispatched once `dispatchedAt` is set or its state has moved past
  * DRAFT. SUPERSEDED proformas are ignored: a replaced invoice is not the live one, so a
  * booking whose only dispatched proforma was later superseded must dispatch the replacement.
  */
-export function enforceProformaDispatchedWhenAdvanceRequired(input: {
+export function enforceProformaDispatchedWhenAdvancePaid(input: {
   proformaInvoices: Array<{ state: InvoiceState; dispatchedAt: Date | null }>;
-  requiredAdvanceAmount: number;
+  totalAdvanceReceived: number;
 }) {
-  if (!(input.requiredAdvanceAmount > 0)) return; // no deposit required → dispatch optional
+  if (!(input.totalAdvanceReceived > 0)) return; // nothing paid yet → dispatch optional
   const live = input.proformaInvoices.filter((i) => i.state !== InvoiceState.SUPERSEDED);
   const dispatched = live.some((i) => i.dispatchedAt != null || i.state !== InvoiceState.DRAFT);
   if (dispatched) return;
   throw new StageGateBlockedError(
-    `Advance payment of ${input.requiredAdvanceAmount.toFixed(2)} is required for this booking — dispatch the proforma invoice to the guest before confirming.`,
+    `An advance payment of ${input.totalAdvanceReceived.toFixed(2)} has been received — dispatch the proforma invoice to the guest before confirming.`,
     "PROFORMA_INVOICE_NOT_DISPATCHED",
   );
 }

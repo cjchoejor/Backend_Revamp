@@ -19,7 +19,7 @@ import {
   enforceCommittedHoldReadyForS4Confirmation,
   enforceEntryAtS3ForReservationConfirmation,
   enforceProformaInvoicePresentForS4Confirmation,
-  enforceProformaDispatchedWhenAdvanceRequired,
+  enforceProformaDispatchedWhenAdvancePaid,
   enforceProvisionalFolioPresentForS4Confirmation,
 } from "../../policies/16-confirmation-authority/p40-s4-confirmation-readiness-gates.js";
 import { enforceEntryVersionMatchesClientForOptimisticLock } from "../../policies/01-availability/p01-entry-version-optimistic-lock-match.js";
@@ -90,14 +90,15 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   const proformas = folio.invoices.filter((i) => i.invoiceType === InvoiceType.PROFORMA);
   enforceProformaInvoicePresentForS4Confirmation({ hasProformaInvoice: proformas.length > 0 });
 
-  // …and when this booking actually requires a deposit, that proforma must have gone OUT to
-  // the guest — you can't ask for money without sending the invoice to pay against
-  // (2026-07-28). Required amount comes from `advancePayment.thresholds` with per-source and
-  // group-boost resolution applied; a threshold of 0 leaves dispatch optional.
+  // …and once the guest has actually paid an advance, that proforma must have gone OUT to
+  // them — money changing hands has to be documented (2026-07-28). Keyed on the amount
+  // RECEIVED, not the configured threshold: `advancePayment.thresholds` can be 0 while a
+  // guest still chooses to pay something up front, and that voluntary payment needs an
+  // invoice just the same.
   const advanceEvaluation = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: folio.id });
-  enforceProformaDispatchedWhenAdvanceRequired({
+  enforceProformaDispatchedWhenAdvancePaid({
     proformaInvoices: proformas.map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
-    requiredAdvanceAmount: advanceEvaluation.requiredAmount,
+    totalAdvanceReceived: advanceEvaluation.totalReceived,
   });
 
   const holdCfg = entry.committedHold;
