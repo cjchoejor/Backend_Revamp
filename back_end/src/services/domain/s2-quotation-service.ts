@@ -1059,6 +1059,11 @@ export async function sendQuotation(
         entityId: comm.id,
         timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
         timerCode: "ACKNOWLEDGEMENT_WINDOW_W22",
+        // stageContext lets the friend's frontend disambiguate this timer's label as
+        // "Awaiting quotation guest reply" (vs the bare "Awaiting guest reply" it fell back
+        // to before this fix). Same convention every other stage's outbound-email W22 timer
+        // uses (S3 proforma, S4 confirmation voucher, S5 pre-arrival reminder).
+        stageContext: Stage.S2,
         dueAt: ackFireAt,
         firesAt: ackFireAt,
         status: "SCHEDULED",
@@ -1260,8 +1265,21 @@ export async function acceptQuotation(
       },
     });
 
+    // Cancel every timer this acceptance resolves:
+    //   1. Timers anchored on the Quotation itself (QUOTATION_ACK_TRACKER, QUOTATION_VALIDITY_W15)
+    //   2. The email-anchored ACKNOWLEDGEMENT_WINDOW_W22 pointing at the outbound quotation
+    //      CommunicationRecord — previously left running, which the desk UI faithfully rendered
+    //      as a ghost "Awaiting guest reply" row long after the quote was accepted (fixed 2026-07-28).
+    const commClause = q.communicationRecordId
+      ? [{ entityType: "CommunicationRecord", entityId: q.communicationRecordId, status: "SCHEDULED" as const }]
+      : [];
     const timers = await tx.timerRecord.findMany({
-      where: { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" },
+      where: {
+        OR: [
+          { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" },
+          ...commClause,
+        ],
+      },
       select: { id: true, pgBossJobId: true },
     });
 
