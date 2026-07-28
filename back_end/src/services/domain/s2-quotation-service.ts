@@ -41,7 +41,7 @@ import {
 } from "../../lib/room-composition.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { Prisma } from "@prisma/client";
-import { enforceExtraBedForCnb11Plus } from "../../policies/34-room-composition/p78-extra-bed-required-for-cnb11plus.js";
+import { enforceExtraBedForThirdAdult } from "../../policies/34-room-composition/p78-extra-bed-required-for-third-adult.js";
 import { enforceCompositionCountsConsistent } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
 
 /**
@@ -87,7 +87,6 @@ export type RoomCompositionServiceInput = {
   endDate?: string;
   occupantCount?: number;
   adultCount?: number;
-  cnb11PlusCount?: number;
   cnb6To10Count?: number;
   cnbUnder6Count?: number;
   extraBedCount?: number;
@@ -320,10 +319,9 @@ export async function createQuotation(
     // are null so partially-filled draft submissions can still succeed.
     for (const c of input.roomCompositions) {
       const roomNumber = numberByRoomId.get(c.roomId) ?? null;
-      enforceExtraBedForCnb11Plus({
+      enforceExtraBedForThirdAdult({
         roomNumber,
         adultCount: c.adultCount,
-        cnb11PlusCount: c.cnb11PlusCount,
         extraBedCount: c.extraBedCount,
         isFoc: c.isFoc,
       });
@@ -331,7 +329,6 @@ export async function createQuotation(
         roomNumber,
         occupantCount: c.occupantCount,
         adultCount: c.adultCount,
-        cnb11PlusCount: c.cnb11PlusCount,
         cnb6To10Count: c.cnb6To10Count,
         cnbUnder6Count: c.cnbUnder6Count,
         mealPlanCpCount: c.mealPlanCpCount,
@@ -346,7 +343,6 @@ export async function createQuotation(
       const compositionInput: RoomCompositionInput = {
         occupantCount: c.occupantCount,
         adultCount: c.adultCount,
-        cnb11PlusCount: c.cnb11PlusCount,
         cnb6To10Count: c.cnb6To10Count,
         cnbUnder6Count: c.cnbUnder6Count,
         extraBedCount: c.extraBedCount,

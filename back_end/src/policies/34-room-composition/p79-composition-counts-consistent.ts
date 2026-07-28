@@ -6,12 +6,14 @@ import {
 } from "../../lib/room-composition.js";
 
 /**
- * Policy 79 — Composition count consistency (Phase A, 2026-07-27).
+ * Policy 79 — Composition count consistency (Phase A, 2026-07-27; revised 2026-07-28).
  *
  * Enforces two invariants on a room's composition record:
  *
- *   (1) `adultCount + cnb11PlusCount + cnb6To10Count + cnbUnder6Count === occupantCount`
- *       — every physical guest is accounted for in exactly one bucket.
+ *   (1) `adultCount + cnb6To10Count + cnbUnder6Count === occupantCount`
+ *       — every physical guest is accounted for in exactly one bucket. Anyone aged 11+
+ *       counts as an adult (per registry.child.ageBands), so there is no separate CNB 11+
+ *       bucket in the composition.
  *
  *   (2) `sum(mealPlanCounts) ≤ occupantCount`
  *       — you can't have more meal-plan pax than physical people. A room with 2 guests
@@ -33,7 +35,7 @@ export function enforceCompositionCountsConsistent(input: RoomCompositionInput &
   if (peopleAssigned !== occupants) {
     throw new ValidationError(
       `Room ${input.roomNumber ?? ""}: guest breakdown (${peopleAssigned}) does not equal occupant count (${occupants}). ` +
-        `Adults + CNB 11+ + CNB 6-10 + CNB under 6 must sum to occupantCount.`.trim(),
+        `Adults + CNB 6-10 + CNB under 6 must sum to occupantCount.`.trim(),
     );
   }
 

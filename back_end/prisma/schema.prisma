@@ -1846,18 +1846,18 @@ model RoomAssignment {
   // booking-level totals until Phase B rewires it.
 
   // === Composition (who's in the room) ===
-  /// Total physical guests in this room. `adultCount + all CNB counts` should equal this.
+  /// Total physical guests in this room. `adultCount + cnb6To10Count + cnbUnder6Count`
+  /// should equal this.
   occupantCount  Int?
-  /// Paying adults — each gets a bed by default.
+  /// Paying adults — each gets a bed by default. Anyone aged 11 and above counts as an
+  /// adult per registry.child.ageBands (default). A room with ≥3 adults requires at least
+  /// one extra bed (enforced by `enforceExtraBedForThirdAdult`).
   adultCount     Int?
-  /// Children 11 and older. If ≥2 adults are in the same room with any CNB 11+, an extra
-  /// bed is required (enforced by `enforceExtraBedForCnb11Plus`).
-  cnb11PlusCount Int?
   /// Pricing-children (age band 6–10 per registry.child.ageBands).
   cnb6To10Count  Int?
   /// Infants (age band 0–5). Typically shares parent's bed, usually free.
   cnbUnder6Count Int?
-  /// Extra beds installed IN THIS ROOM (independent of any per-guest CNB flags).
+  /// Extra beds installed IN THIS ROOM. Required (≥1) whenever `adultCount ≥ 3`.
   extraBedCount  Int?
 
   // === Meal plan distribution (guests per plan category in this room) ===

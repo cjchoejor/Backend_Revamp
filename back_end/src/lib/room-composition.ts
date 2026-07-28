@@ -29,10 +29,9 @@ export type RoomCompositionInput = {
   othersBreakfastPax?: number | null;
   othersLunchPax?: number | null;
   othersDinnerPax?: number | null;
-  // composition counts
+  // composition counts. Anyone aged 11+ counts as an adult per registry.child.ageBands.
   occupantCount?: number | null;
   adultCount?: number | null;
-  cnb11PlusCount?: number | null;
   cnb6To10Count?: number | null;
   cnbUnder6Count?: number | null;
   extraBedCount?: number | null;
@@ -225,14 +224,13 @@ export function computeRoomComposition(
 }
 
 /**
- * Sum of the composition's four "how many people" fields. `null` counts count as 0.
+ * Sum of the composition's three "how many people" fields. `null` counts count as 0.
  * Used by the consistency validator (should equal `occupantCount`) and by the mandatory-
- * extra-bed rule (uses `adultCount` + `cnb11PlusCount`).
+ * extra-bed rule (uses `adultCount` alone — anyone 11+ is an adult).
  */
 export function totalPeopleFromComposition(input: RoomCompositionInput): number {
   return (
     (input.adultCount ?? 0) +
-    (input.cnb11PlusCount ?? 0) +
     (input.cnb6To10Count ?? 0) +
     (input.cnbUnder6Count ?? 0)
   );

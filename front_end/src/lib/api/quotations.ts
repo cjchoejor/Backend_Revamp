@@ -13,7 +13,6 @@ export type RoomCompositionInput = {
   endDate?: string;
   occupantCount?: number;
   adultCount?: number;
-  cnb11PlusCount?: number;
   cnb6To10Count?: number;
   cnbUnder6Count?: number;
   extraBedCount?: number;

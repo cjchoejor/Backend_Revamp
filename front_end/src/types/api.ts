@@ -363,7 +363,6 @@ export type RoomAssignmentSummary = {
   // quotation was built via per-room composition; null on legacy bookings.
   occupantCount?: number | null;
   adultCount?: number | null;
-  cnb11PlusCount?: number | null;
   cnb6To10Count?: number | null;
   cnbUnder6Count?: number | null;
   extraBedCount?: number | null;
