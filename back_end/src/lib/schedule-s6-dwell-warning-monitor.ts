@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { requireActiveConfigValue } from "./config-store.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { cancelActiveStageDwellMonitors } from "./cancel-stage-dwell-monitors.js";
 
 type ThresholdRow = Partial<
   Record<string, Partial<Record<"ACTIVE" | "IDLE" | "PARKED", { warning: number; critical: number; escalation: number }>>>
@@ -11,6 +12,8 @@ type ThresholdRow = Partial<
  * After **S5→S6** (check-in commencement), schedule W1’s first check at **S6 / ACTIVE / warning** (SIG-S6 §5.1).
  */
 export async function scheduleS6StageDwellWarningMonitor(prisma: PrismaClient, entryId: string, createdByActorId: string) {
+  // Kill S5 (or earlier) dwell monitor before arming S6's — one dwell chip per entry.
+  await cancelActiveStageDwellMonitors(prisma, entryId, createdByActorId);
   const thresholds = await requireActiveConfigValue<ThresholdRow>(prisma, "stageDwell.thresholds").catch(() => ({} as ThresholdRow));
   const warnSec = Math.max(60, Number((thresholds as { S6?: { ACTIVE?: { warning?: number } } }).S6?.ACTIVE?.warning ?? 1800));
   const firesAt = new Date(Date.now() + warnSec * 1000);
