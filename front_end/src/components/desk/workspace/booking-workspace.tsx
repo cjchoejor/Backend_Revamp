@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowRight, Check, ChevronLeft, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
+import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
+import { SegmentHistoryPanel } from "./segment-history";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { getEntry, getEntryTimers, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
@@ -556,7 +557,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // Backend side column (live feed + what-runs) — one permanent, always-visible panel with two
   // tabs, replacing the old separate left feed + right rail. The rail slot is the portal target
   // each step's BackendRail teleports into; it stays mounted across tab switches.
-  const [sideTab, setSideTab] = useState<"live" | "runs">("live");
+  const [sideTab, setSideTab] = useState<"live" | "runs" | "rounds">("live");
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Readiness popover on the journey-row gate cluster (replaces the bottom gate bar's list).
   const [needsOpen, setNeedsOpen] = useState(false);
@@ -1217,6 +1218,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <Layers style={{ width: 13, height: 13 }} />
                 What runs
               </button>
+              <button type="button" className={sideTab === "rounds" ? "on" : ""} onClick={() => setSideTab("rounds")}>
+                <History style={{ width: 13, height: 13 }} />
+                Rounds
+              </button>
             </div>
           </div>
           <div className="ws-side-body">
@@ -1224,6 +1229,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               <LiveBackendFeed entryId={entry.id} currentStage={entry.currentStage} />
             </div>
             <div style={{ display: sideTab === "runs" ? "block" : "none" }} ref={setRailSlot} />
+            {/* Segment history — one card per pass through the stages (a "round"); re-entry
+                seals the old round and opens a new one. Mounted lazily so the query only
+                fires once the operator opens the tab. */}
+            <div style={{ display: sideTab === "rounds" ? "block" : "none" }}>
+              {sideTab === "rounds" ? <SegmentHistoryPanel entryId={entry.id} /> : null}
+            </div>
           </div>
         </aside>
       </div>

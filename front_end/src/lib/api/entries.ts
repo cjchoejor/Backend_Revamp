@@ -276,6 +276,75 @@ export async function getJourneySummary(session: Session, entryId: string) {
   return apiRequest<BookingJourneySummary>(`/api/entries/${entryId}/journey-summary`, { session });
 }
 
+// --- Segment history (per-pass record, Implementation Reference §1.2 / §6.2) ----------------
+// One Segment per pass through the stages; re-entry seals the current one and opens the next.
+// Shape mirrors the backend `SegmentHistory` in segment-history-service.ts.
+
+export type SegmentHistoryItem = {
+  id: string;
+  segmentNumber: number;
+  openedAtStage: string;
+  startedAt: string;
+  sealedAt: string | null;
+  sealedBy: string | null;
+  sealedByName: string | null;
+  createdBy: string;
+  createdByName: string | null;
+  isActive: boolean;
+  openReason: string | null;
+  openedBy: { modeKey: string | null; fromStage: string | null; toStage: string | null } | null;
+  sealCause: string | null;
+  stagePath: string[];
+  reservation: {
+    id: string;
+    frozenRate: number | null;
+    frozenCheckIn: string | null;
+    frozenCheckOut: string | null;
+    frozenGuestCount: number | null;
+    frozenBillingModel: string | null;
+    confirmedAt: string | null;
+    confirmedBy: string | null;
+    confirmedByName: string | null;
+  } | null;
+  quotations: Array<{
+    id: string;
+    referenceNumber: string | null;
+    versionNumber: number;
+    state: string;
+    totalAmount: number | null;
+    currency: string | null;
+    acceptedAt: string | null;
+  }>;
+  amendments: Array<{
+    id: string;
+    amendmentPath: string;
+    amendmentType: string;
+    reason: string;
+    stageAtAmendment: string;
+    createdAt: string;
+  }>;
+  billingModelTransitions: Array<{
+    fromModel: string | null;
+    toModel: string;
+    changeSource: string | null;
+    createdAt: string;
+  }>;
+  speculativeHoldCount: number;
+};
+
+export type SegmentHistory = {
+  entryId: string;
+  generatedAt: string;
+  currentStage: string;
+  status: string;
+  currentSegmentNumber: number;
+  segments: SegmentHistoryItem[];
+};
+
+export async function getSegmentHistory(session: Session, entryId: string) {
+  return apiRequest<SegmentHistory>(`/api/entries/${entryId}/segments`, { session });
+}
+
 export async function progressStage(
   session: Session,
   entryId: string,

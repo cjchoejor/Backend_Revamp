@@ -23,6 +23,7 @@ import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
+import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
 
 export const entriesRouter = Router();
 
@@ -76,6 +77,21 @@ entriesRouter.get("/:id/journey-summary", requireActorLevel("L1"), async (req, r
   try {
     const summary = await buildBookingJourneySummary(prisma, req.params.id);
     res.json(summary);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Segment history — the entry's per-pass record (Implementation Reference §1.2 / §6.2). One item
+ * per Segment: the stage path walked, why the pass opened (backflow mode + operator reason),
+ * what sealed it, and the per-segment commercial records (reservation, quotations, amendments,
+ * billing-model transitions). Read-only aggregation, nothing persisted. L1+.
+ */
+entriesRouter.get("/:id/segments", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const history = await buildSegmentHistory(prisma, req.params.id);
+    res.json(history);
   } catch (e) {
     next(e);
   }
