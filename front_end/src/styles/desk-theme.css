@@ -2187,6 +2187,34 @@
     display: grid;
     gap: 10px;
   }
+  & .rct .rce-bar {
+    flex-wrap: wrap;
+  }
+  & .rct-chip {
+    padding: 3px 9px;
+    font-size: 10.5px;
+    font-weight: 700;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+  & .rct-chip:hover {
+    border-color: var(--green);
+    color: var(--green-d);
+  }
+  & .rct-chip.on {
+    border-color: var(--green);
+    background: var(--green-t);
+    color: var(--green-d);
+  }
+  & .rct-corner {
+    display: grid;
+    gap: 3px;
+    justify-items: center;
+    padding: 3px 0;
+  }
   & .rct .ln {
     flex: 1 1 auto;
     height: 1px;

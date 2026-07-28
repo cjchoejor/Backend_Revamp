@@ -23,7 +23,13 @@ import type { RoomCompositionInput } from "@/lib/api/quotations";
  *     occupancy, "Copy row 1 ↓" clones meals / beds / toggles / rates (never the
  *     guest bands) onto every other row;
  *   - a live Σ footer reconciles guests placed vs the intake party and sums each
- *     meal-plan column.
+ *     meal-plan column;
+ *   - columns are ADAPTIVE (2026-07-28): CNB columns only exist when the intake party
+ *     has children (a "Kids +" corner toggle covers occupancies that differ from
+ *     intake), and meal-plan columns appear per plan as the operator toggles its chip
+ *     or picks "Everyone on…" — a two-adult CP booking sees a 2-guest, 1-meal grid,
+ *     not the full matrix. A column with pax in it can never silently hide; switching
+ *     a plan chip off zeroes its column so nothing invisible feeds the draft.
  *
  * Meal pax that exceed a row's occupancy get a warn outline (Policy 79's second rule —
  * still enforced server-side on draft). Negotiated-rate columns and Others à-la-carte
@@ -79,6 +85,13 @@ const EMPTY_ROW: RowState = {
 
 type NumCol = Exclude<keyof RowState, "sc" | "gst" | "foc">;
 const MEAL_COLS: NumCol[] = ["cp", "ml", "md", "ap", "ot"];
+const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
+  cp: { chip: "CP", th: "CP", title: "Breakfast only" },
+  ml: { chip: "MAP+L", th: "M+L", title: "Breakfast + lunch" },
+  md: { chip: "MAP+D", th: "M+D", title: "Breakfast + dinner" },
+  ap: { chip: "AP", th: "AP", title: "All meals" },
+  ot: { chip: "Others", th: "Oth", title: "Others — à-la-carte, set pax in the columns that appear" },
+};
 
 function cnt(v: string): number {
   const n = parseInt(v || "0", 10);
@@ -142,6 +155,14 @@ export function RoomCompositionsTable({
 
   const [rows, setRows] = useState<Record<string, RowState>>({});
   const [ratesOpen, setRatesOpen] = useState(false);
+  // Plans the operator switched on. A plan column is VISIBLE when toggled on OR when any
+  // row carries pax for it — a column with data can never silently disappear.
+  const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
+  // CNB columns exist automatically when the intake party has children; the manual
+  // toggle covers quoted occupancies that differ from intake (incl. no-party entries).
+  const hasKids = (entryChildAges?.length ?? 0) > 0;
+  const [childColsManual, setChildColsManual] = useState(false);
+  const childColsVisible = hasKids || childColsManual;
 
   useEffect(() => {
     setRows((prev) => {
@@ -154,6 +175,47 @@ export function RoomCompositionsTable({
 
   const setCell = (roomId: string, patch: Partial<RowState>) =>
     setRows((prev) => ({ ...prev, [roomId]: { ...(prev[roomId] ?? EMPTY_ROW), ...patch } }));
+
+  const visibleMeals = MEAL_COLS.filter(
+    (c) => activePlans.has(c) || sealedRoomIds.some((id) => cnt(rows[id]?.[c] ?? "0") > 0),
+  );
+
+  /** Chip toggle for a plan column. Switching a visible plan OFF zeroes its column
+   *  (and the Others à-la-carte pax when it's `ot`) — a hidden column must not keep
+   *  feeding the draft. */
+  const togglePlan = (c: NumCol) => {
+    if (visibleMeals.includes(c)) {
+      setActivePlans((prev) => {
+        const n = new Set(prev);
+        n.delete(c);
+        return n;
+      });
+      setRows((prev) => {
+        const next = { ...prev };
+        for (const id of sealedRoomIds) {
+          next[id] = { ...(next[id] ?? EMPTY_ROW), [c]: "0", ...(c === "ot" ? { obf: "", olu: "", odi: "" } : {}) };
+        }
+        return next;
+      });
+    } else {
+      setActivePlans((prev) => new Set(prev).add(c));
+    }
+  };
+
+  /** Manual CNB-columns toggle (only offered when the intake party has no children).
+   *  Hiding zeroes the child cells for the same no-invisible-data reason as plans. */
+  const toggleChildCols = () => {
+    if (childColsVisible) {
+      setChildColsManual(false);
+      setRows((prev) => {
+        const next = { ...prev };
+        for (const id of sealedRoomIds) next[id] = { ...(next[id] ?? EMPTY_ROW), c6: "0", u6: "0" };
+        return next;
+      });
+    } else {
+      setChildColsManual(true);
+    }
+  };
 
   /** Party spread — adults evenly with the remainder on the first row, children all on
    *  the first row so a family shares a room. CNB 11+ retired: declared children above
@@ -194,15 +256,16 @@ export function RoomCompositionsTable({
   }, [ready]);
 
   /** Every room's plan pax = its occupancy on ONE plan — the "whole booking is on CP"
-   *  case in a single pick. */
+   *  case in a single pick. Also collapses the visible plan columns to just that one. */
   const everyoneOn = (col: NumCol | "none") => {
+    setActivePlans(col === "none" ? new Set() : new Set([col as NumCol]));
     setRows((prev) => {
       const next = { ...prev };
       for (const id of sealedRoomIds) {
         const r = next[id] ?? { ...EMPTY_ROW };
         const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
         const meals = Object.fromEntries(MEAL_COLS.map((c) => [c, c === col ? String(occ) : "0"]));
-        next[id] = { ...r, ...(meals as Partial<RowState>) };
+        next[id] = { ...r, ...(meals as Partial<RowState>), ...(col === "ot" ? {} : { obf: "", olu: "", odi: "" }) };
       }
       return next;
     });
@@ -269,12 +332,15 @@ export function RoomCompositionsTable({
   // still works); Enter moves down. Checkboxes participate too (Space still toggles).
   const wrapRef = useRef<HTMLDivElement>(null);
   const visibleCols: string[] = useMemo(() => {
-    const cols: string[] = ["ad", "c6", "u6", "bed", ...MEAL_COLS];
+    const cols: string[] = ["ad"];
+    if (childColsVisible) cols.push("c6", "u6");
+    cols.push("bed", ...visibleMeals);
     if (othersVisible) cols.push("obf", "olu", "odi");
     cols.push("sc", "gst", "foc");
     if (ratesOpen) cols.push("rRoom", "rBed", "rBf", "rLu", "rDi");
     return cols;
-  }, [othersVisible, ratesOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [othersVisible, ratesOpen, childColsVisible, visibleMeals.join(",")]);
 
   const focusCell = (rowIdx: number, col: string) => {
     const el = wrapRef.current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${col}"]`);
@@ -396,6 +462,25 @@ export function RoomCompositionsTable({
             <ArrowDownToLine style={{ width: 11, height: 11 }} /> Copy row 1 ↓
           </button>
         )}
+        <span className="rce-lbl">Meals</span>
+        {MEAL_COLS.map((c) => {
+          const on = visibleMeals.includes(c);
+          return (
+            <button
+              key={c}
+              type="button"
+              className={`rct-chip${on ? " on" : ""}`}
+              onClick={() => togglePlan(c)}
+              title={
+                on
+                  ? `${MEAL_META[c].title} — click to remove the column (zeroes its pax)`
+                  : `${MEAL_META[c].title} — click to add the column`
+              }
+            >
+              {MEAL_META[c].chip}
+            </button>
+          );
+        })}
         <span className="ln" />
         {roomMin != null && (
           <span
@@ -426,29 +511,49 @@ export function RoomCompositionsTable({
             <tr className="grp">
               <th className="room" />
               <th />
-              <th colSpan={4}>Guests</th>
-              <th colSpan={5}>Meal-plan pax</th>
+              <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
+              {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
               {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
               <th colSpan={3}>Charges</th>
               {ratesOpen && <th colSpan={5}>Negotiated rates (Nu., optional)</th>}
               <th className="ratebtn" rowSpan={2}>
-                <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
-                  {ratesOpen ? "Rates −" : "Rates +"}
-                </button>
+                <div className="rct-corner">
+                  <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
+                    {ratesOpen ? "Rates −" : "Rates +"}
+                  </button>
+                  {!hasKids && (
+                    <button
+                      type="button"
+                      className="rcb-mini"
+                      onClick={toggleChildCols}
+                      title={
+                        childColsVisible
+                          ? "Hide the child columns (zeroes them) — the intake party has no children"
+                          : "Show child columns even though the intake party has none"
+                      }
+                    >
+                      {childColsVisible ? "Kids −" : "Kids +"}
+                    </button>
+                  )}
+                </div>
               </th>
             </tr>
             <tr>
               <th className="room">Room</th>
               <th title="Occupants — derived: adults + children">Occ</th>
               <th>Adult</th>
-              <th title="Children 6–10">6–10</th>
-              <th title="Children under 6">&lt;6</th>
+              {childColsVisible && (
+                <>
+                  <th title="Children 6–10">6–10</th>
+                  <th title="Children under 6">&lt;6</th>
+                </>
+              )}
               <th title="Extra beds">Bed</th>
-              <th title="Breakfast only">CP</th>
-              <th title="Breakfast + lunch">M+L</th>
-              <th title="Breakfast + dinner">M+D</th>
-              <th title="All meals">AP</th>
-              <th title="Others — à-la-carte, set pax in the columns that appear">Oth</th>
+              {visibleMeals.map((c) => (
+                <th key={c} title={MEAL_META[c].title}>
+                  {MEAL_META[c].th}
+                </th>
+              ))}
               {othersVisible && (
                 <>
                   <th>B'fast</th>
@@ -492,10 +597,14 @@ export function RoomCompositionsTable({
                     {occ}
                   </td>
                   {numCell(rowIdx, id, "ad")}
-                  {numCell(rowIdx, id, "c6")}
-                  {numCell(rowIdx, id, "u6")}
+                  {childColsVisible && (
+                    <>
+                      {numCell(rowIdx, id, "c6")}
+                      {numCell(rowIdx, id, "u6")}
+                    </>
+                  )}
                   {numCell(rowIdx, id, "bed")}
-                  {MEAL_COLS.map((c) => numCell(rowIdx, id, c, { warn: plansOver }))}
+                  {visibleMeals.map((c) => numCell(rowIdx, id, c, { warn: plansOver }))}
                   {othersVisible && (
                     <>
                       {numCell(rowIdx, id, "obf")}
@@ -525,10 +634,14 @@ export function RoomCompositionsTable({
               <td className="room">Σ</td>
               <td className={`occ${partySize > 0 && totalGuests !== partySize ? " off" : ""}`}>{totalGuests}</td>
               <td>{sum("ad")}</td>
-              <td>{sum("c6")}</td>
-              <td>{sum("u6")}</td>
+              {childColsVisible && (
+                <>
+                  <td>{sum("c6")}</td>
+                  <td>{sum("u6")}</td>
+                </>
+              )}
               <td>{sum("bed")}</td>
-              {MEAL_COLS.map((c) => (
+              {visibleMeals.map((c) => (
                 <td key={c}>{sum(c)}</td>
               ))}
               {othersVisible && (
@@ -556,10 +669,11 @@ export function RoomCompositionsTable({
         </p>
       )}
       <p className="rce-hint">
-        Occ is computed from the guest columns. Arrow keys / Enter move between cells. Totals are priced by
-        the backend when you create the draft. Child meal discounts on per-room plans are pending a backend
-        update; until then every counted guest pays the full plan rate (leave infants off the plan columns
-        if they eat free).
+        Occ is computed from the guest columns. Arrow keys / Enter move between cells. Meal-plan columns
+        appear as you switch plans on with the <b>Meals</b> chips (or <i>Everyone on…</i>). Totals are
+        priced by the backend when you create the draft. Child meal discounts on per-room plans are pending
+        a backend update; until then every counted guest pays the full plan rate (leave infants off the
+        plan columns if they eat free).
       </p>
     </div>
   );
