@@ -78,7 +78,16 @@ export async function createQuotation(
 export async function supersedeQuotation(
   session: Session,
   quotationId: string,
-  body?: { notes?: string; requestedDiscount?: { discountPercent: number; discountBasis: string } | null },
+  body?: {
+    notes?: string;
+    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    /**
+     * Renegotiated per-room compositions (2026-07-28). Send the editor's current state so
+     * meal-plan / extra-bed / negotiated-rate changes re-price on the regenerated draft.
+     * Omit to carry the prior version's compositions forward unchanged.
+     */
+    roomCompositions?: RoomCompositionInput[];
+  },
 ) {
   return apiRequest<QuotationSummary>(`/api/quotations/${quotationId}/supersede`, {
     method: "POST",

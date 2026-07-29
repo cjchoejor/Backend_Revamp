@@ -195,6 +195,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           discountPercent.trim() !== ""
             ? { discountPercent: Number(discountPercent), discountBasis: discountBasis.trim() || "negotiation" }
             : undefined,
+        // Renegotiated per-room composition (meal plans, extra beds, negotiated rates, FOC).
+        // When the operator edited the composition editor, the regenerated draft re-prices
+        // with it; when untouched (empty), the backend carries the prior version's forward.
+        roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
       });
     }, "New negotiation round opened"),
   );
@@ -454,6 +458,36 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               <input value={verbatim} onChange={(e) => setVerbatim(e.target.value)} placeholder="What the guest said" />
             </div>
           )}
+          {/* Renegotiation inputs (2026-07-28): the guest came back wanting changes — a new
+               discount and/or different per-room composition (meal plans, extra beds,
+               negotiated rates). Edit here, then "New round (supersede)" regenerates the
+               quote (fresh QUO number, fully re-priced) and the send flow re-arms the email
+               + acknowledgement window. Left untouched → prior terms carry forward. */}
+          <details style={{ margin: "4px 0 10px" }}>
+            <summary style={{ fontSize: 11.5, color: "var(--ink-3)", cursor: "pointer" }}>
+              Renegotiate terms for the new round (discount · per-room composition)
+            </summary>
+            <div className="frow" style={{ marginTop: 8 }}>
+              <div className="field">
+                <label>New discount %</label>
+                <input type="number" min={0} max={100} value={discountPercent} onChange={(e) => setDiscountPercent(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Discount basis</label>
+                <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
+              </div>
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <RoomCompositionPlanner
+                sealedRoomIds={sealedRoomIds}
+                entryCheckIn={entry.checkInDate ?? null}
+                entryCheckOut={entry.checkOutDate ?? null}
+                entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+                entryChildAges={entry.childAges ?? null}
+                onChange={setRoomCompositions}
+              />
+            </div>
+          </details>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn btn-primary" disabled={acceptM.isPending} onClick={() => acceptM.mutate()}>
               {acceptM.isPending ? "Recording…" : "Record acceptance"}

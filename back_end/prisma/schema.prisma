@@ -1348,6 +1348,13 @@ model Quotation {
   /// rates, hotel profile block, template body. Lets us re-render an identical PDF from
   /// cold years later, even after configs change.
   renderInputSnapshot Json?
+  /// Render generation for this quotation version (2026-07-28). Storage is write-once, so a
+  /// re-render after the price changed while still DRAFT (operator previewed the PDF, then
+  /// applied a discount) needs a NEW key rather than overwriting the old file. Bumped by
+  /// `invalidateQuotationPdfArtifact`; revision 1 keeps the legacy key shape
+  /// (`QUO-…-v{version}.pdf`), 2+ append `-r{revision}`. Previews of superseded prices stay
+  /// on disk — nothing is ever destroyed, matching the append-only guarantee.
+  pdfRenderRevision   Int       @default(1)
 
   entry   Entry           @relation(fields: [entryId], references: [id])
   segment Segment         @relation(fields: [segmentId], references: [id])

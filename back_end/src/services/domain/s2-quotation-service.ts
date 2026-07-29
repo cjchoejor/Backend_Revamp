@@ -46,6 +46,7 @@ import {
   enforceCompositionCountsConsistent,
   enforceNightOverridesWithinStay,
 } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
+import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-pdf.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -123,25 +124,45 @@ export type RoomCompositionServiceInput = {
   }>;
 };
 
-export async function createQuotation(
+/** Input shape shared by `createQuotation` and `supersedeQuotationWithNewDraft`. */
+export type QuotationDraftInput = {
+  requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+  notes?: string;
+  currency?: string;
+  belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
+  /**
+   * Legacy booking-wide flat model (still supported). Read at the top of
+   * `prepareQuotationDraft`; applies when `roomCompositions` is omitted.
+   */
+  mealPlan?: MealPlanType | null;
+  extraBedCount?: number;
+  /**
+   * Per-room compositions (Phase B, 2026-07-27). When supplied, pricing is computed via
+   * per-room iteration (`computeQuotationCompositionTotals`) — including negotiated
+   * per-room rates, meal-plan distribution, FOC waivers. When omitted, falls back to the
+   * flat `effectiveRate × nights × roomCount` model for backward compat.
+   */
+  roomCompositions?: RoomCompositionServiceInput[];
+  /**
+   * When supplied, the requested discount is capped at this actor's ceiling and the call
+   * throws `DISCOUNT_AUTHORITY` if it exceeds it. Omit on the plain create path, where the
+   * discount is recorded and approved separately via `approveDiscount`.
+   */
+  actorLevel?: "L1" | "L2" | "L3" | "L4";
+};
+
+/**
+ * Shared pricing pipeline for S2 quotation drafts (extracted 2026-07-28 so regeneration /
+ * supersede re-runs the EXACT same pipeline as first-time creation — rate-plan resolution,
+ * agent rate cards, MSR waiver, discount authority bands, per-room composition validation
+ * and totals). Returns everything the create-transaction needs; performs NO writes itself
+ * (the MSR-waiver resolution may write its own trace, as before).
+ */
+async function prepareQuotationDraft(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  input: {
-    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
-    notes?: string;
-    currency?: string;
-    belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
-    mealPlan?: MealPlanType | null;
-    extraBedCount?: number;
-    /**
-     * Per-room compositions (Phase B, 2026-07-27). When supplied, pricing is computed via
-     * per-room iteration (`computeQuotationCompositionTotals`) — including negotiated
-     * per-room rates, meal-plan distribution, FOC waivers. When omitted, falls back to the
-     * flat `effectiveRate × nights × roomCount` model for backward compat.
-     */
-    roomCompositions?: RoomCompositionServiceInput[];
-  },
+  input: QuotationDraftInput,
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -182,7 +203,42 @@ export async function createQuotation(
   const tier = entry.guestProfile?.clientTier;
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
   const stay = entry.checkInDate && entry.checkOutDate ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate } : undefined;
-  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, { isDeficientGuestTier, roomTypeId, stay });
+
+  // Discount is resolved BEFORE pricing so it actually reduces the resolved rate (fixed
+  // 2026-07-28 — previously the requested discount was recorded on commercialTerms but never
+  // passed to the pricing engine on the create path, so a quote created with a discount was
+  // priced at full rate; only the separate applyDiscount endpoint re-priced, and it did so
+  // with a different, room-type-blind rate resolution).
+  const requested = input.requestedDiscount ?? null;
+  if (requested) {
+    await validateDiscountRequestAgainstAuthorityBands(prisma, {
+      discountPercent: requested.discountPercent,
+      discountBasis: requested.discountBasis,
+    });
+  }
+  // Actor ceiling only applies when the caller identified an actor level (applyDiscount /
+  // supersede-with-discount). The plain create path records the request and defers approval
+  // to `approveDiscount`, so it passes no cap.
+  let actorMaxDiscountPercent: number | undefined;
+  if (requested && input.actorLevel) {
+    const ceilings = await resolveActorDiscountCeilings(prisma);
+    actorMaxDiscountPercent =
+      input.actorLevel === "L1" ? ceilings.l1MaxPercent : input.actorLevel === "L2" ? ceilings.l2MaxPercent : ceilings.l3MaxPercent;
+  }
+
+  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, {
+    isDeficientGuestTier,
+    roomTypeId,
+    stay,
+    discountPercentOffRequested: requested?.discountPercent,
+    actorMaxDiscountPercent,
+  });
+  if (requested && !pricing.discountWithinAuthorityBounds) {
+    throw new PolicyGateBlockedError(
+      "DISCOUNT_AUTHORITY",
+      "Requested discount exceeds the acting user's maximum discount authority",
+    );
+  }
 
   // Phase C — if the inquiry is linked to a travel agent or corporate account with an active
   // rate card, override the standard pricing with the negotiated room rate (including per-room-type
@@ -238,14 +294,6 @@ export async function createQuotation(
     actorId,
     waiver: input.belowMsrGmWaiver ?? null,
   });
-
-  const requested = input.requestedDiscount ?? null;
-  if (requested) {
-    await validateDiscountRequestAgainstAuthorityBands(prisma, {
-      discountPercent: requested.discountPercent,
-      discountBasis: requested.discountBasis,
-    });
-  }
 
   const last = await prisma.quotation.findFirst({ where: { entryId, segmentId }, orderBy: { versionNumber: "desc" } });
   const nextVersion = (last?.versionNumber ?? 0) + 1;
@@ -327,7 +375,15 @@ export async function createQuotation(
     const defaultLunch = toDecimal(agentRate?.addOns?.lunch ?? 0);
     const defaultDinner = toDecimal(agentRate?.addOns?.dinner ?? 0);
     const defaultExtraBed = toDecimal(agentRate?.addOns?.extraBed ?? 0);
-    const defaultRoomRate = toDecimal(resolvedNightlyRate ?? effectiveRate ?? 0);
+    // Cost the composition from the EFFECTIVE (post-discount) rate, not the resolved base.
+    // Fixed 2026-07-28: this previously read `resolvedNightlyRate`, which is the rate BEFORE
+    // any discount is applied — so on a composition-priced quote the discount reached
+    // `effectiveRate` in commercialTerms but never reached the rooms, and the total came out
+    // identical to the undiscounted one (observed on ENT-20260728-0013: effectiveRate 1530,
+    // roomRate 1700, total unchanged at 1963.50 across three rounds).
+    // `effectiveRate` equals `resolvedNightlyRate` when no discount is in play, so this is a
+    // no-op for undiscounted quotes.
+    const defaultRoomRate = toDecimal(effectiveRate ?? resolvedNightlyRate ?? 0);
 
     // Validate each room's composition BEFORE pricing so we reject early with a friendly
     // error (rather than persisting bad data). Both policies are no-ops when key fields
@@ -454,6 +510,11 @@ export async function createQuotation(
     perNightTotal,
     notes: input.notes?.trim() ? input.notes.trim() : undefined,
     requestedDiscount: requested ? { ...requested } : undefined,
+    // The pipeline now genuinely folds the discount into the resolved rate on every path
+    // (create / supersede / applyDiscount), so record what was actually applied here rather
+    // than leaving it to whichever caller happened to set it — previously only applyDiscount
+    // wrote this field, so a superseded round silently dropped it.
+    ...(requested ? { discountAppliedPercent: requested.discountPercent } : {}),
     // Multi-room-aware pricing breakdown — always present so downstream can rely on it.
     roomCount,
     pricingBreakdown,
@@ -526,6 +587,44 @@ export async function createQuotation(
         }
       : {}),
   };
+
+  return {
+    entry,
+    segmentId,
+    nextVersion,
+    now,
+    msrWaiver,
+    commercialTerms,
+    compositionTotals,
+    effectiveRate,
+    roomCount,
+    currency,
+    // Legacy booking-wide add-ons. Only used when `compositionTotals` is null (the flat
+    // per-night model); callers fold them into totalAmount once, not × roomCount.
+    mealTotal,
+    extraBedTotal,
+  };
+}
+
+export async function createQuotation(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: QuotationDraftInput,
+) {
+  const {
+    segmentId,
+    nextVersion,
+    now,
+    msrWaiver,
+    commercialTerms,
+    compositionTotals,
+    effectiveRate,
+    roomCount,
+    currency,
+    mealTotal,
+    extraBedTotal,
+  } = await prepareQuotationDraft(prisma, entryId, actorId, input);
 
   return prisma.$transaction(async (tx) => {
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
@@ -769,25 +868,137 @@ export async function createGroupQuotation(
   });
 }
 
+/**
+ * Field-level diff between two commercialTerms blobs for the supersede audit trail
+ * (2026-07-28). Shallow-compares every top-level key; when `roomCompositions` differs,
+ * additionally produces a per-room breakdown of exactly which fields moved (keyed by
+ * roomId) so an auditor can read "room 202: mealPlanCpCount 1→2" without JSON-diffing
+ * the snapshots by hand.
+ */
+function diffQuotationTerms(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown> | null,
+): {
+  changedFields: string[];
+  changes: Record<string, { before: unknown; after: unknown }>;
+  roomCompositionChanges?: Record<string, Record<string, { before: unknown; after: unknown }>>;
+} {
+  const b = before ?? {};
+  const a = after ?? {};
+  const keys = new Set([...Object.keys(b), ...Object.keys(a)]);
+  const changedFields: string[] = [];
+  const changes: Record<string, { before: unknown; after: unknown }> = {};
+  for (const k of keys) {
+    if (JSON.stringify((b as any)[k]) !== JSON.stringify((a as any)[k])) {
+      changedFields.push(k);
+      // Snapshots of large sub-objects (roomCompositions, compositionTotals) are still
+      // included — trace payloads are JSONB and these are the fields the auditor cares about.
+      changes[k] = { before: (b as any)[k] ?? null, after: (a as any)[k] ?? null };
+    }
+  }
+
+  let roomCompositionChanges: Record<string, Record<string, { before: unknown; after: unknown }>> | undefined;
+  if (changedFields.includes("roomCompositions")) {
+    const beforeRooms = new Map(
+      (Array.isArray((b as any).roomCompositions) ? (b as any).roomCompositions : []).map((r: any) => [r.roomId, r]),
+    );
+    const afterRooms = new Map(
+      (Array.isArray((a as any).roomCompositions) ? (a as any).roomCompositions : []).map((r: any) => [r.roomId, r]),
+    );
+    roomCompositionChanges = {};
+    for (const roomId of new Set([...beforeRooms.keys(), ...afterRooms.keys()])) {
+      const br = (beforeRooms.get(roomId) ?? {}) as Record<string, unknown>;
+      const ar = (afterRooms.get(roomId) ?? {}) as Record<string, unknown>;
+      const fieldKeys = new Set([...Object.keys(br), ...Object.keys(ar)]);
+      const roomDiff: Record<string, { before: unknown; after: unknown }> = {};
+      for (const fk of fieldKeys) {
+        if (fk === "roomId") continue;
+        if (JSON.stringify(br[fk]) !== JSON.stringify(ar[fk])) {
+          roomDiff[fk] = { before: br[fk] ?? null, after: ar[fk] ?? null };
+        }
+      }
+      if (Object.keys(roomDiff).length > 0) roomCompositionChanges[String(roomId)] = roomDiff;
+    }
+  }
+
+  return { changedFields, changes, ...(roomCompositionChanges ? { roomCompositionChanges } : {}) };
+}
+
+/**
+ * Regenerate the quotation as a fresh DRAFT version (SIG-S2 renegotiation round).
+ *
+ * 2026-07-28 rebuild: instead of copying the prior version's commercialTerms verbatim,
+ * this now re-runs the FULL pricing pipeline (`prepareQuotationDraft` — the same one
+ * `createQuotation` uses) with the renegotiated inputs, so discount changes AND per-room
+ * composition changes (meal plans, extra beds, negotiated rates, FOC) re-price correctly.
+ *
+ * Merge semantics (regenerate = prior + deltas):
+ *  - `roomCompositions` omitted → prior version's compositions carry forward unchanged.
+ *  - `requestedDiscount` omitted → prior's carries forward; explicit `null` clears it.
+ *  - `notes` omitted → prior's notes carry forward.
+ *
+ * The prior version: marked SUPERSEDED, linked to the successor via `supersededById`, all
+ * its timers cancelled — INCLUDING the CommunicationRecord-anchored ACKNOWLEDGEMENT_WINDOW_W22
+ * from its send (previously leaked as a ghost "Awaiting guest reply" chip, same class of bug
+ * fixed in acceptQuotation).
+ *
+ * Audit: the `S2.QUOTATION.SUPERSEDED` trace carries a field-level diff (`changedFields`,
+ * per-field before/after, and per-room composition changes) so the DB records exactly what
+ * was renegotiated, by whom, and when.
+ *
+ * The new DRAFT then goes through the normal send flow — fresh QUO-… reference number, fresh
+ * PDF render, fresh email + acknowledgement window.
+ */
 export async function supersedeQuotationWithNewDraft(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
-  input: { notes?: string; requestedDiscount?: { discountPercent: number; discountBasis: string } | null },
+  input: {
+    notes?: string;
+    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    currency?: string;
+    belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
+    roomCompositions?: RoomCompositionServiceInput[];
+  },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
   enforceQuotationSupersedeAllowedState({ state: q.state });
 
-  const last = await prisma.quotation.findFirst({ where: { entryId: q.entryId, segmentId: q.segmentId }, orderBy: { versionNumber: "desc" } });
-  const nextVersion = (last?.versionNumber ?? q.versionNumber ?? 0) + 1;
+  const priorTerms = (q.commercialTerms ?? {}) as Record<string, unknown>;
+
+  // Regenerate = prior + deltas. Carry forward what the caller didn't touch so a
+  // discount-only renegotiation doesn't silently drop the per-room composition (and vice versa).
+  const mergedInput: QuotationDraftInput = {
+    notes: input.notes?.trim() ? input.notes.trim() : ((priorTerms.notes as string | undefined) ?? undefined),
+    requestedDiscount:
+      input.requestedDiscount === undefined
+        ? ((priorTerms.requestedDiscount as { discountPercent: number; discountBasis: string } | undefined) ?? null)
+        : input.requestedDiscount,
+    currency: input.currency,
+    belowMsrGmWaiver: input.belowMsrGmWaiver ?? null,
+    roomCompositions:
+      input.roomCompositions !== undefined
+        ? input.roomCompositions
+        : ((priorTerms.roomCompositions as RoomCompositionServiceInput[] | undefined) ?? undefined),
+  };
+
+  // Full re-price with the same pipeline createQuotation uses (validations included).
+  const prep = await prepareQuotationDraft(prisma, q.entryId, actorId, mergedInput);
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
-    // Cancel timers for the prior version if any exist.
+    // Cancel every timer belonging to the prior version — both the Quotation-anchored ones
+    // (validity + ack tracker) and the CommunicationRecord-anchored acknowledgement window
+    // from its send (the "Awaiting guest reply" chip).
     const engine = await getTimerEngine();
+    const commClause = q.communicationRecordId
+      ? [{ entityType: "CommunicationRecord", entityId: q.communicationRecordId, status: "SCHEDULED" as const }]
+      : [];
     const timers = await tx.timerRecord.findMany({
-      where: { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" },
+      where: {
+        OR: [{ entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" }, ...commClause],
+      },
       select: { id: true, pgBossJobId: true },
     });
     await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
@@ -801,9 +1012,6 @@ export async function supersedeQuotationWithNewDraft(
       data: { state: QuotationState.SUPERSEDED, supersededAt: now },
     });
 
-    const terms = { ...(prior.commercialTerms as any), notes: input.notes?.trim() ? input.notes.trim() : (prior.commercialTerms as any)?.notes };
-    if (input.requestedDiscount) terms.requestedDiscount = input.requestedDiscount;
-
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
     const created = await tx.quotation.create({
       data: {
@@ -811,30 +1019,47 @@ export async function supersedeQuotationWithNewDraft(
         id: referenceNumber,
         entryId: prior.entryId,
         segmentId: prior.segmentId,
-        versionNumber: nextVersion,
+        versionNumber: prep.nextVersion,
         referenceNumber,
         state: QuotationState.DRAFT,
-        commercialTerms: terms as any,
-        totalAmount: prior.totalAmount,
-        currency: prior.currency,
+        commercialTerms: prep.commercialTerms as any,
+        // Re-priced total (same rule as createQuotation): composition stay-total when
+        // compositions present, else legacy per-night × roomCount PLUS the booking-wide
+        // meal / extra-bed add-ons (added once, not × roomCount). Omitting the add-ons here
+        // would silently under-price any legacy-model quote on regeneration.
+        totalAmount: prep.compositionTotals
+          ? round2(prep.compositionTotals.total)
+          : round2(sumMoney([mulMoney(prep.effectiveRate, prep.roomCount), prep.mealTotal, prep.extraBedTotal])),
+        currency: input.currency?.trim() ? input.currency.trim() : prep.currency?.trim() ? prep.currency : prior.currency,
         supersededById: null,
         createdBy: actorId,
       },
     });
 
     await tx.quotation.update({ where: { id: prior.id }, data: { supersededById: created.id } });
+
+    // Field-level audit of exactly what the renegotiation changed.
+    const diff = diffQuotationTerms(priorTerms, prep.commercialTerms as Record<string, unknown>);
     await tx.traceEvent.create({
       data: {
         eventType: "S2.QUOTATION.SUPERSEDED",
         actorId,
-        actorLevel: "L1",
+        actorLevel: prep.msrWaiver ? ActorLevel.L3 : ActorLevel.L1,
         entityType: "Quotation",
         entityId: prior.id,
         operation: "UPDATE",
         timestamp: now,
         stageContext: Stage.S2,
         entryId: prior.entryId,
-        payload: { priorQuotationId: prior.id, newQuotationId: created.id },
+        payload: {
+          priorQuotationId: prior.id,
+          newQuotationId: created.id,
+          priorVersion: prior.versionNumber,
+          newVersion: prep.nextVersion,
+          priorTotalAmount: prior.totalAmount?.toString?.() ?? null,
+          newTotalAmount: created.totalAmount?.toString?.() ?? null,
+          ...diff,
+        } as any,
         createdBy: actorId,
       },
     });
@@ -870,94 +1095,84 @@ export async function approveDiscount(prisma: PrismaClient, quotationId: string,
   return { ok: true } as const;
 }
 
-/** SIG-S2 §6.1 — Policy 23: apply discount to a DRAFT quotation (re-prices total from basis rate). */
+/**
+ * SIG-S2 §6.1 — Policy 23: apply a discount to a DRAFT quotation, re-pricing in place.
+ *
+ * 2026-07-28 rebuild. The previous implementation had four defects that together produced a
+ * quotation whose stored total, whose commercialTerms, and whose already-rendered PDF all
+ * disagreed with each other:
+ *
+ *  1. It ignored per-room composition entirely — recomputing `totalAmount` as
+ *     `effectiveRate × roomCount` (a PRE-TAX NIGHTLY figure) and overwriting a
+ *     composition-derived stay total that was tax-INCLUSIVE. The two numbers weren't
+ *     comparable quantities, so the "discount" could appear to raise or slash the price
+ *     arbitrarily.
+ *  2. It left `commercialTerms.compositionTotals` untouched, so the row carried a stale
+ *     pre-discount breakdown alongside the new total.
+ *  3. It re-resolved the rate plan WITHOUT `roomTypeId` / `stay`, silently selecting a
+ *     different (room-type-blind, season-blind) plan than creation had used — the base rate
+ *     could move on its own before the discount was even applied.
+ *  4. It never invalidated the rendered PDF, so a quote previewed before the discount was
+ *     emailed to the guest showing the old price.
+ *
+ * Now it re-runs `prepareQuotationDraft` — the same pipeline `createQuotation` and
+ * `supersedeQuotationWithNewDraft` use — with the prior version's compositions plus the new
+ * discount, then writes the result in place and detaches any stale PDF.
+ */
 export async function applyDiscount(
   prisma: PrismaClient,
   quotationId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
   input: { discountPercent: number; discountBasis: string; belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null },
 ) {
-  const q = await prisma.quotation.findUnique({
-    where: { id: quotationId },
-    include: { entry: { include: { guestProfile: true } } },
-  });
+  const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
   if (q.state !== QuotationState.DRAFT) {
     throw new StateTransitionError("Discounts may only be applied to DRAFT quotations");
   }
-  await validateDiscountRequestAgainstAuthorityBands(prisma, {
-    discountPercent: input.discountPercent,
-    discountBasis: input.discountBasis,
-  });
   await enforceDiscountApprovalAuthority(prisma, { actorLevel: actor.actorLevel, discountPercent: input.discountPercent });
 
-  const terms = (q.commercialTerms as any) ?? {};
+  const priorTerms = (q.commercialTerms ?? {}) as Record<string, unknown>;
   const priorTotal = Number(q.totalAmount);
-  if (!Number.isFinite(priorTotal) || priorTotal <= 0) {
-    throw new ValidationError("Quotation has no resolved base amount for discount application");
-  }
 
-  const ceilings = await resolveActorDiscountCeilings(prisma);
-  const actorMaxDiscountPercent =
-    actor.actorLevel === "L1"
-      ? ceilings.l1MaxPercent
-      : actor.actorLevel === "L2"
-        ? ceilings.l2MaxPercent
-        : ceilings.l3MaxPercent;
-
-  const groupSize = typeof terms.groupSize === "number" && Number.isFinite(terms.groupSize) ? terms.groupSize : undefined;
-  const tier = q.entry?.guestProfile?.clientTier;
-  const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
-
-  const pricing = await resolveRatePlanPricingForS2Quotation(prisma, {
-    groupSize,
-    discountPercentOffRequested: input.discountPercent,
-    actorMaxDiscountPercent,
-    isDeficientGuestTier,
-  });
-  if (!pricing.discountWithinAuthorityBounds) {
-    throw new PolicyGateBlockedError(
-      "DISCOUNT_AUTHORITY",
-      "Requested discount exceeds the acting user's maximum discount authority",
-    );
-  }
-  const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
-    belowMsr: pricing.belowMsr,
-    actorId: actor.actorId,
+  // Re-price through the shared pipeline: correct rate plan (room type + season aware),
+  // discount folded into the rate, per-room compositions carried forward and re-costed with
+  // the discounted room rate, service charge and GST recomputed on the new base.
+  const prep = await prepareQuotationDraft(prisma, q.entryId, actor.actorId, {
+    notes: (priorTerms.notes as string | undefined) ?? undefined,
+    requestedDiscount: { discountPercent: input.discountPercent, discountBasis: input.discountBasis },
+    belowMsrGmWaiver: input.belowMsrGmWaiver ?? null,
+    roomCompositions: (priorTerms.roomCompositions as RoomCompositionServiceInput[] | undefined) ?? undefined,
     actorLevel: actor.actorLevel,
-    waiver: input.belowMsrGmWaiver ?? null,
   });
 
   const commercialTerms = {
-    ...terms,
-    requestedDiscount: { discountPercent: input.discountPercent, discountBasis: input.discountBasis },
+    ...prep.commercialTerms,
     discountAppliedPercent: input.discountPercent,
-    resolvedRatePlanId: pricing.resolvedRatePlanId,
-    resolvedRatePlanType: pricing.resolvedRatePlanType,
-    resolvedNightlyRate: pricing.resolvedNightlyRate,
-    effectiveRate: pricing.effectiveRate,
-    msrValue: pricing.msrValue,
-    belowMsr: pricing.belowMsr,
-    resolutionPath: pricing.resolutionPath,
-    currency: pricing.currency,
-    appliedGroupBand: pricing.appliedGroupBand,
-    ...(msrWaiver ? { msrGmWaiver: msrWaiver } : {}),
   };
+  // Same rule as createQuotation — the legacy branch must keep the booking-wide meal /
+  // extra-bed add-ons, or re-pricing a discount silently drops them from the total.
+  const newTotal = prep.compositionTotals
+    ? round2(prep.compositionTotals.total)
+    : round2(sumMoney([mulMoney(prep.effectiveRate, prep.roomCount), prep.mealTotal, prep.extraBedTotal]));
 
   const now = new Date();
-  // Preserve multi-room: totalAmount = effectiveRate × roomCount (matches createQuotation / group
-  // path shape). Before this fix, applying a discount silently collapsed the total back to a single
-  // room's rate.
-  const discountRoomCount = Number((terms as any).roomCount) || 1;
   return prisma.$transaction(async (tx) => {
     const updated = await tx.quotation.update({
       where: { id: quotationId },
       data: {
-        totalAmount: round2(mulMoney(pricing.effectiveRate, discountRoomCount)),
-        currency: typeof pricing.currency === "string" && pricing.currency.trim() ? pricing.currency : q.currency,
+        totalAmount: newTotal,
+        currency: prep.currency?.trim() ? prep.currency : q.currency,
         commercialTerms: commercialTerms as any,
       },
     });
+
+    // The price moved — any PDF rendered from the old numbers (e.g. the desk's preview
+    // button) must not be what the guest receives. Detaching bumps the render revision so
+    // the next render writes a fresh artifact rather than colliding with write-once storage.
+    await invalidateQuotationPdfArtifact(tx, quotationId);
+
+    const msrWaiver = prep.msrWaiver;
     await tx.traceEvent.create({
       data: {
         eventType: "QUOTATION.DISCOUNT_APPLIED",
@@ -975,11 +1190,20 @@ export async function applyDiscount(
           discountPercent: input.discountPercent,
           discountBasis: input.discountBasis,
           priorTotal,
-          newTotal: pricing.effectiveRate,
-          resolvedNightlyRate: pricing.resolvedNightlyRate,
-          msrValue: pricing.msrValue,
+          newTotal: Number(newTotal.toFixed(2)),
+          pricedFrom: prep.compositionTotals ? "PER_ROOM_COMPOSITION" : "FLAT_RATE",
+          resolvedNightlyRate: (prep.commercialTerms as any).resolvedNightlyRate,
+          effectiveRate: prep.effectiveRate,
+          msrValue: (prep.commercialTerms as any).msrValue,
           msrGmWaiver: Boolean(msrWaiver),
-        },
+          ...(prep.compositionTotals
+            ? {
+                compositionSubtotal: Number(prep.compositionTotals.subtotal.toFixed(2)),
+                compositionServiceCharge: Number(prep.compositionTotals.serviceCharge.toFixed(2)),
+                compositionGst: Number(prep.compositionTotals.gst.toFixed(2)),
+              }
+            : {}),
+        } as any,
         createdBy: actor.actorId,
       },
     });
@@ -1367,8 +1591,21 @@ export async function acceptQuotation(
       },
     });
 
+    // Cancel every timer this acceptance resolves:
+    //   1. Timers anchored on the Quotation itself (QUOTATION_ACK_TRACKER, QUOTATION_VALIDITY_W15)
+    //   2. The email-anchored ACKNOWLEDGEMENT_WINDOW_W22 pointing at the outbound quotation
+    //      CommunicationRecord — previously left running, which the desk UI faithfully rendered
+    //      as a ghost "Awaiting guest reply" row long after the quote was accepted (fixed 2026-07-28).
+    const commClause = q.communicationRecordId
+      ? [{ entityType: "CommunicationRecord", entityId: q.communicationRecordId, status: "SCHEDULED" as const }]
+      : [];
     const timers = await tx.timerRecord.findMany({
-      where: { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" },
+      where: {
+        OR: [
+          { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED" },
+          ...commClause,
+        ],
+      },
       select: { id: true, pgBossJobId: true },
     });
 

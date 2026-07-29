@@ -1,4 +1,4 @@
-import { HoldState, Stage } from "@prisma/client";
+import { HoldState, InvoiceState, Stage } from "@prisma/client";
 import { StageGateBlockedError } from "../../lib/errors.js";
 
 /** SIG-S4: entry must be at S3 before reservation confirmation. */
@@ -49,6 +49,37 @@ export function enforceBillingModelFixatedForS4Confirmation(input: { billingMode
 export function enforceProformaInvoicePresentForS4Confirmation(input: { hasProformaInvoice: boolean }) {
   if (input.hasProformaInvoice) return;
   throw new StageGateBlockedError("Proforma invoice required", "MISSING_PROFORMA_INVOICE");
+}
+
+/**
+ * Policy 33 (2026-07-28) — once a guest has actually PAID an advance, the proforma invoice
+ * must have been DISPATCHED to them before the reservation can be confirmed.
+ *
+ * Business rule: money changing hands has to be documented to the guest. The moment any
+ * advance payment lands on the folio, a merely DRAFT proforma is not enough — the guest is
+ * owed the invoice their payment sits against.
+ *
+ * The trigger is the amount RECEIVED, deliberately not the configured requirement. Those come
+ * apart in practice: `advancePayment.thresholds` may be 0 for a booking shape (no deposit
+ * demanded) and the guest still chooses to pay something up front. That voluntary payment
+ * needs documenting exactly as much as a demanded one does.
+ *
+ * A proforma counts as dispatched once `dispatchedAt` is set or its state has moved past
+ * DRAFT. SUPERSEDED proformas are ignored: a replaced invoice is not the live one, so a
+ * booking whose only dispatched proforma was later superseded must dispatch the replacement.
+ */
+export function enforceProformaDispatchedWhenAdvancePaid(input: {
+  proformaInvoices: Array<{ state: InvoiceState; dispatchedAt: Date | null }>;
+  totalAdvanceReceived: number;
+}) {
+  if (!(input.totalAdvanceReceived > 0)) return; // nothing paid yet → dispatch optional
+  const live = input.proformaInvoices.filter((i) => i.state !== InvoiceState.SUPERSEDED);
+  const dispatched = live.some((i) => i.dispatchedAt != null || i.state !== InvoiceState.DRAFT);
+  if (dispatched) return;
+  throw new StageGateBlockedError(
+    `An advance payment of ${input.totalAdvanceReceived.toFixed(2)} has been received — dispatch the proforma invoice to the guest before confirming.`,
+    "PROFORMA_INVOICE_NOT_DISPATCHED",
+  );
 }
 
 /**

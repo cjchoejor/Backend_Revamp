@@ -19,6 +19,7 @@ import {
   enforceCommittedHoldReadyForS4Confirmation,
   enforceEntryAtS3ForReservationConfirmation,
   enforceProformaInvoicePresentForS4Confirmation,
+  enforceProformaDispatchedWhenAdvancePaid,
   enforceProvisionalFolioPresentForS4Confirmation,
 } from "../../policies/16-confirmation-authority/p40-s4-confirmation-readiness-gates.js";
 import { enforceEntryVersionMatchesClientForOptimisticLock } from "../../policies/01-availability/p01-entry-version-optimistic-lock-match.js";
@@ -92,8 +93,19 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   enforceCancellationDisclosurePresent({ hasCancellationDisclosure: !!entry.cancellationDisclosure });
 
   // Require at least one proforma invoice unless waived by config (not implemented in this slice).
-  const hasProforma = folio.invoices.some((i) => i.invoiceType === InvoiceType.PROFORMA);
-  enforceProformaInvoicePresentForS4Confirmation({ hasProformaInvoice: hasProforma });
+  const proformas = folio.invoices.filter((i) => i.invoiceType === InvoiceType.PROFORMA);
+  enforceProformaInvoicePresentForS4Confirmation({ hasProformaInvoice: proformas.length > 0 });
+
+  // …and once the guest has actually paid an advance, that proforma must have gone OUT to
+  // them — money changing hands has to be documented (2026-07-28). Keyed on the amount
+  // RECEIVED, not the configured threshold: `advancePayment.thresholds` can be 0 while a
+  // guest still chooses to pay something up front, and that voluntary payment needs an
+  // invoice just the same.
+  const advanceEvaluation = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: folio.id });
+  enforceProformaDispatchedWhenAdvancePaid({
+    proformaInvoices: proformas.map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
+    totalAdvanceReceived: advanceEvaluation.totalReceived,
+  });
 
   const holdCfg = entry.committedHold;
   enforceCommittedHoldReadyForS4Confirmation({ hold: holdCfg });
@@ -125,7 +137,9 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
 
   const ceiling = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } }).catch(() => null);
 
-  const advanceStatus = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: folio.id });
+  // Reuses the evaluation resolved for the proforma-dispatch gate above — same folio, same
+  // thresholds, nothing in between mutates payments.
+  const advanceStatus = advanceEvaluation;
   if (!advanceStatus.satisfied) {
     throw new PolicyGateBlockedError(
       "ADVANCE_OR_CREDIT_REQUIRED",
