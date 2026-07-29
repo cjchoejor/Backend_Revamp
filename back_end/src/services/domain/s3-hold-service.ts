@@ -33,8 +33,12 @@ import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as paymentService from "./s3-payment-service.js";
 import { enforceFocValidationForCommittedHold } from "../../policies/15-foc/p38-foc-validation-for-committed-hold.js";
-import { enforceCommittedHoldRoomFreeForDates } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
-import { findRoomDateConflicts } from "../../lib/room-date-conflicts.js";
+import {
+  enforceCommittedHoldInventoryAvailable,
+  enforceCommittedHoldRoomPhysicallyUsable,
+  enforceNoOverlappingBookingForCommittedHold,
+} from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
+import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
 import { enforceCancellationDisclosurePresent } from "../../policies/14-cancellation/p34-cancellation-terms-disclosure-required.js";
 import { enforceAdvancePaymentSatisfiedOrCreditExtensionPresent } from "../../policies/18-credit-extension-ceiling/p42-advance-payment-or-credit-extension-required.js";
 import { enforceCommittedHoldReleaseOnReEntryAuthority } from "../../policies/11-committed-hold/p26-committed-hold-release-on-reentry-requires-fom.js";
@@ -132,30 +136,50 @@ export async function placeCommittedHold(
         })
       : [];
 
-  // Policy 26, date-aware (2026-07-29). Was `enforceCommittedHoldInventoryAvailable` on each
-  // room's `currentClaimState` — a snapshot with no dates in it. That contradicted the S1
-  // availability search (date-aware since 2026-07-24): search offered the rooms for this stay,
-  // the operator sealed them, and this refused because another booking's claim was still on
-  // the flag. With no room ever returned to FREE after a legacy stay ended, it blocked every
-  // committed hold. Now both sides ask `findRoomDateConflicts` the same question.
-  const stayStart = entry.checkInDate;
-  const stayEnd = entry.checkOutDate;
-  if (!stayStart || !stayEnd) {
-    throw new ValidationError("Entry has no stay dates — a committed hold needs the check-in and check-out dates.");
-  }
-  const conflicts = await findRoomDateConflicts(prisma, {
-    roomIds: allSealedRoomIds,
-    checkIn: stayStart,
-    checkOut: stayEnd,
-    excludeEntryId: entryId,
-    now,
-  });
-  const numberById = new Map<string, string>([
-    [room.id, room.roomNumber],
-    ...additionalRoomRows.map((r) => [r.id, r.roomNumber] as [string, string]),
-  ]);
-  for (const id of allSealedRoomIds) {
-    enforceCommittedHoldRoomFreeForDates({ roomId: id, roomNumber: numberById.get(id) ?? null, conflicts });
+  // ---- Availability validation (2026-07-29: date-aware) --------------------
+  // Previously this asked `Room.currentClaimState ∈ {FREE, SPECULATIVELY_HELD}` — a NOW
+  // snapshot with no date dimension. S1's availability engine decides by DATE OVERLAP, so the
+  // two disagreed on every ordinary case: a second forward booking for a room that already
+  // holds one (non-overlapping dates), a future booking for a room occupied tonight, and a
+  // retry of the operator's own hold (the first attempt pinned the room COMMITTED_HELD, so the
+  // second failed the FREE check against itself). All three showed as "available" in S1 and
+  // then threw INVENTORY_NOT_AVAILABLE here.
+  //
+  // Now: commercial availability comes from date-overlap against other bookings, physical
+  // availability from blocked/maintenance. Both checks cover EVERY room in the seal, not just
+  // the primary one.
+  const roomsUnderHold = [room, ...additionalRoomRows];
+  const roomNumberById = new Map(roomsUnderHold.map((r) => [r.id, r.roomNumber]));
+
+  if (entry.checkInDate && entry.checkOutDate) {
+    const checkIn = entry.checkInDate;
+    const checkOut = entry.checkOutDate;
+    for (const r of roomsUnderHold) {
+      enforceCommittedHoldRoomPhysicallyUsable({
+        roomNumber: r.roomNumber,
+        isBlocked: r.isBlocked,
+        blockedReason: r.blockedReason,
+        isUnderMaintenance: r.isUnderMaintenance,
+        maintenanceDeadline: r.maintenanceDeadline,
+        checkIn,
+        checkOut,
+      });
+    }
+    const conflicts = await findRoomBookingConflicts(prisma, {
+      roomIds: roomsUnderHold.map((r) => r.id),
+      checkIn,
+      checkOut,
+      excludeEntryId: entryId,
+    });
+    enforceNoOverlappingBookingForCommittedHold({
+      conflicts: conflicts.map((c) => ({ ...c, roomNumber: roomNumberById.get(c.roomId) ?? null })),
+    });
+  } else {
+    // Degenerate: entry carries no stay dates, so there is nothing to intersect. Fall back to
+    // the legacy NOW snapshot — the only signal available on this path.
+    for (const r of roomsUnderHold) {
+      enforceCommittedHoldInventoryAvailable({ currentClaimState: r.currentClaimState });
+    }
   }
 
   return prisma.$transaction(async (tx) => {
