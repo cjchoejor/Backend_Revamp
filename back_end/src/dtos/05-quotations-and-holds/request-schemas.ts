@@ -56,6 +56,28 @@ export const roomCompositionInputSchema = z.object({
   serviceChargeApplies: z.boolean().optional(),
   gstApplies: z.boolean().optional(),
   isFoc: z.boolean().optional(),
+  /**
+   * Per-night meal-plan overrides (2026-07-28). Each entry REPLACES the room-level
+   * distribution above for that one night; nights without an entry keep the default. Dates
+   * must fall inside the room's stay — enforced by `enforceNightOverridesWithinStay`, not here,
+   * because the stay range isn't known at schema-validation time.
+   */
+  nightMealOverrides: z
+    .array(
+      z.object({
+        date: z.string().datetime(),
+        mealPlanCpCount: z.coerce.number().int().min(0).optional(),
+        mealPlanMaplCount: z.coerce.number().int().min(0).optional(),
+        mealPlanMapdCount: z.coerce.number().int().min(0).optional(),
+        mealPlanApCount: z.coerce.number().int().min(0).optional(),
+        mealPlanOthersCount: z.coerce.number().int().min(0).optional(),
+        othersBreakfastPax: z.coerce.number().int().min(0).optional(),
+        othersLunchPax: z.coerce.number().int().min(0).optional(),
+        othersDinnerPax: z.coerce.number().int().min(0).optional(),
+      }),
+    )
+    .max(370)
+    .optional(),
 });
 export type RoomCompositionInputDto = z.infer<typeof roomCompositionInputSchema>;
 

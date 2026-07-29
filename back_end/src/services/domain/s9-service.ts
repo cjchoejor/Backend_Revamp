@@ -156,9 +156,10 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
             id: commId,
             entryId: updated.entryId,
             channel: "EMAIL",
-            // NOTE: We use an existing commType for now to avoid Prisma client regeneration issues on Windows.
-            // Semantically this is a proforma invoice dispatch acknowledgement loop.
-            commType: "INVOICE_SUPERSEDED_NOTICE",
+            // `PROFORMA_INVOICE` has been in the CommunicationType enum all along; this used to
+            // write INVOICE_SUPERSEDED_NOTICE as a temporary dodge around a Windows Prisma-generate
+            // issue, which mislabelled every PI dispatch and made the ack loop unfindable by type.
+            commType: "PROFORMA_INVOICE",
             stageContext: Stage.S3,
             direction: "OUTBOUND",
             sendStatus: "DISPATCHED",

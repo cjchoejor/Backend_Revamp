@@ -2,7 +2,10 @@ import type { PrismaClient } from "@prisma/client";
 import { InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
-import { enforceEntryAtS7ForRoomChangeReEntry } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import {
+  enforceEntryActiveForStageTransition,
+  enforceEntryAtS7ForRoomChangeReEntry,
+} from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 
@@ -80,6 +83,7 @@ export async function roomChangeReEntryToS1(
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS7ForRoomChangeReEntry({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   const currentAssignment = entry.roomAssignments[0];
   if (!currentAssignment) throw new ValidationError("Entry has no current room assignment");
 

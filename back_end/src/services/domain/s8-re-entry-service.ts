@@ -5,6 +5,7 @@ import { computeReEntryConsequences } from "../../engines/re-entry-consequence-e
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 import { collectRoomsHeldByEntry, transitionRoomClaimState } from "../../lib/room-claim-state.js";
+import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 /**
  * SIG-S8 §3.7 — S8→S7 re-entry (additional charge path).
@@ -23,6 +24,7 @@ export async function reEnterS8ToS7(
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { folio: true } });
   if (!entry) throw new NotFoundError("Entry");
   if (entry.currentStage !== Stage.S8) throw new ValidationError("Entry must be at S8 for S8→S7 re-entry");
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (entry.version !== clientVersion) {
     throw new StateTransitionError("Entry version mismatch — refresh and retry", "OPTIMISTIC_LOCK_VERSION_MISMATCH");
   }
@@ -107,6 +109,7 @@ export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actor
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { folio: true, reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
   if (entry.currentStage !== Stage.S8) throw new ValidationError("Entry must be at S8 for S8→S2 re-entry");
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (entry.version !== clientVersion) {
     throw new StateTransitionError("Entry version mismatch — refresh and retry", "OPTIMISTIC_LOCK_VERSION_MISMATCH");
   }

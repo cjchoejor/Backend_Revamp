@@ -28,6 +28,7 @@ import { deficientConditionsRouter } from "./deficient-conditions/router.js";
 import { lookupsRouter } from "./lookups/router.js";
 import { backflowsRouter } from "./backflows/router.js";
 import { documentsRouter } from "./documents/router.js";
+import { communicationsRouter } from "./communications/router.js";
 
 export const apiRouter = Router();
 
@@ -63,6 +64,7 @@ apiRouter.use(rateLimitingPassthrough());
 apiRouter.use("/inquiries", inquiriesRouter);
 apiRouter.use("/duplicate-flags", duplicateFlagsRouter);
 apiRouter.use("/entries", entriesRouter);
+apiRouter.use("/communications", communicationsRouter);
 apiRouter.use(availabilityRouter);
 apiRouter.use("/processing-locks", processingLocksRouter);
 apiRouter.use(quotationsAndHoldsRouter);

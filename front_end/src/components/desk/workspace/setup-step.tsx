@@ -31,6 +31,7 @@ import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
+import { CommunicationAcceptanceBlock } from "./communication-acceptance";
 
 const BK = STAGE_ACTIONS.S3;
 
@@ -383,6 +384,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           </>
         )}
       </div>
+
+      {/* 3b. Guest's answer on the proforma — only meaningful once it has actually been sent.
+          Evidence for the file; it gates nothing (see communication-acceptance.tsx). */}
+      {proformaInvoices.some((i) => i.dispatchedAt != null) && (
+        <CommunicationAcceptanceBlock entryId={entry.id} commType="PROFORMA_INVOICE" />
+      )}
 
       {/* 4. Advance payment */}
       <div className="block">

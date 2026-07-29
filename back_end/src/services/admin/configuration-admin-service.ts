@@ -8,6 +8,8 @@ const FORBIDDEN_ZERO_KEYS = new Set([
   "expiry.s3.committedHoldTtlSeconds",
   "expiry.s2.speculativeHoldTtlSeconds",
   "expiry.s1.defaultTtlSeconds",
+  // 0 days would expire every parked entry on the next worker tick — a park is meant to hold.
+  "expiry.parking.followUpDays",
 ]);
 
 // When true, the generic ConfigurationService rejects keys with no registered validator

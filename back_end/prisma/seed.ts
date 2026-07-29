@@ -128,6 +128,12 @@ async function main() {
       notes: "Seeded S1 entry expiry TTL seconds (W20 registration)",
     },
     {
+      configKey: "expiry.parking.followUpDays",
+      configValue: 30,
+      notes:
+        "DEV-SPEC-001 Part 13 §Seeded Defaults — entry park-expiry threshold, 30 days from park date. Park cancels the short stage-expiry timer and arms a PARKING_FOLLOW_UP ENTRY_EXPIRY job at this offset (SIG-S1 §3.4).",
+    },
+    {
       configKey: "processingLock.ttl.perChannel",
       configValue: { EMAIL_AI: 300, WHATSAPP_AI: 300, FRONT_DESK: 600, PHONE: 600 },
     },

@@ -153,7 +153,15 @@ export function s3Readiness(entry: EntryDetail, opts?: { paymentSatisfied?: bool
   // been fetched. Using inPayments alone wrongly blocks agent/OTA/credit-extension bookings.
   const advanceSatisfied = opts?.paymentSatisfied ?? inPayments.length > 0;
   return [
-    { label: "Quote accepted", met: (entry.quotations ?? []).some((q) => q.state === "ACCEPTED") },
+    // Mirrors the relaxed backend gate (`enforceQuotationPresentForS4Confirmation`): the freeze
+    // needs a quotation to exist as its commercial basis, not one the guest accepted. An accepted
+    // quote is still preferred as that basis when there is one.
+    {
+      label: "Quote generated",
+      met: (entry.quotations ?? []).some(
+        (q) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED",
+      ),
+    },
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
     { label: "Proforma invoice on folio", met: proforma },
@@ -203,26 +211,34 @@ export function canProgressS1(entry: EntryDetail): boolean {
 }
 
 /** S2 exit readiness (SIG-S2) — gates before reservation setup (S3). */
+/**
+ * S2 exit readiness. Mirrors the backend gate, which requires a quotation to have been
+ * GENERATED — not accepted (operator ruling 2026-07-28: generating is mandatory, sending is
+ * optional, and acceptance is only recordable on something sent, so it can't be the gate).
+ * See `resolveOperativeQuotation` / `enforceQuotationGeneratedForS2Exit` on the backend.
+ *
+ * Acceptance is still surfaced, as an unmet-but-non-blocking line, so the operator can see at a
+ * glance whether the guest actually said yes.
+ */
 export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Precondition[] {
-  const accepted = (entry.quotations ?? []).find((q) => q.state === "ACCEPTED");
+  const quotes = entry.quotations ?? [];
+  const live = quotes.filter((q) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED");
+  const accepted = quotes.find((q) => q.state === "ACCEPTED");
+  const operative = accepted ?? live[0];
   const sealed = (entry.availabilityConfigs ?? []).some((c) => c.sealedAt && c.optionSelected);
   const holds = entry.speculativeHolds ?? [];
   const holdsOk = holds.length === 0 || holds.every((h) => h.state === "PLACED" || h.state === "UPGRADED");
-  const validOk = !accepted?.validUntil || new Date(accepted.validUntil).getTime() > now;
+  const validOk = !operative?.validUntil || new Date(operative.validUntil).getTime() > now;
   return [
     { label: "Availability sealed from Inquiry", met: sealed },
-    { label: "Quote accepted by guest", met: !!accepted },
-    { label: "Accepted quote still valid", met: !accepted || validOk },
+    { label: "Quote generated", met: live.length > 0 },
+    { label: "Quote still valid", met: !operative || validOk },
     { label: "Any holds still healthy", met: holdsOk },
   ];
 }
 
 export function canProgressS2(entry: EntryDetail): boolean {
-  return (
-    entry.currentStage === "S2" &&
-    (entry.quotations ?? []).some((q) => q.state === "ACCEPTED") &&
-    s2Readiness(entry).every((c) => c.met)
-  );
+  return entry.currentStage === "S2" && s2Readiness(entry).every((c) => c.met);
 }
 
 /** S5 exit readiness (SIG-S5 §1.5) — gates before check-in (S6). Guest-present is a UI attestation. */
@@ -407,12 +423,8 @@ export function preconditionsFor(entry: EntryDetail, step: DeskStep): Preconditi
         },
       ];
     case "quote":
-      return [
-        {
-          label: "Quote sent to guest",
-          met: !!quote && (quote.state === "SENT" || quote.state === "ACCEPTED"),
-        },
-      ];
+      // Generated, not sent — emailing the quote is optional and never gates the step.
+      return [{ label: "Quote generated", met: !!quote }];
     case "setup":
       return s3Readiness(entry);
     case "confirm":

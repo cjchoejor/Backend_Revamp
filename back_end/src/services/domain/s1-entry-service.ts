@@ -17,7 +17,10 @@ import {
   enforceEntryNotExpiredForS1Lifecycle,
   enforceEntryParkedForUnpark,
 } from "../../policies/01-availability/p01-s1-entry-status-and-stage-gates.js";
-import { enforceEntryParkAllowedForCurrentStage } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
+import {
+  enforceEntryParkAllowedForCurrentStage,
+  entryExpiryTimerAppliesAtStage,
+} from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
 
@@ -288,8 +291,19 @@ async function setOpenDwellMode(tx: any, entryId: string, mode: StageDwellMode):
 }
 
 /**
- * Cancel the park-expiry timer and re-arm the normal stage-expiry timer for one entry, inside a
- * transaction. Shared by entry-level unpark and the inquiry-level cascade unpark.
+ * Cancel the park-expiry timer and — only where one belongs — re-arm the stage-expiry timer for
+ * one entry, inside a transaction. Shared by entry-level unpark and the inquiry-level cascade
+ * unpark.
+ *
+ * `ENTRY_EXPIRY` exists at S1 only: registered at entry creation, cancelled for good on S1→S2
+ * (`s1-state-machine.progressS1ToS2`), never re-registered later. Unpark used to re-arm one
+ * unconditionally at the **S1** TTL regardless of the entry's actual stage, which handed every
+ * unparked entry a death clock it never had:
+ *   - an unparked S2 entry expired ~1h later;
+ *   - and because the inquiry-level cascade parks at any stage, an unparked S5/S7 entry was
+ *     marked EXPIRED — releasing the rooms of an in-house guest (`releaseEntryRoomsToFree`).
+ * Beyond S1 we now cancel the park timer and stop; the stage's own timers (no-show cutoff, hold
+ * expiry, night audit) were never touched by the park and keep running.
  */
 async function restoreStageExpiryTimersTx(
   tx: any,
@@ -305,6 +319,7 @@ async function restoreStageExpiryTimersTx(
       data: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: actorId, cancelledReason: "Entry unparked" },
     });
   }
+  if (!entryExpiryTimerAppliesAtStage(stageContext)) return;
   const s1ExpiryPolicy = await getRegistryPolicy(tx, "registry.s1Expiry.minutes");
   const registryS1Seconds =
     s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"

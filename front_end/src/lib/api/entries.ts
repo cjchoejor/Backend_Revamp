@@ -31,6 +31,64 @@ export async function getEntryTrace(session: Session, entryId: string, limit = 1
   );
 }
 
+/**
+ * The four governed guest-facing communications and their acknowledgement state — quotation (S2),
+ * proforma invoice (S3), confirmation voucher (S4), pre-arrival reminder (S5).
+ *
+ * `canAcknowledge` / `isOverdue` are computed by the backend, not here: an acknowledgement is only
+ * recordable against something actually dispatched, and that rule belongs on the server so both
+ * frontends obey it.
+ */
+export type EntryCommunicationType =
+  | "QUOTATION"
+  | "PROFORMA_INVOICE"
+  | "CONFIRMATION_VOUCHER"
+  | "PRE_ARRIVAL_REMINDER";
+
+export type EntryCommunication = {
+  id: string;
+  commType: EntryCommunicationType;
+  channel: string;
+  stageContext: string | null;
+  direction: string | null;
+  sendStatus: string | null;
+  acknowledgementStatus: string | null;
+  acknowledgementReceivedAt: string | null;
+  acknowledgementTimeoutAt: string | null;
+  contentSummary: string | null;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+  createdBy: string;
+  canAcknowledge: boolean;
+  isOverdue: boolean;
+};
+
+export async function listEntryCommunications(session: Session, entryId: string) {
+  return apiRequest<{ entryId: string; items: EntryCommunication[] }>(
+    `/api/entries/${entryId}/communications`,
+    { session },
+  );
+}
+
+/**
+ * Record that the guest accepted / acknowledged a sent communication (L1+). Closes the W22
+ * acknowledgement window and writes the evidence to the trace. A VERBAL acknowledgement requires
+ * `verbatimNote` — what the guest actually said is the evidence.
+ *
+ * Evidence only: this never gates stage progression.
+ */
+export async function acknowledgeCommunication(
+  session: Session,
+  communicationId: string,
+  body: { method: "WRITTEN" | "VERBAL"; verbatimNote?: string; receivedAt?: string },
+) {
+  return apiRequest<EntryCommunication>(`/api/communications/${communicationId}/acknowledge`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
 export async function createEntry(
   session: Session,
   body: {
@@ -126,9 +184,13 @@ export function normalizeEntryResponse(data: unknown): EntryDetail {
 }
 
 /**
- * Park an entry — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.3 /
- * SIG-S2 §3.3), L1+. Pauses the booking (and its expiry timer) without losing its
- * place. `reason` is REQUIRED (max 500 chars) and is recorded on the trace.
+ * Park an entry — a governed temporary hold on any ACTIVE entry at any live stage
+ * (DEV-SPEC-001 Part 3 §3.2.8; restated per-stage in SIG-S1 §3.3, SIG-S2 §3.3, SIG-S3 §3,
+ * SIG-S4 §3.1, SIG-S5 §3.1), L1+. Pauses the booking without losing its place: the short
+ * stage-expiry timer is cancelled and a long park-expiry one armed. Stage-specific clocks
+ * (quotation validity, no-show cutoff) deliberately keep running. While PARKED the entry
+ * cannot be progressed — resume it first. `reason` is REQUIRED (max 500 chars), recorded
+ * on the trace.
  */
 export async function parkEntry(session: Session, entryId: string, reason: string) {
   const data = await apiRequest<unknown>(`/api/entries/${entryId}/park`, {

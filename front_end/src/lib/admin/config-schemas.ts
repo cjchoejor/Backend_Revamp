@@ -44,6 +44,14 @@ export const TIMER_WORKER_CONFIG_KEYS: ConfigKeyMeta[] = [
     schema: { kind: "record-seconds", label: "TTL by type", fields: [{ key: "DEFAULT", label: "Default (seconds)" }] },
   },
   {
+    key: "expiry.parking.followUpDays",
+    title: "Park expiry",
+    description:
+      "How long a parked booking stays parked before W20 expires it. Parking cancels the short stage-expiry timer and arms this longer one in its place.",
+    worker: "W20",
+    schema: { kind: "days", label: "Threshold (days)", help: "30 = the factory default from Part 13." },
+  },
+  {
     key: "expiry.s2.speculativeHoldTtlSeconds",
     title: "Speculative hold TTL (S2)",
     description: "Default duration for speculative room holds.",

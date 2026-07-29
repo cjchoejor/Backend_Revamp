@@ -25,6 +25,7 @@ import { getEntryTrace } from "../../services/infrastructure/trace-query-service
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
 import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
+import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 
 export const entriesRouter = Router();
 
@@ -34,6 +35,20 @@ entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) 
     const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
     const result = await getEntryTrace(prisma, req.params.id, limit);
     res.json(result);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Governed outbound communications for one entry, newest first (L1+) — the quotation (S2),
+ * proforma invoice (S3), confirmation voucher (S4) and pre-arrival reminder (S5), each with its
+ * acknowledgement state. Drives the "sent / accepted" blocks on the desk's stage steps.
+ * `canAcknowledge` and `isOverdue` are computed server-side so every frontend agrees.
+ */
+entriesRouter.get("/:id/communications", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await listEntryCommunications(prisma, req.params.id));
   } catch (e) {
     next(e);
   }

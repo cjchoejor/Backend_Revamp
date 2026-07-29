@@ -32,6 +32,25 @@ export type RoomCompositionInput = {
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;
+  /**
+   * Per-night meal-plan overrides (2026-07-28). Each entry REPLACES the room-level meal
+   * distribution for that one night; nights without an entry keep the room default. Dates are
+   * ISO timestamps and must fall inside the stay — the backend rejects any that don't, since
+   * a plan pinned outside the stay would silently never price.
+   */
+  nightMealOverrides?: RoomNightMealOverrideInput[];
+};
+
+export type RoomNightMealOverrideInput = {
+  date: string;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
+  mealPlanOthersCount?: number;
+  othersBreakfastPax?: number;
+  othersLunchPax?: number;
+  othersDinnerPax?: number;
 };
 
 export async function createQuotation(

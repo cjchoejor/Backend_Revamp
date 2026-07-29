@@ -33,7 +33,8 @@ import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as paymentService from "./s3-payment-service.js";
 import { enforceFocValidationForCommittedHold } from "../../policies/15-foc/p38-foc-validation-for-committed-hold.js";
-import { enforceCommittedHoldInventoryAvailable } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
+import { enforceCommittedHoldRoomFreeForDates } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
+import { findRoomDateConflicts } from "../../lib/room-date-conflicts.js";
 import { enforceCancellationDisclosurePresent } from "../../policies/14-cancellation/p34-cancellation-terms-disclosure-required.js";
 import { enforceAdvancePaymentSatisfiedOrCreditExtensionPresent } from "../../policies/18-credit-extension-ceiling/p42-advance-payment-or-credit-extension-required.js";
 import { enforceCommittedHoldReleaseOnReEntryAuthority } from "../../policies/11-committed-hold/p26-committed-hold-release-on-reentry-requires-fom.js";
@@ -111,7 +112,6 @@ export async function placeCommittedHold(
 
   const room = await prisma.room.findUnique({ where: { id: input.roomId } });
   if (!room) throw new NotFoundError("Room");
-  enforceCommittedHoldInventoryAvailable({ currentClaimState: room.currentClaimState });
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + Number(ttlSeconds) * 1000);
@@ -131,8 +131,31 @@ export async function placeCommittedHold(
           where: { id: { in: additionalRooms } },
         })
       : [];
-  for (const r of additionalRoomRows) {
-    enforceCommittedHoldInventoryAvailable({ currentClaimState: r.currentClaimState });
+
+  // Policy 26, date-aware (2026-07-29). Was `enforceCommittedHoldInventoryAvailable` on each
+  // room's `currentClaimState` — a snapshot with no dates in it. That contradicted the S1
+  // availability search (date-aware since 2026-07-24): search offered the rooms for this stay,
+  // the operator sealed them, and this refused because another booking's claim was still on
+  // the flag. With no room ever returned to FREE after a legacy stay ended, it blocked every
+  // committed hold. Now both sides ask `findRoomDateConflicts` the same question.
+  const stayStart = entry.checkInDate;
+  const stayEnd = entry.checkOutDate;
+  if (!stayStart || !stayEnd) {
+    throw new ValidationError("Entry has no stay dates — a committed hold needs the check-in and check-out dates.");
+  }
+  const conflicts = await findRoomDateConflicts(prisma, {
+    roomIds: allSealedRoomIds,
+    checkIn: stayStart,
+    checkOut: stayEnd,
+    excludeEntryId: entryId,
+    now,
+  });
+  const numberById = new Map<string, string>([
+    [room.id, room.roomNumber],
+    ...additionalRoomRows.map((r) => [r.id, r.roomNumber] as [string, string]),
+  ]);
+  for (const id of allSealedRoomIds) {
+    enforceCommittedHoldRoomFreeForDates({ roomId: id, roomNumber: numberById.get(id) ?? null, conflicts });
   }
 
   return prisma.$transaction(async (tx) => {

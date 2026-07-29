@@ -84,6 +84,30 @@ function num(v: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * The stay-nights as YYYY-MM-DD keys — check-in inclusive, check-out exclusive (the guest
+ * doesn't eat a booked dinner on the night they've left). This is the set the per-night plan
+ * picker offers, so a plan can never be pinned outside the dates the guest chose; the backend
+ * re-checks it (`enforceNightOverridesWithinStay`) rather than trusting the picker.
+ */
+function stayNights(checkIn?: string | null, checkOut?: string | null): string[] {
+  if (!checkIn || !checkOut) return [];
+  const a = new Date(checkIn.slice(0, 10) + "T00:00:00.000Z").getTime();
+  const b = new Date(checkOut.slice(0, 10) + "T00:00:00.000Z").getTime();
+  if (Number.isNaN(a) || Number.isNaN(b) || b <= a) return [];
+  const out: string[] = [];
+  for (let t = a; t < b; t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10));
+  // Guard against a runaway range (bad data) rendering thousands of chips.
+  return out.slice(0, 370);
+}
+
+/** "Tue 12 Aug" — compact enough for a chip, unambiguous across month boundaries. */
+function nightLabel(key: string): string {
+  const d = new Date(key + "T00:00:00.000Z");
+  if (Number.isNaN(d.getTime())) return key;
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+}
+
 type RoomExtras = {
   extraBed: string;
   sc: boolean;
@@ -146,6 +170,8 @@ export function RoomCompositionsBoard({
   entryChildAges,
   initial,
   onChange,
+  focusRoomId,
+  onFocusRoom,
 }: {
   sealedRoomIds: string[];
   entryCheckIn?: string | null;
@@ -156,6 +182,15 @@ export function RoomCompositionsBoard({
    *  from the same data. Read once on mount; later prop changes are ignored. */
   initial?: RoomCompositionInput[];
   onChange: (compositions: RoomCompositionInput[]) => void;
+  /**
+   * Show only this room's bin. null = every sealed room (the original behaviour).
+   *
+   * DISPLAY ONLY — every sealed room is still emitted, still holds its guests, and still
+   * prices. Filtering the emission instead would silently drop the unfocused rooms from the
+   * quotation, which is the one thing this must never do.
+   */
+  focusRoomId?: string | null;
+  onFocusRoom?: (roomId: string | null) => void;
 }) {
   const { session } = useSession();
   const roomsQuery = useQuery({
@@ -204,12 +239,22 @@ export function RoomCompositionsBoard({
     return out;
   }, [entryAdults, entryChildAges, youngMax, childMax]);
   const guestByKey = new Map(guests.map((g) => [g.key, g]));
+  /** The nights the guest actually booked — the only dates a per-night plan may target. */
+  const nights = useMemo(() => stayNights(entryCheckIn, entryCheckOut), [entryCheckIn, entryCheckOut]);
 
   // Mount-time copy of the seed snapshot — deliberately not reactive.
   const initialRef = useRef(initial);
   // guestKey → roomId; missing/"" = unplaced tray.
   const [assign, setAssign] = useState<Record<string, string>>({});
   const [plans, setPlans] = useState<Record<string, PlanPick>>({});
+  /**
+   * Per-night plan overrides: nightKey → guestKey → plan. A guest with no entry for a night
+   * eats on their stay-wide `plans` choice. Keyed by night first because that's how the
+   * operator thinks ("what's happening on the 14th?") and how it's emitted.
+   */
+  const [nightPlans, setNightPlans] = useState<Record<string, Record<string, PlanPick>>>({});
+  /** Which night the plan buttons currently write to. null = the whole stay (the default). */
+  const [scopeNight, setScopeNight] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [extras, setExtras] = useState<Record<string, RoomExtras>>({});
   // Drop-target highlight while dragging: roomId or "tray".
@@ -268,6 +313,7 @@ export function RoomCompositionsBoard({
     };
     const nextAssign: Record<string, string> = {};
     const nextPlans: Record<string, PlanPick> = {};
+    const nextNightPlans: Record<string, Record<string, PlanPick>> = {};
     let short = false;
     for (const id of sealedRoomIds) {
       const c = comps.find((x) => x.roomId === id);
@@ -298,9 +344,38 @@ export function RoomCompositionsBoard({
       for (const [plan, n] of planCounts) {
         for (let i = 0; i < n && seat < seated.length; i++) nextPlans[seated[seat++]] = plan;
       }
+
+      // Same derivation for any per-night overrides the seed carries (a board → table → board
+      // round trip). Seated in the same order, so a night that matches the room default
+      // produces no override on the next emit rather than a redundant one.
+      for (const o of c.nightMealOverrides ?? []) {
+        const key = String(o.date).slice(0, 10);
+        if (!key) continue;
+        const forNight: Record<string, PlanPick> = { ...(nextNightPlans[key] ?? {}) };
+        let nSeat = 0;
+        const nightCounts: Array<[PlanPick, number]> = [
+          ["CP", o.mealPlanCpCount ?? 0],
+          ["MAPL", o.mealPlanMaplCount ?? 0],
+          ["MAPD", o.mealPlanMapdCount ?? 0],
+          ["AP", o.mealPlanApCount ?? 0],
+          ["OTHERS", o.mealPlanOthersCount ?? 0],
+        ];
+        for (const [plan, n] of nightCounts) {
+          for (let i = 0; i < n && nSeat < seated.length; i++) forNight[seated[nSeat++]] = plan;
+        }
+        // Everyone else in the room that night sits on EP.
+        while (nSeat < seated.length) forNight[seated[nSeat++]] = "NONE";
+        nextNightPlans[key] = forNight;
+      }
+    }
+    // Drop nights whose derived plans match the stay-wide ones — they aren't exceptions.
+    for (const [night, byGuest] of Object.entries(nextNightPlans)) {
+      const differs = Object.entries(byGuest).some(([k, p]) => p !== (nextPlans[k] ?? "NONE"));
+      if (!differs) delete nextNightPlans[night];
     }
     setAssign(nextAssign);
     setPlans(nextPlans);
+    setNightPlans(nextNightPlans);
     setSeedShortfall(short);
   };
 
@@ -330,12 +405,42 @@ export function RoomCompositionsBoard({
     const out: RoomCompositionInput[] = sealedRoomIds.map((id) => {
       const here = guests.filter((g) => assign[g.key] === id);
       const x = extras[id] ?? EMPTY_EXTRAS;
-      const tally: Record<PlanPick, number> = { NONE: 0, CP: 0, MAPL: 0, MAPD: 0, AP: 0, OTHERS: 0 };
-      for (const g of here) tally[plans[g.key] ?? "NONE"] += 1;
+      const tallyFor = (planOf: (key: string) => PlanPick): Record<PlanPick, number> => {
+        const t: Record<PlanPick, number> = { NONE: 0, CP: 0, MAPL: 0, MAPD: 0, AP: 0, OTHERS: 0 };
+        for (const g of here) t[planOf(g.key)] += 1;
+        return t;
+      };
+      const tally = tallyFor((k) => plans[k] ?? "NONE");
+
+      // A night is emitted as an override only when a guest IN THIS ROOM has one — otherwise
+      // the room-level distribution already describes it, and sending a redundant row would
+      // make the backend price the same numbers by a longer path.
+      const nightMealOverrides = nights
+        .filter((n) => here.some((g) => nightPlans[n]?.[g.key] != null))
+        .map((n) => {
+          // The override REPLACES the night, so it carries every guest in the room — those
+          // without a night-specific pick fall back to their stay-wide plan.
+          const t = tallyFor((k) => nightPlans[n]?.[k] ?? plans[k] ?? "NONE");
+          const othersHere = t.OTHERS;
+          return {
+            date: new Date(n + "T00:00:00.000Z").toISOString(),
+            mealPlanCpCount: t.CP,
+            mealPlanMaplCount: t.MAPL,
+            mealPlanMapdCount: t.MAPD,
+            mealPlanApCount: t.AP,
+            mealPlanOthersCount: othersHere,
+            // Room-level à-la-carte pax only make sense while someone is on OTHERS that night.
+            othersBreakfastPax: othersHere > 0 ? num(x.othersB) : 0,
+            othersLunchPax: othersHere > 0 ? num(x.othersL) : 0,
+            othersDinnerPax: othersHere > 0 ? num(x.othersD) : 0,
+          };
+        });
+
       return {
         roomId: id,
         startDate: dayToIso(entryCheckIn),
         endDate: dayToIso(entryCheckOut),
+        ...(nightMealOverrides.length > 0 ? { nightMealOverrides } : {}),
         occupantCount: here.length,
         adultCount: here.filter((g) => g.band === "ADULT").length,
         cnb6To10Count: here.filter((g) => g.band === "C6TO10").length,
@@ -361,7 +466,7 @@ export function RoomCompositionsBoard({
     });
     onChange(out);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assign, plans, extras, sealedRoomIds, guests, entryCheckIn, entryCheckOut]);
+  }, [assign, plans, nightPlans, nights, extras, sealedRoomIds, guests, entryCheckIn, entryCheckOut]);
 
   const setExtra = (roomId: string, patch: Partial<RoomExtras>) =>
     setExtras((prev) => ({ ...prev, [roomId]: { ...(prev[roomId] ?? EMPTY_EXTRAS), ...patch } }));
@@ -392,14 +497,50 @@ export function RoomCompositionsBoard({
     placeKeys([...selected], roomId);
   };
 
+  /**
+   * Apply a plan to the current selection, at the current date scope. Whole-stay writes the
+   * guest's default; a specific night writes an override for that night only, leaving every
+   * other night on the default. Setting a night's plan back to the default clears the
+   * override rather than storing a redundant one.
+   */
   const applyPlanToSelection = (plan: PlanPick) => {
     if (selected.size === 0) return;
-    setPlans((prev) => {
+    if (scopeNight == null) {
+      setPlans((prev) => {
+        const next = { ...prev };
+        for (const k of selected) next[k] = plan;
+        return next;
+      });
+      return;
+    }
+    setNightPlans((prev) => {
+      const forNight = { ...(prev[scopeNight] ?? {}) };
+      for (const k of selected) {
+        if ((plans[k] ?? "NONE") === plan) delete forNight[k];
+        else forNight[k] = plan;
+      }
       const next = { ...prev };
-      for (const k of selected) next[k] = plan;
+      if (Object.keys(forNight).length === 0) delete next[scopeNight];
+      else next[scopeNight] = forNight;
       return next;
     });
   };
+
+  /** Drop every per-night override for one night, returning it to the stay-wide plans. */
+  const clearNight = (night: string) =>
+    setNightPlans((prev) => {
+      if (!prev[night]) return prev;
+      const next = { ...prev };
+      delete next[night];
+      return next;
+    });
+
+  /** Nights carrying at least one override, in stay order — drives the summary strip. */
+  const overriddenNights = nights.filter((n) => Object.keys(nightPlans[n] ?? {}).length > 0);
+
+  /** The plan in force for a guest at the current scope — what the chip should show. */
+  const planInScope = (key: string): PlanPick =>
+    (scopeNight != null ? nightPlans[scopeNight]?.[key] : undefined) ?? plans[key] ?? "NONE";
 
   // Drag carries the dragged chip — or the whole selection when the chip is part of it.
   const dragKeysRef = useRef<string[]>([]);
@@ -433,6 +574,10 @@ export function RoomCompositionsBoard({
 
   const unplaced = guests.filter((g) => !assign[g.key] || !sealedRoomIds.includes(assign[g.key]));
   const placedCount = guests.length - unplaced.length;
+  // A focus on a room that's no longer sealed (selection changed upstream) falls back to All
+  // rather than rendering an empty board.
+  const activeFocus = focusRoomId && sealedRoomIds.includes(focusRoomId) ? focusRoomId : null;
+  const visibleRoomIds = activeFocus ? [activeFocus] : sealedRoomIds;
 
   if (sealedRoomIds.length === 0) {
     return (
@@ -443,7 +588,10 @@ export function RoomCompositionsBoard({
   }
 
   const chip = (g: Guest, inRoom: boolean) => {
-    const plan = plans[g.key] ?? "NONE";
+    // Show the plan for the night being edited, not the stay default — otherwise the operator
+    // sets an exception and the chip appears not to have changed.
+    const plan = planInScope(g.key);
+    const overridden = scopeNight != null && nightPlans[scopeNight]?.[g.key] != null;
     const isSel = selected.has(g.key);
     return (
       <div
@@ -462,10 +610,32 @@ export function RoomCompositionsBoard({
         <span className="n">{g.label}</span>
         {inRoom && (
           <select
+            className={overridden ? "ovr" : undefined}
             value={plan}
             onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setPlans((prev) => ({ ...prev, [g.key]: e.target.value as PlanPick }))}
-            title="Meal plan for this guest"
+            onChange={(e) => {
+              const next = e.target.value as PlanPick;
+              // The dropdown writes at whatever scope the bar is on, so it and the bulk
+              // buttons can never disagree about which night they're editing.
+              if (scopeNight == null) {
+                setPlans((prev) => ({ ...prev, [g.key]: next }));
+                return;
+              }
+              setNightPlans((prev) => {
+                const forNight = { ...(prev[scopeNight] ?? {}) };
+                if ((plans[g.key] ?? "NONE") === next) delete forNight[g.key];
+                else forNight[g.key] = next;
+                const out = { ...prev };
+                if (Object.keys(forNight).length === 0) delete out[scopeNight];
+                else out[scopeNight] = forNight;
+                return out;
+              });
+            }}
+            title={
+              scopeNight == null
+                ? "Meal plan for this guest, every night"
+                : `Meal plan for ${nightLabel(scopeNight)} only`
+            }
           >
             {PLAN_ORDER.map((p) => (
               <option key={p} value={p}>
@@ -519,23 +689,83 @@ export function RoomCompositionsBoard({
 
       {/* Plan bar — appears with a selection; the one place bulk actions live. */}
       {selected.size > 0 && (
-        <div className="rcb-planbar">
-          <span className="cnt">
-            {selected.size} selected
-          </span>
-          <span className="lbl">meal plan:</span>
-          {PLAN_ORDER.map((p) => (
-            <button key={p} type="button" onClick={() => applyPlanToSelection(p)} title={PLAN_LABEL[p]}>
-              {PLAN_SHORT[p]}
+        <>
+          {/* Date scope. "Whole stay" writes the guest's normal plan; picking a night writes
+              an override for that night alone, so "AP on arrival, CP after" is two taps. Only
+              nights the guest actually booked are offered. */}
+          {nights.length > 1 && (
+            <div className="rcb-planbar rcb-nightbar">
+              <span className="lbl">applies to:</span>
+              <button
+                type="button"
+                className={scopeNight == null ? "on" : ""}
+                onClick={() => setScopeNight(null)}
+                title="Set these guests' usual plan for every night of the stay"
+              >
+                Whole stay
+              </button>
+              {nights.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className={`${scopeNight === n ? "on" : ""}${nightPlans[n] ? " has" : ""}`}
+                  onClick={() => setScopeNight(n)}
+                  title={`Set the plan for ${nightLabel(n)} only${nightPlans[n] ? " — this night already differs" : ""}`}
+                >
+                  {nightLabel(n)}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="rcb-planbar">
+            <span className="cnt">{selected.size} selected</span>
+            <span className="lbl">{scopeNight == null ? "meal plan:" : `plan on ${nightLabel(scopeNight)}:`}</span>
+            {PLAN_ORDER.map((p) => (
+              <button key={p} type="button" onClick={() => applyPlanToSelection(p)} title={PLAN_LABEL[p]}>
+                {PLAN_SHORT[p]}
+              </button>
+            ))}
+            <span className="ln" />
+            {scopeNight != null && nightPlans[scopeNight] && (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => clearNight(scopeNight)}
+                title="Drop this night's exceptions — everyone returns to their usual plan"
+              >
+                Reset night
+              </button>
+            )}
+            <button type="button" className="ghost" onClick={() => placeSelection(null)} title="Move the selection back to the tray">
+              <Undo2 style={{ width: 11, height: 11 }} /> To tray
             </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setSelected(new Set());
+                setScopeNight(null);
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Standing summary of which nights differ — visible without a selection, so an
+          exception set earlier can't be forgotten about. */}
+      {overriddenNights.length > 0 && (
+        <div className="rcb-nightsum">
+          <span className="rce-lbl">Nights that differ</span>
+          {overriddenNights.map((n) => (
+            <span key={n} className="rcb-nightpill">
+              {nightLabel(n)}
+              <button type="button" onClick={() => clearNight(n)} title={`Reset ${nightLabel(n)} to the usual plans`}>
+                ×
+              </button>
+            </span>
           ))}
-          <span className="ln" />
-          <button type="button" className="ghost" onClick={() => placeSelection(null)} title="Move the selection back to the tray">
-            <Undo2 style={{ width: 11, height: 11 }} /> To tray
-          </button>
-          <button type="button" className="ghost" onClick={() => setSelected(new Set())}>
-            Done
-          </button>
         </div>
       )}
 
@@ -558,8 +788,39 @@ export function RoomCompositionsBoard({
         </div>
       )}
 
+      {/* Room focus tabs — jump straight to one room without going back to the table.
+          Unfocused rooms keep everything; this only changes what's on screen. */}
+      {sealedRoomIds.length > 1 && (
+        <div className="rcb-roomtabs">
+          <button
+            type="button"
+            className={activeFocus == null ? "on" : ""}
+            onClick={() => onFocusRoom?.(null)}
+            title="Show every sealed room"
+          >
+            All rooms
+          </button>
+          {sealedRoomIds.map((id) => {
+            const n = roomById.get(id)?.roomNumber ?? id.slice(0, 6);
+            const count = guests.filter((g) => assign[g.key] === id).length;
+            return (
+              <button
+                key={id}
+                type="button"
+                className={activeFocus === id ? "on" : ""}
+                onClick={() => onFocusRoom?.(activeFocus === id ? null : id)}
+                title={`Show room ${n} on its own`}
+              >
+                {n}
+                <span className="c">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="rcb-rooms">
-        {sealedRoomIds.map((id) => {
+        {visibleRoomIds.map((id) => {
           const room = roomById.get(id);
           const roomNumber = room?.roomNumber ?? id.slice(0, 6);
           const here = guests.filter((g) => assign[g.key] === id);
@@ -707,6 +968,12 @@ export function RoomCompositionPlanner(props: {
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
   const [mode, setMode] = useState<"table" | "board">("table");
+  /**
+   * Which room the board shows on its own. Lives here rather than in the board so the table
+   * can set it: clicking a room in the grid opens that room in the board, which is the whole
+   * point of the affordance. Survives mode switches.
+   */
+  const [focusRoomId, setFocusRoomId] = useState<string | null>(null);
   // Last emitted compositions — the seed for whichever mode mounts next. A ref, not
   // state: emissions must not re-render the planner (the active editor already did).
   const snapshotRef = useRef<RoomCompositionInput[]>([]);
@@ -737,9 +1004,23 @@ export function RoomCompositionPlanner(props: {
         </button>
       </div>
       {mode === "table" ? (
-        <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current} />
+        <RoomCompositionsTable
+          {...props}
+          onChange={handleChange}
+          initial={snapshotRef.current}
+          onOpenRoomInBoard={(roomId) => {
+            setFocusRoomId(roomId);
+            setMode("board");
+          }}
+        />
       ) : (
-        <RoomCompositionsBoard {...props} onChange={handleChange} initial={snapshotRef.current} />
+        <RoomCompositionsBoard
+          {...props}
+          onChange={handleChange}
+          initial={snapshotRef.current}
+          focusRoomId={focusRoomId}
+          onFocusRoom={setFocusRoomId}
+        />
       )}
     </div>
   );

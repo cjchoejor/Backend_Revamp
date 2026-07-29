@@ -6,8 +6,12 @@ import { enforceQuotationValidityNotLapsedForS2Exit } from "../policies/08-prici
 import { enforceDiscountApprovalBeforeSend } from "../policies/09-discount/p23-discount-send-requires-approval.js";
 import { enforceSpeculativeHoldActiveForS2Exit } from "../policies/10-speculative-hold/p25-speculative-hold-active-for-s2-exit.js";
 import { enforceQuotationAckOpenLoopResolvedForS2Exit } from "../policies/20-communication-acknowledgement-tracking/p52-quotation-ack-open-loop-resolved-for-s2-exit.js";
-import { enforceAcceptedQuotationPresentForS2Exit } from "../policies/08-pricing-rate-plan/p07-quotation-validity-not-lapsed-for-s2-exit.js";
-import { enforceEntryAtS2ForS2ToS3Progression } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { enforceQuotationGeneratedForS2Exit } from "../policies/08-pricing-rate-plan/p07-quotation-validity-not-lapsed-for-s2-exit.js";
+import { resolveOperativeQuotation } from "../lib/operative-quotation.js";
+import {
+  enforceEntryActiveForStageTransition,
+  enforceEntryAtS2ForS2ToS3Progression,
+} from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getOrCreateProvisionalFolioTx } from "../services/domain/s3-folio-service.js";
 import { scheduleS3StageDwellWarningMonitor } from "../lib/schedule-s3-dwell-warning-monitor.js";
 
@@ -24,15 +28,20 @@ export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _act
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS2ForS2ToS3Progression({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (clientVersion == null) throw new ValidationError("version is required");
   if (entry.version !== clientVersion) throw new ValidationError("version mismatch");
 
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
 
-  const acceptedCfg = entry.quotations.find((q) => q.segmentId === segmentId && q.state === "ACCEPTED");
-  enforceAcceptedQuotationPresentForS2Exit({ hasAcceptedQuotation: !!acceptedCfg });
-  const accepted = acceptedCfg!;
+  // Generate-vs-send (operator ruling 2026-07-28): the gate needs a quotation to EXIST for this
+  // segment, not one the guest has accepted — acceptance is only recordable on a sent quote, so
+  // requiring it here would make sending mandatory. Deviation from SIG-S2 §1.4.1, see the policy.
+  // The operative quotation is still the ACCEPTED one whenever there is one.
+  const operative = resolveOperativeQuotation(entry.quotations, segmentId);
+  enforceQuotationGeneratedForS2Exit({ hasQuotation: !!operative });
+  const accepted = operative!;
 
   enforceQuotationValidityNotLapsedForS2Exit({ validUntil: accepted.validUntil });
 

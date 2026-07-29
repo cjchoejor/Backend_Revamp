@@ -7,12 +7,14 @@ import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.
 import { computeReEntryConsequences } from "../engines/re-entry-consequence-engine.js";
 import { enforceS3ReEntryAuthority } from "../policies/01-availability/p01-reentry-authority.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
+import { enforceEntryActiveForStageTransition } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { reason?: string }) {
   enforceS3ReEntryAuthority({ actorLevel: actor.actorLevel });
   const existingEntry = await prisma.entry.findUnique({ where: { id: entryId }, include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 }, committedHold: true } as any });
   if (!existingEntry) throw new NotFoundError("Entry");
   enforceEntryAtS3ForS3DomainOperations({ currentStage: existingEntry.currentStage });
+  enforceEntryActiveForStageTransition({ status: existingEntry.status });
   const currentSeg = existingEntry.segments[0];
   if (!currentSeg) throw new ValidationError("Entry has no segment");
   const now = new Date();
@@ -84,6 +86,7 @@ export async function initiateS3ToS1Backflow(prisma: PrismaClient, entryId: stri
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } } as any });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   const currentSeg = entry.segments[0];
   if (!currentSeg) throw new ValidationError("Entry has no segment");
   const now = new Date();

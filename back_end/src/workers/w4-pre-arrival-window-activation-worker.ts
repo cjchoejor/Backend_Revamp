@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { Stage } from "@prisma/client";
+import { EntryStatus, Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
 import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
@@ -19,6 +19,13 @@ export async function runPreArrivalWindowActivationWorker(
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
   if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
   if (entry.currentStage !== Stage.S4) return { skipped: true, reason: "NOT_AT_S4" } as const;
+  // Part 3 §3.2.2 — S4→S5 originates from (ACTIVE, S4). A parked entry is a deliberate pause, so
+  // the timer must not walk it forward. Skip (not throw): this is the system path, and pg-boss
+  // would otherwise retry-and-fail forever. The operator resumes it, and the manual
+  // /activate-pre-arrival route re-runs this same worker.
+  if (entry.status !== EntryStatus.ACTIVE) {
+    return { skipped: true, reason: entry.status === EntryStatus.PARKED ? "ENTRY_PARKED" : "ENTRY_NOT_ACTIVE" } as const;
+  }
   enforceReservationSnapshotPresentForS5Activation({ reservation: entry.reservation });
 
   // Cross-cutting #5: contact person is mandatory before S5. This is the business-rule

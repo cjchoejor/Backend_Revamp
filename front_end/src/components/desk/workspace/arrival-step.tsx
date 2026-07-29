@@ -25,6 +25,7 @@ import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
 import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
+import { CommunicationAcceptanceBlock } from "./communication-acceptance";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -481,6 +482,10 @@ export function ArrivalStep({
           ))
         )}
       </div>
+
+      {/* Guest's answer on the pre-arrival reminder. The reminder opens a W22 window when it goes
+          out; this closes it. Evidence only — check-in is not held up by it. */}
+      <CommunicationAcceptanceBlock entryId={entry.id} commType="PRE_ARRIVAL_REMINDER" />
 
       {/* Payment & credit */}
       <div className="block">

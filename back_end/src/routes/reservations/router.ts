@@ -79,6 +79,10 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
           next(new ValidationError(detail?.message ?? "Contact person is mandatory before S5 activation."));
           return;
         }
+        if (activation.reason === "ENTRY_PARKED") {
+          next(new ValidationError("This booking is parked — resume it before activating pre-arrival."));
+          return;
+        }
         next(new ValidationError(`Pre-arrival activation could not run: ${activation.reason ?? "unknown"}`));
         return;
       }

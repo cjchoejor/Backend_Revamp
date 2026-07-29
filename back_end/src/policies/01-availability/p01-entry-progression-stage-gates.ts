@@ -88,6 +88,32 @@ export function enforceEntryNotClosedForStageProgression(input: { status: EntryS
   throw new StateTransitionError("Cannot progress stage for CLOSED entry", "ENTRY_ALREADY_CLOSED");
 }
 
+/**
+ * Policy 1 — every stage transition originates from `(ACTIVE, Sn)`.
+ *
+ * DEV-SPEC-001 Part 3 §3.2.2/§3.2.8 and the transition table in every SIG list `(ACTIVE, Sn)` as
+ * the source state for forward progressions, backflows and re-entries alike; `(PARKED, Sn)` has
+ * exactly one legal outgoing transition — unpark.
+ *
+ * Without this guard a PARKED entry could be progressed straight through: S1→S2 would then cancel
+ * the park-expiry timer and open the next stage's dwell record in ACTIVE mode while `status` stayed
+ * PARKED, leaving a booking that is nominally paused, has no expiry clock, and shows the wrong
+ * dwell band. The park was silently defeated.
+ */
+export function enforceEntryActiveForStageTransition(input: { status: EntryStatus }) {
+  if (input.status === EntryStatus.ACTIVE) return;
+  if (input.status === EntryStatus.PARKED) {
+    throw new StateTransitionError(
+      "Entry is PARKED — resume it before progressing the stage",
+      "ENTRY_PARKED",
+    );
+  }
+  throw new StateTransitionError(
+    `Cannot progress a ${input.status} entry`,
+    "ENTRY_NOT_ACTIVE",
+  );
+}
+
 /** Policy 1 — S2→S3 progression requires entry at S2 (StateTransitionError matches prior service). */
 export function enforceEntryAtS2ForS2ToS3Progression(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S2) return;

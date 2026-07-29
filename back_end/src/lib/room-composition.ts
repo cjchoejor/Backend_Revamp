@@ -18,7 +18,34 @@ const ZERO = new Prisma.Decimal(0);
 /** Subset of `RoomAssignment` fields the composition helpers care about. Kept as a plain
  *  type (not the full Prisma model) so callers can pass in a subset without doing an extra
  *  DB round-trip to fetch fields they don't need. */
+/**
+ * A single night whose meal distribution differs from the room's stay-wide default
+ * (2026-07-28). The counts REPLACE the room-level ones for that night — they don't add to
+ * them — so "AP on arrival night, CP the rest" is one override row, not two.
+ *
+ * Mirrors `RoomNightMealPlan`. Nights with no override price from the room-level fields, so
+ * a booking with no overrides prices exactly as it did before per-night meals existed.
+ */
+export type RoomNightMealOverride = {
+  /** The stay-night the guest sleeps. Compared by calendar day, not by timestamp. */
+  date: Date;
+  mealPlanCpCount?: number | null;
+  mealPlanMaplCount?: number | null;
+  mealPlanMapdCount?: number | null;
+  mealPlanApCount?: number | null;
+  mealPlanOthersCount?: number | null;
+  othersBreakfastPax?: number | null;
+  othersLunchPax?: number | null;
+  othersDinnerPax?: number | null;
+};
+
 export type RoomCompositionInput = {
+  /**
+   * Per-night meal-plan overrides. Only applied when the composition knows its `startDate`
+   * — without it there is no way to say which night is which, so overrides are ignored
+   * rather than guessed at.
+   */
+  nightMealOverrides?: RoomNightMealOverride[] | null;
   // meal-plan distribution
   mealPlanCpCount?: number | null;
   mealPlanMaplCount?: number | null;
@@ -101,6 +128,56 @@ export function paxFromMealPlanCounts(input: RoomCompositionInput): {
   };
 }
 
+/** Calendar-day key (UTC) — overrides are matched by day, never by timestamp. */
+export function dayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The stay-nights this composition covers, as day keys, starting at `startDate`.
+ * Empty when the start date is unknown — callers then have no way to place an override.
+ */
+export function nightKeys(input: RoomCompositionInput, nights: number): string[] {
+  if (!input.startDate) return [];
+  const start = Date.UTC(
+    input.startDate.getUTCFullYear(),
+    input.startDate.getUTCMonth(),
+    input.startDate.getUTCDate(),
+  );
+  return Array.from({ length: nights }, (_, i) => new Date(start + i * 86_400_000).toISOString().slice(0, 10));
+}
+
+/**
+ * Index the overrides by day key, keeping the LAST entry for a repeated day so a caller
+ * that appends corrections doesn't silently price the stale one.
+ */
+function indexOverrides(overrides: RoomNightMealOverride[] | null | undefined): Map<string, RoomNightMealOverride> {
+  const map = new Map<string, RoomNightMealOverride>();
+  for (const o of overrides ?? []) {
+    if (!o?.date || Number.isNaN(o.date.getTime())) continue;
+    map.set(dayKey(o.date), o);
+  }
+  return map;
+}
+
+/** The meal counts in force on a given night: the override if there is one, else the room default. */
+function mealCountsForNight(
+  input: RoomCompositionInput,
+  override: RoomNightMealOverride | undefined,
+): RoomCompositionInput {
+  if (!override) return input;
+  return {
+    mealPlanCpCount: override.mealPlanCpCount ?? 0,
+    mealPlanMaplCount: override.mealPlanMaplCount ?? 0,
+    mealPlanMapdCount: override.mealPlanMapdCount ?? 0,
+    mealPlanApCount: override.mealPlanApCount ?? 0,
+    mealPlanOthersCount: override.mealPlanOthersCount ?? 0,
+    othersBreakfastPax: override.othersBreakfastPax ?? 0,
+    othersLunchPax: override.othersLunchPax ?? 0,
+    othersDinnerPax: override.othersDinnerPax ?? 0,
+  };
+}
+
 /**
  * Number of nights this room is stayed for. Prefers explicit `rateContext.nights`, falls
  * back to the assignment's own date range, then to 1 night as a defensive default.
@@ -140,8 +217,13 @@ export function computeRoomComposition(
   dinnerRate: Prisma.Decimal;
   perNightRoom: Prisma.Decimal;
   perNightExtraBed: Prisma.Decimal;
+  /** One un-overridden night's meals — the room's usual night, and what the UI calls "per night". */
   perNightMeals: Prisma.Decimal;
   perNightSubtotal: Prisma.Decimal;
+  /** Meals across the whole stay. Equals `perNightMeals × nights` when no night is overridden. */
+  mealsSubtotal: Prisma.Decimal;
+  /** Populated only when overrides applied — one entry per stay-night, for display/audit. */
+  perNightMealBreakdown: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean }>;
   subtotal: Prisma.Decimal;
   serviceCharge: Prisma.Decimal;
   gst: Prisma.Decimal;
@@ -164,6 +246,8 @@ export function computeRoomComposition(
       perNightExtraBed: ZERO,
       perNightMeals: ZERO,
       perNightSubtotal: ZERO,
+      mealsSubtotal: ZERO,
+      perNightMealBreakdown: [],
       subtotal: ZERO,
       serviceCharge: ZERO,
       gst: ZERO,
@@ -183,13 +267,40 @@ export function computeRoomComposition(
 
   const perNightRoom = toDecimal(roomRate);
   const perNightExtraBed = toDecimal(extraBedRate).mul(extraBeds);
-  const perNightMeals = toDecimal(breakfastRate)
-    .mul(breakfastPax)
-    .add(toDecimal(lunchRate).mul(lunchPax))
-    .add(toDecimal(dinnerRate).mul(dinnerPax));
+  /** Cost of one night's meals for a given distribution. */
+  const mealCostFor = (counts: RoomCompositionInput): Prisma.Decimal => {
+    const p = paxFromMealPlanCounts(counts);
+    return toDecimal(breakfastRate)
+      .mul(p.breakfastPax)
+      .add(toDecimal(lunchRate).mul(p.lunchPax))
+      .add(toDecimal(dinnerRate).mul(p.dinnerPax));
+  };
+  // The room's usual night — what an un-overridden night costs, and what the UI shows as
+  // "per night".
+  const perNightMeals = mealCostFor(input);
   const perNightSubtotal = perNightRoom.add(perNightExtraBed).add(perNightMeals);
 
-  const subtotal = perNightSubtotal.mul(nights);
+  // Room + extra bed are the same every night; only meals can vary. Summing meals night by
+  // night is what makes "AP on arrival, CP after" price correctly.
+  const overrides = indexOverrides(input.nightMealOverrides);
+  const keys = overrides.size > 0 ? nightKeys(input, nights) : [];
+  const perNight: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean }> = [];
+  let mealsSubtotal: Prisma.Decimal;
+  if (keys.length === 0) {
+    // No overrides (or no start date to place them against) — identical to the pre-2026-07-28
+    // behaviour, to the cent.
+    mealsSubtotal = perNightMeals.mul(nights);
+  } else {
+    mealsSubtotal = ZERO;
+    for (const key of keys) {
+      const o = overrides.get(key);
+      const meals = o ? mealCostFor(mealCountsForNight(input, o)) : perNightMeals;
+      perNight.push({ date: key, meals, overridden: !!o });
+      mealsSubtotal = mealsSubtotal.add(meals);
+    }
+  }
+
+  const subtotal = perNightRoom.add(perNightExtraBed).mul(nights).add(mealsSubtotal);
   const serviceCharge =
     input.serviceChargeApplies !== false && ctx.serviceChargeRate > 0
       ? subtotal.mul(ctx.serviceChargeRate)
@@ -216,6 +327,8 @@ export function computeRoomComposition(
     perNightExtraBed,
     perNightMeals,
     perNightSubtotal,
+    mealsSubtotal,
+    perNightMealBreakdown: perNight,
     subtotal,
     serviceCharge,
     gst,

@@ -32,6 +32,7 @@ import { enforceH4InitiatedBeforeS7ToS8UnlessSameDayDeparture } from "../policie
 import { enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8 } from "../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
 import { enforceNoUnresolvedNightAuditAnomaliesForS7ToS8 } from "../policies/24-night-audit/p60-unresolved-night-audit-anomalies-for-s7-to-s8.js";
 import {
+  enforceEntryActiveForStageTransition,
   enforceEntryAtS5ForS5ToS6Progression,
   enforceEntryAtS6ForS6ToS1ReEntry,
   enforceEntryAtS7ForS7ToS8Progression,
@@ -70,6 +71,7 @@ export async function progressStageS5ToS6(
 
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS5ForS5ToS6Progression({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
 
   await enforceConferenceGroupWorkOrderTodosCompleteForS5ToS6(prisma, { entryId, useType: entry.useType });
 
@@ -311,6 +313,7 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS6ForS6ToS1ReEntry({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
 
   const now = new Date();
   const nextSegmentNumber = entry.segmentNumber + 1;
@@ -420,6 +423,7 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS7ForS7ToS8Progression({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (entry.version !== clientVersion) throw new OptimisticLockError();
 
   // Every distinct room must be OCCUPIED for the entry to progress to S8. Deficient records

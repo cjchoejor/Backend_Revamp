@@ -11,6 +11,7 @@ import { deriveFinancials, money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { JourneySummaryBlock } from "./journey-summary";
 import { ConfirmationVoucherBlock } from "./confirmation-voucher";
+import { CommunicationAcceptanceBlock } from "./communication-acceptance";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -110,6 +111,11 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
         <JourneySummaryBlock entryId={entry.id} />
 
         {confirmed && <ConfirmationVoucherBlock entry={entry} />}
+
+        {/* The voucher goes out automatically on confirmation and opens a W22 window. This is the
+            desk's way to close that loop when the guest replies — evidence only, arrival is not
+            held up by it. */}
+        {confirmed && <CommunicationAcceptanceBlock entryId={entry.id} commType="CONFIRMATION_VOUCHER" />}
 
         {!confirmed && (
           <div className="block">

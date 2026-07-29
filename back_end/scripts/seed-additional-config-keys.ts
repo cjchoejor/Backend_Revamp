@@ -13,6 +13,12 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     value: 3,
     notes: "W30 — days before a Lost & Found item's retention expiry that the approaching-expiry trace fires.",
   },
+  {
+    key: "expiry.parking.followUpDays",
+    value: 30,
+    notes:
+      "Entry park-expiry threshold, 30 days from park date (DEV-SPEC-001 Part 13 §Seeded Defaults). Park arms a PARKING_FOLLOW_UP ENTRY_EXPIRY job at this offset in place of the short stage-expiry timer (SIG-S1 §3.4). Was read by s1-entry-service but never seeded — the code silently fell back to its hardcoded 30-day default, so the 'configurable' threshold wasn't.",
+  },
   // Communication channels (ACIG §6.2.16) — the Channels admin page renders empty without this.
   {
     key: "communication.channels",

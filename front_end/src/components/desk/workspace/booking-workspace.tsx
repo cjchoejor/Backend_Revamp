@@ -586,6 +586,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const [nightAuditOk, setNightAuditOk] = useState(false);
   const [parkOpen, setParkOpen] = useState(false);
   const [parkReason, setParkReason] = useState("");
+  // The same dialog serves two entry points: the S1/S2 exit prompt (where leaving is the point)
+  // and the in-place Park button on later stages (where the operator wants to stay put).
+  const [parkExitFlow, setParkExitFlow] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
 
   // Native confirm/freeze — the S3→S4 commitment boundary (SIG-S4).
@@ -675,8 +678,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
   });
 
-  // Park / unpark — a governed temporary hold, valid only at S1/S2 (SIG-S1 §3.3 / SIG-S2 §3.3).
-  // Reason is required (recorded on the trace) and parking pauses the entry-expiry timer.
+  // Park / unpark — a governed temporary hold on any ACTIVE entry (Part 3 §3.2.8; SIG-S1 §3.3,
+  // SIG-S2 §3.3, SIG-S3 §3, SIG-S4 §3.1, SIG-S5 §3.1). Reason is required (recorded on the trace);
+  // parking swaps the short stage-expiry timer for the long park-expiry one.
   const parkMutation = useMutation({
     mutationFn: () => parkEntry(session!, entry!.id, parkReason.trim()),
     onSuccess: (updated) => {
@@ -689,8 +693,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       setParkOpen(false);
       setParkReason("");
       toast.success("Booking parked — it's paused but keeps its place.");
-      // Parking is now reached only from the exit dialog, so leaving is the natural next step.
-      router.push("/desk/bookings");
+      // Only leave when the park came from the exit prompt. Parking in place from a later stage
+      // should keep the operator where they are, looking at the now-parked booking.
+      if (parkExitFlow) router.push("/desk/bookings");
     },
     onError: (e) => {
       toast.error(e instanceof ApiError ? e.message : "Couldn't park this booking");
@@ -750,8 +755,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     entry.status === "CANCELLED" ||
     entry.status === "EXPIRED" ||
     entry.currentStage === "TERMINAL";
-  // Park is a governed hold only at the active negotiation stages (S1/S2).
-  const parkable = entry.currentStage === "S1" || entry.currentStage === "S2";
+  // Park is a governed hold available from any live stage — DEV-SPEC-001 Part 3 §3.2.8
+  // ("any (ACTIVE, Sn) ──► (PARKED, Sn)"), restated per-stage in SIG-S1/S2/S3/S4/S5/S7. The
+  // backend guard is authoritative (p01-entry-park-allowed-stages); this only decides whether
+  // to offer the affordance. It used to read S1/S2 only, mirroring a backend narrowing that had
+  // no spec basis and blocked the S3–S5 parks the SIGs mandate.
+  const parkable = !sealed && entry.status === "ACTIVE";
+  // Whether to *offer* the park on the way out. Deliberately narrower than `parkable`: an
+  // unfinished enquiry/quote is the case where "pause it, don't lose it" is the natural exit,
+  // whereas nagging on every visit to an in-house stay would be noise. Parking later stages is
+  // still permitted — it's just a deliberate act rather than an exit prompt.
+  const promptParkOnExit = parkable && (entry.currentStage === "S1" || entry.currentStage === "S2");
   const timer = fin.frozen ? null : dwellTimer(entry.updatedAt);
 
   // Steps with native actions wired into the desk (vs. the deep-link bridge).
@@ -877,8 +891,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // the park dialog so the operator can choose to pause it on the way out — parking is a governed
   // exit choice now, not a standalone header button. Everything else navigates straight back.
   const handleExit = () => {
-    if (parkable && !parked) setParkOpen(true);
-    else router.push("/desk/bookings");
+    if (promptParkOnExit && !parked) {
+      setParkExitFlow(true);
+      setParkOpen(true);
+    } else router.push("/desk/bookings");
   };
 
   const metCount = preconds.filter((p) => p.met).length;
@@ -948,9 +964,26 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               {parkCountdown ? `Parked · expires ${parkCountdown.text}` : "Parked"}
             </span>
           )}
-          {/* Park is no longer a standalone button — it's offered in the exit dialog (handleExit).
-              A parked booking still needs an in-place way back, so keep Resume. */}
-          {parkable && parked && (
+          {/* At S1/S2 the park is offered on the way out (handleExit) — pausing an unfinished
+              enquiry is an exit choice. From S3 onward there's no exit prompt, so the park needs
+              its own deliberate affordance; without one the stages the SIGs mandate a park for
+              (S3–S5, S7) would be unreachable from the desk. */}
+          {parkable && !promptParkOnExit && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setParkExitFlow(false);
+                setParkOpen(true);
+              }}
+              title="Pause this booking — it keeps its place."
+            >
+              <Pause />
+              Park
+            </button>
+          )}
+          {/* Gate on `parked` alone — NOT on `parkable`, which requires status ACTIVE and so is
+              always false for the very entries that need this button. */}
+          {parked && (
             <button className="btn btn-ghost btn-sm" disabled={unparkMutation.isPending} onClick={() => unparkMutation.mutate()}>
               <Play />
               {unparkMutation.isPending ? "Resuming…" : "Resume"}

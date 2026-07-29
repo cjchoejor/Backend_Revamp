@@ -14,7 +14,7 @@ import { enforceOverbookingRequiresGmMitigationBeforeConfirmation } from "../../
 import { enforceConferenceVerificationBeforeConfirmation } from "../../policies/27-work-order/p67-conference-verification-required.js";
 import { enforceCancellationDisclosurePresent } from "../../policies/14-cancellation/p34-cancellation-terms-disclosure-required.js";
 import {
-  enforceAcceptedQuotationPresentForS4Confirmation,
+  enforceQuotationPresentForS4Confirmation,
   enforceBillingModelFixatedForS4Confirmation,
   enforceCommittedHoldReadyForS4Confirmation,
   enforceEntryAtS3ForReservationConfirmation,
@@ -22,7 +22,9 @@ import {
   enforceProvisionalFolioPresentForS4Confirmation,
 } from "../../policies/16-confirmation-authority/p40-s4-confirmation-readiness-gates.js";
 import { enforceEntryVersionMatchesClientForOptimisticLock } from "../../policies/01-availability/p01-entry-version-optimistic-lock-match.js";
+import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { enforceCommitmentRateFreezeAtS4 } from "../../policies/08-pricing-rate-plan/p20-commitment-rate-freeze-at-s4.js";
+import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { dispatchConfirmationVoucherTx } from "./communication-service.js";
 import { createH1AtS4ConfirmationTx } from "./handoff-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
@@ -63,14 +65,18 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS3ForReservationConfirmation({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (input?.version == null) throw new ValidationError("version is required");
   enforceEntryVersionMatchesClientForOptimisticLock({ entryVersion: entry.version, clientVersion: input.version });
 
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
 
-  const acceptedCfg = entry.quotations.find((q) => q.segmentId === segmentId && q.state === "ACCEPTED");
-  enforceAcceptedQuotationPresentForS4Confirmation({ hasAcceptedQuotation: !!acceptedCfg });
+  // Generate-vs-send: freeze from the operative quotation (ACCEPTED when there is one, otherwise
+  // the newest live SENT/DRAFT). Requiring ACCEPTED here would have re-imposed "must send" one
+  // stage later than the S2 gate we just relaxed. See p40 / p07 for the ruling and deviation.
+  const acceptedCfg = resolveOperativeQuotation(entry.quotations, segmentId);
+  enforceQuotationPresentForS4Confirmation({ hasQuotation: !!acceptedCfg });
   const accepted = acceptedCfg!;
 
   const thresholds = await requireActiveConfigValue<any>(prisma, "confirmation.authorityThresholds").catch(() => ({}) as any);

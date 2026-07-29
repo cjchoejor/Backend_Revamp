@@ -19,7 +19,10 @@ import { enforceAdvancePaymentReconciledBeforeCheckInCompletion } from "../../po
 import { enforceFolioProvisionalBeforeCheckInCompletion } from "../../policies/13-billing-model/p31-folio-provisional-before-checkin-completion.js";
 import { enforceVipArrivalNotificationRecordedForCheckInCompletion } from "../../policies/20-communication-acknowledgement-tracking/p52-vip-arrival-notification-recorded-for-checkin.js";
 import { enforceH2H3NotRejectedAtS6CheckIn } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
-import { enforceEntryAtS6ForCheckInCompletionToS7 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import {
+  enforceEntryActiveForStageTransition,
+  enforceEntryAtS6ForCheckInCompletionToS7,
+} from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { scheduleS7StageDwellWarningMonitor } from "../../lib/schedule-s7-dwell-warning-monitor.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { readHandoffChecklistContent } from "../../lib/handoff-checklist.js";
@@ -55,6 +58,7 @@ export async function completeCheckInToS7(
 
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS6ForCheckInCompletionToS7({ currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (clientVersion !== entry.version) {
     throw new OptimisticLockError();
   }

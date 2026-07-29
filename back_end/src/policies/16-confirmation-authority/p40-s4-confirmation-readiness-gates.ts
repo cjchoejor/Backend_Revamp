@@ -7,10 +7,30 @@ export function enforceEntryAtS3ForReservationConfirmation(input: { currentStage
   throw new StageGateBlockedError("Entry must be at S3 to confirm", "NOT_AT_S3");
 }
 
-/** SIG-S4: active segment must have an ACCEPTED quotation. */
+/** SIG-S4: active segment must have an ACCEPTED quotation. Spec-strict form — see below. */
 export function enforceAcceptedQuotationPresentForS4Confirmation(input: { hasAcceptedQuotation: boolean }) {
   if (input.hasAcceptedQuotation) return;
   throw new StageGateBlockedError("Accepted quotation required", "NO_ACCEPTED_QUOTATION");
+}
+
+/**
+ * SIG-S4: active segment must have a quotation to freeze terms from.
+ *
+ * Relaxed from the ACCEPTED-only form above per the operator's generate-vs-send ruling
+ * (2026-07-28) — see `p07-quotation-generated-for-s2-exit` for the reasoning. Relaxing S2→S3
+ * alone would have been pointless: the booking would clear S2 and then jam at the freeze.
+ *
+ * The commercial basis is still whichever quotation `resolveOperativeQuotation` picks, which
+ * prefers ACCEPTED whenever one exists — so a booking the guest did accept freezes exactly the
+ * terms it always did. Only the never-sent case behaves differently, and there the alternative
+ * was being unable to confirm at all.
+ */
+export function enforceQuotationPresentForS4Confirmation(input: { hasQuotation: boolean }) {
+  if (input.hasQuotation) return;
+  throw new StageGateBlockedError(
+    "A quotation must be generated for this segment before confirmation",
+    "NO_QUOTATION_GENERATED",
+  );
 }
 
 /** Policy 31 — provisional folio must exist before confirmation (this slice). */

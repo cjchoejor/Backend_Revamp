@@ -60,7 +60,30 @@ export async function hydrateRoomAssignmentComposition(
     return typeof v === "number" ? toDecimal(v) : null;
   };
 
+  // Per-night meal overrides ride along in the same commercialTerms JSON as the rest of the
+  // composition. Parsed here so the frozen totals below price the same nights the quotation did.
+  const rawNights = Array.isArray(c.nightMealOverrides) ? (c.nightMealOverrides as unknown[]) : [];
+  const nightMealOverrides = rawNights.flatMap((n) => {
+    if (!n || typeof n !== "object") return [];
+    const o = n as Record<string, unknown>;
+    const d = typeof o.date === "string" ? new Date(o.date) : null;
+    if (!d || Number.isNaN(d.getTime())) return [];
+    const int = (k: string): number | undefined => (typeof o[k] === "number" ? (o[k] as number) : undefined);
+    return [{
+      date: d,
+      mealPlanCpCount: int("mealPlanCpCount"),
+      mealPlanMaplCount: int("mealPlanMaplCount"),
+      mealPlanMapdCount: int("mealPlanMapdCount"),
+      mealPlanApCount: int("mealPlanApCount"),
+      mealPlanOthersCount: int("mealPlanOthersCount"),
+      othersBreakfastPax: int("othersBreakfastPax"),
+      othersLunchPax: int("othersLunchPax"),
+      othersDinnerPax: int("othersDinnerPax"),
+    }];
+  });
+
   const compositionInput: RoomCompositionInput = {
+    nightMealOverrides,
     occupantCount: numOrUndef("occupantCount"),
     adultCount: numOrUndef("adultCount"),
     cnb6To10Count: numOrUndef("cnb6To10Count"),
@@ -129,8 +152,28 @@ export async function hydrateRoomAssignmentComposition(
     serviceChargeApplies: compositionInput.serviceChargeApplies ?? true,
     gstApplies: compositionInput.gstApplies ?? true,
     isFoc: compositionInput.isFoc ?? false,
-    // frozen totals (recomputed from live rates + composition)
+    // frozen totals (recomputed from live rates + composition, per-night meals included)
     frozenSubtotal: computed.subtotal,
     frozenTotal: computed.total,
+    // Nested-create the per-night overrides alongside the assignment, so the durable record
+    // matches what was priced. Cascades on delete with the assignment.
+    ...(nightMealOverrides.length > 0
+      ? {
+          nightMealPlans: {
+            create: nightMealOverrides.map((o) => ({
+              date: o.date,
+              mealPlanCpCount: o.mealPlanCpCount ?? 0,
+              mealPlanMaplCount: o.mealPlanMaplCount ?? 0,
+              mealPlanMapdCount: o.mealPlanMapdCount ?? 0,
+              mealPlanApCount: o.mealPlanApCount ?? 0,
+              mealPlanOthersCount: o.mealPlanOthersCount ?? 0,
+              othersBreakfastPax: o.othersBreakfastPax ?? null,
+              othersLunchPax: o.othersLunchPax ?? null,
+              othersDinnerPax: o.othersDinnerPax ?? null,
+              createdBy: "SYSTEM",
+            })),
+          },
+        }
+      : {}),
   };
 }

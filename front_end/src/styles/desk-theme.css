@@ -1974,6 +1974,97 @@
     background: transparent;
     font-weight: 600;
   }
+  /* Date-scope strip inside the plan bar: which night the plan buttons write to. */
+  & .rcb-nightbar {
+    border-style: dashed;
+    background: var(--cream);
+  }
+  & .rcb-planbar button.on {
+    border-color: var(--green-d);
+    background: var(--green-d);
+    color: #fff;
+  }
+  /* A night that already carries exceptions — findable without selecting it. */
+  & .rcb-planbar button.has:not(.on) {
+    border-color: var(--green);
+    background: var(--green-t);
+    color: var(--green-d);
+  }
+  /* Standing summary of nights that differ, shown with no selection active. */
+  & .rcb-nightsum {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 5px 9px;
+    border: 1px dashed var(--green);
+    border-radius: var(--r-sm);
+    background: var(--green-t);
+  }
+  & .rcb-nightpill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 4px 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid var(--green);
+    color: var(--green-d);
+  }
+  & .rcb-nightpill button {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 3px;
+  }
+  & .rcb-nightpill button:hover {
+    color: var(--terracotta, #b4553a);
+  }
+  /* Room focus tabs — display filter only; every sealed room still prices. */
+  & .rcb-roomtabs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  & .rcb-roomtabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  & .rcb-roomtabs button:hover {
+    border-color: var(--green);
+    color: var(--green-d);
+  }
+  & .rcb-roomtabs button.on {
+    border-color: var(--green-d);
+    background: var(--green-d);
+    color: #fff;
+  }
+  & .rcb-roomtabs button .c {
+    font-size: 10px;
+    font-weight: 700;
+    opacity: 0.75;
+  }
+  /* A per-night exception on a chip's plan dropdown. */
+  & .rcb-chip select.ovr {
+    border-color: var(--green-d);
+    background: var(--green-t);
+    font-weight: 700;
+  }
   & .rcb-tray {
     border: 1.5px dashed var(--line-2);
     border-radius: var(--r-md);
@@ -2288,6 +2379,17 @@
     margin-left: 6px;
     font-size: 9.5px;
     color: var(--ink-3);
+  }
+  /* Clickable room cell — opens that room on its own in the guest board. */
+  & .rct-t tbody .room.opens {
+    cursor: pointer;
+  }
+  & .rct-t tbody .room.opens:hover {
+    background: var(--green-t);
+  }
+  & .rct-t tbody .room.opens:hover b {
+    color: var(--green-d);
+    text-decoration: underline;
   }
   /* Derived occupancy cell — read-only, mono, visually "computed". */
   & .rct-t .occ {

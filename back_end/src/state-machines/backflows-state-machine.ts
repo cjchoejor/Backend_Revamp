@@ -43,6 +43,7 @@ import {
   enforceS7ToS4BackflowAuthority,
   enforceComplaintResolutionBackflowAuthority,
 } from "../policies/01-availability/p01-backflow-authority.js";
+import { enforceEntryActiveForStageTransition } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 type Tx = Prisma.TransactionClient;
@@ -84,6 +85,10 @@ async function runBackflow(
   if (entry.currentStage !== input.fromStage) {
     throw new ValidationError(`Backflow requires entry at ${input.fromStage}, got ${entry.currentStage}`);
   }
+  // Part 3 §3.2.2/§3.2.8 — a backflow is a stage transition like any other, so it originates from
+  // (ACTIVE, Sn). `status` was already selected above but never checked; a PARKED entry could be
+  // backflowed, which seals its segment and opens a new one while the park is still nominally held.
+  enforceEntryActiveForStageTransition({ status: entry.status });
   const currentSeg = entry.segments[0];
   if (!currentSeg) throw new ValidationError("Entry has no segment");
 

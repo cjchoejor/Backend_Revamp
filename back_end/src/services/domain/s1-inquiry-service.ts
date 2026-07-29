@@ -7,6 +7,10 @@ import * as auditService from "../infrastructure/audit-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { cascadeParkEntryTx, cascadeUnparkEntryTx } from "./s1-entry-service.js";
+import {
+  isEntryParkAllowedForStage,
+  isEntryStatusParkable,
+} from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 
 export async function createInquiry(
   prisma: PrismaClient,
@@ -221,7 +225,17 @@ export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actor
   const inquiry = await prisma.inquiry.findUnique({ where: { id: inquiryId }, include: { entries: true } });
   if (!inquiry) throw new NotFoundError("Inquiry");
 
-  const targets = inquiry.entries.filter((e) => e.status === "ACTIVE");
+  // Same eligibility rule as the entry-level route (`parkEntry`) — one source of truth, so the
+  // cascade can never park an entry the direct route would refuse. Ineligible children are SKIPPED
+  // rather than failing the whole inquiry park: one out-of-scope sibling must not block pausing
+  // the rest. `skipped` is reported back and traced so the operator sees what was left running.
+  const eligible = inquiry.entries.filter(
+    (e) => isEntryStatusParkable(e.status) && isEntryParkAllowedForStage(e.currentStage),
+  );
+  const skipped = inquiry.entries
+    .filter((e) => isEntryStatusParkable(e.status) && !isEntryParkAllowedForStage(e.currentStage))
+    .map((e) => ({ entryId: e.id, currentStage: e.currentStage }));
+  const targets = eligible;
   const now = new Date();
   await prisma.$transaction(async (tx) => {
     const engine = await getTimerEngine();
@@ -237,7 +251,7 @@ export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actor
       timestamp: now,
       inquiryId,
       entryId: null,
-      payload: { reason: trimmedReason, entriesParked: targets.length },
+      payload: { reason: trimmedReason, entriesParked: targets.length, entriesSkipped: skipped },
       createdBy: actorId,
     });
   });
@@ -249,6 +263,7 @@ export async function parkInquiry(prisma: PrismaClient, inquiryId: string, actor
     parkedAt: refreshed?.parkedAt ?? null,
     parkedBy: refreshed?.parkedBy ?? null,
     entriesParked: targets.length,
+    entriesSkipped: skipped,
   };
 }
 

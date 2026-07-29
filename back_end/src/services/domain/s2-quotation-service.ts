@@ -42,7 +42,10 @@ import {
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { Prisma } from "@prisma/client";
 import { enforceExtraBedForThirdAdult } from "../../policies/34-room-composition/p78-extra-bed-required-for-third-adult.js";
-import { enforceCompositionCountsConsistent } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
+import {
+  enforceCompositionCountsConsistent,
+  enforceNightOverridesWithinStay,
+} from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -106,6 +109,18 @@ export type RoomCompositionServiceInput = {
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;
+  /** Per-night meal-plan overrides — ISO dates inside this room's stay. */
+  nightMealOverrides?: Array<{
+    date: string;
+    mealPlanCpCount?: number;
+    mealPlanMaplCount?: number;
+    mealPlanMapdCount?: number;
+    mealPlanApCount?: number;
+    mealPlanOthersCount?: number;
+    othersBreakfastPax?: number;
+    othersLunchPax?: number;
+    othersDinnerPax?: number;
+  }>;
 };
 
 export async function createQuotation(
@@ -319,6 +334,7 @@ export async function createQuotation(
     // are null so partially-filled draft submissions can still succeed.
     for (const c of input.roomCompositions) {
       const roomNumber = numberByRoomId.get(c.roomId) ?? null;
+      const nightOverrides = (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) }));
       enforceExtraBedForThirdAdult({
         roomNumber,
         adultCount: c.adultCount,
@@ -336,11 +352,24 @@ export async function createQuotation(
         mealPlanMapdCount: c.mealPlanMapdCount,
         mealPlanApCount: c.mealPlanApCount,
         mealPlanOthersCount: c.mealPlanOthersCount,
+        // Each overridden night has to satisfy the occupancy ceiling on its own.
+        nightMealOverrides: nightOverrides,
       });
+      // Reject a plan pinned to a night outside the stay — it would silently never price.
+      enforceNightOverridesWithinStay(
+        {
+          roomNumber,
+          nightMealOverrides: nightOverrides,
+          startDate: c.startDate ? new Date(c.startDate) : stay?.checkIn ?? null,
+          endDate: c.endDate ? new Date(c.endDate) : stay?.checkOut ?? null,
+        },
+        nightsForPricing,
+      );
     }
 
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
+        nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
         occupantCount: c.occupantCount,
         adultCount: c.adultCount,
         cnb6To10Count: c.cnb6To10Count,
@@ -458,6 +487,17 @@ export async function createQuotation(
                   serviceCharge: Number(r.serviceCharge.toFixed(2)),
                   gst: Number(r.gst.toFixed(2)),
                   total: Number(r.total.toFixed(2)),
+                  // Meals across the stay + the night-by-night split. Only differs from
+                  // `perNightMeals × nights` when the room has per-date plans; carried so the
+                  // desk, the PDFs and the kitchen can show WHICH night differed and by how
+                  // much, instead of just a total that doesn't reconcile to the nightly rate.
+                  mealsSubtotal: Number(r.mealsSubtotal.toFixed(2)),
+                  perNightMeals: Number(r.perNightMeals.toFixed(2)),
+                  perNightMealBreakdown: r.perNightMealBreakdown.map((n) => ({
+                    date: n.date,
+                    meals: Number(n.meals.toFixed(2)),
+                    overridden: n.overridden,
+                  })),
                 })),
               }
             : null,

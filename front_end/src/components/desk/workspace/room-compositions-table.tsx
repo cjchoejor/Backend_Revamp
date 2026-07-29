@@ -149,7 +149,10 @@ export function RoomCompositionsTable({
   entryChildAges,
   initial,
   onChange,
+  onOpenRoomInBoard,
 }: {
+  /** Set by the planner — clicking a room number opens that room alone in the guest board. */
+  onOpenRoomInBoard?: (roomId: string) => void;
   sealedRoomIds: string[];
   entryCheckIn?: string | null;
   entryCheckOut?: string | null;
@@ -331,6 +334,18 @@ export function RoomCompositionsTable({
     });
   };
 
+  // Per-night overrides carried in from the board, keyed by room. Read from the mount-time
+  // seed only — same lifetime rule as the rest of `initial`.
+  const nightOverridesBySeedRoom = useMemo(
+    () =>
+      new Map(
+        (initialRef.current ?? [])
+          .filter((c) => (c.nightMealOverrides?.length ?? 0) > 0)
+          .map((c) => [c.roomId, c.nightMealOverrides]),
+      ),
+    [],
+  );
+
   // Emit on every change. Occ is derived, so invariant (1) of Policy 79 holds by
   // construction; invariant (2) (plan pax ≤ occ) is warned inline and enforced server-side.
   useEffect(() => {
@@ -364,6 +379,13 @@ export function RoomCompositionsTable({
           serviceChargeApplies: r.sc,
           gstApplies: r.gst,
           isFoc: r.foc,
+          // Per-night meal overrides are a guest-board concept — this grid has no column for
+          // them. Carry the seed's through untouched so a board → table → board round trip
+          // doesn't quietly delete the operator's per-date plans. The board re-derives them
+          // from chip placement on its next emit, so a stale carry-through can't win.
+          ...(nightOverridesBySeedRoom.get(id)?.length
+            ? { nightMealOverrides: nightOverridesBySeedRoom.get(id) }
+            : {}),
         };
       });
     onChange(out);
@@ -633,7 +655,14 @@ export function RoomCompositionsTable({
               const overCap = cap != null && occ > cap + cnt(r.bed);
               return (
                 <tr key={id} className={r.foc ? "foc" : undefined}>
-                  <td className="room">
+                  {/* The room cell doubles as "open this room in the guest board". Deliberately
+                      the room cell and not the whole row: a row-level handler would fire on
+                      every cell click and fight the grid's own editing/navigation. */}
+                  <td
+                    className={`room${onOpenRoomInBoard ? " opens" : ""}`}
+                    onClick={onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
+                    title={onOpenRoomInBoard ? "Open this room on its own in the guest board" : undefined}
+                  >
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}
                   </td>

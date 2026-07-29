@@ -56,7 +56,7 @@ const S1: StageBackend = {
   ],
   policies: [
     { name: "Policy 1 — entry status & stage gates", ref: "p01-s1-entry-status-and-stage-gates.ts", detail: "Park requires ACTIVE; unpark requires PARKED; blocks actions on EXPIRED entries." },
-    { name: "Park allowed-stages guard", ref: "p01-entry-park-allowed-stages.ts", detail: "Entry-level park/unpark is valid only at S1 or S2." },
+    { name: "Park allowed-stages guard", ref: "p01-entry-park-allowed-stages.ts", detail: "Park is valid from any live stage (Part 3 §3.2.8); a PARKED booking can't be progressed until it's resumed." },
     { name: "Optimistic-lock match", ref: "p01-entry-version-optimistic-lock-match.ts", detail: "Rejects stage progression if the client's entry version is stale." },
     { name: "Availability query params", ref: "p01-availability-query-params-s1.ts", detail: "Validates the dates / guest-count / room-type of an availability search." },
     { name: "Policy 3 — initial custodian assignment", ref: "p03-initial-custodian-assignment.ts", detail: "Assigns the owning actor from sourceChannel; throws on an unknown channel." },
@@ -70,7 +70,7 @@ const S1: StageBackend = {
     { name: "Pricing pipeline (indicative)", ref: "engines/pricing-pipeline-engine.ts", detail: "Attaches an indicative-only nightly rate to the availability result (not a quote)." },
   ],
   workersTimers: [
-    { name: "W20 — Entry expiry", ref: "ENTRY_EXPIRY · w20-entry-expiry-worker.ts", detail: "Expires the entry if it sits at S1 past its TTL. Paused on park, re-armed on unpark." },
+    { name: "W20 — Entry expiry", ref: "ENTRY_EXPIRY · w20-entry-expiry-worker.ts", detail: "Expires the entry if it sits at S1 past its TTL. Park swaps that short clock for the long park-expiry one; unpark restores it at S1 only (no later stage carries an entry-expiry timer)." },
     { name: "W1 — Stage-dwell monitor", ref: "STAGE_DWELL_MONITOR · w1-stage-dwell-monitor.ts", detail: "Fires dwell warnings/escalations and marks availability results stale." },
     { name: "W16 — Processing-lock expiry", ref: "PROCESSING_LOCK_TTL · w16-processing-lock-expiry-worker.ts", detail: "Releases the S1 processing lock if it is not cleared within its TTL." },
   ],

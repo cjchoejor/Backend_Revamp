@@ -20,6 +20,7 @@ import { enforceApartmentCommercialFieldsForS1Exit } from "../policies/13-billin
 import { enforceConferenceSpaceAllocationForS1Exit } from "../policies/27-work-order/p67-conference-s1-exit-space-gates.js";
 import { enforceEntryAtS1ForAutoFulfilS2ToS3 } from "../policies/01-availability/p01-entry-at-s1-for-auto-fulfil-s2-to-s3.js";
 import { enforceEntryAtS1ForS1ToS2Progression } from "../policies/01-availability/p01-s1-entry-status-and-stage-gates.js";
+import { enforceEntryActiveForStageTransition } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { scheduleS2StageDwellWarningMonitor } from "../lib/schedule-s2-dwell-warning-monitor.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 
@@ -35,6 +36,7 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS1ForS1ToS2Progression({ status: entry.status, currentStage: entry.currentStage });
+  enforceEntryActiveForStageTransition({ status: entry.status });
   if (clientVersion == null) throw new ValidationError("version is required");
   if (entry.version !== clientVersion) throw new ValidationError("version mismatch");
 
