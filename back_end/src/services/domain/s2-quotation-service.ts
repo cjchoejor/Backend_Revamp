@@ -959,6 +959,9 @@ export async function supersedeQuotationWithNewDraft(
     currency?: string;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
     roomCompositions?: RoomCompositionServiceInput[];
+    /** Legacy booking-wide model. Omit to carry the prior version's forward. */
+    mealPlan?: MealPlanType | null;
+    extraBedCount?: number;
   },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
@@ -977,6 +980,13 @@ export async function supersedeQuotationWithNewDraft(
         : input.requestedDiscount,
     currency: input.currency,
     belowMsrGmWaiver: input.belowMsrGmWaiver ?? null,
+    // Legacy booking-wide model must carry forward too — otherwise regenerating a quote that
+    // was priced on `mealPlan` / `extraBedCount` silently drops those charges from the total.
+    mealPlan: input.mealPlan !== undefined ? input.mealPlan : ((priorTerms.mealPlan as MealPlanType | null | undefined) ?? null),
+    extraBedCount:
+      input.extraBedCount !== undefined
+        ? input.extraBedCount
+        : ((priorTerms.extraBed as { count?: number } | undefined)?.count ?? 0),
     roomCompositions:
       input.roomCompositions !== undefined
         ? input.roomCompositions
