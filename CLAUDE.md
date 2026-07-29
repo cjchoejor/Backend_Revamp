@@ -108,6 +108,7 @@ All design docs live in `docs/`. The canonical references:
 | `docs/policy-wiring-audit-explained.md` | Plain-language walkthrough of the 2026-06-27 policy audit (149 System-A guards + 24 System-B registry policies). Explains System A vs B, what "wired/unwired" means, the shadow-inventory dead-chain case, and shadow-inventory as a concept. Use as reference when someone asks "why is X policy not doing anything?" |
 | `docs/multi-room-bug-hunt.md` | Per-bug status table for the 2026-07-13 multi-room sweep (persistence, pricing, state-machine gaps). Location, description, status, fix date. Read before touching `optionSelected` / `CommittedHold` / `roomAssignments`. |
 | `docs/backend-bug-hunt.md` | Broader 2026-07-13 backend sweep (auth, money precision, atomicity, silent failures). 41 findings ranked by severity, all currently **Open**. Read before touching auth headers, folio balance math, timer scheduling, or money-typed columns. |
+| `docs/rate-mapping-visual.html` | Visual money-flow map (2026-07-28): every rate/amount traced DB table.column → backend computation → API field → UI/PDF, per stage S1–S9, with the 8 confirmed wrong-pull risks flagged (child pricing not applied, meal rates 0 for non-agent, hydration freezing per-room totals from 0, etc.). Open in a browser. Regenerate when pricing code changes. |
 
 When a user asks "what does the spec say about X?", the relevant document above is the source. Quote chapter and verse rather than paraphrasing.
 
@@ -377,6 +378,23 @@ The 13 spec-mandated regression paths (SIG-S2 §1.3, SIG-S4 §3.1, SIG-S5 §1.3,
 All three share the same engine — release hold → cancel timers → supersede invoices → post penalty → refund net → transition entry to CANCELLED/TERMINAL → audit trace.
 
 S3 cancel UI lives on the S3 workspace ([s3-workspace.tsx](front_end/src/components/stages/s3/s3-workspace.tsx)) as a destructive-styled "Cancel booking" card, fronted by a two-step confirm (prompt for reason, then danger-variant confirm).
+
+### Room availability is decided by DATES, never by `currentClaimState` (2026-07-29)
+
+`Room.currentClaimState` is a **NOW snapshot with no date dimension**. It is display/ops state — it must never be used to answer "can this room be booked?", because that question is always about a date range.
+
+The S1 availability engine has worked this way since 2026-07-24 (non-FREE rooms stay in the candidate pool; per-date overlap decides). Policy 26 had not, so `placeCommittedHold` rejected rooms S1 legitimately offered. Three reachable failures: a second forward booking on a room that already held one for other dates; any future booking on a room occupied tonight; and an operator retrying their own hold (attempt 1 pinned the room `COMMITTED_HELD`, attempt 2 failed the FREE check against itself).
+
+**Helper**: [`lib/room-booking-conflicts.ts`](back_end/src/lib/room-booking-conflicts.ts) — `findRoomBookingConflicts(db, { roomIds, checkIn, checkOut, excludeEntryId })` returns overlapping reservations + committed holds with guest/booking context. `endDate` is the **exclusive** checkout, so back-to-back turnover is not a conflict.
+
+**Policy 26** ([p26-committed-hold-inventory-availability.ts](back_end/src/policies/11-committed-hold/p26-committed-hold-inventory-availability.ts)) now splits authority:
+- `enforceNoOverlappingBookingForCommittedHold` — commercial (is someone else booked on these dates?)
+- `enforceCommittedHoldRoomPhysicallyUsable` — physical (blocked / maintenance deadline inside the stay)
+- `enforceCommittedHoldInventoryAvailable` — **deprecated**, retained only for entries with no stay dates
+
+The overlap predicates deliberately **mirror the sibling query in `s1-availability-service.ts`** (reservations by frozen dates; holds by entry dates + PLACED/CONFIRMED + unexpired; both excluding self). Keep the two in step — if S1 offers a room, S3 must accept it. Divergence reintroduces this bug.
+
+Housekeeping readiness (`DEPARTED_DIRTY`) is deliberately **not** a booking gate — same-day turnover is normal. It stays enforced at check-in by the SIG-S6 per-room physical-ready check.
 
 ### Operational policy modules
 

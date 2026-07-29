@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LEGPHEL PMS — Money Flow Map (DB → Backend → Frontend)</title>
+<style>
+  :root {
+    --bg: #f7f5f0; --card: #ffffff; --ink: #1e1a14; --ink2: #5c5342; --line: #e3ddd0;
+    --tbl: #1e5fa8;  --tbl-bg: #e8f1fb;
+    --cfg: #1c7a43;  --cfg-bg: #e6f5ec;
+    --pol: #6a3fa0;  --pol-bg: #f0e9f9;
+    --cmp: #6b6252;  --cmp-bg: #efece5;
+    --hc:  #b3541e;  --hc-bg: #fbeee2;
+    --warn:#a8231e;  --warn-bg:#fdeceb;
+    --ok:  #1c7a43;
+    --pin: #b3541e;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
+  h1 { font-size: 22px; margin: 8px 0 2px; }
+  .sub { color: var(--ink2); margin: 0 0 18px; font-size: 13px; }
+  h2 { font-size: 17px; margin: 44px 0 4px; padding-top: 14px; border-top: 2px solid var(--line); }
+  h2 .st { display:inline-block; background:var(--ink); color:#fff; border-radius:5px; padding:1px 9px; font-size:12px; vertical-align:2px; margin-right:8px; }
+  h3 { font-size: 14px; margin: 22px 0 6px; }
+  .note { color: var(--ink2); font-size: 12.5px; margin: 2px 0 10px; }
+
+  .chip { display:inline-block; border-radius:4px; padding:1px 8px; font-size:12px; font-weight:600; white-space:nowrap; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .chip.tbl { color:var(--tbl); background:var(--tbl-bg); border:1px solid #c4d9f0; }
+  .chip.cfg { color:var(--cfg); background:var(--cfg-bg); border:1px solid #bfe3cd; }
+  .chip.pol { color:var(--pol); background:var(--pol-bg); border:1px solid #d9c9ef; }
+  .chip.cmp { color:var(--cmp); background:var(--cmp-bg); border:1px solid #ddd6c8; }
+  .chip.hc  { color:var(--hc);  background:var(--hc-bg);  border:1px solid #f0d0b4; }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin: 14px 0 6px; align-items:center; font-size:12.5px; }
+
+  .flow { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin: 10px 0; }
+  .flow .ui { font-weight:700; font-size:13.5px; }
+  .flow .ui small { font-weight:400; color:var(--ink2); }
+  .explain { background:#fbf9f4; border:1px solid #eee7d8; border-radius:7px; padding:9px 12px; margin:8px 0 4px; font-size:13px; }
+  .explain b:first-child { color:#8a6d1d; }
+  .chain { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
+  .arrow { color:#b0a68f; font-weight:700; }
+  .step { background:#faf8f4; border:1px solid var(--line); border-radius:6px; padding:5px 9px; font-size:12.5px; max-width:100%; }
+  .step .lbl { color:var(--ink2); font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; display:block; }
+  .step code { font-family: ui-monospace, Consolas, monospace; font-size:12px; }
+  .math { background:#faf8f4; border:1px dashed #cfc6b3; border-radius:6px; padding:8px 12px; margin-top:8px; font-family: ui-monospace, Consolas, monospace; font-size:12.5px; white-space:pre; overflow-x:auto; }
+
+  .warnbox { background:var(--warn-bg); border:1px solid #f2c1be; border-left:4px solid var(--warn); border-radius:8px; padding:10px 14px; margin:10px 0; font-size:13px; }
+  .warnbox b { color:var(--warn); }
+  .flow.risky { border-left:4px solid var(--warn); }
+  .okbox { background:#e6f5ec; border:1px solid #bfe3cd; border-left:4px solid var(--ok); border-radius:8px; padding:10px 14px; margin:10px 0; font-size:13px; }
+
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:12px 0; font-size:13px; }
+  th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:#f1ede3; font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--ink2); }
+  tr:last-child td { border-bottom:none; }
+  td.no { font-weight:700; color:var(--warn); white-space:nowrap; }
+
+  /* floating legend — pinned to the right while scrolling (wide screens only) */
+  #legend-float {
+    position: fixed; top: 64px; right: 14px; z-index: 6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; width: 205px; box-shadow: 0 2px 10px rgba(0,0,0,.06);
+    font-size: 11.5px; display: none;
+  }
+  #legend-float .lt { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink2); margin-bottom: 7px; }
+  #legend-float .li { display: flex; align-items: center; gap: 7px; margin: 6px 0; }
+  #legend-float .li span.desc { color: var(--ink2); line-height: 1.3; }
+  #legend-float .li .chip { font-size: 10.5px; padding: 1px 6px; flex: none; }
+  #legend-float .li .pin { width: 15px; height: 15px; font-size: 9.5px; }
+  /* only when the centered 1080px content leaves enough right-gutter for the panel */
+  @media (min-width: 1520px) { #legend-float { display: block; } }
+
+  nav { position:sticky; top:0; background:rgba(247,245,240,.96); backdrop-filter: blur(4px); border-bottom:1px solid var(--line); padding:8px 0; margin:0 -20px 8px; z-index:5; }
+  nav .wrapn { max-width:1080px; margin:0 auto; padding:0 20px; display:flex; gap:6px; flex-wrap:wrap; }
+  nav a { text-decoration:none; color:var(--ink2); font-size:12px; border:1px solid var(--line); background:var(--card); border-radius:20px; padding:3px 11px; }
+  nav a:hover { color:var(--ink); border-color:#c9bfa8; }
+  .fileref { color:var(--ink2); font-size:11px; font-family: ui-monospace, Consolas, monospace; }
+
+  /* ===== Mock desk UI (mimics the friend's cream desk styling) ===== */
+  .mock { background:#f6f1e7; border:1px solid #ddd3bd; border-radius:10px; padding:14px 16px; margin:12px 0 4px; max-width:640px; }
+  .mock .mtitle { font-size:10.5px; letter-spacing:1px; font-weight:700; color:#7a6a52; text-transform:uppercase; border-bottom:1px solid #e2d8c3; padding-bottom:5px; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+  .mock .mtitle::after { content:""; flex:1; }
+  .mrow { display:flex; align-items:center; gap:8px; margin:7px 0; flex-wrap:wrap; }
+  .mlabel { font-size:11px; color:#7a6a52; min-width:150px; }
+  .mfield { background:#fff; border:1px solid #ddd3bd; border-radius:6px; padding:5px 10px; font-size:13px; min-width:110px; }
+  .mfield.money { font-variant-numeric: tabular-nums; font-weight:600; }
+  .mfield.derived { background:#efe9db; }
+  .mbtn { background:#a44f2b; color:#fff; border-radius:6px; padding:5px 13px; font-size:12.5px; font-weight:600; display:inline-block; }
+  .mbtn.ghost { background:#fff; color:#5c5342; border:1px solid #ddd3bd; }
+  .mbanner { background:repeating-linear-gradient(45deg,#fdf6e3,#fdf6e3 8px,#faf0d8 8px,#faf0d8 16px); border:1px solid #ecd9a8; border-radius:7px; padding:7px 11px; font-size:12.5px; display:flex; justify-content:space-between; align-items:center; }
+  .mtag { font-size:10px; font-weight:700; border-radius:4px; padding:1px 7px; }
+  .mtag.warn { background:#fdf0d4; color:#8a6d1d; border:1px solid #ecd9a8; }
+  .mline { display:flex; justify-content:space-between; gap:8px; padding:5px 2px; border-bottom:1px dashed #e2d8c3; font-size:12.5px; }
+  .mline:last-child { border-bottom:none; }
+  .mline .d small { display:block; color:#9a8a6d; font-size:10.5px; }
+  .mline .a { font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+  .mgrid { display:grid; grid-template-columns:repeat(6,1fr); gap:5px; margin:6px 0; }
+  .mgrid .cell { background:#fff; border:1px solid #ddd3bd; border-radius:5px; padding:3px 6px; font-size:11px; text-align:center; }
+  .mgrid .cell b { display:block; font-size:12.5px; }
+  .mgrid .cell small { color:#9a8a6d; font-size:9.5px; }
+
+  /* ===== Mock PDF page ===== */
+  .pdf { background:#fff; border:1px solid #cfc9bb; box-shadow:0 2px 8px rgba(0,0,0,.07); border-radius:4px; padding:18px 22px; margin:12px 0 4px; max-width:640px; font-size:12.5px; }
+  .pdf .ph { text-align:center; font-weight:800; letter-spacing:.5px; }
+  .pdf .phr { border-top:2px solid #b32d2d; margin:4px 0 10px; }
+  .pdf .pt { text-align:center; font-weight:700; text-decoration:underline; margin:6px 0 10px; font-size:13px; }
+  .pdf table.pb { border:1px solid #c9d0d9; border-radius:0; margin:6px 0; font-size:12px; }
+  .pdf table.pb th, .pdf table.pb td { border-right:1px solid #d9dde3; border-bottom:1px solid #d9dde3; text-align:center; padding:5px 7px; background:#fff; }
+  .pdf .ptotals { text-align:right; margin-top:8px; font-size:12.5px; line-height:1.9; }
+  .pdf .ptotals b { display:inline-block; min-width:90px; text-align:right; }
+
+  /* pins */
+  .pin { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; background:var(--pin); color:#fff; font-size:11px; font-weight:800; flex:none; vertical-align:1px; }
+  .pin.b { background:#1e5fa8; }
+  .pinlist { margin:10px 0 0; }
+  .pinrow { display:flex; gap:10px; margin:12px 0; }
+  .pinrow .pin { margin-top:2px; }
+  .pinrow .body { flex:1; min-width:0; }
+  .pinrow .body .t { font-weight:700; font-size:13px; }
+</style>
+</head>
+<body>
+<nav><div class="wrapn">
+  <a href="#gotchas">⚠ Wrong-pull risks</a>
+  <a href="#origins">Rate origins</a>
+  <a href="#s1">S1</a>
+  <a href="#s2desk">S2 desk</a>
+  <a href="#s2pdf">S2 PDF</a>
+  <a href="#s3">S3</a>
+  <a href="#s4">S4</a>
+  <a href="#s5">S5</a>
+  <a href="#s7">S7</a>
+  <a href="#s8">S8/S9</a>
+</div></nav>
+
+<aside id="legend-float" aria-label="Legend">
+  <div class="lt">Legend</div>
+  <div class="li"><span class="chip tbl">table.column</span><span class="desc">database table</span></div>
+  <div class="li"><span class="chip cfg">config.key</span><span class="desc">admin setting</span></div>
+  <div class="li"><span class="chip pol">registry.*</span><span class="desc">admin policy</span></div>
+  <div class="li"><span class="chip cmp">computed</span><span class="desc">calculated in code</span></div>
+  <div class="li"><span class="chip hc">fallback</span><span class="desc">hardcoded default</span></div>
+  <div class="li" style="margin-top:9px; padding-top:8px; border-top:1px dashed var(--line);"><span class="pin">1</span><span class="desc">desk-screen field</span></div>
+  <div class="li"><span class="pin b">1</span><span class="desc">PDF field</span></div>
+</aside>
+
+<div class="wrap">
+
+<h1>Money Flow Map — where every rate &amp; amount comes from</h1>
+<p class="sub">Traced from the live code on <b>integration-prod-frontend</b> (2026-07-28). Each section shows a <b>mock of the actual screen or PDF</b> with numbered pins <span class="pin">1</span> — below it, each pin is explained twice: first <b>in simple words</b>, then as the exact technical chain (database → backend → screen).</p>
+
+<div class="legend">
+  <b>Legend:</b>
+  <span class="chip tbl">table.column</span> database table
+  <span class="chip cfg">config.key</span> admin setting (ConfigurationEntry)
+  <span class="chip pol">registry.*</span> admin policy (/admin/policies)
+  <span class="chip cmp">computed</span> calculated in code
+  <span class="chip hc">fallback</span> hardcoded default
+</div>
+
+<!-- ============================================================ -->
+<h2 id="gotchas">⚠ Known wrong-pull risks — read this first</h2>
+<div class="explain"><b>In simple words:</b> these are the eight places where the number you see can be wrong today. If a price ever looks off, check this list first — the odds are it's one of these.</div>
+
+<table>
+  <tr><th style="width:28px">#</th><th style="width:30%">What you'd see</th><th>Why it happens</th></tr>
+  <tr>
+    <td class="no">1</td>
+    <td>Night audit posts a <b>Nu 0.00 room charge</b>; the per-room card on the Stay screen shows total 0</td>
+    <td>When the room assignment is created at S5, the system re-calculates the room's frozen price — but it only looks at the <b>negotiated rate the operator typed</b>. If none was typed (the quote used the normal hotel rate), it calculates from <b>0</b> instead of going back to the quote's real price. <span class="fileref">lib/hydrate-room-assignment-composition.ts</span></td>
+  </tr>
+  <tr>
+    <td class="no">2</td>
+    <td><b>Meal plans add Nu 0</b> to the price on walk-in / direct bookings</td>
+    <td>Default meal prices only exist on agent rate cards. A booking with no agent has no meal price source, so CP/MAPL pax get counted but multiplied by 0 — unless the operator types negotiated meal rates per room.</td>
+  </tr>
+  <tr>
+    <td class="no">3</td>
+    <td>The agent's <b>meal-plan package rates and child discount % never apply</b></td>
+    <td><span class="chip tbl">rate_cards.cpRate / mapLunchRate / mapDinnerRate / apRate / cnbPercent</span> are saved in the admin console but no pricing code ever reads them. Only the room base rate + à-la-carte meal add-ons are used.</td>
+  </tr>
+  <tr>
+    <td class="no">4</td>
+    <td><b>Children (CNB 6-10, under-6) cost the same as adults</b> — no child discount anywhere</td>
+    <td>The child pricing rules (<span class="chip pol">registry.child.mealPricing</span>) only fill an "advisory" info block — they never change the actual total. The CNB count fields only validate occupancy; they don't price anything.</td>
+  </tr>
+  <tr>
+    <td class="no">5</td>
+    <td>Label says <b>“per night”</b> but the number is the whole stay</td>
+    <td>The desk shows <span class="chip tbl">quotations.totalAmount</span>. For new composition-priced quotes that column holds the tax-inclusive <b>whole-stay</b> total; for old quotes it was per-night. Same field, two meanings — the label only fits the old one.</td>
+  </tr>
+  <tr>
+    <td class="no">6</td>
+    <td>The old booking-level <b>“Meal plan” dropdown does nothing</b></td>
+    <td>The desk still sends it, but the backend's input validator has no such field and silently deletes it. Only the per-room composition editor actually prices meals.</td>
+  </tr>
+  <tr>
+    <td class="no">7</td>
+    <td>Agent negotiated an <b>all-in price</b>, guest gets billed <b>more</b></td>
+    <td><span class="chip tbl">rate_cards.rateIsTaxInclusive</span> exists but the maths to “remove tax from the all-in price first” isn't wired. A 3,400-all-in rate gets 10% + 5% added on top → ~3,927.</td>
+  </tr>
+  <tr>
+    <td class="no">8</td>
+    <td>Final invoice PDF <b>missing the F&amp;B charges</b></td>
+    <td>Deliberate: the FINAL PDF prints room lines only. F&amp;B / service charges are collected via the folio balance but don't appear on the printed room invoice. Also its service charge + GST are <i>re-calculated at print time</i> from config, not summed from the posted tax lines.</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="origins">The three origins of a room rate</h2>
+<div class="explain"><b>In simple words:</b> every price in the whole system begins as ONE nightly room rate, and that rate can come from exactly three places. Think of it as a ladder — the system starts at the top and stops at the first rung that applies:
+<br><br>
+<b>1. A price the operator typed for that specific room</b> (the “negotiated rate” box in the S2 composition editor) — always wins.<br>
+<b>2. The agent's / company's contracted price</b> — used when the booking is linked to a travel agent or corporate account that has a rate card.<br>
+<b>3. The hotel's own price list</b> (rate plans, adjusted by season) — the default for everyone else.
+</div>
+
+<div class="flow">
+  <div class="ui">① Operator-typed per-room rate</div>
+  <div class="chain">
+    <span class="step"><span class="lbl">typed at S2, stored in</span><code>quotations.commercialTerms.roomCompositions[].negotiatedRoomRate</code></span>
+    <span class="arrow">→</span>
+    <span class="step"><span class="lbl">copied at S5 into</span><span class="chip tbl">room_assignments.negotiatedRoomRate</span></span>
+  </div>
+</div>
+
+<div class="flow">
+  <div class="ui">② Agent / corporate rate card</div>
+  <div class="chain">
+    <span class="step"><span class="lbl">booking linked via</span><span class="chip tbl">inquiries.travelAgentId / corporateAccountId</span></span>
+    <span class="arrow">→</span>
+    <span class="step"><span class="chip tbl">rate_cards.roomBaseRate</span> (or the per-room-type override <span class="chip tbl">room_type_rate_overrides.roomBaseRate</span>)</span>
+    <span class="arrow">+</span>
+    <span class="step"><span class="lbl">meal &amp; bed add-ons</span><span class="chip tbl">rate_cards.breakfastRate / lunchRate / dinnerRate / extraBedRate</span></span>
+  </div>
+  <div class="note fileref">lib/agent-rate-resolution.ts — agent rates skip the minimum-selling-rate (MSR) check because they're contractual.</div>
+</div>
+
+<div class="flow">
+  <div class="ui">③ Hotel rate plan (default)</div>
+  <div class="chain">
+    <span class="step"><span class="chip tbl">rate_plan_registry.baseRate</span></span>
+    <span class="arrow">×</span>
+    <span class="step"><span class="lbl">season</span><span class="chip tbl">season_calendar.rateMultiplier</span></span>
+    <span class="arrow">→</span>
+    <span class="step"><span class="lbl">best plan wins</span><span class="chip cmp">resolvedNightlyRate</span></span>
+    <span class="arrow">→</span>
+    <span class="step"><span class="lbl">discount</span><span class="chip cmp">effectiveRate = nightly × (1 − %/100)</span></span>
+  </div>
+  <div class="note fileref">lib/load-eligible-rate-plans.ts → pricing-pipeline-engine.ts. Discount limits per staff level: <span class="chip pol">registry.discount.actorCeiling</span>.</div>
+</div>
+
+<div class="flow">
+  <div class="ui">Taxes (used at every stage)</div>
+  <div class="explain"><b>In simple words:</b> two admin-set percentages get added to almost every charge — service charge first, then GST calculated on (price + service charge). Both live in the admin console under Financial settings.</div>
+  <div class="chain">
+    <span class="step"><span class="lbl">service charge</span><span class="chip cfg">billing.serviceChargeRate</span> <span class="chip hc">10%</span></span>
+    <span class="step"><span class="lbl">GST</span><span class="chip cfg">billing.salesTaxRate</span> <span class="chip hc">5%</span></span>
+    <span class="step"><span class="chip cmp">svc = price × 10% · gst = (price + svc) × 5%</span></span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1"><span class="st">S1</span> Inquiry — the indicative price banner</h2>
+
+<div class="mock">
+  <div class="mtitle">Workable options</div>
+  <div class="mbanner">
+    <span><span class="pin">1</span>&nbsp; Indicative Nu 1,500/night · Nu 1,500 for 1 nights</span>
+    <span class="mtag warn">not a quote</span>
+  </div>
+  <div class="mrow" style="margin-top:10px">
+    <div class="mfield" style="background:#f3d9cd; border-color:#dfb29d;"><b>Room</b> 26 rooms · <b>Nu 1,500/night</b> available</div>
+    <div class="mfield">202</div><div class="mfield">203</div><div class="mfield">204</div>
+  </div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin">1</span><div class="body">
+    <div class="t">The “Indicative Nu 1,500/night” banner</div>
+    <div class="explain"><b>In simple words:</b> this is just the hotel's own price list, shown early so the receptionist has a ballpark to talk from. The system takes the base rate from the rate-plan table, multiplies by the season factor if one covers the dates, picks the best plan, and multiplies by nights. <b>It ignores agents, discounts and room composition completely</b> — that's why it's tagged “not a quote”.</div>
+    <div class="chain">
+      <span class="step"><span class="chip tbl">rate_plan_registry.baseRate</span> × <span class="chip tbl">season_calendar.rateMultiplier</span></span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="chip cmp">rateAmount, lineTotalIndicative = rate × nights</span></span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="lbl">api</span><code>availableRooms[].pricingIndicative</code></span>
+    </div>
+  </div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2desk"><span class="st">S2</span> Negotiation — the desk screen</h2>
+
+<div class="mock">
+  <div class="mtitle">Per-room composition — Room 202</div>
+  <div class="mgrid">
+    <div class="cell"><small>Occupants</small><b>3</b></div>
+    <div class="cell"><small>Adults</small><b>2</b></div>
+    <div class="cell"><small>CNB 6-10</small><b>1</b> <span class="pin">2</span></div>
+    <div class="cell"><small>CNB &lt;6</small><b>0</b></div>
+    <div class="cell"><small>Extra beds</small><b>1</b> <span class="pin">3</span></div>
+    <div class="cell"><small>FOC</small><b>☐</b> <span class="pin">4</span></div>
+  </div>
+  <div class="mgrid" style="grid-template-columns:repeat(5,1fr)">
+    <div class="cell"><small>CP</small><b>1</b></div>
+    <div class="cell"><small>MAPL</small><b>1</b> <span class="pin">5</span></div>
+    <div class="cell"><small>MAPD</small><b>0</b></div>
+    <div class="cell"><small>AP</small><b>0</b></div>
+    <div class="cell"><small>Others</small><b>0</b></div>
+  </div>
+  <div class="mrow"><div class="mlabel">Negotiated room rate</div><div class="mfield money">1,700.00</div><span class="pin">6</span></div>
+</div>
+
+<div class="mock">
+  <div class="mtitle">Adjust &amp; send · QUO-20260728-0018</div>
+  <div class="mrow"><div class="mlabel">Indicative total (per night)</div><div class="mfield money derived">Nu 1,963.50</div><span class="pin">7</span></div>
+  <div class="mrow"><div class="mlabel">Discount %</div><div class="mfield">10</div><span class="pin">8</span><div class="mfield" style="min-width:60px">basis: negotiation</div></div>
+  <div class="mrow"><span class="mbtn">Send quote to guest</span><span class="mbtn ghost">New round (supersede)</span></div>
+</div>
+
+<div class="mock">
+  <div class="mtitle">Quote history</div>
+  <div class="mline"><span class="d"><b>QUO-20260728-0016</b> <small>Superseded</small></span><span class="a">Nu 1,963.50 <span class="pin">7</span></span></div>
+  <div class="mline"><span class="d"><b>QUO-20260728-0018</b> <small>Sent</small></span><span class="a">Nu 1,767.15</span></div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin">2</span><div class="body">
+    <div class="t">CNB 6-10 / under-6 counts</div>
+    <div class="explain"><b>In simple words:</b> these boxes say how many children share the room. Today they are used to check the room isn't over-full — <b>they do not change the price at all</b> (wrong-pull risk #4). A child on a meal plan is charged the same meal rate as an adult.</div>
+    <div class="chain">
+      <span class="step"><span class="lbl">stored in</span><code>roomCompositions[].cnb6To10Count / cnbUnder6Count</code></span>
+      <span class="arrow">→</span>
+      <span class="step">occupancy validation only (Policy 79) — <b>no pricing effect</b></span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">3</span><div class="body">
+    <div class="t">Extra beds</div>
+    <div class="explain"><b>In simple words:</b> each extra bed costs (negotiated bed rate, or the agent card's bed rate, or 0) per night. Note the “or 0”: a walk-in booking with no typed rate adds beds for free. Also: 3+ adults in one room forces at least one extra bed (Policy 78).</div>
+    <div class="chain">
+      <span class="step"><span class="chip cmp">extraBedCount ×</span> (<code>negotiatedExtraBedRate</code> ?? <span class="chip tbl">rate_cards.extraBedRate</span> ?? <span class="chip hc">0</span>)</span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">4</span><div class="body">
+    <div class="t">FOC (free of cost)</div>
+    <div class="explain"><b>In simple words:</b> ticking FOC makes this one room completely free — room, meals, beds, taxes all become 0.00 — while the other rooms still charge normally.</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">5</span><div class="body">
+    <div class="t">Meal plan counts (CP / MAPL / MAPD / AP / Others)</div>
+    <div class="explain"><b>In simple words:</b> these counts are converted into “how many breakfasts / lunches / dinners per night”. CP = breakfast only; MAPL = breakfast+lunch; MAPD = breakfast+dinner; AP = all three. Each meal serving is then priced at (negotiated meal rate, or agent card's à-la-carte rate, or 0). <b>The agent card's package prices (cpRate, apRate…) are never used</b> — risk #3. And with no agent + no typed rates, meals cost 0 — risk #2.</div>
+    <div class="math">breakfasts/night = CP + MAPL + MAPD + AP (+ Others-breakfast pax)
+lunches/night    = MAPL + AP (+ Others-lunch pax)
+dinners/night    = MAPD + AP (+ Others-dinner pax)
+meals money      = Σ pax × (negotiated ?? rate_cards.mealRate ?? 0)</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">6</span><div class="body">
+    <div class="t">Negotiated room rate</div>
+    <div class="explain"><b>In simple words:</b> if the guest haggled a special price for this room, type it here — it beats the agent rate and the hotel rate list for this room only. Left empty, the system falls back to the agent rate, then the hotel rate plan (see “three origins” above).</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">7</span><div class="body">
+    <div class="t">“Indicative total (per night)” + Quote history amounts</div>
+    <div class="explain"><b>In simple words:</b> both show the same saved number: the quotation's <code>totalAmount</code> column. When the quote was priced per room (the new way) that number is the <b>whole-stay total including taxes</b> — e.g. 1,963.50 = 1,700 room + 170 service + 93.50 GST. The label “per night” is left over from the old system and is wrong for these quotes (risk #5). The screen does no maths — it just prints the stored value.</div>
+    <div class="chain">
+      <span class="step"><span class="chip tbl">quotations.totalAmount</span></span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="lbl">api</span><code>entry.quotations[].totalAmount</code></span>
+      <span class="arrow">→</span>
+      <span class="step">displayed verbatim, 2 decimals</span>
+    </div>
+    <div class="math">HOW totalAmount was written:
+  per-room composition quote → Σ each room's (room + beds + meals) × nights + svc + gst   ← STAY total
+  old flat quote             → effectiveRate × roomCount                                  ← per NIGHT</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">8</span><div class="body">
+    <div class="t">Discount %</div>
+    <div class="explain"><b>In simple words:</b> the percentage is taken off the <b>nightly room rate first</b>, and then everything is recalculated from that cheaper rate — beds, meals, service charge and GST all shrink with it. Example: 1,700 → 1,530, so the total goes 1,963.50 → 1,767.15. Each staff level has a maximum % they may give (set in /admin/policies); going over it needs a higher level. Applying a discount also throws away any already-generated PDF so the guest can never receive an old price.</div>
+    <div class="chain">
+      <span class="step"><span class="lbl">ceiling</span><span class="chip pol">registry.discount.actorCeiling</span></span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="chip cmp">effectiveRate = nightly × (1 − %/100)</span></span>
+      <span class="arrow">→</span>
+      <span class="step">whole composition re-priced → new <span class="chip tbl">quotations.totalAmount</span>, PDF revision bumped</span>
+    </div>
+  </div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2pdf"><span class="st">S2</span> Quotation PDF — what the guest receives</h2>
+
+<div class="pdf">
+  <div class="ph">LEGPHEL HOTEL</div>
+  <div class="phr"></div>
+  <div class="pt">QUOTATION</div>
+  <table class="pb">
+    <tr><th>Date</th><th>Room No.</th><th>Occupants</th><th>Meal Plan</th><th>Extra Beds</th><th>Amount (Nu.)</th></tr>
+    <tr><td>28-07-2026</td><td>202</td><td>2 adults, 1 child</td><td>1 CP · 1 MAPL <span class="pin">9</span></td><td>1 extra bed</td><td>1,963.50 <span class="pin b">10</span></td></tr>
+  </table>
+  <div class="ptotals">
+    Total Amount (Nu.): <b>1,963.50</b> <span class="pin b">11</span><br>
+    Advance (Nu.): <b>0.00</b> <span class="pin b">12</span><br>
+    FOC (Nu.): <b>0.00</b><br>
+    Total Payable (Nu.): <b>1,963.50</b> <span class="pin b">13</span>
+  </div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin">9</span><div class="body">
+    <div class="t">Row description columns (Occupants · Meal Plan · Extra Beds)</div>
+    <div class="explain"><b>In simple words:</b> these words are built from the composition counts the operator entered — “1 CP · 1 MAPL” literally means one guest on CP, one on MAPL. One row is printed per room (per-room quotes) or per night (old quotes).</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">10</span><div class="body">
+    <div class="t">Row Amount</div>
+    <div class="explain"><b>In simple words:</b> the full stay price of THAT room including taxes — the same per-room total the backend computed at draft time. Printed rows are also snapshotted into the <code>quotation_lines</code> table so there is a permanent record of exactly what was printed.</div>
+    <div class="chain">
+      <span class="step"><code>commercialTerms.compositionTotals.perRoom[].total</code></span>
+      <span class="arrow">→</span>
+      <span class="step">printed + copied into <span class="chip tbl">quotation_lines.amount</span></span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">11</span><div class="body">
+    <div class="t">Total Amount</div>
+    <div class="explain"><b>In simple words:</b> just the sum of the rows above.</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">12</span><div class="body">
+    <div class="t">Advance</div>
+    <div class="explain"><b>In simple words:</b> always 0.00 on a quotation — at S2 no money has been collected yet, and no payment can even be recorded until the folio exists at S3.</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">13</span><div class="body">
+    <div class="t">Total Payable</div>
+    <div class="explain"><b>In simple words:</b> Total − Advance − FOC. On the quotation that's simply the total again.</div>
+  </div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s3"><span class="st">S3</span> Set up — proforma invoice &amp; advance payment</h2>
+
+<div class="mock">
+  <div class="mtitle">Advance payment</div>
+  <div class="mbanner"><span>Received Nu 100.00 <span class="pin">14</span> / required Nu 0.00 <span class="pin">15</span></span><span class="mtag warn">Short Nu 0</span></div>
+  <div class="mrow" style="margin-top:8px"><div class="mlabel">Payment amount</div><div class="mfield">&nbsp;</div><span class="mbtn ghost">Record payment</span></div>
+</div>
+
+<div class="pdf">
+  <div class="pt" style="margin-top:0">PROFORMA INVOICE</div>
+  <div class="ptotals" style="text-align:right">
+    Total Amount (Nu.): <b>1,963.50</b><br>
+    Advance (Nu.): <b>100.00</b> <span class="pin b">16</span><br>
+    Total Payable (Nu.): <b>1,863.50</b>
+  </div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin">14</span><div class="body">
+    <div class="t">“Received Nu …”</div>
+    <div class="explain"><b>In simple words:</b> the sum of every payment recorded IN on this booking's folio. Each “Record payment” click inserts one row into the payments table; this number is just their total.</div>
+    <div class="chain">
+      <span class="step"><span class="chip cmp">Σ</span> <span class="chip tbl">payment_records.amount</span> where direction = IN</span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">15</span><div class="body">
+    <div class="t">“required Nu …”</div>
+    <div class="explain"><b>In simple words:</b> the deposit the hotel demands, from an admin setting. It can differ per booking source (OTA vs agent vs walk-in), and group bookings get it multiplied (default ×2). Setting it to 0 means no deposit is demanded — but if the guest pays anyway, the proforma <b>must be dispatched before confirming</b> (rule added 2026-07-28).</div>
+    <div class="chain">
+      <span class="step"><span class="chip cfg">advancePayment.thresholds</span> — per <span class="chip tbl">inquiries.sourceChannel</span> ?? DEFAULT</span>
+      <span class="arrow">×</span>
+      <span class="step"><span class="chip pol">registry.groupBooking.advancePaymentBoost</span> when group</span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">16</span><div class="body">
+    <div class="t">Advance on the proforma PDF</div>
+    <div class="explain"><b>In simple words:</b> unlike the quotation (always 0), the proforma subtracts what the guest has already paid — same payment rows as pin 14 — so Total Payable is what's still owed.</div>
+  </div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s4"><span class="st">S4</span> Confirm — the freeze</h2>
+
+<div class="explain"><b>In simple words:</b> confirming is the point of no return — the system takes a permanent photocopy of the agreed deal and stores it on the reservation. From here on, everything downstream (night audit, invoices) is supposed to read from this photocopy, not from live settings that might change later.</div>
+
+<div class="flow">
+  <div class="ui">What gets frozen, and from where</div>
+  <div class="chain">
+    <span class="step"><span class="lbl">nightly rate</span><span class="chip tbl">reservations.frozenRate</span> ← <code>commercialTerms.effectiveRate</code> (the post-discount <b>per-night room rate</b> — not the stay total)</span>
+  </div>
+  <div class="chain">
+    <span class="step"><span class="lbl">the whole deal</span><span class="chip tbl">reservations.frozenCommercialTerms</span> ← full terms, including every room's composition and its already-priced totals</span>
+  </div>
+  <div class="chain">
+    <span class="step"><span class="lbl">who pays</span><span class="chip tbl">reservations.frozenBillingModel</span> ← latest <span class="chip tbl">billing_model_transition_records.toModel</span></span>
+  </div>
+</div>
+
+<div class="flow">
+  <div class="ui">Confirmation voucher PDF</div>
+  <div class="explain"><b>In simple words:</b> the voucher lists who sleeps where with which meals — it shows <b>no money</b>. Rows come from the room assignments if they exist; usually at S4 they don't yet, so it falls back to the booking-level adult/child counts with the room number left blank.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s5"><span class="st">S5</span> Arrival prep — per-room totals are frozen onto the assignment</h2>
+
+<div class="mock">
+  <div class="mtitle">Per-room composition (Stay screen)</div>
+  <div class="mline"><span class="d"><b>Room 202</b><small>Occupants: 2 adults, 1 CNB 6-10 · 1 extra bed &nbsp;·&nbsp; Meals: 1 CP · 1 MAPL</small></span><span class="a">Nu 0.00 <span class="pin">17</span></span></div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin">17</span><div class="body">
+    <div class="t">The per-room frozen total — <b style="color:var(--warn)">wrong-pull risk #1, the big one</b></div>
+    <div class="explain"><b>In simple words:</b> when a room is assigned, its composition is copied from the accepted quote onto the assignment row, and the room's price is <b>re-calculated</b> — but the recalculation only knows the <b>typed negotiated rate</b>. If the quote used the hotel rate or agent rate (nothing typed), it recalculates from 0 → the card shows Nu 0.00 and the night audit later posts 0.00 room charges. The correct number already exists (it's inside the frozen deal photocopy at <span class="chip tbl">reservations.frozenCommercialTerms</span>) — the code just doesn't read it.</div>
+    <div class="chain">
+      <span class="step"><code>roomCompositions[roomId]</code> from accepted quote</span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="chip tbl">room_assignments.*</span> (counts, rates, toggles)</span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="chip tbl">room_assignments.frozenSubtotal / frozenTotal</span> = priced from <code>negotiatedRoomRate ?? 0</code> ⚠</span>
+    </div>
+  </div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s7"><span class="st">S7</span> Stay — the live folio</h2>
+
+<div class="mock">
+  <div class="mtitle">Live folio · charges (append-only)</div>
+  <div class="mline"><span class="d">⚙ Night audit room charge · Room 202<small>ROOM_CHARGE · 28-07 · audit</small></span><span class="a">1,700.00 <span class="pin">18</span></span></div>
+  <div class="mline"><span class="d">✎ Dinner — à la carte<small>F_AND_B · 28-07</small></span><span class="a">500.00 <span class="pin">19</span></span></div>
+  <div class="mline"><span class="d">⚙ Service charge (10.00%) on: Dinner<small>SERVICE</small></span><span class="a">50.00 <span class="pin">19</span></span></div>
+  <div class="mline"><span class="d">⚙ GST (5.00%) on: Dinner<small>OTHER</small></span><span class="a">27.50 <span class="pin">19</span></span></div>
+  <div class="mline" style="border-top:1px solid #d8ccb4; font-weight:700"><span class="d">Balance due (from folio)</span><span class="a">2,277.50 <span class="pin">20</span></span></div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin">18</span><div class="body">
+    <div class="t">The nightly room charge</div>
+    <div class="explain"><b>In simple words:</b> every night, the night-audit job posts one room charge per room. For composition bookings it takes the room's frozen stay price and divides by nights (so it's pre-tax); older bookings use the frozen nightly rate from the reservation. This is where risk #1 bites: a 0.00 frozen total → 0.00 nightly charges.</div>
+    <div class="chain">
+      <span class="step"><span class="chip tbl">room_assignments.frozenSubtotal</span> ÷ nights</span>
+      <span class="arrow">fallback</span>
+      <span class="step"><span class="chip tbl">reservations.frozenRate</span></span>
+      <span class="arrow">→</span>
+      <span class="step"><span class="chip tbl">folio_lines.amount</span> (ROOM_CHARGE)</span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">19</span><div class="body">
+    <div class="t">A manual charge and its two automatic tax lines</div>
+    <div class="explain"><b>In simple words:</b> when the operator posts a dinner of 500, the system automatically adds two more lines: 10% service charge (50.00) and 5% GST on 550 (27.50). Three lines total — the folio is append-only, nothing is edited in place.</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin">20</span><div class="body">
+    <div class="t">Balance due</div>
+    <div class="explain"><b>In simple words:</b> one running total, always recomputed by the server: everything charged, minus everything paid in, plus refunds out, minus write-offs. The screen never adds lines up itself — it prints the server's number.</div>
+    <div class="math">folios.outstandingBalance = max(0, Σ folio_lines.amount − Σ payments IN + Σ payments OUT − Σ write-offs)</div>
+  </div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s8"><span class="st">S8/S9</span> Check-out — final invoice &amp; settlement</h2>
+
+<div class="pdf">
+  <div class="ph" style="font-size:12px">LEGPHEL HOTEL · 3 kilo, Phuentsholing</div>
+  <div class="pt">ROOM INVOICE</div>
+  <table class="pb">
+    <tr><th>PARTICULAR</th><th>ROOM NO.</th><th>NIGHT(S)</th><th>RATE (NU.)</th><th>AMOUNT (NU.)</th></tr>
+    <tr><td>Room</td><td>202</td><td>1</td><td>1,700.00</td><td>1,700.00 <span class="pin b">21</span></td></tr>
+  </table>
+  <div class="ptotals">
+    Subtotal: <b>1,700.00</b><br>
+    Service Charge (10%): <b>170.00</b> <span class="pin b">22</span><br>
+    GST (5%): <b>93.50</b><br>
+    Advance: <b>100.00</b><br>
+    Total Payable: <b>1,863.50</b> <span class="pin b">23</span>
+  </div>
+</div>
+
+<div class="pinlist">
+  <div class="pinrow"><span class="pin b">21</span><div class="body">
+    <div class="t">Invoice rows</div>
+    <div class="explain"><b>In simple words:</b> only the ROOM charge lines from the folio are printed — one per room per night. The dinner and its taxes from S7 are <b>not on this PDF</b> (risk #8, by instruction: “room bill only”); the guest pays them through the folio balance at settlement.</div>
+    <div class="chain">
+      <span class="step"><span class="chip tbl">folio_lines</span> where lineType = ROOM_CHARGE</span>
+      <span class="arrow">→</span>
+      <span class="step">printed + snapshotted into <span class="chip tbl">invoice_lines</span></span>
+    </div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">22</span><div class="body">
+    <div class="t">Service charge &amp; GST on the invoice</div>
+    <div class="explain"><b>In simple words:</b> these are <b>recalculated at print time</b> from the admin settings, applied to the room subtotal — they are NOT the tax lines already sitting on the folio. That's fine for room lines (night audit posts them pre-tax), but it means the invoice's tax figures and the folio's posted tax lines are two different calculations.</div>
+  </div></div>
+
+  <div class="pinrow"><span class="pin b">23</span><div class="body">
+    <div class="t">Total Payable · and the “Take payment &amp; settle” amount</div>
+    <div class="explain"><b>In simple words:</b> the invoice's Total Payable = room subtotal + taxes − advance already paid. The settlement screen, however, charges the <b>folio balance</b> (which includes F&amp;B). Paying it inserts a final payment row; when the balance reaches exactly 0 the folio flips to SETTLED and the room is released to housekeeping.</div>
+    <div class="chain">
+      <span class="step"><span class="chip tbl">folios.outstandingBalance</span></span>
+      <span class="arrow">→</span>
+      <span class="step">new <span class="chip tbl">payment_records</span> row (IN)</span>
+      <span class="arrow">→</span>
+      <span class="step">balance recomputed → SETTLED at 0</span>
+    </div>
+  </div></div>
+</div>
+
+<p class="note" style="margin-top:30px">Generated 2026-07-28 from commit <code>998a0ec</code>. Mock screens are simplified recreations of the desk UI, not screenshots — field positions may differ slightly, sources are exact. When pricing code changes, regenerate this map.</p>
+</div>
+</body>
+</html>
