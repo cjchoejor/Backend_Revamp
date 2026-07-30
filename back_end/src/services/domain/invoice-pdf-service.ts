@@ -235,7 +235,7 @@ export async function generateOrLoadInvoicePdf(
       tariffVersion: "T1.0",
     });
 
-    const bytes = await renderHtmlToPdf(html);
+    const bytes = await renderHtmlToPdf(html, { fitToPage: true });
     const checksum = hashSha256(bytes);
     const storageKey = buildStorageKey("proforma-invoice", `${invoiceRef}-v${inv.versionNumber}`, now);
     await writeDocument(storageKey, bytes);

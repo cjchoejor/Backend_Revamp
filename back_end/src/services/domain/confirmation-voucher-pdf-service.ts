@@ -207,7 +207,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
     tariffVersion: "T1.0",
   });
 
-  const bytes = await renderHtmlToPdf(html);
+  const bytes = await renderHtmlToPdf(html, { fitToPage: true });
   const checksum = hashSha256(bytes);
   const storageKey = buildStorageKey(
     "confirmation-voucher",

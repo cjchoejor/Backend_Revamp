@@ -169,7 +169,7 @@ export async function generateCancellationConfirmationPdf(
     tariffVersion: "T1.0",
   });
 
-  const bytes = await renderHtmlToPdf(html);
+  const bytes = await renderHtmlToPdf(html, { fitToPage: true });
   const checksum = hashSha256(bytes);
   await writeDocument(storageKey, bytes);
 

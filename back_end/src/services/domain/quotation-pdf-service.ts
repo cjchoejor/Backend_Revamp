@@ -244,7 +244,7 @@ export async function generateOrLoadQuotationPdf(
     tariffVersion: "T1.0",
   });
 
-  const bytes = await renderHtmlToPdf(html);
+  const bytes = await renderHtmlToPdf(html, { fitToPage: true });
   const checksum = hashSha256(bytes);
   const now = new Date();
   // Revision suffix so a re-render after a price change (operator previewed, then applied a

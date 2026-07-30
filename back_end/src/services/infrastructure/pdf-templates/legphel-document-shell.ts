@@ -108,16 +108,16 @@ export const LEGPHEL_DOCUMENT_CSS = `
     color:rgba(63,74,87,.13);letter-spacing:.22em;pointer-events:none }
 
   /* ---- Print: the card fills the A4 page ------------------------------------------------
-     renderHtmlToPdf already applies 12/14mm page margins, so the screen-preview .sheet padding
-     is dropped and the whole layout is scaled up uniformly (zoom keeps the reference's exact
-     proportions). The mm values are in POST-zoom units: printable area is ~186×271mm, so
-     min-height is 271/1.25 ≈ 216mm in layout coordinates. The card frame stretches to the full
-     page and .dfoot rides the bottom edge via margin-top:auto. The drop shadow is a gallery
-     affordance, not part of the bill, so it goes. */
+     In the reference gallery the card column is minmax(320px,430px), so the card lays out
+     ~386px wide — tall and dense, filling its frame completely. Reproducing that on paper needs
+     a scale factor that depends on each document's content height, so the scaling itself lives
+     in renderHtmlToPdf's fit-to-page pass (it measures the card and picks the pdf scale). Here
+     the print rules only strip the gallery affordances (sheet padding — the pdf call already
+     applies real page margins — and the drop shadow) and turn the card into a column so the
+     fit pass can pin .dfoot to the bottom edge via a min-height it computes. */
   @media print {
-    body { zoom: 1.25 }
     .sheet { padding: 0 }
-    .doc { display:flex; flex-direction:column; min-height:215mm; box-shadow:none }
+    .doc { display:flex; flex-direction:column; box-shadow:none }
     .dfoot { margin-top:auto; padding-top:8px }
   }
 `;
