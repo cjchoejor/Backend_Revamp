@@ -34,9 +34,14 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    // Wait for DOM parsing + any local resource loads to finish. Templates don't fetch any
-    // remote assets (fonts are default, logo is base64) so `load` is sufficient.
+    // Wait for DOM parsing + resource loads. The Legphel document shell @imports its webfonts
+    // (Spectral / IBM Plex), which finish AFTER `load`, so also wait on document.fonts.ready —
+    // capped at 5s so an offline host degrades to the CSS fallback stacks instead of hanging.
     await page.setContent(html, { waitUntil: "load" });
+    await Promise.race([
+      page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready),
+      new Promise((r) => setTimeout(r, 5000)),
+    ]);
     // A4 with 12 mm margins matches the reference bill aspect ratio; tweak per template if
     // a specific document needs a different size.
     const pdf = await page.pdf({

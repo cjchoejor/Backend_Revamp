@@ -10,10 +10,15 @@
  * Family accents (the 3px top border) come from the reference's `.doc.f/.c/.i/.n` modifiers:
  *   f = Fiscal (crimson) · c = Commercial (bronze) · i = Informational (steel) · n = Internal (dashed)
  *
- * FONTS — the reference loads Spectral + IBM Plex from Google Fonts. A rendering Chromium has no
- * guaranteed network access (and `renderHtmlToPdf` must not depend on one), so the stacks keep the
- * reference's own declared fallbacks: Georgia for the serif, system-ui for the sans, and the
- * platform monospace. Drop woff2 files in and swap to @font-face if exact type is ever required.
+ * FONTS — the reference loads Spectral + IBM Plex from Google Fonts, and so does this shell (the
+ * same @import). When the rendering host is offline the stacks degrade to the reference's own
+ * declared fallbacks (Georgia / system-ui / platform mono) instead of failing the render.
+ *
+ * PRINT — the reference shows these cards as small gallery previews (~10.5px base). Printed
+ * unscaled on A4 that leaves the card floating small on a mostly-empty page, so the print rules
+ * at the bottom of the CSS scale the card up uniformly (CSS zoom keeps every proportion of the
+ * reference intact) and stretch the card's frame to the full printable height, with the footer
+ * pinned to the bottom edge — the card IS the page, exactly like a real bill.
  */
 import { htmlEscape } from "../../../lib/pdf-render-context.js";
 
@@ -30,6 +35,7 @@ const FAMILY_CLASS: Record<DocumentFamily, string> = {
 export type DocumentWatermark = "void" | "copy" | null;
 
 export const LEGPHEL_DOCUMENT_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
   :root {
     --paper:#FDFDFB; --ink:#14161A; --slate:#5A6068; --mute:#8A8F96;
     --rule:#D9D7D1; --hair:#EAE8E3; --wash:#F2F1ED;
@@ -100,6 +106,20 @@ export const LEGPHEL_DOCUMENT_CSS = `
   .doc.copyw::after { content:"COPY";position:absolute;inset:0;display:flex;align-items:center;
     justify-content:center;font-family:var(--serif);font-size:46px;font-weight:700;
     color:rgba(63,74,87,.13);letter-spacing:.22em;pointer-events:none }
+
+  /* ---- Print: the card fills the A4 page ------------------------------------------------
+     renderHtmlToPdf already applies 12/14mm page margins, so the screen-preview .sheet padding
+     is dropped and the whole layout is scaled up uniformly (zoom keeps the reference's exact
+     proportions). The mm values are in POST-zoom units: printable area is ~186×271mm, so
+     min-height is 271/1.25 ≈ 216mm in layout coordinates. The card frame stretches to the full
+     page and .dfoot rides the bottom edge via margin-top:auto. The drop shadow is a gallery
+     affordance, not part of the bill, so it goes. */
+  @media print {
+    body { zoom: 1.25 }
+    .sheet { padding: 0 }
+    .doc { display:flex; flex-direction:column; min-height:215mm; box-shadow:none }
+    .dfoot { margin-top:auto; padding-top:8px }
+  }
 `;
 
 /** The masthead — logo disc, name, address + TPN line. Matches `.dmast` in the reference. */
@@ -149,7 +169,10 @@ export function mastheadFromHotelProfile(hotel: {
     hotelName: hotel.hotelName,
     addressLine,
     taxLine: taxParts.length > 0 ? taxParts.join(" · ") : null,
-    logoDataUri: hotel.logoDataUri,
+    // Deliberately NOT the HotelProfile PNG: the house format's mark is the "ལེ" glyph disc
+    // (operator ruling 2026-07-30 — "keep it like in the html, same to same"). The shell still
+    // supports an image for any future document that opts in explicitly.
+    logoDataUri: null,
   };
 }
 
