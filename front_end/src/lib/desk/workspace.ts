@@ -143,13 +143,27 @@ export function maxReachableOrder(entry: EntryDetail): number {
  * checklist. Payment "satisfied" is approximated from folio payments (the server
  * re-validates the real payment-status on confirm).
  */
-export function s3Readiness(entry: EntryDetail, opts?: { paymentSatisfied?: boolean }): Precondition[] {
+export function s3Readiness(
+  entry: EntryDetail,
+  opts?: { paymentSatisfied?: boolean; totalReceived?: number | null },
+): Precondition[] {
   const folio = entry.folio;
   const hold = entry.committedHold;
   const inPayments = (folio?.payments ?? []).filter(
     (p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""),
   );
-  const proforma = (folio?.invoices ?? []).some((i) => i.invoiceType === "PROFORMA");
+  const proformas = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
+  const proforma = proformas.length > 0;
+  // Mirrors the backend's `enforceProformaDispatchedWhenAdvancePaid` (p40, 2026-07-28): once the
+  // guest has actually paid ANY advance, the proforma must have gone out to them. Keyed on the
+  // amount RECEIVED, not on whether the advance requirement is satisfied — a voluntary payment
+  // against a zero threshold still needs the invoice documented. Without this line the desk
+  // showed all-green (a DRAFT proforma satisfies "on folio") and the freeze then failed with
+  // PROFORMA_INVOICE_NOT_DISPATCHED, which is what "everything is done but it won't seal" was.
+  const advanceReceived = typeof opts?.totalReceived === "number" ? opts.totalReceived : 0;
+  const proformaDispatched = proformas
+    .filter((i) => i.state !== "SUPERSEDED")
+    .some((i) => i.dispatchedAt != null || i.state !== "DRAFT");
   // The advance-payment condition (SIG-S3 Policy 27 / §115) is satisfied by an actual advance
   // payment OR an FOM credit extension (Policy 42). Prefer the authoritative server payment-status
   // flag (which counts the credit extension); fall back to raw folio payments only when it hasn't
@@ -168,6 +182,10 @@ export function s3Readiness(entry: EntryDetail, opts?: { paymentSatisfied?: bool
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
     { label: "Proforma invoice on folio", met: proforma },
+    {
+      label: "Proforma sent to guest (advance received)",
+      met: advanceReceived > 0 ? proformaDispatched : true,
+    },
     { label: "Advance settled or credit extended", met: advanceSatisfied },
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
@@ -181,11 +199,17 @@ export function s3Readiness(entry: EntryDetail, opts?: { paymentSatisfied?: bool
 }
 
 /** Alias — the confirm step's gate is exactly the S3 exit checklist. */
-export function confirmReadiness(entry: EntryDetail, opts?: { paymentSatisfied?: boolean }): Precondition[] {
+export function confirmReadiness(
+  entry: EntryDetail,
+  opts?: { paymentSatisfied?: boolean; totalReceived?: number | null },
+): Precondition[] {
   return s3Readiness(entry, opts);
 }
 
-export function canConfirm(entry: EntryDetail, opts?: { paymentSatisfied?: boolean }): boolean {
+export function canConfirm(
+  entry: EntryDetail,
+  opts?: { paymentSatisfied?: boolean; totalReceived?: number | null },
+): boolean {
   return entry.currentStage === "S3" && s3Readiness(entry, opts).every((c) => c.met);
 }
 

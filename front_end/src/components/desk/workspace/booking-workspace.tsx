@@ -537,6 +537,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // it is fetched from the moment a folio exists rather than only at S3.
   const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
+  // Amount actually RECEIVED — distinct from `satisfied`. The backend's proforma-dispatch gate
+  // keys on this, because a voluntary advance against a zero threshold still needs the invoice
+  // sent even though the advance requirement already reads as satisfied.
+  const totalReceived = paymentStatusQuery.data?.totalReceived ?? null;
 
   // Park expiry — parking cancels the short stage-expiry timer and arms a long PARKING_FOLLOW_UP
   // one in its place (SIG-S1 §3.4: a parked booking still expires, just on a 30-day window). The
@@ -718,7 +722,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   // Default the viewing pointer once loaded — land on Confirm when it's ready to freeze.
   useEffect(() => {
-    if (entry) setSelected((s) => s ?? (canConfirm(entry, { paymentSatisfied }) ? 4 : currentStepOrder(entry)));
+    if (entry) setSelected((s) => s ?? (canConfirm(entry, { paymentSatisfied, totalReceived }) ? 4 : currentStepOrder(entry)));
   }, [entry]);
 
   const fin = useMemo(
@@ -796,7 +800,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     !stayStepActive &&
     !checkOutStepActive &&
     !confirmedS4Active;
-  const ready = canConfirm(entry, { paymentSatisfied });
+  const ready = canConfirm(entry, { paymentSatisfied, totalReceived });
   // On a sealed booking every step is read-only history — show the outcome, not pending gates.
   const sealedOutcome =
     entry.status === "CANCELLED"
@@ -807,13 +811,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const preconds = sealed
     ? [{ label: sealedOutcome, met: true }]
     : confirmStepActive
-    ? confirmReadiness(entry, { paymentSatisfied })
+    ? confirmReadiness(entry, { paymentSatisfied, totalReceived })
     : inquiryStepActive
       ? s1Readiness(entry)
       : quoteStepActive
         ? s2Readiness(entry)
         : setupStepActive
-          ? confirmReadiness(entry, { paymentSatisfied })
+          ? confirmReadiness(entry, { paymentSatisfied, totalReceived })
           : arrivalStepActive
             ? s5Readiness(entry)
             : checkInStepActive
