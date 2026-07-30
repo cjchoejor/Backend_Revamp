@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEGPHEL PMS — Document System Developer Handbook v0.2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FDFDFB; --ink:#14161A; --slate:#5A6068; --mute:#8A8F96;
+    --rule:#D9D7D1; --hair:#EAE8E3; --wash:#F2F1ED;
+    --crimson:#A81E2D; --bronze:#8A6532; --steel:#3F4A57; --slgrey:#6E7278;
+    --brand:#C0242E;
+    --serif:'Spectral',Georgia,serif;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  html,body{margin:0;padding:0}
+  body{background:#E8E7E3;color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
+    padding:40px 20px 100px}
+  .stage{max-width:960px;margin:0 auto}
+
+  .cover{background:var(--paper);border:1px solid var(--rule);
+    padding:46px 52px 40px;margin-bottom:26px;border-top:4px solid var(--brand)}
+  .cover .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--slgrey);margin:0 0 12px}
+  .cover h1{font-family:var(--serif);font-size:34px;font-weight:700;
+    line-height:1.15;margin:0 0 12px}
+  .cover .sub{font-size:14px;color:#4A4E54;max-width:66ch;line-height:1.7;margin:0 0 18px}
+  .cover .metar{display:flex;flex-wrap:wrap;gap:8px 28px;font-size:11.5px;
+    color:var(--slate);padding-top:14px;border-top:1px solid var(--hair)}
+  .cover .metar b{font-family:var(--mono);font-size:11px;color:var(--ink);font-weight:500}
+
+  .toc{background:var(--paper);border:1px solid var(--rule);padding:20px 26px;
+    margin-bottom:34px;display:grid;grid-template-columns:1fr 1fr;gap:6px 34px}
+  .toc a{color:var(--ink);text-decoration:none;font-size:13px;padding:4px 0;
+    border-bottom:1px solid var(--hair);display:flex;gap:12px}
+  .toc a:hover{color:var(--crimson)}
+  .toc a b{font-family:var(--mono);font-size:11px;color:var(--crimson);font-weight:600;min-width:20px}
+
+  h2.sect{font-family:var(--serif);font-size:24px;font-weight:600;margin:52px 0 6px;
+    scroll-margin-top:24px}
+  h2.sect b{font-family:var(--mono);font-size:13px;color:var(--crimson);
+    font-weight:600;margin-right:12px;vertical-align:3px}
+  p.lede{font-size:13.5px;color:#4A4E54;margin:0 0 20px;max-width:76ch;line-height:1.7}
+  p.lede b{color:var(--ink)}
+
+  .stack{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;
+    background:var(--paper);border:1px solid var(--rule);padding:22px 20px}
+  .sblock{flex:1;min-width:130px;text-align:center;padding:14px 10px;position:relative}
+  .sblock + .sblock::before{content:"→";position:absolute;left:-8px;top:50%;
+    transform:translateY(-50%);color:var(--mute);font-size:15px}
+  .sblock .n{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--mute);display:block;margin-bottom:6px}
+  .sblock .t{font-size:13px;font-weight:600;display:block;line-height:1.35}
+  .sblock .d{font-size:10.5px;color:var(--slate);display:block;margin-top:5px;line-height:1.5}
+  .sblock.hot .t{color:var(--crimson)}
+
+  .zwrap{display:grid;grid-template-columns:minmax(300px,430px) 1fr;gap:26px;align-items:start}
+  .zpage{background:#fff;border:1px solid var(--ink);padding:12px;
+    box-shadow:4px 4px 0 var(--rule)}
+  .zone{border:1px dashed #B9B6AF;margin-bottom:7px;padding:8px 10px;
+    position:relative;min-height:34px;display:flex;align-items:center;
+    font-size:10.5px;color:var(--slate)}
+  .zone:last-child{margin-bottom:0}
+  .zone .zt{position:absolute;top:-1px;left:-1px;background:var(--ink);color:#fff;
+    font-family:var(--mono);font-size:8.5px;font-weight:600;padding:2px 6px;letter-spacing:.06em}
+  .zone.center{justify-content:center;text-align:center}
+  .zone.split{justify-content:space-between;gap:12px}
+  .zone.tall{min-height:84px;align-items:flex-start;padding-top:22px}
+  .zone.right{justify-content:flex-end}
+  .zone .hero{border:1.5px solid var(--crimson);color:var(--crimson);
+    font-family:var(--mono);font-size:10px;font-weight:600;padding:5px 12px}
+  .zrules{display:grid;gap:10px}
+  .zrule{background:var(--paper);border:1px solid var(--rule);padding:12px 16px;
+    font-size:12.5px;line-height:1.6;color:#3A3E44}
+  .zrule b{color:var(--ink)}
+  .zrule .zn{font-family:var(--mono);font-size:10px;color:var(--crimson);font-weight:600;margin-right:8px}
+
+  .wx{display:grid;grid-template-columns:minmax(320px,460px) 1fr;gap:26px;align-items:start}
+  .mk{display:inline-flex;width:15px;height:15px;border-radius:50%;
+    background:var(--ink);color:#fff;font-size:9px;font-weight:600;
+    align-items:center;justify-content:center;vertical-align:1px;
+    font-family:var(--sans);flex-shrink:0}
+  .mk.r{background:var(--crimson)}
+  .mktab{background:var(--paper);border:1px solid var(--rule)}
+  .mkrow{display:grid;grid-template-columns:26px 1fr;gap:10px;
+    padding:10px 14px;border-bottom:1px solid var(--hair);font-size:12px;line-height:1.55}
+  .mkrow:last-child{border-bottom:0}
+  .mkrow .what{color:#3A3E44}
+  .mkrow .what b{color:var(--ink)}
+  .mkrow .src{font-family:var(--mono);font-size:10px;color:var(--crimson);
+    display:block;margin-top:3px}
+
+  .doc{border:1px solid var(--rule);background:#fff;padding:18px 20px;font-size:11px;
+    box-shadow:4px 4px 0 var(--rule)}
+  .doc.f{border-top:3px solid var(--crimson)}
+  .doc.c{border-top:3px solid var(--bronze)}
+  .dmast{text-align:center;padding-bottom:10px;border-bottom:2px solid var(--brand);margin-bottom:10px}
+  .dlogo{width:34px;height:34px;border:1.5px solid var(--brand);border-radius:50%;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-family:var(--serif);font-weight:700;font-size:13px;color:var(--brand);margin-bottom:5px}
+  .dname{font-family:var(--serif);font-size:16px;font-weight:700;letter-spacing:.12em;margin:0}
+  .daddr{font-size:8.5px;color:var(--slate);margin:3px 0 0;line-height:1.55}
+  .daddr b{font-family:var(--mono);font-size:8.5px;color:var(--ink);font-weight:500}
+  .dtitle{text-align:center;margin:10px 0}
+  .dtitle h3{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.22em;
+    text-transform:uppercase;margin:0;padding-bottom:3px;border-bottom:1.2px solid var(--ink)}
+  .doc.f .dtitle h3{color:var(--crimson);border-color:var(--crimson)}
+  .dtitle .strip{display:block;font-size:8px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--crimson);font-weight:600;margin-top:4px}
+  .dl{display:flex;justify-content:space-between;gap:10px;padding:2.5px 0;color:#2E3238;font-size:10px}
+  .dl .k{color:var(--slate)}
+  .dl .v{font-family:var(--mono);font-size:9.5px;text-align:right}
+  .dl .v.b{font-weight:600}
+  .dl.tot{border-top:1px solid var(--ink);margin-top:4px;padding-top:5px}
+  .dl.tot .k{font-size:8px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--ink)}
+  .dl.tot .v{font-weight:700;font-size:11px;color:var(--brand)}
+  .dnote{margin-top:7px;padding:5px 8px;font-size:8.5px;line-height:1.55;color:var(--ink);
+    border-left:2px solid var(--crimson)}
+  .dnote.q{border-left-color:var(--rule);color:var(--slate)}
+  .dfoot{font-family:var(--mono);font-size:7.5px;color:var(--mute);margin-top:8px;
+    display:flex;justify-content:space-between;gap:8px}
+  .dsec{border-top:1px solid var(--hair);margin-top:8px;padding-top:7px}
+  .dbank{display:flex;flex-wrap:wrap;gap:3px 14px;font-size:8.5px;color:var(--slate)}
+  .dbank b{font-family:var(--mono);font-size:8px;color:var(--ink);font-weight:500}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{background:var(--paper);border:1px solid var(--rule);padding:18px 20px}
+  .card h3{font-family:var(--serif);font-size:16px;font-weight:600;margin:0 0 10px}
+  .card p{font-size:12px;line-height:1.6;color:#3A3E44;margin:0 0 8px}
+  .card p:last-child{margin-bottom:0}
+  .card code{font-family:var(--mono);font-size:10.5px;background:var(--wash);padding:1px 4px}
+  .card pre{font-family:var(--mono);font-size:10.5px;line-height:1.7;background:var(--wash);
+    padding:10px 13px;margin:8px 0;overflow-x:auto}
+  .full{grid-column:1/-1}
+
+  table{width:100%;border-collapse:collapse;font-size:12px;background:var(--paper)}
+  th{font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--slate);
+    font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid var(--ink)}
+  td{padding:8px 12px;border-bottom:1px solid var(--hair);vertical-align:top;
+    line-height:1.5;color:#3A3E44}
+  tr:last-child td{border-bottom:0}
+  td b{color:var(--ink)}
+  td code,th code{font-family:var(--mono);font-size:10.5px;background:var(--wash);padding:0 3px}
+  .tabwrap{border:1px solid var(--rule);overflow-x:auto}
+
+  .chip{font-size:10px;font-weight:600;padding:2px 8px;border:1px solid;border-radius:2px;
+    white-space:nowrap;display:inline-block}
+  .chip.f{border-color:var(--crimson);color:var(--crimson)}
+  .chip.c{border-color:var(--bronze);color:var(--bronze)}
+  .chip.i{border-color:var(--steel);color:var(--steel)}
+  .chip.n{border-color:var(--slgrey);color:var(--slgrey);border-style:dashed}
+
+  .check{counter-reset:ck;display:grid;gap:10px}
+  .ckitem{background:var(--paper);border:1px solid var(--rule);padding:13px 16px 13px 52px;
+    position:relative;font-size:12.5px;line-height:1.6;color:#3A3E44}
+  .ckitem::before{counter-increment:ck;content:counter(ck,decimal-leading-zero);
+    position:absolute;left:14px;top:13px;font-family:var(--mono);font-size:12px;
+    font-weight:600;color:var(--crimson)}
+  .ckitem b{color:var(--ink)}
+
+  @media (max-width:820px){
+    body{padding:20px 12px 60px}
+    .cover{padding:28px 22px}
+    .toc{grid-template-columns:1fr}
+    .zwrap,.wx,.cards{grid-template-columns:1fr}
+    .stack{flex-direction:column}
+    .sblock + .sblock::before{content:"↓";left:50%;top:-10px;transform:translateX(-50%)}
+  }
+  @media print{
+    body{background:#fff;padding:0;font-size:10pt}
+    .cover,.card,.zrule,.mktab{border-color:#999}
+    h2.sect{page-break-after:avoid}
+    .wx,.zwrap{page-break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+
+<!-- ═══════════ COVER ═══════════ -->
+<div class="cover">
+  <p class="kicker">LEGPHEL PMS · DFG-001 Companion · Developer Report</p>
+  <h1>The Document System, in One Place</h1>
+  <p class="sub">Everything the PMS prints, sends, and records — the law it obeys, the arithmetic it runs, the <b>30 documents</b> it produces, the psychology that shapes them, and the one grid they all share. Two fully annotated documents show exactly how the guideline lands on the page, marker by marker. The normative text is <b>DFG-001 v0.2</b>; this handbook is the version you read first.</p>
+  <div class="metar">
+    <span>Version <b>v0.2 DRAFT</b></span>
+    <span>Date <b>28 Jul 2026</b></span>
+    <span>Audience <b>Development team</b></span>
+    <span>Decisions <b>D-12–D-24 locked · §15 of the guideline</b></span>
+    <span>Numbering <b>Provisional (session pending)</b></span>
+  </div>
+</div>
+
+<!-- ═══════════ TOC ═══════════ -->
+<div class="toc">
+  <a href="#s1"><b>01</b> The stack — how it all fits</a>
+  <a href="#s2"><b>02</b> The zone grid — one template, 30 configurations</a>
+  <a href="#s3"><b>03</b> Worked example — Tax Invoice, annotated</a>
+  <a href="#s4"><b>04</b> Worked example — Proforma Invoice, annotated</a>
+  <a href="#s5"><b>05</b> Tax model, rounding, discounts &amp; deposits</a>
+  <a href="#s6"><b>06</b> The 30 documents</a>
+  <a href="#s7"><b>07</b> When documents release (S1–S9)</a>
+  <a href="#s8"><b>08</b> Numbering</a>
+  <a href="#s9"><b>09</b> Revision — how each class changes</a>
+  <a href="#s10"><b>10</b> Compliance — the ten that matter most</a>
+  <a href="#s11"><b>11</b> The eight acceptance tests</a>
+  <a href="#s12"><b>12</b> Build checklist</a>
+  <a href="#s13"><b>13</b> Verify in code · open items · file map</a>
+</div>
+
+<!-- ═══════════ 01 STACK ═══════════ -->
+<h2 class="sect" id="s1"><b>01</b>The stack — how it all fits</h2>
+<p class="lede">Five layers, each constraining the next. Read a document top-down and you can trace every element on it back through this chain. Nothing on any page is a style choice floating free — it is either law, arithmetic, doctrine, psychology, or grid.</p>
+
+<div class="stack">
+  <div class="sblock"><span class="n">Layer 1</span><span class="t">Bhutan GST</span><span class="d">Act + Rules 2026 · 5% from 1 Jan 2026 · no customer exemption</span></div>
+  <div class="sblock"><span class="n">Layer 2</span><span class="t">Tax model</span><span class="d">GST on (rate + 10% service) · ×1.155 · derive down from gross</span></div>
+  <div class="sblock"><span class="n">Layer 3</span><span class="t">30 documents</span><span class="d">4 legal characters · colour-coded · fiscal never revised</span></div>
+  <div class="sblock"><span class="n">Layer 4</span><span class="t">Attention doctrine</span><span class="d">one job · one hero · exceptions get the ink · 8 tests</span></div>
+  <div class="sblock hot"><span class="n">Layer 5</span><span class="t">The zone grid</span><span class="d">10 zones, fixed forever · every document = a configuration</span></div>
+</div>
+
+<!-- ═══════════ 02 ZONE GRID ═══════════ -->
+<h2 class="sect" id="s2"><b>02</b>The zone grid — one template, 30 configurations</h2>
+<p class="lede">Staff read documents <b>spatially</b> before they read them verbally: the price is always bottom-right, the reference always top-right, the policy always above the signature. The grid fixes those positions forever. For development this collapses the build: <b>ten zone components, built once</b> — every document is a zone configuration plus a content mapping.</p>
+
+<div class="zwrap">
+  <div class="zpage">
+    <div class="zone center"><span class="zt">Z1</span>Masthead — logo centred, name, address · TPN always the last line</div>
+    <div class="zone center"><span class="zt">Z2</span>Title + character strip (disclaimer directly beneath when required)</div>
+    <div class="zone split"><span class="zt">Z3</span><span>Parties — always left</span><span style="text-align:right">Doc No · <span style="color:var(--crimson);font-weight:600">Booking Ref</span> · dates · Your ref/PO — always right</span></div>
+    <div class="zone"><span class="zt">Z4</span>Engagement frame — In/Out · Re Check-In rows for split stays</div>
+    <div class="zone tall"><span class="zt">Z5</span>Inventory table — Date · Type/No · Occupants · Meal Plan · Extra Beds · Amount (fixed column order · segment-grouped lines with effective dates)</div>
+    <div class="zone right"><span class="zt">Z6</span><span class="hero">Money ladder — the hero lives here</span></div>
+    <div class="zone"><span class="zt">Z7</span>Terms &amp; policy — full width, always above signature</div>
+    <div class="zone"><span class="zt">Z8</span>Auxiliary — Remittance Block · amenities · please-note (fixed internal order)</div>
+    <div class="zone split"><span class="zt">Z9</span><span>Signature — directly under what it acknowledges</span></div>
+    <div class="zone split"><span class="zt">Z10</span><span>DocNo · BookingRef · E&amp;OE · template ver.</span><span>Page x of y · reprint n</span></div>
+  </div>
+
+  <div class="zrules">
+    <div class="zrule"><span class="zn">RULE 1</span><b>Zones never reorder.</b> A moved zone is worse than a missing one — trained eyes read the old position. No document, present or future, moves a zone.</div>
+    <div class="zrule"><span class="zn">RULE 2</span><b>Unused zones collapse without residue.</b> No empty frames, no placeholder boxes. (This is also the blank test — a printed blank is a perceived error and a fraud surface.)</div>
+    <div class="zrule"><span class="zn">RULE 3</span><b>One renderer component per zone.</b> A document type = zone configuration + content mapping. Build ten components; ship 30 documents.</div>
+    <div class="zrule"><span class="zn">RULE 4</span><b>New documents must fit the grid.</b> If one can't, that's an Architect decision, not designer improvisation.</div>
+    <div class="zrule"><span class="zn">RULE 5</span><b>Template versioning.</b> Every rendered document records its template version (Z10, small). Templates evolve; issued documents stay reproducible. Template version ≠ document revision.</div>
+    <div class="zrule"><span class="zn">PRESETS</span><b>Client types are presets, never formats</b> (D-13). INDIVIDUAL · CORPORATE (+ Your ref/PO, credit terms, accounts contact, optional net-rate column) · GOVERNMENT (corporate + portal ref, own follow-up clock) · AGENCY (rate-silent guest docs). Presets vary zone <i>content</i>; the grid never moves.</div>
+    <div class="zrule"><span class="zn">VOCAB</span><b>Controlled display vocabulary.</b> One canonical name per room type, meal plan, unit, from one config surface. Charge category → component-bill routing. Internal codes never render.</div>
+  </div>
+</div>
+
+<!-- ═══════════ 03 WORKED EXAMPLE — TAX INVOICE ═══════════ -->
+<h2 class="sect" id="s3"><b>03</b>Worked example — Tax Invoice, annotated</h2>
+<p class="lede">The most rule-dense document in the system. Every numbered marker on the page maps to the rule that put it there — statute, tax model, attention doctrine, or grid. This is what "the guideline was used" looks like, element by element.</p>
+
+<div class="wx">
+  <div class="doc f">
+    <div class="dmast">
+      <div class="dlogo">ལེ</div>
+      <div class="dname">LEGPHEL HOTEL</div>
+      <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br>
+      <b>TPN LAC00091 · GST TPN C10082014</b> <span class="mk">1</span></p>
+    </div>
+    <div class="dtitle">
+      <h3>Tax Invoice</h3> <span class="mk r">2</span>
+    </div>
+    <div class="dl"><span class="k">Invoice No <span class="mk">3</span></span><span class="v b">LH/TI/000140</span></div>
+    <div class="dl"><span class="k">Booking Ref <span class="mk">4</span></span><span class="v" style="color:var(--crimson);font-weight:600">LH/26/E/04211</span></div>
+    <div class="dl"><span class="k">Issued <span class="mk">5</span></span><span class="v">15 Oct 2026</span></div>
+    <div class="dsec"></div>
+    <div class="dl"><span class="k">Billed to</span><span class="v b">Pelden Enterprise Pvt. Ltd.</span></div>
+    <div class="dl"><span class="k">Customer TPN <span class="mk">6</span> · Your ref</span><span class="v">2030405060 · PO-2611</span></div>
+    <div class="dsec"></div>
+    <div class="dl"><span class="k">Accommodation · 12 room-nights <span class="mk">7</span></span><span class="v">41,400.00</span></div>
+    <div class="dl"><span class="k">Hall, laundry &amp; transfer</span><span class="v">26,200.00</span></div>
+    <div class="dl" style="font-size:8.5px"><span class="k">Detail per Room Bill …000318 · Services Bill …000201 attached <span class="mk">8</span></span><span class="v"></span></div>
+    <div class="dsec"></div>
+    <div class="dl"><span class="k">Net value of supply <span class="mk">9</span></span><span class="v">58,528.14</span></div>
+    <div class="dl"><span class="k">Service charge 10%</span><span class="v">5,852.81</span></div>
+    <div class="dl"><span class="k">Taxable value</span><span class="v">64,380.95</span></div>
+    <div class="dl"><span class="k">GST @ 5%</span><span class="v">3,219.05</span></div>
+    <div class="dl tot"><span class="k">Total · Nu. <span class="mk r">10</span></span><span class="v">67,600.00</span></div>
+    <div class="dl"><span class="k">Advance applied · LH/MR/26/002903 <span class="mk">11</span></span><span class="v">−40,000.00</span></div>
+    <div class="dl"><span class="k">Balance due</span><span class="v b">27,600.00</span></div>
+    <div class="dnote">GST of Nu. 3,219.05 is included in the total consideration of Nu. 67,600.00. <span class="mk r">12</span></div>
+    <div class="dnote q">Please raise any discrepancy within 7 days. <span class="mk">13</span> Balance via the remittance details below — reference LH/TI/000140.</div>
+    <div class="dfoot"><span>LH/TI/000140 · LH/26/E/04211 · E&amp;OE · T1.0 <span class="mk">14</span></span><span>Page 1 of 1 · original <span class="mk">15</span></span></div>
+  </div>
+
+  <div class="mktab">
+    <div class="mkrow"><span class="mk">1</span><div class="what"><b>Supplier identity + TPN</b> in the masthead, always the last line — the field corporate clients reject invoices for lacking.<span class="src">r.185(3) · Z1</span></div></div>
+    <div class="mkrow"><span class="mk r">2</span><div class="what"><b>"TAX INVOICE"</b> prominent, crimson. Only fiscal documents may carry these words — enforced by document class, not staff memory. Crimson header rule = fiscal, recognisable across a desk.<span class="src">r.185(1) · §10A.5 recognition over recall</span></div></div>
+    <div class="mkrow"><span class="mk">3</span><div class="what"><b>Fiscal serial</b> — no year, no dates, no meaning inside it. Gapless, continuous, allocated at issue inside the same transaction, logged in the issuance register.<span class="src">r.185 "serially numbered" · §6.3, §6.5</span></div></div>
+    <div class="mkrow"><span class="mk">4</span><div class="what"><b>Booking Ref</b> — the mother number, red, always top-right second row. Anyone holding this sheet can name the whole engagement file.<span class="src">§6.1 two-identifier model · §8.1</span></div></div>
+    <div class="mkrow"><span class="mk">5</span><div class="what"><b>Issue date</b> — its own field, distinct from stay dates. Dates render as <b>15 Oct 2026</b>, never 15-10-2026: no locale misparse exists.<span class="src">r.185(2) · §10.3</span></div></div>
+    <div class="mkrow"><span class="mk">6</span><div class="what"><b>Customer TPN + "Your ref / PO"</b> — the corporate preset in action: their reference is what routes this through their accounts process. Unregistered payer above Nu. 50,000 → identity reference or issue blocks.<span class="src">r.185(9)–(10) · §10B.5 preset (D-13)</span></div></div>
+    <div class="mkrow"><span class="mk">7</span><div class="what"><b>Description + quantity</b> at category level — room-nights, covers. Internal codes never print; labels come from the controlled vocabulary. A negotiated discount would render as its own line here.<span class="src">r.185(4)–(5) · §4.5 (D-12) · §10B.4</span></div></div>
+    <div class="mkrow"><span class="mk">8</span><div class="what"><b>Component bills attached</b> as the detail schedule, referenced by number — progressive disclosure: the invoice decides, the attachments itemise.<span class="src">§8.2 · §10A layering</span></div></div>
+    <div class="mkrow"><span class="mk">9</span><div class="what"><b>The ladder derives downward from gross</b>: GST = 67,600 ÷ 21 = 3,219.05. Every line 2dp; a phone calculator reconciles the face. Self-checking documents catch errors at the desk, not at audit.<span class="src">§4.2–4.3 · §10A.6</span></div></div>
+    <div class="mkrow"><span class="mk r">10</span><div class="what"><b>The hero</b> — one loud thing. The GST-inclusive total gets the only large type and the isolation; inclusive-led display is also the price-display law.<span class="src">§10A.1, 10A.3 · r.264(4)</span></div></div>
+    <div class="mkrow"><span class="mk">11</span><div class="what"><b>Advance applied with its receipt number</b> — every money movement points at its evidence. The receipt behind it carries a <code>paymentPurpose</code>; a security deposit would not appear here as consideration.<span class="src">§6.6 · §4.5 (D-20)</span></div></div>
+    <div class="mkrow"><span class="mk r">12</span><div class="what"><b>The GST sentence</b> — stated, not merely derivable. This single line closes both r.185(6) and the s.265(6) misrepresentation exposure.<span class="src">r.185(6) · §3 row 5</span></div></div>
+    <div class="mkrow"><span class="mk">13</span><div class="what"><b>7-day query line</b> — protects the statutory adjustment-note window; the Remittance Block below it carries bank, modes, accounts contact, and the no-surcharge line.<span class="src">Act ss.88–89 · §10B.6 (D-18/19)</span></div></div>
+    <div class="mkrow"><span class="mk">14</span><div class="what"><b>Footline</b>: doc no · booking ref · E&amp;OE · template version. E&amp;OE reserves the correction right; the template version makes the render reproducible forever.<span class="src">Z10 · §10B.2 rule 5</span></div></div>
+    <div class="mkrow"><span class="mk">15</span><div class="what"><b>"original"</b> — and no version number anywhere on the face. One original per supply; any reprint renders COPY full-width; corrections are adjustment notes, never edits.<span class="src">r.188 · §9.2</span></div></div>
+  </div>
+</div>
+
+<!-- ═══════════ 04 WORKED EXAMPLE — PROFORMA ═══════════ -->
+<h2 class="sect" id="s4"><b>04</b>Worked example — Proforma Invoice, annotated</h2>
+<p class="lede">The commercial counterpart — same grid, different character. Watch three things: the disclaimer strip that keeps it legally safe, the zones that collapse because this document doesn't need them, and the revision behaviour it inherits by being bronze instead of crimson.</p>
+
+<div class="wx">
+  <div class="doc c">
+    <div class="dmast">
+      <div class="dlogo">ལེ</div>
+      <div class="dname">LEGPHEL HOTEL</div>
+      <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br>
+      <b>TPN LAC00091 · GST TPN C10082014</b></p>
+    </div>
+    <div class="dtitle">
+      <h3 style="color:var(--bronze);border-color:var(--bronze)">Proforma Invoice</h3>
+      <span class="strip">This is not a tax invoice — a tax invoice will be issued on supply <span class="mk r">1</span></span>
+    </div>
+    <div class="dl"><span class="k">Proforma No <span class="mk">2</span></span><span class="v b">LH/PI/26/000231</span></div>
+    <div class="dl"><span class="k">Booking Ref</span><span class="v" style="color:var(--crimson);font-weight:600">LH/26/E/04236</span></div>
+    <div class="dl"><span class="k">Date</span><span class="v">28 Jul 2026</span></div>
+    <div class="dl"><span class="k">Advance due by <span class="mk r">3</span></span><span class="v b" style="color:var(--crimson)">05 Aug 2026</span></div>
+    <div class="dsec"></div>
+    <div class="dl"><span class="k">To</span><span class="v b">Bhutan Online Booking Travel</span></div>
+    <div class="dl"><span class="k">For guest</span><span class="v">Dr Lakshmi Menon</span></div>
+    <div class="dsec"></div>
+    <div class="dl"><span class="k">Split stay <span class="mk">4</span></span><span class="v">08–09 Sep · Re 12–13 Sep 2026 · 2 nights</span></div>
+    <div class="dl"><span class="k">Deluxe · 3 adults · MAP · per night <span class="mk">5</span></span><span class="v">3,450.00</span></div>
+    <div class="dsec"></div>
+    <div class="dl"><span class="k">Total (incl. service &amp; GST)</span><span class="v">6,900.00</span></div>
+    <div class="dl"><span class="k">Net 5,974.03 · Service 597.40 · GST <i style="font-style:normal;color:var(--mute)">(expected)</i> 328.57 <span class="mk r">6</span></span><span class="v"></span></div>
+    <div class="dl tot"><span class="k">Advance due now · Nu. <span class="mk r">7</span></span><span class="v">3,450.00</span></div>
+    <div class="dl"><span class="k">Balance at checkout</span><span class="v">3,450.00</span></div>
+    <div class="dsec"></div>
+    <div class="dbank"><span class="mk">8</span>&nbsp;
+      <span>Bank <b>Bank of Bhutan, Phuentsholing</b></span>
+      <span>A/C <b>Legphel Hotel · 200108440</b></span>
+      <span>Ref <b>LH/PI/26/000231</b></span>
+      <span>Accounts <b>+975 17 772 393</b></span>
+    </div>
+    <div class="dnote q">No surcharge applies on any payment mode. Cancellation: 45+ days — 100% refund of advance · 30–44 days — 50% · under 30 days — no refund. <span class="mk">9</span> The booking confirms on receipt of the advance; a confirmation voucher follows.</div>
+    <div class="dfoot"><span>LH/PI/26/000231 · LH/26/E/04236 · E&amp;OE · T1.0</span><span>Page 1 of 1 <span class="mk">10</span></span></div>
+  </div>
+
+  <div class="mktab">
+    <div class="mkrow"><span class="mk r">1</span><div class="what"><b>The disclaimer strip</b> — directly under the title, the fixed slot in Z2. A PI states GST <i>expected</i>, never charged; without this line the document invites treatment it cannot legally bear.<span class="src">§3 row 19 · Act s.265(6) exposure closed</span></div></div>
+    <div class="mkrow"><span class="mk">2</span><div class="what"><b>Non-fiscal number</b> — carries the year, resets annually, and is silently replaceable: a renegotiated PI gets a <b>fresh number</b>; the old one is SUPERSEDED in the system and nothing on any face ever says "revised".<span class="src">§6.2 · §9.1 Class 1</span></div></div>
+    <div class="mkrow"><span class="mk r">3</span><div class="what"><b>The action with its date</b>, top-right where the scan lands — "pay by 05 Aug 2026", not courtesy padding. One document, one action.<span class="src">§10A.1, 10A.13</span></div></div>
+    <div class="mkrow"><span class="mk">4</span><div class="what"><b>Split stay expressed, nights filled</b> — the Re Check-In convention kept from the house format; no field ever prints blank.<span class="src">Z4 · §10A.4 blank rule · fixes V4</span></div></div>
+    <div class="mkrow"><span class="mk">5</span><div class="what"><b>Decoded pricing, declared</b> — the production figure 3,984.76155 was net × 1.155 at six decimals; here the inclusive 3,450.00 prints at 2dp and says what it includes. A package rate would render exactly this way: the package <i>is</i> the rate, no synthetic rack anchor.<span class="src">§4, §4.5 (D-12) · fixes V1–V3</span></div></div>
+    <div class="mkrow"><span class="mk r">6</span><div class="what"><b>GST labelled "expected"</b> — the one word that separates a lawful PI from a false representation of tax charged.<span class="src">§3 row 19</span></div></div>
+    <div class="mkrow"><span class="mk r">7</span><div class="what"><b>The hero is the advance</b>, not the total — because the document's one job is to be paid. Hierarchy follows the job, not the biggest number. (Were this a security deposit, the receipt would say so: <code>paymentPurpose</code>, "held as security, refundable".)<span class="src">§10A.1 · §4.5 (D-20)</span></div></div>
+    <div class="mkrow"><span class="mk">8</span><div class="what"><b>Remittance Block in Z8</b> — the standard payment component (D-18): bank, account, modes, <b>accounts contact</b>, and the document number as the transfer reference — which is how receipts auto-match. One component, reused on PI, TI, DN, SoA, and DD.<span class="src">§10B.6</span></div></div>
+    <div class="mkrow"><span class="mk">9</span><div class="what"><b>No-surcharge line + cancellation tiers at the first money conversation</b> — transaction charges are absorbed (D-19), and disputes are violated expectations: the expectation is set before the money moves.<span class="src">§4.5 · §10A.7</span></div></div>
+    <div class="mkrow"><span class="mk">10</span><div class="what"><b>Collapsed zones</b> — no Z5 table (single rate line suffices), no Z9 signature (nothing is acknowledged). Unused zones leave no residue.<span class="src">§10B.2 rule 2</span></div></div>
+  </div>
+</div>
+
+<!-- ═══════════ 05 TAX MODEL ═══════════ -->
+<h2 class="sect" id="s5"><b>05</b>Tax model, rounding, discounts &amp; deposits</h2>
+<div class="cards">
+  <div class="card">
+    <h3>The locked model</h3>
+    <p>GST <b>5%</b> applies on <b>(rate + 10% service charge)</b> — service charge is consideration inside the GST base, not a parallel tax. Effective inclusive multiplier: <code>×1.155</code>.</p>
+    <p><b>No customer exemption exists.</b> Missions, agencies, NGOs all pay 5% (Act ss.308–309); missions and agencies claim their own refund from DRC (ss.154–155). Two fields support them: <code>customerTaxStatus</code>, <code>refundEntitlementRef</code> — plus a refund-pathway note. No exemption toggle anywhere.</p>
+  </div>
+  <div class="card">
+    <h3>Two directions — never mixed</h3>
+    <pre>INCLUSIVE (gross authoritative — current rates)
+  GST     = Gross ÷ 21
+  Taxable = Gross − GST
+  Service = Taxable ÷ 11
+  Net     = Taxable − Service
+
+ADDITIVE (net authoritative)
+  Service = 0.10 × Net          (2dp/line)
+  GST     = 0.05 × (Net+Svc)    (2dp/line)
+  Gross   = sum of the rounded parts</pre>
+  </div>
+  <div class="card full">
+    <h3>Rounding — five rules</h3>
+    <p><b>1.</b> Line-level, 2dp, at posting — columns sum exactly; a calculator reconciles every face. <b>2.</b> Each document derives its ladder from its own gross; where a rollup and components ever differ by a chethrum, the rollup (and at settlement, the invoice) governs. <b>3.</b> Never round an invoice total. <b>4.</b> Settlement rounding is a payment-side event — not consideration, not taxable, receipt-only. <b>5.</b> No "round-off" line on any invoice. Render all money as <code>Nu. 27,610.50</code>.</p>
+  </div>
+  <div class="card full">
+    <h3>Discounts, FOC, deposits, surcharges (D-12 · D-19 · D-20 · D-22)</h3>
+    <p><b>Negotiated discount</b> → shown as a line (r.185(5)); GST on the post-discount amount. <b>Promotional/package</b> → the package <i>is</i> the rate; no synthetic rack anchor. <b>FOC room</b> → rendered "Complimentary per group terms", dash in the amount column (GST character of free supplies → advisor, O15). <b>Post-invoice discount</b> → adjustment note within 7 days. <b>Transaction charges</b> → absorbed; "no surcharge on any payment mode" stated; any future surcharge is a taxable line, advisor first. <b>Security deposit ≠ advance</b> → <code>paymentPurpose</code> on every receipt; deposits render "held as security, refundable"; no GST until applied or forfeited (timing → O2). <b>Late payment</b> → none currently applied; credit terms say so.</p>
+  </div>
+</div>
+
+<!-- ═══════════ 06 REGISTER ═══════════ -->
+<h2 class="sect" id="s6"><b>06</b>The 30 documents</h2>
+<p class="lede">Four legal characters decide everything downstream — colour, numbering class, revision class. <span class="chip f">Fiscal</span> never revised · <span class="chip c">Commercial</span> versionable, silently · <span class="chip i">Informational</span> reprintable · <span class="chip n">Internal</span> immutable once sealed.</p>
+
+<div class="tabwrap"><table>
+  <tr><th>Family</th><th>Documents (series)</th></tr>
+  <tr><td><b>A · Pre-stay</b></td><td><span class="chip c">Quotation Q</span> <span class="chip c">Proforma PI</span> <span class="chip c">Voucher CV</span> <span class="chip c">Amendment Advice AA</span> <span class="chip c">Cancellation CX</span> <span class="chip c">No-Show NS</span> <span class="chip i">Registration RF</span></td></tr>
+  <tr><td><b>B · Fiscal</b></td><td><span class="chip f">Tax Invoice — Final TI</span> <span class="chip f">Tax Invoice — Post-stay TI</span> <span class="chip f">Adjustment Note ∓ AN</span> <span class="chip c">Money Receipt MR*</span> <span class="chip c">Refund Receipt RR*</span> <span class="chip f">Buyer-Created TI (conditional)</span> &nbsp;<i style="font-size:10.5px;color:var(--mute)">* gapless, fiscal-grade rigour, figures + words, paymentPurpose</i></td></tr>
+  <tr><td><b>C · Operational</b></td><td><span class="chip i">Master Bill MB</span> <span class="chip i">Room Bill RB</span> <span class="chip i">F&amp;B Bill FB</span> <span class="chip i">Services Bill SB</span> <span class="chip i">Interim Folio</span> <span class="chip c">Damage Advice DA</span> <span class="chip c">Work Order WO</span> &nbsp;<i style="font-size:10.5px;color:var(--mute)">one folio; component bills are filtered views; MB is the rollup — with a member/room axis for groups and a Group Summary Statement variant</i></td></tr>
+  <tr><td><b>D · Trade</b></td><td><span class="chip c">Commission Statement CS</span> <span class="chip i">Statement of Account SA</span> <span class="chip f">Periodic Billing Invoice TI</span> <span class="chip i">Dispatch Note DN</span> <span class="chip c">Dues Demand Notice DD</span> &nbsp;<i style="font-size:10.5px;color:var(--mute)">SoA carries the aged view; DD is the formal escalation instrument (D-23)</i></td></tr>
+  <tr><td><b>E · Internal</b></td><td><span class="chip n">Night Audit</span> <span class="chip n">Shift Remittance</span> <span class="chip n">Output Tax Register</span> <span class="chip n">Write-Off Memo WM</span> <span class="chip n">Issuance Register</span></td></tr>
+</table></div>
+
+<!-- ═══════════ 07 STAGE MAP ═══════════ -->
+<h2 class="sect" id="s7"><b>07</b>When documents release</h2>
+<div class="tabwrap"><table>
+  <tr><th style="width:150px">Stage</th><th>Releases</th></tr>
+  <tr><td><b>S1</b> Inquiry</td><td>Nothing — the engagement reference (the mother) is allocated; issuance logging begins.</td></tr>
+  <tr><td><b>S2</b> Negotiation</td><td>Quotation — fresh number every round.</td></tr>
+  <tr><td><b>S3</b> Reservation setup</td><td>Proforma Invoice · Money Receipt (advance) · Work Order Confirmation (conference/package). Cancellation terms disclosed no later than here.</td></tr>
+  <tr><td><b>S4</b> Confirmation</td><td>Confirmation Voucher.</td></tr>
+  <tr><td><b>S5</b> Pre-arrival</td><td>No-Show Notice · Cancellation Confirmation + Refund Receipt (S1–S5).</td></tr>
+  <tr><td><b>S6</b> Check-in</td><td>Registration Form · Money Receipt (balance).</td></tr>
+  <tr><td><b>S7</b> In-stay</td><td>Interim Folio Statement · Money Receipt · Periodic Billing Invoice (apartment cycle) · Amendment Advice (on change, S2–S7) · Night Audit (daily).</td></tr>
+  <tr><td><b>S8</b> Checkout</td><td><b>The heavy stage — up to nine documents.</b> Damage Advice · Room/F&amp;B/Services + Master Bill · <b>Tax Invoice per payer</b> · Money Receipt · Dispatch Note (direct-bill) · Refund Receipt. Split payers: two supplies, two invoices, one folio.</td></tr>
+  <tr><td><b>S9</b> Post-stay</td><td>Post-stay Tax Invoice · Adjustment Notes (7-day window) · Commission Statement · Statement of Account (aged view) · <b>Dues Demand Notice</b> (per escalation) · Refund Receipt · Write-Off Memo.</td></tr>
+  <tr><td><b>Cyclical</b></td><td>Shift Remittance (per shift) · Output Tax Register (monthly) · Issuance Register (continuous).</td></tr>
+</table></div>
+
+<!-- ═══════════ 08 NUMBERING ═══════════ -->
+<h2 class="sect" id="s8"><b>08</b>Numbering</h2>
+<div class="cards">
+  <div class="card">
+    <h3>Two identifiers, two jobs</h3>
+    <pre>Booking Ref   LH/26/E/04211   ← mother, constant,
+                                on every document
+Document No   LH/TI/000140    ← this document,
+                                unique, opaque</pre>
+    <p>Non-fiscal: <code>LH/{SER}/{YY}/{NNNNNN}</code>, resets annually. Fiscal (TI, AN): <code>LH/{SER}/{NNNNNN}</code> — no year, continuous, gapless, never reused.</p>
+  </div>
+  <div class="card">
+    <h3>Hard rules</h3>
+    <p><b>Legacy styles are retired</b> — <code>RES…</code>/<code>INV_…</code> are never generated, printed, or accepted; legacy refs live only as a migration lookup field. <b>No meaning inside numbers</b> — no dates, no reservation refs. <b>No revision markers, ever</b> — revision = a fresh number. Receipts (MR/RR) run gapless with a VOID disposition. Reminders carry <b>no series</b> — a per-invoice R-counter in the dispatch log (D-23).</p>
+  </div>
+  <div class="card full">
+    <h3>The allocator (build item)</h3>
+    <p><code>MAX+1</code>, UUIDs, and DB sequences all fail (sequences gap on rollback by design). Required: a <code>DocumentSeries</code> row per series, allocation <b>inside the issue transaction</b> under a row lock, <b>no allocation at draft time</b>, and a permanent <code>DocumentIssuanceRecord</code> per allocation — number, type, entity, actor, timestamp, disposition ∈ {ISSUED, VOID, CANCELLED, SUPERSEDED}. The register is what makes a VOID a non-gap: the sequence is unbroken and every number answers for itself.</p>
+  </div>
+</div>
+
+<!-- ═══════════ 09 REVISION ═══════════ -->
+<h2 class="sect" id="s9"><b>09</b>Revision — how each class changes</h2>
+<p class="lede"><b>A document in a client's hands is a fact.</b> Facts are superseded, adjusted, voided, or reprinted — never quietly rewritten.</p>
+<div class="tabwrap"><table>
+  <tr><th>Mechanism</th><th>Applies to</th><th>Client sees</th><th>System holds</th></tr>
+  <tr><td><b>1 · Silent supersession</b></td><td>Q · PI · CV · WO · CS — and the fresh-instrument family: AA · CX · NS · DA · <b>DD</b> (each event issues anew)</td><td>A new document, fresh number. <b>No R2, no "revised", anywhere.</b> (The Amendment Advice alone states its change — the client asked for it.)</td><td>Supersession link; prior SUPERSEDED, kept forever.</td></tr>
+  <tr><td><b>2a · Adjustment note</b></td><td>Tax invoices — amount/GST wrong</td><td>Original untouched + AN naming the event, the invoice, the GST effect in Nu.</td><td>AN series entry; <b>7-day timer from awareness</b> (Act ss.88–89).</td></tr>
+  <tr><td><b>2b · VOID + fresh</b></td><td>Wholly wrong (party, duplicate)</td><td>Only the correct invoice.</td><td>VOID retained in register, never reused; if dispatched, written disregard recorded.</td></tr>
+  <tr><td><b>2c · Amended invoice</b></td><td>Non-fiscal typo</td><td>Amended invoice, "GST effect: Nu. 0.00", new serial.</td><td>Original CANCELLED, retained (r.191).</td></tr>
+  <tr><td><b>3 · Reprint</b></td><td>Bills · statements · registration</td><td>Same document, reprint ordinal + timestamp; content freezes at folio seal.</td><td>Folio unchanged.</td></tr>
+  <tr><td><b>Receipt rule</b></td><td>MR / RR</td><td>Reissued receipt; money back = Refund Receipt, never a negative.</td><td>VOID in sequence; shift remittance lists the range including voids.</td></tr>
+</table></div>
+
+<!-- ═══════════ 10 COMPLIANCE ═══════════ -->
+<h2 class="sect" id="s10"><b>10</b>Compliance — the ten that matter most</h2>
+<p class="lede">The full 21-row matrix is DFG-001 §3. These are the ten a developer must never break; several are <b>hard gates</b>, not advisories.</p>
+<div class="tabwrap"><table>
+  <tr><th style="width:210px">Rule</th><th>Implementation</th></tr>
+  <tr><td><b>r.185(1)–(5)</b> invoice particulars</td><td>Title, date, supplier + TPN, description + quantity, <b>discount shown when negotiated</b> — fixed zones; internal codes never render.</td></tr>
+  <tr><td><b>r.185(6)</b> GST stated</td><td>The ladder <b>and</b> the sentence: "GST of Nu. X is included in the total consideration of Nu. Y." Missing sentence blocks issue.</td></tr>
+  <tr><td><b>r.185(9)–(10)</b> customer identity</td><td>Registered → TPN required. Unregistered above Nu. 50,000 → identity ref captured <b>or issue blocks</b>.</td></tr>
+  <tr><td><b>"serially numbered"</b></td><td>Gapless allocator + permanent issuance register (§08).</td></tr>
+  <tr><td><b>r.187</b> defective = worthless to client</td><td>The enforcement logic: strictest validation for registered corporates and refund-entitled missions/agencies — their claim depends on this paper.</td></tr>
+  <tr><td><b>r.188</b> one original</td><td>Fiscal documents generate once, carry no version, and every reprint renders <b>COPY</b> full-width. Statements are non-fiscal <i>precisely so they can reprint freely</i>.</td></tr>
+  <tr><td><b>rr.190–191 + ss.88–89</b></td><td>Adjustment Note as a first-class document; <b>7-day timer</b> from awareness with escalation; amended-invoice path for typos.</td></tr>
+  <tr><td><b>rr.195–197</b> reissue SLA</td><td>Customer request record + <b>15-day issue timer</b>; replacements render COPY.</td></tr>
+  <tr><td><b>r.247</b> cash ceiling</td><td>Payment capture <b>blocks cash above Nu. 50,000</b> per supply; the ceiling is stated on the receipt, not the invoice.</td></tr>
+  <tr><td><b>r.264(4) + s.265(6)</b> price display</td><td>Inclusive-led everywhere; the PI carries "not a tax invoice" and GST <i>expected</i> — the two words that keep pre-supply documents lawful.</td></tr>
+</table></div>
+
+<!-- ═══════════ 11 TESTS ═══════════ -->
+<h2 class="sect" id="s11"><b>11</b>The eight acceptance tests</h2>
+<p class="lede">Design review is a checklist, not an opinion. A document ships only when it passes all eight.</p>
+<div class="tabwrap"><table>
+  <tr><th style="width:170px">Test</th><th>Pass condition</th></tr>
+  <tr><td><b>1 · Ten-second</b></td><td>A first-time reader states the document's identity, its one action, and the hero figure within ten seconds.</td></tr>
+  <tr><td><b>2 · Calculator</b></td><td>Every printed column and ladder reconciles on a pocket calculator.</td></tr>
+  <tr><td><b>3 · Squint</b></td><td>Blurred at arm's length, it cannot be mistaken for its confusable neighbour (invoice ≠ statement ≠ proforma).</td></tr>
+  <tr><td><b>4 · Photocopy</b></td><td>One monochrome copy preserves every distinction that matters — never colour alone.</td></tr>
+  <tr><td><b>5 · Fold</b></td><td>Z-folded, the top third identifies the document, the reference, and the money.</td></tr>
+  <tr><td><b>6 · Blank</b></td><td>No unfilled label prints anywhere.</td></tr>
+  <tr><td><b>7 · Pattern</b></td><td>At most one deliberate pattern violation — and it is the thing that must not be missed.</td></tr>
+  <tr><td><b>8 · Phone</b></td><td>Zoomed to width on a phone, identity and hero are legible without pinching or horizontal scrolling — the PDF remains the document; the phone is where it is first read.</td></tr>
+</table></div>
+
+<!-- ═══════════ 12 BUILD ═══════════ -->
+<h2 class="sect" id="s12"><b>12</b>Build checklist</h2>
+<p class="lede">The implementation surface this system asks of the codebase, in a sensible build order.</p>
+<div class="check">
+  <div class="ckitem"><b>Ten zone components + document configurations.</b> One renderer per zone (Z1–Z10); each of the 30 documents is a configuration (occupancy + content mapping). Unused zones collapse without residue.</div>
+  <div class="ckitem"><b>Controlled vocabulary configuration.</b> Canonical names for room types, meal plans, units; charge-category → component-bill routing table. Documents read labels from here only; internal codes cannot reach the render layer.</div>
+  <div class="ckitem"><b>Client-type presets (D-13).</b> INDIVIDUAL / CORPORATE / GOVERNMENT / AGENCY as configuration varying zone content — Your ref/PO, credit terms, accounts contact, net-rate column, rate-silence. Never a second template.</div>
+  <div class="ckitem"><b>Tax engine per §05.</b> Configurable rates with effective dates; both derivation directions; line-level 2dp; the GST sentence generated from the ladder, never typed. Discount lines, FOC rendering, and deposit purpose per §4.5 of the guideline.</div>
+  <div class="ckitem"><b>Series allocator + issuance register.</b> In-transaction, row-locked, issue-time allocation; dispositions ISSUED / VOID / CANCELLED / SUPERSEDED; register append-only and permanent.</div>
+  <div class="ckitem"><b>Document lifecycle states.</b> DRAFT → ISSUED → DISPATCHED → ACKNOWLEDGED → terminal. DRAFT renders a watermark and <b>no serial</b>; the serial exists only from ISSUED.</div>
+  <div class="ckitem"><b>Validation gates at issue.</b> Supplier TPN block · customer TPN (registered) or identity ref (unregistered &gt; 50k) · GST sentence · no blank labels · cash-ceiling check at payment capture · receipt purpose captured (advance / deposit / settlement / recovery).</div>
+  <div class="ckitem"><b>Timers.</b> Adjustment-note 7-day clock from awareness, with escalation before expiry · reissue-request 15-day SLA · validity/due-date timers wired to the printed dates.</div>
+  <div class="ckitem"><b>Receivables follow-up engine (D-23/24).</b> Per-invoice reminder counter (R1, R2 …) writing to the dispatch log; cadence ladder per client preset (government on its own clock); aged SoA view (buckets, days overdue, total outstanding); Dues Demand Notice generation carrying the reminder history as its evidence line.</div>
+  <div class="ckitem"><b>Dispatch &amp; acknowledgement log.</b> Per document: channel, timestamps, delivery/read state, acknowledgement — powers reminders and the SLA timers. WhatsApp templates per DFG-001 §12.2 (Meta-approved, positional variables, read-only once approved).</div>
+  <div class="ckitem"><b>Template versioning.</b> Every render records its template version (Z10). Template update ≠ document revision; issued documents stay reproducible from their own version.</div>
+  <div class="ckitem"><b>File naming &amp; retrieval.</b> <code>LH-TI-000140.pdf</code> style; retrieval by any identifier in seconds — the 15-day SLA is a retrieval problem.</div>
+</div>
+
+<!-- ═══════════ 13 VERIFY / OPEN ═══════════ -->
+<h2 class="sect" id="s13"><b>13</b>Verify in code · open items · file map</h2>
+<div class="cards">
+  <div class="card">
+    <h3>Verify against the codebase first</h3>
+    <p><b>V1</b> Six-decimal money storage/printing (all three production documents). <b>V2</b> <b>Possible double tax</b>: the PI base equals the quotation's output; both multiply by exactly 1.155 — trace one booking through quotation → PI. <b>V3</b> "Amount" column semantics (inclusive, unlabelled). <b>V4</b> Blank fields print. <b>V5</b> Honorific defaulting + name casing. <b>V6</b> Upward computation producing 1-chethrum gaps (6,399.99 vs 6,400.00).</p>
+  </div>
+  <div class="card">
+    <h3>Open (Architect / tax advisor)</h3>
+    <p><b>O1</b> Numbering session. <b>O2</b> Time of supply on advances <b>and security deposits</b> — confirm before Family B locks. <b>O3</b> Schedule IV (apartment long-stay; spa). <b>O4</b> Room number vs type on voucher. <b>O13</b> Stationery ruling. <b>O14</b> Revenue-stamp practice; verification QR. <b>O15</b> Advisor bundle: FOC/deemed supply (s.146) · TDS on corporate/government payments · surcharge &amp; late-fee GST if ever adopted. <b>O16</b> Payment QR (BFS scan-to-pay) on PI/TI.</p>
+  </div>
+  <div class="card full">
+    <h3>File map</h3>
+    <p><b>Normative:</b> <code>DFG-001-Document-Format-Fiscal-Compliance-Guideline (v0.2)</code> — including the <b>§15 Decision Register</b> (L1–L19 foundational locks + D-12–D-24). Where this handbook and the guideline differ, the guideline wins. <b>Specimens</b> (status-flagged in the guideline's annex): tax invoice (superseded — layout instructive) · master bill day-wise (pagination reference) · component bill system + split settlement (current) · corpus atlas (layout current; A1/B1 figures pre-decode) · revision mechanics (doctrine current) · pre-stay set in the house layout (<b>current layout and arithmetic reference</b>). <b>This handbook:</b> v0.2, the reading-first companion; annotated examples §03–§04 are the acceptance demonstration.</p>
+  </div>
+</div>
+
+<p class="lede" style="margin-top:44px;padding-top:18px;border-top:1px solid #CFCDC7">
+One sentence to keep: <b>law decides what must appear, arithmetic decides the numbers, character decides what may change, psychology decides what gets the ink, and the grid decides where everything lives.</b> A developer who can trace any element on any document back through that chain has understood the system.
+</p>
+
+</div>
+</body>
+</html>

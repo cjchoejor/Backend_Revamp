@@ -1,0 +1,1628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEGPHEL PMS — Document Formats: The Complete Thirty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FDFDFB; --ink:#14161A; --slate:#5A6068; --mute:#8A8F96;
+    --rule:#D9D7D1; --hair:#EAE8E3; --wash:#F2F1ED;
+    --crimson:#A81E2D; --bronze:#8A6532; --steel:#3F4A57; --slgrey:#6E7278;
+    --brand:#C0242E;
+    --serif:'Spectral',Georgia,serif;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:#E8E7E3;color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
+    padding:40px 20px 110px}
+  .stage{max-width:1080px;margin:0 auto}
+
+  .cover{background:var(--paper);border:1px solid var(--rule);
+    padding:44px 50px 36px;margin-bottom:24px;border-top:4px solid var(--brand)}
+  .cover .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--slgrey);margin:0 0 12px}
+  .cover h1{font-family:var(--serif);font-size:33px;font-weight:700;line-height:1.15;margin:0 0 12px}
+  .cover .sub{font-size:14px;color:#4A4E54;max-width:72ch;line-height:1.7;margin:0 0 16px}
+  .cover .metar{display:flex;flex-wrap:wrap;gap:8px 26px;font-size:11.5px;color:var(--slate);
+    padding-top:14px;border-top:1px solid var(--hair)}
+  .cover .metar b{font-family:var(--mono);font-size:11px;color:var(--ink);font-weight:500}
+
+  .legend{background:var(--paper);border:1px solid var(--rule);padding:18px 24px;
+    margin-bottom:40px;display:grid;grid-template-columns:1fr 1fr;gap:8px 40px;font-size:12px;color:#3A3E44}
+  .legend h4{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--slate);margin:0 0 6px;grid-column:1/-1}
+  .legend .lrow{line-height:1.7}
+  .legend b{color:var(--ink)}
+
+  .chip{font-size:10px;font-weight:600;padding:1.5px 8px;border:1px solid;border-radius:2px;
+    white-space:nowrap;display:inline-block;vertical-align:1px}
+  .chip.f{border-color:var(--crimson);color:var(--crimson)}
+  .chip.c{border-color:var(--bronze);color:var(--bronze)}
+  .chip.i{border-color:var(--steel);color:var(--steel)}
+  .chip.n{border-color:var(--slgrey);color:var(--slgrey);border-style:dashed}
+
+  h2.fam{font-family:var(--serif);font-size:26px;font-weight:600;margin:58px 0 4px;scroll-margin-top:20px}
+  h2.fam b{font-family:var(--mono);font-size:13px;color:var(--crimson);font-weight:600;margin-right:12px;vertical-align:3px}
+  p.famlede{font-size:13px;color:#4A4E54;margin:0 0 24px;max-width:80ch;line-height:1.7}
+  p.famlede b{color:var(--ink)}
+
+  .dcard{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:0;
+    background:var(--paper);border:1px solid var(--rule);margin-bottom:26px}
+  .dcard .left{padding:20px 22px;border-right:1px solid var(--hair)}
+  .dcard .right{padding:18px 24px}
+  .dhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .dhead .code{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--crimson)}
+  .dhead h3{font-family:var(--serif);font-size:18px;font-weight:600;margin:0}
+  .dhead .ser{font-family:var(--mono);font-size:10.5px;color:var(--slate)}
+
+  .doc{border:1px solid var(--rule);background:#fff;padding:16px 18px;font-size:10.5px;
+    box-shadow:4px 4px 0 var(--rule)}
+  .doc.f{border-top:3px solid var(--crimson)}
+  .doc.c{border-top:3px solid var(--bronze)}
+  .doc.i{border-top:3px solid var(--steel)}
+  .doc.n{border:1.5px dashed var(--slgrey);box-shadow:none}
+  .dmast{text-align:center;padding-bottom:9px;border-bottom:2px solid var(--brand);margin-bottom:9px}
+  .doc.n .dmast{border-bottom-color:var(--slgrey)}
+  .dlogo{width:30px;height:30px;border:1.5px solid var(--brand);border-radius:50%;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-family:var(--serif);font-weight:700;font-size:12px;color:var(--brand);margin-bottom:4px}
+  .dname{font-family:var(--serif);font-size:14.5px;font-weight:700;letter-spacing:.12em;margin:0}
+  .daddr{font-size:8px;color:var(--slate);margin:3px 0 0;line-height:1.55}
+  .daddr b{font-family:var(--mono);font-size:8px;color:var(--ink);font-weight:500}
+  .dtitle{text-align:center;margin:8px 0}
+  .dtitle h5{display:inline-block;font-size:9.5px;font-weight:600;letter-spacing:.2em;
+    text-transform:uppercase;margin:0;padding-bottom:3px;border-bottom:1.2px solid var(--ink)}
+  .doc.f .dtitle h5{color:var(--crimson);border-color:var(--crimson)}
+  .doc.c .dtitle h5{color:var(--bronze);border-color:var(--bronze)}
+  .doc.i .dtitle h5{color:var(--steel);border-color:var(--steel)}
+  .doc.n .dtitle h5{color:var(--slgrey);border-color:var(--slgrey)}
+  .dtitle .strip{display:block;font-size:7.5px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--crimson);font-weight:600;margin-top:3px}
+  .dtitle .strip.mut{color:var(--slgrey)}
+  .dl{display:flex;justify-content:space-between;gap:10px;padding:2px 0;color:#2E3238;font-size:9.5px}
+  .dl .k{color:var(--slate)}
+  .dl .k b{color:var(--ink);font-weight:600}
+  .dl .v{font-family:var(--mono);font-size:9px;text-align:right;white-space:nowrap}
+  .dl .v.b{font-weight:600}
+  .dl .v.red{color:var(--crimson);font-weight:600}
+  .dl.tot{border-top:1px solid var(--ink);margin-top:3px;padding-top:4px}
+  .dl.tot .k{font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--ink)}
+  .dl.tot .v{font-weight:700;font-size:10.5px;color:var(--brand)}
+  .dsec{border-top:1px solid var(--hair);margin-top:7px;padding-top:6px}
+  .dsub{font-size:7.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);
+    font-weight:600;margin:6px 0 3px}
+  .dnote{margin-top:6px;padding:4px 8px;font-size:8px;line-height:1.55;color:var(--ink);
+    border-left:2px solid var(--crimson)}
+  .dnote.q{border-left-color:var(--rule);color:var(--slate)}
+  .dnote.g{border-left-color:var(--slgrey);color:var(--slate)}
+  .dfoot{font-family:var(--mono);font-size:7px;color:var(--mute);margin-top:8px;
+    display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  .dbank{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:8px;color:var(--slate);margin-top:5px}
+  .dbank b{font-family:var(--mono);font-size:7.5px;color:var(--ink);font-weight:500}
+  .sig{display:flex;justify-content:space-between;gap:14px;margin-top:12px}
+  .sig .s{flex:1;border-top:1px solid var(--ink);padding-top:3px;font-size:7.5px;color:var(--slate);text-align:center}
+  .wm{position:relative}
+  .wm::after{content:"DRAFT";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-family:var(--serif);font-size:52px;font-weight:700;color:rgba(168,30,45,.08);
+    letter-spacing:.2em;pointer-events:none}
+
+  table.mini{width:100%;border-collapse:collapse;font-size:8.5px;margin:4px 0}
+  table.mini th{font-size:6.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--slate);
+    font-weight:600;text-align:left;padding:3px 6px;border-bottom:1px solid var(--ink);background:none}
+  table.mini td{padding:3px 6px;border-bottom:1px solid var(--hair);color:#2E3238;line-height:1.4;vertical-align:top}
+  table.mini td.r,table.mini th.r{text-align:right;font-family:var(--mono);font-size:8px;white-space:nowrap}
+  table.mini tr:last-child td{border-bottom:0}
+
+  .spec{display:grid;gap:0;font-size:12px}
+  .sprow{display:grid;grid-template-columns:118px 1fr;gap:14px;padding:9px 0;border-bottom:1px solid var(--hair);line-height:1.6}
+  .sprow:last-child{border-bottom:0}
+  .sprow .sk{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--slate);font-weight:600;padding-top:2px}
+  .sprow .sv{color:#3A3E44}
+  .sprow .sv b{color:var(--ink)}
+  .sprow .sv code{font-family:var(--mono);font-size:10px;background:var(--wash);padding:0 4px}
+  .zline{font-family:var(--mono);font-size:10px;color:var(--ink);letter-spacing:.02em}
+  .zline i{font-style:normal;color:#C4C1BA}
+
+  @media (max-width:900px){
+    body{padding:20px 12px 60px}
+    .cover{padding:26px 20px}
+    .legend{grid-template-columns:1fr}
+    .dcard{grid-template-columns:1fr}
+    .dcard .left{border-right:0;border-bottom:1px solid var(--hair)}
+  }
+  @media print{
+    body{background:#fff;padding:0;font-size:9.5pt}
+    .dcard{page-break-inside:avoid;border-color:#999}
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+
+<!-- ═══════════ COVER ═══════════ -->
+<div class="cover">
+  <p class="kicker">LEGPHEL PMS · DFG-001 v0.2 Companion · Complete Formats Reference</p>
+  <h1>Document Formats — The Complete Thirty</h1>
+  <p class="sub">Every document the system produces, rendered and specified: the format on the left, the specification on the right. All thirty specimens share <b>one coherent data universe</b> — the Pelden Enterprise conference engagement (E/04211), the Lakshmi split-stay agency booking (E/04236), the Nandi quotation (E/04198), and the apartment long-stay cycle — so cross-references between documents are real and every figure reconciles on a calculator. Where this reference and <b>DFG-001 v0.2</b> differ, the guideline wins.</p>
+  <div class="metar">
+    <span>Version <b>v1.0 · 28 Jul 2026</b></span>
+    <span>Doctrine <b>DFG-001 v0.2 · D-12–D-24</b></span>
+    <span>Documents <b>30 across 5 families</b></span>
+    <span>Numbering <b>Provisional pending O1</b></span>
+  </div>
+</div>
+
+<div class="legend">
+  <h4>How to read a card</h4>
+  <div class="lrow"><b>Left — the format.</b> A compact but complete render: every zone the document uses, populated with real engagement data, correct arithmetic, and the character-coloured title rule: <span class="chip f">Fiscal</span> <span class="chip c">Commercial</span> <span class="chip i">Informational</span> <span class="chip n">Internal</span>.</div>
+  <div class="lrow"><b>Right — the specification.</b> Series &amp; numbering class · zone configuration (greyed zones collapse) · mandatory content, with statutory pins where fiscal · revision mechanism · dispatch rule. Zones: <b>Z1</b> masthead · <b>Z2</b> title+strip · <b>Z3</b> parties/refs · <b>Z4</b> engagement frame · <b>Z5</b> table · <b>Z6</b> money ladder · <b>Z7</b> terms · <b>Z8</b> auxiliary/remittance · <b>Z9</b> signatures · <b>Z10</b> footline.</div>
+</div>
+
+<!-- ══════════════════════════════ FAMILY A ══════════════════════════════ -->
+<h2 class="fam"><b>A</b>Family A — Pre-stay</h2>
+<p class="famlede">The commercial conversation before supply. Everything here is <span class="chip c">Commercial</span> or <span class="chip i">Informational</span> — versionable by silent supersession, GST always <i>expected</i>, never charged. The Booking Ref (red) is born at S1 and rides every face from here on.</p>
+
+<!-- A1 QUOTATION -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A1</span><h3>Quotation</h3><span class="chip c">Commercial</span><span class="ser">LH/Q/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Quotation</h5><span class="strip mut">Valid until 12 Aug 2026 · Not a booking confirmation</span></div>
+      <div class="dl"><span class="k">Quotation No</span><span class="v b">LH/Q/26/000512</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04198</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">28 Jul 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">To</span><span class="v b">Nandi Travels &amp; Tours, Jaigaon</span></div>
+      <div class="dl"><span class="k">Attn</span><span class="v">Mr Rajesh Nandi</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Stay</span><span class="v">20 Oct — 22 Oct 2026 · 2 nights</span></div>
+      <table class="mini">
+        <tr><th>Description</th><th class="r">Nights</th><th class="r">Rate / night</th><th class="r">Amount</th></tr>
+        <tr><td>Deluxe · 1 room · 2 adults · MAP</td><td class="r">2</td><td class="r">13,805.25</td><td class="r">27,610.50</td></tr>
+      </table>
+      <div class="dl"><span class="k">Net value</span><span class="v">23,905.19</span></div>
+      <div class="dl"><span class="k">Service charge 10%</span><span class="v">2,390.52</span></div>
+      <div class="dl"><span class="k">GST @ 5% <i style="font-style:normal;color:var(--mute)">(expected)</i></span><span class="v">1,314.79</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">27,610.50</span></div>
+      <div class="dnote q">Rates are inclusive of service charge and GST. Subject to availability at confirmation. A proforma invoice with advance terms follows on acceptance.</div>
+      <div class="dfoot"><span>LH/Q/26/000512 · LH/26/E/04198 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/Q/{YY}/{NNNNNN}</code> — non-fiscal, annual reset. Fresh number every negotiation round.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8 Z9</i> Z10</span> — engagement frame folds into the stay line; no signature (nothing acknowledged).</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv"><b>Validity date</b> in the title strip (the document's one action is "accept before this date") · full ladder with GST marked <i>expected</i> · inclusive-led rate (r.264(4)) · availability caveat. A package rate renders as the rate itself — no synthetic rack anchor (D-12).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 1 silent supersession — renegotiation issues a fresh Q number; prior marked SUPERSEDED in system only.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>QUOTATION</code> / WhatsApp template; PDF attached; validity timer wired to the printed date.</span></div>
+  </div></div>
+</div>
+
+<!-- A2 PROFORMA -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A2</span><h3>Proforma Invoice</h3><span class="chip c">Commercial</span><span class="ser">LH/PI/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Proforma Invoice</h5><span class="strip">This is not a tax invoice — a tax invoice will be issued on supply</span></div>
+      <div class="dl"><span class="k">Proforma No</span><span class="v b">LH/PI/26/000231</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04236</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">28 Jul 2026</span></div>
+      <div class="dl"><span class="k"><b>Advance due by</b></span><span class="v red">05 Aug 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">To</span><span class="v b">Bhutan Online Booking Travel</span></div>
+      <div class="dl"><span class="k">For guest</span><span class="v">Dr Lakshmi Menon</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Split stay</span><span class="v">08–09 Sep · Re 12–13 Sep 2026 · 2 nights</span></div>
+      <div class="dl"><span class="k">Deluxe · 3 adults · MAP · per night</span><span class="v">3,450.00</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Total (incl. service &amp; GST)</span><span class="v">6,900.00</span></div>
+      <div class="dl"><span class="k">Net 5,974.03 · Service 597.40 · GST <i style="font-style:normal;color:var(--mute)">(expected)</i> 328.57</span><span class="v"></span></div>
+      <div class="dl tot"><span class="k">Advance due now · Nu.</span><span class="v">3,450.00</span></div>
+      <div class="dl"><span class="k">Balance at checkout</span><span class="v">3,450.00</span></div>
+      <div class="dbank"><span>Bank <b>Bank of Bhutan, Phuentsholing</b></span><span>A/C <b>Legphel Hotel · 200108440</b></span><span>Ref <b>LH/PI/26/000231</b></span><span>Accounts <b>+975 17 772 393</b></span></div>
+      <div class="dnote q">No surcharge applies on any payment mode. Cancellation: 45+ days — 100% refund of advance · 30–44 days — 50% · under 30 days — no refund. The booking confirms on receipt of the advance; a confirmation voucher follows.</div>
+      <div class="dfoot"><span>LH/PI/26/000231 · LH/26/E/04236 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/PI/{YY}/{NNNNNN}</code> — non-fiscal, annual reset.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 <i>Z5</i> Z6 Z7 Z8 <i>Z9</i> Z10</span> — single rate line replaces the table; Remittance Block occupies Z8.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv"><b>"Not a tax invoice"</b> strip under the title + GST labelled <b>expected</b> (the two lawful-PI markers, s.265(6)) · <b>advance due date top-right</b> — the hero is the advance, because payment is the document's one job · Remittance Block with reference = PI number (§10B.6) · no-surcharge line (D-19) · cancellation tiers at the first money conversation.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 1 — renegotiated terms issue a fresh PI; no marker on any face.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>PROFORMA</code>; advance timer to the due date; receipt auto-matches on the transfer reference.</span></div>
+  </div></div>
+</div>
+
+<!-- A3 VOUCHER -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A3</span><h3>Confirmation Voucher</h3><span class="chip c">Commercial</span><span class="ser">LH/CV/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Confirmation Voucher</h5><span class="strip mut">Booking confirmed — present at check-in</span></div>
+      <div class="dl"><span class="k">Voucher No</span><span class="v b">LH/CV/26/000198</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04236</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">05 Aug 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Guest</span><span class="v b">Dr Lakshmi Menon · 3 adults</span></div>
+      <div class="dl"><span class="k">Booked by</span><span class="v">Bhutan Online Booking Travel</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Check-in</span><span class="v b">08 Sep 2026 · 14:00</span></div>
+      <div class="dl"><span class="k">Check-out</span><span class="v">09 Sep 2026 · 12:00</span></div>
+      <div class="dl"><span class="k"><b>Re check-in</b></span><span class="v b">12 Sep 2026 · 14:00</span></div>
+      <div class="dl"><span class="k">Re check-out</span><span class="v">13 Sep 2026 · 12:00</span></div>
+      <div class="dl"><span class="k">Room · plan</span><span class="v">Deluxe · MAP · 2 nights total</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Advance held · LH/MR/26/002741</span><span class="v">3,450.00</span></div>
+      <div class="dl"><span class="k">Balance at checkout</span><span class="v b">3,450.00</span></div>
+      <div class="dnote q">Inclusions: MAP meals per plan · Wi-Fi · parking. Early check-in and late check-out subject to availability. Please carry photo ID for all adult guests.</div>
+      <div class="dfoot"><span>LH/CV/26/000198 · LH/26/E/04236 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/CV/{YY}/{NNNNNN}</code> — non-fiscal, annual reset.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 <i>Z5 Z6</i> Z7 Z8 <i>Z9</i> Z10</span> — Z4 engagement frame is the heart: In/Out with <b>Re Check-In rows</b> for split stays; money reduced to position lines.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Stay frame with times · guest + agency parties (agency preset keeps the voucher <b>rate-silent</b> where terms require — this direct-payer render shows position) · advance held with its receipt number · inclusions · ID requirement. Room <b>type</b>, not number (O4 pending).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 1 — any change re-issues the voucher under a fresh number; the accompanying Amendment Advice states the change.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>CONFIRMATION</code> + WhatsApp; the guest-facing artefact of S4.</span></div>
+  </div></div>
+</div>
+
+<!-- A4 AMENDMENT ADVICE -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A4</span><h3>Amendment Advice</h3><span class="chip c">Commercial</span><span class="ser">LH/AA/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Amendment Advice</h5><span class="strip mut">Records a change you requested</span></div>
+      <div class="dl"><span class="k">Advice No</span><span class="v b">LH/AA/26/000047</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04236</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">20 Aug 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Guest</span><span class="v b">Dr Lakshmi Menon</span></div>
+      <div class="dsub">Change requested 19 Aug 2026</div>
+      <table class="mini">
+        <tr><th></th><th>Previous</th><th>Now</th></tr>
+        <tr><td><b>Re-stay dates</b></td><td>12–13 Sep 2026</td><td><b>13–14 Sep 2026</b></td></tr>
+        <tr><td>First stay</td><td colspan="2">08–09 Sep 2026 — unchanged</td></tr>
+        <tr><td>Charges</td><td colspan="2">Unchanged · Nu. 6,900.00 total</td></tr>
+      </table>
+      <div class="dl"><span class="k">Superseded voucher</span><span class="v">LH/CV/26/000198</span></div>
+      <div class="dl"><span class="k"><b>New voucher issued</b></span><span class="v b">LH/CV/26/000203</span></div>
+      <div class="dnote q">Please discard the earlier voucher and present LH/CV/26/000203 at check-in. All other terms continue.</div>
+      <div class="dfoot"><span>LH/AA/26/000047 · LH/26/E/04236 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/AA/{YY}/{NNNNNN}</code> — non-fiscal; one advice per amendment event.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 <i>Z6</i> Z7 <i>Z8 Z9</i> Z10</span> — the previous/now table is the Z5 payload.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">The <b>only Class-1 document that states a change</b> — because the client asked for it. Prior particulars · the delta, bold · charges line even when unchanged · superseded voucher number · <b>re-issued voucher number</b>. If money changes, a fresh PI or an adjusted position renders alongside.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Fresh-instrument family — each amendment event issues a new AA; an AA is never edited.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>AMENDED</code>, same thread as the booking; new voucher attached with it.</span></div>
+  </div></div>
+</div>
+
+<!-- A5 CANCELLATION -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A5</span><h3>Cancellation Confirmation</h3><span class="chip c">Commercial</span><span class="ser">LH/CX/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Cancellation Confirmation</h5><span class="strip mut">Booking cancelled at your request</span></div>
+      <div class="dl"><span class="k">Cancellation No</span><span class="v b">LH/CX/26/000031</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04251</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">02 Sep 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Guest</span><span class="v b">Mr Karma Wangchuk</span></div>
+      <div class="dl"><span class="k">Cancelled stay</span><span class="v">10–12 Oct 2026 · Deluxe · 2 nights</span></div>
+      <div class="dl"><span class="k">Notice given</span><span class="v">38 days before arrival</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Advance held · LH/MR/26/002768</span><span class="v">5,000.00</span></div>
+      <div class="dl"><span class="k">Refundable per terms (30–44 days · 50%)</span><span class="v">2,500.00</span></div>
+      <div class="dl"><span class="k">Retained per terms</span><span class="v">2,500.00</span></div>
+      <div class="dl tot"><span class="k">Refund issued · Nu.</span><span class="v">2,500.00</span></div>
+      <div class="dl"><span class="k">Refund Receipt</span><span class="v">LH/RR/26/000112</span></div>
+      <div class="dnote q">Refund by bank transfer within 7 working days to the account the advance was received from. Cancellation terms as stated on proforma LH/PI/26/000219.</div>
+      <div class="dfoot"><span>LH/CX/26/000031 · LH/26/E/04251 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/CX/{YY}/{NNNNNN}</code> — non-fiscal; one per cancellation event.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 <i>Z5</i> Z6 Z7 <i>Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">The cancelled stay · <b>notice period computed and shown</b> (the fact that selects the tier) · the money position in three lines: held / refundable per named tier / retained · the <b>Refund Receipt number</b> · the PI whose terms govern. The tier does the explaining; the document states facts, not apologies.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Fresh-instrument family — a disputed outcome issues a corrected CX under a new number.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>CANCELLED</code>; Refund Receipt attached when the transfer executes.</span></div>
+  </div></div>
+</div>
+
+<!-- A6 NO-SHOW -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A6</span><h3>No-Show Notice</h3><span class="chip c">Commercial</span><span class="ser">LH/NS/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>No-Show Notice</h5><span class="strip mut">Reserved accommodation was not taken up</span></div>
+      <div class="dl"><span class="k">Notice No</span><span class="v b">LH/NS/26/000012</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04263</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">11 Oct 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Guest</span><span class="v b">Ms Pema Choden</span></div>
+      <div class="dl"><span class="k">Reserved stay</span><span class="v">10–11 Oct 2026 · Deluxe · confirmed LH/CV/26/000207</span></div>
+      <div class="dl"><span class="k">Held until</span><span class="v">10 Oct 2026 · 23:59</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Advance held · LH/MR/26/002790</span><span class="v">3,450.00</span></div>
+      <div class="dl tot"><span class="k">Forfeited per no-show terms · Nu.</span><span class="v">3,450.00</span></div>
+      <div class="dnote q">The room was held for the full night per the confirmed booking. No-show terms as stated on the proforma and voucher. Please contact reservations if the absence was due to circumstances you wish us to consider.</div>
+      <div class="dfoot"><span>LH/NS/26/000012 · LH/26/E/04263 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/NS/{YY}/{NNNNNN}</code> — non-fiscal; one per no-show event.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 <i>Z5</i> Z6 Z7 <i>Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">The confirmed reservation it evidences against (voucher no) · <b>held-until timestamp</b> — the operational fact · advance + forfeiture per named terms · a human line inviting contact. This is the paper an agency or card dispute will be argued with.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Fresh-instrument family — waived forfeiture is a new commercial event (refund via RR), not an edit.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email, booking thread; issued morning after the hold lapses.</span></div>
+  </div></div>
+</div>
+
+<!-- A7 REGISTRATION -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">A7</span><h3>Registration Form</h3><span class="chip i">Informational</span><span class="ser">LH/RF/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Guest Registration</h5></div>
+      <div class="dl"><span class="k">Registration No</span><span class="v b">LH/RF/26/001874</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04236</span></div>
+      <div class="dl"><span class="k">Check-in</span><span class="v">08 Sep 2026 · 14:20</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Guest</span><span class="v b">Dr Lakshmi Menon</span></div>
+      <div class="dl"><span class="k">Nationality · ID</span><span class="v">Indian · Passport Z4728XXX</span></div>
+      <div class="dl"><span class="k">Address</span><span class="v">Bengaluru, Karnataka, India</span></div>
+      <div class="dl"><span class="k">Accompanying</span><span class="v">2 adults (as per voucher)</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Room</span><span class="v b">204 · Deluxe · MAP</span></div>
+      <div class="dl"><span class="k">Departure</span><span class="v">09 Sep 2026 · 12:00</span></div>
+      <div class="dl"><span class="k">Rate (incl. service &amp; GST)</span><span class="v">3,450.00 / night</span></div>
+      <div class="dnote q">I agree to the hotel's terms of stay, including checkout time, liability for charges to my room, and the safekeeping policy for valuables.</div>
+      <div class="sig"><span class="s">Guest signature</span><span class="s">Front office · received by</span></div>
+      <div class="dfoot"><span>LH/RF/26/001874 · LH/26/E/04236 · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/RF/{YY}/{NNNNNN}</code> — informational; the S6 legal formality.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 Z5 <i>Z6</i> Z7 <i>Z8</i> Z9 Z10</span> — <b>Z9 signature is the point</b>: consent sits directly under the terms it acknowledges.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Identity + ID reference (feeds the r.185(10) identity requirement if the guest later pays cash above the ceiling) · room assignment · rate inclusive-led · terms-of-stay consent text · <b>no blank printed labels</b> — unknown fields collapse.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 3 reprint — content freezes at signature; reprints carry ordinal + timestamp.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Printed at desk, signed, scanned to the engagement file; retained 5 years with the folio (rr.202–203).</span></div>
+  </div></div>
+</div>
+
+<!-- ══════════════════════════════ FAMILY B ══════════════════════════════ -->
+<h2 class="fam"><b>B</b>Family B — Fiscal</h2>
+<p class="famlede">The crimson family. <span class="chip f">Fiscal</span> documents are generated once, never revised, never carry a version; corrections travel as adjustment notes or VOID + fresh issue. Receipts are <span class="chip c">commercial</span> in law but run at fiscal-grade rigour: gapless, figures + words, <code>paymentPurpose</code> on every one.</p>
+
+<!-- B1 TAX INVOICE FINAL -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">B1</span><h3>Tax Invoice — Final</h3><span class="chip f">Fiscal</span><span class="ser">LH/TI/NNNNNN</span></div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000140</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">Issued</span><span class="v">15 Oct 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v b">Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl"><span class="k">Customer TPN · Your ref</span><span class="v">2030405060 · PO-2611</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Accommodation · 12 room-nights</span><span class="v">41,400.00</span></div>
+      <div class="dl"><span class="k">Hall hire, laundry &amp; transfer</span><span class="v">26,200.00</span></div>
+      <div class="dl" style="font-size:8px"><span class="k">Detail per Room Bill LH/RB/26/000318 · Services Bill LH/SB/26/000201, attached</span><span class="v"></span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Net value of supply</span><span class="v">58,528.14</span></div>
+      <div class="dl"><span class="k">Service charge 10%</span><span class="v">5,852.81</span></div>
+      <div class="dl"><span class="k">Taxable value</span><span class="v">64,380.95</span></div>
+      <div class="dl"><span class="k">GST @ 5%</span><span class="v">3,219.05</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">67,600.00</span></div>
+      <div class="dl"><span class="k">Advance applied · LH/MR/26/002903</span><span class="v">−40,000.00</span></div>
+      <div class="dl"><span class="k">Balance due · 30 days</span><span class="v b">27,600.00</span></div>
+      <div class="dnote">GST of Nu. 3,219.05 is included in the total consideration of Nu. 67,600.00.</div>
+      <div class="dbank"><span>Bank <b>Bank of Bhutan, Phuentsholing</b></span><span>A/C <b>Legphel Hotel · 200108440</b></span><span>Ref <b>LH/TI/000140</b></span><span>Accounts <b>+975 17 772 393</b></span></div>
+      <div class="dnote q">Please raise any discrepancy within 7 days. No surcharge applies on any payment mode; remitter bears transfer charges — the full invoice value must be received.</div>
+      <div class="dfoot"><span>LH/TI/000140 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/TI/{NNNNNN}</code> — fiscal: no year, continuous, <b>gapless</b>, allocated at issue in-transaction, never reused. One invoice <b>per payer</b> on split settlements.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 Z8 <i>Z9</i> Z10</span> — Z6 ladder + Z8 Remittance Block; detail delegated to attached component bills.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">"TAX INVOICE" prominent (r.185(1)) · date (r.185(2)) · supplier + TPN (r.185(3)) · description + quantity, <b>discount shown when negotiated</b> (r.185(4)–(5), D-12) · downward ladder + <b>the GST sentence</b> (r.185(6)) · customer TPN, or identity ref when unregistered &gt; Nu. 50,000 — else <b>issue blocks</b> (r.185(9)–(10)) · corporate preset fields: Your ref / PO (D-13) · advance with receipt no · 7-day query line (protects the AN window) · <b>"original"</b>, no version, reprints render COPY (r.188).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv"><b>Never.</b> Amount/GST error → Adjustment Note within 7 days of awareness · wholly wrong → VOID + fresh · non-fiscal typo → amended invoice, "GST effect: Nu. 0.00" (r.191).</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>TAX INVOICE</code> + Dispatch Note for direct-bill originals; acknowledgement requested; retrieval within the 15-day reissue SLA.</span></div>
+  </div></div>
+</div>
+
+<!-- B2 TAX INVOICE POST-STAY -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">B2</span><h3>Tax Invoice — Post-stay</h3><span class="chip f">Fiscal</span><span class="ser">LH/TI/NNNNNN (same series)</span></div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000141</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">Issued</span><span class="v">20 Oct 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v b">Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl"><span class="k">Customer TPN · Your ref</span><span class="v">2030405060 · PO-2611</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Repair of damaged projection screen — Conference Hall, per Damage Advice LH/DA/26/000009</span><span class="v">4,620.00</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Net value of supply</span><span class="v">4,000.00</span></div>
+      <div class="dl"><span class="k">Service charge 10%</span><span class="v">400.00</span></div>
+      <div class="dl"><span class="k">Taxable value</span><span class="v">4,400.00</span></div>
+      <div class="dl"><span class="k">GST @ 5%</span><span class="v">220.00</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">4,620.00</span></div>
+      <div class="dnote">GST of Nu. 220.00 is included in the total consideration of Nu. 4,620.00.</div>
+      <div class="dbank"><span>Bank <b>Bank of Bhutan, Phuentsholing</b></span><span>A/C <b>200108440</b></span><span>Ref <b>LH/TI/000141</b></span></div>
+      <div class="dnote q">Charge assessed at checkout and advised on 15 Oct 2026; payment against this invoice records as RECOVERY. Please raise any discrepancy within 7 days.</div>
+      <div class="dfoot"><span>LH/TI/000141 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><b>The same</b> <code>LH/TI/{NNNNNN}</code> series — post-stay is a timing, not a document type. Late charges, damage recovery, and periodic cycles all draw from the one fiscal sequence.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 Z8 <i>Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Everything B1 requires, plus the <b>evidence pointer</b>: the line names its source event (Damage Advice, late posting, cycle) so the invoice never arrives unexplained. Payment against it carries <code>paymentPurpose = RECOVERY</code> on the receipt (D-20).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Never — AN / VOID+fresh / amended, as B1.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>TAX INVOICE</code>, booking thread; the referenced advice travels attached the first time.</span></div>
+  </div></div>
+</div>
+
+<!-- B3 ADJUSTMENT NOTE -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">B3</span><h3>Adjustment Note</h3><span class="chip f">Fiscal</span><span class="ser">LH/AN/NNNNNN</span></div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Adjustment Note — Credit</h5><span class="strip">Adjusts tax invoice LH/TI/000138 · issued within 7 days of awareness</span></div>
+      <div class="dl"><span class="k">Adjustment No</span><span class="v b">LH/AN/000027</span></div>
+      <div class="dl"><span class="k">Against invoice</span><span class="v b">LH/TI/000138 · 05 Oct 2026</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/03887</span></div>
+      <div class="dl"><span class="k">Issued</span><span class="v">24 Oct 2026 · awareness 20 Oct 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v b">Mr Sonam Tobgay · Apartment 3B</span></div>
+      <div class="dl"><span class="k">Reason</span><span class="v">Contracted long-stay rate applied from 05 Sep</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Net adjustment</span><span class="v">−2,000.00</span></div>
+      <div class="dl"><span class="k">Service charge 10%</span><span class="v">−200.00</span></div>
+      <div class="dl"><span class="k">GST @ 5%</span><span class="v b">−110.00</span></div>
+      <div class="dl tot"><span class="k">Credit · Nu.</span><span class="v">−2,310.00</span></div>
+      <div class="dnote">GST effect of this adjustment: <b>−Nu. 110.00</b> against invoice LH/TI/000138. The original invoice remains on record unaltered.</div>
+      <div class="dnote q">Credit applies to your account balance; the November statement will reflect it.</div>
+      <div class="dfoot"><span>LH/AN/000027 · LH/26/E/03887 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/AN/{NNNNNN}</code> — fiscal, gapless, no year. Signed direction in the title: <b>Credit (−)</b> or <b>Debit (+)</b>.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4 Z5</i> Z6 Z7 <i>Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">The <b>invoice it adjusts</b>, by number and date (rr.190–191) · the adjustment <b>event</b> in one line · a signed mini-ladder · the <b>GST effect stated in Nu.</b> · the sentence that the original stays on record · issue + awareness dates — the face itself evidences the <b>7-day statutory window</b> (Act ss.88–89).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Never — a wrong AN is corrected by a further AN.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>ADJUSTMENT</code>, threaded to the invoice; timer + escalation run from awareness (O7 worker pending).</span></div>
+  </div></div>
+</div>
+
+<!-- B4 MONEY RECEIPT -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">B4</span><h3>Money Receipt</h3><span class="chip c">Commercial*</span><span class="ser">LH/MR/26/NNNNNN · gapless</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Money Receipt</h5></div>
+      <div class="dl"><span class="k">Receipt No</span><span class="v b">LH/MR/26/002903</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">30 Sep 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Received from</span><span class="v b">Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl tot"><span class="k">Amount · Nu.</span><span class="v">40,000.00</span></div>
+      <div class="dl"><span class="k">In words</span><span class="v">Ngultrum Forty Thousand Only</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Method</span><span class="v">Bank transfer · BoB ref 2609TX48812</span></div>
+      <div class="dl"><span class="k">Purpose</span><span class="v b">ADVANCE</span></div>
+      <div class="dl"><span class="k">Against</span><span class="v">Proforma LH/PI/26/000224 · conference booking</span></div>
+      <div class="dnote q">Cash payments are accepted up to Nu. 50,000 per supply (GST Rules, r.247); amounts above this must be paid by bank transfer or card. A security deposit, where taken, is held as security and is refundable.</div>
+      <div class="sig"><span class="s">Received by · Front office</span><span class="s">For Legphel Hotel</span></div>
+      <div class="dfoot"><span>LH/MR/26/002903 · LH/26/E/04211 · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/MR/{YY}/{NNNNNN}</code> — commercial in law, <b>fiscal-grade in rigour</b>: gapless, VOID disposition (never deletion), shift remittance lists the full range including voids.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4 Z5</i> Z6 Z7 <i>Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Amount in <b>figures and words</b> (L17) · method + instrument reference (the auto-match key) · <b>purpose</b>: ADVANCE / SECURITY_DEPOSIT / SETTLEMENT / RECOVERY (D-20) — deposits render <i>"held as security, refundable"</i> · against-what (PI / folio / TI) · the <b>cash-ceiling sentence</b> — placed here, on the receipt, where cash actually happens (L9, r.247) · receiver signature.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">VOID + reissue only. Money going back is a <b>Refund Receipt</b> — a money receipt is never negative.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>RECEIPT</code> / WhatsApp on capture; original printed on request.</span></div>
+  </div></div>
+</div>
+
+<!-- B5 REFUND RECEIPT -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">B5</span><h3>Refund Receipt</h3><span class="chip c">Commercial*</span><span class="ser">LH/RR/26/NNNNNN · gapless</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Refund Receipt</h5></div>
+      <div class="dl"><span class="k">Refund No</span><span class="v b">LH/RR/26/000112</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04251</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">04 Sep 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Refunded to</span><span class="v b">Mr Karma Wangchuk</span></div>
+      <div class="dl tot"><span class="k">Amount · Nu.</span><span class="v">2,500.00</span></div>
+      <div class="dl"><span class="k">In words</span><span class="v">Ngultrum Two Thousand Five Hundred Only</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Method</span><span class="v">Bank transfer · to originating account · BoB ref 2609TX51244</span></div>
+      <div class="dl"><span class="k">Against</span><span class="v">Cancellation LH/CX/26/000031 · advance LH/MR/26/002768</span></div>
+      <div class="dnote q">Refund per cancellation terms (30–44 days notice · 50% of advance). This receipt evidences the outward payment; the original money receipt remains on record.</div>
+      <div class="sig"><span class="s">Authorised · Accounts</span><span class="s">For Legphel Hotel</span></div>
+      <div class="dfoot"><span>LH/RR/26/000112 · LH/26/E/04251 · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/RR/{YY}/{NNNNNN}</code> — gapless, same rigour as MR; the <b>outward</b> mirror.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4 Z5</i> Z6 Z7 <i>Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Figures + words · method with instrument ref, <b>to the originating account</b> by default · the chain: the event document (CX / NS / AN / overpayment) and the inbound receipt it reverses · authorisation signature. Where a refund follows an adjustment note, the AN number renders here.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">VOID + reissue only; never negative, never edited.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>RECEIPT</code> when the transfer executes; attaches to the CX/AN thread.</span></div>
+  </div></div>
+</div>
+
+<!-- B6 BCTI -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">B6</span><h3>Buyer-Created Tax Invoice</h3><span class="chip f">Fiscal · conditional</span><span class="ser">dormant until agreement</span></div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Buyer-Created Tax Invoice</h5><span class="strip">Issued by the recipient under r.200 written agreement BCTI-AGR-2026-01</span></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/BC/000001</span></div>
+      <div class="dl"><span class="k">Issued</span><span class="v">30 Sep 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Supplier</span><span class="v b">Bhutan Online Booking Travel · TPN 2030405061</span></div>
+      <div class="dl"><span class="k">Recipient (creator)</span><span class="v">Legphel Hotel · TPN C10082014</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Booking commission · Sep 2026 · per Commission Statement LH/CS/26/000058</span><span class="v">690.00</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Value of supply</span><span class="v">657.14</span></div>
+      <div class="dl"><span class="k">GST @ 5%</span><span class="v">32.86</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">690.00</span></div>
+      <div class="dnote">GST of Nu. 32.86 is included in the total consideration of Nu. 690.00. The supplier shall not issue a tax invoice for this supply.</div>
+      <div class="dfoot"><span>LH/BC/000001 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/BC/{NNNNNN}</code> — fiscal, gapless. <b>Conditional (O6): the class stays dormant</b> until a r.200 written agreement exists; the system refuses generation without an agreement reference on file.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8 Z9</i> Z10</span> — note the ladder has <b>no service-charge line</b>: agent commission is not a hospitality supply; the grid handles it by collapsing the row.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Both parties <b>registered, both TPNs</b> · the agreement reference in the title strip · "BUYER-CREATED TAX INVOICE" wording · the supplier-shall-not-invoice sentence · value + GST + the GST sentence · the source computation (Commission Statement) by number.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">As any tax invoice — AN / VOID + fresh; never edited.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>TAX INVOICE</code> to the supplier with the commission statement; copy retained both sides 5 years.</span></div>
+  </div></div>
+</div>
+
+<!-- ══════════════════════════════ FAMILY C ══════════════════════════════ -->
+<h2 class="fam"><b>C</b>Family C — Operational bills &amp; statements</h2>
+<p class="famlede">One folio per engagement. Room, F&amp;B, and Services bills are <b>filtered views</b> of that folio; the Master Bill is the <b>rollup</b> of the three bill numbers — steel-coloured, reprintable, and never the words "tax invoice". Statements render <b>state</b>, grouped by segment with effective dates; the Amendment Advice evidences the change (D-17).</p>
+
+<!-- C1 MASTER BILL -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C1</span><h3>Master Bill</h3><span class="chip i">Informational</span><span class="ser">LH/MB/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Master Bill</h5><span class="strip mut">Statement — not a tax invoice</span></div>
+      <div class="dl"><span class="k">Master Bill No</span><span class="v b">LH/MB/26/000287</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">Account</span><span class="v">Pelden Enterprise · conference · 13–15 Oct 2026</span></div>
+      <table class="mini">
+        <tr><th>Bill No</th><th>Component</th><th>Contents</th><th class="r">Amount</th></tr>
+        <tr><td>LH/RB/26/000318</td><td>Room</td><td>6 Deluxe × 2 nights</td><td class="r">41,400.00</td></tr>
+        <tr><td>LH/FB/26/000225</td><td>F&amp;B</td><td>Conference lunch · gala dinner</td><td class="r">34,260.00</td></tr>
+        <tr><td>LH/SB/26/000201</td><td>Services</td><td>Hall · laundry · transfer</td><td class="r">26,200.00</td></tr>
+      </table>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">101,860.00</span></div>
+      <div class="dl"><span class="k">Net 88,190.47 · Service 8,819.05 · Taxable 97,009.52 · GST 4,850.48</span><span class="v"></span></div>
+      <div class="dsec"></div>
+      <div class="dsub">Settlement position</div>
+      <div class="dl"><span class="k">Payable by Pelden Enterprise (Room + Services)</span><span class="v">67,600.00</span></div>
+      <div class="dl"><span class="k">Payable by Mr Karma Dorji, guest (F&amp;B)</span><span class="v">34,260.00</span></div>
+      <div class="dl"><span class="k">Advance held · LH/MR/26/002903</span><span class="v">−40,000.00</span></div>
+      <div class="dnote g">All amounts include service charge and GST. Position as at printing, 15 Oct 2026 09:40. Itemised detail per component bill. Please raise queries before settlement; tax invoices issue per payer.</div>
+      <div class="sig"><span class="s">Guest / account signature</span><span class="s">Front office</span></div>
+      <div class="dfoot"><span>LH/MB/26/000287 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · reprint 0</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/MB/{YY}/{NNNNNN}</code> — informational; freely reprintable with ordinal + timestamp.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 Z5 Z6 Z7 <i>Z8</i> Z9 Z10</span> — Z5 is the <b>rollup table of bill numbers</b>, never raw charges.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">"Statement — not a tax invoice" strip · rollup rows with component bill numbers · one ladder from the rollup gross (rollup governs on any chethrum divergence) · settlement position with per-payer split (§8.4) · the four standard notes: as-at, GST-included, detail-per-component, query-before-settlement. <b>Group configurations (D-14):</b> consolidated billing adds a member/room axis (per-room subtotals above category totals, rooming schedule as annex); individual billing renders the <b>Group Summary Statement</b> — an MB variant listing each guest folio and total, no separate series.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 3 reprint; content freezes at folio seal. Summary-first mode above ~35 lines; grand totals final page only (D-15).</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Printed at checkout for signature; email <code>STATEMENT</code> on request.</span></div>
+  </div></div>
+</div>
+
+<!-- C2 ROOM BILL -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C2</span><h3>Room Bill</h3><span class="chip i">Informational</span><span class="ser">LH/RB/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Room Bill</h5><span class="strip mut">Component of Master Bill LH/MB/26/000287</span></div>
+      <div class="dl"><span class="k">Bill No</span><span class="v b">LH/RB/26/000318</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <table class="mini">
+        <tr><th>Date</th><th>Description</th><th class="r">Rooms</th><th class="r">Amount</th></tr>
+        <tr><td>13 Oct</td><td>Deluxe · MAP · corporate rate</td><td class="r">6</td><td class="r">20,700.00</td></tr>
+        <tr><td>14 Oct</td><td>Deluxe · MAP · corporate rate</td><td class="r">6</td><td class="r">20,700.00</td></tr>
+      </table>
+      <div class="dl tot"><span class="k">Room total · Nu.</span><span class="v">41,400.00</span></div>
+      <div class="dnote g">All amounts GST-inclusive. Consolidated ladder and settlement on Master Bill LH/MB/26/000287.</div>
+      <div class="dfoot"><span>LH/RB/26/000318 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · reprint 0</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/RB/{YY}/{NNNNNN}</code> — a numbered <b>view</b> of the one folio, filtered to room charges.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 <i>Z7 Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Date-wise room lines in the fixed column order · day subtotals on long folios · <b>segment-grouped lines with effective dates</b> on room/rate changes ("Room change · 14 Oct") — the bill renders state (D-17) · the parent Master Bill reference · GST-included note deferring the ladder to the rollup. Routing from charge category → this bill is the controlled-vocabulary table (§10B.4).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 3 reprint; freezes at folio seal.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Attached to the Master Bill and to the payer's tax invoice as the detail schedule.</span></div>
+  </div></div>
+</div>
+
+<!-- C3 F&B BILL -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C3</span><h3>F&amp;B Bill</h3><span class="chip i">Informational</span><span class="ser">LH/FB/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Food &amp; Beverage Bill</h5><span class="strip mut">Component of Master Bill LH/MB/26/000287</span></div>
+      <div class="dl"><span class="k">Bill No</span><span class="v b">LH/FB/26/000225</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <table class="mini">
+        <tr><th>Date</th><th>Description</th><th class="r">Covers</th><th class="r">Amount</th></tr>
+        <tr><td>13 Oct</td><td>Conference lunch · set menu</td><td class="r">40</td><td class="r">18,480.00</td></tr>
+        <tr><td>14 Oct</td><td>Gala dinner · buffet</td><td class="r">40</td><td class="r">15,780.00</td></tr>
+      </table>
+      <div class="dl tot"><span class="k">F&amp;B total · Nu.</span><span class="v">34,260.00</span></div>
+      <div class="dnote g">All amounts GST-inclusive. Payable by Mr Karma Dorji per the split settlement; tax invoice LH/TI/000139 issues for this component.</div>
+      <div class="dfoot"><span>LH/FB/26/000225 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · reprint 0</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/FB/{YY}/{NNNNNN}</code> — folio view filtered to food &amp; beverage.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 <i>Z7 Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Outlet/event lines with covers · canonical menu labels from the vocabulary, never POS codes · parent MB reference · where the split assigns this component to another payer, the <b>payable-by line and its invoice number</b> render here — the view answers "who owes this and where is its invoice".</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 3 reprint; freezes at folio seal.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">With the Master Bill; detail schedule to TI/000139 (guest payer).</span></div>
+  </div></div>
+</div>
+
+<!-- C4 SERVICES BILL -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C4</span><h3>Services Bill</h3><span class="chip i">Informational</span><span class="ser">LH/SB/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Services Bill</h5><span class="strip mut">Component of Master Bill LH/MB/26/000287</span></div>
+      <div class="dl"><span class="k">Bill No</span><span class="v b">LH/SB/26/000201</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <table class="mini">
+        <tr><th>Date</th><th>Description</th><th class="r">Amount</th></tr>
+        <tr><td>13–14 Oct</td><td>Conference hall hire · 2 days</td><td class="r">20,000.00</td></tr>
+        <tr><td>14 Oct</td><td>Laundry · corporate account</td><td class="r">2,200.00</td></tr>
+        <tr><td>13 Oct</td><td>Airport transfer · Paro · 1 coach</td><td class="r">4,000.00</td></tr>
+      </table>
+      <div class="dl tot"><span class="k">Services total · Nu.</span><span class="v">26,200.00</span></div>
+      <div class="dnote g">All amounts GST-inclusive. Consolidated ladder and settlement on Master Bill LH/MB/26/000287.</div>
+      <div class="dfoot"><span>LH/SB/26/000201 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · reprint 0</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/SB/{YY}/{NNNNNN}</code> — folio view for everything that is neither room nor F&amp;B: hall, laundry, transfer, spa, misc.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 <i>Z7 Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Service lines with dates and canonical labels · parent MB reference · GST-included note. The charge-category → component routing lives in configuration, not code — a new charge type is a vocabulary row, not a deploy.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 3 reprint; freezes at folio seal.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">With the Master Bill; detail schedule to the corporate tax invoice.</span></div>
+  </div></div>
+</div>
+
+<!-- C5 INTERIM FOLIO -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C5</span><h3>Interim Folio Statement</h3><span class="chip i">Informational</span><span class="ser">LH/IF/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Interim Folio Statement</h5><span class="strip mut">Position to date — not a bill for settlement</span></div>
+      <div class="dl"><span class="k">Statement No</span><span class="v b">LH/IF/26/000452</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">As at</span><span class="v b">13 Oct 2026 · 23:59</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Room charges to date</span><span class="v">20,700.00</span></div>
+      <div class="dl"><span class="k">F&amp;B to date</span><span class="v">18,480.00</span></div>
+      <div class="dl"><span class="k">Services to date (hall · transfer)</span><span class="v">24,000.00</span></div>
+      <div class="dl tot"><span class="k">Charges to date · Nu.</span><span class="v">63,180.00</span></div>
+      <div class="dl"><span class="k">Advance held</span><span class="v">−40,000.00</span></div>
+      <div class="dl"><span class="k">Position to date</span><span class="v b">23,180.00</span></div>
+      <div class="dnote g">All amounts GST-inclusive. Charges continue to post until checkout; final amounts on the Master Bill and tax invoice.</div>
+      <div class="dfoot"><span>LH/IF/26/000452 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1 · reprint 0</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/IF/{YY}/{NNNNNN}</code> — informational; any number may issue during a stay.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv"><b>The as-at timestamp beside the title</b> — the defining datum · component-summarised charges (detail on request) · position after advances · the not-for-settlement strip and the charges-continue note. Its job is to prevent checkout surprise (§10A.7).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">None — each print is a new snapshot with a new as-at; superseded by time itself.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Printed or WhatsApp on request; long-stay guests receive a scheduled weekly render.</span></div>
+  </div></div>
+</div>
+
+<!-- C6 DAMAGE ADVICE -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C6</span><h3>Damage Advice</h3><span class="chip c">Commercial</span><span class="ser">LH/DA/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Damage Advice</h5><span class="strip mut">Assessment of loss or damage during stay</span></div>
+      <div class="dl"><span class="k">Advice No</span><span class="v b">LH/DA/26/000009</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">15 Oct 2026 · checkout inspection</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Account</span><span class="v b">Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl"><span class="k">Item</span><span class="v">Projection screen · Conference Hall</span></div>
+      <div class="dl"><span class="k">Finding</span><span class="v">Torn surface · beyond repair · photos DA-009/1–3</span></div>
+      <div class="dl"><span class="k">Witnessed</span><span class="v">Banquet supervisor · client coordinator</span></div>
+      <div class="dsec"></div>
+      <div class="dl tot"><span class="k">Assessed amount (incl. taxes) · Nu.</span><span class="v">4,620.00</span></div>
+      <div class="dnote q">Assessment per the replacement quotation on file. The charge will be invoiced separately as a tax invoice; payment records as recovery. Queries to the front office manager within 7 days.</div>
+      <div class="sig"><span class="s">Assessed by · Housekeeping/Banquets</span><span class="s">Acknowledged (optional)</span></div>
+      <div class="dfoot"><span>LH/DA/26/000009 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/DA/{YY}/{NNNNNN}</code> — commercial; the evidence document, not the demand.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Item · finding · <b>evidence references</b> (photos, witnesses) · assessed amount marked inclusive · the forward pointer: <i>invoiced separately as a tax invoice</i> (→ B2) · optional acknowledgement slot. Assessment basis named — quotation, rate card — never bare authority.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Fresh-instrument family — a revised assessment is a new DA; the invoice cites whichever is current.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Handed/emailed at checkout; travels attached to the recovery invoice.</span></div>
+  </div></div>
+</div>
+
+<!-- C7 WORK ORDER -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">C7</span><h3>Work Order Confirmation</h3><span class="chip c">Commercial</span><span class="ser">LH/WO/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Work Order Confirmation</h5><span class="strip mut">Banquet &amp; event order — conference</span></div>
+      <div class="dl"><span class="k">Work Order No</span><span class="v b">LH/WO/26/000076</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">28 Sep 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Client</span><span class="v b">Pelden Enterprise · Mr Ugyen Pelden</span></div>
+      <div class="dl"><span class="k">Event</span><span class="v">Dealer conference · 13–14 Oct · 40 pax</span></div>
+      <table class="mini">
+        <tr><th>Item</th><th>Specification</th><th class="r">Est. Nu.</th></tr>
+        <tr><td>Hall</td><td>Conference Hall · classroom 40 · 09:00–17:00 both days</td><td class="r">20,000.00</td></tr>
+        <tr><td>AV</td><td>Projector + screen · 2 mics · included in hall</td><td class="r">—</td></tr>
+        <tr><td>F&amp;B</td><td>Lunch set ×40 (13th) · gala buffet ×40 (14th) · 2 tea breaks/day</td><td class="r">34,000.00</td></tr>
+        <tr><td>Rooms</td><td>6 Deluxe · MAP · corporate rate · 13–15 Oct</td><td class="r">41,400.00</td></tr>
+      </table>
+      <div class="dnote q">Estimates GST-inclusive; final charges per actual consumption on the bills. Menu selections due 7 days prior; guaranteed covers 48 hours prior — the guarantee is the billing minimum.</div>
+      <div class="sig"><span class="s">Client confirmation</span><span class="s">Banquets · Legphel</span></div>
+      <div class="dfoot"><span>LH/WO/26/000076 · LH/26/E/04211 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/WO/{YY}/{NNNNNN}</code> — commercial; the operational contract for events and packages.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 Z4 Z5 <i>Z6</i> Z7 <i>Z8</i> Z9 Z10</span> — estimates table instead of a ladder; both signatures required.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Event frame (dates, pax, timings) · specification lines with <b>estimates marked as estimates</b> · the two deadlines that protect billing: menu cut-off and <b>guaranteed covers = billing minimum</b> · dual signature. Actuals flow to the folio; this document is why the bill looks the way it does.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 1 — changed specs issue a fresh WO; the guarantee line re-anchors.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email for countersignature; internal copies to kitchen, banquets, housekeeping.</span></div>
+  </div></div>
+</div>
+
+<!-- ══════════════════════════════ FAMILY D ══════════════════════════════ -->
+<h2 class="fam"><b>D</b>Family D — Trade &amp; B2B</h2>
+<p class="famlede">The receivables side. Statements carry the <b>aged view</b>; reminders are logged messages with no series; the <b>Dues Demand Notice</b> is the numbered escalation instrument. Corporate preset throughout: Your ref / PO, credit terms, accounts contact (D-13, D-21, D-23).</p>
+
+<!-- D1 COMMISSION STATEMENT -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">D1</span><h3>Commission Statement</h3><span class="chip c">Commercial</span><span class="ser">LH/CS/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Commission Statement</h5><span class="strip mut">Agency settlement · September 2026</span></div>
+      <div class="dl"><span class="k">Statement No</span><span class="v b">LH/CS/26/000058</span></div>
+      <div class="dl"><span class="k">Agent</span><span class="v b">Bhutan Online Booking Travel · TPN 2030405061</span></div>
+      <div class="dl"><span class="k">Period</span><span class="v">01–30 Sep 2026 · rate 10%</span></div>
+      <table class="mini">
+        <tr><th>Booking Ref</th><th>Guest · stay</th><th class="r">Room revenue</th><th class="r">Commission</th></tr>
+        <tr><td>LH/26/E/04236</td><td>Dr L. Menon · 08–13 Sep</td><td class="r">6,900.00</td><td class="r">690.00</td></tr>
+        <tr><td>LH/26/E/04244</td><td>Mr A. Bose · 18–20 Sep</td><td class="r">9,240.00</td><td class="r">924.00</td></tr>
+      </table>
+      <div class="dl tot"><span class="k">Commission payable · Nu.</span><span class="v">1,614.00</span></div>
+      <div class="dnote q">Computed on GST-inclusive room revenue for materialised stays, per agency agreement AGR-BOB-2025-11. Please invoice this amount — or, where the buyer-created invoicing agreement applies, our BCTI follows this statement.</div>
+      <div class="dfoot"><span>LH/CS/26/000058 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/CS/{YY}/{NNNNNN}</code> — commercial; the computation, not the invoice.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Period + rate + agreement reference · per-booking rows with Booking Refs (the agent reconciles by these) · the <b>computation base named</b> (inclusive room revenue, materialised stays) · the invoicing instruction — agent invoices, or BCTI where agreed (→ B6). Agency preset: guest-facing docs stay rate-silent; the rates live here.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Class 1 — corrections re-issue the statement fresh.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>STATEMENT</code>, monthly, with payment following per agreement terms.</span></div>
+  </div></div>
+</div>
+
+<!-- D2 STATEMENT OF ACCOUNT -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">D2</span><h3>Statement of Account — aged</h3><span class="chip i">Informational</span><span class="ser">LH/SA/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Statement of Account</h5><span class="strip mut">Not a tax invoice · as at 15 Dec 2026</span></div>
+      <div class="dl"><span class="k">Statement No</span><span class="v b">LH/SA/26/000141</span></div>
+      <div class="dl"><span class="k">Account</span><span class="v b">Pelden Enterprise Pvt. Ltd. · credit 30 days</span></div>
+      <table class="mini">
+        <tr><th>Invoice</th><th>Issued</th><th>Due</th><th class="r">Days over</th><th class="r">Open Nu.</th></tr>
+        <tr><td>LH/TI/000140</td><td>15 Oct</td><td>14 Nov</td><td class="r">31</td><td class="r">27,600.00</td></tr>
+        <tr><td>LH/TI/000141</td><td>20 Oct</td><td>19 Nov</td><td class="r">26</td><td class="r">4,620.00</td></tr>
+      </table>
+      <div class="dsub">Aging</div>
+      <div class="dl"><span class="k">Current</span><span class="v">0.00</span></div>
+      <div class="dl"><span class="k">1–30 days</span><span class="v">4,620.00</span></div>
+      <div class="dl"><span class="k">31–60 days</span><span class="v">27,600.00</span></div>
+      <div class="dl"><span class="k">61–90 · 90+ days</span><span class="v">0.00 · 0.00</span></div>
+      <div class="dl tot"><span class="k">Total outstanding · Nu.</span><span class="v">32,220.00</span></div>
+      <div class="dnote g">Payments received to 15 Dec 2026 are reflected. Individual invoices remain the fiscal documents; this statement is for reconciliation. Reminders R1 (21 Nov) and R2 (05 Dec) refer.</div>
+      <div class="dfoot"><span>LH/SA/26/000141 · E&amp;OE · T1.0</span><span>Page 1 of 1 · reprint 0</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/SA/{YY}/{NNNNNN}</code> — informational, reprintable; per-account, on cycle or on demand.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv"><b>Aged configuration (D-23):</b> per-invoice rows with due date and <b>days overdue</b> · aging buckets current / 1–30 / 31–60 / 61–90 / 90+ · <b>total outstanding as the hero</b> · not-a-tax-invoice strip · the reminders-refer line tying to the dispatch log. Default cadence for contracted corporates: monthly, alongside per-stay invoices (D-21).</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Snapshot — each issue is a new as-at; reprints of a given statement carry ordinal.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>STATEMENT</code> monthly; the object a reminder message points at.</span></div>
+  </div></div>
+</div>
+
+<!-- D3 PERIODIC BILLING -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">D3</span><h3>Periodic Billing Invoice</h3><span class="chip f">Fiscal</span><span class="ser">LH/TI/NNNNNN (same series)</span></div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5><span class="strip mut">Long-stay cycle · 05 Sep – 04 Oct 2026</span></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000138</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/03887</span></div>
+      <div class="dl"><span class="k">Issued</span><span class="v">05 Oct 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v b">Mr Sonam Tobgay · Apartment 3B</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Apartment 3B · 30 nights · monthly cycle</span><span class="v">51,975.00</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Net value of supply</span><span class="v">45,000.00</span></div>
+      <div class="dl"><span class="k">Service charge 10%</span><span class="v">4,500.00</span></div>
+      <div class="dl"><span class="k">Taxable value</span><span class="v">49,500.00</span></div>
+      <div class="dl"><span class="k">GST @ 5%</span><span class="v">2,475.00</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">51,975.00</span></div>
+      <div class="dnote">GST of Nu. 2,475.00 is included in the total consideration of Nu. 51,975.00.</div>
+      <div class="dbank"><span>Bank <b>Bank of Bhutan, Phuentsholing</b></span><span>A/C <b>200108440</b></span><span>Ref <b>LH/TI/000138</b></span></div>
+      <div class="dnote q">Cycle invoices issue on the 5th of each month for the preceding cycle. Please raise any discrepancy within 7 days.</div>
+      <div class="dfoot"><span>LH/TI/000138 · LH/26/E/03887 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><b>The same</b> <code>LH/TI/{NNNNNN}</code> fiscal series — a periodic cycle is a supply pattern, not a new document class. Same regime, same rigour.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 Z8 <i>Z9</i> Z10</span> — the cycle period rides the title strip.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Everything B1 requires, plus the <b>cycle period on the face</b> and the cadence note. Consolidated monthly corporate invoicing (contract election, D-21) renders on this exact pattern. Long-stay GST character under Schedule IV remains an advisor item (O3) — until ruled, the standard model applies.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Never — AN / VOID+fresh / amended, as all fiscal.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Email <code>TAX INVOICE</code> on cycle date; feeds the monthly SoA.</span></div>
+  </div></div>
+</div>
+
+<!-- D4 DISPATCH NOTE -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">D4</span><h3>Direct-Bill Dispatch Note</h3><span class="chip i">Informational</span><span class="ser">LH/DN/26/NNNNNN</span></div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Dispatch Note</h5><span class="strip mut">Invoice originals enclosed — please acknowledge</span></div>
+      <div class="dl"><span class="k">Dispatch No</span><span class="v b">LH/DN/26/000064</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">16 Oct 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">To</span><span class="v b">Accounts Payable · Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl"><span class="k">Your ref</span><span class="v">PO-2611</span></div>
+      <div class="dsub">Enclosures</div>
+      <div class="dl"><span class="k">Tax Invoice · original</span><span class="v">LH/TI/000140 · Nu. 27,600.00 balance</span></div>
+      <div class="dl"><span class="k">Master Bill + component bills</span><span class="v">LH/MB/26/000287 · RB/FB/SB</span></div>
+      <div class="dl"><span class="k">Statement of works</span><span class="v">Work Order LH/WO/26/000076 copy</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Payment terms</span><span class="v b">30 days · due 14 Nov 2026</span></div>
+      <div class="dnote g">Kindly acknowledge receipt by signing and returning this note, or by email reply quoting LH/DN/26/000064. Portal submission reference (where applicable): —</div>
+      <div class="sig"><span class="s">Received · name, date, seal</span><span class="s">Dispatched by · Legphel accounts</span></div>
+      <div class="dfoot"><span>LH/DN/26/000064 · LH/26/E/04211 · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/DN/{YY}/{NNNNNN}</code> — informational; proof-of-delivery for fiscal originals.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 <i>Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Enclosure list <b>by document number and amount</b> · the payer's own reference (corporate preset) · payment terms + computed due date · <b>acknowledgement slip</b> — the returned slip starts the credit clock beyond dispute · government preset adds the portal submission reference.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Fresh-instrument — a re-dispatch is a new note; the log links them.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Physical with originals, or email <code>TAX INVOICE</code> cover; acknowledgement recorded in the dispatch log.</span></div>
+  </div></div>
+</div>
+
+<!-- D5 DUES DEMAND NOTICE -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">D5</span><h3>Dues Demand Notice</h3><span class="chip c">Commercial</span><span class="ser">LH/DD/26/NNNNNN</span></div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing, Chukha, Bhutan · +975 17 772 393<br><b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Dues Demand Notice</h5><span class="strip">Settlement required by 22 Dec 2026</span></div>
+      <div class="dl"><span class="k">Notice No</span><span class="v b">LH/DD/26/000006</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">15 Dec 2026</span></div>
+      <div class="dl"><span class="k">Account</span><span class="v b">Pelden Enterprise Pvt. Ltd. · credit 30 days</span></div>
+      <table class="mini">
+        <tr><th>Invoice</th><th>Due</th><th class="r">Days over</th><th class="r">Open Nu.</th></tr>
+        <tr><td>LH/TI/000140</td><td>14 Nov 2026</td><td class="r">31</td><td class="r">27,600.00</td></tr>
+        <tr><td>LH/TI/000141</td><td>19 Nov 2026</td><td class="r">26</td><td class="r">4,620.00</td></tr>
+      </table>
+      <div class="dl tot"><span class="k">Total outstanding · Nu.</span><span class="v">32,220.00</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Prior reminders</span><span class="v">R1 · 21 Nov · email &nbsp;·&nbsp; R2 · 05 Dec · WhatsApp</span></div>
+      <div class="dnote q">Under the agreed credit terms, continued supply on account requires settlement of overdue invoices. If payment is not received by <b>22 Dec 2026</b>, credit facilities will be suspended and the matter referred per our terms of trade. If payment has crossed this notice, kindly share the reference.</div>
+      <div class="dbank"><span>Bank <b>Bank of Bhutan, Phuentsholing</b></span><span>A/C <b>Legphel Hotel · 200108440</b></span><span>Ref <b>LH/DD/26/000006</b></span><span>Accounts <b>+975 17 772 393</b></span></div>
+      <div class="sig"><span class="s">Front Office Manager</span><span class="s">General Manager</span></div>
+      <div class="dfoot"><span>LH/DD/26/000006 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/DD/{YY}/{NNNNNN}</code> — commercial; <b>document #30</b>. Each escalation step is a <b>fresh instrument</b> (D-23).</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 Z7 Z8 Z9 Z10</span> — letter-form on the grid; the <b>deadline is the hero</b>, riding the title strip.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Outstanding-invoice table (numbers, due dates, days overdue) · total outstanding · <b>prior-reminders evidence line</b> from the dispatch log — the reason this document is numbered · consequence <b>per credit terms</b>, dates and facts, zero heat · the crossed-payment courtesy line · Remittance Block · <b>FOM/GM signatures</b> — authority is part of the format.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Fresh-instrument — the next escalation is DD/000007; nothing is edited. Chain: invoice → R1/R2 → DD(s) → Write-Off Memo.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv"><b>New thread</b>, prefix <code>FINAL NOTICE</code>, PDF attached, acknowledgement requested. Cadence per client preset; government on its own clock (D-24).</span></div>
+  </div></div>
+</div>
+
+<!-- ══════════════════════════════ FAMILY E ══════════════════════════════ -->
+<h2 class="fam"><b>E</b>Family E — Internal &amp; control</h2>
+<p class="famlede">Dashed grey: never client-facing, immutable once sealed, and the reason the client-facing families can be trusted. These are the documents an auditor reads first.</p>
+
+<!-- E1 NIGHT AUDIT -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">E1</span><h3>Night Audit Report</h3><span class="chip n">Internal</span><span class="ser">LH/NA/26/NNNNNN</span></div>
+    <div class="doc n">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">Internal control document — not for circulation</p></div>
+      <div class="dtitle"><h5>Night Audit</h5><span class="strip mut">Business date 13 Oct 2026 · sealed 14 Oct 02:10</span></div>
+      <div class="dl"><span class="k">Report No</span><span class="v b">LH/NA/26/000286</span></div>
+      <div class="dl"><span class="k">Occupancy</span><span class="v">18 / 22 rooms · 41 guests</span></div>
+      <div class="dsec"></div>
+      <div class="dsub">Revenue posted (GST-inclusive)</div>
+      <div class="dl"><span class="k">Rooms</span><span class="v">24,150.00</span></div>
+      <div class="dl"><span class="k">F&amp;B</span><span class="v">21,300.00</span></div>
+      <div class="dl"><span class="k">Services</span><span class="v">24,900.00</span></div>
+      <div class="dl tot"><span class="k">Total posted · Nu.</span><span class="v">70,350.00</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Receipts taken (all shifts)</span><span class="v">43,450.00</span></div>
+      <div class="dl"><span class="k">Rate/posting variances</span><span class="v b">Nil</span></div>
+      <div class="dl"><span class="k">Sequence check</span><span class="v">TI —  · MR 002914–002921 · no gaps</span></div>
+      <div class="dl"><span class="k">Open folios carried</span><span class="v">9 · incl. E/04211 (63,180.00)</span></div>
+      <div class="sig"><span class="s">Night auditor</span><span class="s">FOM · next morning</span></div>
+      <div class="dfoot"><span>LH/NA/26/000286 · INTERNAL · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/NA/{YY}/{NNNNNN}</code> — one per business date; seals the day.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 <i>Z7 Z8</i> Z9 Z10</span> — internal masthead variant, no public address block.</span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Business date + seal timestamp · occupancy · posted revenue by component (ties to the folio views) · receipts vs postings · variances stated even when nil · <b>sequence check across every gapless series</b> · open-folio carry list. This is where V-item drift would first surface.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Immutable at seal — a post-seal discovery is next day's variance line, never an edit.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Internal file + FOM/GM morning distribution; retained 5 years.</span></div>
+  </div></div>
+</div>
+
+<!-- E2 SHIFT REMITTANCE -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">E2</span><h3>Shift Remittance</h3><span class="chip n">Internal</span><span class="ser">LH/SR/26/NNNNNN</span></div>
+    <div class="doc n">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">Internal control document — not for circulation</p></div>
+      <div class="dtitle"><h5>Shift Remittance</h5><span class="strip mut">Front office · Shift A · 30 Sep 2026</span></div>
+      <div class="dl"><span class="k">Remittance No</span><span class="v b">LH/SR/26/000871</span></div>
+      <div class="dl"><span class="k">Cashier</span><span class="v">Tashi Dema · 07:00–15:00</span></div>
+      <div class="dsub">Receipts this shift</div>
+      <table class="mini">
+        <tr><th>Receipt</th><th>Mode</th><th class="r">Nu.</th></tr>
+        <tr><td>LH/MR/26/002903</td><td>Transfer</td><td class="r">40,000.00</td></tr>
+        <tr><td>LH/MR/26/002904</td><td>Cash</td><td class="r">8,050.00</td></tr>
+        <tr><td>LH/MR/26/002905</td><td><b>VOID</b> — duplicate entry</td><td class="r">—</td></tr>
+        <tr><td>LH/MR/26/002906</td><td>Card</td><td class="r">12,600.00</td></tr>
+      </table>
+      <div class="dl"><span class="k">Cash</span><span class="v">8,050.00</span></div>
+      <div class="dl"><span class="k">Transfer · Card</span><span class="v">40,000.00 · 12,600.00</span></div>
+      <div class="dl tot"><span class="k">Total accounted · Nu.</span><span class="v">60,650.00</span></div>
+      <div class="dl"><span class="k">Cash drop</span><span class="v">Sealed bag CD-2609-A · safe 15:05</span></div>
+      <div class="sig"><span class="s">Cashier</span><span class="s">Verified · FOM</span></div>
+      <div class="dfoot"><span>LH/SR/26/000871 · INTERNAL · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/SR/{YY}/{NNNNNN}</code> — one per cashier shift.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 <i>Z7 Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">The <b>full receipt range including VOIDs</b> — a void is a listed non-gap, and its reason prints · mode totals reconciling to the receipts · cash drop reference · dual signature. This document is why the gapless receipt series is auditable in practice.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Immutable at verification; discrepancies become the next shift's opening note.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Internal; feeds the night audit receipts line.</span></div>
+  </div></div>
+</div>
+
+<!-- E3 OUTPUT TAX REGISTER -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">E3</span><h3>Output Tax Register</h3><span class="chip n">Internal</span><span class="ser">LH/TR/26/NNN · monthly</span></div>
+    <div class="doc n">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">Internal control document — GST filing support</p></div>
+      <div class="dtitle"><h5>Output Tax Register</h5><span class="strip mut">Period · October 2026</span></div>
+      <div class="dl"><span class="k">Register No</span><span class="v b">LH/TR/26/010</span></div>
+      <table class="mini">
+        <tr><th>Serial</th><th>Date</th><th>Customer</th><th class="r">Taxable</th><th class="r">GST</th></tr>
+        <tr><td>LH/TI/000139</td><td>15 Oct</td><td>K. Dorji</td><td class="r">32,628.57</td><td class="r">1,631.43</td></tr>
+        <tr><td>LH/TI/000140</td><td>15 Oct</td><td>Pelden Ent.</td><td class="r">64,380.95</td><td class="r">3,219.05</td></tr>
+        <tr><td>LH/TI/000141</td><td>20 Oct</td><td>Pelden Ent.</td><td class="r">4,400.00</td><td class="r">220.00</td></tr>
+        <tr><td>LH/AN/000027</td><td>24 Oct</td><td>S. Tobgay · vs 000138</td><td class="r">−2,200.00</td><td class="r">−110.00</td></tr>
+      </table>
+      <div class="dl"><span class="k">Rows LH/TI/000135–000138 (01–14 Oct)</span><span class="v">elided in specimen</span></div>
+      <div class="dl tot"><span class="k">Displayed rows · net output GST · Nu.</span><span class="v">4,960.48</span></div>
+      <div class="dl"><span class="k">Continuity</span><span class="v b">TI 000135→000141 · AN 000027 · no gaps</span></div>
+      <div class="sig"><span class="s">Prepared · Accounts</span><span class="s">Reviewed · GM</span></div>
+      <div class="dfoot"><span>LH/TR/26/010 · INTERNAL · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/TR/{YY}/{NNN}</code> — monthly; the filing-support artefact.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 <i>Z3 Z4</i> Z5 Z6 <i>Z7 Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Every fiscal serial of the period in order — invoices <b>and adjustment notes, signed</b> · taxable + GST columns · the <b>continuity line</b> asserting the gapless sequence · preparer/reviewer signatures. The register totals are what the GST return asserts; rr.202–203 retention applies.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Immutable at review; late discoveries enter the next period with cross-reference.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Internal; supports the DRC filing each period.</span></div>
+  </div></div>
+</div>
+
+<!-- E4 WRITE-OFF MEMO -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">E4</span><h3>Write-Off Memo</h3><span class="chip n">Internal</span><span class="ser">LH/WM/26/NNNNNN</span></div>
+    <div class="doc n">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">Internal control document — not for circulation</p></div>
+      <div class="dtitle"><h5>Write-Off Memo</h5><span class="strip mut">Irrecoverable balance · GM approval required</span></div>
+      <div class="dl"><span class="k">Memo No</span><span class="v b">LH/WM/26/000003</span></div>
+      <div class="dl"><span class="k">Date</span><span class="v">30 Jun 2026</span></div>
+      <div class="dsec"></div>
+      <div class="dl"><span class="k">Account</span><span class="v b">Walk-in folio · LH/26/E/04102</span></div>
+      <div class="dl"><span class="k">Balance written off</span><span class="v b">460.00</span></div>
+      <div class="dsub">Evidential chain</div>
+      <div class="dl"><span class="k">Invoice</span><span class="v">LH/TI/000129 · 02 Apr 2026</span></div>
+      <div class="dl"><span class="k">Reminders</span><span class="v">R1 20 Apr email · R2 05 May WhatsApp</span></div>
+      <div class="dl"><span class="k">Demand notice</span><span class="v">LH/DD/26/000004 · 26 May · no response</span></div>
+      <div class="dl"><span class="k">Basis</span><span class="v">Contact unreachable · cost of recovery exceeds balance</span></div>
+      <div class="dnote g">The invoice remains on record; the write-off is an accounting event. GST adjustment eligibility on bad debts to be confirmed with the tax advisor before any output-tax relief is claimed.</div>
+      <div class="sig"><span class="s">Proposed · Accounts</span><span class="s">Approved · General Manager</span></div>
+      <div class="dfoot"><span>LH/WM/26/000003 · INTERNAL · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv"><code>LH/WM/{YY}/{NNNNNN}</code> — internal; terminal step of the receivables ladder.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 Z3 <i>Z4</i> Z5 Z6 <i>Z7 Z8</i> Z9 Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">The <b>complete evidential chain</b> — invoice → logged reminders → numbered demand notice(s) → basis (D-23's chain, closed) · GM approval · the invoice-remains-on-record sentence · the advisor caveat on any GST relief. A write-off without the chain must not be approvable in the system.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Immutable at approval; a recovery afterwards is a receipt (purpose RECOVERY), never an un-write-off.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Internal; listed in the month's management pack.</span></div>
+  </div></div>
+</div>
+
+<!-- E5 ISSUANCE REGISTER -->
+<div class="dcard">
+  <div class="left">
+    <div class="dhead"><span class="code">E5</span><h3>Document Issuance Register</h3><span class="chip n">Internal</span><span class="ser">continuous · system-generated</span></div>
+    <div class="doc n">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">Internal control document — permanent record</p></div>
+      <div class="dtitle"><h5>Document Issuance Register</h5><span class="strip mut">Extract · 05 Aug – 24 Oct 2026</span></div>
+      <table class="mini">
+        <tr><th>Number</th><th>Type</th><th>Entity · actor</th><th>Issued</th><th>Disposition</th></tr>
+        <tr><td>LH/CV/26/000198</td><td>Voucher</td><td>E/04236 · Reservations</td><td>05 Aug 14:31</td><td><b>SUPERSEDED</b> → 000203</td></tr>
+        <tr><td>LH/MR/26/002905</td><td>Receipt</td><td>E/04244 · FO Shift A</td><td>30 Sep 11:02</td><td><b>VOID</b> — duplicate</td></tr>
+        <tr><td>LH/TI/000139</td><td>Tax Invoice</td><td>E/04211 · FO checkout</td><td>15 Oct 10:12</td><td>ISSUED</td></tr>
+        <tr><td>LH/TI/000140</td><td>Tax Invoice</td><td>E/04211 · FO checkout</td><td>15 Oct 10:14</td><td>ISSUED</td></tr>
+        <tr><td>LH/AN/000027</td><td>Adjustment</td><td>E/03887 · Accounts</td><td>24 Oct 16:40</td><td>ISSUED</td></tr>
+      </table>
+      <div class="dl"><span class="k">Integrity</span><span class="v b">Append-only · every allocation answered for</span></div>
+      <div class="dfoot"><span>ISSUANCE REGISTER · INTERNAL · T1.0</span><span>Extract page 1</span></div>
+    </div>
+  </div>
+  <div class="right"><div class="spec">
+    <div class="sprow"><span class="sk">Series</span><span class="sv">Not a numbered document — the <b>permanent append-only table</b> behind every series; rendered as extracts on demand.</span></div>
+    <div class="sprow"><span class="sk">Zones</span><span class="sv"><span class="zline">Z1 Z2 <i>Z3 Z4</i> Z5 <i>Z6 Z7 Z8 Z9</i> Z10</span></span></div>
+    <div class="sprow"><span class="sk">Must contain</span><span class="sv">Per allocation: number · type · entity · actor · timestamp · <b>disposition</b> ∈ ISSUED / VOID / CANCELLED / SUPERSEDED, with reason on non-ISSUED rows. This is what makes a VOID a non-gap and lets the fiscal sequence face any DRC continuity question.</span></div>
+    <div class="sprow"><span class="sk">Revision</span><span class="sv">Append-only, forever. Corrections are new rows referencing old ones.</span></div>
+    <div class="sprow"><span class="sk">Dispatch</span><span class="sv">Internal; the night audit and output register both read from it.</span></div>
+  </div></div>
+</div>
+
+
+<!-- ═══════════ ADDED STYLES · SECTIONS F & G ═══════════ -->
+<style>
+  .chain{display:flex;flex-wrap:wrap;align-items:stretch;background:var(--paper);
+    border:1px solid var(--rule);padding:16px 14px;margin:0 0 16px}
+  .cbox{flex:1;min-width:132px;padding:12px 10px;text-align:center;position:relative}
+  .cbox + .cbox::before{content:"→";position:absolute;left:-7px;top:50%;
+    transform:translateY(-50%);color:var(--mute);font-size:14px}
+  .cbox .cn{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;
+    color:var(--mute);display:block;margin-bottom:5px}
+  .cbox .ct{font-size:12.5px;font-weight:600;display:block;line-height:1.35}
+  .cbox .cd{font-size:10.5px;color:var(--slate);display:block;margin-top:5px;line-height:1.5}
+  .cbox.f .ct{color:var(--crimson)} .cbox.c .ct{color:var(--bronze)}
+  .cbox.i .ct{color:var(--steel)} .cbox.n .ct{color:var(--slgrey)}
+  .cbox.stop .ct{color:var(--ink)}
+  .cbox.stop{background:var(--wash)}
+
+  .gates{display:flex;flex-wrap:wrap;background:var(--paper);border:1px solid var(--rule);
+    padding:18px 16px;margin:0 0 16px}
+  .gate{flex:1;min-width:150px;padding:0 14px;border-left:2px solid var(--crimson);margin-bottom:8px}
+  .gate:first-child{border-left-color:var(--hair)}
+  .gate .gn{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;
+    color:var(--crimson);display:block;margin-bottom:5px}
+  .gate:first-child .gn{color:var(--mute)}
+  .gate .gt{font-size:12.5px;font-weight:600;display:block;line-height:1.35;margin-bottom:5px}
+  .gate .gd{font-size:11px;color:var(--slate);display:block;line-height:1.55}
+
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;margin-bottom:6px}
+  .plink{text-align:center;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--slate);padding:6px 0 12px}
+  .mechhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:30px 0 8px}
+  .mechhead .code{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--crimson)}
+  .mechhead h3{font-family:var(--serif);font-size:18px;font-weight:600;margin:0}
+  .mechnote{font-size:12.5px;color:#3A3E44;line-height:1.65;margin:0 0 14px;max-width:88ch}
+  .mechnote b{color:var(--ink)}
+
+  .doc.void{position:relative}
+  .doc.void::after{content:"VOID";position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;font-family:var(--serif);font-size:46px;font-weight:700;
+    color:rgba(168,30,45,.13);letter-spacing:.22em;pointer-events:none}
+  .doc.copyw{position:relative}
+  .doc.copyw::after{content:"COPY";position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;font-family:var(--serif);font-size:46px;font-weight:700;
+    color:rgba(63,74,87,.13);letter-spacing:.22em;pointer-events:none}
+
+  .regbox{background:var(--wash);border:1px solid var(--rule);padding:11px 14px;margin-top:10px;
+    font-family:var(--mono);font-size:10px;line-height:1.75;color:#3A3E44}
+  .regbox .rl{display:block}
+  .regbox .rk{color:var(--slate)}
+  .regbox b{color:var(--ink);font-weight:600}
+
+  .tabwrap{border:1px solid var(--rule);overflow-x:auto;margin:0 0 16px}
+  table.mtx{width:100%;border-collapse:collapse;font-size:12px;background:var(--paper)}
+  table.mtx th{font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--slate);
+    font-weight:600;text-align:left;padding:8px 11px;border-bottom:1px solid var(--ink);white-space:nowrap}
+  table.mtx td{padding:8px 11px;border-bottom:1px solid var(--hair);vertical-align:top;
+    line-height:1.5;color:#3A3E44}
+  table.mtx tr:last-child td{border-bottom:0}
+  table.mtx td b{color:var(--ink)}
+  table.mtx code{font-family:var(--mono);font-size:10px;background:var(--wash);padding:0 3px}
+  table.mtx td.never{color:var(--crimson)}
+
+  .oflag{background:var(--paper);border:1px solid var(--rule);border-left:3px solid var(--bronze);
+    padding:13px 17px;margin:16px 0;font-size:12.5px;line-height:1.65;color:#3A3E44}
+  .oflag .tag{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--bronze);font-weight:600;display:block;margin-bottom:5px}
+  .oflag b{color:var(--ink)}
+
+  .rulebox{background:var(--paper);border:1px solid var(--ink);padding:18px 22px;margin:18px 0 0}
+  .rulebox p{margin:0;font-family:var(--serif);font-size:15px;line-height:1.65;color:var(--ink)}
+  .rulebox p b{color:var(--crimson)}
+
+  @media (max-width:900px){ .pair{grid-template-columns:1fr} }
+</style>
+
+<!-- ══════════════════════════════ SECTION F ══════════════════════════════ -->
+<h2 class="fam"><b>F</b>Revision, void &amp; reprint — the mechanisms rendered</h2>
+<p class="famlede">Nothing in this system is edited. A document in a client's hands is a fact, and facts are <b>superseded</b>, <b>adjusted</b>, <b>voided</b>, or <b>reprinted</b> — never quietly rewritten. Six mechanisms cover every case. Each is shown here as the pair or chain it actually produces, with the system-side record beneath — because in every one of them, what the register holds differs from what the client sees.</p>
+
+<!-- F1 -->
+<div class="mechhead"><span class="code">F1</span><h3>Class 1 — Silent supersession</h3><span class="chip c">Commercial</span></div>
+<p class="mechnote">Applies to <b>Q · PI · CV · WO · CS</b>. The renegotiated quotation is a <b>new document with a fresh number</b>. Note what is <i>not</i> on the right-hand face: no "Rev 2", no "revised", no marker of any kind. The supersession lives entirely in the register. This is L14, and it is the single most counter-intuitive rule in the corpus for developers — the temptation to stamp a version is constant.</p>
+<div class="pair">
+  <div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Quotation</h5><span class="strip mut">Valid until 12 Aug 2026</span></div>
+      <div class="dl"><span class="k">Quotation No</span><span class="v b">LH/Q/26/000512</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04198</span></div>
+      <div class="dl"><span class="k">To</span><span class="v">Nandi Travels &amp; Tours</span></div>
+      <div class="dl"><span class="k">Deluxe · MAP · 2 nights · per night</span><span class="v">13,805.25</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">27,610.50</span></div>
+      <div class="dfoot"><span>LH/Q/26/000512 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>SUPERSEDED</b> → LH/Q/26/000516</span>
+      <span class="rl"><span class="rk">retained</span> &nbsp;permanently · never reused · never re-rendered to client</span>
+    </div>
+  </div>
+  <div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Quotation</h5><span class="strip mut">Valid until 20 Aug 2026</span></div>
+      <div class="dl"><span class="k">Quotation No</span><span class="v b">LH/Q/26/000516</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04198</span></div>
+      <div class="dl"><span class="k">To</span><span class="v">Nandi Travels &amp; Tours</span></div>
+      <div class="dl"><span class="k">Deluxe · MAP · 2 nights · per night</span><span class="v">12,650.00</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">25,300.00</span></div>
+      <div class="dfoot"><span>LH/Q/26/000516 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>ISSUED</b> · supersedes LH/Q/26/000512</span>
+      <span class="rl"><span class="rk">client sees</span> &nbsp;<b>no revision marker of any kind</b></span>
+    </div>
+  </div>
+</div>
+<div class="oflag"><span class="tag">Open · Q-01 (MOM-ARCH-2026-027)</span>Architect has raised whether the Quotation should carry revision identity. The recommendation on the table is a <b>lineage line</b> — <i>"Supersedes LH/Q/26/000511"</i> — which gives the counterparty continuity without reintroducing a version marker. Until ruled, the faces above stand as specified.</div>
+
+<!-- F2 -->
+<div class="mechhead"><span class="code">F2</span><h3>Class 2a — Adjustment note</h3><span class="chip f">Fiscal</span></div>
+<p class="mechnote">The tax invoice was right when issued and stays on the record exactly as issued. The correction travels as a <b>separate fiscal instrument</b> carrying the GST effect in Ngultrum — and the clock on it is statutory: <b>7 days from awareness</b>, not from the error.</p>
+<div class="chain">
+  <div class="cbox f"><span class="cn">Unchanged</span><span class="ct">TI/000138</span><span class="cd">Original invoice · Nu. 51,975.00 · remains on record, untouched</span></div>
+  <div class="cbox f"><span class="cn">New instrument</span><span class="ct">AN/000027</span><span class="cd">Credit Nu. −2,310.00 · GST effect −110.00 · awareness 20 Oct, issued 24 Oct</span></div>
+  <div class="cbox n"><span class="cn">Register</span><span class="ct">Output Tax Register</span><span class="cd">Signed row for the period · net output GST moves</span></div>
+  <div class="cbox i"><span class="cn">Statement</span><span class="ct">SoA</span><span class="cd">Account balance reflects the credit at next issue</span></div>
+</div>
+
+<!-- F3 -->
+<div class="mechhead"><span class="code">F3</span><h3>Class 2b — VOID and fresh issue</h3><span class="chip f">Fiscal</span></div>
+<p class="mechnote">For invoices that are <b>wholly wrong</b> — issued to the wrong party, or duplicated. There is nothing to adjust, because the supply on the face never happened as described. The number is voided, retained forever, and never reused; the correct invoice takes the next serial.</p>
+<div class="pair">
+  <div>
+    <div class="doc f void">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000142</span></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v">Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl"><span class="k">Banquet · private dinner · 22 Oct</span><span class="v">8,085.00</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">8,085.00</span></div>
+      <div class="dfoot"><span>LH/TI/000142 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>VOID</b> — billed to account holder; supply was to the private guest</span>
+      <span class="rl"><span class="rk">serial</span> &nbsp;retained · <b>never reused</b> · continuity unbroken</span>
+      <span class="rl"><span class="rk">if dispatched</span> &nbsp;written disregard advice recorded in the dispatch log</span>
+    </div>
+  </div>
+  <div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000143</span></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v">Mr Tenzin Norbu</span></div>
+      <div class="dl"><span class="k">Banquet · private dinner · 22 Oct</span><span class="v">8,085.00</span></div>
+      <div class="dl"><span class="k">Net 7,000.00 · Service 700.00 · GST 385.00</span><span class="v"></span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">8,085.00</span></div>
+      <div class="dnote">GST of Nu. 385.00 is included in the total consideration of Nu. 8,085.00.</div>
+      <div class="dfoot"><span>LH/TI/000143 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>ISSUED</b> · replaces VOID LH/TI/000142</span>
+      <span class="rl"><span class="rk">output register</span> &nbsp;000142 listed as VOID · only 000143 carries tax</span>
+    </div>
+  </div>
+</div>
+<div class="oflag"><span class="tag">Open · P-02</span>The <b>disregard advice</b> sent when a voided invoice has already reached the client is currently specified as a dispatch-log message, not a numbered instrument. If the Architect prefers it to be a numbered document, that is a register decision and would make the corpus thirty-one.</div>
+
+<!-- F4 -->
+<div class="mechhead"><span class="code">F4</span><h3>Class 2c — Amended invoice (r.191)</h3><span class="chip f">Fiscal</span></div>
+<p class="mechnote">For a defect in a <b>non-fiscal particular</b> — a misspelled name, a wrong address, a missing purchase-order reference — where the money and the tax are both correct. The amended invoice states its GST effect as <b>nil</b>, which is precisely what makes it not an adjustment note.</p>
+<div class="pair">
+  <div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000144</span></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v">Druk Cement Ltd · <i style="font-style:normal;color:var(--crimson)">TPN omitted</i></span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">11,550.00</span></div>
+      <div class="dfoot"><span>LH/TI/000144 · E&amp;OE · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>CANCELLED</b> — defective particular (r.187)</span>
+      <span class="rl"><span class="rk">retained</span> &nbsp;permanently, per r.191</span>
+    </div>
+  </div>
+  <div>
+    <div class="doc f">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice — Amended</h5><span class="strip">Amends LH/TI/000144 · GST effect: Nu. 0.00</span></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000145</span></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v">Druk Cement Ltd · TPN 2030411982</span></div>
+      <div class="dl"><span class="k">Net 10,000.00 · Service 1,000.00 · GST 550.00</span><span class="v"></span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">11,550.00</span></div>
+      <div class="dnote">GST of Nu. 550.00 is included in the total consideration of Nu. 11,550.00.</div>
+      <div class="dfoot"><span>LH/TI/000145 · E&amp;OE · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>ISSUED</b> · amends CANCELLED LH/TI/000144</span>
+      <span class="rl"><span class="rk">tax position</span> &nbsp;unchanged — the register carries the supply once</span>
+    </div>
+  </div>
+</div>
+
+<!-- F5 -->
+<div class="mechhead"><span class="code">F5</span><h3>Class 3 — Reprint</h3><span class="chip i">Informational</span> <span class="chip f">Fiscal · COPY</span></div>
+<p class="mechnote">Two different behaviours, and the difference is the whole reason statements were designed as non-fiscal. A <b>statement reprints freely</b> with an ordinal and timestamp, its content frozen at folio seal. A <b>fiscal document has one original</b> (r.188) — every subsequent render carries <b>COPY</b> across the face, so the original can never be in two hands at once.</p>
+<div class="pair">
+  <div>
+    <div class="doc i">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Master Bill</h5><span class="strip mut">Statement — not a tax invoice</span></div>
+      <div class="dl"><span class="k">Master Bill No</span><span class="v b">LH/MB/26/000287</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04211</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">101,860.00</span></div>
+      <div class="dnote g">Content frozen at folio seal · 15 Oct 2026 09:40.</div>
+      <div class="dfoot"><span>LH/MB/26/000287 · E&amp;OE · T1.0</span><span>Page 1 of 1 · <b>reprint 2 · 04 Nov 2026 11:16</b></span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">mechanism</span> &nbsp;<b>ordinal + timestamp</b> · unlimited reprints</span>
+      <span class="rl"><span class="rk">content</span> &nbsp;identical every time — the folio is sealed</span>
+    </div>
+  </div>
+  <div>
+    <div class="doc f copyw">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Tax Invoice</h5></div>
+      <div class="dl"><span class="k">Invoice No</span><span class="v b">LH/TI/000140</span></div>
+      <div class="dl"><span class="k">Billed to</span><span class="v">Pelden Enterprise Pvt. Ltd.</span></div>
+      <div class="dl tot"><span class="k">Total · Nu.</span><span class="v">67,600.00</span></div>
+      <div class="dnote">GST of Nu. 3,219.05 is included in the total consideration of Nu. 67,600.00.</div>
+      <div class="dfoot"><span>LH/TI/000140 · E&amp;OE · T1.0</span><span>Page 1 of 1 · <b>COPY</b></span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">mechanism</span> &nbsp;<b>COPY across the face</b> (r.188) · original issued once</span>
+      <span class="rl"><span class="rk">reissue request</span> &nbsp;logged · <b>15-day SLA</b> (rr.195–197)</span>
+    </div>
+  </div>
+</div>
+
+<!-- F6 -->
+<div class="mechhead"><span class="code">F6</span><h3>Receipt rule — VOID and reissue</h3><span class="chip c">Commercial · fiscal-grade</span></div>
+<p class="mechnote">A receipt is <b>never edited and never negative</b>. A wrong capture is voided in sequence and reissued; money actually going back is a <b>Refund Receipt</b>, a different document entirely. A duplicate capture voids with <i>no</i> replacement — the sequence carries a listed void, which is not a gap.</p>
+<div class="pair">
+  <div>
+    <div class="doc c void">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Money Receipt</h5></div>
+      <div class="dl"><span class="k">Receipt No</span><span class="v b">LH/MR/26/002911</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04244</span></div>
+      <div class="dl"><span class="k">Received from</span><span class="v">Mr A. Bose</span></div>
+      <div class="dl tot"><span class="k">Amount · Nu.</span><span class="v">12,600.00</span></div>
+      <div class="dl"><span class="k">Purpose</span><span class="v">SETTLEMENT</span></div>
+      <div class="dfoot"><span>LH/MR/26/002911 · T1.0</span><span>Page 1 of 1</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>VOID</b> — captured against the wrong booking</span>
+      <span class="rl"><span class="rk">reason</span> &nbsp;prints on the shift remittance row</span>
+    </div>
+  </div>
+  <div>
+    <div class="doc c">
+      <div class="dmast"><div class="dlogo">ལེ</div><div class="dname">LEGPHEL HOTEL</div>
+        <p class="daddr">3 Kilo, Phuentsholing · <b>TPN LAC00091 · GST TPN C10082014</b></p></div>
+      <div class="dtitle"><h5>Money Receipt</h5></div>
+      <div class="dl"><span class="k">Receipt No</span><span class="v b">LH/MR/26/002912</span></div>
+      <div class="dl"><span class="k">Booking Ref</span><span class="v red">LH/26/E/04247</span></div>
+      <div class="dl"><span class="k">Received from</span><span class="v">Mr A. Bose</span></div>
+      <div class="dl tot"><span class="k">Amount · Nu.</span><span class="v">12,600.00</span></div>
+      <div class="dl"><span class="k">In words</span><span class="v">Ngultrum Twelve Thousand Six Hundred Only</span></div>
+      <div class="dl"><span class="k">Purpose</span><span class="v b">SETTLEMENT</span></div>
+      <div class="dfoot"><span>LH/MR/26/002912 · T1.0</span><span>Page 1 of 1 · original</span></div>
+    </div>
+    <div class="regbox">
+      <span class="rl"><span class="rk">disposition</span> &nbsp;<b>ISSUED</b> · replaces VOID LH/MR/26/002911</span>
+      <span class="rl"><span class="rk">money</span> &nbsp;never moved — this is a <b>re-attribution</b>, not a refund</span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════ SECTION G ══════════════════════════════ -->
+<h2 class="fam"><b>G</b>Propagation — what moves when something changes</h2>
+<p class="famlede">The question behind this section: <b>if a money receipt changes, does the shift remittance entry change too?</b> The answer turns on a distinction the design depends on. A receipt is never <i>changed</i> — it is <b>voided and reissued</b>. And the shift remittance does not retroactively change either: it <b>lists the void</b>, with its reason, in the receipt range. That is precisely why the range is printed rather than the total alone. The propagation is real, but it is always one of three things — a <b>regeneration</b>, a <b>new instrument</b>, or a <b>register entry</b>. Never an edit.</p>
+
+<!-- G1 -->
+<div class="mechhead"><span class="code">G1</span><h3>The three gates</h3></div>
+<p class="mechnote">Every propagation question resolves the same way once you know <b>which gates the correction falls behind</b>. Before a gate, correction is free and invisible. After it, the correction becomes an instrument of its own.</p>
+<div class="gates">
+  <div class="gate"><span class="gn">Open</span><span class="gt">Folio live</span><span class="gd">Charges post and re-post freely. Component bills and the Master Bill are <b>views</b> — they regenerate on demand and no document exists yet to contradict.</span></div>
+  <div class="gate"><span class="gn">Gate 1</span><span class="gt">Folio seal · checkout</span><span class="gd">Statement content freezes. Reprints reproduce the sealed state with an ordinal. A later charge is a <b>post-stay supply</b>, not a re-opening.</span></div>
+  <div class="gate"><span class="gn">Gate 2</span><span class="gt">Fiscal issue</span><span class="gd">The tax invoice becomes immutable. Corrections take one of three paths only: <b>adjustment note</b> · <b>VOID + fresh</b> · <b>amended invoice</b>. The 7-day awareness clock starts.</span></div>
+  <div class="gate"><span class="gn">Gate 3</span><span class="gt">Period close · register + filing</span><span class="gd">The Output Tax Register is sealed and the return asserted. Later adjustments land in the <b>next period</b>, cross-referenced — never backdated into a closed one.</span></div>
+</div>
+
+<!-- G2 -->
+<div class="mechhead"><span class="code">G2</span><h3>Worked chain — a money receipt is voided</h3></div>
+<p class="mechnote">Three cases, distinguished only by <b>which gates have already closed</b>. The document set is the same; what differs is whether each affected document regenerates or holds.</p>
+
+<p class="mechnote"><b>Case A — void inside the open shift.</b> The simplest and the most common. Nothing has sealed.</p>
+<div class="chain">
+  <div class="cbox c"><span class="cn">Trigger</span><span class="ct">MR/002911 VOID</span><span class="cd">Wrong booking · reissued as MR/002912 same shift</span></div>
+  <div class="cbox n"><span class="cn">Regenerates</span><span class="ct">Shift Remittance</span><span class="cd">Lists <b>both</b> rows — 002911 VOID with reason, 002912 ISSUED. Mode totals count only the live one</span></div>
+  <div class="cbox i"><span class="cn">Regenerates</span><span class="ct">Folio position</span><span class="cd">Settlement block on the interim folio and Master Bill re-derives — both are views</span></div>
+  <div class="cbox n"><span class="cn">Records</span><span class="ct">Issuance Register</span><span class="cd">Two rows, permanently: VOID + reason, ISSUED + replaces-link</span></div>
+</div>
+
+<p class="mechnote"><b>Case B — void after the shift is verified.</b> Gate passed. The sealed remittance is an internal control document and is <b>immutable at verification</b> — it does not retroactively acquire a void row.</p>
+<div class="chain">
+  <div class="cbox c"><span class="cn">Trigger</span><span class="ct">MR/002911 VOID</span><span class="cd">Discovered next day</span></div>
+  <div class="cbox stop"><span class="cn">Holds — no change</span><span class="ct">Shift A Remittance</span><span class="cd">Sealed and signed. Stands exactly as verified</span></div>
+  <div class="cbox n"><span class="cn">Carries it</span><span class="ct">Current shift remittance</span><span class="cd">The reversal and reissue appear here, referencing the earlier receipt</span></div>
+  <div class="cbox n"><span class="cn">Variance line</span><span class="ct">Night Audit</span><span class="cd">Post-seal discovery is the next day's <b>variance line</b> — never an edit to a sealed audit</span></div>
+</div>
+
+<p class="mechnote"><b>Case C — void after a tax invoice citing that receipt has issued.</b> Gate 2 passed, and this is the case that needs an Architect ruling.</p>
+<div class="chain">
+  <div class="cbox c"><span class="cn">Trigger</span><span class="ct">MR/002903 VOID</span><span class="cd">Reissued as MR/002915 · same payer, same Nu. 40,000</span></div>
+  <div class="cbox f"><span class="cn">Cannot change</span><span class="ct">TI/000140</span><span class="cd">Face cites the advance as MR/002903. Fiscal documents are never revised</span></div>
+  <div class="cbox stop"><span class="cn">Unaffected</span><span class="ct">Money &amp; tax</span><span class="cd">Amount, GST, and balance due are all identical — nothing fiscal has moved</span></div>
+  <div class="cbox n"><span class="cn">Holds the truth</span><span class="ct">Issuance Register</span><span class="cd">The replaces-link makes the stale citation traceable in one lookup</span></div>
+</div>
+<div class="oflag"><span class="tag">Open · P-01 — Architect ruling required</span>When a voided receipt is cited on an already-issued tax invoice, the invoice face carries a reference that no longer stands, while the money and the tax are unchanged. <b>Two defensible paths:</b> <b>(i)</b> treat it as a defective non-fiscal particular and issue an <b>amended invoice</b> under r.191 with GST effect Nu. 0.00 — doctrinally clean, but it spends a fiscal serial and re-papers the client for a reference change; <b>(ii)</b> leave the invoice untouched and let the <b>issuance register's replaces-link</b> carry the substitution, on the reasoning that the invoice's statutory particulars are all still correct and the receipt reference is a convenience, not a r.185 requirement. <b>Recommendation: (ii)</b>, with a hard rule attached — <b>receipt corrections must be made before invoice issue wherever the folio is still open</b>, so this case stays rare by design. Path (i) reserved for where the payer identity itself changes, which does touch the invoice's substance.</div>
+
+<!-- G3 -->
+<div class="mechhead"><span class="code">G3</span><h3>Propagation matrix</h3></div>
+<p class="mechnote">Every recurring change event, and what each one moves. Read the <b>never changes</b> column first — it is the shorter discipline and the one that gets violated.</p>
+<div class="tabwrap"><table class="mtx">
+  <tr><th>Trigger event</th><th>Regenerates / re-issues</th><th>Never changes</th><th>Register &amp; log</th><th>Timer</th></tr>
+
+  <tr>
+    <td><b>Charge corrected before folio seal</b></td>
+    <td>Component bill view (RB/FB/SB) · Master Bill rollup · ladder · Interim Folio</td>
+    <td class="never">Nothing fiscal exists yet</td>
+    <td>Folio posting audit trail</td>
+    <td>—</td>
+  </tr>
+
+  <tr>
+    <td><b>Charge discovered after tax invoice issued</b></td>
+    <td><b>Adjustment Note</b> (new instrument) · SoA balance at next issue</td>
+    <td class="never">The tax invoice · the sealed Master Bill</td>
+    <td>AN in fiscal series · Output Tax Register signed row</td>
+    <td><b>7 days</b> from awareness</td>
+  </tr>
+
+  <tr>
+    <td><b>Room or rate changed mid-stay</b></td>
+    <td><b>Amendment Advice</b> · fresh Confirmation Voucher · Room Bill renders segment-grouped lines with effective dates</td>
+    <td class="never">The superseded voucher — no marker, no re-render</td>
+    <td>Supersession link on the prior CV</td>
+    <td>—</td>
+  </tr>
+
+  <tr>
+    <td><b>Booking amended pre-stay</b></td>
+    <td><b>Amendment Advice</b> · fresh CV · fresh PI where money moves</td>
+    <td class="never">Prior PI and CV faces</td>
+    <td>Two supersession links</td>
+    <td>Advance due date re-anchors</td>
+  </tr>
+
+  <tr>
+    <td><b>Booking cancelled after advance</b></td>
+    <td><b>Cancellation Confirmation</b> · <b>Refund Receipt</b></td>
+    <td class="never">The original Money Receipt — it records money that genuinely arrived</td>
+    <td>RR in gapless series · shift remittance (outward)</td>
+    <td>Refund SLA per terms</td>
+  </tr>
+
+  <tr>
+    <td><b>Damage assessed at checkout</b></td>
+    <td><b>Damage Advice</b> · post-stay <b>Tax Invoice</b> citing it</td>
+    <td class="never">The checkout invoice already issued for the stay</td>
+    <td>New TI serial · DA serial</td>
+    <td>7-day query window on the DA</td>
+  </tr>
+
+  <tr>
+    <td><b>Receipt voided (open folio)</b></td>
+    <td>Shift Remittance range listing · folio settlement position · Master Bill settlement block</td>
+    <td class="never">Any sealed shift remittance · any sealed night audit</td>
+    <td>VOID + ISSUED rows with replaces-link</td>
+    <td>—</td>
+  </tr>
+
+  <tr>
+    <td><b>Invoice unpaid past terms</b></td>
+    <td>Aged <b>Statement of Account</b> · logged reminders R1/R2 (<b>no series</b>) · <b>Dues Demand Notice</b> · ultimately <b>Write-Off Memo</b></td>
+    <td class="never">The invoice · its amount · its GST</td>
+    <td>Dispatch log per reminder · DD serial · WM serial</td>
+    <td>Cadence ladder per client preset</td>
+  </tr>
+
+  <tr>
+    <td><b>Agency commission corrected</b></td>
+    <td>Fresh <b>Commission Statement</b> · BCTI where the r.200 agreement applies</td>
+    <td class="never">Guest-facing documents — commission is invisible to them</td>
+    <td>Supersession link · BC serial</td>
+    <td>Settlement terms per agreement</td>
+  </tr>
+
+  <tr>
+    <td><b>Error found after period close</b></td>
+    <td>Adjustment Note in the <b>current</b> period · next Output Tax Register</td>
+    <td class="never">The closed register · the filed return</td>
+    <td>Cross-reference to the closed period</td>
+    <td>7 days from awareness, unchanged</td>
+  </tr>
+</table></div>
+
+<!-- G4 -->
+<div class="mechhead"><span class="code">G4</span><h3>The rule underneath all of it</h3></div>
+<div class="rulebox">
+  <p>Documents that are <b>views</b> regenerate. Documents that are <b>instruments</b> never do — a correction to an instrument is <b>another instrument</b>. And anything sealed, whether by folio seal, fiscal issue, or period close, is answered forward in time, never backward. The register is what makes this survivable: every number, live or void, answers for itself.</p>
+</div>
+<p class="mechnote" style="margin-top:16px">Which is why the build order in the handbook puts the <b>issuance register before every renderer</b>. A system that can regenerate a statement but cannot explain a voided serial has built the easy half.</p>
+
+
+<p class="famlede" style="margin-top:48px;padding-top:18px;border-top:1px solid #CFCDC7;max-width:none">
+<b>The count:</b> A1–A7 · B1–B6 · C1–C7 · D1–D5 · E1–E5 — thirty documents, ten zone components, one grid. Every figure above reconciles: the Pelden folio (41,400 + 34,260 + 26,200 = 101,860) splits into TI/000139 and TI/000140; the demand notice chases exactly what the aged statement shows; the shift remittance lists the receipt the invoice applied. That is the system working as one instrument. Normative text: <b>DFG-001 v0.2</b>.
+</p>
+
+</div>
+</body>
+</html>

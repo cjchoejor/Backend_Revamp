@@ -15,6 +15,8 @@ import { readDocument } from "../../lib/document-storage.js";
 import { generateOrLoadQuotationPdf } from "../../services/domain/quotation-pdf-service.js";
 import { generateOrLoadInvoicePdf } from "../../services/domain/invoice-pdf-service.js";
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
+import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
+import { readCancellationFiguresFromTrace } from "../../services/domain/cancellation-confirmation-figures.js";
 
 export const documentsRouter = Router();
 
@@ -122,6 +124,38 @@ documentsRouter.get("/invoices/:id/pdf", requireActorLevel("L1"), async (req, re
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.send(bytes);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * GET /api/entries/:id/cancellation-confirmation-pdf — the A5 Cancellation Confirmation.
+ *
+ * Unlike the other three, this document has no row of its own to carry a `pdfStorageKey` (see the
+ * header note in cancellation-confirmation-pdf-service), so the generator derives its key from the
+ * entry and the storage layer's write-once rule keeps it immutable. Figures are recovered from the
+ * cancellation's own TraceEvent rather than recomputed — the document must restate the decision the
+ * engine actually made, even if the ladder config has changed since.
+ */
+documentsRouter.get("/entries/:id/cancellation-confirmation-pdf", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const entry = await prisma.entry.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, status: true, inquiryId: true },
+    });
+    if (!entry) throw new NotFoundError("Entry");
+    if (entry.status !== "CANCELLED") {
+      throw new NotFoundError("Cancellation Confirmation (entry is not cancelled)");
+    }
+
+    const figures = await readCancellationFiguresFromTrace(prisma, entry.id);
+    const artifact = await generateCancellationConfirmationPdf(prisma, entry.id, figures);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${artifact.filename}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(artifact.bytes);
   } catch (e) {
     next(e);
   }

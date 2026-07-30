@@ -19,9 +19,11 @@
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
-import { loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
+import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
-import { renderQuotationProformaHtml, type QuotationProformaLine } from "../infrastructure/pdf-templates/quotation-proforma-template.js";
+import { renderLegphelQuotationHtml } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
+import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
+import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 
 type QuotationTerms = {
@@ -129,7 +131,16 @@ export async function generateOrLoadQuotationPdf(
     }>;
   })?.compositionTotals?.perRoom;
 
-  const linesForTemplate: QuotationProformaLine[] = [];
+  /** Intermediate print row — collapsed into the A1 table's four columns at render time. */
+  type PrintLine = {
+    date: Date;
+    roomNo?: string | null;
+    occupants: string;
+    mealPlan: string | null;
+    extraBeds: string | null;
+    amount: string | number;
+  };
+  const linesForTemplate: PrintLine[] = [];
   let totalAmount = 0;
   if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
     // One row per room summarising the whole stay for that room.
@@ -183,23 +194,54 @@ export async function generateOrLoadQuotationPdf(
   const fromName = hotel.hotelName;
   const documentDate = q.sentAt ?? new Date();
 
-  const html = renderQuotationProformaHtml({
-    documentTitle: "QUOTATION",
-    hotel,
-    toEmail,
-    fromName,
-    invoiceNumber: q.referenceNumber,
-    documentDate,
-    checkIn,
-    checkOut,
-    numberOfNights: nights,
-    primaryGuestName: guestName,
-    lines: linesForTemplate,
-    totalAmount,
-    advanceAmount,
-    focAmount,
-    totalPayable,
-    currency: "Nu.",
+  // A1 Quotation, house format (docs/bills). Amounts here are TAX-INCLUSIVE; the Net / Service /
+  // GST rows decompose that same total rather than adding to it, which is why the decomposition
+  // is read from the priced terms instead of being recomputed.
+  const ct =
+    (terms as unknown as {
+      compositionTotals?: {
+        subtotal?: string | number;
+        serviceCharge?: string | number;
+        gst?: string | number;
+        gstRate?: string | number;
+        serviceChargeRate?: string | number;
+      };
+    })?.compositionTotals ?? null;
+  const gstRate = Number(ct?.gstRate ?? 0);
+  const scRate = Number(ct?.serviceChargeRate ?? 0);
+  const netValue = ct ? Number(ct.subtotal ?? 0) : totalAmount;
+  const serviceCharge = ct ? Number(ct.serviceCharge ?? 0) : 0;
+  const gstValue = ct ? Number(ct.gst ?? 0) : 0;
+
+  const html = renderLegphelQuotationHtml({
+    masthead: mastheadFromHotelProfile(hotel),
+    quotationNo: q.referenceNumber,
+    bookingRef: q.entryId,
+    date: formatDocDate(documentDate),
+    validityStrip: q.validUntil
+      ? `Valid until ${formatDocDate(q.validUntil)} · Not a booking confirmation`
+      : "Not a booking confirmation",
+    to: toEmail ? `${guestName} · ${toEmail}` : guestName,
+    attn: null,
+    stay: formatStayRange(checkIn, checkOut, nights),
+    lines: linesForTemplate.map((l) => ({
+      description: [l.roomNo ? `Room ${l.roomNo}` : null, l.occupants, l.mealPlan, l.extraBeds && l.extraBeds !== "None" ? l.extraBeds : null]
+        .filter(Boolean)
+        .join(" · "),
+      nights: String(nights),
+      ratePerNight: formatMoney(Number(l.amount) / Math.max(1, nights)),
+      amount: formatMoney(l.amount),
+    })),
+    netValue: formatMoney(netValue),
+    serviceChargeLabel: scRate > 0 ? `Service charge ${(scRate * 100).toFixed(0)}%` : "Service charge",
+    serviceCharge: formatMoney(serviceCharge),
+    gstLabel: gstRate > 0 ? `GST @ ${(gstRate * 100).toFixed(0)}%` : "GST",
+    gst: formatMoney(gstValue),
+    total: formatMoney(totalAmount),
+    closingNote:
+      "Rates are inclusive of service charge and GST. Subject to availability at confirmation. " +
+      "A proforma invoice with advance terms follows on acceptance.",
+    tariffVersion: "T1.0",
   });
 
   const bytes = await renderHtmlToPdf(html);

@@ -20,15 +20,15 @@ import { NotFoundError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import {
   extractPrimaryPhone,
+  formatMoney,
   getPreparedByName,
   loadHotelProfileForRender,
 } from "../../lib/pdf-render-context.js";
 import { toDecimal } from "../../lib/money.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
-import {
-  renderQuotationProformaHtml,
-  type QuotationProformaLine,
-} from "../infrastructure/pdf-templates/quotation-proforma-template.js";
+import { renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
+import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
+import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
@@ -134,7 +134,15 @@ export async function generateOrLoadInvoicePdf(
     // Per-row Amount (Nu.) on Proforma is tax-INCLUSIVE — matches the Quotation convention.
     const perNightBreakdown = await computeStayCharges(prisma, nightlyRate, 1, roomCount);
     const perNightAmount = perNightBreakdown.total;
-    const linesForTemplate: QuotationProformaLine[] = [];
+    type PrintLine = {
+      date: Date;
+      roomNo?: string | null;
+      occupants: string;
+      mealPlan: string | null;
+      extraBeds: string | null;
+      amount: string | number;
+    };
+    const linesForTemplate: PrintLine[] = [];
     let totalAmount = 0;
     if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
       const inputsByRoomId = new Map(
@@ -183,23 +191,48 @@ export async function generateOrLoadInvoicePdf(
     const focAmount = 0;
     const totalPayable = totalAmount - advanceAmount - focAmount;
 
-    const html = renderQuotationProformaHtml({
-      documentTitle: "PROFORMA INVOICE",
-      hotel,
-      toEmail: guest?.email ?? inv.dispatchedTo ?? "",
-      fromName: hotel.hotelName,
-      invoiceNumber: invoiceRef,
-      documentDate: inv.dispatchedAt ?? inv.issuedAt ?? now,
-      checkIn,
-      checkOut,
-      numberOfNights: nights,
-      primaryGuestName: guestName,
-      lines: linesForTemplate,
-      totalAmount,
-      advanceAmount,
-      focAmount,
-      totalPayable,
-      currency: "Nu.",
+    // A2 Proforma Invoice, house format (docs/bills). The Net / Service / GST figures decompose
+    // the tax-inclusive total; they are not added to it.
+    const ctP =
+      (terms as unknown as {
+        compositionTotals?: {
+          subtotal?: string | number;
+          serviceCharge?: string | number;
+          gst?: string | number;
+        };
+      })?.compositionTotals ?? null;
+    const balanceAtCheckout = totalPayable;
+    const docDate = inv.dispatchedAt ?? inv.issuedAt ?? now;
+
+    const html = renderLegphelProformaHtml({
+      masthead: mastheadFromHotelProfile(hotel),
+      proformaNo: invoiceRef,
+      bookingRef: inv.entryId,
+      date: formatDocDate(docDate),
+      // The advance deadline lives on the payment-condition evaluation, not the invoice row, so it
+      // is left off until that value is threaded through rather than printed as a guess.
+      advanceDueBy: null,
+      to: guest?.email ? `${guestName} · ${guest.email}` : guestName,
+      forGuest: guestName,
+      stayLabel: "Stay",
+      stay: formatStayRange(checkIn, checkOut, nights),
+      rateLabel: [occupantsString, mealPlanDisplay || null, "per night"].filter(Boolean).join(" · "),
+      rateValue: formatMoney(perNightAmount),
+      totalInclusive: formatMoney(totalAmount),
+      decompositionNet: formatMoney(ctP?.subtotal ?? totalAmount),
+      decompositionService: formatMoney(ctP?.serviceCharge ?? 0),
+      decompositionGst: formatMoney(ctP?.gst ?? 0),
+      advanceDueNow: formatMoney(advanceAmount > 0 ? advanceAmount : totalAmount),
+      balanceAtCheckout: formatMoney(balanceAtCheckout),
+      bank: {
+        bankName: null,
+        accountName: hotel.accountNumber ? `${hotel.hotelName} · ${hotel.accountNumber}` : null,
+        accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
+      },
+      closingNote:
+        "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
+        "a confirmation voucher follows. Cancellation terms as disclosed for this booking.",
+      tariffVersion: "T1.0",
     });
 
     const bytes = await renderHtmlToPdf(html);

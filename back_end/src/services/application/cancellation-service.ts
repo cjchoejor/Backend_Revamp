@@ -13,6 +13,7 @@ import {
   type CancellationPolicyTiersConfig,
 } from "../../policies/14-cancellation/p35-cancellation-penalty-from-commitment.js";
 import { enforceGmAuthorityForCancellationPenaltyWaiver } from "../../policies/14-cancellation/p35-penalty-waiver-requires-gm-authority.js";
+import { generateCancellationConfirmationPdf } from "../domain/cancellation-confirmation-pdf-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import type { ActorLevel as RequestActorLevel } from "../../types/actor.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
@@ -28,6 +29,31 @@ import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.
  * Authority: L1 (FRONT_DESK) minimum per SIG-S3 line 129. GM authority required only when the
  * caller asks to waive the penalty.
  */
+/**
+ * Emit the A5 Cancellation Confirmation after a cancellation commits.
+ *
+ * Best-effort by design, matching how stage emails and the S4 voucher are dispatched: the
+ * cancellation is already committed and irreversible by this point, so a Puppeteer or disk failure
+ * must not surface as a failed cancellation. The document can always be produced later on demand
+ * via `GET /api/entries/:id/cancellation-confirmation-pdf`, which reads the same trace payload.
+ */
+async function emitCancellationConfirmationBestEffort(
+  prisma: PrismaClient,
+  entryId: string,
+  figures: { advanceHeld: number; retained: number; refundIssued: number; penaltyWaived: boolean },
+): Promise<void> {
+  try {
+    await generateCancellationConfirmationPdf(prisma, entryId, {
+      advanceHeld: figures.advanceHeld,
+      retained: figures.retained,
+      refundIssued: figures.refundIssued,
+      penaltyWaived: figures.penaltyWaived,
+    });
+  } catch (e) {
+    console.error(`[cancellation] confirmation PDF failed for ${entryId}:`, e);
+  }
+}
+
 export async function cancelEntryAtS3(
   prisma: PrismaClient,
   entryId: string,
@@ -273,6 +299,13 @@ export async function cancelEntryAtS3(
     }
   });
 
+  await emitCancellationConfirmationBestEffort(prisma, entryId, {
+    advanceHeld: advanceTotal,
+    retained: penalty,
+    refundIssued: Math.max(0, netRefund),
+    penaltyWaived: waiver && penalty === 0,
+  });
+
   return updated;
 }
 
@@ -473,6 +506,13 @@ export async function cancelEntryAtS5(
     } catch {
       // best-effort
     }
+  });
+
+  await emitCancellationConfirmationBestEffort(prisma, entryId, {
+    advanceHeld: advanceTotal,
+    retained: penalty,
+    refundIssued: Math.max(0, netRefund),
+    penaltyWaived: waiver && penalty === 0,
   });
 
   return updated;
