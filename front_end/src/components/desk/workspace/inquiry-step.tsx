@@ -232,6 +232,12 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         ? `${entry.guestCount} guest${entry.guestCount === 1 ? "" : "s"}`
         : null;
 
+  // After a successful search the room table appears far below the fold. Scroll to it once it has
+  // actually rendered — the rows arrive with the state update that follows this mutation, so
+  // scrolling inside onSuccess would target an element that isn't on the page yet.
+  const roomsRef = useRef<HTMLDivElement | null>(null);
+  const [scrollToRooms, setScrollToRooms] = useState(false);
+
   const searchMutation = useMutation({
     mutationFn: async () => {
       if (!checkIn || !checkOut) throw new Error("Check-in and check-out dates required");
@@ -251,6 +257,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     },
     onSuccess: (data) => {
       setSearchResult(data);
+      setScrollToRooms(true);
       toast.success("Availability saved — pick a preferred option");
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
       // Refresh the live backend feed so the new trace events / timers show immediately.
@@ -645,6 +652,17 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
 
   // The commit action + progress counter. Rendered below the table normally, hoisted into the
   // toolbar when expanded so nothing but the grid occupies the screen.
+  // Fires on the render where the rows first exist. `scrollToRooms` is cleared immediately so a
+  // later re-render (selecting a room, toggling per-night mode) never yanks the page again.
+  useEffect(() => {
+    if (!scrollToRooms || statusRows.length === 0) return;
+    setScrollToRooms(false);
+    const el = roomsRef.current;
+    if (!el) return;
+    const id = requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "start" }));
+    return () => cancelAnimationFrame(id);
+  }, [scrollToRooms, statusRows.length]);
+
   const sealReady = varyActive ? varyComplete : tableSel.length === numberOfRooms;
   const sealControls = (
     <>
@@ -963,7 +981,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           )}
 
           {statusRows.length > 0 ? (
-            <div className={expanded ? "rst-expandwrap on" : "rst-expandwrap"}>
+            <div ref={roomsRef} className={expanded ? "rst-expandwrap on" : "rst-expandwrap"}>
               {expanded && (
                 <div className="rst-expandbar">
                   <b>Room status · {statusRows.length} rooms</b>
@@ -1008,9 +1026,10 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     <Maximize2 style={{ width: 13, height: 13 }} /> Expand
                   </button>
                 )}
-                {/* Expanded view puts the commit action up here so the grid owns the rest of
-                    the screen — no controls below the table competing for vertical space. */}
-                {expanded && sealControls}
+                {/* The commit action lives in the toolbar in BOTH views. The room table is as tall
+                    as the hotel, so a seal button below it meant scrolling past every room to
+                    finish — and past the "N of M selected" counter that says whether you can. */}
+                {sealControls}
               </div>
               <RoomStatusTable
                 rows={statusRows}
@@ -1026,11 +1045,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                 dense={expanded}
                 showNames={showNames}
               />
-              {!expanded && (
-                <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-                  {sealControls}
-                </div>
-              )}
               {!expanded && statusRows.some((r) => r.bucket === "deficient") && (
                 <p style={{ fontSize: 11, color: "var(--warn)", margin: "10px 0 0", display: "inline-flex", gap: 5, alignItems: "center" }}>
                   <AlertTriangle style={{ width: 12, height: 12 }} />

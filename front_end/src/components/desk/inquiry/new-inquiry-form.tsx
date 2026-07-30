@@ -734,6 +734,11 @@ export function DeskNewInquiryForm() {
         <div className="bx-main formwrap" style={{ margin: 0, maxWidth: "none" }}>
         <div className="block">
           <BlockH>Who is this for</BlockH>
+          {/* Agent / corporate bookings lead with WHO is booking, not the guest's phone: the
+              account carries the negotiated rate card and (for corporates) the contract ref +
+              coordinator that pre-fill below, so picking it first is the operator's real first
+              move. Every other channel starts at the phone as before. */}
+          {!isEdit && partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
           {isEdit ? (
             <>
               <div className="field">
@@ -929,8 +934,6 @@ export function DeskNewInquiryForm() {
               </select>
             )}
           </div>
-
-          {!isEdit && partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
 
           {needsCorporateContext &&
             (() => {
