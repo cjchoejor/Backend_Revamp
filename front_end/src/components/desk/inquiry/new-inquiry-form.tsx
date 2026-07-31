@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { usePageTitle } from "@/hooks/use-page-title";
 import { ApiError } from "@/lib/api/client";
 import {
   createGuestProfile,
@@ -86,6 +87,29 @@ const CHANNEL_GROUPS: { label: string; keys: ChannelKey[] }[] = [
 const PHONE_CODES = ["+975", "+91", "+61"];
 const NATIONALITIES = ["Bhutanese", "Indian"];
 
+/**
+ * Split a stored phone back into the country-code + number pair the form edits.
+ *
+ * Needed when adopting an existing guest: the operator usually types only the first few digits
+ * before picking the match, so the form's own phone fields hold a fragment. Splitting the guest's
+ * stored number back into them makes every downstream read (`fullPhone`, and through it the
+ * booking's contact person) agree with the guest that was actually chosen.
+ */
+function splitStoredPhone(full: string | null | undefined): { code: string; number: string } {
+  const v = (full ?? "").trim();
+  if (!v) return { code: PHONE_CODES[0], number: "" };
+  // Stored numbers carry separators inconsistently ("+975-17-100-204", "+97577491134"), so strip
+  // any leading ones off the remainder rather than leaving the field starting with a hyphen.
+  const strip = (s: string) => s.replace(/^[\s-]+/, "").trim();
+  const preset = PHONE_CODES.find((c) => v.startsWith(c));
+  if (preset) return { code: preset, number: strip(v.slice(preset.length)) };
+  const m = v.match(/^(\+\d{1,4})[\s-]*(.*)$/);
+  if (m) return { code: m[1], number: strip(m[2]) };
+  // No dialling code at all — the majority of the imported legacy numbers. Leave the code blank
+  // rather than assuming one; the guest's stored number is what gets used downstream either way.
+  return { code: "", number: v };
+}
+
 function isoDate(d: Date): string {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
   return z.toISOString().slice(0, 10);
@@ -133,21 +157,41 @@ function BlockH({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** A preset dropdown with a "+" button that swaps in a free-text input for other values. */
+const OTHER_OPTION = "__other__";
+
+/**
+ * A preset dropdown that swaps in a free-text input for other values.
+ *
+ * Two ways in, because the two uses differ: `otherLabel` puts a named option in the list itself
+ * (right for nationality, where "Other" is a real answer an operator looks for), while the compact
+ * "+" button is used where the control is too narrow to spell it out (the phone dialling code).
+ */
 function PresetOrCustom({
   presets,
   value,
   onChange,
   customPlaceholder,
   selectStyle,
+  otherLabel,
 }: {
   presets: string[];
   value: string;
   onChange: (v: string) => void;
   customPlaceholder: string;
   selectStyle?: React.CSSProperties;
+  /** When set, the select carries this as a final option instead of showing the "+" button. */
+  otherLabel?: string;
 }) {
   const [custom, setCustom] = useState(!presets.includes(value) && value !== "");
+
+  // A value can also arrive from outside the control — adopting a guest whose stored nationality or
+  // dialling code isn't a preset. Flip to the free-text form so the value stays visible and
+  // editable, rather than a select silently rendering an option it doesn't have.
+  useEffect(() => {
+    if (value !== "" && !presets.includes(value)) setCustom(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
   if (custom) {
     return (
       <div style={{ display: "flex", gap: 6 }}>
@@ -172,26 +216,38 @@ function PresetOrCustom({
       </div>
     );
   }
+  const toCustom = () => {
+    setCustom(true);
+    onChange("");
+  };
+
   return (
     <div style={{ display: "flex", gap: 6 }}>
-      <select value={value} onChange={(e) => onChange(e.target.value)} style={selectStyle}>
+      <select
+        value={value}
+        onChange={(e) => (e.target.value === OTHER_OPTION ? toCustom() : onChange(e.target.value))}
+        style={selectStyle}
+      >
+        {/* A stored value can be blank — e.g. adopting a guest whose number has no dialling code.
+            Without a matching option the select would silently display the first preset while
+            holding "", which reads as a country code that was never chosen. */}
+        {value === "" && (
+          <option value="" disabled>
+            —
+          </option>
+        )}
         {presets.map((p) => (
           <option key={p} value={p}>
             {p}
           </option>
         ))}
+        {otherLabel && <option value={OTHER_OPTION}>{otherLabel}</option>}
       </select>
-      <button
-        type="button"
-        className="btn btn-ghost btn-sm"
-        title="Other"
-        onClick={() => {
-          setCustom(true);
-          onChange("");
-        }}
-      >
-        <Plus style={{ width: 14, height: 14 }} />
-      </button>
+      {!otherLabel && (
+        <button type="button" className="btn btn-ghost btn-sm" title="Other" onClick={toCustom}>
+          <Plus style={{ width: 14, height: 14 }} />
+        </button>
+      )}
     </div>
   );
 }
@@ -528,6 +584,20 @@ export function DeskNewInquiryForm() {
   // Corporate bookings require the client-ref / coordinator context (Policy 17).
   const needsCorporateContext = channel.channel === "CORPORATE";
 
+  // Land the cursor on the first field when the details screen opens, so the operator can start
+  // typing straight out of the booking-type screen. Which field that is depends on the channel —
+  // an agent booking leads with the agency search, everything else with the guest's phone — so
+  // rather than each branch owning a ref, the first enabled control in the form is found and
+  // focused. Re-runs on the New/Returning toggle, which also swaps the first field.
+  const formRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (wizardStep !== "details") return;
+    const first = formRef.current?.querySelector<HTMLElement>(
+      "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled])",
+    );
+    first?.focus();
+  }, [wizardStep, mode]);
+
   // Default check-in to TODAY client-side (avoids SSR hydration mismatch). In edit mode the
   // loaded booking's own dates win — only `today` (the date-field floor) is still set.
   useEffect(() => {
@@ -682,10 +752,26 @@ export function DeskNewInquiryForm() {
     setLastName(g.lastName);
     setEmail(g.email ?? "");
     if (g.nationality) setNationality(g.nationality);
+    // Adopt the guest's STORED number over whatever fragment was typed to find them. Without this
+    // the half-typed draft stayed in the phone fields and flowed into the booking's contact person.
+    if (g.phone) {
+      const { code, number } = splitStoredPhone(g.phone);
+      setPhoneCode(code);
+      setPhoneNumber(number);
+    }
     toast.success(`Using existing guest: ${g.firstName} ${g.lastName}`);
   };
 
   const fullPhone = phoneCode && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
+
+  // Name the tab after the guest as soon as there's a name to show, so an intake started in one tab
+  // is distinguishable from bookings open in others.
+  const tabGuestName = isEdit
+    ? guestFullName({ firstName: editGuest?.firstName ?? "", lastName: editGuest?.lastName ?? "" })
+    : selectedGuest
+      ? guestFullName(selectedGuest)
+      : `${firstName.trim()} ${lastName.trim()}`.trim();
+  usePageTitle(tabGuestName || null, isEdit ? "Edit booking" : "New booking");
 
   const newGuestComplete = !!(firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim());
 
@@ -782,8 +868,10 @@ export function DeskNewInquiryForm() {
       // defaults to the guest: for a walk-in / individual the guest IS the contact. Only set at
       // intake (Entry.contactPerson* is S1-editable only). Falls back to the guest profile's phone
       // for a returning guest whose number wasn't re-typed into the form.
+      // An adopted guest's stored number beats the form draft: the draft is often just the fragment
+      // typed to find them, and their profile holds the real number.
       const contactPersonName = partyContact?.name?.trim() || `${firstName.trim()} ${lastName.trim()}`.trim();
-      const contactPersonPhone = partyContact?.phone?.trim() || fullPhone || selectedGuest?.phone || "";
+      const contactPersonPhone = partyContact?.phone?.trim() || selectedGuest?.phone || fullPhone || "";
 
       return createEntry(session, {
         inquiryId: inquiry.id,
@@ -930,7 +1018,7 @@ export function DeskNewInquiryForm() {
       </p>
 
       <div className="bx-split" style={{ maxWidth: 1020, margin: "18px auto 0" }}>
-        <div className="bx-main formwrap" style={{ margin: 0, maxWidth: "none" }}>
+        <div className="bx-main formwrap" ref={formRef} style={{ margin: 0, maxWidth: "none" }}>
         <div className="block">
           <BlockH>Who is this for</BlockH>
           {/* Agent / corporate bookings lead with WHO is booking, not the guest's phone: the
@@ -1035,7 +1123,6 @@ export function DeskNewInquiryForm() {
                     placeholder="17 88 21 04"
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
-                    autoFocus
                   />
                 </div>
                 {phoneMatches.length > 0 && (
@@ -1069,7 +1156,8 @@ export function DeskNewInquiryForm() {
                     presets={NATIONALITIES}
                     value={nationality}
                     onChange={setNationality}
-                    customPlaceholder="Nationality"
+                    customPlaceholder="Type the nationality"
+                    otherLabel="Other…"
                   />
                 </div>
                 <div className="field">
@@ -1137,22 +1225,37 @@ export function DeskNewInquiryForm() {
           <BlockH>Inquiry &amp; stay</BlockH>
           <div className="field">
             <label>Came in as</label>
-            {isEdit ? (
-              <select value={editChannelKey} disabled>
-                {CHANNELS.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <select value={channelKey} onChange={(e) => setChannelKey(e.target.value as ChannelKey)}>
-                {CHANNELS.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
+            {/* Fixed once chosen. The channel was picked on the previous screen and it decides what
+                the rest of this form asks for — the agent/corporate picker, the Policy 17 corporate
+                context, the useType on the entry. Changing it here would strand fields already
+                filled in against a different channel, so it's shown read-only and changed by going
+                back to the booking-type screen, which resets those fields cleanly. */}
+            <select value={isEdit ? editChannelKey : channelKey} disabled>
+              {CHANNELS.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            {!isEdit && (
+              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "5px 0 0" }}>
+                Set when you picked the booking type.{" "}
+                <button
+                  type="button"
+                  onClick={() => setWizardStep("type")}
+                  style={{
+                    background: "none",
+                    border: 0,
+                    padding: 0,
+                    cursor: "pointer",
+                    color: "var(--terra-d)",
+                    textDecoration: "underline",
+                    font: "inherit",
+                  }}
+                >
+                  Change it
+                </button>
+              </p>
             )}
           </div>
 

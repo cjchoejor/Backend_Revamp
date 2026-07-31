@@ -19,6 +19,7 @@ import {
 } from "@/lib/api/entries";
 import { countdownTo, findParkTimer } from "@/lib/desk/timers";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
+import { usePageTitle } from "@/hooks/use-page-title";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
@@ -767,6 +768,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     () => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null),
     [entry, paymentStatusQuery.data],
   );
+
+  // Name the tab after the guest — the desk routinely has several bookings open at once, and
+  // identically-titled tabs can only be told apart by clicking into them.
+  usePageTitle(entry ? guestName(entry.guestProfile ?? entry.inquiry?.guestProfile) : null);
 
   if (sessionLoading || entryQuery.isLoading) {
     return (
