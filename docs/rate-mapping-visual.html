@@ -119,6 +119,40 @@
   .pinrow .pin { margin-top:2px; }
   .pinrow .body { flex:1; min-width:0; }
   .pinrow .body .t { font-weight:700; font-size:13px; }
+
+  /* ===== ERD (pgAdmin-style entity boxes + relationship lines) ===== */
+  .erdbox { background:#fbfbfc; border:1px solid var(--line); border-radius:10px; padding:14px 14px 12px; margin:12px 0 4px; overflow-x:auto; }
+  .erdcap { font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--ink2); font-weight:700; margin-bottom:11px; }
+  .erd { display:flex; align-items:center; min-width:min-content; }
+  .ent { flex:none; border:1px solid #8fa9c4; border-radius:5px; background:#fff; min-width:198px; font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; box-shadow:0 1px 3px rgba(30,60,90,.10); }
+  .ent .eh { background:#d7e6f5; color:#12405f; border-bottom:1px solid #8fa9c4; border-radius:4px 4px 0 0; padding:5px 9px; font-size:11.5px; font-weight:700; }
+  .ent .eh small { display:block; font-weight:400; font-size:9.5px; color:#4a6c8c; letter-spacing:.2px; }
+  .ec { display:flex; align-items:baseline; gap:6px; padding:3.5px 9px; font-size:11px; border-bottom:1px solid #f0f3f7; white-space:nowrap; }
+  .ec:last-child { border-bottom:none; }
+  .ec .k { font-size:8.5px; font-weight:800; letter-spacing:.3px; border-radius:3px; padding:0 4px; width:27px; text-align:center; flex:none; }
+  .ec.pk .k { background:#fbe3a6; color:#6b4c00; border:1px solid #e2bd63; }
+  .ec.fk .k { background:#d7e6f5; color:#12405f; border:1px solid #8fa9c4; }
+  .ec.soft .k { background:#f6f1e7; color:#7a6a52; border:1px dashed #c9b795; }
+  .ec.plain .k { background:transparent; border:1px solid transparent; color:transparent; }
+  .ec .cn { flex:1; }
+  .ec .ty { color:#93a0ae; font-size:9.5px; }
+  .ec.val { background:#fff6e8; }
+  .ec.val .cn { font-weight:700; color:#8a5a12; }
+  .ec.warnv { background:#fdeceb; }
+  .ec.warnv .cn { font-weight:700; color:var(--warn); }
+  .ec.dead .cn { color:#a8a29a; text-decoration:line-through; }
+
+  .entstack { flex:none; display:flex; flex-direction:column; gap:9px; }
+  .rel { flex:none; display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:134px; padding:0 2px; }
+  .rel .rlbl { font-family:ui-monospace,Consolas,monospace; font-size:9.5px; color:#12405f; background:#eef3f8; border:1px solid #c8d8e6; border-radius:9px; padding:1px 7px; white-space:nowrap; margin-bottom:4px; }
+  .rel .rlbl.softl { background:#f6f1e7; border-color:#ddd3bd; color:#7a6a52; }
+  .rel .rline { display:flex; align-items:center; width:100%; }
+  .rel .rline .bar { flex:1; border-top:1.5px solid #7f9bb8; }
+  .rel .rline .bar.softl { border-top:1.5px dashed #bda98a; }
+  .rel .rline .card { font-size:11px; font-weight:800; color:#4a6c8c; padding:0 3px; line-height:1; }
+  .rel .rnote { font-size:9.5px; color:var(--ink2); margin-top:5px; text-align:center; max-width:132px; line-height:1.35; }
+  .erdkey { display:flex; gap:14px; flex-wrap:wrap; font-size:10.5px; color:var(--ink2); margin-top:11px; padding-top:9px; border-top:1px dashed var(--line); align-items:center; }
+  .erdkey b { font-weight:700; color:var(--ink); }
 </style>
 </head>
 <body>
@@ -149,7 +183,7 @@
 <div class="wrap">
 
 <h1>Money Flow Map — where every rate &amp; amount comes from</h1>
-<p class="sub">Traced from the live code on <b>integration-prod-frontend</b> (2026-07-28). Each section shows a <b>mock of the actual screen or PDF</b> with numbered pins <span class="pin">1</span> — below it, each pin is explained twice: first <b>in simple words</b>, then as the exact technical chain (database → backend → screen).</p>
+<p class="sub">Traced from the live code on <b>integration-prod-frontend</b> (2026-07-28). Each section shows a <b>mock of the actual screen or PDF</b> with numbered pins <span class="pin">1</span> — below it, each pin is explained twice: first <b>in simple words</b>, then as the exact technical chain (database → backend → screen). Each stage also carries an <b>ERD panel</b> in pgAdmin style showing which tables join to which, on which column, and which columns the money is actually read from. Only the keys and money columns are drawn — not every column in the table.</p>
 
 <div class="legend">
   <b>Legend:</b>
@@ -172,14 +206,14 @@
     <td>When the room assignment is created at S5, the system re-calculates the room's frozen price — but it only looks at the <b>negotiated rate the operator typed</b>. If none was typed (the quote used the normal hotel rate), it calculates from <b>0</b> instead of going back to the quote's real price. <span class="fileref">lib/hydrate-room-assignment-composition.ts</span></td>
   </tr>
   <tr>
-    <td class="no">2</td>
-    <td><b>Meal plans add Nu 0</b> to the price on walk-in / direct bookings</td>
-    <td>Default meal prices only exist on agent rate cards. A booking with no agent has no meal price source, so CP/MAPL pax get counted but multiplied by 0 — unless the operator types negotiated meal rates per room.</td>
+    <td class="no" style="color:var(--ok)">2</td>
+    <td><b style="color:var(--ok)">FIXED 2026-07-30</b> — was: meal plans and extra beds add Nu 0 on walk-in / direct bookings</td>
+    <td>Bed and meal rates only existed on agent rate cards, so a booking with no agent multiplied every CP/MAPL pax and every extra bed by 0. Now the new <span class="chip tbl">house_tariffs</span> table supplies them for any booking without a rate card. <b>Extra bed = 900</b>, seeded from the legacy <code>room.csv</code>. <b>Meal rates are still NULL</b> — the legacy data contains no meal tariff, so walk-in meals price at 0 until an L4 sets them via <code>POST /api/admin/house-tariff</code>.</td>
   </tr>
   <tr>
-    <td class="no">3</td>
-    <td>The agent's <b>meal-plan package rates and child discount % never apply</b></td>
-    <td><span class="chip tbl">rate_cards.cpRate / mapLunchRate / mapDinnerRate / apRate / cnbPercent</span> are saved in the admin console but no pricing code ever reads them. Only the room base rate + à-la-carte meal add-ons are used.</td>
+    <td class="no" style="color:var(--ok)">3</td>
+    <td><b style="color:var(--ok)">FIXED 2026-07-30</b> — was: the agent's meal-plan package rates never apply</td>
+    <td><span class="chip tbl">rate_cards.cpRate / mapLunchRate / mapDinnerRate / apRate</span> are now read, via the new <code>mealPlanRates</code> block on the rate resolver. A guest on a plan is charged the plan rate instead of the meals it covers. No price moved for existing agents — all 127 active cards have <code>cpRate == breakfastRate</code> and <code>apRate == bf+ln+dn</code>, so plan rate and fallback are the same number; a real package discount will now be honoured. <b><span class="chip tbl">cnbPercent</span> is still unread</b> — see risk #4.</td>
   </tr>
   <tr>
     <td class="no">4</td>
@@ -238,6 +272,82 @@
   <div class="note fileref">lib/agent-rate-resolution.ts — agent rates skip the minimum-selling-rate (MSR) check because they're contractual.</div>
 </div>
 
+<div class="erdbox">
+  <div class="erdcap">ERD · how a booking reaches its agent rate</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">inquiries</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">text</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">travelAgentId</span><span class="ty">text NULL</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">corporateAccountId</span><span class="ty">text NULL</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">travelAgentId → id</div>
+      <div class="rline"><span class="card">∞</span><span class="bar"></span><span class="card">1</span></div>
+      <div class="rnote">exactly one of the two is set — never both</div>
+    </div>
+
+    <div class="entstack">
+      <div class="ent">
+        <div class="eh">travel_agents</div>
+        <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">TA-…</span></div>
+        <div class="ec plain"><span class="k">·</span><span class="cn">displayName</span><span class="ty">text</span></div>
+      </div>
+      <div class="ent">
+        <div class="eh">corporate_accounts</div>
+        <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">CORP-…</span></div>
+        <div class="ec plain"><span class="k">·</span><span class="cn">displayName</span><span class="ty">text</span></div>
+      </div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl softl">partyId = id</div>
+      <div class="rline"><span class="card">1</span><span class="bar softl"></span><span class="card">∞</span></div>
+      <div class="rnote"><b>no FK constraint</b> — polymorphic; partyType says which table to look in</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">rate_cards<small>append-only versions</small></div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">RC-…</span></div>
+      <div class="ec soft"><span class="k">~FK</span><span class="cn">partyId</span><span class="ty">text</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">partyType</span><span class="ty">enum</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">roomBaseRate</span><span class="ty">numeric</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">extraBedRate</span><span class="ty">numeric</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">breakfast/lunch/dinnerRate</span><span class="ty">numeric</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">cpRate · mapLunchRate</span><span class="ty">read since 07-30</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">mapDinnerRate · apRate</span><span class="ty">read since 07-30</span></div>
+      <div class="ec dead"><span class="k">·</span><span class="cn">cnbPercent</span><span class="ty">never read</span></div>
+      <div class="ec warnv"><span class="k">·</span><span class="cn">rateIsTaxInclusive</span><span class="ty">not wired</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">effectiveFrom / effectiveTo</span><span class="ty">timestamp</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">rateCardId → id</div>
+      <div class="rline"><span class="card">∞</span><span class="bar"></span><span class="card">1</span></div>
+      <div class="rnote">override wins over the card's base rate</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">room_type_rate_overrides</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">rateCardId</span><span class="ty">text</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">roomTypeId</span><span class="ty">text</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">roomBaseRate</span><span class="ty">numeric</span></div>
+    </div>
+  </div>
+
+  <div class="erdkey">
+    <b>Reading these diagrams:</b>
+    <span><span class="ec pk" style="display:inline-flex;padding:0;border:none"><span class="k">PK</span></span> primary key</span>
+    <span><span class="ec fk" style="display:inline-flex;padding:0;border:none"><span class="k">FK</span></span> real foreign key (solid line)</span>
+    <span><span class="ec soft" style="display:inline-flex;padding:0;border:none"><span class="k">~FK</span></span> soft link, joined in code (dashed line)</span>
+    <span style="background:#fff6e8;padding:1px 6px;border-radius:3px"><b style="color:#8a5a12">amber</b> = a money column actually read</span>
+    <span style="color:#a8a29a;text-decoration:line-through">grey</span> = column exists but nothing reads it
+    <span><b>1 / ∞</b> = one-to-many direction</span>
+  </div>
+</div>
+
 <div class="flow">
   <div class="ui">③ Hotel rate plan (default)</div>
   <div class="chain">
@@ -250,6 +360,116 @@
     <span class="step"><span class="lbl">discount</span><span class="chip cmp">effectiveRate = nightly × (1 − %/100)</span></span>
   </div>
   <div class="note fileref">lib/load-eligible-rate-plans.ts → pricing-pipeline-engine.ts. Discount limits per staff level: <span class="chip pol">registry.discount.actorCeiling</span>.</div>
+</div>
+
+<div class="erdbox">
+  <div class="erdcap">ERD · the hotel's own price list</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">room_types</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">text</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">code · name</span><span class="ty">text</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl softl">roomTypeId = id</div>
+      <div class="rline"><span class="card">1</span><span class="bar softl"></span><span class="card">∞</span></div>
+      <div class="rnote"><b>nullable, no FK</b> — NULL means the plan applies to every room type</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">rate_plan_registry</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec soft"><span class="k">~FK</span><span class="cn">roomTypeId</span><span class="ty">text NULL</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">baseRate</span><span class="ty">numeric</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">msr</span><span class="ty">floor price</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">isActive</span><span class="ty">bool</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl softl">no join column</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">·</span></div>
+      <div class="rnote"><b>matched by dates</b> — the season whose startDate…endDate covers the stay, highest priority wins</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">season_calendar</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">startDate · endDate</span><span class="ty">timestamp</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">rateMultiplier</span><span class="ty">numeric</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">priority</span><span class="ty">int</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl softl">computed</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">▶</span></div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">(in memory)<small>never stored as a column</small></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">resolvedNightlyRate</span><span class="ty">baseRate × multiplier</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">effectiveRate</span><span class="ty">× (1 − disc%)</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="flow">
+  <div class="ui">Add-ons — extra bed &amp; meals <small>(separate from the room rate)</small></div>
+  <div class="explain"><b>In simple words:</b> the three origins above decide the <b>room</b> price only. Extra beds and meals come from a different place, and which place depends on one thing: does this booking have a travel agent or company attached?
+  <br><br>
+  <b>Agent / corporate booking</b> → their rate card's add-on rates. A blank field on the card means the hotel agreed nothing, so it stays free (Nu 0).<br>
+  <b>Walk-in / direct / OTA</b> → the hotel's own <b>house tariff</b> (added 2026-07-30). Before this existed, these bookings had no add-on source at all, so every bed and every meal was silently free.
+  <br><br>
+  The two never mix: a booking with a rate card never falls back to the house tariff.</div>
+</div>
+
+<div class="erdbox">
+  <div class="erdcap">ERD · where extra-bed and meal rates come from</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">inquiries</div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">travelAgentId</span><span class="ty">NULL on walk-in</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">corporateAccountId</span><span class="ty">NULL on walk-in</span></div>
+    </div>
+
+    <div class="rel" style="min-width:150px">
+      <div class="rlbl softl">both NULL?</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">▶</span></div>
+      <div class="rnote">the branch is decided here — one source or the other, never both</div>
+    </div>
+
+    <div class="entstack">
+      <div class="ent">
+        <div class="eh">rate_cards<small>if an agent / company IS linked</small></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">extraBedRate</span><span class="ty">blank ⇒ free</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">breakfast/lunch/dinnerRate</span><span class="ty">numeric</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">cp · mapLunch · mapDinner · apRate</span><span class="ty">plan rates</span></div>
+      </div>
+      <div class="ent">
+        <div class="eh">house_tariffs<small>if NEITHER is linked — walk-in / direct / OTA</small></div>
+        <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">extraBedRate</span><span class="ty">numeric NULL</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">breakfast/lunch/dinnerRate</span><span class="ty">numeric NULL</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">cp · mapLunch · mapDinner · apRate</span><span class="ty">plan rates</span></div>
+        <div class="ec plain"><span class="k">·</span><span class="cn">effectiveFrom / effectiveTo</span><span class="ty">append-only</span></div>
+      </div>
+    </div>
+
+    <div class="rel" style="min-width:158px">
+      <div class="rlbl softl">per-room override</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">▶</span></div>
+      <div class="rnote">anything the operator types for a specific room beats both sources</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">room_assignments<small>operator-typed, per room</small></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">negotiatedExtraBedRate</span><span class="ty">wins if set</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">negotiatedBreakfastRate</span><span class="ty">wins if set</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">negotiatedLunch/DinnerRate</span><span class="ty">wins if set</span></div>
+    </div>
+  </div>
+
+  <div class="okbox" style="margin-top:12px"><b>Meal plans replace their meals.</b> A guest on AP is charged <code>apRate</code> once — not breakfast + lunch + dinner added up. If a plan's rate is left blank, it falls back to summing exactly those meals, so quotes priced before plan rates existed reprice to the cent.</div>
 </div>
 
 <div class="flow">
@@ -325,6 +545,73 @@
   <div class="mtitle">Quote history</div>
   <div class="mline"><span class="d"><b>QUO-20260728-0016</b> <small>Superseded</small></span><span class="a">Nu 1,963.50 <span class="pin">7</span></span></div>
   <div class="mline"><span class="d"><b>QUO-20260728-0018</b> <small>Sent</small></span><span class="a">Nu 1,767.15</span></div>
+</div>
+
+<div class="erdbox">
+  <div class="erdcap">ERD · where an S2 quote stores its money</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">entries</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">ENT-…</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">inquiryId</span><span class="ty">INQ-…</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">checkInDate · checkOutDate</span><span class="ty">timestamp</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">entryId → id</div>
+      <div class="rline"><span class="card">1</span><span class="bar"></span><span class="card">∞</span></div>
+      <div class="rnote">many quote versions per booking — each supersede adds a row</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">quotations</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">QUO-…</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">text</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">segmentId</span><span class="ty">text</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">totalAmount</span><span class="ty">numeric ← pin 7</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">commercialTerms</span><span class="ty">jsonb</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">state · versionNumber</span><span class="ty">enum · int</span></div>
+      <div class="ec soft"><span class="k">~FK</span><span class="cn">supersededById</span><span class="ty">→ quotations.id</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">quotationId → id</div>
+      <div class="rline"><span class="card">1</span><span class="bar"></span><span class="card">∞</span></div>
+      <div class="rnote">one row per printed PDF line, written once at render</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">quotation_lines<small>immutable print snapshot</small></div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">quotationId</span><span class="ty">QUO-…</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">lineNumber</span><span class="ty">int</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">occupants · mealPlan</span><span class="ty">text ← pin 9</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">amount</span><span class="ty">tax-INCL ← pin 10</span></div>
+    </div>
+  </div>
+
+  <div class="erd" style="margin-top:16px">
+    <div class="ent" style="min-width:230px">
+      <div class="eh">quotations.commercialTerms<small>jsonb — not columns, but this is where the real pricing lives</small></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">effectiveRate</span><span class="ty">post-discount / night</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">resolvedNightlyRate</span><span class="ty">pre-discount</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">discountAppliedPercent</span><span class="ty">← pin 8</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">roomCompositions[]</span><span class="ty">per-room input</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">compositionTotals.perRoom[]</span><span class="ty">per-room output</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">agentRate { … }</span><span class="ty">when agent-linked</span></div>
+    </div>
+
+    <div class="rel" style="min-width:150px">
+      <div class="rlbl softl">read at S4 confirm</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">▶</span></div>
+      <div class="rnote">copied wholesale into the reservation — see the S4 diagram</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">reservations</div>
+      <div class="ec val"><span class="k">·</span><span class="cn">frozenCommercialTerms</span><span class="ty">jsonb copy</span></div>
+    </div>
+  </div>
 </div>
 
 <div class="pinlist">
@@ -505,6 +792,79 @@ meals money      = Σ pax × (negotiated ?? rate_cards.mealRate ?? 0)</div>
   </div>
 </div>
 
+<div class="erdbox">
+  <div class="erdcap">ERD · the S4 freeze — one reservation per booking</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">quotations<small>state = ACCEPTED</small></div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">QUO-…</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">text</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">commercialTerms</span><span class="ty">jsonb</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">acceptedAt</span><span class="ty">timestamp</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">entryId → id</div>
+      <div class="rline"><span class="card">∞</span><span class="bar"></span><span class="card">1</span></div>
+      <div class="rnote">only the ACCEPTED version is read</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">entries</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">ENT-…</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">currentStage</span><span class="ty">S3 → S4</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">entryId → id · UNIQUE</div>
+      <div class="rline"><span class="card">1</span><span class="bar"></span><span class="card">1</span></div>
+      <div class="rnote"><b>one-to-one</b> — a booking can only ever have one reservation</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">reservations<small>the legal photocopy</small></div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">UNIQUE</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">frozenRate</span><span class="ty">per night</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">frozenCommercialTerms</span><span class="ty">jsonb copy</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">frozenCheckIn/OutDate</span><span class="ty">timestamp</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">frozenBillingModel</span><span class="ty">text</span></div>
+    </div>
+  </div>
+
+  <div class="erd" style="margin-top:16px">
+    <div class="ent">
+      <div class="eh">folios</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">UNIQUE</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">folioId → id</div>
+      <div class="rline"><span class="card">1</span><span class="bar"></span><span class="card">∞</span></div>
+      <div class="rnote">append-only history of who pays</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">billing_model_transition_records</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">folioId</span><span class="ty">uuid</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">fromModel</span><span class="ty">text NULL</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">toModel</span><span class="ty">latest row wins</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl softl">latest toModel</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">▶</span></div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">reservations</div>
+      <div class="ec val"><span class="k">·</span><span class="cn">frozenBillingModel</span><span class="ty">text</span></div>
+    </div>
+  </div>
+</div>
+
 <div class="flow">
   <div class="ui">Confirmation voucher PDF</div>
   <div class="explain"><b>In simple words:</b> the voucher lists who sleeps where with which meals — it shows <b>no money</b>. Rows come from the room assignments if they exist; usually at S4 they don't yet, so it falls back to the booking-level adult/child counts with the room number left blank.</div>
@@ -530,6 +890,52 @@ meals money      = Σ pax × (negotiated ?? rate_cards.mealRate ?? 0)</div>
       <span class="step"><span class="chip tbl">room_assignments.frozenSubtotal / frozenTotal</span> = priced from <code>negotiatedRoomRate ?? 0</code> ⚠</span>
     </div>
   </div></div>
+</div>
+
+<div class="erdbox">
+  <div class="erdcap">ERD · S5 hydration — and exactly where risk #1 goes wrong</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">reservations</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">UNIQUE</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">frozenCommercialTerms</span><span class="ty">holds the RIGHT price</span></div>
+    </div>
+
+    <div class="rel" style="min-width:168px">
+      <div class="rlbl softl">✗ not read</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl" style="border-top-color:#d9a3a0"></span><span class="card" style="color:var(--warn)">✗</span></div>
+      <div class="rnote" style="color:var(--warn)"><b>the missing link.</b> compositionTotals.perRoom already has each room's real total — the hydration code never opens it</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">room_assignments</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">RA-…</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">ENT-…</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">roomId</span><span class="ty">text</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">startDate · endDate</span><span class="ty">per-night range</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">occupantCount · adultCount</span><span class="ty">int</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">cnb6To10 · cnbUnder6</span><span class="ty">int</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">mealPlanCp/Mapl/Mapd/Ap</span><span class="ty">int</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">negotiatedRoomRate</span><span class="ty">NULL if untyped</span></div>
+      <div class="ec warnv"><span class="k">·</span><span class="cn">frozenSubtotal</span><span class="ty">0.00 when NULL ⚠</span></div>
+      <div class="ec warnv"><span class="k">·</span><span class="cn">frozenTotal</span><span class="ty">0.00 when NULL ⚠</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">roomId → id</div>
+      <div class="rline"><span class="card">∞</span><span class="bar"></span><span class="card">1</span></div>
+      <div class="rnote">one row per room per date range</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">rooms</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">text</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">roomNumber</span><span class="ty">"202"</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">roomTypeId</span><span class="ty">text</span></div>
+    </div>
+  </div>
+  <div class="warnbox" style="margin-top:12px"><b>Read the red line as:</b> the correct per-room total is sitting one table to the left, already calculated and legally frozen. The fix is to price from <code>frozenCommercialTerms.compositionTotals.perRoom[roomId]</code> instead of recomputing from <code>negotiatedRoomRate ?? 0</code>.</div>
 </div>
 
 <!-- ============================================================ -->
@@ -567,6 +973,69 @@ meals money      = Σ pax × (negotiated ?? rate_cards.mealRate ?? 0)</div>
     <div class="explain"><b>In simple words:</b> one running total, always recomputed by the server: everything charged, minus everything paid in, plus refunds out, minus write-offs. The screen never adds lines up itself — it prints the server's number.</div>
     <div class="math">folios.outstandingBalance = max(0, Σ folio_lines.amount − Σ payments IN + Σ payments OUT − Σ write-offs)</div>
   </div></div>
+</div>
+
+<div class="erdbox">
+  <div class="erdcap">ERD · the folio — everything the guest owes hangs off one row</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">room_assignments</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">RA-…</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">frozenSubtotal</span><span class="ty">÷ nights</span></div>
+    </div>
+
+    <div class="rel" style="min-width:150px">
+      <div class="rlbl softl">night audit writes</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl"></span><span class="card">▶</span></div>
+      <div class="rnote">one ROOM_CHARGE row per room per night — <b>no FK</b>, the worker inserts it</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">folio_lines<small>append-only</small></div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">folioId</span><span class="ty">uuid</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">lineType</span><span class="ty">ROOM_CHARGE · F_AND_B · SERVICE</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">amount</span><span class="ty">numeric</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">chargeDate</span><span class="ty">timestamp</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">nightAuditRecordId</span><span class="ty">NULL if manual</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">folioId → id</div>
+      <div class="rline"><span class="card">∞</span><span class="bar"></span><span class="card">1</span></div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">folios</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">UNIQUE</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">outstandingBalance</span><span class="ty">← pin 20</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">state</span><span class="ty">PROVISIONAL→SETTLED</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">folioId → id</div>
+      <div class="rline"><span class="card">1</span><span class="bar"></span><span class="card">∞</span></div>
+      <div class="rnote">both subtract from the balance</div>
+    </div>
+
+    <div class="entstack">
+      <div class="ent">
+        <div class="eh">payment_records</div>
+        <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">PMT-…</span></div>
+        <div class="ec fk"><span class="k">FK</span><span class="cn">folioId</span><span class="ty">uuid</span></div>
+        <div class="ec soft"><span class="k">~FK</span><span class="cn">invoiceId</span><span class="ty">no constraint</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">amount</span><span class="ty">← pin 14</span></div>
+        <div class="ec plain"><span class="k">·</span><span class="cn">paymentDirection</span><span class="ty">IN / OUT</span></div>
+      </div>
+      <div class="ent">
+        <div class="eh">write_off_records</div>
+        <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+        <div class="ec fk"><span class="k">FK</span><span class="cn">folioId</span><span class="ty">uuid</span></div>
+        <div class="ec val"><span class="k">·</span><span class="cn">writtenOffAmount</span><span class="ty">numeric</span></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ============================================================ -->
@@ -617,7 +1086,83 @@ meals money      = Σ pax × (negotiated ?? rate_cards.mealRate ?? 0)</div>
   </div></div>
 </div>
 
-<p class="note" style="margin-top:30px">Generated 2026-07-28 from commit <code>998a0ec</code>. Mock screens are simplified recreations of the desk UI, not screenshots — field positions may differ slightly, sources are exact. When pricing code changes, regenerate this map.</p>
+<div class="erdbox">
+  <div class="erdcap">ERD · the final invoice and its permanent line snapshot</div>
+  <div class="erd">
+    <div class="ent">
+      <div class="eh">folios</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">outstandingBalance</span><span class="ty">what settlement charges</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">folioId → id</div>
+      <div class="rline"><span class="card">∞</span><span class="bar"></span><span class="card">1</span></div>
+      <div class="rnote">PROFORMA at S3, FINAL at S8 — plus a new row per correction</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">invoices</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">folioId</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">entryId</span><span class="ty">ENT-…</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">invoiceType</span><span class="ty">PROFORMA / FINAL</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">totalAmount</span><span class="ty">numeric</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">dispatchedAt</span><span class="ty">gates S4 confirm</span></div>
+      <div class="ec soft"><span class="k">~FK</span><span class="cn">supersededById</span><span class="ty">→ invoices.id</span></div>
+    </div>
+
+    <div class="rel">
+      <div class="rlbl">invoiceId → id</div>
+      <div class="rline"><span class="card">1</span><span class="bar"></span><span class="card">∞</span></div>
+      <div class="rnote">written once at render, never updated</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">invoice_lines<small>immutable print snapshot</small></div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec fk"><span class="k">FK</span><span class="cn">invoiceId</span><span class="ty">uuid</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">particular · roomNo · nights</span><span class="ty">as printed</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">rate</span><span class="ty">tax-EXCL ← pin 21</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">amount</span><span class="ty">numeric</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">serviceChargeAmount · gstAmount</span><span class="ty">← pin 22</span></div>
+      <div class="ec soft"><span class="k">~FK</span><span class="cn">folioLineId</span><span class="ty">audit trail only</span></div>
+    </div>
+  </div>
+
+  <div class="erd" style="margin-top:16px">
+    <div class="ent">
+      <div class="eh">folio_lines</div>
+      <div class="ec pk"><span class="k">PK</span><span class="cn">id</span><span class="ty">uuid</span></div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">lineType</span><span class="ty">filtered to ROOM_CHARGE</span></div>
+      <div class="ec val"><span class="k">·</span><span class="cn">amount</span><span class="ty">numeric</span></div>
+    </div>
+
+    <div class="rel" style="min-width:186px">
+      <div class="rlbl softl">folioLineId = id</div>
+      <div class="rline"><span class="card">1</span><span class="bar softl"></span><span class="card">∞</span></div>
+      <div class="rnote"><b>nullable, no FK</b> — lets an auditor trace a printed line back to its charge without the invoice breaking if the folio changes</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">invoice_lines</div>
+      <div class="ec soft"><span class="k">~FK</span><span class="cn">folioLineId</span><span class="ty">text NULL</span></div>
+    </div>
+
+    <div class="rel" style="min-width:150px">
+      <div class="rlbl softl">F&amp;B excluded</div>
+      <div class="rline"><span class="card">·</span><span class="bar softl" style="border-top-color:#d9a3a0"></span><span class="card" style="color:var(--warn)">✗</span></div>
+      <div class="rnote" style="color:var(--warn)">risk #8 — F_AND_B and its tax lines never reach the printed room invoice</div>
+    </div>
+
+    <div class="ent">
+      <div class="eh">(the printed PDF)</div>
+      <div class="ec plain"><span class="k">·</span><span class="cn">room rows only</span><span class="ty">by instruction</span></div>
+    </div>
+  </div>
+</div>
+
+<p class="note" style="margin-top:30px">Generated 2026-07-28, ERD panels added 2026-07-29. Mock screens are simplified recreations of the desk UI, not screenshots — field positions may differ slightly, sources are exact. ERD boxes show only primary keys, foreign keys and money columns; every column name and relationship was read from <code>prisma/schema.prisma</code>, not inferred. When pricing code or the schema changes, regenerate this map.</p>
 </div>
 </body>
 </html>

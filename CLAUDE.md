@@ -379,6 +379,42 @@ All three share the same engine — release hold → cancel timers → supersede
 
 S3 cancel UI lives on the S3 workspace ([s3-workspace.tsx](front_end/src/components/stages/s3/s3-workspace.tsx)) as a destructive-styled "Cancel booking" card, fronted by a two-step confirm (prompt for reason, then danger-variant confirm).
 
+### HouseTariff — the hotel's own add-on price list (2026-07-30)
+
+Extra-bed and meal rates only ever existed on `RateCard`, which is per-agent. Every booking with no `travelAgentId` / `corporateAccountId` (walk-in, direct, OTA) therefore resolved add-ons to `?? 0` — a room with an extra bed and two guests on CP was billed for the room alone. Confirmed across all 31 composition-priced quotations in the dev DB: every one had `extraBedRate` and all three meal rates at 0.
+
+**Model** `HouseTariff` ([schema.prisma](back_end/prisma/schema.prisma), migration `20260730060818_house_tariff_addon_rates`) — `extraBedRate`, `breakfastRate`/`lunchRate`/`dinnerRate`, `cpRate`/`mapLunchRate`/`mapDinnerRate`/`apRate`, `currency`, `effectiveFrom`/`effectiveTo`. Append-only versioned like RateCard.
+
+**Deliberately NOT here: the room rate.** Room rates stay on `rate_plan_registry`, which already supports per-room-type pricing via `RatePlanRegistry.roomTypeId` (filtered in [load-eligible-rate-plans.ts](back_end/src/lib/load-eligible-rate-plans.ts)) *and* carries the MSR floor, season multiplier and discount pipeline. A second room-rate source would bypass all four. **Per-room-type room rates = one rate plan per room type.**
+
+**Per-room-type rate plans seeded from legacy data (2026-07-30)** — [`scripts/seed-rate-plans-from-legacy-rooms.ts`](back_end/scripts/seed-rate-plans-from-legacy-rooms.ts) reads `scripts/import-data/legacy-bookings/room.csv` (the old system's room table) and creates one `INDIVIDUAL` plan per room type. Dry run by default; `--commit` to write. Already applied.
+
+- Typed `INDIVIDUAL` because the engine sorts by type priority (`INDIVIDUAL: 1` … `RACK: 5`) and takes `sorted[0]`, so a type-bound plan beats the universal RACK fallback for its type.
+- Rates: STS 1558.44 · STD 1800 · DDX 2100 · EXE 3000 · SUT 4500 · DSA 3500 · EXA 4000 · PST 5000 · FAK 4000 · FAT 3500. **STS is dirty legacy data** — the other 9 types all satisfy `indianRate = base × 1.1`, but Standard Single's 1,650 implies a base of 1,500, and `1558.44 × 1.155 = 1800.00` exactly (a tax-exclusive back-solve). Imported faithfully rather than guessed; fix on `/admin/rate-plans` when the real number is confirmed.
+- Deactivated (not deleted) the orphan plan `"Deluxe Weekday"`, which was bound to `roomTypeId = "DLX-0001"` — a room type that does not exist, so it could never match and all 10 types were being priced from the single 1,700 RACK plan.
+- `msr` left null on the seeded plans (no MSR column in the legacy CSV); the engine treats null as a 70%-of-nightly placeholder floor.
+- `HouseTariff.extraBedRate = 900` seeded from the CSV's uniform `extra_rate_per_bed`. Meal rates left NULL — the legacy data has **no meal tariff anywhere** (checked room / reservation_billing / all_room_billing / registration_rooms; the last records which plans a guest took, never their price).
+- **Not seeded: the Indian-nationality tier** (`room_rate_indian`, uniformly base × 1.1). There is no nationality input in the pricing engine, and adding these as extra plans would leave two `INDIVIDUAL` plans eligible per room type with an arbitrary tie-break.
+
+**Known consequence — the S1 indicative chip is non-deterministic.** `loadEligibleRatePlans` returns every plan when no `roomTypeId` is known (the S1 chip before a type filter is applied). With 10 `INDIVIDUAL` plans now tying on priority, `sorted[0]` is whatever Postgres returns first. S2 is unaffected (a room type is always known there, so exactly one `INDIVIDUAL` plan is eligible). Fix if it matters: tie-break on `rateAmount` ascending so the chip shows a "from" price.
+
+- **Resolution**: [`lib/house-tariff.ts`](back_end/src/lib/house-tariff.ts) — `resolveActiveHouseTariff(db, asOf?)`, 30s TTL cache on the "now" lookup, `invalidateHouseTariffCache()` called by admin writes.
+- **Applies only when there is no rate card.** Agent/corporate cards do NOT fall back to the house tariff — a blank field on a negotiated card stays 0 (operator decision). The two sources never mix on one booking.
+- **Admin**: [`house-tariff-admin-service.ts`](back_end/src/services/admin/house-tariff-admin-service.ts) + [`house-tariff-router.ts`](back_end/src/routes/admin/house-tariff-router.ts) — `GET /api/admin/house-tariff[?asOf=]`, `GET /api/admin/house-tariff/versions`, `POST /api/admin/house-tariff`. L4-only. Audit event `ADMIN.HOUSE_TARIFF_VERSION_CREATED` carries a field-level diff. Belongs to Domain 03 Commercial; it is a **user-requested extension, not one of the 26 ACIG §6.2 services** — leave the hardcoded `26` in `overview-router.ts` alone.
+- **Admin UI**: `/admin/house-tariff` in the friend's frontend ([page.tsx](friend_front_end/src/app/(app)/admin/house-tariff/page.tsx)), nav entry under **Domain 03 · Commercial** between Rate plans and Seasons. Client fns `getHouseTariff` / `listHouseTariffVersions` / `saveHouseTariff` in [`lib/api/admin.ts`](friend_front_end/src/lib/api/admin.ts). The page shows a live "what each plan will charge" table distinguishing explicitly-set prices from ones added up from their meals, plus the version history. Note `friend_front_end` DOES have a full 32-page admin console under `src/app/(app)/admin/` — a glob that doesn't traverse the `(app)` route group will wrongly report none.
+
+**Per-room negotiation beats a configured plan price, per plan.** If the hotel sets CP = 350 and the operator negotiates breakfast to 300 for one room, CP guests in that room are charged 300 — otherwise the negotiation would silently do nothing. The override is scoped to plans that actually include a re-priced meal: negotiating dinner re-derives MAPD and AP but leaves CP (breakfast-only) on the configured price. Verified: with tariff bf 350 / ln 440 / dn 440 and plan prices CP 350 / MAPL 750 / MAPD 750 / AP 1100, negotiating lunch to 0 gives CP 350 · MAPL 350 · MAPD 750 · AP 790.
+
+**Meal-plan pricing semantics changed** ([room-composition.ts](back_end/src/lib/room-composition.ts)): a guest on a plan is charged the plan rate **instead of** the individual meals that plan covers (CP = breakfast; MAPL = breakfast+lunch; MAPD = breakfast+dinner; AP = all three). À-la-carte rates now apply only to `others*Pax` guests. When a plan rate is `null` the plan falls back to the sum of its constituent meals, which is algebraically identical to the old formula:
+
+```
+cp·bf + mapl·(bf+ln) + mapd·(bf+dn) + ap·(bf+ln+dn)  ==  bf·(cp+mapl+mapd+ap) + ln·(mapl+ap) + dn·(mapd+ap)
+```
+
+`0` means deliberately free; only `null` triggers the fallback. Verified: all 33 rooms across every stored composition quote reprice to the cent. `RoomCompositionRateContext` gained optional `defaultCpRate` / `defaultMapLunchRate` / `defaultMapDinnerRate` / `defaultApRate`; the result gained `cpRate`/`mapLunchRate`/`mapDinnerRate`/`apRate` plus `perNightPlanMeals` / `perNightAlaCarteMeals`, all surfaced in `commercialTerms.compositionTotals.perRoom[]`.
+
+**Closes wrong-pull risk #3**: `rate_cards.cpRate` / `mapLunchRate` / `mapDinnerRate` / `apRate` are now read (via the new `mealPlanRates` block on `AgentRateBreakdown`). Zero pricing change for existing agents — all 127 active cards have `cpRate == breakfastRate` and `apRate == breakfast+lunch+dinner`, so the plan rate and the fallback are the same number. A genuine package discount (`cp < bf`) will now finally be honoured.
+
 ### Room availability is decided by DATES, never by `currentClaimState` (2026-07-29)
 
 `Room.currentClaimState` is a **NOW snapshot with no date dimension**. It is display/ops state — it must never be used to answer "can this room be booked?", because that question is always about a date range.
