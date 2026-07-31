@@ -149,6 +149,7 @@ export function RoomStatusTable({
   maxSelect,
   onToggle,
   onToggleCell,
+  onCappedClick,
   disabled,
   dense,
   showNames,
@@ -165,6 +166,9 @@ export function RoomStatusTable({
   maxSelect: number;
   onToggle: (row: RoomStatusRow) => void;
   onToggleCell?: (row: RoomStatusRow, night: string) => void;
+  /** Fired when a pickable room is clicked while the selection is already full — the parent
+   *  explains (toast) instead of the click dying silently. */
+  onCappedClick?: () => void;
   disabled?: boolean;
   /** Compact rows so the whole room list fits one screen (used by the expanded view). */
   dense?: boolean;
@@ -285,7 +289,9 @@ export function RoomStatusTable({
             // (the parent replaces the selection) instead of being blocked.
             const atCap = !sel && selectedIds.length >= maxSelect && maxSelect > 1;
             const rowClickable = canPick && !disabled && !atCap;
-            const rowCls = sel ? "sel" : rowClickable ? "pick" : "dis";
+            // "capped" = would be pickable, but the selection is full — dimmed harder than a
+            // merely-unavailable row, and clicking it explains itself via onCappedClick.
+            const rowCls = sel ? "sel" : rowClickable ? "pick" : canPick && atCap ? "dis capped" : "dis";
             const title = vary
               ? `Room ${row.roomNumber} — pick nights in the columns`
               : !canPick
@@ -298,7 +304,11 @@ export function RoomStatusTable({
                 key={row.roomId}
                 className={vary ? "dis" : rowCls}
                 title={title}
-                onClick={() => !vary && (rowClickable || sel) && !disabled && onToggle(row)}
+                onClick={() => {
+                  if (vary || disabled) return;
+                  if (rowClickable || sel) onToggle(row);
+                  else if (canPick && atCap) onCappedClick?.();
+                }}
               >
                 <td className={`rst-no ${pinCls(0)}`} style={pin(0)}>
                   {sel && <Check style={{ width: 11, height: 11, marginRight: 4, verticalAlign: "-1px" }} />}
