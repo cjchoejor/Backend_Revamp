@@ -8,6 +8,7 @@ import { useSession } from "@/hooks/use-session";
 import {
   duplicateSegment,
   DUPLICATE_ROUTES,
+  recallSegment,
   getSegmentHistory,
   type SegmentHistoryItem,
 } from "@/lib/api/entries";
@@ -433,6 +434,7 @@ function RoundCard({
  * booking needs FOM), then the source segment's basis is recalled and revalidated into it.
  */
 function DuplicateModal({
+  entryId,
   fromSegmentNumber,
   routes,
   stage,
@@ -443,6 +445,7 @@ function DuplicateModal({
   onConfirm,
   onClose,
 }: {
+  entryId: string;
   fromSegmentNumber: number;
   routes: string[];
   stage: string;
@@ -453,6 +456,32 @@ function DuplicateModal({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const { session } = useSession();
+
+  // Dry run: re-check the basis against today's availability and show what would actually carry
+  // over BEFORE the re-entry commits. A copy is not undoable — the re-entry seals the current
+  // segment either way — so finding out afterwards that half the rooms were dropped is too late.
+  // Writes nothing (`apply` defaults to false); the commit below is what writes.
+  const preview = useQuery({
+    queryKey: ["segment-recall-preview", entryId, fromSegmentNumber],
+    queryFn: () => recallSegment(session!, entryId, fromSegmentNumber),
+    enabled: !!session,
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  const p = preview.data ?? null;
+  const dropped = p?.droppedRooms ?? [];
+  const droppedIds = new Set(dropped.map((d) => d.roomId));
+  const allRooms = p?.recalledSelection.rooms ?? [];
+  const carrying = allRooms.filter((r) => !droppedIds.has(r.roomId));
+  // Rooms that survive but whose conditions moved — still carried, worth seeing before you commit.
+  const changedIds = new Set<string>([
+    ...(p?.delta.deficientDelta ?? []).map((d) => d.roomId),
+    ...(p?.delta.pricingDelta ?? []).map((d) => d.roomId),
+  ]);
+
   return (
     <div className="scrim" onClick={(e) => e.target === e.currentTarget && !pending && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" aria-label="Copy into a new segment">
@@ -471,6 +500,71 @@ function DuplicateModal({
             segment&rsquo;s basis is re-checked against today&rsquo;s availability before it&rsquo;s carried over — so
             you start from what worked rather than from a blank search.
           </p>
+          <div style={{ marginTop: 12 }}>
+            <div
+              style={{
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: 0.3,
+                textTransform: "uppercase",
+                color: "var(--ink-3)",
+                marginBottom: 6,
+              }}
+            >
+              What would carry over
+            </div>
+            {preview.isLoading ? (
+              <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>Re-checking availability…</p>
+            ) : preview.isError ? (
+              <p style={{ fontSize: 12, color: "var(--warn)", margin: 0 }}>
+                Couldn&rsquo;t re-check availability just now
+                {preview.error instanceof ApiError ? ` — ${preview.error.message}` : ""}. You can still
+                copy; the rooms are re-checked again as part of it, and any that no longer work are
+                left out.
+              </p>
+            ) : p ? (
+              <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: "8px 10px" }}>
+                {allRooms.map((r) => {
+                  const isDropped = droppedIds.has(r.roomId);
+                  const drop = dropped.find((d) => d.roomId === r.roomId);
+                  const changed = !isDropped && changedIds.has(r.roomId);
+                  return (
+                    <div
+                      key={r.roomId}
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "baseline",
+                        fontSize: 12,
+                        padding: "2px 0",
+                        color: isDropped ? "var(--ink-3)" : "var(--ink-2)",
+                        textDecoration: isDropped ? "line-through" : undefined,
+                      }}
+                    >
+                      <span style={{ width: 14, flex: "0 0 auto", color: isDropped ? "var(--stop)" : changed ? "var(--warn)" : "var(--green)" }}>
+                        {isDropped ? "✗" : changed ? "!" : "✓"}
+                      </span>
+                      <span style={{ fontWeight: 600 }}>{r.roomNumber ?? r.roomId.slice(0, 6)}</span>
+                      {r.roomTypeName ? <span style={{ color: "var(--ink-3)" }}>{r.roomTypeName}</span> : null}
+                      <span style={{ marginLeft: "auto", textDecoration: "none", color: "var(--ink-3)", textAlign: "right" }}>
+                        {isDropped
+                          ? drop?.reason ?? "No longer available"
+                          : changed
+                            ? "Carries over — conditions changed"
+                            : "Carries over"}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--line)", fontSize: 11.5, color: "var(--ink-3)" }}>
+                  {carrying.length} of {allRooms.length} room{allRooms.length === 1 ? "" : "s"} would carry over.
+                  {p.materialChanges.length > 0 ? ` ${p.materialChanges.join("; ")}.` : ""}
+                  {p.requiresFomDecision ? " Conditions have moved, so this needs manager authority." : ""}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="field" style={{ marginTop: 12 }}>
             <label htmlFor="dup-stage">Where should the new segment start?</label>
             <select id="dup-stage" value={stage} onChange={(e) => setStage(e.target.value)} disabled={pending}>
@@ -629,6 +723,7 @@ export function SegmentHistoryPanel({
 
       {dupSeg != null ? (
         <DuplicateModal
+          entryId={entryId}
           fromSegmentNumber={dupSeg}
           routes={dupRoutes}
           stage={dupStage}
