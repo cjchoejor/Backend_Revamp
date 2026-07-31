@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, PenLine, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
@@ -627,6 +627,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // The same dialog serves two entry points: the S1/S2 exit prompt (where leaving is the point)
   // and the in-place Park button on later stages (where the operator wants to stay put).
   const [parkExitFlow, setParkExitFlow] = useState(false);
+  // Where the operator was actually headed when the park prompt intercepted them —
+  // a sidebar link's href or (for browser Back) the bookings list. Honoured on leave.
+  const pendingExitRef = useRef<string | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
 
   // Native confirm/freeze — the S3→S4 commitment boundary (SIG-S4).
@@ -732,8 +735,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       setParkReason("");
       toast.success("Booking parked — it's paused but keeps its place.");
       // Only leave when the park came from the exit prompt. Parking in place from a later stage
-      // should keep the operator where they are, looking at the now-parked booking.
-      if (parkExitFlow) router.push("/desk/bookings");
+      // should keep the operator where they are, looking at the now-parked booking. Honour the
+      // destination the operator was actually headed to (sidebar link / browser Back).
+      if (parkExitFlow) {
+        const dest = pendingExitRef.current ?? "/desk/bookings";
+        pendingExitRef.current = null;
+        router.push(dest);
+      }
     },
     onError: (e) => {
       toast.error(e instanceof ApiError ? e.message : "Couldn't park this booking");
@@ -767,6 +775,50 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     () => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null),
     [entry, paymentStatusQuery.data],
   );
+
+  // The park offer must catch EVERY way out, not just the "Bookings" button (2026-08-01):
+  // browser Back (and Alt+←) plus in-app links (sidebar, "All bookings") were bypassing the
+  // exit prompt entirely. Two interceptors, armed only while the booking is park-promptable
+  // (ACTIVE at S1/S2 — same rule as promptParkOnExit, derived here entry-safely because this
+  // effect must sit above the loading early-returns):
+  //  - a history sentinel: Back pops onto it, we re-arm and open the park dialog instead;
+  //  - a capture-phase click guard on internal /desk links, which records the intended
+  //    destination so "Park & leave" / "Leave without parking" still end up where the
+  //    operator was going. Links within this booking (workspace views, its intake edit)
+  //    pass through untouched.
+  const parkPromptable =
+    !!entry &&
+    entry.status === "ACTIVE" &&
+    (entry.currentStage === "S1" || entry.currentStage === "S2");
+  useEffect(() => {
+    if (!parkPromptable) return;
+    window.history.pushState({ deskParkGuard: entryId }, "");
+    const onPop = () => {
+      window.history.pushState({ deskParkGuard: entryId }, "");
+      pendingExitRef.current = "/desk/bookings";
+      setParkExitFlow(true);
+      setParkOpen(true);
+    };
+    const onClickCapture = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as HTMLElement).closest?.("a[href^='/desk'], a[href^='/admin']") as HTMLAnchorElement | null;
+      if (!a) return;
+      const href = a.getAttribute("href") ?? "";
+      // Same-booking destinations aren't an exit.
+      if (href.startsWith(`/desk/bookings/${entryId}`) || href.includes(`edit=${entryId}`)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pendingExitRef.current = href;
+      setParkExitFlow(true);
+      setParkOpen(true);
+    };
+    window.addEventListener("popstate", onPop);
+    document.addEventListener("click", onClickCapture, true);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      document.removeEventListener("click", onClickCapture, true);
+    };
+  }, [parkPromptable, entryId]);
 
   if (sessionLoading || entryQuery.isLoading) {
     return (
@@ -894,7 +946,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // Viewing an already-completed (earlier) step → render its FULL working surface, but read-only,
   // rather than the compact summary. All setters are no-ops and the subtree is `inert` so nothing
   // can be clicked, typed, or navigated. "Done" = strictly before the current step.
-  const viewingDoneStep = viewing < currentOrder;
+  //
+  // A SEALED booking gets the same treatment on EVERY step (2026-07-31): an EXPIRED entry keeps
+  // its stage (S1 stays S1), so the `*StepActive` flags below stayed true and the live working
+  // surface rendered — the operator could still search availability and save rooms on an expired
+  // booking while the gate bar claimed "read-only record". The backend now refuses those writes
+  // (ENTRY_SEALED_READ_ONLY), and here the canvas goes inert so they can't be attempted.
+  // The terminal "closed" step keeps its dedicated sealed summary canvas (StepCanvas) instead.
+  const viewingDoneStep = viewing < currentOrder || (sealed && step.key !== "closed");
   const readOnlyStepBody = () => {
     switch (step.key) {
       case "inquiry":
@@ -1277,13 +1336,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                   }}
                 >
                   <Lock style={{ width: 12, height: 12 }} />
-                  Completed step · read-only
+                  {sealed ? sealedOutcome : "Completed step · read-only"}
                 </div>
                 {/* Pre-freeze only: Set up is sealed by the desk (all gates green, review reached),
                     not by the backend stage — so a deliberate change (billing model, another
                     payment, a regressed gate) is still allowed via an explicit reopen. Once the
                     booking freezes at S4 this button disappears and the seal is absolute. */}
-                {setupSealedForReview && step.key === "setup" && (
+                {!sealed && setupSealedForReview && step.key === "setup" && (
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => setSetupDone(false)}
@@ -1418,7 +1477,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       {parkOpen && (
         <div
           className="scrim"
-          onClick={(e) => e.target === e.currentTarget && !parkMutation.isPending && setParkOpen(false)}
+          onClick={(e) => {
+            if (e.target !== e.currentTarget || parkMutation.isPending) return;
+            // Dismissed = staying on the booking; forget the intercepted destination.
+            pendingExitRef.current = null;
+            setParkOpen(false);
+          }}
         >
           <div className="modal" role="dialog" aria-modal="true" aria-label="Park this booking">
             <div className="modal-top" style={{ background: "var(--warn-t)", borderBottomColor: "#e6cf9a" }}>
@@ -1452,7 +1516,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             <div className="modal-foot">
               <button
                 className="btn btn-ghost"
-                onClick={() => router.push("/desk/bookings")}
+                onClick={() => {
+                  const dest = pendingExitRef.current ?? "/desk/bookings";
+                  pendingExitRef.current = null;
+                  router.push(dest);
+                }}
                 disabled={parkMutation.isPending}
               >
                 Leave without parking
