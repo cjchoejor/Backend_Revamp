@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { queryAvailability as availabilityEngineQuery } from "../../engines/availability-engine.js";
 import { enforceAvailabilityQueryParamsForS1 } from "../../policies/01-availability/p01-availability-query-params-s1.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { resolveIndicativePricingForS1Availability } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s1-indicative.js";
 import { resolveAgentRate } from "../../lib/agent-rate-resolution.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
@@ -364,6 +365,8 @@ export async function queryAvailability(
     include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // Sealed records are read-only — no fresh availability work on an expired/cancelled/closed booking.
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
 
   const { engineOut, resultForApi, checkIn, checkOut, guestCount } = await runAvailabilityEngineForEntry(prisma, entry, input, actorLevel);
   const segmentId = entry.segments[0]?.id ?? null;
@@ -558,6 +561,11 @@ export async function selectOption(
   const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: configId } });
   if (!cfg) throw new NotFoundError("AvailabilityConfiguration");
   if (cfg.isStale) throw new ValidationError("configuration is stale");
+  // Sealed records are read-only — a selection can't be recorded against an expired/cancelled/
+  // closed booking (reported: room selection saved onto an EXPIRED entry from the desk).
+  const owningEntry = await prisma.entry.findUnique({ where: { id: cfg.entryId }, select: { status: true } });
+  if (!owningEntry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: owningEntry.status });
 
   // Normalise the three input shapes into a single flat list of distinct room ids to validate
   // and a normalised `perNight` list (empty if the caller didn't use that shape). Downstream

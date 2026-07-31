@@ -11,6 +11,7 @@ import * as auditService from "../infrastructure/audit-service.js";
 import * as notificationService from "../infrastructure/notification-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { resolveGroupBillingModeFromGuestCount } from "../../policies/26-group-foc-billing/p64-group-detection-at-entry-creation.js";
 import {
   enforceEntryActiveForPark,
@@ -486,6 +487,9 @@ export async function updateEntryIntakeFields(
 ) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
+  // Sealed records are read-only — an EXPIRED booking still sits at S1, so the stage check
+  // below alone let its intake keep being edited.
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   if (entry.currentStage !== Stage.S1) {
     throw new ValidationError(`Cannot edit intake fields — entry has advanced to ${entry.currentStage}. Use the stage-specific amendment flow.`);
   }
