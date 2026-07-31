@@ -249,14 +249,19 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
 function RoundCard({
   seg,
   canDuplicate,
+  hasBasis,
+  basisInherited,
   onDuplicate,
 }: {
   seg: SegmentHistoryItem;
   canDuplicate: boolean;
+  /** Whether a room selection is in force for this segment — its own, or one it inherited. */
+  hasBasis: boolean;
+  /** True when that selection belongs to an earlier segment rather than this one. */
+  basisInherited: boolean;
   onDuplicate: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const hasBasis = seg.availabilityConfigs.some((c) => c.rooms.length > 0);
   const acceptedQuote = seg.quotations.find((q) => q.state === "ACCEPTED") ?? null;
   const modeLabel = seg.openedBy?.modeKey ? MODE_LABEL[seg.openedBy.modeKey] ?? seg.openedBy.modeKey : null;
   const sealText = sealCauseText(seg.sealCause);
@@ -414,6 +419,7 @@ function RoundCard({
           </button>
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
             Availability is re-checked first — this segment stays as it is.
+            {basisInherited ? " Its rooms carry over from an earlier segment." : ""}
           </span>
         </div>
       ) : null}
@@ -505,7 +511,20 @@ function DuplicateModal({
   );
 }
 
-export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string; currentStage?: string }) {
+export function SegmentHistoryPanel({
+  entryId,
+  currentStage,
+  onSegmentOpened,
+}: {
+  entryId: string;
+  currentStage?: string;
+  /**
+   * Fired once a copy has actually opened a new segment, with the stage it opened at. The panel
+   * lives in a side tab, so without this the operator is left looking at the segment list while
+   * the booking has moved back to Inquiry behind them — they'd have to find the step themselves.
+   */
+  onSegmentOpened?: (toStage: string) => void;
+}) {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [dupSeg, setDupSeg] = useState<number | null>(null);
@@ -527,9 +546,18 @@ export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string
       void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
       void queryClient.invalidateQueries({ queryKey: ["segment-history", entryId] });
+      // The booking has moved back to the stage the new segment opened at, so take the operator
+      // there. Both branches navigate — the segment is real either way, and leaving them on the
+      // old step (this panel is a side tab) means the move happens invisibly behind them.
+      onSegmentOpened?.(out.toStage);
       if (out.prefilled) {
+        const dropped = out.recall?.droppedRooms?.length ?? 0;
         toast.success(
-          `Segment ${out.newSegmentNumber} opened at ${stageLabel(out.toStage)} with segment ${out.fromSegmentNumber}'s basis — review the selection and save it.`,
+          `Segment ${out.newSegmentNumber} opened at ${stageLabel(out.toStage)} with segment ${out.fromSegmentNumber}'s basis — review the selection and save it.` +
+            (dropped > 0
+              ? ` ${dropped} room${dropped === 1 ? "" : "s"} didn't carry over: ${out.recall!.droppedRooms.map((d) => d.roomNumber ?? d.roomId.slice(0, 6)).join(", ")}.`
+              : ""),
+          dropped > 0 ? { duration: 10_000 } : undefined,
         );
       } else {
         // The re-entry committed; only the basis carry-over was blocked (usually the FOM gate).
@@ -574,18 +602,30 @@ export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string
         {sealedCount > 0 ? ` ${sealedCount} sealed segment${sealedCount === 1 ? "" : "s"} below are read-only.` : ""}
       </p>
       {/* Newest first — the active segment on top, history beneath. */}
-      {[...segs].reverse().map((s) => (
-        <RoundCard
-          key={s.id}
-          seg={s}
-          canDuplicate={dupRoutes.length > 0}
-          onDuplicate={() => {
-            setDupSeg(s.segmentNumber);
-            setDupStage(dupRoutes[0] ?? "S1");
-            setDupReason("");
-          }}
-        />
-      ))}
+      {[...segs].reverse().map((s) => {
+        // A segment can be copied when a room selection is IN FORCE for it — its own, or one
+        // inherited from an earlier segment. Only a segment opened at S1 seals a configuration of
+        // its own; one opened at S2/S3 by re-entry runs on what it inherited, and gating on
+        // ownership alone hid the copy action on every segment after the first.
+        const ownsBasis = s.availabilityConfigs.some((c) => c.rooms.length > 0);
+        const inheritsBasis = segs.some(
+          (e) => e.segmentNumber <= s.segmentNumber && e.availabilityConfigs.some((c) => c.rooms.length > 0),
+        );
+        return (
+          <RoundCard
+            key={s.id}
+            seg={s}
+            canDuplicate={dupRoutes.length > 0}
+            hasBasis={inheritsBasis}
+            basisInherited={!ownsBasis && inheritsBasis}
+            onDuplicate={() => {
+              setDupSeg(s.segmentNumber);
+              setDupStage(dupRoutes[0] ?? "S1");
+              setDupReason("");
+            }}
+          />
+        );
+      })}
 
       {dupSeg != null ? (
         <DuplicateModal

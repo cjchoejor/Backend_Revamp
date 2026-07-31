@@ -32,6 +32,7 @@ import {
   initialsOf,
   partyCaption,
   DESK_STEPS,
+  stepForStage,
   type DeskStep,
 } from "@/lib/desk/model";
 import {
@@ -1262,7 +1263,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                     before it becomes the basis.
                   </p>
                 </div>
-                <SegmentHistoryPanel entryId={entry.id} currentStage={entry.currentStage} />
+                <SegmentHistoryPanel
+                  entryId={entry.id}
+                  currentStage={entry.currentStage}
+                  // A copy re-enters the booking at an earlier stage. Follow it there instead of
+                  // leaving the canvas on the step the booking has just left.
+                  onSegmentOpened={(toStage) => setSelected(stepForStage(toStage).order)}
+                />
               </>
             ) : viewingDoneStep ? (
               <div style={{ position: "relative" }}>
