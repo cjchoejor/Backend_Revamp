@@ -25,8 +25,9 @@ import type { RoomCompositionInput } from "@/lib/api/quotations";
  *   - a live Σ footer reconciles guests placed vs the intake party and sums each
  *     meal-plan column;
  *   - columns are ADAPTIVE (2026-07-28): CNB columns only exist when the intake party
- *     has children (a "Kids +" corner toggle covers occupancies that differ from
- *     intake), and meal-plan columns appear per plan as the operator toggles its chip
+ *     has children (or saved data already carries child counts — the manual "Kids +"
+ *     corner toggle was removed 2026-07-31; only the Rates toggle remains),
+ *     and meal-plan columns appear per plan as the operator toggles its chip
  *     or picks "Everyone on…" — a two-adult CP booking sees a 2-guest, 1-meal grid,
  *     not the full matrix. A column with pax in it can never silently hide; switching
  *     a plan chip off zeroes its column so nothing invisible feeds the draft.
@@ -200,10 +201,11 @@ export function RoomCompositionsTable({
   // Plans the operator switched on. A plan column is VISIBLE when toggled on OR when any
   // row carries pax for it — a column with data can never silently disappear.
   const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
-  // CNB columns exist automatically when the intake party has children; the manual
-  // toggle covers quoted occupancies that differ from intake (incl. no-party entries).
+  // CNB columns exist automatically when the intake party has children, or when saved
+  // data already carries child counts — the manual "Kids +" toggle was removed
+  // (2026-07-31, operator request); only the Rates toggle remains in the corner.
   const hasKids = (entryChildAges?.length ?? 0) > 0;
-  const [childColsManual, setChildColsManual] = useState(
+  const [childColsManual] = useState(
     () => !hasKids && (initial ?? []).some((c) => (c.cnb6To10Count ?? 0) > 0 || (c.cnbUnder6Count ?? 0) > 0),
   );
   const childColsVisible = hasKids || childColsManual;
@@ -249,21 +251,6 @@ export function RoomCompositionsTable({
       });
     } else {
       setActivePlans((prev) => new Set(prev).add(c));
-    }
-  };
-
-  /** Manual CNB-columns toggle (only offered when the intake party has no children).
-   *  Hiding zeroes the child cells for the same no-invisible-data reason as plans. */
-  const toggleChildCols = () => {
-    if (childColsVisible) {
-      setChildColsManual(false);
-      setRows((prev) => {
-        const next = { ...prev };
-        for (const id of sealedRoomIds) next[id] = { ...(next[id] ?? EMPTY_ROW), c6: "0", u6: "0" };
-        return next;
-      });
-    } else {
-      setChildColsManual(true);
     }
   };
 
@@ -590,20 +577,6 @@ export function RoomCompositionsTable({
                   <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
                     {ratesOpen ? "Rates −" : "Rates +"}
                   </button>
-                  {!hasKids && (
-                    <button
-                      type="button"
-                      className="rcb-mini"
-                      onClick={toggleChildCols}
-                      title={
-                        childColsVisible
-                          ? "Hide the child columns (zeroes them) — the intake party has no children"
-                          : "Show child columns even though the intake party has none"
-                      }
-                    >
-                      {childColsVisible ? "Kids −" : "Kids +"}
-                    </button>
-                  )}
                 </div>
               </th>
             </tr>

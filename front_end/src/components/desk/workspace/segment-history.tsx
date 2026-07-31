@@ -2,16 +2,14 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, History, Lock, RotateCcw, ShieldAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, History, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import {
   duplicateSegment,
   DUPLICATE_ROUTES,
   getSegmentHistory,
-  recallSegment,
   type SegmentHistoryItem,
-  type SegmentRecallOutcome,
 } from "@/lib/api/entries";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, stepForStage } from "@/lib/desk/model";
@@ -23,11 +21,10 @@ import { moneyOrDash } from "@/lib/desk/workspace";
  * is a stack of segments. Rendered from the backend aggregation at
  * GET /api/entries/:id/segments — nothing is derived here (money included).
  *
- * Each sealed segment can be REUSED as the current segment's basis. That is a
- * recall-plus-revalidate (Canon Block 10 §59), not a copy: the preview call re-runs the
- * availability engine against present state and reports what moved; applying it writes a NEW
- * configuration on the current segment and never touches the sealed one. Any material change
- * needs FOM (L2) authority — §59 M.4.
+ * Each segment with a basis can be COPIED into a new segment — a governed re-entry opens the
+ * new segment, then the source's basis is recalled and revalidated into it (Canon Block 10 §59).
+ * The within-segment "reuse" action was removed from this surface (2026-07-31, operator request);
+ * only the copy-into-new-segment composite remains.
  */
 
 const MODE_LABEL: Record<string, string> = {
@@ -40,11 +37,6 @@ const MODE_LABEL: Record<string, string> = {
   GUEST_COMPOSITION_CHANGE: "Guest composition change",
   COMPLAINT_RESOLUTION: "Complaint resolution",
 };
-
-/** Stages where swapping the commercial basis is still legitimate (mirrors the backend gate). */
-const RECALLABLE_STAGES = new Set(["S1", "S2", "S3"]);
-
-const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
 
 function stageLabel(stage: string): string {
   return stepForStage(stage).label;
@@ -256,18 +248,12 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
 
 function RoundCard({
   seg,
-  canReuse,
   canDuplicate,
-  onReuse,
   onDuplicate,
-  reusePending,
 }: {
   seg: SegmentHistoryItem;
-  canReuse: boolean;
   canDuplicate: boolean;
-  onReuse: () => void;
   onDuplicate: () => void;
-  reusePending: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const hasBasis = seg.availabilityConfigs.some((c) => c.rooms.length > 0);
@@ -410,7 +396,7 @@ function RoundCard({
 
       {open ? <StageBreakdown seg={seg} /> : null}
 
-      {hasBasis && (canReuse || canDuplicate) ? (
+      {hasBasis && canDuplicate ? (
         <div
           style={{
             marginTop: 10,
@@ -422,171 +408,15 @@ function RoundCard({
             alignItems: "center",
           }}
         >
-          {canDuplicate ? (
-            <button className="btn btn-ghost btn-sm" onClick={onDuplicate}>
-              <Copy style={{ width: 12, height: 12 }} />
-              Copy into a new segment
-            </button>
-          ) : null}
-          {!seg.isActive && canReuse ? (
-            <button className="btn btn-ghost btn-sm" onClick={onReuse} disabled={reusePending}>
-              <RotateCcw style={{ width: 12, height: 12 }} />
-              {reusePending ? "Checking…" : "Reuse in this segment"}
-            </button>
-          ) : null}
+          <button className="btn btn-ghost btn-sm" onClick={onDuplicate}>
+            <Copy style={{ width: 12, height: 12 }} />
+            Copy into a new segment
+          </button>
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            Both re-check availability first — neither changes this segment.
+            Availability is re-checked first — this segment stays as it is.
           </span>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/** The revalidation result — what moved since the segment was configured, and the apply gate. */
-function RecallPreviewModal({
-  outcome,
-  actorLevel,
-  pending,
-  onApply,
-  onClose,
-}: {
-  outcome: SegmentRecallOutcome;
-  actorLevel: string | undefined;
-  pending: boolean;
-  onApply: () => void;
-  onClose: () => void;
-}) {
-  const needsFom = outcome.requiresFomDecision;
-  const hasAuthority = RANK[actorLevel ?? "L1"] >= RANK.L2;
-  const blocked = needsFom && !hasAuthority;
-  const noneViable = outcome.droppedRooms.length > 0 && outcome.droppedRooms.length === outcome.recalledSelection.distinctRoomCount;
-
-  return (
-    <div className="scrim" onClick={(e) => e.target === e.currentTarget && !pending && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Reuse a previous segment">
-        <div
-          className="modal-top"
-          style={
-            needsFom
-              ? { background: "var(--warn-t)", borderBottomColor: "#e6cf9a" }
-              : undefined
-          }
-        >
-          <div className="modal-ic" style={needsFom ? { background: "var(--warn)" } : undefined}>
-            {needsFom ? <AlertTriangle /> : <RotateCcw />}
-          </div>
-          <div>
-            <h3>Reuse segment {outcome.fromSegmentNumber} on segment {outcome.toSegmentNumber}?</h3>
-            <p>
-              {outcome.recalledSelection.distinctRoomCount} room
-              {outcome.recalledSelection.distinctRoomCount === 1 ? "" : "s"} ·{" "}
-              {outcome.recalledSelection.rooms.map((r) => r.roomNumber ?? r.roomId.slice(0, 6)).join(", ")}
-            </p>
-          </div>
-        </div>
-        <div className="modal-body">
-          <p className="why">
-            This doesn&rsquo;t copy segment {outcome.fromSegmentNumber} — it re-checks that basis against today&rsquo;s
-            state and starts a fresh selection from it. Segment {outcome.fromSegmentNumber} stays sealed exactly as it is.
-          </p>
-
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.3, textTransform: "uppercase", color: "var(--ink-3)", marginBottom: 6 }}>
-              What was re-checked
-            </div>
-            {(
-              [
-                ["Rooms still available", outcome.delta.availabilityChanged],
-                ["Room condition (deficiencies)", outcome.delta.deficientStatusChanged],
-                ["Indicative rate", outcome.delta.pricingChanged],
-              ] as Array<[string, boolean]>
-            ).map(([label, changed]) => (
-              <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "2px 0" }}>
-                <span
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: 999,
-                    background: changed ? "var(--warn)" : "var(--ok, var(--green))",
-                    flex: "0 0 auto",
-                  }}
-                />
-                <span style={{ color: "var(--ink-2)" }}>{label}</span>
-                <span style={{ marginLeft: "auto", color: changed ? "var(--warn)" : "var(--ink-3)", fontWeight: changed ? 600 : 400 }}>
-                  {changed ? "changed" : "unchanged"}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {outcome.materialChanges.length ? (
-            <div
-              style={{
-                marginTop: 12,
-                background: "var(--warn-t)",
-                border: "1px solid #e6cf9a",
-                borderRadius: "var(--r-md)",
-                padding: "10px 12px",
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink)", marginBottom: 4 }}>
-                What changed since segment {outcome.fromSegmentNumber}
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "var(--ink-2)", lineHeight: 1.6 }}>
-                {outcome.materialChanges.map((c, i) => (
-                  <li key={i}>{c}</li>
-                ))}
-              </ul>
-              {outcome.droppedRooms.length ? (
-                <div style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 6 }}>
-                  {outcome.droppedRooms.length} room{outcome.droppedRooms.length === 1 ? "" : "s"} won&rsquo;t be carried
-                  over. You can pick replacements after this.
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 12 }}>
-              Nothing has changed — this segment&rsquo;s basis is still exactly as viable as when it was configured.
-            </div>
-          )}
-
-          {blocked ? (
-            <div
-              style={{
-                marginTop: 12,
-                display: "flex",
-                gap: 8,
-                alignItems: "flex-start",
-                background: "var(--stop-t, rgba(155,34,38,0.08))",
-                border: "1px solid rgba(155,34,38,0.35)",
-                borderRadius: "var(--r-md)",
-                padding: "10px 12px",
-              }}
-            >
-              <ShieldAlert style={{ width: 15, height: 15, color: "var(--stop)", flex: "0 0 auto", marginTop: 1 }} />
-              <div style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
-                Conditions have changed, so this needs <b>FOM approval</b> before it can be reused. Ask a front-office
-                manager to apply it — your access level is {actorLevel ?? "L1"}.
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <div className="modal-foot">
-          <button className="btn btn-ghost" onClick={onClose} disabled={pending}>
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            style={needsFom ? { background: "var(--warn)" } : undefined}
-            onClick={onApply}
-            disabled={pending || blocked || noneViable}
-          >
-            <RotateCcw />
-            {pending ? "Applying…" : needsFom ? "Approve & reuse" : "Reuse this segment"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -678,8 +508,6 @@ function DuplicateModal({
 export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string; currentStage?: string }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [preview, setPreview] = useState<SegmentRecallOutcome | null>(null);
-  const [pendingRound, setPendingRound] = useState<number | null>(null);
   const [dupSeg, setDupSeg] = useState<number | null>(null);
   const [dupStage, setDupStage] = useState<string>("");
   const [dupReason, setDupReason] = useState("");
@@ -689,26 +517,6 @@ export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string
     queryFn: () => getSegmentHistory(session!, entryId),
     enabled: !!session,
     refetchInterval: 30_000,
-  });
-
-  const previewMutation = useMutation({
-    mutationFn: (segmentNumber: number) => recallSegment(session!, entryId, segmentNumber, { apply: false }),
-    onSuccess: (out) => setPreview(out),
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't re-check that segment"),
-    onSettled: () => setPendingRound(null),
-  });
-
-  const applyMutation = useMutation({
-    mutationFn: (segmentNumber: number) => recallSegment(session!, entryId, segmentNumber, { apply: true }),
-    onSuccess: (out) => {
-      setPreview(null);
-      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
-      void queryClient.invalidateQueries({ queryKey: ["segment-history", entryId] });
-      toast.success(
-        `Segment ${out.fromSegmentNumber}'s basis is now on segment ${out.toSegmentNumber} — review the selection and save it.`,
-      );
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't reuse that segment"),
   });
 
   const duplicateMutation = useMutation({
@@ -748,7 +556,6 @@ export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string
   const segs = q.data.segments;
   const sealedCount = segs.filter((s) => !s.isActive).length;
   const stage = currentStage ?? q.data.currentStage;
-  const recallable = RECALLABLE_STAGES.has(String(stage));
   // Which stages a new segment could open at from here. Empty → no re-entry route leads back to a
   // configuration stage (e.g. already at S1, or in-house past the point of re-quoting).
   const dupRoutes = DUPLICATE_ROUTES[String(stage)] ?? [];
@@ -765,22 +572,13 @@ export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string
         Each segment is one pass through the journey. A change after confirmation doesn&rsquo;t edit the
         old segment — it seals it as history and opens a fresh one.
         {sealedCount > 0 ? ` ${sealedCount} sealed segment${sealedCount === 1 ? "" : "s"} below are read-only.` : ""}
-        {sealedCount > 0 && !recallable
-          ? " Reusing an earlier segment is only possible before the booking is frozen."
-          : ""}
       </p>
       {/* Newest first — the active segment on top, history beneath. */}
       {[...segs].reverse().map((s) => (
         <RoundCard
           key={s.id}
           seg={s}
-          canReuse={recallable}
           canDuplicate={dupRoutes.length > 0}
-          reusePending={pendingRound === s.segmentNumber}
-          onReuse={() => {
-            setPendingRound(s.segmentNumber);
-            previewMutation.mutate(s.segmentNumber);
-          }}
           onDuplicate={() => {
             setDupSeg(s.segmentNumber);
             setDupStage(dupRoutes[0] ?? "S1");
@@ -788,16 +586,6 @@ export function SegmentHistoryPanel({ entryId, currentStage }: { entryId: string
           }}
         />
       ))}
-
-      {preview ? (
-        <RecallPreviewModal
-          outcome={preview}
-          actorLevel={session?.actorLevel}
-          pending={applyMutation.isPending}
-          onApply={() => applyMutation.mutate(preview.fromSegmentNumber)}
-          onClose={() => setPreview(null)}
-        />
-      ) : null}
 
       {dupSeg != null ? (
         <DuplicateModal
