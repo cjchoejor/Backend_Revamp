@@ -143,9 +143,26 @@ export function maxReachableOrder(entry: EntryDetail): number {
  * checklist. Payment "satisfied" is approximated from folio payments (the server
  * re-validates the real payment-status on confirm).
  */
+/**
+ * Slice of `EntryCommunication` the S3 checklist needs — structural, so callers can pass the
+ * `/api/entries/:id/communications` items straight through without this module importing the
+ * API client.
+ */
+export type CommForReadiness = {
+  commType: string;
+  direction: string | null;
+  sendStatus: string | null;
+  acknowledgementStatus: string | null;
+};
+
 export function s3Readiness(
   entry: EntryDetail,
-  opts?: { paymentSatisfied?: boolean; totalReceived?: number | null },
+  opts?: {
+    paymentSatisfied?: boolean;
+    totalReceived?: number | null;
+    /** Newest-first items from GET /api/entries/:id/communications. */
+    communications?: CommForReadiness[] | null;
+  },
 ): Precondition[] {
   const folio = entry.folio;
   const hold = entry.committedHold;
@@ -186,6 +203,27 @@ export function s3Readiness(
       label: "Proforma sent to guest (advance received)",
       met: advanceReceived > 0 ? proformaDispatched : true,
     },
+    // Mirrors the backend's `enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation`
+    // (p40, 2026-07-31): once the proforma actually WENT OUT, the guest's answer must be on
+    // record before the freeze. Only shown when a live proforma was dispatched — a generated-
+    // but-never-sent proforma asks the guest nothing, so there is nothing to answer. The latest
+    // dispatched proforma communication decides (items arrive newest-first); while the
+    // communications feed hasn't loaded the item reads unmet rather than green, so the desk
+    // never declares freeze-ready on data it doesn't have.
+    ...(proformaDispatched
+      ? [
+          {
+            label: "Guest's answer to the proforma recorded",
+            met:
+              (opts?.communications ?? []).find(
+                (c) =>
+                  c.commType === "PROFORMA_INVOICE" &&
+                  c.direction === "OUTBOUND" &&
+                  c.sendStatus === "DISPATCHED",
+              )?.acknowledgementStatus === "RECEIVED",
+          },
+        ]
+      : []),
     { label: "Advance settled or credit extended", met: advanceSatisfied },
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
@@ -201,14 +239,14 @@ export function s3Readiness(
 /** Alias — the confirm step's gate is exactly the S3 exit checklist. */
 export function confirmReadiness(
   entry: EntryDetail,
-  opts?: { paymentSatisfied?: boolean; totalReceived?: number | null },
+  opts?: Parameters<typeof s3Readiness>[1],
 ): Precondition[] {
   return s3Readiness(entry, opts);
 }
 
 export function canConfirm(
   entry: EntryDetail,
-  opts?: { paymentSatisfied?: boolean; totalReceived?: number | null },
+  opts?: Parameters<typeof s3Readiness>[1],
 ): boolean {
   return entry.currentStage === "S3" && s3Readiness(entry, opts).every((c) => c.met);
 }

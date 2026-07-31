@@ -4,12 +4,19 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
+import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, PenLine, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
 import { SegmentHistoryPanel } from "./segment-history";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
-import { getEntry, getEntryTimers, progressStage, parkEntry, unparkEntry } from "@/lib/api/entries";
+import {
+  getEntry,
+  getEntryTimers,
+  listEntryCommunications,
+  progressStage,
+  parkEntry,
+  unparkEntry,
+} from "@/lib/api/entries";
 import { countdownTo, findParkTimer } from "@/lib/desk/timers";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
@@ -542,6 +549,21 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // sent even though the advance requirement already reads as satisfied.
   const totalReceived = paymentStatusQuery.data?.totalReceived ?? null;
 
+  // Guest answers to the governed communications (2026-07-31). The S3 checklist's "Guest's answer
+  // to the proforma recorded" item mirrors the backend gate
+  // `enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation`, which reads
+  // CommunicationRecord.acknowledgementStatus — a field that lives on NO other query the workspace
+  // makes. Without this fetch the item's lookup ran over an empty array and could never tick, so a
+  // captured answer left the freeze permanently blocked on the desk while the backend was happy.
+  // Shares the exact query key CommunicationAcceptanceBlock uses, so capturing an answer there
+  // invalidates this too and the checklist goes green in the same beat.
+  const commsQuery = useQuery({
+    queryKey: ["entry-communications", entryId],
+    queryFn: () => listEntryCommunications(session!, entryId),
+    enabled: !!session && !sessionLoading,
+  });
+  const communications = commsQuery.data?.items ?? null;
+
   // Park expiry — parking cancels the short stage-expiry timer and arms a long PARKING_FOLLOW_UP
   // one in its place (SIG-S1 §3.4: a parked booking still expires, just on a 30-day window). The
   // backend already runs that clock; the operator should be able to see it rather than assume a
@@ -579,9 +601,21 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const parkCountdown = parkTimer ? countdownTo(parkTimer.firesAt, nowTick) : null;
 
   const queryClient = useQueryClient();
-  const currentOrder = entry ? currentStepOrder(entry) : 1;
-  const maxReach = entry ? maxReachableOrder(entry) : 1;
   const [selected, setSelected] = useState<number | null>(null);
+  // "Set up is finished" — the desk-side marker that promotes Confirm to the current step while
+  // the backend stage is still S3. The Confirm review shares stage S3 with Set up, so the stage
+  // number alone never moves past Set up until the freeze — which left Set up fully editable
+  // after the operator crossed into the review, unlike every other completed step. Engaged when
+  // the operator reaches Confirm with all gates green (or the workspace opens in that state);
+  // released by the explicit "Reopen" on the read-only Set up view. Deliberately sticky rather
+  // than derived from canConfirm each render, so completing the last gate never flips the step
+  // inert under the operator's cursor. Irrelevant once a reservation exists (S4+, or an S3
+  // re-entry where setup must be editable again).
+  const [setupDone, setSetupDone] = useState(false);
+  const setupSealedForReview =
+    !!entry && entry.currentStage === "S3" && !entry.reservation && setupDone;
+  const currentOrder = setupSealedForReview ? 4 : entry ? currentStepOrder(entry) : 1;
+  const maxReach = entry ? maxReachableOrder(entry) : 1;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [guestPresent, setGuestPresent] = useState(false);
   const [keyCount, setKeyCount] = useState("1");
@@ -720,10 +754,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
   });
 
-  // Default the viewing pointer once loaded — land on Confirm when it's ready to freeze.
+  // Default the viewing pointer once loaded — land on Confirm when it's ready to freeze, and in
+  // that case mark Set up finished so it presents as a completed (read-only) step from the start.
   useEffect(() => {
-    if (entry) setSelected((s) => s ?? (canConfirm(entry, { paymentSatisfied, totalReceived }) ? 4 : currentStepOrder(entry)));
-  }, [entry]);
+    if (!entry || selected !== null) return;
+    const ready = canConfirm(entry, { paymentSatisfied, totalReceived, communications });
+    if (ready && !entry.reservation) setSetupDone(true);
+    setSelected(ready ? 4 : currentStepOrder(entry));
+  }, [entry, selected, paymentSatisfied, totalReceived, communications]);
 
   const fin = useMemo(
     () => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null),
@@ -800,7 +838,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     !stayStepActive &&
     !checkOutStepActive &&
     !confirmedS4Active;
-  const ready = canConfirm(entry, { paymentSatisfied, totalReceived });
+  const ready = canConfirm(entry, { paymentSatisfied, totalReceived, communications });
   // On a sealed booking every step is read-only history — show the outcome, not pending gates.
   const sealedOutcome =
     entry.status === "CANCELLED"
@@ -811,13 +849,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const preconds = sealed
     ? [{ label: sealedOutcome, met: true }]
     : confirmStepActive
-    ? confirmReadiness(entry, { paymentSatisfied, totalReceived })
+    ? confirmReadiness(entry, { paymentSatisfied, totalReceived, communications })
     : inquiryStepActive
       ? s1Readiness(entry)
       : quoteStepActive
         ? s2Readiness(entry)
         : setupStepActive
-          ? confirmReadiness(entry, { paymentSatisfied, totalReceived })
+          ? confirmReadiness(entry, { paymentSatisfied, totalReceived, communications })
           : arrivalStepActive
             ? s5Readiness(entry)
             : checkInStepActive
@@ -1105,7 +1143,16 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <ArrowRight />
               </button>
             ) : setupStepActive ? (
-              <button className="adv commit" onClick={() => setSelected(4)}>
+              <button
+                className="adv commit"
+                onClick={() => {
+                  // Crossing into the Confirm review with every gate green is the desk's
+                  // "S3 → S4" moment: Set up seals as a completed (read-only) step, like S1/S2
+                  // after their stage advances. With gates still open it stays the working step.
+                  if (ready) setSetupDone(true);
+                  setSelected(4);
+                }}
+              >
                 <Lock />
                 Review &amp; confirm
               </button>
@@ -1214,6 +1261,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               </>
             ) : viewingDoneStep ? (
               <div style={{ position: "relative" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
                 <div
                   style={{
                     display: "inline-flex",
@@ -1226,11 +1274,25 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                     border: "1px solid var(--line)",
                     borderRadius: 999,
                     padding: "4px 10px",
-                    marginBottom: 12,
                   }}
                 >
                   <Lock style={{ width: 12, height: 12 }} />
                   Completed step · read-only
+                </div>
+                {/* Pre-freeze only: Set up is sealed by the desk (all gates green, review reached),
+                    not by the backend stage — so a deliberate change (billing model, another
+                    payment, a regressed gate) is still allowed via an explicit reopen. Once the
+                    booking freezes at S4 this button disappears and the seal is absolute. */}
+                {setupSealedForReview && step.key === "setup" && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setSetupDone(false)}
+                    title="Unlock Set up to make a change before the freeze"
+                  >
+                    <PenLine style={{ width: 13, height: 13 }} />
+                    Reopen for changes
+                  </button>
+                )}
                 </div>
                 {/* `inert` (React 19) makes the whole subtree non-interactive + non-focusable,
                     so the full step surface is visible but nothing can be actioned. */}

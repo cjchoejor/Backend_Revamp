@@ -22,8 +22,9 @@ import {
  *  - Acceptance is only recordable against something actually SENT. It is evidence of what the
  *    guest said, and there is no response to an email that never went out. When nothing has been
  *    dispatched the block says so rather than offering a button that would 409.
- *  - Recording it changes no gate. It closes the W22 acknowledgement window and lands on the
- *    trace; it never blocks the next stage.
+ *  - Recording it is evidence, and for one boundary also a gate (2026-07-31): a DISPATCHED
+ *    proforma must have its answer recorded before the S3→S4 freeze. The voucher and
+ *    pre-arrival acknowledgements remain evidence-only and never block a stage.
  *
  * All state (dispatched? acknowledged? overdue?) is read from the backend's `canAcknowledge` /
  * `isOverdue` — never re-derived here, so the production frontend and this one always agree.
@@ -46,8 +47,9 @@ const COPY: Record<EntryCommunicationType, { title: string; nothingSent: string;
   },
   PROFORMA_INVOICE: {
     title: "Proforma invoice",
-    nothingSent: "The proforma hasn't been emailed to the guest yet — dispatch it above first.",
-    optionalHint: "Sending the proforma is optional — generating it is what the confirm checklist needs.",
+    nothingSent: "The proforma hasn't been emailed to the guest yet — nothing to answer.",
+    optionalHint:
+      "Sending the proforma is optional — but once it has been sent, the guest's answer must be recorded here before the booking can be confirmed.",
   },
   CONFIRMATION_VOUCHER: {
     title: "Confirmation voucher",

@@ -75,7 +75,8 @@ export async function listEntryCommunications(session: Session, entryId: string)
  * acknowledgement window and writes the evidence to the trace. A VERBAL acknowledgement requires
  * `verbatimNote` — what the guest actually said is the evidence.
  *
- * Evidence only: this never gates stage progression.
+ * Mostly evidence: the one gate it feeds is the S3→S4 freeze, which requires a DISPATCHED
+ * proforma's answer to be recorded (backend p40, 2026-07-31). Other types never gate progression.
  */
 export async function acknowledgeCommunication(
   session: Session,
