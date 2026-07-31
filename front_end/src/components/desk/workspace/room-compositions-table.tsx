@@ -228,6 +228,139 @@ export function RoomCompositionsTable({
   const setCell = (roomId: string, patch: Partial<RowState>) =>
     setRows((prev) => ({ ...prev, [roomId]: { ...(prev[roomId] ?? EMPTY_ROW), ...patch } }));
 
+  // ---- Input bounds (2026-08-01) --------------------------------------------------
+  // The grid used to accept ANY number in the people cells; the Σ footer only warned.
+  // The counts must stay within the party captured at Inquiry (S1) — the same bands the
+  // guest board is bound to by construction. Type-time clamps, with a notice saying why.
+  // An entry with NO party breakdown stays unconstrained (the table is deliberately the
+  // fallback editor for those).
+  const partyBands = useMemo(() => {
+    const ages = entryChildAges ?? [];
+    return {
+      ad: Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length,
+      c6: ages.filter((a) => a > youngMax && a <= childMax).length,
+      u6: ages.filter((a) => a <= youngMax).length,
+    };
+  }, [entryAdults, entryChildAges, youngMax, childMax]);
+  const partyBound = (entryAdults ?? 0) + (entryChildAges?.length ?? 0) > 0;
+
+  const [limitMsg, setLimitMsg] = useState<string | null>(null);
+  const limitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashLimit = (msg: string) => {
+    setLimitMsg(msg);
+    if (limitTimer.current) clearTimeout(limitTimer.current);
+    limitTimer.current = setTimeout(() => setLimitMsg(null), 5000);
+  };
+
+  const bandLabel = (col: "ad" | "c6" | "u6", n: number): string =>
+    col === "ad"
+      ? `adult-rate guest${n === 1 ? "" : "s"} (adults + 11+)`
+      : col === "c6"
+        ? `child${n === 1 ? "" : "ren"} ${youngMax + 1}–${childMax}`
+        : `child${n === 1 ? "" : "ren"} under ${youngMax + 1}`;
+  const roomNoOf = (id: string) => roomById.get(id)?.roomNumber ?? id.slice(0, 6);
+  const capOf = (id: string): number | null => {
+    const rt = roomById.get(id)?.roomType;
+    return rt?.maxCapacity ?? rt?.standardCapacity ?? null;
+  };
+  const bedMaxOf = (id: string): number => roomById.get(id)?.roomType?.maxExtraBeds ?? 0;
+  /** Extra beds a room NEEDS for its adults: everyone past base capacity gets one
+   *  (children under 11 share bedding — they never need a bed). */
+  const bedsNeeded = (id: string, adults: number): number => {
+    const cap = capOf(id);
+    if (cap == null) return 0;
+    return Math.min(Math.max(0, adults - cap), bedMaxOf(id));
+  };
+  /** Re-derive a row's bed cell from its adults — auto-add when adults exceed base
+   *  capacity, auto-remove when they no longer do (2026-08-01 operator ruling). */
+  const withAutoBed = (id: string, row: RowState): RowState => ({
+    ...row,
+    bed: String(bedsNeeded(id, cnt(row.ad))),
+  });
+
+  /**
+   * Band-cell edit (2026-08-01) — a HARD cap, never an auto-move (operator ruling: the
+   * earlier version pulled overflow out of other rooms, which read as the grid changing
+   * numbers behind your back):
+   *   1. `ad` is capped at the ROOM's ceiling (base capacity + max extra beds; beds
+   *      auto-derive below) — pooling every adult into one room stops at what it can sleep.
+   *   2. The cell is capped at what's LEFT of the intake party band once the other rooms
+   *      are counted — moving someone between rooms means reducing the source room first
+   *      (or dragging their chip on the guest board, which moves them properly).
+   *   3. The room's extra beds re-derive whenever its adults change.
+   */
+  const applyBandChange = (roomId: string, col: "ad" | "c6" | "u6", v: string) => {
+    let n = cnt(v);
+    let display = v; // keep the raw string (e.g. "") when nothing clamps
+    if (col === "ad") {
+      const cap = capOf(roomId);
+      if (cap != null) {
+        const ceil = cap + bedMaxOf(roomId);
+        if (n > ceil) {
+          flashLimit(
+            `Room ${roomNoOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}) — capped.`,
+          );
+          n = ceil;
+          display = String(n);
+        }
+      }
+    }
+    if (partyBound) {
+      const others = sealedRoomIds.reduce((s, id) => (id === roomId ? s : s + cnt(rows[id]?.[col] ?? "0")), 0);
+      const remaining = Math.max(0, partyBands[col] - others);
+      if (n > remaining) {
+        flashLimit(
+          `This booking has ${partyBands[col]} ${bandLabel(col, partyBands[col])}${
+            others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms` : ""
+          } — capped at ${remaining}. Reduce the other room first to move someone here, or change the party at the Inquiry step.`,
+        );
+        n = remaining;
+        display = String(n);
+      }
+    }
+    setRows((prev) => {
+      const next = { ...prev };
+      let mine = { ...(next[roomId] ?? EMPTY_ROW), [col]: display };
+      if (col === "ad") mine = withAutoBed(roomId, mine);
+      next[roomId] = mine;
+      return next;
+    });
+  };
+
+  /** Extra beds: floored at what the room's adults need, capped at the type's max.
+   *  Manual raises (e.g. a separate bed for a child) stay until the adults change. */
+  const clampBed = (roomId: string, v: string): string => {
+    const max = bedMaxOf(roomId);
+    const needed = bedsNeeded(roomId, cnt(rows[roomId]?.ad ?? "0"));
+    const n = cnt(v);
+    if (n > max) {
+      flashLimit(`Room ${roomNoOf(roomId)} allows at most ${max} extra bed${max === 1 ? "" : "s"} — capped.`);
+      return String(max);
+    }
+    if (n < needed) {
+      flashLimit(
+        `Room ${roomNoOf(roomId)} needs ${needed} extra bed${needed === 1 ? "" : "s"} for its adults — it can't go lower while they're in the room.`,
+      );
+      return String(needed);
+    }
+    return v;
+  };
+  /** Meal-plan pax: a room can't feed more people than it sleeps (Policy 79 rule 2). */
+  const clampMeal = (roomId: string, col: NumCol, v: string): string => {
+    const r = rows[roomId] ?? EMPTY_ROW;
+    const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
+    const otherMeals = MEAL_COLS.reduce((s, c) => (c === col ? s : s + cnt(r[c] ?? "0")), 0);
+    const allowed = Math.max(0, occ - otherMeals);
+    if (cnt(v) <= allowed) return v;
+    const roomNo = roomById.get(roomId)?.roomNumber ?? "";
+    flashLimit(
+      `Room ${roomNo} has ${occ} guest${occ === 1 ? "" : "s"}${
+        otherMeals > 0 ? ` (${otherMeals} already on other plans)` : ""
+      } — meal-plan pax can't exceed the people in the room; capped at ${allowed}.`,
+    );
+    return String(allowed);
+  };
+
   const visibleMeals = MEAL_COLS.filter(
     (c) => activePlans.has(c) || sealedRoomIds.some((id) => cnt(rows[id]?.[c] ?? "0") > 0),
   );
@@ -269,12 +402,12 @@ export function RoomCompositionsTable({
     setRows((prev) => {
       const next = { ...prev };
       sealedRoomIds.forEach((id, i) => {
-        next[id] = {
+        next[id] = withAutoBed(id, {
           ...(next[id] ?? { ...EMPTY_ROW }),
           ad: String(base + (i < rem ? 1 : 0)),
           c6: String(i === 0 ? c6to10 : 0),
           u6: String(i === 0 ? under6 : 0),
-        };
+        });
       });
       return next;
     });
@@ -309,14 +442,33 @@ export function RoomCompositionsTable({
   };
 
   /** Clone row 1's meals / beds / toggles / rates / others pax onto every other row —
-   *  never the guest bands (copying people would double the party). */
+   *  never the guest bands (copying people would double the party). Beds and meal pax
+   *  are clamped per target row (its own bed limit / its own occupancy), so the copy
+   *  can't write what typing wouldn't have allowed. */
   const copyFirstDown = () => {
     const first = rows[sealedRoomIds[0]];
     if (!first) return;
     const { ad: _a, c6: _c, u6: _u, ...rest } = first;
     setRows((prev) => {
       const next = { ...prev };
-      for (const id of sealedRoomIds.slice(1)) next[id] = { ...(next[id] ?? EMPTY_ROW), ...rest };
+      for (const id of sealedRoomIds.slice(1)) {
+        const target = next[id] ?? EMPTY_ROW;
+        const merged = { ...target, ...rest };
+        // Bed bounds per target room: capped at its type's max, floored at what its own
+        // adults need (the copy must not strip beds a fuller room depends on).
+        const bedMax = bedMaxOf(id);
+        const needed = bedsNeeded(id, cnt(target.ad));
+        merged.bed = String(Math.max(needed, Math.min(cnt(merged.bed), bedMax)));
+        // Meal pax ≤ the TARGET row's occupancy (it keeps its own guest bands).
+        const occ = cnt(target.ad) + cnt(target.c6) + cnt(target.u6);
+        let left = occ;
+        for (const c of MEAL_COLS) {
+          const take = Math.min(cnt(merged[c] ?? "0"), left);
+          merged[c] = String(take);
+          left -= take;
+        }
+        next[id] = merged;
+      }
       return next;
     });
   };
@@ -364,7 +516,8 @@ export function RoomCompositionsTable({
           negotiatedLunchRate: numOrUndef(r.rLu),
           negotiatedDinnerRate: numOrUndef(r.rDi),
           serviceChargeApplies: r.sc,
-          gstApplies: r.gst,
+          // GST is statutory — always applied regardless of any historic seed value.
+          gstApplies: true,
           isFoc: r.foc,
           // Per-night meal overrides are a guest-board concept — this grid has no column for
           // them. Carry the seed's through untouched so a board → table → board round trip
@@ -458,25 +611,40 @@ export function RoomCompositionsTable({
           onKeyDown={onCellKeyDown(rowIdx, col)}
           onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => {
-            const v = e.target.value;
+            let v = e.target.value;
             // Digits only for counts; digits + one dot for rate cells.
-            if (opts?.decimal ? /^\d*\.?\d*$/.test(v) : /^\d*$/.test(v)) setCell(roomId, { [col]: v });
+            if (!(opts?.decimal ? /^\d*\.?\d*$/.test(v) : /^\d*$/.test(v))) return;
+            // People/bed/meal cells are bounded — see the clamp helpers above. Band cells go
+            // through the MOVE-semantics writer (it updates other rooms + auto beds itself).
+            if (col === "ad" || col === "c6" || col === "u6") {
+              applyBandChange(roomId, col, v);
+              return;
+            }
+            if (col === "bed") v = clampBed(roomId, v);
+            else if ((MEAL_COLS as string[]).includes(col)) v = clampMeal(roomId, col, v);
+            setCell(roomId, { [col]: v });
           }}
         />
       </td>
     );
   };
-  const boolCell = (rowIdx: number, roomId: string, col: "sc" | "gst" | "foc") => (
-    <td key={col} className="ck">
-      <input
-        type="checkbox"
-        data-cell={`${rowIdx}:${col}`}
-        checked={rows[roomId]?.[col] ?? EMPTY_ROW[col]}
-        onKeyDown={onCellKeyDown(rowIdx, col)}
-        onChange={(e) => setCell(roomId, { [col]: e.target.checked })}
-      />
-    </td>
-  );
+  const boolCell = (rowIdx: number, roomId: string, col: "sc" | "gst" | "foc") =>
+    col === "gst" ? (
+      // GST is statutory — not an option (2026-08-01 operator ruling). Always on, always sent.
+      <td key={col} className="ck" title="GST is mandatory — applied on every room">
+        <input type="checkbox" checked disabled />
+      </td>
+    ) : (
+      <td key={col} className="ck">
+        <input
+          type="checkbox"
+          data-cell={`${rowIdx}:${col}`}
+          checked={rows[roomId]?.[col] ?? EMPTY_ROW[col]}
+          onKeyDown={onCellKeyDown(rowIdx, col)}
+          onChange={(e) => setCell(roomId, { [col]: e.target.checked })}
+        />
+      </td>
+    );
 
   return (
     <div className="rct">
@@ -552,6 +720,11 @@ export function RoomCompositionsTable({
           </span>
         )}
       </div>
+      {limitMsg && (
+        <p className="rce-warns" style={{ marginBottom: 0 }}>
+          {limitMsg}
+        </p>
+      )}
       {roomMin != null && sealedRoomIds.length < roomMin && (
         <p className="rce-block">
           {roomEnvelopeQuery.data?.chargeableOccupants} chargeable guest

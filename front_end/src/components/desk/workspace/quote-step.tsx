@@ -329,6 +329,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               entryCheckOut={entry.checkOutDate ?? null}
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
+              persistKey={entry.id}
               onChange={setRoomCompositions}
             />
           </div>
@@ -484,6 +485,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
                 entryCheckOut={entry.checkOutDate ?? null}
                 entryAdults={entry.adultCount ?? entry.guestCount ?? null}
                 entryChildAges={entry.childAges ?? null}
+                persistKey={entry.id}
                 onChange={setRoomCompositions}
               />
             </div>

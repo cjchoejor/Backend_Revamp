@@ -239,6 +239,11 @@ export function RoomCompositionsBoard({
     return out;
   }, [entryAdults, entryChildAges, youngMax, childMax]);
   const guestByKey = new Map(guests.map((g) => [g.key, g]));
+  /** Chargeable = consumes a capacity slot. Children under 11 share bedding (backend rule —
+   *  `computeChargeableOccupants` / the OVER_MAX_OCCUPANCY check exclude them). */
+  const isChargeable = (key: string) => guestByKey.get(key)?.band === "ADULT";
+  const chargeableIn = (roomId: string) =>
+    guests.filter((g) => assign[g.key] === roomId && g.band === "ADULT").length;
   /** The nights the guest actually booked — the only dates a per-night plan may target. */
   const nights = useMemo(() => stayNights(entryCheckIn, entryCheckOut), [entryCheckIn, entryCheckOut]);
 
@@ -262,6 +267,23 @@ export function RoomCompositionsBoard({
   // Set when the seed counted more people than the intake party has chips for — the
   // board is party-bound, so the overflow can't be represented and gets dropped.
   const [seedShortfall, setSeedShortfall] = useState(false);
+  // Transient refused-placement notice (room at its occupancy ceiling).
+  const [capMsg, setCapMsg] = useState<string | null>(null);
+  const capTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashCap = (msg: string) => {
+    setCapMsg(msg);
+    if (capTimer.current) clearTimeout(capTimer.current);
+    capTimer.current = setTimeout(() => setCapMsg(null), 5000);
+  };
+
+  /** The most a room may hold RIGHT NOW: catalog capacity + the extra beds currently set on the
+   *  bin. null = capacity unknown (never blocks). Adding a bed below raises it immediately. */
+  const ceilingOf = (roomId: string): number | null => {
+    const room = roomById.get(roomId);
+    const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
+    if (cap == null) return null;
+    return cap + (num((extras[roomId] ?? EMPTY_EXTRAS).extraBed) ?? 0);
+  };
 
   useEffect(() => {
     setExtras((prev) => {
@@ -278,23 +300,31 @@ export function RoomCompositionsBoard({
     });
   }, [sealedRoomIds]);
 
-  /** Spread the party: adults evenly with the remainder on the first room; children all
-   *  in the first room so a family stays together (and that room is guaranteed the most
-   *  adults). A starting point — every chip stays movable. */
+  /** Spread the party, capacity-aware: children go to the earliest room with space (family
+   *  stays together while it fits), adults then fill the least-loaded room with space. The
+   *  ceiling includes each bin's current extra beds. Whoever doesn't fit stays in the tray —
+   *  the tally says so honestly instead of overfilling a bin the placement guard would refuse.
+   *  A starting point — every chip stays movable. */
   const autoAssign = () => {
-    const n = sealedRoomIds.length;
-    if (n === 0) return;
-    const adultKeys = guests.filter((g) => g.band === "ADULT").map((g) => g.key);
-    const childKeys = guests.filter((g) => g.band !== "ADULT").map((g) => g.key);
-    const base = Math.floor(adultKeys.length / n);
-    const rem = adultKeys.length % n;
+    if (sealedRoomIds.length === 0) return;
+    // Load counts CHARGEABLE guests only — children share bedding and consume no slot, so
+    // they sit with the first room (family together) without affecting where adults fit.
+    const load = new Map<string, number>(sealedRoomIds.map((id) => [id, 0]));
+    const fits = (id: string) => {
+      const ceiling = ceilingOf(id);
+      return ceiling == null || (load.get(id) ?? 0) < ceiling;
+    };
     const next: Record<string, string> = {};
-    let cursor = 0;
-    sealedRoomIds.forEach((id, i) => {
-      const take = base + (i < rem ? 1 : 0);
-      for (let k = 0; k < take; k++) next[adultKeys[cursor++]] = id;
-    });
-    for (const key of childKeys) next[key] = sealedRoomIds[0];
+    for (const g of guests.filter((x) => x.band !== "ADULT")) {
+      next[g.key] = sealedRoomIds[0];
+    }
+    for (const g of guests.filter((x) => x.band === "ADULT")) {
+      const open = sealedRoomIds.filter(fits);
+      if (open.length === 0) continue;
+      const id = open.reduce((a, b) => ((load.get(b) ?? 0) < (load.get(a) ?? 0) ? b : a));
+      next[g.key] = id;
+      load.set(id, (load.get(id) ?? 0) + 1);
+    }
     setAssign(next);
   };
 
@@ -380,10 +410,13 @@ export function RoomCompositionsBoard({
   };
 
   // First open, once: resume from the other mode's snapshot when it carries people,
-  // otherwise auto-assign a sensible split. Ref-guarded against re-renders.
+  // otherwise auto-assign a sensible split. Ref-guarded against re-renders. Waits for the
+  // rooms catalog — auto-assigning before the capacities load would spread blind and could
+  // overfill a room the placement guard would then have refused.
+  const roomsSettled = roomsQuery.isSuccess || roomsQuery.isError;
   const autoRanRef = useRef(false);
   useEffect(() => {
-    if (autoRanRef.current || sealedRoomIds.length === 0 || guests.length === 0) return;
+    if (autoRanRef.current || sealedRoomIds.length === 0 || guests.length === 0 || !roomsSettled) return;
     if (Object.keys(assign).length > 0) {
       autoRanRef.current = true;
       return;
@@ -396,7 +429,7 @@ export function RoomCompositionsBoard({
     if (seedHasPeople) deriveFromSeed(seed);
     else autoAssign();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sealedRoomIds, guests.length]);
+  }, [sealedRoomIds, guests.length, roomsSettled]);
 
   // Derive + emit the backend composition rows whenever the board changes. Counts are
   // tallied from chip placement, so adults + bands always equals occupants and plan pax
@@ -460,7 +493,8 @@ export function RoomCompositionsBoard({
         negotiatedLunchRate: num(x.rateLu),
         negotiatedDinnerRate: num(x.rateDi),
         serviceChargeApplies: x.sc,
-        gstApplies: x.gst,
+        // GST is statutory — always applied regardless of any historic seed value.
+        gstApplies: true,
         isFoc: x.foc,
       };
     });
@@ -479,7 +513,32 @@ export function RoomCompositionsBoard({
       return next;
     });
 
+  /** Move chips. Interactive placement is hard-blocked at the room's occupancy ceiling
+   *  (capacity + extra beds) — a drop that doesn't fully fit is refused whole rather than
+   *  silently placing part of the selection. Seed derivation (`deriveFromSeed`) is deliberately
+   *  NOT guarded: a table→board round trip must reproduce the table's counts faithfully, and
+   *  the over-capacity warning on the bin flags them instead. */
   const placeKeys = (keys: string[], roomId: string | null) => {
+    if (roomId) {
+      const ceiling = ceilingOf(roomId);
+      if (ceiling != null) {
+        // Capacity counts CHARGEABLE guests only — children under 11 share bedding and
+        // consume no slot (mirrors the backend's OVER_MAX_OCCUPANCY rule), so placing a
+        // child succeeds even in a room that is adult-full.
+        const current = chargeableIn(roomId);
+        const incoming = keys.filter((k) => assign[k] !== roomId && isChargeable(k)).length;
+        if (current + incoming > ceiling) {
+          const room = roomById.get(roomId);
+          const spots = Math.max(0, ceiling - current);
+          flashCap(
+            `Room ${room?.roomNumber ?? ""} fits ${ceiling} adult-rate guests right now — ${
+              spots === 0 ? "it's full" : `only space for ${spots} more`
+            }. Add an extra bed on the room, or move someone out (children under ${childMax + 1} don't take a slot).`,
+          );
+          return;
+        }
+      }
+    }
     setAssign((prev) => {
       const next = { ...prev };
       for (const k of keys) {
@@ -574,6 +633,16 @@ export function RoomCompositionsBoard({
 
   const unplaced = guests.filter((g) => !assign[g.key] || !sealedRoomIds.includes(assign[g.key]));
   const placedCount = guests.length - unplaced.length;
+  // Every saved room at its ceiling while people still wait — worth a standing line, not just
+  // the transient refusal flash, because no tap can succeed until something changes.
+  const allFull =
+    sealedRoomIds.length > 0 &&
+    sealedRoomIds.every((id) => {
+      const ceiling = ceilingOf(id);
+      return ceiling != null && chargeableIn(id) >= ceiling;
+    }) &&
+    // Only adults left in the tray make this a hard stop — children always fit somewhere.
+    unplaced.some((g) => g.band === "ADULT");
   // A focus on a room that's no longer sealed (selection changed upstream) falls back to All
   // rather than rendering an empty board.
   const activeFocus = focusRoomId && sealedRoomIds.includes(focusRoomId) ? focusRoomId : null;
@@ -582,7 +651,7 @@ export function RoomCompositionsBoard({
   if (sealedRoomIds.length === 0) {
     return (
       <div style={{ padding: 10, fontSize: 11.5, color: "var(--ink-3)" }}>
-        Seal a room selection in Inquiry first — per-room composition unlocks after that.
+        Save a room selection in Inquiry first — per-room composition unlocks after that.
       </div>
     );
   }
@@ -665,7 +734,7 @@ export function RoomCompositionsBoard({
             className={`rce-tally${sealedRoomIds.length < roomMin ? " off" : ""}`}
             title="Backend capacity envelope: chargeable guests vs the largest room capacity"
           >
-            needs ≥ {roomMin} room{roomMin === 1 ? "" : "s"} · {sealedRoomIds.length} sealed
+            needs ≥ {roomMin} room{roomMin === 1 ? "" : "s"} · {sealedRoomIds.length} saved
           </span>
         )}
         <span className={`rce-tally${placedCount !== guests.length ? " off" : ""}`}>
@@ -684,6 +753,17 @@ export function RoomCompositionsBoard({
         <p className="rce-warns" style={{ marginBottom: 0 }}>
           The table counted more guests than this booking&rsquo;s party has — the board can only place real
           party members, so the extra seats were dropped. Check the placement before continuing.
+        </p>
+      )}
+      {capMsg && (
+        <p className="rce-warns" style={{ marginBottom: 0 }}>
+          {capMsg}
+        </p>
+      )}
+      {allFull && unplaced.length > 0 && (
+        <p className="rce-warns" style={{ marginBottom: 0 }}>
+          Every saved room is at its limit — {unplaced.length} guest{unplaced.length === 1 ? "" : "s"} can&rsquo;t
+          be placed until you add an extra bed on a room below, or go back to Inquiry and save more rooms.
         </p>
       )}
 
@@ -827,16 +907,44 @@ export function RoomCompositionsBoard({
           const x = extras[id] ?? EMPTY_EXTRAS;
           const othersCount = here.filter((g) => (plans[g.key] ?? "NONE") === "OTHERS").length;
           const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
-          const overCap = cap != null && here.length > cap + (num(x.extraBed) ?? 0);
+          const ceiling = cap != null ? cap + (num(x.extraBed) ?? 0) : null;
+          // Capacity counts CHARGEABLE guests only — children under 11 share bedding and
+          // consume no slot (backend OVER_MAX_OCCUPANCY rule).
+          const chargeable = here.filter((g) => g.band === "ADULT").length;
+          const overCap = ceiling != null && chargeable > ceiling;
+          const incomingChargeable = [...selected].filter((k) => assign[k] !== id && isChargeable(k)).length;
+          const wontFit = ceiling != null && chargeable + incomingChargeable > ceiling;
+          // Room closed: at its ceiling it stops being a target for ADULT-rate guests — dimmed,
+          // no drop glow, "Full" tag. A selection of only children still places fine.
+          const full = ceiling != null && chargeable >= ceiling;
+          const blockedForSelection = wontFit && incomingChargeable > 0;
           return (
-            <div key={id} className={`rcb-room${x.foc ? " foc" : ""}${dragOver === id ? " drop" : ""}`} {...zoneDragProps(id, id)}>
+            <div
+              key={id}
+              className={`rcb-room${x.foc ? " foc" : ""}${full ? " full" : ""}${dragOver === id && !blockedForSelection ? " drop" : ""}`}
+              {...zoneDragProps(id, id)}
+            >
               <div className="rcb-room-head">
                 <span className="rce-roomno">Room {roomNumber}</span>
                 {room?.roomType?.name && <span className="rcb-type">{room.roomType.name}</span>}
                 <span className="ln" />
-                <span className={`rcb-occ${overCap ? " over" : ""}`} title={cap != null ? `Capacity ${cap}${overCap ? " — over" : ""}` : undefined}>
-                  {here.length}
-                  {cap != null ? `/${cap}` : ""} <span aria-hidden>·</span> {num(x.extraBed) ?? 0} bed
+                {full && (
+                  <span className="tag warn" style={{ fontSize: 9 }}>
+                    Full
+                  </span>
+                )}
+                <span
+                  className={`rcb-occ${overCap ? " over" : ""}`}
+                  title={
+                    ceiling != null
+                      ? `${here.length} guest${here.length === 1 ? "" : "s"} in the room · ${chargeable}/${ceiling} capacity used (incl. extra beds) — children under ${childMax + 1} share bedding and don't count`
+                      : undefined
+                  }
+                >
+                  {chargeable}
+                  {ceiling != null ? `/${ceiling}` : ""}
+                  {here.length > chargeable ? ` +${here.length - chargeable}kid` : ""} <span aria-hidden>·</span>{" "}
+                  {num(x.extraBed) ?? 0} bed
                 </span>
                 {here.length > 0 && (
                   <button
@@ -850,9 +958,24 @@ export function RoomCompositionsBoard({
                 )}
               </div>
 
-              {selected.size > 0 && (
-                <button type="button" className="rcb-place" onClick={() => placeSelection(id)}>
-                  + Place {selected.size} here
+              {/* A room that's adult-full offers no place action for a selection carrying adults —
+                  the Full tag says why, and the extra-bed stepper below reopens it. A selection of
+                  only children (no capacity slot) still places. */}
+              {selected.size > 0 && !(full && incomingChargeable > 0) && (
+                <button
+                  type="button"
+                  className="rcb-place"
+                  disabled={blockedForSelection}
+                  title={
+                    blockedForSelection
+                      ? `Room ${roomNumber} fits ${ceiling} adult-rate guests right now — add an extra bed to raise it`
+                      : undefined
+                  }
+                  onClick={() => placeSelection(id)}
+                >
+                  {blockedForSelection
+                    ? `Only space for ${Math.max(0, (ceiling ?? 0) - chargeable)}`
+                    : `+ Place ${selected.size} here`}
                 </button>
               )}
 
@@ -863,8 +986,8 @@ export function RoomCompositionsBoard({
               )}
               {overCap && (
                 <p className="rcb-overcap">
-                  {here.length} guests for capacity {cap} + {num(x.extraBed) ?? 0} extra bed{(num(x.extraBed) ?? 0) === 1 ? "" : "s"} —
-                  add beds below or move someone out.
+                  {chargeable} adult-rate guests for capacity {cap} + {num(x.extraBed) ?? 0} extra bed
+                  {(num(x.extraBed) ?? 0) === 1 ? "" : "s"} — add beds below or move someone out.
                 </p>
               )}
 
@@ -883,8 +1006,9 @@ export function RoomCompositionsBoard({
                 <label className="rce-tog">
                   <input type="checkbox" checked={x.sc} onChange={(e) => setExtra(id, { sc: e.target.checked })} /> SC
                 </label>
-                <label className="rce-tog">
-                  <input type="checkbox" checked={x.gst} onChange={(e) => setExtra(id, { gst: e.target.checked })} /> GST
+                {/* GST is statutory — not an option (2026-08-01 operator ruling). */}
+                <label className="rce-tog" title="GST is mandatory — applied on every room">
+                  <input type="checkbox" checked disabled /> GST
                 </label>
                 <label className="rce-tog">
                   <input type="checkbox" checked={x.foc} onChange={(e) => setExtra(id, { foc: e.target.checked })} /> <b>FOC</b>
@@ -964,6 +1088,9 @@ export function RoomCompositionPlanner(props: {
   entryCheckOut?: string | null;
   entryAdults?: number | null;
   entryChildAges?: number[] | null;
+  /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
+   *  the workspace — without it the grid reset to the auto-distributed default on return. */
+  persistKey?: string;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
@@ -976,10 +1103,34 @@ export function RoomCompositionPlanner(props: {
   const [focusRoomId, setFocusRoomId] = useState<string | null>(null);
   // Last emitted compositions — the seed for whichever mode mounts next. A ref, not
   // state: emissions must not re-render the planner (the active editor already did).
-  const snapshotRef = useRef<RoomCompositionInput[]>([]);
+  // Hydrated ONCE from sessionStorage (2026-08-01) so leaving the workspace and coming
+  // back resumes the edits — hydration must happen before the first child mounts (the
+  // editors read `initial` at mount), so it's a lazy ref init, not an effect. This
+  // component only ever renders client-side (behind the entry fetch), so no SSR risk.
+  const storeKey = props.persistKey ? `desk:rcomp:${props.persistKey}` : null;
+  const snapshotRef = useRef<RoomCompositionInput[] | null>(null);
+  if (snapshotRef.current === null) {
+    snapshotRef.current = [];
+    if (storeKey && typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem(storeKey);
+        const v = raw ? (JSON.parse(raw) as RoomCompositionInput[]) : null;
+        if (Array.isArray(v)) snapshotRef.current = v;
+      } catch {
+        /* corrupt / private mode — start fresh as before */
+      }
+    }
+  }
   const { onChange } = props;
   const handleChange = (compositions: RoomCompositionInput[]) => {
     snapshotRef.current = compositions;
+    if (storeKey) {
+      try {
+        localStorage.setItem(storeKey, JSON.stringify(compositions));
+      } catch {
+        /* non-fatal — the edits just won't survive navigation */
+      }
+    }
     onChange(compositions);
   };
   if (!canBoard) return <RoomCompositionsTable {...props} />;
@@ -1007,7 +1158,7 @@ export function RoomCompositionPlanner(props: {
         <RoomCompositionsTable
           {...props}
           onChange={handleChange}
-          initial={snapshotRef.current}
+          initial={snapshotRef.current ?? []}
           onOpenRoomInBoard={(roomId) => {
             setFocusRoomId(roomId);
             setMode("board");
@@ -1017,7 +1168,7 @@ export function RoomCompositionPlanner(props: {
         <RoomCompositionsBoard
           {...props}
           onChange={handleChange}
-          initial={snapshotRef.current}
+          initial={snapshotRef.current ?? []}
           focusRoomId={focusRoomId}
           onFocusRoom={setFocusRoomId}
         />
