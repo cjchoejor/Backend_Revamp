@@ -2395,6 +2395,12 @@ model TravelAgent {
   contactNumber String?
   contactEmail  String?
   modeOfContact ContactMode @default(PHONE)
+  // coordinators: the agency's contact persons, array of [{ name, phone?, email? }] — same shape as
+  // CorporateAccount.coordinators. One agency routinely has several people who ring in bookings, so
+  // the desk picks from this list at S1 intake to fill Entry.contactPerson* rather than retyping a
+  // number each time. Appendable from the desk (L1) via POST /lookups/travel-agents/:id/contacts so
+  // a new contact person captured mid-call is there for the next booking.
+  coordinators  Json?
   notes         String?
   isActive      Boolean     @default(true)
   createdAt     DateTime    @default(now())

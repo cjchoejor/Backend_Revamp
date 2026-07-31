@@ -4,8 +4,9 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { appendContact, normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
 
-export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+export type { CoordinatorContact };
 
 export type CorporateAccountInput = {
   displayName: string;
@@ -30,22 +31,6 @@ function normalizeContractRefs(v: unknown): string[] {
   for (const r of v) {
     const s = typeof r === "string" ? r.trim() : "";
     if (s && !seen.has(s)) { seen.add(s); out.push(s); }
-  }
-  return out;
-}
-
-/** Normalise coordinators: each must have a non-empty name; phone/email optional. */
-function normalizeCoordinators(v: unknown): CoordinatorContact[] {
-  if (!Array.isArray(v)) return [];
-  const out: CoordinatorContact[] = [];
-  for (const c of v) {
-    if (!c || typeof c !== "object") continue;
-    const obj = c as Record<string, unknown>;
-    const name = typeof obj.name === "string" ? obj.name.trim() : "";
-    if (!name) continue;
-    const phone = typeof obj.phone === "string" && obj.phone.trim() ? obj.phone.trim() : null;
-    const email = typeof obj.email === "string" && obj.email.trim() ? obj.email.trim() : null;
-    out.push({ name, phone, email });
   }
   return out;
 }
@@ -155,6 +140,45 @@ export async function updateCorporateAccount(
     });
     return updated;
   });
+}
+
+/**
+ * Append one coordinator to a corporate account. L1-reachable via the desk lookup route — see the
+ * rationale on `addTravelAgentContact`; the two behave identically. Idempotent by phone.
+ */
+export async function addCorporateAccountContact(
+  prisma: PrismaClient,
+  id: string,
+  contact: CoordinatorContact,
+  actorId: string,
+) {
+  const existing = await prisma.corporateAccount.findUnique({ where: { id } });
+  if (!existing) throw new NotFoundError("CorporateAccount");
+  if (!contact?.name?.trim()) throw new ValidationError("name is required");
+
+  const result = appendContact(existing.coordinators, contact);
+  if (!result.added) {
+    return { account: existing, contact: result.contact, added: false as const };
+  }
+
+  const account = await prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "CorporateAccount", entityId: id, actorId });
+    const updated = await tx.corporateAccount.update({
+      where: { id },
+      data: { coordinators: result.coordinators as Prisma.InputJsonValue },
+    });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ADMIN.CORPORATE_ACCOUNT_CONTACT_ADDED",
+      entityType: "CorporateAccount",
+      entityId: id,
+      operation: "UPDATE",
+      payload: { displayName: updated.displayName, contact: result.contact },
+    });
+    return updated;
+  });
+
+  return { account, contact: result.contact, added: true as const };
 }
 
 export async function deactivateCorporateAccount(prisma: PrismaClient, id: string, actorId: string) {

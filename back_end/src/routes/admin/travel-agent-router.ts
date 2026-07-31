@@ -11,11 +11,19 @@ const L4 = requireActorLevel("L4");
 
 const contactModeSchema = z.enum(["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"]).optional().nullable();
 
+/** One contact person at the agency. Same shape as CorporateAccount.coordinators. */
+const coordinatorSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  phone: z.string().trim().max(50).optional().nullable(),
+  email: z.string().trim().max(200).optional().nullable(),
+});
+
 const createSchema = z.object({
   displayName: z.string().trim().min(1).max(200),
   contactNumber: z.string().trim().max(50).optional().nullable(),
   contactEmail: z.string().trim().email().max(200).optional().nullable(),
   modeOfContact: contactModeSchema,
+  coordinators: z.array(coordinatorSchema).max(50).optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
   isActive: z.boolean().optional(),
 });

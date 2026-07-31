@@ -6,8 +6,10 @@
  * taking a phone-call inquiry. Read-only.
  */
 import { Router } from "express";
+import { z } from "zod";
 import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
+import { validateBody } from "../../middleware/validate-body.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
@@ -82,3 +84,63 @@ lookupsRouter.get("/lookups/corporate-accounts/search", L1, async (req, res, nex
     res.json({ matches: await corporateSvc.searchCorporateAccounts(prisma, q) });
   } catch (e) { next(e); }
 });
+
+/**
+ * Append a contact person to a standing party, at L1.
+ *
+ * Every other write to a TravelAgent / CorporateAccount is L4-only, deliberately — these carry the
+ * negotiated rate cards. Appending a contact is the one carve-out: a new person at the agency comes
+ * up during an intake call, and the number is only worth capturing if the operator taking the call
+ * can store it. The authority granted is append-only — no rename, no removal, no touching any
+ * commercial field — and each append is audited + snapshotted like any admin write, so an L4 can
+ * see who added what and revert it from the Versions tab.
+ *
+ * Idempotent by phone: re-posting a number the party already has returns it with `added: false`.
+ */
+const addContactSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  phone: z.string().trim().max(50).optional().nullable(),
+  email: z.string().trim().max(200).optional().nullable(),
+});
+
+lookupsRouter.post(
+  "/lookups/travel-agents/:id/contacts",
+  L1,
+  validateBody(addContactSchema),
+  async (req, res, next) => {
+    try {
+      const result = await travelAgentSvc.addTravelAgentContact(
+        prisma,
+        req.params.id,
+        req.body,
+        req.actor!.actorId,
+      );
+      res.status(result.added ? 201 : 200).json({
+        contact: result.contact,
+        added: result.added,
+        coordinators: result.agent.coordinators ?? [],
+      });
+    } catch (e) { next(e); }
+  },
+);
+
+lookupsRouter.post(
+  "/lookups/corporate-accounts/:id/contacts",
+  L1,
+  validateBody(addContactSchema),
+  async (req, res, next) => {
+    try {
+      const result = await corporateSvc.addCorporateAccountContact(
+        prisma,
+        req.params.id,
+        req.body,
+        req.actor!.actorId,
+      );
+      res.status(result.added ? 201 : 200).json({
+        contact: result.contact,
+        added: result.added,
+        coordinators: result.account.coordinators ?? [],
+      });
+    } catch (e) { next(e); }
+  },
+);

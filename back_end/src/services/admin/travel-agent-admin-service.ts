@@ -4,12 +4,17 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { appendContact, normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+
+export type { CoordinatorContact };
 
 export type TravelAgentInput = {
   displayName: string;
   contactNumber?: string | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
+  /** The agency's contact persons [{ name, phone?, email? }] — who actually rings in bookings. */
+  coordinators?: CoordinatorContact[];
   notes?: string | null;
   isActive?: boolean;
 };
@@ -56,6 +61,7 @@ export async function createTravelAgent(prisma: PrismaClient, input: TravelAgent
         contactNumber: input.contactNumber?.trim() || null,
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
+        coordinators: normalizeCoordinators(input.coordinators),
         notes: input.notes?.trim() || null,
         isActive: input.isActive ?? true,
         createdBy: actorId,
@@ -95,6 +101,7 @@ export async function updateTravelAgent(
         contactNumber: input.contactNumber === undefined ? undefined : input.contactNumber?.trim() || null,
         contactEmail: input.contactEmail === undefined ? undefined : input.contactEmail?.trim() || null,
         modeOfContact: input.modeOfContact ?? undefined,
+        coordinators: input.coordinators === undefined ? undefined : normalizeCoordinators(input.coordinators),
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
         isActive: input.isActive,
       },
@@ -111,6 +118,52 @@ export async function updateTravelAgent(
     });
     return updated;
   });
+}
+
+/**
+ * Append one contact person to an agency's list.
+ *
+ * Unlike the rest of this service this is reachable at L1 (see the desk lookup route): a new
+ * contact person at an agency surfaces during an intake call, and the number is only worth having
+ * if the operator who heard it can store it. Appending is the whole of the granted authority —
+ * existing contacts can't be renamed or removed here, only through the L4 update path.
+ *
+ * Idempotent by phone: re-adding a number already on the agency returns the stored contact with
+ * `added: false` and writes nothing.
+ */
+export async function addTravelAgentContact(
+  prisma: PrismaClient,
+  id: string,
+  contact: CoordinatorContact,
+  actorId: string,
+) {
+  const existing = await prisma.travelAgent.findUnique({ where: { id } });
+  if (!existing) throw new NotFoundError("TravelAgent");
+  if (!contact?.name?.trim()) throw new ValidationError("name is required");
+
+  const result = appendContact(existing.coordinators, contact);
+  if (!result.added) {
+    return { agent: existing, contact: result.contact, added: false as const };
+  }
+
+  const agent = await prisma.$transaction(async (tx) => {
+    await captureSnapshotTx(tx, { entityType: "TravelAgent", entityId: id, actorId });
+    const updated = await tx.travelAgent.update({
+      where: { id },
+      data: { coordinators: result.coordinators as Prisma.InputJsonValue },
+    });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ADMIN.TRAVEL_AGENT_CONTACT_ADDED",
+      entityType: "TravelAgent",
+      entityId: id,
+      operation: "UPDATE",
+      payload: { displayName: updated.displayName, contact: result.contact },
+    });
+    return updated;
+  });
+
+  return { agent, contact: result.contact, added: true as const };
 }
 
 export async function deactivateTravelAgent(prisma: PrismaClient, id: string, actorId: string) {
