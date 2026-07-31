@@ -73,8 +73,9 @@ export type LookupPartyMatch = {
   contactEmail: string | null;
   modeOfContact: string;
   gstNumber?: string | null;
-  /** Corporate accounts only — contract references + coordinators inherited at intake (spec §2.6.2). */
+  /** Corporate accounts only — contract references inherited at intake (spec §2.6.2). */
   contractRefs?: string[];
+  /** The party's contact persons — who actually rings in bookings. Both party kinds carry these. */
   coordinators?: CoordinatorContact[];
 };
 
@@ -86,4 +87,31 @@ export async function searchTravelAgentsLookup(session: Session, q: string) {
 export async function searchCorporateAccountsLookup(session: Session, q: string) {
   const qs = new URLSearchParams({ q });
   return apiRequest<{ matches: LookupPartyMatch[] }>(`/api/lookups/corporate-accounts/search?${qs}`, { session });
+}
+
+export type AddPartyContactResult = {
+  contact: CoordinatorContact;
+  /** False when the party already had this number — the stored contact is returned unchanged. */
+  added: boolean;
+  coordinators: CoordinatorContact[];
+};
+
+/**
+ * Append a contact person to a travel agent / corporate account from the desk (L1).
+ *
+ * Append-only by design — the desk can add a person who came up on a call, but renaming or
+ * removing contacts stays an L4 action in Admin. Idempotent by phone.
+ */
+export async function addPartyContact(
+  session: Session,
+  kind: "TRAVEL_AGENT" | "CORPORATE",
+  partyId: string,
+  contact: CoordinatorContact,
+) {
+  const base = kind === "TRAVEL_AGENT" ? "travel-agents" : "corporate-accounts";
+  return apiRequest<AddPartyContactResult>(`/api/lookups/${base}/${partyId}/contacts`, {
+    method: "POST",
+    session,
+    body: contact,
+  });
 }

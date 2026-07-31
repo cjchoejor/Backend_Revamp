@@ -28,11 +28,13 @@ import {
   type GuestProfileSummary,
 } from "@/lib/api/guest-profiles";
 import {
+  addPartyContact,
   captureCorporateContext,
   createInquiry,
   getInquiry,
   searchCorporateAccountsLookup,
   searchTravelAgentsLookup,
+  type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
 import { createEntry, getEntry, updateEntryIntake } from "@/lib/api/entries";
@@ -194,15 +196,172 @@ function PresetOrCustom({
   );
 }
 
+/**
+ * The contact persons on the picked agency / corporate account.
+ *
+ * An agency rarely has one voice — several people ring in bookings, and a new one turns up mid-call.
+ * So this behaves like the guest phone auto-match one field up: the numbers already known for THIS
+ * party are offered, and anything new is captured and appended to the party (L1, append-only) so the
+ * next booking through them already has it. The pick fills the booking's contact person — the number
+ * the hotel rings about this stay — not the guest, who is captured separately below.
+ */
+function PartyContacts({
+  kind,
+  party,
+  setParty,
+  contact,
+  setContact,
+}: {
+  kind: PartyKind;
+  party: LookupPartyMatch;
+  setParty: (p: LookupPartyMatch | null) => void;
+  contact: CoordinatorContact | null;
+  setContact: (c: CoordinatorContact | null) => void;
+}) {
+  const { session } = useSession();
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newCode, setNewCode] = useState(PHONE_CODES[0]);
+  const [newPhone, setNewPhone] = useState("");
+
+  const contacts = party.coordinators ?? [];
+  const noun = kind === "TRAVEL_AGENT" ? "agency" : "account";
+
+  const addMutation = useMutation({
+    mutationFn: () =>
+      addPartyContact(session!, kind, party.id, {
+        name: newName.trim(),
+        phone: newPhone.trim() ? `${newCode}${newPhone.trim()}` : null,
+      }),
+    onSuccess: (res) => {
+      // Reflect the append locally so the list shows it without re-running the party search.
+      setParty({ ...party, coordinators: res.coordinators });
+      setContact(res.contact);
+      setAdding(false);
+      setNewName("");
+      setNewPhone("");
+      toast.success(res.added ? `Added ${res.contact.name} to ${party.displayName}` : `${res.contact.name} was already on file`);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not add the contact"),
+  });
+
+  if (contact) {
+    return (
+      <div className="field">
+        <label>Contact person</label>
+        <div className="pickrow sel" style={{ borderRadius: "var(--r-md)", border: "1.5px solid var(--terra)" }}>
+          <span>
+            <b>{contact.name}</b>
+            {contact.phone && <span style={{ color: "var(--ink-3)" }}> · {contact.phone}</span>}
+          </span>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => setContact(null)}>
+            Change
+          </button>
+        </div>
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "5px 0 0" }}>
+          The hotel rings this person about the booking. The guest travelling is captured below.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="field">
+      <label>Contact person</label>
+      {contacts.length > 0 ? (
+        <div className="picklist">
+          <div className="pickempty" style={{ padding: "7px 12px", textAlign: "left", color: "var(--ink-3)" }}>
+            Contacts on file for {party.displayName}:
+          </div>
+          {contacts.map((c, i) => (
+            <button key={`${c.name}-${i}`} type="button" className="pickrow" onClick={() => setContact(c)}>
+              <span>
+                <b>{c.name}</b>
+                {c.phone && <span style={{ color: "var(--ink-3)" }}> · {c.phone}</span>}
+              </span>
+              <span className="brow-open">Use →</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 6px" }}>
+          No contacts on file for this {noun} yet — add the person you&rsquo;re speaking to.
+        </p>
+      )}
+
+      {adding ? (
+        <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+          <input
+            className="dinput"
+            placeholder="Contact person's name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            autoFocus
+          />
+          <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ flex: "0 0 auto" }}>
+              <PresetOrCustom
+                presets={PHONE_CODES}
+                value={newCode}
+                onChange={setNewCode}
+                customPlaceholder="+__"
+                selectStyle={{ width: 92 }}
+              />
+            </div>
+            <input
+              className="dinput"
+              style={{ flex: 1 }}
+              inputMode="tel"
+              placeholder="17 88 21 04"
+              value={newPhone}
+              onChange={(e) => setNewPhone(e.target.value)}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!newName.trim() || addMutation.isPending}
+              onClick={() => addMutation.mutate()}
+            >
+              {addMutation.isPending ? "Saving…" : `Save to ${noun}`}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+            Saved onto {party.displayName}, so it&rsquo;s already here next time they book.
+          </p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          style={{ marginTop: 7 }}
+          onClick={() => setAdding(true)}
+        >
+          <Plus style={{ width: 14, height: 14 }} />
+          New contact person
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Debounced search + pick for a single party kind (travel agent or corporate). */
 function PartySearch({
   kind,
   party,
   setParty,
+  contact,
+  setContact,
 }: {
   kind: PartyKind;
   party: LookupPartyMatch | null;
   setParty: (p: LookupPartyMatch | null) => void;
+  contact: CoordinatorContact | null;
+  setContact: (c: CoordinatorContact | null) => void;
 }) {
   const { session } = useSession();
   const [q, setQ] = useState("");
@@ -225,18 +384,21 @@ function PartySearch({
 
   if (party) {
     return (
-      <div className="field">
-        <label>{kind === "TRAVEL_AGENT" ? "Travel agent" : "Corporate account"}</label>
-        <div className="pickrow sel" style={{ borderRadius: "var(--r-md)", border: "1.5px solid var(--terra)" }}>
-          <span>
-            <b>{party.displayName}</b>
-            {party.contactEmail && <span style={{ color: "var(--ink-3)" }}> · {party.contactEmail}</span>}
-          </span>
-          <button className="btn btn-ghost btn-sm" type="button" onClick={() => setParty(null)}>
-            Change
-          </button>
+      <>
+        <div className="field">
+          <label>{kind === "TRAVEL_AGENT" ? "Travel agent" : "Corporate account"}</label>
+          <div className="pickrow sel" style={{ borderRadius: "var(--r-md)", border: "1.5px solid var(--terra)" }}>
+            <span>
+              <b>{party.displayName}</b>
+              {party.contactEmail && <span style={{ color: "var(--ink-3)" }}> · {party.contactEmail}</span>}
+            </span>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => setParty(null)}>
+              Change
+            </button>
+          </div>
         </div>
-      </div>
+        <PartyContacts kind={kind} party={party} setParty={setParty} contact={contact} setContact={setContact} />
+      </>
     );
   }
 
@@ -303,6 +465,8 @@ export function DeskNewInquiryForm() {
   // Inquiry & stay
   const [channelKey, setChannelKey] = useState<ChannelKey>("WALKIN");
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
+  // The agency/account contact person handling this booking — becomes Entry.contactPerson* below.
+  const [partyContact, setPartyContact] = useState<CoordinatorContact | null>(null);
   // Policy 17 / SIG-S1 §100.6 — CORPORATE bookings must record a client reference + coordinator
   // on the inquiry, else the entry can't exit S1. Captured here at intake.
   const [corpClientRef, setCorpClientRef] = useState("");
@@ -392,8 +556,17 @@ export function DeskNewInquiryForm() {
 
   // Reset party selection when channel changes away from agent/corporate.
   useEffect(() => {
-    if (!partyKind) setParty(null);
+    if (!partyKind) {
+      setParty(null);
+      setPartyContact(null);
+    }
   }, [partyKind]);
+
+  // A contact belongs to one party — dropping or swapping the party drops the contact with it.
+  useEffect(() => {
+    setPartyContact(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [party?.id]);
 
   // Clear the corporate context when the channel no longer needs it.
   useEffect(() => {
@@ -414,6 +587,12 @@ export function DeskNewInquiryForm() {
     if (coords.length > 0) setCorpCoordinator(coords[0].name);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [party?.id]);
+
+  // For a corporate booking the contact person IS the Policy 17 coordinator — picking one above
+  // fills the required field below rather than making the operator name the same person twice.
+  useEffect(() => {
+    if (needsCorporateContext && partyContact) setCorpCoordinator(partyContact.name);
+  }, [needsCorporateContext, partyContact]);
 
   // Keep the child-ages list length in step with the children count.
   const childCountNum = Math.max(0, parseInt(children || "0", 10) || 0);
@@ -508,10 +687,29 @@ export function DeskNewInquiryForm() {
 
   const fullPhone = phoneCode && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
 
-  const canSubmitNew = !!(
-    selectedGuest ||
-    (firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim())
-  );
+  const newGuestComplete = !!(firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim());
+
+  // Save the guest before the rest of the booking is filled in. Submitting the form would create
+  // the profile anyway, so this only moves that write earlier — useful when the caller gives their
+  // details first and the stay is still being discussed. The saved profile is adopted straight
+  // away, so the submit path reuses its id rather than creating a second one.
+  const saveGuestMutation = useMutation({
+    mutationFn: () =>
+      createGuestProfile(session!, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim() || undefined,
+        phone: fullPhone || undefined,
+        nationality: nationality.trim() || undefined,
+      }),
+    onSuccess: (created) => {
+      setSelectedGuest(created);
+      toast.success(`Guest saved: ${created.firstName} ${created.lastName}`);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not save the guest"),
+  });
+
+  const canSubmitNew = !!(selectedGuest || newGuestComplete);
   const corporateContextComplete = !needsCorporateContext || (corpClientRef.trim() !== "" && corpCoordinator.trim() !== "");
   const canSubmit = isEdit
     ? // Editing an existing booking: guest + channel are fixed, so only the stay fields gate the save.
@@ -578,13 +776,14 @@ export function DeskNewInquiryForm() {
         });
       }
 
-      // On-site contact person (required at S4→S5 pre-arrival activation / W4). Default it to the
-      // guest — for a walk-in / individual the guest IS the on-site contact. A corporate/group
-      // coordinator can differ, but the guest is a sensible default and this is only set at intake
-      // (Entry.contactPerson* is S1-editable only). Falls back to the guest profile's phone for a
-      // returning guest whose number wasn't re-typed into the form.
-      const contactPersonName = `${firstName.trim()} ${lastName.trim()}`.trim();
-      const contactPersonPhone = fullPhone || selectedGuest?.phone || "";
+      // On-site contact person (required at S4→S5 pre-arrival activation / W4). When the booking
+      // came through an agency or corporate account and the operator picked one of its contact
+      // persons, that person is who the hotel rings about this stay — so they win. Otherwise it
+      // defaults to the guest: for a walk-in / individual the guest IS the contact. Only set at
+      // intake (Entry.contactPerson* is S1-editable only). Falls back to the guest profile's phone
+      // for a returning guest whose number wasn't re-typed into the form.
+      const contactPersonName = partyContact?.name?.trim() || `${firstName.trim()} ${lastName.trim()}`.trim();
+      const contactPersonPhone = partyContact?.phone?.trim() || fullPhone || selectedGuest?.phone || "";
 
       return createEntry(session, {
         inquiryId: inquiry.id,
@@ -738,7 +937,15 @@ export function DeskNewInquiryForm() {
               account carries the negotiated rate card and (for corporates) the contract ref +
               coordinator that pre-fill below, so picking it first is the operator's real first
               move. Every other channel starts at the phone as before. */}
-          {!isEdit && partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
+          {!isEdit && partyKind && (
+            <PartySearch
+              kind={partyKind}
+              party={party}
+              setParty={setParty}
+              contact={partyContact}
+              setContact={setPartyContact}
+            />
+          )}
           {isEdit ? (
             <>
               <div className="field">
@@ -873,6 +1080,20 @@ export function DeskNewInquiryForm() {
               <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
                 Phone and nationality are required. Type a known number to reuse an existing guest.
               </p>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 9 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={!newGuestComplete || saveGuestMutation.isPending}
+                  onClick={() => saveGuestMutation.mutate()}
+                >
+                  {saveGuestMutation.isPending ? "Saving…" : "Save guest"}
+                </button>
+                <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
+                  Optional — saves the guest to the system now. Otherwise they&rsquo;re saved when you
+                  open the booking.
+                </span>
+              </div>
             </>
           ) : (
             <>

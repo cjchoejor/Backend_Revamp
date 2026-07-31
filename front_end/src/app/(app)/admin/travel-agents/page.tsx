@@ -53,6 +53,7 @@ export default function AdminTravelAgentsPage() {
       contactNumber: a.contactNumber,
       contactEmail: a.contactEmail,
       modeOfContact: a.modeOfContact,
+      coordinators: a.coordinators ?? [],
       notes: a.notes,
       isActive: a.isActive,
     });
@@ -164,6 +165,65 @@ export default function AdminTravelAgentsPage() {
                     <span className="admin-muted text-xs">Email</span>
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
                   </label>
+                  <div className="block space-y-1 sm:col-span-2">
+                    <span className="admin-muted text-xs">Contact persons</span>
+                    <p className="admin-muted text-[11px]">
+                      The people at this agency who ring in bookings. The front desk picks one at
+                      intake to fill the booking&rsquo;s contact person, and can append a new one
+                      mid-call — so this list also grows from the desk.
+                    </p>
+                    {(draft.coordinators ?? []).map((c, i) => {
+                      const update = (patch: Partial<typeof c>) => {
+                        const next = [...(draft.coordinators ?? [])];
+                        next[i] = { ...next[i], ...patch };
+                        setDraft({ ...draft, coordinators: next });
+                      };
+                      return (
+                        <div key={i} className="flex flex-wrap gap-2">
+                          <input
+                            className="admin-input"
+                            style={{ flex: "1 1 30%" }}
+                            value={c.name}
+                            placeholder="Name"
+                            onChange={(e) => update({ name: e.target.value })}
+                          />
+                          <input
+                            className="admin-input"
+                            style={{ flex: "1 1 25%" }}
+                            value={c.phone ?? ""}
+                            placeholder="Phone"
+                            onChange={(e) => update({ phone: e.target.value })}
+                          />
+                          <input
+                            className="admin-input"
+                            style={{ flex: "1 1 25%" }}
+                            value={c.email ?? ""}
+                            placeholder="Email"
+                            onChange={(e) => update({ email: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn-ghost admin-btn-sm"
+                            onClick={() =>
+                              setDraft({ ...draft, coordinators: (draft.coordinators ?? []).filter((_, j) => j !== i) })
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-ghost admin-btn-sm"
+                      onClick={() =>
+                        setDraft({ ...draft, coordinators: [...(draft.coordinators ?? []), { name: "", phone: "", email: "" }] })
+                      }
+                    >
+                      + Add contact person
+                    </button>
+                  </div>
+
                   <label className="block space-y-1 sm:col-span-2">
                     <span className="admin-muted text-xs">Notes</span>
                     <textarea className="admin-input min-h-[60px]" value={draft.notes ?? ""} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />

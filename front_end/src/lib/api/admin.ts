@@ -1033,6 +1033,8 @@ export type TravelAgentAdmin = {
   contactNumber: string | null;
   contactEmail: string | null;
   modeOfContact: ContactMode;
+  /** The agency's contact persons — the desk picks one at intake to fill the booking contact. */
+  coordinators: CoordinatorContact[] | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1045,6 +1047,7 @@ export type TravelAgentInput = {
   contactNumber?: string | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
+  coordinators?: CoordinatorContact[];
   notes?: string | null;
   isActive?: boolean;
 };
