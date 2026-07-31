@@ -19,9 +19,12 @@ import {
  * Each of those already opened a W22 acknowledgement loop on dispatch; none of them had any way
  * to CLOSE it except letting the window time out. That is what this service adds.
  *
- * Scope boundary: recording an acknowledgement is **evidence, not a gate**. It closes the W22
- * loop and writes a trace; it does not affect S3→S4, S4→S5 or S5→S6 progression. Confirmed with
- * the operator; neither SIG mandates such a gate.
+ * Scope boundary: recording an acknowledgement is **evidence, not a gate** — with one deliberate
+ * exception (2026-07-31 operator ruling): a proforma invoice that was actually DISPATCHED must
+ * have its answer recorded before the S3→S4 freeze
+ * (`enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation`, p40). Everything else here
+ * stays gate-free: quotation, voucher and pre-arrival acknowledgements never block progression,
+ * and a proforma that was generated but never sent doesn't either.
  */
 
 export type AcknowledgementInput = {

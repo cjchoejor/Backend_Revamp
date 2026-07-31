@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { InvoiceType, Stage } from "@prisma/client";
+import { CommunicationType, InvoiceType, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -20,6 +20,7 @@ import {
   enforceEntryAtS3ForReservationConfirmation,
   enforceProformaInvoicePresentForS4Confirmation,
   enforceProformaDispatchedWhenAdvancePaid,
+  enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation,
   enforceProvisionalFolioPresentForS4Confirmation,
 } from "../../policies/16-confirmation-authority/p40-s4-confirmation-readiness-gates.js";
 import { enforceEntryVersionMatchesClientForOptimisticLock } from "../../policies/01-availability/p01-entry-version-optimistic-lock-match.js";
@@ -105,6 +106,23 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   enforceProformaDispatchedWhenAdvancePaid({
     proformaInvoices: proformas.map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
     totalAdvanceReceived: advanceEvaluation.totalReceived,
+  });
+
+  // …and once the proforma actually went OUT, the guest's answer must be on record before the
+  // freeze (2026-07-31 operator ruling — narrows the 2026-07-28 "evidence, never a gate" rule for
+  // this one boundary). Latest dispatch decides: a re-issued proforma re-opens the question.
+  const latestProformaComm = await prisma.communicationRecord.findFirst({
+    where: {
+      entryId,
+      commType: CommunicationType.PROFORMA_INVOICE,
+      direction: "OUTBOUND",
+      sendStatus: "DISPATCHED",
+    },
+    orderBy: { createdAt: "desc" },
+    select: { acknowledgementStatus: true },
+  });
+  enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation({
+    latestDispatchedProformaComm: latestProformaComm,
   });
 
   const holdCfg = entry.committedHold;

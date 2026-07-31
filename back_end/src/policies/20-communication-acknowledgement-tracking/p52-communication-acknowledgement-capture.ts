@@ -13,7 +13,10 @@ import { StateTransitionError, ValidationError } from "../../lib/errors.js";
  * actually said, so it may only be recorded against something that was actually sent.** A
  * generated-but-never-dispatched artifact has nothing for a guest to have responded to.
  * Progression gates deliberately do NOT depend on any of this — see
- * `p07-quotation-generated-for-s2-exit` for the generate-vs-send split.
+ * `p07-quotation-generated-for-s2-exit` for the generate-vs-send split — with one exception
+ * (2026-07-31): a DISPATCHED proforma's answer gates the S3→S4 freeze, enforced by
+ * `enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation` in p40 (not here — this file
+ * stays capture-only).
  */
 
 /** The outbound communications a guest can meaningfully acknowledge. */

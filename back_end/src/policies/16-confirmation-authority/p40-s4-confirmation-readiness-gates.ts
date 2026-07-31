@@ -83,6 +83,34 @@ export function enforceProformaDispatchedWhenAdvancePaid(input: {
 }
 
 /**
+ * Policy 33 refinement (2026-07-31, operator ruling) — once the proforma has actually been
+ * DISPATCHED to the guest, the guest's answer must be RECORDED before the reservation can be
+ * confirmed.
+ *
+ * This narrows the 2026-07-28 "acceptance is evidence, never a gate" ruling for exactly one
+ * boundary: engaging the guest creates an open question ("do you accept this bill?"), and the
+ * freeze must not outrun the answer. The generate-vs-send rule itself is untouched — a proforma
+ * that was generated but never sent still confirms without any acknowledgement, because there is
+ * no outstanding question to answer.
+ *
+ * Gate input is the LATEST dispatched proforma communication: a re-issued proforma opens a fresh
+ * question, so an answer recorded against an earlier revision does not carry forward. A TIMED_OUT
+ * window does not satisfy the gate either — timing out records no answer; the desk captures a
+ * late response (p52 allows it) and that is what unblocks the freeze.
+ */
+export function enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation(input: {
+  latestDispatchedProformaComm: { acknowledgementStatus: string | null } | null;
+}) {
+  const comm = input.latestDispatchedProformaComm;
+  if (!comm) return; // never sent → nothing the guest was asked to answer
+  if (comm.acknowledgementStatus === "RECEIVED") return;
+  throw new StageGateBlockedError(
+    "The proforma invoice was sent to the guest — record the guest's answer before confirming.",
+    "PROFORMA_GUEST_ANSWER_NOT_RECORDED",
+  );
+}
+
+/**
  * Policy 26 — committed hold present, PLACED, and has at least one room bound. Multi-room-safe:
  * accepts either the legacy `roomId` field OR the per-night `perNightBreakdown` snapshot as
  * evidence that at least one room is held. Rejecting a booking because roomId happens to be
