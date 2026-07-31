@@ -150,14 +150,28 @@ export async function recallSegmentConfiguration(
   const source = entry.segments.find((s) => s.segmentNumber === fromSegmentNumber);
   if (!source) throw new NotFoundError(`Segment ${fromSegmentNumber} for this entry`);
 
-  // The recalled basis is the source segment's configuration that actually carried a selection.
+  // The recalled basis is the configuration IN FORCE during the source segment — its own if it
+  // sealed one, otherwise the newest selection it inherited from an earlier segment. Only a
+  // segment opened at S1 seals a configuration of its own; one opened at S2/S3 by re-entry runs on
+  // the selection it inherited, and asking to reuse it plainly means "reuse what it was working
+  // from". Requiring the segment to own a row made every such segment un-reusable.
+  const inForceSegmentIds = entry.segments
+    .filter((s) => s.segmentNumber <= fromSegmentNumber)
+    .map((s) => s.id);
   const sourceConfig = await prisma.availabilityConfiguration.findFirst({
-    where: { entryId, segmentId: source.id, NOT: { optionSelected: { equals: Prisma.DbNull } } },
-    orderBy: { createdAt: "desc" },
+    where: { entryId, segmentId: { in: inForceSegmentIds }, NOT: { optionSelected: { equals: Prisma.DbNull } } },
+    orderBy: [{ createdAt: "desc" }],
   });
   if (!sourceConfig) {
-    throw new ValidationError(`Segment ${fromSegmentNumber} has no chosen room configuration to reuse.`);
+    throw new ValidationError(
+      `Segment ${fromSegmentNumber} has no chosen room configuration to reuse, and inherited none from an earlier segment.`,
+    );
   }
+  // Which segment the basis actually came from — reported so the operator isn't told they are
+  // reusing segment 3 when the selection is really segment 1's.
+  const basisSegmentNumber =
+    entry.segments.find((s) => s.id === sourceConfig.segmentId)?.segmentNumber ?? fromSegmentNumber;
+  const basisInherited = basisSegmentNumber !== fromSegmentNumber;
 
   const sel = readOptionSelected(sourceConfig.optionSelected ?? null);
   if (sel.distinctRoomIds.length === 0) {
@@ -290,6 +304,8 @@ export async function recallSegmentConfiguration(
     fromSegmentNumber,
     toSegmentNumber: current.segmentNumber,
     sourceConfigurationId: sourceConfig.id,
+    basisSegmentNumber,
+    basisInherited,
     checksRun: ["AVAILABILITY", "DEFICIENT_FLAG", "INDICATIVE_PRICING"],
     ...delta,
     requiresFomDecision,
@@ -384,7 +400,13 @@ export async function recallSegmentConfiguration(
       data: {
         entryId,
         segmentId: current.id,
-        searchCriteria: { ...sc, recalledFromSegmentNumber: fromSegmentNumber, recalledFromConfigurationId: sourceConfig.id } as any,
+        searchCriteria: {
+          ...sc,
+          recalledFromSegmentNumber: fromSegmentNumber,
+          recalledFromConfigurationId: sourceConfig.id,
+          // Differs from recalledFromSegmentNumber when the source segment inherited its basis.
+          basisSegmentNumber,
+        } as any,
         resultSet: engineOut as any,
         optionSelected: carriedSelection as any,
         createdBy: actor.actorId,
@@ -534,13 +556,19 @@ export async function duplicateSegmentIntoNew(
 
   // Fail BEFORE the re-entry if there is nothing to carry over — a committed re-entry cannot be
   // undone, so stranding the operator in an empty new segment would be worse than refusing.
+  // Mirrors the basis resolution in recallSegmentConfiguration: the configuration in force during
+  // the source segment, which may have been inherited from an earlier one.
+  const inForceSegmentIds = entry.segments
+    .filter((s) => s.segmentNumber <= fromSegmentNumber)
+    .map((s) => s.id);
   const sourceConfig = await prisma.availabilityConfiguration.findFirst({
-    where: { entryId, segmentId: source.id, NOT: { optionSelected: { equals: Prisma.DbNull } } },
+    where: { entryId, segmentId: { in: inForceSegmentIds }, NOT: { optionSelected: { equals: Prisma.DbNull } } },
+    orderBy: [{ createdAt: "desc" }],
     select: { id: true },
   });
   if (!sourceConfig) {
     throw new ValidationError(
-      `Segment ${fromSegmentNumber} has no chosen room configuration, so there is nothing to base a new segment on.`,
+      `Segment ${fromSegmentNumber} has no chosen room configuration and inherited none from an earlier segment, so there is nothing to base a new segment on.`,
     );
   }
 
