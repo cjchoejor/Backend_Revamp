@@ -60,6 +60,22 @@ export type RoomCompositionRateContext = {
   defaultBreakfastRate: Prisma.Decimal;
   defaultLunchRate: Prisma.Decimal;
   defaultDinnerRate: Prisma.Decimal;
+  /**
+   * Meal-PLAN rates (per guest, per night) — from the agent rate card or the HouseTariff.
+   * A guest on a plan is charged their plan rate INSTEAD of the individual meals that plan
+   * covers (CP = breakfast; MAPL = breakfast + lunch; MAPD = breakfast + dinner; AP = all
+   * three).
+   *
+   * `null` / omitted means the plan isn't priced, and the plan falls back to the SUM of its
+   * constituent à-la-carte rates. That fallback is exactly the old formula, so leaving all
+   * four unset reproduces pre-2026-07-30 totals to the cent.
+   *
+   * A plan rate of 0 is honoured as "deliberately free" — only null triggers the fallback.
+   */
+  defaultCpRate?: Prisma.Decimal | null;
+  defaultMapLunchRate?: Prisma.Decimal | null;
+  defaultMapDinnerRate?: Prisma.Decimal | null;
+  defaultApRate?: Prisma.Decimal | null;
   /** Service-charge percentage (e.g., 0.10 for 10%). Comes from
    *  `billing.serviceChargeRate` ConfigurationEntry. */
   serviceChargeRate: number;
@@ -138,8 +154,18 @@ export function computeRoomComposition(
   breakfastRate: Prisma.Decimal;
   lunchRate: Prisma.Decimal;
   dinnerRate: Prisma.Decimal;
+  /** Resolved per-plan rates AFTER the à-la-carte fallback — what each plan guest is charged. */
+  cpRate: Prisma.Decimal;
+  mapLunchRate: Prisma.Decimal;
+  mapDinnerRate: Prisma.Decimal;
+  apRate: Prisma.Decimal;
   perNightRoom: Prisma.Decimal;
   perNightExtraBed: Prisma.Decimal;
+  /** Charged to guests on a meal plan (plan rate × plan pax). */
+  perNightPlanMeals: Prisma.Decimal;
+  /** Charged to OTHERS-category guests eating à la carte (per-meal rate × others pax). */
+  perNightAlaCarteMeals: Prisma.Decimal;
+  /** perNightPlanMeals + perNightAlaCarteMeals. */
   perNightMeals: Prisma.Decimal;
   perNightSubtotal: Prisma.Decimal;
   subtotal: Prisma.Decimal;
@@ -160,8 +186,14 @@ export function computeRoomComposition(
       breakfastRate: ZERO,
       lunchRate: ZERO,
       dinnerRate: ZERO,
+      cpRate: ZERO,
+      mapLunchRate: ZERO,
+      mapDinnerRate: ZERO,
+      apRate: ZERO,
       perNightRoom: ZERO,
       perNightExtraBed: ZERO,
+      perNightPlanMeals: ZERO,
+      perNightAlaCarteMeals: ZERO,
       perNightMeals: ZERO,
       perNightSubtotal: ZERO,
       subtotal: ZERO,
@@ -181,12 +213,55 @@ export function computeRoomComposition(
 
   const extraBeds = input.extraBedCount ?? 0;
 
+  // Meal-plan rates. A configured plan rate REPLACES the meals that plan covers; an
+  // unconfigured one (null) falls back to summing those same meals à la carte. The fallback is
+  // algebraically identical to the pre-2026-07-30 formula:
+  //   cp·bf + mapl·(bf+ln) + mapd·(bf+dn) + ap·(bf+ln+dn) + others
+  //     = bf·(cp+mapl+mapd+ap+oB) + ln·(mapl+ap+oL) + dn·(mapd+ap+oD)
+  // so quotes priced before plan rates existed reprice to the cent.
+  const bf = toDecimal(breakfastRate);
+  const ln = toDecimal(lunchRate);
+  const dn = toDecimal(dinnerRate);
+
+  // Per-room negotiation beats the hotel's configured plan price. Without this, a hotel that
+  // sets CP = 350 would ignore an operator who negotiated breakfast down to 300 for one room —
+  // the CP guests would still be charged 350, and the negotiation would silently do nothing.
+  //
+  // The override is scoped per plan: only the plans that actually INCLUDE a re-priced meal are
+  // re-derived. Negotiating dinner re-prices MAPD and AP but leaves CP (breakfast-only) on the
+  // hotel's configured rate, which is what an operator would expect.
+  const bfNegotiated = input.negotiatedBreakfastRate != null;
+  const lnNegotiated = input.negotiatedLunchRate != null;
+  const dnNegotiated = input.negotiatedDinnerRate != null;
+  const resolvePlanRate = (
+    configured: Prisma.Decimal | null | undefined,
+    alaCarteSum: Prisma.Decimal,
+    anyConstituentNegotiated: boolean,
+  ) => {
+    if (anyConstituentNegotiated) return alaCarteSum;
+    return configured != null ? toDecimal(configured) : alaCarteSum;
+  };
+
+  const cpRate = resolvePlanRate(ctx.defaultCpRate, bf, bfNegotiated);
+  const mapLunchRate = resolvePlanRate(ctx.defaultMapLunchRate, bf.add(ln), bfNegotiated || lnNegotiated);
+  const mapDinnerRate = resolvePlanRate(ctx.defaultMapDinnerRate, bf.add(dn), bfNegotiated || dnNegotiated);
+  const apRate = resolvePlanRate(ctx.defaultApRate, bf.add(ln).add(dn), bfNegotiated || lnNegotiated || dnNegotiated);
+
   const perNightRoom = toDecimal(roomRate);
   const perNightExtraBed = toDecimal(extraBedRate).mul(extraBeds);
-  const perNightMeals = toDecimal(breakfastRate)
-    .mul(breakfastPax)
-    .add(toDecimal(lunchRate).mul(lunchPax))
-    .add(toDecimal(dinnerRate).mul(dinnerPax));
+
+  // Guests on a plan pay their plan rate; OTHERS-category guests pay per serving consumed.
+  const perNightPlanMeals = cpRate
+    .mul(input.mealPlanCpCount ?? 0)
+    .add(mapLunchRate.mul(input.mealPlanMaplCount ?? 0))
+    .add(mapDinnerRate.mul(input.mealPlanMapdCount ?? 0))
+    .add(apRate.mul(input.mealPlanApCount ?? 0));
+  const perNightAlaCarteMeals = bf
+    .mul(input.othersBreakfastPax ?? 0)
+    .add(ln.mul(input.othersLunchPax ?? 0))
+    .add(dn.mul(input.othersDinnerPax ?? 0));
+  const perNightMeals = perNightPlanMeals.add(perNightAlaCarteMeals);
+
   const perNightSubtotal = perNightRoom.add(perNightExtraBed).add(perNightMeals);
 
   const subtotal = perNightSubtotal.mul(nights);
@@ -209,11 +284,17 @@ export function computeRoomComposition(
     effectiveDinnerPax: dinnerPax,
     roomRate: toDecimal(roomRate),
     extraBedRate: toDecimal(extraBedRate),
-    breakfastRate: toDecimal(breakfastRate),
-    lunchRate: toDecimal(lunchRate),
-    dinnerRate: toDecimal(dinnerRate),
+    breakfastRate: bf,
+    lunchRate: ln,
+    dinnerRate: dn,
+    cpRate,
+    mapLunchRate,
+    mapDinnerRate,
+    apRate,
     perNightRoom,
     perNightExtraBed,
+    perNightPlanMeals,
+    perNightAlaCarteMeals,
     perNightMeals,
     perNightSubtotal,
     subtotal,

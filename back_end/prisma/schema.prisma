@@ -2425,6 +2425,65 @@ model RoomTypeRateOverride {
   @@map("room_type_rate_overrides")
 }
 
+/**
+ * HouseTariff — the hotel's OWN add-on price list, used when a booking has no negotiated
+ * rate card (walk-in, direct email, OTA — anything with no travelAgentId / corporateAccountId).
+ *
+ * WHY THIS EXISTS (2026-07-30)
+ * ---------------------------
+ * Extra-bed and meal rates only ever existed on `RateCard`, which is per-agent. A walk-in
+ * therefore resolved every add-on to `?? 0` — a room with an extra bed and two guests on CP
+ * was billed for the room alone, and the bed and the breakfasts were silently free. Verified
+ * across all 31 composition-priced quotations in the database: every one had extraBedRate and
+ * all three meal rates at 0.
+ *
+ * DELIBERATELY NOT HERE: the room rate. That stays owned by `rate_plan_registry`, which
+ * already supports per-room-type pricing (`RatePlanRegistry.roomTypeId`) AND carries the MSR
+ * floor, the season multiplier and the discount pipeline. Duplicating a room rate here would
+ * bypass all four, so per-room-type room rates are configured as rate plans instead.
+ *
+ * Append-only versioned, same pattern as RateCard / ConfigurationEntry: saving edits closes
+ * the current row with `effectiveTo` and inserts a new one. A quotation priced last month can
+ * always be re-derived from the tariff that was active then.
+ *
+ * All rates are NULLABLE with distinct meanings:
+ *   NULL = not configured → meal plans fall back to the sum of their à-la-carte meals
+ *   0    = deliberately free
+ */
+model HouseTariff {
+  id String @id @default(uuid())
+
+  /// Per extra bed, per night.
+  extraBedRate Decimal? @db.Decimal(10, 2)
+
+  // === Standalone (à la carte) meal rates — per guest, per serving ===
+  /// Also the fallback unit price for meal plans that have no explicit plan rate.
+  breakfastRate Decimal? @db.Decimal(10, 2)
+  lunchRate     Decimal? @db.Decimal(10, 2)
+  dinnerRate    Decimal? @db.Decimal(10, 2)
+
+  // === Meal-plan rates — per guest, per night ===
+  /// A guest on a plan is charged THIS instead of the individual meals the plan covers
+  /// (CP = breakfast; MAP_LUNCH = breakfast + lunch; MAP_DINNER = breakfast + dinner;
+  /// AP = all three). When a plan rate is NULL the constituent à-la-carte rates are summed,
+  /// which reproduces the pre-2026-07-30 pricing exactly.
+  cpRate        Decimal? @db.Decimal(10, 2)
+  mapLunchRate  Decimal? @db.Decimal(10, 2)
+  mapDinnerRate Decimal? @db.Decimal(10, 2)
+  apRate        Decimal? @db.Decimal(10, 2)
+
+  currency      String    @default("BTN")
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime? // null = currently active
+  notes         String?
+  createdAt     DateTime  @default(now())
+  createdBy     String
+
+  @@index([effectiveFrom])
+  @@index([effectiveTo])
+  @@map("house_tariffs")
+}
+
 // --- Readable business IDs (PREFIX-YYYYMMDD-####, daily sequence) --------
 
 model ReadableIdSequence {

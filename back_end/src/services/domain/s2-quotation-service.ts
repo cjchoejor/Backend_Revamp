@@ -30,6 +30,7 @@ import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
+import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { mulMoney, round2, toDecimal } from "../../lib/money.js";
@@ -310,13 +311,40 @@ async function prepareQuotationDraft(
     });
     const numberByRoomId = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
 
-    // Default meal / extra-bed rates come from the agent rate card's add-ons when present;
-    // otherwise 0. Operators can still enter per-room negotiatedBreakfast/Lunch/DinnerRate
-    // to override in the composition payload.
-    const defaultBreakfast = toDecimal(agentRate?.addOns?.breakfast ?? 0);
-    const defaultLunch = toDecimal(agentRate?.addOns?.lunch ?? 0);
-    const defaultDinner = toDecimal(agentRate?.addOns?.dinner ?? 0);
-    const defaultExtraBed = toDecimal(agentRate?.addOns?.extraBed ?? 0);
+    // Default meal / extra-bed / meal-plan rates.
+    //
+    // 2026-07-30: bookings with NO negotiated rate card (walk-in, direct, OTA) now resolve
+    // their add-ons from the hotel's own `HouseTariff` instead of falling straight to 0. That
+    // zero was silently giving away every extra bed and every meal on non-agent bookings —
+    // confirmed across all 31 composition-priced quotations in the database, each with
+    // extraBedRate and all three meal rates at 0.
+    //
+    // Agent / corporate cards deliberately do NOT fall back to the house tariff: a blank field
+    // on a negotiated card means "we agreed nothing", and the operator's decision is that it
+    // stays free rather than quietly acquiring the rack price. So the house tariff is loaded
+    // ONLY when there is no card at all, and the two sources never mix on one booking.
+    const houseTariff = agentRate ? null : await resolveActiveHouseTariff(prisma);
+    const addOns = agentRate?.addOns ?? null;
+    const defaultBreakfast = toDecimal(addOns?.breakfast ?? houseTariff?.breakfastRate ?? 0);
+    const defaultLunch = toDecimal(addOns?.lunch ?? houseTariff?.lunchRate ?? 0);
+    const defaultDinner = toDecimal(addOns?.dinner ?? houseTariff?.dinnerRate ?? 0);
+    const defaultExtraBed = toDecimal(addOns?.extraBed ?? houseTariff?.extraBedRate ?? 0);
+
+    // Meal-PLAN rates. A guest on a plan is charged the plan rate instead of the individual
+    // meals it covers; `null` means unpriced, and `computeRoomComposition` then falls back to
+    // summing that plan's à-la-carte meals (identical to the old behaviour). Agent cards feed
+    // their own cpRate / mapLunchRate / mapDinnerRate / apRate here — those columns were
+    // previously written by the admin console and never read by any pricing code.
+    const planRates = agentRate?.mealPlanRates ?? null;
+    const pickPlan = (agentValue: number | null | undefined, houseValue: Prisma.Decimal | null | undefined) => {
+      if (agentValue != null) return new Prisma.Decimal(agentValue);
+      if (!agentRate && houseValue != null) return houseValue;
+      return null;
+    };
+    const defaultCp = pickPlan(planRates?.cp, houseTariff?.cpRate);
+    const defaultMapLunch = pickPlan(planRates?.mapLunch, houseTariff?.mapLunchRate);
+    const defaultMapDinner = pickPlan(planRates?.mapDinner, houseTariff?.mapDinnerRate);
+    const defaultAp = pickPlan(planRates?.ap, houseTariff?.apRate);
     // Cost the composition from the EFFECTIVE (post-discount) rate, not the resolved base.
     // Fixed 2026-07-28: this previously read `resolvedNightlyRate`, which is the rate BEFORE
     // any discount is applied — so on a composition-priced quote the discount reached
@@ -385,6 +413,10 @@ async function prepareQuotationDraft(
         defaultBreakfastRate: defaultBreakfast,
         defaultLunchRate: defaultLunch,
         defaultDinnerRate: defaultDinner,
+        defaultCpRate: defaultCp,
+        defaultMapLunchRate: defaultMapLunch,
+        defaultMapDinnerRate: defaultMapDinner,
+        defaultApRate: defaultAp,
         serviceChargeRate,
         gstRate,
         nights: nightsForPricing,
@@ -448,6 +480,16 @@ async function prepareQuotationDraft(
                   breakfastRate: Number(r.breakfastRate.toFixed(2)),
                   lunchRate: Number(r.lunchRate.toFixed(2)),
                   dinnerRate: Number(r.dinnerRate.toFixed(2)),
+                  // Resolved meal-plan rates (after the à-la-carte fallback) + the split of
+                  // meal money between plan guests and à-la-carte guests, so the PDF and desk
+                  // can show WHY a room's meal charge is what it is.
+                  cpRate: Number(r.cpRate.toFixed(2)),
+                  mapLunchRate: Number(r.mapLunchRate.toFixed(2)),
+                  mapDinnerRate: Number(r.mapDinnerRate.toFixed(2)),
+                  apRate: Number(r.apRate.toFixed(2)),
+                  perNightPlanMeals: Number(r.perNightPlanMeals.toFixed(2)),
+                  perNightAlaCarteMeals: Number(r.perNightAlaCarteMeals.toFixed(2)),
+                  perNightMeals: Number(r.perNightMeals.toFixed(2)),
                   subtotal: Number(r.subtotal.toFixed(2)),
                   serviceCharge: Number(r.serviceCharge.toFixed(2)),
                   gst: Number(r.gst.toFixed(2)),

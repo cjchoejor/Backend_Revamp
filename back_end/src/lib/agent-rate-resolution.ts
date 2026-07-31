@@ -33,6 +33,21 @@ export type AgentRateBreakdown = {
   /** Meal plan rate (if mealPlan was supplied and the card carries that plan). */
   mealPlan: MealPlanType | null;
   mealPlanRate: number | null;
+  /**
+   * ALL four meal-plan rates off the card, regardless of which plan (if any) the caller asked
+   * about. Added 2026-07-30: per-room composition pricing needs every plan at once, because a
+   * single room can carry a MIX of plans (1 guest on CP + 1 on MAPL). `mealPlanRate` above
+   * only answers for one requested plan and can't serve that case.
+   *
+   * `null` for a plan means the card doesn't negotiate it — the composition helper then falls
+   * back to summing that plan's à-la-carte meals.
+   */
+  mealPlanRates: {
+    cp: number | null;
+    mapLunch: number | null;
+    mapDinner: number | null;
+    ap: number | null;
+  };
   /** Per-night total = roomRate + mealPlanRate (excluding standalone add-ons, taxes, service charge). */
   perNightTotal: number;
   /** Standalone add-on rates (NOT included in perNightTotal — caller adds them if used). */
@@ -110,6 +125,12 @@ export async function resolveAgentRate(
     roomRateSource,
     mealPlan: input.mealPlan ?? null,
     mealPlanRate,
+    mealPlanRates: {
+      cp: decimalToNumberOrNull(card.cpRate),
+      mapLunch: decimalToNumberOrNull(card.mapLunchRate),
+      mapDinner: decimalToNumberOrNull(card.mapDinnerRate),
+      ap: decimalToNumberOrNull(card.apRate),
+    },
     perNightTotal,
     addOns: {
       extraBed: decimalToNumberOrNull(card.extraBedRate),
