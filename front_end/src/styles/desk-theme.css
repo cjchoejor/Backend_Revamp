@@ -556,6 +556,159 @@
     font-size: 11px;
     color: var(--ink-3);
   }
+  & .attn-party {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin-top: 1px;
+  }
+  & .attn-count {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--warn);
+    background: var(--warn-t);
+    border: 1px solid #e6cf9a;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  & .attn-more {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    padding: 11px 16px;
+    font-size: 11.5px;
+    color: var(--ink-3);
+    background: var(--cream);
+    border-top: 1px solid var(--line);
+    border-radius: 0 0 calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px);
+  }
+  & .attn-pill {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--green-d);
+    background: var(--green-t);
+    border: 1px solid var(--green-t2);
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+    text-decoration: none;
+  }
+  & .attn-pill:hover {
+    background: var(--green-t2);
+  }
+  & .attn-alllink {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green-d);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  & .attn-alllink svg {
+    width: 11px;
+    height: 11px;
+  }
+  & .attn-alllink:hover {
+    text-decoration: underline;
+  }
+  /* Today's rhythm — compact arrival/departure name lists */
+  & .mini-h {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  & .mini-h svg {
+    width: 12px;
+    height: 12px;
+    color: var(--green-d);
+  }
+  & .mini-list {
+    padding: 2px 0 6px;
+  }
+  & .mini-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    text-align: left;
+    padding: 6px 16px;
+    cursor: pointer;
+    transition: background 0.13s;
+  }
+  & .mini-row:hover {
+    background: var(--cream);
+  }
+  & .mini-av {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-size: 9.5px;
+    font-weight: 600;
+    flex: 0 0 auto;
+  }
+  & .mini-mid {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  & .mini-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  & .mini-sub {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  & .mini-empty {
+    padding: 5px 16px 10px;
+    font-size: 11.5px;
+    color: var(--ink-3);
+    margin: 0;
+  }
+  & .mini-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 16px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green-d);
+    text-decoration: none;
+  }
+  & .mini-more svg {
+    width: 11px;
+    height: 11px;
+  }
+  & .mini-more:hover {
+    text-decoration: underline;
+  }
+  & .today-note {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.55;
+    margin: 0;
+    padding: 0 4px;
+  }
 
   /* ───────── notifications ───────── */
   & .notif-wrap {
@@ -1715,6 +1868,12 @@
   & .rst tr.dis .rst-type {
     color: var(--ink-3);
   }
+  /* Selection full: pickable-but-capped rows fade harder than merely-unavailable ones, and the
+     cursor says the click won't select (it explains instead — onCappedClick toast). */
+  & .rst tr.capped {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   /* ---- S2 per-room composition editor (room-compositions-editor.tsx) ---- */
   & .rce {
     display: grid;
@@ -2186,6 +2345,14 @@
     box-shadow: 0 0 0 1.5px var(--green);
     background: var(--green-t);
   }
+  /* At capacity the bin reads CLOSED: dashed, cream, slightly faded. Its chips stay editable
+     (plans, dragging OUT) — only receiving is off, which placeKeys enforces. */
+  & .rcb-room.full {
+    border-style: dashed;
+    border-color: var(--line-2);
+    background: var(--cream);
+    opacity: 0.75;
+  }
   & .rcb-room-head {
     display: flex;
     align-items: center;
@@ -2221,6 +2388,16 @@
   & .rcb-place:hover {
     background: var(--green);
     color: #fff;
+  }
+  & .rcb-place:disabled {
+    border-color: var(--line-2);
+    background: var(--cream);
+    color: var(--ink-3);
+    cursor: not-allowed;
+  }
+  & .rcb-place:disabled:hover {
+    background: var(--cream);
+    color: var(--ink-3);
   }
   & .rcb-empty {
     font-size: 11px;
