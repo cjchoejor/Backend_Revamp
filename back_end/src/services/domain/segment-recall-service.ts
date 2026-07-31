@@ -133,7 +133,11 @@ export async function recallSegmentConfiguration(
   });
   if (!entry) throw new NotFoundError("Entry");
 
-  if (!RECALL_ALLOWED_STAGES.has(String(entry.currentStage))) {
+  // Both guards below restrict the WRITE, and are scoped to it. A preview creates no
+  // configuration and changes nothing, so neither danger applies — and previewing is precisely
+  // what the duplicate flow needs BEFORE it opens the new segment, at which point the entry may
+  // still be at S4+ and the source is still the current segment.
+  if (apply && !RECALL_ALLOWED_STAGES.has(String(entry.currentStage))) {
     // Post-freeze the commercial basis is bound to the confirmed reservation. Changing it means
     // a re-entry first (which opens a fresh segment), then recall inside that segment — never an
     // in-place swap of a frozen basis (§59 M.13 forbids treating recall as a rollback).
@@ -144,7 +148,7 @@ export async function recallSegmentConfiguration(
 
   const current = entry.segments[entry.segments.length - 1];
   if (!current) throw new ValidationError("Entry has no segment");
-  if (fromSegmentNumber === current.segmentNumber) {
+  if (apply && fromSegmentNumber === current.segmentNumber) {
     throw new ValidationError("That is the segment you are already on — pick an earlier segment to reuse.");
   }
   const source = entry.segments.find((s) => s.segmentNumber === fromSegmentNumber);
