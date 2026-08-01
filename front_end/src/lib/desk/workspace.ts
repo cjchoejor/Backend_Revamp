@@ -160,6 +160,8 @@ export function s3Readiness(
   opts?: {
     paymentSatisfied?: boolean;
     totalReceived?: number | null;
+    /** The server's required advance (payment-status). 0 = the hotel demands nothing. */
+    requiredAmount?: number | null;
     /** Newest-first items from GET /api/entries/:id/communications. */
     communications?: CommForReadiness[] | null;
   },
@@ -198,11 +200,21 @@ export function s3Readiness(
     },
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
-    { label: "Proforma invoice on folio", met: proforma },
-    {
-      label: "Proforma sent to guest (advance received)",
-      met: advanceReceived > 0 ? proformaDispatched : true,
-    },
+    // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
+    // advance is demanded or the guest asks). So "generated" is the standing item, and the
+    // dispatch/settlement items below appear only when they actually apply — a vacuously-true
+    // green line ("sent ✓" when nothing was ever sent or owed) misreads as work done.
+    { label: "Proforma invoice generated", met: proforma },
+    // Money was received → the bill it was paid against must have gone out (backend p40 +
+    // the bill-before-money guard). Hidden when nothing has been received: nothing to document.
+    ...(advanceReceived > 0
+      ? [
+          {
+            label: "Proforma sent to guest (advance was received)",
+            met: proformaDispatched,
+          },
+        ]
+      : []),
     // Mirrors the backend's `enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation`
     // (p40, 2026-07-31): once the proforma actually WENT OUT, the guest's answer must be on
     // record before the freeze. Only shown when a live proforma was dispatched — a generated-
@@ -224,7 +236,13 @@ export function s3Readiness(
           },
         ]
       : []),
-    { label: "Advance settled or credit extended", met: advanceSatisfied },
+    // Shown only when an advance is actually DEMANDED (required > 0 — config threshold or the
+    // desk's per-booking requirement), when money has already come in, or when the requirement
+    // is unknown (status not fetched — conservative). With required = 0 the hotel asks for
+    // nothing, and a green "settled ✓" over zero activity misreads as a payment having happened.
+    ...(typeof opts?.requiredAmount !== "number" || opts.requiredAmount > 0 || advanceReceived > 0
+      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied }]
+      : []),
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.

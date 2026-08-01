@@ -548,6 +548,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // keys on this, because a voluntary advance against a zero threshold still needs the invoice
   // sent even though the advance requirement already reads as satisfied.
   const totalReceived = paymentStatusQuery.data?.totalReceived ?? null;
+  // What the hotel actually demands (config threshold or the desk's per-booking requirement).
+  // 0 hides the vacuous "Advance settled" checklist line — nothing is being asked for.
+  const requiredAmount = paymentStatusQuery.data?.requiredAmount ?? null;
 
   // Guest answers to the governed communications (2026-07-31). The S3 checklist's "Guest's answer
   // to the proforma recorded" item mirrors the backend gate
@@ -610,7 +613,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // the review was reached with green gates, which read as "S3 done / stage moved" while the
   // backend was still at S3 — exactly the confusion this removes.)
   const currentOrder = entry ? currentStepOrder(entry) : 1;
-  const maxReach = entry ? maxReachableOrder(entry) : 1;
+  // Whether the S3 exit checklist is fully green — computed up here because it now gates
+  // BOTH the rail (node 4 stays a locked future step until then) and the Review & confirm
+  // button, not just the freeze itself.
+  const readyToConfirm = entry
+    ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications })
+    : false;
+  const maxReach = !entry
+    ? 1
+    : entry.currentStage === "S3" && !readyToConfirm
+      ? Math.min(maxReachableOrder(entry), 3)
+      : maxReachableOrder(entry);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [guestPresent, setGuestPresent] = useState(false);
   const [keyCount, setKeyCount] = useState("1");
@@ -761,9 +774,9 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // freeze (a view choice only; Set up remains the current step until the freeze).
   useEffect(() => {
     if (!entry || selected !== null) return;
-    const ready = canConfirm(entry, { paymentSatisfied, totalReceived, communications });
+    const ready = readyToConfirm;
     setSelected(ready ? 4 : currentStepOrder(entry));
-  }, [entry, selected, paymentSatisfied, totalReceived, communications]);
+  }, [entry, selected, paymentSatisfied, totalReceived, requiredAmount, communications]);
 
   const fin = useMemo(
     () => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null),
@@ -884,7 +897,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     !stayStepActive &&
     !checkOutStepActive &&
     !confirmedS4Active;
-  const ready = canConfirm(entry, { paymentSatisfied, totalReceived, communications });
+  const ready = canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications });
   // On a sealed booking every step is read-only history — show the outcome, not pending gates.
   const sealedOutcome =
     entry.status === "CANCELLED"
@@ -895,13 +908,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const preconds = sealed
     ? [{ label: sealedOutcome, met: true }]
     : confirmStepActive
-    ? confirmReadiness(entry, { paymentSatisfied, totalReceived, communications })
+    ? confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications })
     : inquiryStepActive
       ? s1Readiness(entry)
       : quoteStepActive
         ? s2Readiness(entry)
         : setupStepActive
-          ? confirmReadiness(entry, { paymentSatisfied, totalReceived, communications })
+          ? confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications })
           : arrivalStepActive
             ? s5Readiness(entry)
             : checkInStepActive
@@ -1201,9 +1214,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               </button>
             ) : setupStepActive ? (
               <button
-                className="adv commit"
-                onClick={() => setSelected(4)}
-                title="Open the Confirm review — the stage stays Set up (S3) until you freeze"
+                className={`adv commit${ready ? "" : " locked"}`}
+                disabled={!ready}
+                onClick={() => ready && setSelected(4)}
+                title={
+                  ready
+                    ? "Open the Confirm review — the stage stays Set up (S3) until you freeze"
+                    : "Finish the checklist above first — the review opens when Set up is complete"
+                }
               >
                 <Lock />
                 Review &amp; confirm
