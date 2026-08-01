@@ -26,6 +26,7 @@ import {
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
 import { countdownTo } from "@/lib/desk/timers";
+import { listEntryCommunications } from "@/lib/api/entries";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -100,6 +101,25 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   // Mirrors the backend's `enforceProformaDispatchedBeforeAdvancePayment` (2026-08-01): the
   // bill goes out first, then the money comes in — the payment form stays locked until then.
   const proformaDispatchedNow = proformaInvoices.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  // Guest's answer to THIS segment's dispatched proforma — mirrors the backend's
+  // `enforceProformaGuestAnswerRecordedBeforeAdvancePayment` (2026-08-03): once the bill went
+  // out, money can only be logged after the guest's reply is on record. Shares the
+  // ["entry-communications"] cache with the reply block below.
+  const commsForGateQuery = useQuery({
+    queryKey: ["entry-communications", entry.id],
+    queryFn: () => listEntryCommunications(session!, entry.id),
+    enabled: !!session,
+  });
+  const segStartIsoForComms = (entry.segments ?? [])[0]?.startedAt ?? null;
+  const latestProformaComm = (commsForGateQuery.data?.items ?? []).find(
+    (c) =>
+      c.commType === "PROFORMA_INVOICE" &&
+      c.direction === "OUTBOUND" &&
+      c.sendStatus === "DISPATCHED" &&
+      (!segStartIsoForComms || (c.createdAt ?? "") >= segStartIsoForComms),
+  );
+  // Locked while dispatched-but-unanswered; also while the feed is still loading (brief, safe).
+  const paymentLockedForAnswer = proformaDispatchedNow && latestProformaComm?.acknowledgementStatus !== "RECEIVED";
   // The live issue — newest non-superseded (a changed advance requirement supersedes the sent
   // one and mints a new version; rows are createdAt-desc so the first live row is the current).
   const currentProformaId = proformaInvoices.find((i) => i.state !== "SUPERSEDED")?.id ?? null;
@@ -479,10 +499,15 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
         {paymentStatus && (
           <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 11px" }}>
+            {/* When a pin exists, say EXPLICITLY that it lives on this booking alone and the
+                hotel's configured minimum is untouched — a pinned figure was being read as
+                "the minimum threshold changed" (2026-08-03). */}
             {paymentStatus.requirementSource === "OPERATOR"
-              ? paymentStatus.requirementBasis?.mode === "PERCENT"
-                ? `Requirement set at the desk — ${paymentStatus.requirementBasis.percent}% of the quote total (${money(paymentStatus.requirementBasis.baseTotal ?? null)})`
-                : "Requirement set at the desk — flat amount"
+              ? `${
+                  paymentStatus.requirementBasis?.mode === "PERCENT"
+                    ? `Requested for THIS booking only — ${paymentStatus.requirementBasis.percent}% of the quote total (${money(paymentStatus.requirementBasis.baseTotal ?? null)})`
+                    : "Requested for THIS booking only — flat amount"
+                } · the hotel's min threshold is unchanged at ${money(paymentStatus.configuredBaseAmount ?? null)}`
               : "Requirement from the hotel's default thresholds — set a booking-specific one here"}
             {paymentStatus.creditExtensionActive && paymentStatus.creditExtensionExpiresAt
               ? ` · credit extension active until ${paymentStatus.creditExtensionExpiresAt.slice(0, 16).replace("T", " ")}`
@@ -734,6 +759,21 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             guest received, so this form unlocks once it has gone out.
           </p>
         )}
+        {folio && proformaDispatchedNow && paymentLockedForAnswer && (
+          <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px", lineHeight: 1.5 }}>
+            Note down the guest&rsquo;s response first — the proforma went out, so record their answer
+            (verbal or written) in the reply box above. Money can be logged once their reply is on file.
+          </p>
+        )}
+        <div
+          onClickCapture={() => {
+            // The inputs are disabled, so a stray click lands here — tell the operator WHY
+            // instead of leaving a dead form (2026-08-03, operator request).
+            if (folio && proformaDispatchedNow && paymentLockedForAnswer) {
+              toast("Note down the guest's response first — the reply box is just above this section.");
+            }
+          }}
+        >
         <div className="frow">
           <div className="field">
             <label>Amount received (Nu)</label>
@@ -746,18 +786,22 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 setPaymentAmount(e.target.value);
                 if (paymentM.isSuccess) paymentM.reset();
               }}
-              disabled={!folio || !proformaDispatchedNow}
+              disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer}
             />
           </div>
           <div className="field">
             <label>Notes</label>
-            <input value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} disabled={!folio || !proformaDispatchedNow} />
+            <input
+              value={paymentNotes}
+              onChange={(e) => setPaymentNotes(e.target.value)}
+              disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer}
+            />
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             className="btn btn-ghost btn-sm"
-            disabled={!folio || !proformaDispatchedNow || !paymentAmount || paymentM.isPending}
+            disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer || !paymentAmount || paymentM.isPending}
             onClick={() => paymentM.mutate()}
           >
             {paymentM.isPending ? "Logging…" : paymentM.isSuccess ? "✓ Payment logged" : "Log payment received"}
@@ -777,6 +821,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             <RefreshCw style={{ width: 12, height: 12 }} />
             Refresh
           </button>
+        </div>
         </div>
         {elevated && (
           <div style={{ marginTop: 12, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>

@@ -250,6 +250,11 @@ export type PaymentStatusSummary = {
   requirementSource?: "OPERATOR" | "CONFIG";
   /** Present for OPERATOR requirements: { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }. */
   requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string } | null;
+  /**
+   * What the CONFIG thresholds demand (incl. group boost), independent of any per-booking pin
+   * (2026-08-03). Lets the desk show "hotel minimum unchanged at X" next to a pinned figure.
+   */
+  configuredBaseAmount?: number;
   /** Present only when the group-boost policy raised the requiredAmount above the base. */
   groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
   /**

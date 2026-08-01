@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Eye, EyeOff, Mail, Percent, Timer } from "lucide-react";
+import { Check, Eye, EyeOff, Mail, Percent, Route, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -20,6 +20,7 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "./room-compositions-board";
 import { QuotationPreview } from "./quotation-preview";
+import { PriceResolutionPanel } from "./price-resolution";
 import { money } from "@/lib/desk/workspace";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
@@ -128,6 +129,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [releaseReason, setReleaseReason] = useState("");
   // Which quotation's inline document preview is open in the history block (one at a time).
   const [previewId, setPreviewId] = useState<string | null>(null);
+  // Which quote's "How this price was resolved" panel is open (one at a time, like previews).
+  const [resolutionId, setResolutionId] = useState<string | null>(null);
   // Per-room composition (Phase E of per-room track, 2026-07-27). Managed by the
   // `RoomCompositionsEditor` child; parent just holds the current array and forwards it
   // in the createQuotation body.
@@ -329,7 +332,12 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
                 showSegment={multiSegment}
                 previewOpen={previewId === q.id}
                 onTogglePreview={() => setPreviewId((cur) => (cur === q.id ? null : q.id))}
+                resolutionOpen={resolutionId === q.id}
+                onToggleResolution={() => setResolutionId((cur) => (cur === q.id ? null : q.id))}
               />
+              {/* Display-only rendering of the pricing pipeline's stored trail — each version's
+                  commercialTerms are immutable, so this is exactly how THAT version priced. */}
+              {resolutionId === q.id && <PriceResolutionPanel terms={q.commercialTerms} currency={q.currency} />}
               {/* Old rows that have a stored PDF show the FROZEN artifact (what was actually
                   sent); other rows recompose — safe here even for old versions, because each
                   quotation row's commercialTerms are immutable per version. */}
@@ -645,6 +653,8 @@ function QuoteRow({
   showSegment,
   previewOpen,
   onTogglePreview,
+  resolutionOpen,
+  onToggleResolution,
 }: {
   q: QuotationSummary;
   segmentNumber: number | null;
@@ -652,6 +662,8 @@ function QuoteRow({
   showSegment: boolean;
   previewOpen: boolean;
   onTogglePreview: () => void;
+  resolutionOpen: boolean;
+  onToggleResolution: () => void;
 }) {
   const tag = STATE_TAG[q.state];
   const { session } = useSession();
@@ -692,6 +704,15 @@ function QuoteRow({
       </span>
       <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span className="mono">{money(q.totalAmount, q.currency)}</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onToggleResolution}
+          title="How this price was resolved — the pricing pipeline's recorded trail for this version"
+        >
+          <Route style={{ width: 14, height: 14 }} />
+          {resolutionOpen ? "Hide price" : "Why this price"}
+        </button>
         <button
           type="button"
           className="btn btn-ghost btn-sm"

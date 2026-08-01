@@ -98,8 +98,14 @@ export function CommunicationAcceptanceBlock({
   // Newest first from the backend, so the first match is the live one. Earlier ones are prior
   // rounds (a superseded quote, a re-issued proforma) and are history, not actionable.
   // ISO-8601 strings compare lexicographically, so the sinceIso cut needs no Date parsing.
+  // DISPATCHED only (2026-08-03, operator request): a communication row can exist before the
+  // send actually went out — there is no answer to something the guest never received, so the
+  // capture form (typable fields included) must not appear until dispatch. Mirrors the p52
+  // backend rule, which refuses acknowledgements on non-dispatched communications anyway.
   const items = (commsQuery.data?.items ?? []).filter((c) => !sinceIso || (c.createdAt ?? "") >= sinceIso);
-  const comm: EntryCommunication | undefined = items.find((c) => c.commType === commType);
+  const comm: EntryCommunication | undefined = items.find(
+    (c) => c.commType === commType && c.sendStatus === "DISPATCHED",
+  );
 
   const ackM = useMutation({
     mutationFn: () => {

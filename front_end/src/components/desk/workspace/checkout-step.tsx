@@ -19,7 +19,7 @@ import {
   reEnterS8ToS2,
 } from "@/lib/api/checkout";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
-import { progressDispute } from "@/lib/api/in-stay";
+import { correctFolioCharge, postCreditNote, progressDispute } from "@/lib/api/in-stay";
 import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -59,6 +59,11 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const fin = deriveFinancials(entry, { paymentStatus: paymentStatus.data });
   const folio = entry.folio;
   const folioLines = folio?.lines ?? [];
+  // Same rule as the Stay step: corrections target real charge lines, not tax lines or
+  // earlier corrections (the backend rejects those too — this just keeps the picker clean).
+  const correctable = folioLines.filter(
+    (l) => !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for"),
+  );
   const folioInvoices = folio?.invoices ?? [];
   const hasFinalInvoice = folioInvoices.some((i) => i.invoiceType === "FINAL");
   const draftFinalInvoice = folioInvoices.find((i) => i.invoiceType === "FINAL" && i.state === "DRAFT");
@@ -98,6 +103,14 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const [fomAckRef, setFomAckRef] = useState("");
   const [finalChargeDesc, setFinalChargeDesc] = useState("");
   const [finalChargeAmount, setFinalChargeAmount] = useState("");
+  // Same charge toolkit as the Stay step (2026-08-03, operator request): type select, credit
+  // note, and corrections — the backend posts at S7 OR S8 pre-settlement (SIG-S8 §2.2).
+  const [finalChargeType, setFinalChargeType] = useState("F_AND_B");
+  const [correctLineId, setCorrectLineId] = useState("");
+  const [correctMode, setCorrectMode] = useState<"adjust" | "setNet">("adjust");
+  const [correctDelta, setCorrectDelta] = useState("");
+  const [correctToAmount, setCorrectToAmount] = useState("");
+  const [correctReason, setCorrectReason] = useState("");
   const [reEntryReason, setReEntryReason] = useState("");
   const [reEntryS2Reason, setReEntryS2Reason] = useState("");
   const [disputeCloseReason, setDisputeCloseReason] = useState("");
@@ -126,8 +139,49 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     wrap(() => {
       const amt = Number.parseFloat(finalChargeAmount);
       if (!folio?.id || !Number.isFinite(amt)) throw new Error("Valid amount required");
-      return postFolioCharge(session!, folio.id, { entryId: entry.id, lineType: "F_AND_B", description: finalChargeDesc.trim() || "Final morning charge", amount: amt, chargeDate: checkoutChargeDate ?? new Date().toISOString() });
-    }, "Final charge posted"),
+      return postFolioCharge(session!, folio.id, {
+        entryId: entry.id,
+        lineType: finalChargeType,
+        description: finalChargeDesc.trim() || "Final morning charge",
+        amount: amt,
+        chargeDate: checkoutChargeDate ?? new Date().toISOString(),
+      });
+    }, "Charge posted"),
+  );
+  const creditNoteM = useMutation(
+    wrap(() => {
+      const amt = Number.parseFloat(finalChargeAmount);
+      if (!folio?.id || !Number.isFinite(amt) || amt <= 0) throw new Error("Valid amount required");
+      // Dated to the checkout day like the charges — "today" can collide with the just-audited
+      // final stay night (see checkoutChargeDate above).
+      return postCreditNote(session!, folio.id, {
+        entryId: entry.id,
+        description: finalChargeDesc.trim() || "Credit note",
+        amount: amt,
+        creditDate: checkoutChargeDate ?? new Date().toISOString(),
+      });
+    }, "Credit note posted"),
+  );
+  const correctM = useMutation(
+    wrap(() => {
+      if (!folio?.id || !correctLineId) throw new Error("Select a line to correct");
+      const body: Parameters<typeof correctFolioCharge>[2] = {
+        entryId: entry.id,
+        originalFolioLineId: correctLineId,
+        reason: correctReason.trim(),
+        correctionDate: checkoutChargeDate ?? new Date().toISOString(),
+      };
+      if (correctMode === "setNet") {
+        const net = Number.parseFloat(correctToAmount);
+        if (!Number.isFinite(net)) throw new Error("Enter the net amount to set the line to");
+        body.correctToAmount = net;
+      } else {
+        const v = Number.parseFloat(correctDelta);
+        if (!Number.isFinite(v) || v === 0) throw new Error("Enter a non-zero adjustment");
+        body.correctionAmount = v;
+      }
+      return correctFolioCharge(session!, folio.id, body);
+    }, "Correction posted"),
   );
   const keyReturnM = useMutation(
     wrap(() => {
@@ -275,22 +329,100 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         </div>
         {folioLive && (
           <div style={{ marginTop: 6, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
+            {/* Full charge toolkit, same as the Stay step (2026-08-03): the backend posts at
+                S7 OR S8 pre-settlement (SIG-S8 §2.2), so last-minute minibar/breakfast items,
+                credit notes and corrections all work right here until the folio settles.
+                Everything is dated to the checkout day — "today" can collide with the
+                just-audited final stay night. */}
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>
-              Post a final-morning charge{checkoutChargeYmd ? ` · dated checkout day ${checkoutChargeYmd}` : ""}
+              Post a charge{checkoutChargeYmd ? ` · dated checkout day ${checkoutChargeYmd}` : ""}
             </div>
             <div className="frow">
               <div className="field">
-                <label>Description</label>
-                <input value={finalChargeDesc} onChange={(e) => setFinalChargeDesc(e.target.value)} />
+                <label>Type</label>
+                <select value={finalChargeType} onChange={(e) => setFinalChargeType(e.target.value)}>
+                  <option value="F_AND_B">F &amp; B</option>
+                  <option value="SERVICE">Service</option>
+                  <option value="OTHER">Other</option>
+                </select>
               </div>
               <div className="field">
                 <label>Amount</label>
-                <input type="number" value={finalChargeAmount} onChange={(e) => setFinalChargeAmount(e.target.value)} />
+                <input type="number" min={0} step="0.01" value={finalChargeAmount} onChange={(e) => setFinalChargeAmount(e.target.value)} />
               </div>
             </div>
-            <button className="btn btn-ghost btn-sm" disabled={finalChargeM.isPending} onClick={() => finalChargeM.mutate()}>
-              Post final charge
-            </button>
+            <div className="field">
+              <label>Description</label>
+              <input value={finalChargeDesc} onChange={(e) => setFinalChargeDesc(e.target.value)} />
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-primary btn-sm" disabled={finalChargeM.isPending} onClick={() => finalChargeM.mutate()}>
+                Post a charge
+              </button>
+              {elevated && (
+                <button className="btn btn-ghost btn-sm" disabled={creditNoteM.isPending} onClick={() => creditNoteM.mutate()}>
+                  Post credit note (L2+)
+                </button>
+              )}
+            </div>
+
+            {correctable.length > 0 && (
+              <div style={{ marginTop: 12, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 4 }}>Correct a charge</div>
+                <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "0 0 9px", lineHeight: 1.55 }}>
+                  The folio stays append-only — correcting adds an offsetting line next to the
+                  original, so the bill shows both the mistake and the fix.
+                </p>
+                <div className="field">
+                  <label>Which posted charge is wrong?</label>
+                  <select value={correctLineId} onChange={(e) => setCorrectLineId(e.target.value)}>
+                    <option value="">Choose a charge from the folio…</option>
+                    {correctable.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.lineType} — {l.description} ({String(l.amount)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Mode</label>
+                  <div style={{ display: "flex", gap: 14, fontSize: 12.5 }}>
+                    <label className="checkline" style={{ cursor: "pointer" }}>
+                      <input type="radio" name="checkoutCorrectMode" checked={correctMode === "adjust"} onChange={() => setCorrectMode("adjust")} />
+                      <span>Adjust by ±</span>
+                    </label>
+                    <label className="checkline" style={{ cursor: "pointer" }}>
+                      <input type="radio" name="checkoutCorrectMode" checked={correctMode === "setNet"} onChange={() => setCorrectMode("setNet")} />
+                      <span>Set net to</span>
+                    </label>
+                  </div>
+                </div>
+                <div className="frow">
+                  {correctMode === "adjust" ? (
+                    <div className="field">
+                      <label>Adjustment (±)</label>
+                      <input type="number" step="0.01" value={correctDelta} onChange={(e) => setCorrectDelta(e.target.value)} />
+                    </div>
+                  ) : (
+                    <div className="field">
+                      <label>Net amount to set</label>
+                      <input type="number" min={0} step="0.01" value={correctToAmount} onChange={(e) => setCorrectToAmount(e.target.value)} />
+                    </div>
+                  )}
+                  <div className="field">
+                    <label>Reason</label>
+                    <input value={correctReason} onChange={(e) => setCorrectReason(e.target.value)} />
+                  </div>
+                </div>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={correctM.isPending || !correctLineId || !correctReason.trim()}
+                  onClick={() => correctM.mutate()}
+                >
+                  Post correction
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

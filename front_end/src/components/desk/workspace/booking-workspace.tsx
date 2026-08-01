@@ -538,6 +538,19 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   const entry = entryQuery.data ?? null;
 
+  // Browser-tab title = the customer, not the product (2026-08-03, operator request): with
+  // several booking tabs open, "LEGPHEL PMS" × N tells the operator nothing — the guest's
+  // name is the tab's identity. Falls back to the booking id while the guest is unnamed, and
+  // restores the app default when the workspace unmounts (back to Bookings, etc.).
+  useEffect(() => {
+    if (!entry) return;
+    const name = guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null);
+    document.title = name !== "Guest" ? `${name} · ${entry.id}` : entry.id;
+    return () => {
+      document.title = "LEGPHEL PMS";
+    };
+  }, [entry]);
+
   // Authoritative advance-payment position from the server (payment OR FOM credit extension —
   // raw folio payments alone miss the credit-extension path, SIG-S3 Policy 42). It supplies both
   // the confirm gate's `satisfied` flag AND every "advance paid" figure the workspace renders, so
