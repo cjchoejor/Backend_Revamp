@@ -112,6 +112,7 @@ export type SpeculativeHoldSummary = {
 export type SegmentSummary = {
   id: string;
   segmentNumber: number;
+  startedAt?: string;
   sealedAt?: string | null;
 };
 
@@ -165,6 +166,9 @@ export type InvoiceSummary = {
   folioId: string;
   invoiceType: string;
   state: string;
+  invoiceNumber?: string | null;
+  versionNumber?: number;
+  supersededById?: string | null;
   templateKey?: string | null;
   dispatchedAt?: string | null;
   dispatchedTo?: string | null;
@@ -234,6 +238,14 @@ export type PaymentStatusSummary = {
   shortfall: number;
   creditExtensionActive: boolean;
   ceilingAmount: number | null;
+  /** ISO expiry of the credit extension, when the FOM set a time limit (2026-08-01). */
+  creditExtensionExpiresAt?: string | null;
+  /** True when an extension exists but its clock ran out — it no longer satisfies the condition. */
+  creditExtensionExpired?: boolean;
+  /** Where requiredAmount came from: the desk's per-booking requirement or the config thresholds. */
+  requirementSource?: "OPERATOR" | "CONFIG";
+  /** Present for OPERATOR requirements: { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }. */
+  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string } | null;
   /** Present only when the group-boost policy raised the requiredAmount above the base. */
   groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
 };

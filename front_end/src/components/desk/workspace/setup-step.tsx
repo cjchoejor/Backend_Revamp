@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Check, FileCheck, Lock, RefreshCw, Shield } from "lucide-react";
+import { Banknote, Check, Eye, EyeOff, FileCheck, Lock, RefreshCw, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -22,6 +22,7 @@ import {
   recordFolioPayment,
   reconcileAdvancePayment,
   schedulePaymentMilestones,
+  setAdvanceRequirement,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -32,6 +33,7 @@ import type { EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
+import { ProformaPreview } from "./quotation-preview";
 
 const BK = STAGE_ACTIONS.S3;
 
@@ -74,6 +76,35 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const preferredRoomId = optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? null;
   const proformaInvoices = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
+  // Segment labeling for the proforma list (2026-08-01, operator request): after a re-entry the
+  // prior segment's proforma stays listed next to the new one, labeled so old vs current is
+  // unambiguous. Invoices carry no segmentId, so each is attributed to the segment whose
+  // [startedAt, sealedAt) window contains its creation — the same time-windowing the
+  // segment-history service uses server-side.
+  const segments = entry.segments ?? [];
+  const currentSegmentNo = segments[0]?.segmentNumber ?? null;
+  const multiSegment = segments.length > 1;
+  const segmentNoForDate = (iso: string): number | null => {
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return null;
+    const seg = segments.find((s) => {
+      const start = s.startedAt ? new Date(s.startedAt).getTime() : Number.NEGATIVE_INFINITY;
+      const end = s.sealedAt ? new Date(s.sealedAt).getTime() : Number.POSITIVE_INFINITY;
+      return t >= start && t < end;
+    });
+    return seg?.segmentNumber ?? null;
+  };
+  // Operator language mirror of the S2 quote tags: a created proforma IS ready to go — "DRAFT"
+  // is backend state, not desk vocabulary.
+  // Mirrors the backend's `enforceProformaDispatchedBeforeAdvancePayment` (2026-08-01): the
+  // bill goes out first, then the money comes in — the payment form stays locked until then.
+  const proformaDispatchedNow = proformaInvoices.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  const invoiceStateLabel = (inv: { state: string; dispatchedAt?: string | null }): string =>
+    inv.dispatchedAt
+      ? "Dispatched"
+      : inv.state === "DRAFT"
+        ? "Ready to send"
+        : inv.state.charAt(0) + inv.state.slice(1).toLowerCase();
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
   const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
@@ -89,8 +120,16 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentNotes, setPaymentNotes] = useState("");
   const [reconcileNote, setReconcileNote] = useState("");
+  // Advance requirement (2026-08-01): the desk pins how much the guest must pay — a flat
+  // amount, or a percentage the BACKEND converts against the quote total (no money math here).
+  const [advReqMode, setAdvReqMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
+  const [advReqValue, setAdvReqValue] = useState("");
   const [creditCeiling, setCreditCeiling] = useState("");
   const [creditReason, setCreditReason] = useState("");
+  // Optional time limit on the credit extension — hours until it stops satisfying the condition.
+  const [creditHours, setCreditHours] = useState("");
+  // Which proforma's inline document preview is open (one at a time).
+  const [proformaPreviewId, setProformaPreviewId] = useState<string | null>(null);
   const [holdJustification, setHoldJustification] = useState("Reservation setup — committed inventory hold");
   // Guest email for the proforma dispatch. Same robust auto-pull as the S2 send field — resolve
   // across the profile chain and fill via an effect so a late-loading profile still populates it.
@@ -121,6 +160,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+    // The inline proforma preview recomposes from the folio's current payments + advance
+    // requirement — logging a payment or changing the requirement changes the document.
+    void queryClient.invalidateQueries({ queryKey: ["invoice-preview"] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
@@ -160,7 +202,36 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     }, "Advance reconciled"),
   );
   const creditM = useMutation(
-    wrap(() => recordCreditExtension(session!, entry.id, { ceilingAmount: Number(creditCeiling), reason: creditReason.trim() }), "Credit extension approved"),
+    wrap(
+      () =>
+        recordCreditExtension(session!, entry.id, {
+          ceilingAmount: Number(creditCeiling),
+          reason: creditReason.trim(),
+          validForHours: creditHours.trim() !== "" ? Number(creditHours) : null,
+        }),
+      "Credit extension approved",
+    ),
+  );
+  const advReqM = useMutation({
+    mutationFn: () => {
+      if (!folio) throw new Error("Create the folio first");
+      const n = Number(advReqValue);
+      if (!Number.isFinite(n) || n <= 0) throw new Error("Enter a positive value");
+      return setAdvanceRequirement(
+        session!,
+        entry.id,
+        advReqMode === "AMOUNT" ? { mode: "AMOUNT", amount: n } : { mode: "PERCENT", percent: n },
+      );
+    },
+    onSuccess: (status) => {
+      toast.success(`Advance requirement set — ${money(status.requiredAmount)}`);
+      setAdvReqValue("");
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Action failed"),
+  });
+  const advReqClearM = useMutation(
+    wrap(() => setAdvanceRequirement(session!, entry.id, { mode: "CLEAR" }), "Requirement cleared — hotel default applies"),
   );
   const holdM = useMutation(
     wrap(() => {
@@ -347,28 +418,162 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 3. Proforma invoice — ready with the folio; emailing it is optional */}
+      {/* 3. What the guest must pay — set FIRST: the proforma below prints exactly these
+          figures as "Advance due now" / "Advance received" (2026-08-01, operator ordering:
+          requirement → proforma → money received). */}
+      <div className="block">
+        <BlockH>
+          <Banknote style={{ width: 13, height: 13 }} />
+          What the guest must pay
+        </BlockH>
+        {paymentStatus && (
+          <div className="fact b-transit" style={{ marginBottom: 6, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
+            <span>
+              Received {money(paymentStatus.totalReceived, folio?.lines?.[0]?.currency)} / required{" "}
+              {money(paymentStatus.requiredAmount, folio?.lines?.[0]?.currency)}
+            </span>
+            <span className={`tag ${paymentStatus.satisfied ? "" : "warn"}`}>
+              {paymentStatus.satisfied ? "Satisfied" : `Short ${money(paymentStatus.shortfall)}`}
+            </span>
+          </div>
+        )}
+        {paymentStatus && (
+          <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 11px" }}>
+            {paymentStatus.requirementSource === "OPERATOR"
+              ? paymentStatus.requirementBasis?.mode === "PERCENT"
+                ? `Requirement set at the desk — ${paymentStatus.requirementBasis.percent}% of the quote total (${money(paymentStatus.requirementBasis.baseTotal ?? null)})`
+                : "Requirement set at the desk — flat amount"
+              : "Requirement from the hotel's default thresholds — set a booking-specific one here"}
+            {paymentStatus.creditExtensionActive && paymentStatus.creditExtensionExpiresAt
+              ? ` · credit extension active until ${paymentStatus.creditExtensionExpiresAt.slice(0, 16).replace("T", " ")}`
+              : paymentStatus.creditExtensionActive
+                ? " · credit extension active (no time limit)"
+                : paymentStatus.creditExtensionExpired
+                  ? " · a credit extension EXPIRED — it no longer counts"
+                  : ""}
+          </p>
+        )}
+        {/* What the guest must pay — flat Nu or % of the quote. The % is converted by the
+            BACKEND against the operative quotation (no money math in the desk); the resolved
+            figure lands in "required" above and prints as "Advance due now" on the proforma. */}
+        <div>
+          <div className="frow">
+            <div className="field">
+              <label>Set as</label>
+              <select value={advReqMode} onChange={(e) => setAdvReqMode(e.target.value as "AMOUNT" | "PERCENT")} disabled={!folio}>
+                <option value="AMOUNT">Flat amount (Nu)</option>
+                <option value="PERCENT">% of quote total</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>{advReqMode === "AMOUNT" ? "Amount (Nu)" : "Percent (1–100)"}</label>
+              <input
+                type="number"
+                min={0.01}
+                max={advReqMode === "PERCENT" ? 100 : undefined}
+                step={advReqMode === "PERCENT" ? "1" : "0.01"}
+                value={advReqValue}
+                onChange={(e) => setAdvReqValue(e.target.value)}
+                disabled={!folio}
+              />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-ghost btn-sm" disabled={!folio || !advReqValue || advReqM.isPending} onClick={() => advReqM.mutate()}>
+              {advReqM.isPending ? "Setting…" : "Set requirement"}
+            </button>
+            {paymentStatus?.requirementSource === "OPERATOR" && (
+              <button className="btn btn-ghost btn-sm" disabled={advReqClearM.isPending} onClick={() => advReqClearM.mutate()}>
+                {advReqClearM.isPending ? "Clearing…" : "Clear — use hotel default"}
+              </button>
+            )}
+          </div>
+          {advReqMode === "PERCENT" && (
+            <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "6px 0 0", lineHeight: 1.5 }}>
+              Converted against the current quote when you set it — if the quote is renegotiated,
+              set the requirement again to track the new total.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* 4. Proforma invoice — reflects the advance figures above; emailing it is optional */}
       <div className="block">
         <BlockH>
           <FileCheck style={{ width: 13, height: 13 }} />
           Proforma invoice
         </BlockH>
         {proformaInvoices.length === 0 ? (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>A proforma draft is created with the folio.</p>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>A proforma invoice is created together with the folio.</p>
         ) : (
           <>
-            {proformaInvoices.map((inv) => (
-              <div key={inv.id} className="fact b-transit" style={{ marginBottom: 9, padding: "6px 11px", fontSize: 12, justifyContent: "space-between", width: "100%" }}>
-                <span className="mono">{inv.id.slice(0, 14)}…</span>
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="tag">{inv.state}</span>
-                  {session && <PdfButton label="Proforma PDF" open={() => openInvoicePdf(session, inv.id)} />}
-                </span>
-              </div>
-            ))}
+            {multiSegment && (
+              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 6px" }}>
+                This booking has been re-worked — proformas from earlier segments stay here for
+                reference; the current segment&rsquo;s proforma is the live one.
+              </p>
+            )}
+            {proformaInvoices.map((inv) => {
+              const segNo = segmentNoForDate(inv.createdAt);
+              const isCurrent = !multiSegment || segNo == null || segNo === currentSegmentNo;
+              const previewOpen = proformaPreviewId === inv.id;
+              return (
+                <div key={inv.id}>
+                  <div
+                    className="fact b-transit"
+                    style={{
+                      marginBottom: 9,
+                      padding: "6px 11px",
+                      fontSize: 12,
+                      justifyContent: "space-between",
+                      width: "100%",
+                      opacity: isCurrent ? 1 : 0.75,
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span className="mono">{inv.id}</span>
+                      {(inv.versionNumber ?? 1) > 1 && <span className="tag">v{inv.versionNumber}</span>}
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {multiSegment && (
+                        <span
+                          className="tag"
+                          style={
+                            isCurrent
+                              ? { borderColor: "var(--green-t2)", background: "var(--green-t)", color: "var(--green-d)" }
+                              : undefined
+                          }
+                          title={
+                            isCurrent
+                              ? "From the segment you are working now"
+                              : "From an earlier pass of this booking — kept for reference"
+                          }
+                        >
+                          {segNo != null ? `Segment ${segNo}` : "Earlier segment"}
+                          {isCurrent && segNo != null ? " · current" : ""}
+                        </span>
+                      )}
+                      <span className="tag">{invoiceStateLabel(inv)}</span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setProformaPreviewId((cur) => (cur === inv.id ? null : inv.id))}
+                        title="Show the proforma document right here — no PDF needed"
+                      >
+                        {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+                        {previewOpen ? "Hide" : "View"}
+                      </button>
+                      {session && <PdfButton label="PDF" open={() => openInvoicePdf(session, inv.id)} />}
+                    </span>
+                  </div>
+                  {previewOpen && <ProformaPreview invoiceId={inv.id} />}
+                </div>
+              );
+            })}
             <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
-              The proforma already counts for the confirm checklist — emailing it to the guest is
-              <b> optional</b>, only if they ask for it.
+              The document carries the advance figures from above — what&rsquo;s been received and
+              &ldquo;Advance due now&rdquo;. The proforma already counts for the confirm checklist —
+              emailing it to the guest is <b>optional</b>, only if they ask for it.
             </p>
             <div className="field">
               <label>Dispatch to (optional)</label>
@@ -385,28 +590,24 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 3b. Guest's answer on the proforma — only meaningful once it has actually been sent.
+      {/* 4b. Guest's answer on the proforma — only meaningful once it has actually been sent.
           Evidence for the file; it gates nothing (see communication-acceptance.tsx). */}
       {proformaInvoices.some((i) => i.dispatchedAt != null) && (
         <CommunicationAcceptanceBlock entryId={entry.id} commType="PROFORMA_INVOICE" />
       )}
 
-      {/* 4. Advance payment */}
+      {/* 5. Money received from the guest — after the proforma, so the page reads in the
+          order the desk works: set the requirement, show/send the bill, take the money. */}
       <div className="block">
         <BlockH>
           <Banknote style={{ width: 13, height: 13 }} />
-          Advance payment
+          Money received from the guest
         </BlockH>
         {paymentStatus && (
-          <div className="fact b-transit" style={{ marginBottom: 11, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
-            <span>
-              Received {money(paymentStatus.totalReceived, folio?.lines?.[0]?.currency)} / required{" "}
-              {money(paymentStatus.requiredAmount, folio?.lines?.[0]?.currency)}
-            </span>
-            <span className={`tag ${paymentStatus.satisfied ? "" : "warn"}`}>
-              {paymentStatus.satisfied ? "Satisfied" : `Short ${money(paymentStatus.shortfall)}`}
-            </span>
-          </div>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
+            Received {money(paymentStatus.totalReceived)} of {money(paymentStatus.requiredAmount)} required
+            {paymentStatus.satisfied ? " — satisfied" : ""}.
+          </p>
         )}
         {inPayments.length > 0 && (
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 11px" }}>
@@ -416,9 +617,15 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             {folio?.advancePaymentReconciliationComplete ? " · reconciled" : ""}
           </p>
         )}
+        {folio && !proformaDispatchedNow && (
+          <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px", lineHeight: 1.5 }}>
+            Dispatch the proforma invoice above first — payments are logged against the bill the
+            guest received, so this form unlocks once it has gone out.
+          </p>
+        )}
         <div className="frow">
           <div className="field">
-            <label>Payment amount</label>
+            <label>Amount received (Nu)</label>
             <input
               type="number"
               min={0.01}
@@ -428,17 +635,21 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 setPaymentAmount(e.target.value);
                 if (paymentM.isSuccess) paymentM.reset();
               }}
-              disabled={!folio}
+              disabled={!folio || !proformaDispatchedNow}
             />
           </div>
           <div className="field">
             <label>Notes</label>
-            <input value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} disabled={!folio} />
+            <input value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} disabled={!folio || !proformaDispatchedNow} />
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn btn-ghost btn-sm" disabled={!folio || !paymentAmount || paymentM.isPending} onClick={() => paymentM.mutate()}>
-            {paymentM.isPending ? "Recording…" : paymentM.isSuccess ? "✓ Payment recorded" : "Record payment"}
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={!folio || !proformaDispatchedNow || !paymentAmount || paymentM.isPending}
+            onClick={() => paymentM.mutate()}
+          >
+            {paymentM.isPending ? "Logging…" : paymentM.isSuccess ? "✓ Payment logged" : "Log payment received"}
           </button>
           <button
             className="btn btn-ghost btn-sm"
@@ -459,6 +670,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         {elevated && (
           <div style={{ marginTop: 12, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Credit extension (FOM+)</div>
+            <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 7px", lineHeight: 1.5 }}>
+              Lets the booking proceed without the advance, up to the ceiling. Give it a time limit
+              and it stops counting when the clock runs out — the advance becomes due again.
+            </p>
             <div className="frow">
               <div className="field">
                 <label>Ceiling amount</label>
@@ -468,6 +683,16 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 <label>Reason</label>
                 <input value={creditReason} onChange={(e) => setCreditReason(e.target.value)} />
               </div>
+              <div className="field">
+                <label>Valid for (hours, optional)</label>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="No limit"
+                  value={creditHours}
+                  onChange={(e) => setCreditHours(e.target.value)}
+                />
+              </div>
             </div>
             <button className="btn btn-ghost btn-sm" disabled={creditM.isPending || creditM.isSuccess || !creditCeiling || !creditReason.trim() || !folio} onClick={() => creditM.mutate()}>
               {creditM.isPending ? "Approving…" : creditM.isSuccess ? "✓ Credit extension approved" : "Approve credit extension"}
@@ -476,7 +701,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 5. Committed hold */}
+      {/* 6. Committed hold */}
       <div className="block">
         <BlockH>
           <Lock style={{ width: 13, height: 13 }} />

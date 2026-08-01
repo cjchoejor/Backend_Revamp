@@ -101,9 +101,27 @@ export async function reconcileAdvancePayment(
 export async function recordCreditExtension(
   session: Session,
   entryId: string,
-  body: { ceilingAmount: number; reason: string },
+  body: { ceilingAmount: number; reason: string; validForHours?: number | null },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/credit-extension`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
+/**
+ * Operator-set advance requirement (2026-08-01): how much the guest must pay before the
+ * booking confirms — a flat amount, or a percentage of the operative quotation's total
+ * (converted server-side; no money math here). CLEAR reverts to the hotel's configured
+ * thresholds. Returns the fresh payment-status.
+ */
+export async function setAdvanceRequirement(
+  session: Session,
+  entryId: string,
+  body: { mode: "AMOUNT"; amount: number } | { mode: "PERCENT"; percent: number } | { mode: "CLEAR" },
+) {
+  return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/advance-requirement`, {
     method: "POST",
     session,
     body,
