@@ -121,7 +121,12 @@ export async function setAdvanceRequirement(
   entryId: string,
   body: { mode: "AMOUNT"; amount: number } | { mode: "PERCENT"; percent: number } | { mode: "CLEAR" },
 ) {
-  return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/advance-requirement`, {
+  return apiRequest<
+    PaymentStatusSummary & {
+      /** Set when the change superseded a frozen proforma and minted a fresh DRAFT (2026-08-01). */
+      reissuedProforma?: { newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null;
+    }
+  >(`/api/entries/${entryId}/advance-requirement`, {
     method: "POST",
     session,
     body,

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
-import { fetchInvoicePreviewHtml, fetchQuotationPreviewHtml } from "@/lib/api/documents";
+import { fetchInvoicePreviewHtml, fetchPdfObjectUrl, fetchQuotationPreviewHtml } from "@/lib/api/documents";
 
 /**
  * Inline document views (2026-08-01, operator request): the A1 quotation / A2 proforma in
@@ -73,9 +73,66 @@ function DocumentPreviewFrame({
   );
 }
 
-/** S2 — the quotation document, live from its current terms. */
-export function QuotationPreview({ quotationId }: { quotationId: string }) {
+/**
+ * Frozen-artifact inline view (2026-08-01): superseded documents must show what actually
+ * went out at the time — recomposing them from current data would print today's figures
+ * under yesterday's number. This embeds the STORED PDF (fetched with auth as a blob) in the
+ * same portrait frame the live previews use. No sandbox attribute — the browser's built-in
+ * PDF viewer doesn't run inside a sandboxed iframe.
+ */
+function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
   const { session } = useSession();
+  const query = useQuery({
+    queryKey: ["pdf-inline", path] as const,
+    queryFn: () => fetchPdfObjectUrl(session!, path),
+    enabled: !!session,
+    // The artifact is write-once — it can never change.
+    staleTime: Infinity,
+  });
+  // Revoke the object URL when the frame unmounts (or the URL is replaced).
+  useEffect(() => {
+    const url = query.data;
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [query.data]);
+
+  if (query.isLoading) {
+    return <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "6px 0" }}>Loading the sent document…</p>;
+  }
+  if (query.isError || !query.data) {
+    return (
+      <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "6px 0" }}>
+        {query.error instanceof Error ? query.error.message : "Could not load the document."}
+      </p>
+    );
+  }
+  return (
+    <iframe
+      title={title}
+      src={query.data}
+      style={{
+        width: "min(100%, 470px)",
+        display: "block",
+        height: 640,
+        border: "1px solid var(--line-2)",
+        borderRadius: 8,
+        background: "#FDFDFB",
+        margin: "6px auto 4px",
+      }}
+    />
+  );
+}
+
+/**
+ * S2 — the quotation document. Live rows compose from current terms; pass `frozenPdf` on a
+ * superseded row that has a stored PDF to show the artifact that actually went out.
+ */
+export function QuotationPreview({ quotationId, frozenPdf }: { quotationId: string; frozenPdf?: boolean }) {
+  const { session } = useSession();
+  if (frozenPdf) {
+    return <FrozenPdfFrame path={`/api/quotations/${quotationId}/pdf`} title="Quotation (as sent)" />;
+  }
   return (
     <DocumentPreviewFrame
       queryKey={["quotation-preview", quotationId] as const}
@@ -85,9 +142,15 @@ export function QuotationPreview({ quotationId }: { quotationId: string }) {
   );
 }
 
-/** S3 — the proforma document, live from folio payments + the desk's advance requirement. */
-export function ProformaPreview({ invoiceId }: { invoiceId: string }) {
+/**
+ * S3 — the proforma document. Live rows compose from folio payments + the desk's advance
+ * requirement; pass `frozenPdf` on a superseded row to show the stored artifact instead.
+ */
+export function ProformaPreview({ invoiceId, frozenPdf }: { invoiceId: string; frozenPdf?: boolean }) {
   const { session } = useSession();
+  if (frozenPdf) {
+    return <FrozenPdfFrame path={`/api/invoices/${invoiceId}/pdf`} title="Proforma invoice (as sent)" />;
+  }
   return (
     <DocumentPreviewFrame
       queryKey={["invoice-preview", invoiceId] as const}

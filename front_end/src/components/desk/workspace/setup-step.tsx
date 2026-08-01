@@ -99,6 +99,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   // Mirrors the backend's `enforceProformaDispatchedBeforeAdvancePayment` (2026-08-01): the
   // bill goes out first, then the money comes in — the payment form stays locked until then.
   const proformaDispatchedNow = proformaInvoices.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  // The live issue — newest non-superseded (a changed advance requirement supersedes the sent
+  // one and mints a new version; rows are createdAt-desc so the first live row is the current).
+  const currentProformaId = proformaInvoices.find((i) => i.state !== "SUPERSEDED")?.id ?? null;
   const invoiceStateLabel = (inv: { state: string; dispatchedAt?: string | null }): string =>
     inv.dispatchedAt
       ? "Dispatched"
@@ -224,15 +227,30 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       );
     },
     onSuccess: (status) => {
-      toast.success(`Advance requirement set — ${money(status.requiredAmount)}`);
+      if (status.reissuedProforma) {
+        toast.success(
+          `Advance requirement set — ${money(status.requiredAmount)}. The sent proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it again.`,
+        );
+      } else {
+        toast.success(`Advance requirement set — ${money(status.requiredAmount)}`);
+      }
       setAdvReqValue("");
       invalidate();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Action failed"),
   });
-  const advReqClearM = useMutation(
-    wrap(() => setAdvanceRequirement(session!, entry.id, { mode: "CLEAR" }), "Requirement cleared — hotel default applies"),
-  );
+  const advReqClearM = useMutation({
+    mutationFn: () => setAdvanceRequirement(session!, entry.id, { mode: "CLEAR" }),
+    onSuccess: (status) => {
+      toast.success(
+        status.reissuedProforma
+          ? `Requirement cleared — hotel default applies. The sent proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it again.`
+          : "Requirement cleared — hotel default applies",
+      );
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+  });
   const holdM = useMutation(
     wrap(() => {
       if (!preferredRoomId) throw new Error("No preferred room from Inquiry");
@@ -517,6 +535,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               const segNo = segmentNoForDate(inv.createdAt);
               const isCurrent = !multiSegment || segNo == null || segNo === currentSegmentNo;
               const previewOpen = proformaPreviewId === inv.id;
+              // Current vs Old (2026-08-01, operator request): a changed advance requirement
+              // supersedes a sent proforma and mints a new version — every issue stays listed,
+              // the live one marked "Current", the rest "Old", numbered by their version.
+              const isCurrentDoc = currentProformaId != null && inv.id === currentProformaId;
+              const isOldDoc = inv.state === "SUPERSEDED" || (currentProformaId != null && !isCurrentDoc);
               return (
                 <div key={inv.id}>
                   <div
@@ -527,12 +550,28 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                       fontSize: 12,
                       justifyContent: "space-between",
                       width: "100%",
-                      opacity: isCurrent ? 1 : 0.75,
+                      opacity: isCurrent && !isOldDoc ? 1 : 0.75,
                     }}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span className="mono">{inv.id}</span>
-                      {(inv.versionNumber ?? 1) > 1 && <span className="tag">v{inv.versionNumber}</span>}
+                      {proformaInvoices.length > 1 && (
+                        <span
+                          className="tag"
+                          style={
+                            isCurrentDoc
+                              ? { borderColor: "var(--green-t2)", background: "var(--green-t)", color: "var(--green-d)" }
+                              : undefined
+                          }
+                          title={
+                            isCurrentDoc
+                              ? "The live proforma — the one the guest is held to"
+                              : "Superseded issue — kept for the record; the PDF shows what was sent at the time"
+                          }
+                        >
+                          {isCurrentDoc ? `Current · v${inv.versionNumber ?? 1}` : `Old · v${inv.versionNumber ?? 1}`}
+                        </span>
+                      )}
                     </span>
                     <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       {multiSegment && (
@@ -554,19 +593,29 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                         </span>
                       )}
                       <span className="tag">{invoiceStateLabel(inv)}</span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => setProformaPreviewId((cur) => (cur === inv.id ? null : inv.id))}
-                        title="Show the proforma document right here — no PDF needed"
-                      >
-                        {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
-                        {previewOpen ? "Hide" : "View"}
-                      </button>
+                      {/* Live rows preview by recomposing from current data; OLD rows embed the
+                          STORED PDF instead — the frozen artifact that actually went out (a
+                          recomposition would show today's figures under yesterday's number).
+                          An old row with no stored artifact has nothing to show — no View. */}
+                      {(!isOldDoc || inv.pdfStorageKey != null || inv.dispatchedAt != null) && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setProformaPreviewId((cur) => (cur === inv.id ? null : inv.id))}
+                          title={
+                            isOldDoc
+                              ? "Show this superseded issue as it was sent (stored PDF)"
+                              : "Show the proforma document right here — no PDF needed"
+                          }
+                        >
+                          {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+                          {previewOpen ? "Hide" : "View"}
+                        </button>
+                      )}
                       {session && <PdfButton label="PDF" open={() => openInvoicePdf(session, inv.id)} />}
                     </span>
                   </div>
-                  {previewOpen && <ProformaPreview invoiceId={inv.id} />}
+                  {previewOpen && <ProformaPreview invoiceId={inv.id} frozenPdf={isOldDoc} />}
                 </div>
               );
             })}

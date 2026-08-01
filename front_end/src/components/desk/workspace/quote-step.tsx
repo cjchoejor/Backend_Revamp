@@ -330,7 +330,15 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
                 previewOpen={previewId === q.id}
                 onTogglePreview={() => setPreviewId((cur) => (cur === q.id ? null : q.id))}
               />
-              {previewId === q.id && <QuotationPreview quotationId={q.id} />}
+              {/* Old rows that have a stored PDF show the FROZEN artifact (what was actually
+                  sent); other rows recompose — safe here even for old versions, because each
+                  quotation row's commercialTerms are immutable per version. */}
+              {previewId === q.id && (
+                <QuotationPreview
+                  quotationId={q.id}
+                  frozenPdf={(q.state === "SUPERSEDED" || q.state === "EXPIRED") && !!q.pdfStorageKey}
+                />
+              )}
             </div>
           ))}
         </div>

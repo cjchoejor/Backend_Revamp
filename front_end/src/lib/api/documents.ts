@@ -71,6 +71,27 @@ export async function fetchInvoicePreviewHtml(session: Session, invoiceId: strin
   return fetchPreviewHtml(session, `/api/invoices/${invoiceId}/preview-html`, "proforma");
 }
 
+/**
+ * Fetch a stored PDF as a blob object-URL for INLINE embedding (2026-08-01) — used by the
+ * "View" on superseded quotations/proformas, where the honest inline view is the FROZEN
+ * artifact that actually went out, not a recomposition from current data. Caller owns the
+ * URL lifecycle (revoke on unmount).
+ */
+export async function fetchPdfObjectUrl(session: Session, path: string): Promise<string> {
+  const res = await fetch(path, { headers: authHeaders(session), credentials: "same-origin" });
+  if (!res.ok) {
+    let message = `Could not load the document (HTTP ${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // non-JSON error body — keep the generic message
+    }
+    throw new Error(message);
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
 async function fetchPreviewHtml(session: Session, path: string, label: string): Promise<string> {
   const res = await fetch(path, { headers: authHeaders(session), credentials: "same-origin" });
   if (!res.ok) {

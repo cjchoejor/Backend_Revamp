@@ -84,6 +84,8 @@ export type QuotationSummary = {
   versionNumber: number;
   referenceNumber: string;
   state: QuotationState;
+  /** Set once the PDF artifact was rendered — the frozen document that went out. */
+  pdfStorageKey?: string | null;
   commercialTerms?: Record<string, unknown> | null;
   totalAmount: string | number;
   currency: string;
@@ -169,6 +171,8 @@ export type InvoiceSummary = {
   invoiceNumber?: string | null;
   versionNumber?: number;
   supersededById?: string | null;
+  /** Set once the PDF artifact was rendered — the frozen document that went out. */
+  pdfStorageKey?: string | null;
   templateKey?: string | null;
   dispatchedAt?: string | null;
   dispatchedTo?: string | null;
