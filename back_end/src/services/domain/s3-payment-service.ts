@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { PaymentDirection, Prisma, Stage } from "@prisma/client";
+import { InvoiceState, InvoiceType, PaymentDirection, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -164,6 +164,12 @@ export async function setAdvanceRequirement(
   }
   // mode === "CLEAR" leaves requiredDec/basis null → falls back to config thresholds.
 
+  // Did the requirement actually change? Drives the proforma re-issue below — setting the
+  // same figure again must not spawn a new document version.
+  const priorStr = folio.advanceRequiredAmount != null ? toDecimal(folio.advanceRequiredAmount).toFixed(2) : null;
+  const nextStr = requiredDec != null ? requiredDec.toFixed(2) : null;
+  const requirementChanged = priorStr !== nextStr;
+
   return prisma.$transaction(async (tx) => {
     const updated = await tx.folio.update({
       where: { id: input.folioId },
@@ -192,7 +198,84 @@ export async function setAdvanceRequirement(
       },
     });
 
-    return updated;
+    // ── Class-1 supersession on a changed advance (2026-08-01, operator request) ─────────
+    // "Advance due now" is printed on the proforma, so a changed requirement makes a FROZEN
+    // proforma (PDF rendered and/or dispatched) misstate the deal. Those get superseded —
+    // kept as read-only history with `supersededById` pointing at a fresh DRAFT that prints
+    // the new figures (fresh INV number, versionNumber+1; the desk re-dispatches it, and the
+    // bill-before-money guard re-locks payments until it goes out). A never-rendered DRAFT is
+    // NOT superseded: nothing frozen exists yet — its preview/PDF composes the new figures on
+    // demand, and re-issuing would only mint noise versions.
+    let reissued: { newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null = null;
+    if (requirementChanged) {
+      const proformas = await tx.invoice.findMany({
+        where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA },
+        orderBy: { versionNumber: "desc" },
+      });
+      const live = proformas.filter((i) => i.state !== InvoiceState.SUPERSEDED);
+      const frozen = live.filter((i) => i.dispatchedAt != null || i.pdfStorageKey != null || i.state === InvoiceState.DISPATCHED);
+      if (frozen.length > 0) {
+        const nextVersion = Math.max(...proformas.map((i) => i.versionNumber ?? 1)) + 1;
+        const newId = await allocateReadableId(tx, "INVOICE" as const, now);
+        const created = await tx.invoice.create({
+          data: {
+            id: newId,
+            folioId: input.folioId,
+            entryId: input.entryId,
+            invoiceType: InvoiceType.PROFORMA,
+            state: InvoiceState.DRAFT,
+            versionNumber: nextVersion,
+            templateKey: frozen[0].templateKey ?? "proforma-v1",
+            issuedAt: now,
+            issuedBy: actor.actorId,
+            metadata: {
+              basis: "ADVANCE_REQUIREMENT_CHANGED",
+              supersedes: frozen.map((i) => i.id),
+              requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null,
+            },
+          },
+        });
+        await tx.invoice.updateMany({
+          where: { id: { in: frozen.map((i) => i.id) } },
+          data: { state: InvoiceState.SUPERSEDED, supersededById: created.id },
+        });
+        for (const old of frozen) {
+          await tx.traceEvent.create({
+            data: {
+              eventType: "INVOICE.SUPERSEDED",
+              actorId: actor.actorId,
+              actorLevel: actor.actorLevel,
+              entityType: "Invoice",
+              entityId: old.id,
+              operation: "UPDATE",
+              timestamp: now,
+              stageContext: Stage.S3,
+              entryId: input.entryId,
+              payload: { entryId: input.entryId, invoiceId: old.id, supersededById: created.id, reason: "ADVANCE_REQUIREMENT_CHANGED" },
+              createdBy: actor.actorId,
+            },
+          });
+        }
+        await tx.traceEvent.create({
+          data: {
+            eventType: "INVOICE.CREATED",
+            actorId: actor.actorId,
+            actorLevel: actor.actorLevel,
+            entityType: "Invoice",
+            entityId: created.id,
+            operation: "CREATE",
+            timestamp: now,
+            stageContext: Stage.S3,
+            entryId: input.entryId,
+            payload: { folioId: input.folioId, invoiceId: created.id, invoiceType: "PROFORMA", basis: "ADVANCE_REQUIREMENT_CHANGED" },
+            createdBy: actor.actorId,
+          },
+        });
+        reissued = { newInvoiceId: created.id, supersededIds: frozen.map((i) => i.id), versionNumber: nextVersion };
+      }
+    }
+
+    return { folio: updated, reissuedProforma: reissued };
   });
 }
 

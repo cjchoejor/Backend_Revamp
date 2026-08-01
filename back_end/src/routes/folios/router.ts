@@ -137,13 +137,16 @@ foliosRouter.post(
         return;
       }
       const { mode, amount, percent } = req.body;
-      await s3PaymentService.setAdvanceRequirement(
+      const result = await s3PaymentService.setAdvanceRequirement(
         prisma,
         { entryId: entry.id, folioId: entry.folio.id, mode, amount, percent },
         { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
       );
       const status = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
-      res.json(status);
+      // `reissuedProforma` is set when the changed requirement superseded a frozen (rendered/
+      // dispatched) proforma and minted a fresh DRAFT — the desk toasts it so the operator
+      // knows to dispatch the new bill.
+      res.json({ ...status, reissuedProforma: result.reissuedProforma });
     } catch (e) {
       next(e);
     }
