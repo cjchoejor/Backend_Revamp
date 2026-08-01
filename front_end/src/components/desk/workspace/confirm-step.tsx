@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Lock, Users } from "lucide-react";
+import { AlertTriangle, Check, ListChecks, Lock, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { acknowledgeMultiBooking, verifyConference } from "@/lib/api/confirmation";
+import { patchPreArrivalTask } from "@/lib/api/pre-arrival";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { JourneySummaryBlock } from "./journey-summary";
@@ -26,6 +27,19 @@ function BlockH({ children }: { children: React.ReactNode }) {
 function isElevated(level?: string) {
   return level === "L2" || level === "L3" || level === "L4";
 }
+
+/**
+ * The front-desk prep subset of the pre-arrival task set, surfaced on S4 (2026-08-02, operator
+ * request). The tasks are seeded at confirmation (backend, idempotent) so they can be worked
+ * here before the arrival window opens; the same records show on the Arrival step — completing
+ * one in either place writes the same row.
+ */
+const HANDOFF_TASKS: Array<{ type: string; label: string }> = [
+  { type: "PAYMENT_RECONCILIATION", label: "Payment reconciliation" },
+  { type: "SPECIAL_REQUEST_FULFILMENT", label: "Special request fulfilment" },
+  { type: "LATE_ARRIVAL_MEAL_COORDINATION", label: "Late-arrival meal coordination" },
+  { type: "SITE_VISIT", label: "Site visit" },
+];
 
 /**
  * Confirm (S3→S4) interactive step. Rendered in place of the read-only confirm canvas while the
@@ -50,6 +64,7 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
   const [conferenceChecklist, setConferenceChecklist] = useState(
     '{"venueConfirmed": true, "cateringConfirmed": true, "avConfirmed": true}',
   );
+  const [waiveReasons, setWaiveReasons] = useState<Record<string, string>>({});
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -78,6 +93,24 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
       return verifyConference(session!, entry.id, checklist);
     }, "Conference verified"),
   );
+  const handoffTaskM = useMutation({
+    mutationFn: (args: { taskId: string; action: "COMPLETE" | "WAIVE" }) =>
+      patchPreArrivalTask(session!, args.taskId, {
+        action: args.action,
+        waivedReason: args.action === "WAIVE" ? waiveReasons[args.taskId]?.trim() || undefined : undefined,
+      }),
+    onSuccess: (_d, args) => {
+      toast.success(args.action === "COMPLETE" ? "Task completed" : "Task waived");
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+  });
+
+  // The four front-desk prep tasks, in the fixed display order above.
+  const handoffTasks = HANDOFF_TASKS.map((h) => ({
+    ...h,
+    task: (entry.preArrivalTasks ?? []).find((t) => t.taskType === h.type) ?? null,
+  }));
 
   const s4Groups: RailGroup[] = [
     { key: "confirm", label: "On freeze & confirm", items: STAGE_ACTIONS.S4.confirm },
@@ -132,10 +165,9 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
           </div>
         )}
 
-        {/* If the proforma went out, the guest's answer must be on record before the freeze
-            (backend p40 gate, 2026-07-31). Capturing it here spares the operator reopening
-            Set up just for that; when nothing was dispatched the block says so and gates nothing. */}
-        {!confirmed && <CommunicationAcceptanceBlock entryId={entry.id} commType="PROFORMA_INVOICE" />}
+        {/* The proforma answer capture lives on Set up ONLY (2026-08-01, operator request —
+            it was duplicated here). Set up stays editable until the freeze, so the p40 gate's
+            checklist item points the operator back there when the answer is still missing. */}
 
         {/* Multi-booking overlap acknowledgement (FOM+) */}
         {!confirmed && elevated && (
@@ -187,6 +219,68 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
               <Check style={{ width: 14, height: 14 }} />
               Verify conference
             </button>
+          </div>
+        )}
+
+        {/* Handoff to front desk — kept at the BOTTOM of S4 (2026-08-02, operator request).
+            The front-desk prep subset of the pre-arrival tasks, workable as soon as the
+            booking is frozen. Same records as the Arrival step's task list — whichever step
+            completes one, the other shows it done. */}
+        {confirmed && (
+          <div className="block">
+            <BlockH>
+              <ListChecks style={{ width: 13, height: 13 }} />
+              Handoff to front desk
+            </BlockH>
+            <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0 }}>
+              What the front desk needs squared away before this guest arrives. These can be worked
+              here or on the Arrival step — it&rsquo;s the same list.
+            </p>
+            {handoffTasks.every((h) => !h.task) ? (
+              <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+                Tasks are seeded at confirmation — refresh if they haven&rsquo;t appeared yet. (Bookings
+                confirmed before this feature get theirs when the arrival window is activated.)
+              </p>
+            ) : (
+              handoffTasks
+                .filter((h) => h.task)
+                .map(({ label, task }) => (
+                  <div key={task!.id} style={{ borderBottom: "1px dashed var(--line)", padding: "8px 0" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
+                      <span className={`tag ${task!.status === "PENDING" ? "warn" : ""}`}>{task!.status}</span>
+                    </div>
+                    {task!.status === "PENDING" && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          disabled={handoffTaskM.isPending}
+                          onClick={() => handoffTaskM.mutate({ taskId: task!.id, action: "COMPLETE" })}
+                        >
+                          Complete
+                        </button>
+                        <input
+                          className="dinput"
+                          style={{ flex: 1, minWidth: 140 }}
+                          placeholder="Waive reason"
+                          value={waiveReasons[task!.id] ?? ""}
+                          onChange={(e) => setWaiveReasons((prev) => ({ ...prev, [task!.id]: e.target.value }))}
+                        />
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          disabled={handoffTaskM.isPending || !(waiveReasons[task!.id] ?? "").trim()}
+                          onClick={() => handoffTaskM.mutate({ taskId: task!.id, action: "WAIVE" })}
+                        >
+                          Waive
+                        </button>
+                      </div>
+                    )}
+                    {task!.status === "WAIVED" && task!.waivedReason ? (
+                      <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "5px 0 0" }}>Waived — {task!.waivedReason}</p>
+                    ) : null}
+                  </div>
+                ))
+            )}
           </div>
         )}
       </div>

@@ -13,7 +13,9 @@ export async function computeReEntryConsequences(
   const consequences: string[] = [];
 
   if (input.fromStage === Stage.S3 && input.toStage === Stage.S2) {
-    consequences.push("HOLD_RETAINED", "FOLIO_CONTINUES", "INVOICES_NOT_SUPERSEDED");
+    // HOLD_RELEASED since 2026-08-02 (operator ruling — was HOLD_RETAINED): a new segment
+    // places its own commitments; the sealed segment's hold must not carry forward.
+    consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_NOT_SUPERSEDED");
   }
   if (input.fromStage === Stage.S3 && input.toStage === Stage.S1) {
     consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_SUPERSEDED", "CANCEL_W22_W34_TIMERS");

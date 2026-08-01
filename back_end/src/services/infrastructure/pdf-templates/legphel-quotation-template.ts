@@ -49,6 +49,15 @@ export type LegphelQuotationInput = {
   /** "20 Oct — 22 Oct 2026 · 2 nights" */
   stay: string;
   lines: LegphelQuotationLine[];
+  /**
+   * Optional discount row (2026-08-02): the table shows ORIGINAL (pre-discount) prices and
+   * this row carries the deduction — label "Discount 10%", value "− 340.00". (Legacy
+   * discounted quotes without a stored pre-discount snapshot pass a rate-movement note
+   * instead, e.g. "1,700.00 → 1,530.00 / room / night", with discounted rows.) Rendered
+   * above Net value; omitted when no discount applied.
+   */
+  discountLabel?: string | null;
+  discountValue?: string | null;
   netValue: string;
   /** Label carries the rate, e.g. "Service charge 10%". */
   serviceChargeLabel: string;
@@ -90,6 +99,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
       ],
       input.lines.map((l) => [l.description, l.nights, l.ratePerNight, l.amount]),
     ),
+    input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
     row("Net value", input.netValue),
     row(input.serviceChargeLabel, input.serviceCharge),
     // The reference annotates GST as "(expected)" on pre-stay documents — no supply has happened

@@ -2,6 +2,8 @@ import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../lib/errors.js";
 import { scheduleS2StageDwellWarningMonitor } from "../lib/schedule-s2-dwell-warning-monitor.js";
+import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
+import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pdf-service.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
 import { computeReEntryConsequences } from "../engines/re-entry-consequence-engine.js";
@@ -20,9 +22,25 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
   const now = new Date();
   const nextSegmentNumber = Number(existingEntry.segmentNumber ?? 1) + 1;
 
+  // Prior-segment reply windows are moot in the new segment (2026-08-02, segment-scoped
+  // acknowledgement) — cancel before the tx, same pattern as runBackflow.
+  await cancelEntryTimersByCode(prisma, {
+    entryId,
+    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22"],
+    cancelledBy: actor.actorId,
+    cancelledReason: "REENTRY_S3_TO_S2",
+  });
+
   const updatedEntry = await prisma.$transaction(async (tx) => {
     await computeReEntryConsequences(tx as any, { entryId, fromStage: Stage.S3, toStage: Stage.S2, reason: input?.reason ?? "S3_TO_S2", actorId: actor.actorId });
     await tx.segment.update({ where: { id: currentSeg.id }, data: { sealedAt: now, sealedBy: actor.actorId, notes: "REENTRY_S3_TO_S2" } });
+
+    // Hold released on S3→S2 too (2026-08-02 operator ruling — was retained): a re-entry opens
+    // a NEW segment and each segment places its own commitments, so a sealed segment's hold
+    // must not surface as the new segment's. The room re-opens to other bookings while the
+    // quote is renegotiated; re-placing the hold at S3 re-runs the date-conflict checks.
+    await s3HoldService.releaseOnReEntry(tx as any, entryId, actor as any, "REENTRY_S3_TO_S2");
+
     await tx.segment.create({ data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S2, startedAt: now, createdBy: actor.actorId, notes: input?.reason ?? "REENTRY_S3_TO_S2" } });
 
     const s3Dwell = await tx.stageDwellRecord.findFirst({
@@ -44,7 +62,7 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
 
     await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S2, segmentNumber: nextSegmentNumber, version: { increment: 1 }, updatedAt: now } });
     await tx.traceEvent.create({
-      data: { eventType: "ENTRY.REENTRY_S3_TO_S2", actorId: actor.actorId, actorLevel: actor.actorLevel, entityType: "Entry", entityId: entryId, operation: "TRANSITION", timestamp: now, stageContext: Stage.S3, entryId, payload: { entryId, toStage: "S2", segmentNumber: nextSegmentNumber, holdRetained: true }, createdBy: actor.actorId },
+      data: { eventType: "ENTRY.REENTRY_S3_TO_S2", actorId: actor.actorId, actorLevel: actor.actorLevel, entityType: "Entry", entityId: entryId, operation: "TRANSITION", timestamp: now, stageContext: Stage.S3, entryId, payload: { entryId, toStage: "S2", segmentNumber: nextSegmentNumber, holdReleased: true }, createdBy: actor.actorId },
     });
     return tx.entry.findUniqueOrThrow({ where: { id: entryId } });
   });
@@ -91,6 +109,19 @@ export async function initiateS3ToS1Backflow(prisma: PrismaClient, entryId: stri
   if (!currentSeg) throw new ValidationError("Entry has no segment");
   const now = new Date();
   const nextSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;
+
+  // Prior-segment reply windows are moot in the new segment (2026-08-02) — see S3→S2 above.
+  await cancelEntryTimersByCode(prisma, {
+    entryId,
+    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22"],
+    cancelledBy: actor.actorId,
+    cancelledReason: "REENTRY_S3_TO_S1",
+  });
+
+  // The re-entry supersedes every pending proforma below — freeze the never-rendered ones
+  // FIRST so their stored PDFs retain this segment's figures (2026-08-02 operator ruling:
+  // superseded versions must keep the price that was on the table, not recompose later data).
+  await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId);
 
   return prisma.$transaction(async (tx) => {
     await computeReEntryConsequences(tx as any, { entryId, fromStage: Stage.S3, toStage: Stage.S1, reason: input?.reason ?? "S3_TO_S1", actorId: actor.actorId });

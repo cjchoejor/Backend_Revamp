@@ -34,6 +34,7 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
 import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -111,12 +112,22 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   // …and once the proforma actually went OUT, the guest's answer must be on record before the
   // freeze (2026-07-31 operator ruling — narrows the 2026-07-28 "evidence, never a gate" rule for
   // this one boundary). Latest dispatch decides: a re-issued proforma re-opens the question.
+  // Segment-scoped (2026-08-02): only dispatches from the CURRENT segment count — a prior
+  // segment's bill (and its answer, or lack of one) belongs to a sealed pass and must neither
+  // satisfy nor block this segment's freeze. CommunicationRecord carries no segmentId, so the
+  // scope is the segment's time window, same convention as segment-history.
+  const currentSegmentForComms = await prisma.segment.findFirst({
+    where: { entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
   const latestProformaComm = await prisma.communicationRecord.findFirst({
     where: {
       entryId,
       commType: CommunicationType.PROFORMA_INVOICE,
       direction: "OUTBOUND",
       sendStatus: "DISPATCHED",
+      ...(currentSegmentForComms?.startedAt ? { createdAt: { gte: currentSegmentForComms.startedAt } } : {}),
     },
     orderBy: { createdAt: "desc" },
     select: { acknowledgementStatus: true },
@@ -315,6 +326,19 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   });
 
   await scheduleS4StageDwellWarningMonitor(prisma, entryId, actorId);
+
+  // Handoff-to-front-desk prep (2026-08-02, operator request): seed the pre-arrival task set
+  // at confirmation so the S4 desk can already work the front-desk handoff items (payment
+  // reconciliation, special-request fulfilment, late-arrival meal coordination, site visit)
+  // before activating the arrival window. Idempotent (`@@unique(entryId, taskType)` +
+  // skipDuplicates), so the S4→S5 activation's lazy init simply finds them present.
+  // Best-effort: a seeding hiccup must not fail a committed confirmation — the S5 activation
+  // path self-heals (task count 0 → initialise).
+  try {
+    await initialisePreArrivalTasks(prisma, entryId, actorId);
+  } catch {
+    /* S5 activation lazy init covers it */
+  }
 
   // Phase 2 — outbound confirmation email. Runs AFTER the transaction commits so an SMTP
   // failure cannot roll back the reservation. The send is best-effort; a failure is logged

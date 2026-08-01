@@ -117,9 +117,11 @@ export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actor
     throw new ValidationError("S8→S2 re-entry requires folio in LIVE state (settlement not yet completed)");
   }
 
+  // W22 too (2026-08-02): the re-entry opens a new segment, and a prior segment's reply
+  // windows (quote / proforma / voucher / pre-arrival) are moot there.
   await cancelEntryTimersByCode(prisma, {
     entryId,
-    timerCodes: ["CHECKOUT_TIME_W26"],
+    timerCodes: ["CHECKOUT_TIME_W26", "ACKNOWLEDGEMENT_WINDOW_W22"],
     cancelledBy: actorId,
     cancelledReason: "REENTRY_S8_TO_S2",
   });

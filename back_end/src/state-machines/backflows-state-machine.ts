@@ -30,6 +30,8 @@ import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
+import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pdf-service.js";
+import { generateOrLoadQuotationPdf } from "../services/domain/quotation-pdf-service.js";
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import {
@@ -122,14 +124,18 @@ async function runBackflow(
 
   // Cancel pg-boss jobs BEFORE the tx (side-effect-free to DB retry) so pre-tx failure doesn't
   // leave orphan cancelled rows. Idempotent per code.
-  if (input.cancelTimerCodes?.length) {
-    await cancelEntryTimersByCode(prisma, {
-      entryId: entry.id,
-      timerCodes: input.cancelTimerCodes,
-      cancelledBy: input.actor.actorId,
-      cancelledReason: `BACKFLOW_${input.modeKey}_${input.fromStage}_TO_${input.toStage}`,
-    });
-  }
+  // ACKNOWLEDGEMENT_WINDOW_W22 is cancelled on EVERY backflow (2026-08-02): each backflow opens
+  // a new segment, and a prior segment's reply windows (quote / proforma / voucher /
+  // pre-arrival) are moot there — segment-scoped acknowledgement means they no longer gate or
+  // inform anything, and a stale voucher countdown was surfacing on the desk at S3. Late
+  // answers can still be captured (p52 allows it); only the ticking window dies.
+  const timerCodesToCancel = Array.from(new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22"]));
+  await cancelEntryTimersByCode(prisma, {
+    entryId: entry.id,
+    timerCodes: timerCodesToCancel,
+    cancelledBy: input.actor.actorId,
+    cancelledReason: `BACKFLOW_${input.modeKey}_${input.fromStage}_TO_${input.toStage}`,
+  });
 
   const now = new Date();
   const nextSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;
@@ -358,6 +364,9 @@ export async function backflowS4ToS1(
 ) {
   enforceS4ToS1BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // The hook supersedes pending proformas — freeze the never-rendered ones first (pre-tx)
+  // so their stored PDFs retain this segment's figures (2026-08-02 operator ruling).
+  await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId);
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S4,
@@ -396,6 +405,19 @@ export async function backflowS4ToS2(
 ) {
   enforceS4ToS2BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // The hook supersedes the ACCEPTED quotation — freeze a never-rendered one first so its
+  // stored PDF retains the accepted figures (2026-08-02 operator ruling).
+  const acceptedQuotes = await prisma.quotation.findMany({
+    where: { entryId, state: "ACCEPTED", pdfStorageKey: null },
+    select: { id: true },
+  });
+  for (const q of acceptedQuotes) {
+    try {
+      await generateOrLoadQuotationPdf(prisma, q.id, actor.actorId);
+    } catch {
+      /* degrade to recomposition for this one */
+    }
+  }
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S4,
@@ -454,6 +476,9 @@ export async function backflowS5ToS1(
 ) {
   enforceS5ToS1BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // The hook supersedes pending proformas — freeze the never-rendered ones first (pre-tx)
+  // so their stored PDFs retain this segment's figures (2026-08-02 operator ruling).
+  await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId);
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S5,

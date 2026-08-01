@@ -14,9 +14,13 @@
  *   - InvoiceLine snapshot.
  *   - renderInputSnapshot on the Invoice row for cold re-render decades later.
  *   - `INVOICE.PDF_GENERATED` trace event with the SHA-256 checksum.
+ *
+ * The PROFORMA document COMPOSITION is factored into `buildProformaDocRender` so the desk's
+ * inline preview (`renderInvoicePreviewHtml`, 2026-08-01) shows the exact same document
+ * WITHOUT rendering a PDF, writing storage, or snapshotting InvoiceLine rows.
  */
 import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
-import { NotFoundError } from "../../lib/errors.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import {
   extractPrimaryPhone,
@@ -30,11 +34,13 @@ import { renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legph
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { evaluateAdvancePaymentCondition, resolveOperatorAdvanceRequirement } from "./s3-payment-service.js";
+import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 
 type QuotationTerms = {
   roomCount?: number;
+  roomTypeId?: string;
   effectiveRate?: string | number;
   currency?: string;
   pricingBreakdown?: { nightlyRate?: number | string; nights?: number; roomCount?: number };
@@ -60,11 +66,22 @@ function filenameFor(invoiceType: InvoiceType, invoiceRef: string): string {
   return `${invoiceRef}-${label}.pdf`;
 }
 
-export async function generateOrLoadInvoicePdf(
-  prisma: PrismaClient,
-  invoiceId: string,
-  actorId: string,
-): Promise<InvoicePdfArtifact> {
+type LoadedInvoice = Prisma.InvoiceGetPayload<{
+  include: {
+    folio: { include: { lines: true; payments: true } };
+    entry: {
+      include: {
+        guestProfile: true;
+        reservation: true;
+        inquiry: { include: { travelAgent: true; corporateAccount: true } };
+        quotations: true;
+        segments: true;
+      };
+    };
+  };
+}>;
+
+async function loadInvoiceForRender(prisma: PrismaClient, invoiceId: string): Promise<LoadedInvoice> {
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: {
@@ -74,12 +91,348 @@ export async function generateOrLoadInvoicePdf(
           guestProfile: true,
           reservation: true,
           inquiry: { include: { travelAgent: true, corporateAccount: true } },
-          quotations: { where: { state: "ACCEPTED" }, orderBy: { versionNumber: "desc" }, take: 1 },
+          // ALL quotations, not just ACCEPTED (fixed 2026-08-01): since the generate-vs-send
+          // rule, a quote is often never formally accepted — the OPERATIVE quotation (accepted
+          // → sent → draft, current segment) is the commercial basis, same as the S2→S3 gate.
+          // Filtering to ACCEPTED here left `terms` null and printed a proforma with 0.00 in
+          // every money row except the advance.
+          quotations: { orderBy: { versionNumber: "desc" } },
+          segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
         },
       },
     },
   });
   if (!inv) throw new NotFoundError("Invoice");
+  return inv as LoadedInvoice;
+}
+
+/** Shared derivations both branches (and the proforma preview) start from. */
+function invoicePrelude(inv: LoadedInvoice) {
+  // The commercial basis: the operative quotation of the current segment (matches
+  // resolveOperativeQuotation everywhere else), falling back to the newest ACCEPTED, then the
+  // newest of any state — the document should show the best terms on file, not blanks.
+  const segmentId = inv.entry.segments?.[0]?.id ?? null;
+  const operative = segmentId ? resolveOperativeQuotation(inv.entry.quotations, segmentId) : null;
+  const quotation =
+    operative ?? inv.entry.quotations.find((q) => q.state === "ACCEPTED") ?? inv.entry.quotations[0] ?? null;
+  const terms = (quotation?.commercialTerms as QuotationTerms) ?? null;
+
+  const checkIn = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? new Date();
+  const rawCheckOut = inv.entry.reservation?.frozenCheckOutDate ?? inv.entry.checkOutDate ?? null;
+  // Nights: the priced figure when the quote carries one, else the real stay length —
+  // previously a missing terms value silently collapsed a 3-night stay to "1 night".
+  const termNights = Number(terms?.pricingBreakdown?.nights ?? NaN);
+  const dateNights = rawCheckOut
+    ? Math.max(1, Math.round((rawCheckOut.getTime() - checkIn.getTime()) / 86_400_000))
+    : NaN;
+  const nights = Math.max(1, Number.isFinite(termNights) ? termNights : Number.isFinite(dateNights) ? dateNights : 1);
+  const checkOut = rawCheckOut ?? new Date(checkIn.getTime() + nights * 86_400_000);
+
+  const roomCount = Math.max(
+    1,
+    Number(terms?.roomCount ?? terms?.pricingBreakdown?.roomCount ?? inv.entry.numberOfRooms ?? 1),
+  );
+  const nightlyRate = Number(terms?.pricingBreakdown?.nightlyRate ?? terms?.effectiveRate ?? 0);
+
+  const guest = inv.entry.guestProfile;
+  const guestName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || "Guest";
+  const adultCount = inv.entry.adultCount ?? Number(inv.entry.guestCount ?? 1) ?? 1;
+  const childCount = inv.entry.childCount ?? 0;
+  // "3 adults" / "2 adults, 1 child" — the reference never prints ", 0 children".
+  const occupantsString =
+    `${adultCount} adult${adultCount === 1 ? "" : "s"}` +
+    (childCount > 0 ? `, ${childCount} child${childCount === 1 ? "" : "ren"}` : "");
+  const mealPlanCode = String(terms?.mealPlan ?? "").trim();
+  const mealPlanDisplay = mealPlanCode ? `${adultCount + childCount} ${mealPlanCode}` : "";
+  const extraBeds = terms?.extraBeds != null && String(terms.extraBeds).trim() && String(terms.extraBeds) !== "0" ? String(terms.extraBeds) : "None";
+
+  return { terms, nights, roomCount, nightlyRate, guest, guestName, adultCount, childCount, occupantsString, mealPlanDisplay, extraBeds, checkIn, checkOut };
+}
+
+type ProformaPrintLine = {
+  date: Date;
+  roomNo?: string | null;
+  occupants: string;
+  mealPlan: string | null;
+  extraBeds: string | null;
+  amount: string | number;
+};
+
+/**
+ * Compose the A2 house-format proforma from the invoice's CURRENT data. Pure read — no
+ * writes, no storage. Both the stored-PDF path and the desk's live preview run through
+ * here, so the two can never disagree.
+ *
+ * Advance semantics (2026-08-01, per the A2 reference — "the hero is the advance"):
+ *   - Required = the desk's per-booking requirement (`Folio.advanceRequiredAmount`, flat or
+ *     percent-resolved) when set; else the configured `advancePayment.thresholds` evaluation.
+ *   - "Advance received" row appears once the guest has paid something in.
+ *   - "Advance due now" = required − received (floor 0); with no requirement resolvable it
+ *     falls back to the full remaining balance.
+ *   - "Balance at checkout" = total − received − advance due now (floor 0).
+ */
+async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) {
+  const hotel = await loadHotelProfileForRender(prisma);
+  const p = invoicePrelude(inv);
+
+  // Per-room composition path (Phase D, 2026-07-27). When frozenCommercialTerms carries
+  // compositions, render one row per room. Falls back to legacy per-night rendering when
+  // no composition (older bookings + non-composition callers).
+  const compositionPerRoom = (p.terms as unknown as {
+    compositionTotals?: {
+      perRoom?: Array<{ roomId: string; roomNumber: string | null; total: number }>;
+    };
+    roomCompositions?: Array<any>;
+  })?.compositionTotals?.perRoom;
+
+  // Per-row Amount (Nu.) on Proforma is tax-INCLUSIVE — matches the Quotation convention.
+  const perNightBreakdown = await computeStayCharges(prisma, p.nightlyRate, 1, p.roomCount);
+  const perNightAmount = perNightBreakdown.total;
+  // Full-stay breakdown for the legacy (non-composition) path — feeds the Total and the
+  // Net/Service/GST decomposition, which previously printed 0.00 whenever compositionTotals
+  // was absent.
+  const stayCharges = await computeStayCharges(prisma, p.nightlyRate, p.nights, p.roomCount);
+
+  const linesForTemplate: ProformaPrintLine[] = [];
+  let totalAmount = 0;
+  if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
+    const inputsByRoomId = new Map(
+      ((p.terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
+    );
+    for (const r of compositionPerRoom) {
+      const raw = inputsByRoomId.get(r.roomId) as any;
+      const adults = raw?.adultCount ?? 0;
+      const cnb = (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
+      const rowOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
+      const planParts: string[] = [];
+      if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);
+      if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAP+L`);
+      if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAP+D`);
+      if (raw?.mealPlanApCount) planParts.push(`${raw.mealPlanApCount} AP`);
+      if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
+      const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
+      linesForTemplate.push({
+        date: p.checkIn,
+        roomNo: r.roomNumber ?? r.roomId.slice(0, 6),
+        occupants: rowOccupants,
+        mealPlan: planParts.length > 0 ? planParts.join(" · ") : "EP (room only)",
+        extraBeds: eb,
+        amount: r.total,
+      });
+      totalAmount += Number(r.total);
+    }
+  } else {
+    // Legacy per-night rendering.
+    for (let i = 0; i < p.nights; i++) {
+      const date = new Date(p.checkIn.getTime() + i * 86_400_000);
+      linesForTemplate.push({
+        date,
+        occupants: p.occupantsString,
+        mealPlan: p.mealPlanDisplay || null,
+        extraBeds: p.extraBeds,
+        amount: perNightAmount,
+      });
+    }
+    // Decimal-safe full-stay total (was perNightAmount × nights in float).
+    totalAmount = stayCharges.total;
+  }
+
+  // The reference's single rate line — "Deluxe · 1 room · 2 adults · MAP · per night". Room
+  // type resolved from the quotation's terms; meal plans summarised across the composition
+  // ("2 CP · 1 AP") or the legacy booking-wide plan.
+  let roomTypeName: string | null = null;
+  if (p.terms?.roomTypeId) {
+    const rt = await prisma.roomType.findUnique({ where: { id: p.terms.roomTypeId }, select: { name: true } });
+    roomTypeName = rt?.name ?? null;
+  }
+  const comps: any[] = ((p.terms as any)?.roomCompositions ?? []) as any[];
+  const planAgg: Array<[string, number]> = [
+    ["CP", comps.reduce((s, c) => s + (c?.mealPlanCpCount ?? 0), 0)],
+    ["MAP+L", comps.reduce((s, c) => s + (c?.mealPlanMaplCount ?? 0), 0)],
+    ["MAP+D", comps.reduce((s, c) => s + (c?.mealPlanMapdCount ?? 0), 0)],
+    ["AP", comps.reduce((s, c) => s + (c?.mealPlanApCount ?? 0), 0)],
+    ["Others", comps.reduce((s, c) => s + (c?.mealPlanOthersCount ?? 0), 0)],
+  ];
+  const planSummary =
+    comps.length > 0
+      ? planAgg.filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(" · ") || "EP (room only)"
+      : p.mealPlanDisplay || null;
+  const rateLabel = [
+    roomTypeName,
+    `${p.roomCount} room${p.roomCount === 1 ? "" : "s"}`,
+    p.occupantsString,
+    planSummary,
+    "per night",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  // Per-night figure consistent with the printed total (composition totals are stay-wide).
+  const rateValue = Number((totalAmount / Math.max(1, p.nights)).toFixed(2));
+
+  // === Advance figures ===
+  const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
+  const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
+
+  // The requirement: operator-pinned (Folio.advanceRequiredAmount) wins; else the configured
+  // thresholds evaluation; else null (no requirement resolvable). The pin is SEGMENT-SCOPED
+  // (2026-08-02, shared resolver): one set in a prior segment doesn't survive a re-entry, so
+  // a new segment's proforma prints the configured default, not the old segment's figure.
+  const currentSegmentForAdvance = await prisma.segment.findFirst({
+    where: { entryId: inv.entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
+  const pinnedAdvance = inv.folio
+    ? resolveOperatorAdvanceRequirement(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
+    : null;
+  let requiredAdvance: number | null = pinnedAdvance != null ? Number(toDecimal(pinnedAdvance).toFixed(2)) : null;
+  let advanceDueQualifier: string | null = null;
+  const basis = (inv.folio?.advanceRequiredBasis ?? null) as { mode?: string; percent?: number } | null;
+  if (requiredAdvance != null && basis?.mode === "PERCENT" && typeof basis.percent === "number") {
+    advanceDueQualifier = `(${basis.percent}% of quote)`;
+  }
+  if (requiredAdvance == null && inv.folio) {
+    try {
+      const ev = await evaluateAdvancePaymentCondition(prisma, { entryId: inv.entryId, folioId: inv.folio.id });
+      requiredAdvance = ev.requiredAmount > 0 ? ev.requiredAmount : null;
+    } catch {
+      /* advancePayment.thresholds not configured — fall through to full-balance semantics */
+    }
+  }
+
+  const advanceDueNow = Math.max(0, Number(((requiredAdvance ?? totalAmount) - advanceReceived).toFixed(2)));
+  const totalPayable = Number((totalAmount - advanceReceived).toFixed(2));
+  const balanceAtCheckout = Math.max(0, Number((totalAmount - advanceReceived - advanceDueNow).toFixed(2)));
+
+  // A2 Proforma Invoice, house format (docs/bills). The Net / Service / GST figures decompose
+  // the tax-inclusive total; they are not added to it.
+  const ctP =
+    (p.terms as unknown as {
+      compositionTotals?: {
+        subtotal?: string | number;
+        serviceCharge?: string | number;
+        gst?: string | number;
+      };
+    })?.compositionTotals ?? null;
+  const invoiceRef = inv.invoiceNumber ?? inv.id;
+  const docDate = inv.dispatchedAt ?? inv.issuedAt ?? new Date();
+
+  // The billed party — the reference's "To" is the agency/corporate when one books
+  // ("To: Bhutan Online Booking Travel / For guest: Dr Lakshmi Menon"), else the guest.
+  const billedParty =
+    inv.entry.inquiry?.travelAgent?.displayName ?? inv.entry.inquiry?.corporateAccount?.displayName ?? null;
+
+  const html = renderLegphelProformaHtml({
+    masthead: mastheadFromHotelProfile(hotel),
+    proformaNo: invoiceRef,
+    bookingRef: inv.entryId,
+    date: formatDocDate(docDate),
+    // The advance deadline lives on the payment-condition evaluation, not the invoice row, so it
+    // is left off until that value is threaded through rather than printed as a guess.
+    advanceDueBy: null,
+    to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
+    forGuest: p.guestName,
+    stayLabel: "Stay",
+    stay: formatStayRange(p.checkIn, p.checkOut, p.nights),
+    rateLabel,
+    rateValue: formatMoney(rateValue),
+    totalInclusive: formatMoney(totalAmount),
+    // Composition quotes decompose from their own priced totals; legacy quotes from the
+    // stay-charge engine — never 0.00 placeholders.
+    decompositionNet: formatMoney(ctP?.subtotal ?? stayCharges.subTotal),
+    decompositionService: formatMoney(ctP?.serviceCharge ?? stayCharges.serviceCharge),
+    decompositionGst: formatMoney(ctP?.gst ?? stayCharges.gst),
+    advanceReceived: advanceReceived > 0 ? formatMoney(advanceReceived) : null,
+    advanceDueQualifier,
+    advanceDueNow: formatMoney(advanceDueNow),
+    balanceAtCheckout: formatMoney(balanceAtCheckout),
+    bank: {
+      bankName: null,
+      accountName: hotel.accountNumber ? `${hotel.hotelName} · ${hotel.accountNumber}` : null,
+      accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
+    },
+    closingNote:
+      "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
+      "a confirmation voucher follows. Cancellation terms as disclosed for this booking.",
+    tariffVersion: "T1.0",
+  });
+
+  return {
+    html,
+    linesForTemplate,
+    perNightAmount,
+    totalAmount,
+    advanceReceived,
+    requiredAdvance,
+    advanceDueNow,
+    balanceAtCheckout,
+    totalPayable,
+    invoiceRef,
+    hotel,
+    prelude: p,
+  };
+}
+
+/**
+ * Desk inline preview (2026-08-01): the proforma document as HTML, composed fresh from the
+ * invoice's CURRENT data (folio payments, advance requirement, accepted quote terms). No PDF
+ * render, no storage write, no InvoiceLine snapshot, no trace — a pure read. The stored PDF
+ * (when later rendered) runs the same composition.
+ */
+export async function renderInvoicePreviewHtml(
+  prisma: PrismaClient,
+  invoiceId: string,
+): Promise<{ html: string; invoiceRef: string }> {
+  const inv = await loadInvoiceForRender(prisma, invoiceId);
+  if (inv.invoiceType !== InvoiceType.PROFORMA) {
+    throw new ValidationError("Inline preview is available for proforma invoices only");
+  }
+  const m = await buildProformaDocRender(prisma, inv);
+  return { html: m.html, invoiceRef: m.invoiceRef };
+}
+
+/**
+ * Freeze every live, never-rendered proforma for an entry by rendering its PDF NOW —
+ * called just BEFORE something supersedes them (advance-requirement change, re-entry).
+ *
+ * Why (2026-08-02, operator ruling): a superseded proforma without a stored artifact can
+ * only be shown by RECOMPOSING from current data, so every later requirement change
+ * rewrote what old versions displayed. Rendering the artifact at supersession time freezes
+ * the figures that were actually on the table when that version was live; the desk's
+ * frozen-PDF view then serves it unchanged forever (write-once storage).
+ *
+ * Best-effort per invoice: a render failure falls back to the existing caveat-labelled
+ * reconstruction rather than blocking the operation that triggered the supersession.
+ */
+export async function freezeUnrenderedProformasForEntry(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+): Promise<void> {
+  const live = await prisma.invoice.findMany({
+    where: {
+      entryId,
+      invoiceType: InvoiceType.PROFORMA,
+      state: { not: "SUPERSEDED" },
+      pdfStorageKey: null,
+    },
+    select: { id: true },
+  });
+  for (const inv of live) {
+    try {
+      await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+    } catch {
+      /* degrade to the caveat-labelled reconstruction for this one */
+    }
+  }
+}
+
+export async function generateOrLoadInvoicePdf(
+  prisma: PrismaClient,
+  invoiceId: string,
+  actorId: string,
+): Promise<InvoicePdfArtifact> {
+  const inv = await loadInvoiceForRender(prisma, invoiceId);
 
   // Idempotency — write-once means the stored file wins.
   if (inv.pdfStorageKey && inv.pdfChecksum) {
@@ -92,28 +445,6 @@ export async function generateOrLoadInvoicePdf(
     };
   }
 
-  const hotel = await loadHotelProfileForRender(prisma);
-  const acceptedQ = inv.entry.quotations[0];
-  const terms = (acceptedQ?.commercialTerms as QuotationTerms) ?? null;
-  const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
-  const roomCount = Math.max(
-    1,
-    Number(terms?.roomCount ?? terms?.pricingBreakdown?.roomCount ?? inv.entry.numberOfRooms ?? 1),
-  );
-  const nightlyRate = Number(terms?.pricingBreakdown?.nightlyRate ?? terms?.effectiveRate ?? 0);
-
-  const guest = inv.entry.guestProfile;
-  const guestName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || "Guest";
-  const adultCount = inv.entry.adultCount ?? Number(inv.entry.guestCount ?? 1) ?? 1;
-  const childCount = inv.entry.childCount ?? 0;
-  const occupantsString = `${adultCount} adult${adultCount === 1 ? "" : "s"}, ${childCount} child${childCount === 1 ? "" : "ren"}`;
-  const mealPlanCode = String(terms?.mealPlan ?? "").trim();
-  const mealPlanDisplay = mealPlanCode ? `${adultCount + childCount} ${mealPlanCode}` : "";
-  const extraBeds = terms?.extraBeds != null && String(terms.extraBeds).trim() && String(terms.extraBeds) !== "0" ? String(terms.extraBeds) : "None";
-
-  const checkIn = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? new Date();
-  const checkOut = inv.entry.reservation?.frozenCheckOutDate ?? inv.entry.checkOutDate ?? new Date(checkIn.getTime() + nights * 86_400_000);
-
   const invoiceRef = inv.invoiceNumber ?? inv.id;
   const now = new Date();
 
@@ -121,127 +452,15 @@ export async function generateOrLoadInvoicePdf(
   // PROFORMA branch — same template as quotation.
   // ================================================================
   if (inv.invoiceType === InvoiceType.PROFORMA) {
-    // Per-room composition path (Phase D, 2026-07-27). When frozenCommercialTerms carries
-    // compositions, render one row per room. Falls back to legacy per-night rendering when
-    // no composition (older bookings + non-composition callers).
-    const compositionPerRoom = (terms as unknown as {
-      compositionTotals?: {
-        perRoom?: Array<{ roomId: string; roomNumber: string | null; total: number }>;
-      };
-      roomCompositions?: Array<any>;
-    })?.compositionTotals?.perRoom;
+    const m = await buildProformaDocRender(prisma, inv);
 
-    // Per-row Amount (Nu.) on Proforma is tax-INCLUSIVE — matches the Quotation convention.
-    const perNightBreakdown = await computeStayCharges(prisma, nightlyRate, 1, roomCount);
-    const perNightAmount = perNightBreakdown.total;
-    type PrintLine = {
-      date: Date;
-      roomNo?: string | null;
-      occupants: string;
-      mealPlan: string | null;
-      extraBeds: string | null;
-      amount: string | number;
-    };
-    const linesForTemplate: PrintLine[] = [];
-    let totalAmount = 0;
-    if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
-      const inputsByRoomId = new Map(
-        ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
-      );
-      for (const r of compositionPerRoom) {
-        const raw = inputsByRoomId.get(r.roomId) as any;
-        const adults = raw?.adultCount ?? 0;
-        const cnb = (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
-        const rowOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
-        const planParts: string[] = [];
-        if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);
-        if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAPL`);
-        if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAPD`);
-        if (raw?.mealPlanApCount) planParts.push(`${raw.mealPlanApCount} AP`);
-        if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
-        const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
-        linesForTemplate.push({
-          date: checkIn,
-          roomNo: r.roomNumber ?? r.roomId.slice(0, 6),
-          occupants: rowOccupants,
-          mealPlan: planParts.length > 0 ? planParts.join(" · ") : null,
-          extraBeds: eb,
-          amount: r.total,
-        });
-        totalAmount += Number(r.total);
-      }
-    } else {
-      // Legacy per-night rendering.
-      for (let i = 0; i < nights; i++) {
-        const date = new Date(checkIn.getTime() + i * 86_400_000);
-        linesForTemplate.push({
-          date,
-          occupants: occupantsString,
-          mealPlan: mealPlanDisplay || null,
-          extraBeds,
-          amount: perNightAmount,
-        });
-      }
-      totalAmount = perNightAmount * nights;
-    }
-
-    // Advance and FoC pulled from the folio's payments (IN) for a real total-payable calc.
-    const inPayments = (inv.folio?.payments ?? []).filter((p) => p.paymentDirection === "IN");
-    const advanceAmount = inPayments.reduce((s, p) => s + Number(toDecimal(p.amount).toFixed(2)), 0);
-    const focAmount = 0;
-    const totalPayable = totalAmount - advanceAmount - focAmount;
-
-    // A2 Proforma Invoice, house format (docs/bills). The Net / Service / GST figures decompose
-    // the tax-inclusive total; they are not added to it.
-    const ctP =
-      (terms as unknown as {
-        compositionTotals?: {
-          subtotal?: string | number;
-          serviceCharge?: string | number;
-          gst?: string | number;
-        };
-      })?.compositionTotals ?? null;
-    const balanceAtCheckout = totalPayable;
-    const docDate = inv.dispatchedAt ?? inv.issuedAt ?? now;
-
-    const html = renderLegphelProformaHtml({
-      masthead: mastheadFromHotelProfile(hotel),
-      proformaNo: invoiceRef,
-      bookingRef: inv.entryId,
-      date: formatDocDate(docDate),
-      // The advance deadline lives on the payment-condition evaluation, not the invoice row, so it
-      // is left off until that value is threaded through rather than printed as a guess.
-      advanceDueBy: null,
-      to: guest?.email ? `${guestName} · ${guest.email}` : guestName,
-      forGuest: guestName,
-      stayLabel: "Stay",
-      stay: formatStayRange(checkIn, checkOut, nights),
-      rateLabel: [occupantsString, mealPlanDisplay || null, "per night"].filter(Boolean).join(" · "),
-      rateValue: formatMoney(perNightAmount),
-      totalInclusive: formatMoney(totalAmount),
-      decompositionNet: formatMoney(ctP?.subtotal ?? totalAmount),
-      decompositionService: formatMoney(ctP?.serviceCharge ?? 0),
-      decompositionGst: formatMoney(ctP?.gst ?? 0),
-      advanceDueNow: formatMoney(advanceAmount > 0 ? advanceAmount : totalAmount),
-      balanceAtCheckout: formatMoney(balanceAtCheckout),
-      bank: {
-        bankName: null,
-        accountName: hotel.accountNumber ? `${hotel.hotelName} · ${hotel.accountNumber}` : null,
-        accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
-      },
-      closingNote:
-        "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
-        "a confirmation voucher follows. Cancellation terms as disclosed for this booking.",
-      tariffVersion: "T1.0",
-    });
-
-    const bytes = await renderHtmlToPdf(html, { fitToPage: true });
+    const bytes = await renderHtmlToPdf(m.html, { fitToPage: true });
     const checksum = hashSha256(bytes);
     const storageKey = buildStorageKey("proforma-invoice", `${invoiceRef}-v${inv.versionNumber}`, now);
     await writeDocument(storageKey, bytes);
 
     await prisma.$transaction(async (tx) => {
-      const lineData: Prisma.InvoiceLineCreateManyInput[] = linesForTemplate.map((l, i) => ({
+      const lineData: Prisma.InvoiceLineCreateManyInput[] = m.linesForTemplate.map((l, i) => ({
         invoiceId: inv.id,
         lineNumber: i + 1,
         particular: "Room",
@@ -267,27 +486,29 @@ export async function generateOrLoadInvoicePdf(
             documentTitle: "PROFORMA INVOICE",
             invoiceRef,
             versionNumber: inv.versionNumber,
-            checkIn: checkIn.toISOString(),
-            checkOut: checkOut.toISOString(),
-            nights,
-            roomCount,
-            nightlyRate,
-            perNightAmount,
-            totalAmount,
-            advanceAmount,
-            focAmount,
-            totalPayable,
-            primaryGuestName: guestName,
-            occupantsString,
-            mealPlanDisplay,
-            extraBeds,
+            checkIn: m.prelude.checkIn.toISOString(),
+            checkOut: m.prelude.checkOut.toISOString(),
+            nights: m.prelude.nights,
+            roomCount: m.prelude.roomCount,
+            nightlyRate: m.prelude.nightlyRate,
+            perNightAmount: m.perNightAmount,
+            totalAmount: m.totalAmount,
+            advanceAmount: m.advanceReceived,
+            requiredAdvance: m.requiredAdvance,
+            advanceDueNow: m.advanceDueNow,
+            focAmount: 0,
+            totalPayable: m.totalPayable,
+            primaryGuestName: m.prelude.guestName,
+            occupantsString: m.prelude.occupantsString,
+            mealPlanDisplay: m.prelude.mealPlanDisplay,
+            extraBeds: m.prelude.extraBeds,
             hotel: {
-              hotelName: hotel.hotelName,
-              registeredAddress: hotel.registeredAddress,
-              primaryEmail: hotel.primaryEmail,
-              accountNumber: hotel.accountNumber,
-              tpnNumber: hotel.tpnNumber,
-              gstTpnNumber: hotel.gstTpnNumber,
+              hotelName: m.hotel.hotelName,
+              registeredAddress: m.hotel.registeredAddress,
+              primaryEmail: m.hotel.primaryEmail,
+              accountNumber: m.hotel.accountNumber,
+              tpnNumber: m.hotel.tpnNumber,
+              gstTpnNumber: m.hotel.gstTpnNumber,
             },
           } as any,
         },
@@ -335,8 +556,12 @@ export async function generateOrLoadInvoicePdf(
   // OTHER lines appear on the guest invoice (previously stripped as "room-only" filter).
   // Legacy whole-folio invoices keep the room-only filter for backward compat.
   // ================================================================
-  const gstRate = Number(await requireActiveConfigValue<number>(prisma, "billing.salesTaxRate")) || 0.05;
-  const svcRate = Number(await requireActiveConfigValue<number>(prisma, "billing.serviceChargeRate")) || 0.10;
+  const hotel = await loadHotelProfileForRender(prisma);
+  const { nights, nightlyRate, guest, guestName, adultCount, childCount, checkIn, checkOut } = invoicePrelude(inv);
+  // Same resolver as quotes and charge posting (2026-08-03) — the prior
+  // `requireActiveConfigValue(...) || 0.05` threw when the key was unseeded and silently
+  // overrode a configured 0, so invoices could print rates the folio never charged.
+  const { gstRate, serviceChargeRate: svcRate } = await resolveChargeRates(prisma);
 
   // Two independent filters:
   //   1. Split-billing filter: only lines whose billingModel matches this invoice's bucket.

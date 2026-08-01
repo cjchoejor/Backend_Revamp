@@ -1532,6 +1532,16 @@ model Folio {
   outstandingBalance                   Decimal @default(0) @db.Decimal(15, 2)
   advancePaymentReconciliationComplete Boolean @default(false)
 
+  /// Operator-set advance requirement for THIS booking (2026-08-01). When set it overrides
+  /// the `advancePayment.thresholds` config (and the group boost) in the payment evaluation,
+  /// and prints as "Advance due now" on the proforma. Always stored RESOLVED (a percentage
+  /// is converted server-side against the operative quotation's total at set time).
+  advanceRequiredAmount Decimal? @db.Decimal(15, 2)
+  /// How the requirement was expressed: `{ mode: "AMOUNT" } | { mode: "PERCENT", percent,
+  /// baseTotal, quotationId }` + `{ setBy, setAt }`. Display/audit only — the amount above
+  /// is the operative value.
+  advanceRequiredBasis  Json?
+
   entry                   Entry                          @relation(fields: [entryId], references: [id])
   payments                PaymentRecord[]
   lines                   FolioLine[]
@@ -1752,6 +1762,10 @@ model CreditExtensionCeilingRecord {
   approvedBy    String
   approvedAt    DateTime @default(now())
   reason        String
+  /// Optional expiry (2026-08-01): past this instant the extension no longer satisfies the
+  /// advance-payment condition. Enforced at read time in the payment evaluation — no worker
+  /// needed; an expired extension simply stops counting. Null = no time limit (legacy rows).
+  expiresAt     DateTime?
   createdAt     DateTime @default(now())
 
   @@map("credit_extension_ceiling_records")

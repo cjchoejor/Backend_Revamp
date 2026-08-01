@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Check, FileCheck, Lock, RefreshCw, Shield } from "lucide-react";
+import { Banknote, Check, Eye, EyeOff, FileCheck, Lock, RefreshCw, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -22,8 +22,11 @@ import {
   recordFolioPayment,
   reconcileAdvancePayment,
   schedulePaymentMilestones,
+  setAdvanceRequirement,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
+import { countdownTo } from "@/lib/desk/timers";
+import { listEntryCommunications } from "@/lib/api/entries";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -32,6 +35,7 @@ import type { EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
+import { ProformaPreview } from "./quotation-preview";
 
 const BK = STAGE_ACTIONS.S3;
 
@@ -74,6 +78,57 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const preferredRoomId = optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? null;
   const proformaInvoices = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
+  // Segment labeling for the proforma list (2026-08-01, operator request): after a re-entry the
+  // prior segment's proforma stays listed next to the new one, labeled so old vs current is
+  // unambiguous. Invoices carry no segmentId, so each is attributed to the segment whose
+  // [startedAt, sealedAt) window contains its creation — the same time-windowing the
+  // segment-history service uses server-side.
+  const segments = entry.segments ?? [];
+  const currentSegmentNo = segments[0]?.segmentNumber ?? null;
+  const multiSegment = segments.length > 1;
+  const segmentNoForDate = (iso: string): number | null => {
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return null;
+    const seg = segments.find((s) => {
+      const start = s.startedAt ? new Date(s.startedAt).getTime() : Number.NEGATIVE_INFINITY;
+      const end = s.sealedAt ? new Date(s.sealedAt).getTime() : Number.POSITIVE_INFINITY;
+      return t >= start && t < end;
+    });
+    return seg?.segmentNumber ?? null;
+  };
+  // Operator language mirror of the S2 quote tags: a created proforma IS ready to go — "DRAFT"
+  // is backend state, not desk vocabulary.
+  // Mirrors the backend's `enforceProformaDispatchedBeforeAdvancePayment` (2026-08-01): the
+  // bill goes out first, then the money comes in — the payment form stays locked until then.
+  const proformaDispatchedNow = proformaInvoices.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  // Guest's answer to THIS segment's dispatched proforma — mirrors the backend's
+  // `enforceProformaGuestAnswerRecordedBeforeAdvancePayment` (2026-08-03): once the bill went
+  // out, money can only be logged after the guest's reply is on record. Shares the
+  // ["entry-communications"] cache with the reply block below.
+  const commsForGateQuery = useQuery({
+    queryKey: ["entry-communications", entry.id],
+    queryFn: () => listEntryCommunications(session!, entry.id),
+    enabled: !!session,
+  });
+  const segStartIsoForComms = (entry.segments ?? [])[0]?.startedAt ?? null;
+  const latestProformaComm = (commsForGateQuery.data?.items ?? []).find(
+    (c) =>
+      c.commType === "PROFORMA_INVOICE" &&
+      c.direction === "OUTBOUND" &&
+      c.sendStatus === "DISPATCHED" &&
+      (!segStartIsoForComms || (c.createdAt ?? "") >= segStartIsoForComms),
+  );
+  // Locked while dispatched-but-unanswered; also while the feed is still loading (brief, safe).
+  const paymentLockedForAnswer = proformaDispatchedNow && latestProformaComm?.acknowledgementStatus !== "RECEIVED";
+  // The live issue — newest non-superseded (a changed advance requirement supersedes the sent
+  // one and mints a new version; rows are createdAt-desc so the first live row is the current).
+  const currentProformaId = proformaInvoices.find((i) => i.state !== "SUPERSEDED")?.id ?? null;
+  const invoiceStateLabel = (inv: { state: string; dispatchedAt?: string | null }): string =>
+    inv.dispatchedAt
+      ? "Dispatched"
+      : inv.state === "DRAFT"
+        ? "Ready to send"
+        : inv.state.charAt(0) + inv.state.slice(1).toLowerCase();
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
   const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
@@ -89,8 +144,16 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentNotes, setPaymentNotes] = useState("");
   const [reconcileNote, setReconcileNote] = useState("");
+  // Advance requirement (2026-08-01): the desk pins how much the guest must pay — a flat
+  // amount, or a percentage the BACKEND converts against the quote total (no money math here).
+  const [advReqMode, setAdvReqMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
+  const [advReqValue, setAdvReqValue] = useState("");
   const [creditCeiling, setCreditCeiling] = useState("");
   const [creditReason, setCreditReason] = useState("");
+  // Optional time limit on the credit extension — hours until it stops satisfying the condition.
+  const [creditHours, setCreditHours] = useState("");
+  // Which proforma's inline document preview is open (one at a time).
+  const [proformaPreviewId, setProformaPreviewId] = useState<string | null>(null);
   const [holdJustification, setHoldJustification] = useState("Reservation setup — committed inventory hold");
   // Guest email for the proforma dispatch. Same robust auto-pull as the S2 send field — resolve
   // across the profile chain and fill via an effect so a late-loading profile still populates it.
@@ -116,11 +179,26 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   });
   const paymentStatus = paymentStatusQuery.data;
 
+  // Advance-payment window countdown (backend fact: proforma dispatch → check-in date).
+  // 30s tick keeps the label honest without re-rendering every second.
+  const advanceWindow = paymentStatus?.advanceWindow ?? null;
+  const [advanceNowTick, setAdvanceNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!advanceWindow?.active) return;
+    const t = setInterval(() => setAdvanceNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [advanceWindow?.active]);
+  const advanceCountdown =
+    advanceWindow?.active && advanceWindow.deadline ? countdownTo(advanceWindow.deadline, advanceNowTick) : null;
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+    // The inline proforma preview recomposes from the folio's current payments + advance
+    // requirement — logging a payment or changing the requirement changes the document.
+    void queryClient.invalidateQueries({ queryKey: ["invoice-preview"] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
@@ -160,8 +238,58 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     }, "Advance reconciled"),
   );
   const creditM = useMutation(
-    wrap(() => recordCreditExtension(session!, entry.id, { ceilingAmount: Number(creditCeiling), reason: creditReason.trim() }), "Credit extension approved"),
+    wrap(
+      () =>
+        recordCreditExtension(session!, entry.id, {
+          ceilingAmount: Number(creditCeiling),
+          reason: creditReason.trim(),
+          validForHours: creditHours.trim() !== "" ? Number(creditHours) : null,
+        }),
+      "Credit extension approved",
+    ),
   );
+  const advReqM = useMutation({
+    mutationFn: () => {
+      if (!folio) throw new Error("Create the folio first");
+      const n = Number(advReqValue);
+      if (!Number.isFinite(n) || n <= 0) throw new Error("Enter a positive value");
+      return setAdvanceRequirement(
+        session!,
+        entry.id,
+        advReqMode === "AMOUNT" ? { mode: "AMOUNT", amount: n } : { mode: "PERCENT", percent: n },
+      );
+    },
+    onSuccess: (status) => {
+      if (status.reissuedProforma) {
+        // supersededIds empty = the fresh-mint path (a re-entry had superseded every proforma,
+        // so nothing live existed to supersede — a new one was generated for this segment).
+        toast.success(
+          status.reissuedProforma.supersededIds.length > 0
+            ? `Advance requirement set — ${money(status.requiredAmount)}. The previous proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it.`
+            : `Advance requirement set — ${money(status.requiredAmount)}. A fresh proforma (v${status.reissuedProforma.versionNumber}) was generated for this segment — dispatch it.`,
+        );
+      } else {
+        toast.success(`Advance requirement set — ${money(status.requiredAmount)}`);
+      }
+      setAdvReqValue("");
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Action failed"),
+  });
+  const advReqClearM = useMutation({
+    mutationFn: () => setAdvanceRequirement(session!, entry.id, { mode: "CLEAR" }),
+    onSuccess: (status) => {
+      toast.success(
+        status.reissuedProforma
+          ? status.reissuedProforma.supersededIds.length > 0
+            ? `Requirement cleared — hotel default applies. The previous proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it.`
+            : `Requirement cleared — hotel default applies. A fresh proforma (v${status.reissuedProforma.versionNumber}) was generated for this segment — dispatch it.`
+          : "Requirement cleared — hotel default applies",
+      );
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+  });
   const holdM = useMutation(
     wrap(() => {
       if (!preferredRoomId) throw new Error("No preferred room from Inquiry");
@@ -347,28 +475,214 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 3. Proforma invoice — ready with the folio; emailing it is optional */}
+      {/* 3. What the guest must pay — set FIRST: the proforma below prints exactly these
+          figures as "Advance due now" / "Advance received" (2026-08-01, operator ordering:
+          requirement → proforma → money received). */}
+      <div className="block">
+        <BlockH>
+          <Banknote style={{ width: 13, height: 13 }} />
+          What the guest must pay
+        </BlockH>
+        {paymentStatus && (
+          <div className="fact b-transit" style={{ marginBottom: 6, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
+            {/* "Requested" when the desk pinned a figure for this booking; "min threshold"
+                when it's the hotel's configured default — "required" blurred the two. */}
+            <span>
+              Received {money(paymentStatus.totalReceived, folio?.lines?.[0]?.currency)} ·{" "}
+              {paymentStatus.requirementSource === "OPERATOR" ? "requested" : "min threshold"}{" "}
+              {money(paymentStatus.requiredAmount, folio?.lines?.[0]?.currency)}
+            </span>
+            <span className={`tag ${paymentStatus.satisfied ? "" : "warn"}`}>
+              {paymentStatus.satisfied ? "Satisfied" : `Short ${money(paymentStatus.shortfall)}`}
+            </span>
+          </div>
+        )}
+        {paymentStatus && (
+          <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 11px" }}>
+            {/* When a pin exists, say EXPLICITLY that it lives on this booking alone and the
+                hotel's configured minimum is untouched — a pinned figure was being read as
+                "the minimum threshold changed" (2026-08-03). */}
+            {paymentStatus.requirementSource === "OPERATOR"
+              ? `${
+                  paymentStatus.requirementBasis?.mode === "PERCENT"
+                    ? `Requested for THIS booking only — ${paymentStatus.requirementBasis.percent}% of the quote total (${money(paymentStatus.requirementBasis.baseTotal ?? null)})`
+                    : "Requested for THIS booking only — flat amount"
+                } · the hotel's min threshold is unchanged at ${money(paymentStatus.configuredBaseAmount ?? null)}`
+              : "Requirement from the hotel's default thresholds — set a booking-specific one here"}
+            {paymentStatus.creditExtensionActive && paymentStatus.creditExtensionExpiresAt
+              ? ` · credit extension active until ${paymentStatus.creditExtensionExpiresAt.slice(0, 16).replace("T", " ")}`
+              : paymentStatus.creditExtensionActive
+                ? " · credit extension active (no time limit)"
+                : paymentStatus.creditExtensionExpired
+                  ? " · a credit extension EXPIRED — it no longer counts"
+                  : ""}
+          </p>
+        )}
+        {/* What the guest must pay — flat Nu or % of the quote. The % is converted by the
+            BACKEND against the operative quotation (no money math in the desk); the resolved
+            figure lands in "required" above and prints as "Advance due now" on the proforma. */}
+        <div>
+          <div className="frow">
+            <div className="field">
+              <label>Set as</label>
+              <select value={advReqMode} onChange={(e) => setAdvReqMode(e.target.value as "AMOUNT" | "PERCENT")} disabled={!folio}>
+                <option value="AMOUNT">Flat amount (Nu)</option>
+                <option value="PERCENT">% of quote total</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>{advReqMode === "AMOUNT" ? "Amount (Nu)" : "Percent (1–100)"}</label>
+              <input
+                type="number"
+                min={0.01}
+                max={advReqMode === "PERCENT" ? 100 : undefined}
+                step={advReqMode === "PERCENT" ? "1" : "0.01"}
+                value={advReqValue}
+                onChange={(e) => setAdvReqValue(e.target.value)}
+                disabled={!folio}
+              />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-ghost btn-sm" disabled={!folio || !advReqValue || advReqM.isPending} onClick={() => advReqM.mutate()}>
+              {advReqM.isPending ? "Setting…" : "Set requirement"}
+            </button>
+            {paymentStatus?.requirementSource === "OPERATOR" && (
+              <button className="btn btn-ghost btn-sm" disabled={advReqClearM.isPending} onClick={() => advReqClearM.mutate()}>
+                {advReqClearM.isPending ? "Clearing…" : "Clear — use hotel default"}
+              </button>
+            )}
+          </div>
+          {advReqMode === "PERCENT" && (
+            <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "6px 0 0", lineHeight: 1.5 }}>
+              Converted against the current quote when you set it — if the quote is renegotiated,
+              set the requirement again to track the new total.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* 4. Proforma invoice — reflects the advance figures above; emailing it is optional */}
       <div className="block">
         <BlockH>
           <FileCheck style={{ width: 13, height: 13 }} />
           Proforma invoice
         </BlockH>
         {proformaInvoices.length === 0 ? (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>A proforma draft is created with the folio.</p>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>A proforma invoice is created together with the folio.</p>
         ) : (
           <>
-            {proformaInvoices.map((inv) => (
-              <div key={inv.id} className="fact b-transit" style={{ marginBottom: 9, padding: "6px 11px", fontSize: 12, justifyContent: "space-between", width: "100%" }}>
-                <span className="mono">{inv.id.slice(0, 14)}…</span>
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="tag">{inv.state}</span>
-                  {session && <PdfButton label="Proforma PDF" open={() => openInvoicePdf(session, inv.id)} />}
-                </span>
-              </div>
-            ))}
+            {multiSegment && (
+              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 6px" }}>
+                This booking has been re-worked — proformas from earlier segments stay here for
+                reference; the current segment&rsquo;s proforma is the live one.
+              </p>
+            )}
+            {proformaInvoices.map((inv) => {
+              const segNo = segmentNoForDate(inv.createdAt);
+              const isCurrent = !multiSegment || segNo == null || segNo === currentSegmentNo;
+              const previewOpen = proformaPreviewId === inv.id;
+              // Current vs Old (2026-08-01, operator request): a changed advance requirement
+              // supersedes a sent proforma and mints a new version — every issue stays listed,
+              // the live one marked "Current", the rest "Old", numbered by their version.
+              const isCurrentDoc = currentProformaId != null && inv.id === currentProformaId;
+              const isOldDoc = inv.state === "SUPERSEDED" || (currentProformaId != null && !isCurrentDoc);
+              return (
+                <div key={inv.id}>
+                  <div
+                    className="fact b-transit"
+                    style={{
+                      marginBottom: 9,
+                      padding: "6px 11px",
+                      fontSize: 12,
+                      justifyContent: "space-between",
+                      width: "100%",
+                      opacity: isCurrent && !isOldDoc ? 1 : 0.75,
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span className="mono">{inv.id}</span>
+                      {proformaInvoices.length > 1 && (
+                        <span
+                          className="tag"
+                          style={
+                            isCurrentDoc
+                              ? { borderColor: "var(--green-t2)", background: "var(--green-t)", color: "var(--green-d)" }
+                              : undefined
+                          }
+                          title={
+                            isCurrentDoc
+                              ? "The live proforma — the one the guest is held to"
+                              : "Superseded issue — kept for the record; the PDF shows what was sent at the time"
+                          }
+                        >
+                          {isCurrentDoc ? `Current · v${inv.versionNumber ?? 1}` : `Old · v${inv.versionNumber ?? 1}`}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {multiSegment && (
+                        <span
+                          className="tag"
+                          style={
+                            isCurrent
+                              ? { borderColor: "var(--green-t2)", background: "var(--green-t)", color: "var(--green-d)" }
+                              : undefined
+                          }
+                          title={
+                            isCurrent
+                              ? "From the segment you are working now"
+                              : "From an earlier pass of this booking — kept for reference"
+                          }
+                        >
+                          {segNo != null ? `Segment ${segNo}` : "Earlier segment"}
+                          {isCurrent && segNo != null ? " · current" : ""}
+                        </span>
+                      )}
+                      <span className="tag">{invoiceStateLabel(inv)}</span>
+                      {/* Live rows preview by recomposing from current data; OLD rows with a
+                          stored/sent artifact embed the FROZEN PDF instead — the document that
+                          actually went out (a recomposition would show today's figures under
+                          yesterday's number). Old rows with NO artifact (e.g. drafts superseded
+                          by a re-entry) are still viewable (2026-08-02, operator request) as a
+                          reconstruction, flagged with a caveat strip so nobody mistakes it for
+                          what was sent — nothing ever went out for those. */}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setProformaPreviewId((cur) => (cur === inv.id ? null : inv.id))}
+                        title={
+                          isOldDoc
+                            ? inv.pdfStorageKey != null || inv.dispatchedAt != null
+                              ? "Show this superseded issue as it was sent (stored PDF)"
+                              : "Show this superseded version — reconstructed, it was never sent"
+                            : "Show the proforma document right here — no PDF needed"
+                        }
+                      >
+                        {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+                        {previewOpen ? "Hide" : "View"}
+                      </button>
+                      {session && <PdfButton label="PDF" open={() => openInvoicePdf(session, inv.id)} />}
+                    </span>
+                  </div>
+                  {previewOpen && (
+                    <ProformaPreview
+                      invoiceId={inv.id}
+                      frozenPdf={isOldDoc && (inv.pdfStorageKey != null || inv.dispatchedAt != null)}
+                      notice={
+                        isOldDoc && inv.pdfStorageKey == null && inv.dispatchedAt == null
+                          ? "Superseded version that was never rendered or sent — no frozen copy exists, so this is a reconstruction using the booking's current figures."
+                          : undefined
+                      }
+                    />
+                  )}
+                </div>
+              );
+            })}
             <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
-              The proforma already counts for the confirm checklist — emailing it to the guest is
-              <b> optional</b>, only if they ask for it.
+              The document carries the advance figures from above — what&rsquo;s been received and
+              &ldquo;Advance due now&rdquo;. The proforma already counts for the confirm checklist —
+              emailing it to the guest is <b>optional</b>, only if they ask for it.
             </p>
             <div className="field">
               <label>Dispatch to (optional)</label>
@@ -385,26 +699,49 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 3b. Guest's answer on the proforma — only meaningful once it has actually been sent.
+      {/* 4b. Guest's answer on the proforma — only meaningful once it has actually been sent.
           Evidence for the file; it gates nothing (see communication-acceptance.tsx). */}
-      {proformaInvoices.some((i) => i.dispatchedAt != null) && (
-        <CommunicationAcceptanceBlock entryId={entry.id} commType="PROFORMA_INVOICE" />
-      )}
+      {/* Guest's answer to the proforma — always present on S3 (2026-08-02, operator request:
+          after a re-entry the section vanished because only prior-segment dispatches existed).
+          Scoped to the CURRENT segment via its startedAt: a sealed segment's dispatch (and its
+          recorded answer) never stands in for this segment's; before this segment's proforma
+          goes out the block says "nothing to answer" instead of disappearing. */}
+      <CommunicationAcceptanceBlock
+        entryId={entry.id}
+        commType="PROFORMA_INVOICE"
+        sinceIso={segments[0]?.startedAt ?? null}
+      />
 
-      {/* 4. Advance payment */}
+
+      {/* 5. Money received from the guest — after the proforma, so the page reads in the
+          order the desk works: set the requirement, show/send the bill, take the money. */}
       <div className="block">
         <BlockH>
           <Banknote style={{ width: 13, height: 13 }} />
-          Advance payment
+          Money received from the guest
         </BlockH>
         {paymentStatus && (
-          <div className="fact b-transit" style={{ marginBottom: 11, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
-            <span>
-              Received {money(paymentStatus.totalReceived, folio?.lines?.[0]?.currency)} / required{" "}
-              {money(paymentStatus.requiredAmount, folio?.lines?.[0]?.currency)}
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
+            Received {money(paymentStatus.totalReceived)} of the{" "}
+            {paymentStatus.requirementSource === "OPERATOR" ? "requested" : "min threshold"}{" "}
+            {money(paymentStatus.requiredAmount)}
+            {paymentStatus.satisfied ? " — satisfied" : ""}.
+          </p>
+        )}
+        {/* The payment window: the advance is due between the proforma going out and the
+            check-in date. Facts come from payment-status (backend); only the countdown label
+            ticks here. Overdue keeps showing until the money arrives or check-in gates catch it. */}
+        {advanceWindow && (advanceWindow.active || advanceWindow.overdue) && (
+          <div style={{ margin: "0 0 11px", display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+            <span className={`timer ${advanceWindow.overdue ? "crit" : advanceCountdown?.level || "warn"}`}>
+              {advanceWindow.overdue
+                ? "Advance overdue — check-in date passed with the advance unpaid"
+                : `Advance due ${advanceCountdown?.text ?? "before check-in"} · by ${advanceWindow.deadline?.slice(0, 10) ?? ""}`}
             </span>
-            <span className={`tag ${paymentStatus.satisfied ? "" : "warn"}`}>
-              {paymentStatus.satisfied ? "Satisfied" : `Short ${money(paymentStatus.shortfall)}`}
+            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+              Window opened when the proforma went out
+              {advanceWindow.opensAt ? ` (${advanceWindow.opensAt.slice(0, 16).replace("T", " ")})` : ""} — it closes at
+              check-in.
             </span>
           </div>
         )}
@@ -416,9 +753,30 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             {folio?.advancePaymentReconciliationComplete ? " · reconciled" : ""}
           </p>
         )}
+        {folio && !proformaDispatchedNow && (
+          <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px", lineHeight: 1.5 }}>
+            Dispatch the proforma invoice above first — payments are logged against the bill the
+            guest received, so this form unlocks once it has gone out.
+          </p>
+        )}
+        {folio && proformaDispatchedNow && paymentLockedForAnswer && (
+          <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px", lineHeight: 1.5 }}>
+            Note down the guest&rsquo;s response first — the proforma went out, so record their answer
+            (verbal or written) in the reply box above. Money can be logged once their reply is on file.
+          </p>
+        )}
+        <div
+          onClickCapture={() => {
+            // The inputs are disabled, so a stray click lands here — tell the operator WHY
+            // instead of leaving a dead form (2026-08-03, operator request).
+            if (folio && proformaDispatchedNow && paymentLockedForAnswer) {
+              toast("Note down the guest's response first — the reply box is just above this section.");
+            }
+          }}
+        >
         <div className="frow">
           <div className="field">
-            <label>Payment amount</label>
+            <label>Amount received (Nu)</label>
             <input
               type="number"
               min={0.01}
@@ -428,17 +786,25 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 setPaymentAmount(e.target.value);
                 if (paymentM.isSuccess) paymentM.reset();
               }}
-              disabled={!folio}
+              disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer}
             />
           </div>
           <div className="field">
             <label>Notes</label>
-            <input value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} disabled={!folio} />
+            <input
+              value={paymentNotes}
+              onChange={(e) => setPaymentNotes(e.target.value)}
+              disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer}
+            />
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn btn-ghost btn-sm" disabled={!folio || !paymentAmount || paymentM.isPending} onClick={() => paymentM.mutate()}>
-            {paymentM.isPending ? "Recording…" : paymentM.isSuccess ? "✓ Payment recorded" : "Record payment"}
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer || !paymentAmount || paymentM.isPending}
+            onClick={() => paymentM.mutate()}
+          >
+            {paymentM.isPending ? "Logging…" : paymentM.isSuccess ? "✓ Payment logged" : "Log payment received"}
           </button>
           <button
             className="btn btn-ghost btn-sm"
@@ -456,9 +822,14 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             Refresh
           </button>
         </div>
+        </div>
         {elevated && (
           <div style={{ marginTop: 12, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Credit extension (FOM+)</div>
+            <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 7px", lineHeight: 1.5 }}>
+              Lets the booking proceed without the advance, up to the ceiling. Give it a time limit
+              and it stops counting when the clock runs out — the advance becomes due again.
+            </p>
             <div className="frow">
               <div className="field">
                 <label>Ceiling amount</label>
@@ -468,6 +839,16 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 <label>Reason</label>
                 <input value={creditReason} onChange={(e) => setCreditReason(e.target.value)} />
               </div>
+              <div className="field">
+                <label>Valid for (hours, optional)</label>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="No limit"
+                  value={creditHours}
+                  onChange={(e) => setCreditHours(e.target.value)}
+                />
+              </div>
             </div>
             <button className="btn btn-ghost btn-sm" disabled={creditM.isPending || creditM.isSuccess || !creditCeiling || !creditReason.trim() || !folio} onClick={() => creditM.mutate()}>
               {creditM.isPending ? "Approving…" : creditM.isSuccess ? "✓ Credit extension approved" : "Approve credit extension"}
@@ -476,7 +857,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         )}
       </div>
 
-      {/* 5. Committed hold */}
+      {/* 6. Committed hold */}
       <div className="block">
         <BlockH>
           <Lock style={{ width: 13, height: 13 }} />

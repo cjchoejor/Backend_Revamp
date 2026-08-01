@@ -358,6 +358,9 @@ async function prepareQuotationDraft(
   // Backward-compat: when `roomCompositions` is empty/undefined, the flat model above is
   // authoritative and nothing here runs.
   let compositionTotals: ReturnType<typeof computeQuotationCompositionTotals> | null = null;
+  // Undiscounted reference run — populated only when a discount actually moved the room rate,
+  // so the document can print ORIGINAL prices with an explicit deduction (2026-08-02).
+  let compositionTotalsPreDiscount: ReturnType<typeof computeQuotationCompositionTotals> | null = null;
   if (Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0) {
     // Fetch charge rates + hydrate room numbers for the perRoom breakdown.
     const { serviceChargeRate, gstRate } = await resolveChargeRates(prisma);
@@ -469,6 +472,18 @@ async function prepareQuotationDraft(
       };
     });
     compositionTotals = computeQuotationCompositionTotals(rooms);
+
+    // Pre-discount reference run (2026-08-02): when the requested discount moved the room
+    // rate, cost the SAME compositions once more from the undiscounted base. The document
+    // prints these as the original prices and shows the difference as a deduction. Rooms
+    // with a per-room negotiatedRoomRate ignore defaultRoomRate, so they price identically
+    // in both runs — accurate: a negotiated rate is not a discounted one.
+    const preRateDec = toDecimal(resolvedNightlyRate ?? 0);
+    const postRateDec = toDecimal(effectiveRate ?? 0);
+    if (requested && preRateDec.gt(postRateDec)) {
+      const roomsPre = rooms.map((r) => ({ ...r, ctx: { ...r.ctx, defaultRoomRate: preRateDec } }));
+      compositionTotalsPreDiscount = computeQuotationCompositionTotals(roomsPre);
+    }
   }
 
   const commercialTerms = {
@@ -562,6 +577,23 @@ async function prepareQuotationDraft(
                 })),
               }
             : null,
+          // Original (undiscounted) figures for the document's price display — present only
+          // when a discount moved the rate. Slim shape: the document needs the per-room
+          // originals and the totals, nothing else.
+          ...(compositionTotalsPreDiscount
+            ? {
+                compositionTotalsPreDiscount: {
+                  subtotal: Number(compositionTotalsPreDiscount.subtotal.toFixed(2)),
+                  serviceCharge: Number(compositionTotalsPreDiscount.serviceCharge.toFixed(2)),
+                  gst: Number(compositionTotalsPreDiscount.gst.toFixed(2)),
+                  total: Number(compositionTotalsPreDiscount.total.toFixed(2)),
+                  perRoom: compositionTotalsPreDiscount.perRoom.map((r) => ({
+                    roomId: r.roomId,
+                    total: Number(r.total.toFixed(2)),
+                  })),
+                },
+              }
+            : {}),
         }
       : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
@@ -995,6 +1027,21 @@ export async function supersedeQuotationWithNewDraft(
 
   // Full re-price with the same pipeline createQuotation uses (validations included).
   const prep = await prepareQuotationDraft(prisma, q.entryId, actorId, mergedInput);
+
+  // Freeze the outgoing version's document before it is marked SUPERSEDED (2026-08-02,
+  // operator ruling): a superseded version without a stored PDF can only recompose — and
+  // while a quotation's own commercialTerms are immutable, the composition still reads live
+  // context (entry dates, current tax config on the flat path). Rendering now pins the
+  // document to exactly what this version said. Best-effort — a render failure degrades to
+  // recomposition, never blocks the renegotiation.
+  if (!q.pdfStorageKey) {
+    try {
+      await generateOrLoadQuotationPdf(prisma, q.id, actorId);
+    } catch {
+      /* recomposition fallback remains */
+    }
+  }
+
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {

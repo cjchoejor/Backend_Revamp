@@ -683,6 +683,12 @@ export function DeskNewInquiryForm() {
   });
   const minAdultAge = childPolicyQuery.data?.unaccompaniedMinor.minimumAge ?? 18;
   const maxChildAge = Math.max(0, minAdultAge - 1);
+  // Pricing bands are a SEPARATE cut from the legal/supervision age above (Legphel child
+  // policy §2): under 6 free · 6–10 child rates · 11+ charged as an adult even though they
+  // are a minor. The hint under the age inputs spells this out — it used to say "under
+  // {minAdultAge} counts as a child", which read as child PRICING up to 17.
+  const youngMaxAge = childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5;
+  const childMaxAge = childPolicyQuery.data?.ageBands.childMaxAge ?? 10;
   const agesComplete =
     childCountNum === 0 ||
     (childAges.length === childCountNum &&
@@ -1021,19 +1027,6 @@ export function DeskNewInquiryForm() {
         <div className="bx-main formwrap" ref={formRef} style={{ margin: 0, maxWidth: "none" }}>
         <div className="block">
           <BlockH>Who is this for</BlockH>
-          {/* Agent / corporate bookings lead with WHO is booking, not the guest's phone: the
-              account carries the negotiated rate card and (for corporates) the contract ref +
-              coordinator that pre-fill below, so picking it first is the operator's real first
-              move. Every other channel starts at the phone as before. */}
-          {!isEdit && partyKind && (
-            <PartySearch
-              kind={partyKind}
-              party={party}
-              setParty={setParty}
-              contact={partyContact}
-              setContact={setPartyContact}
-            />
-          )}
           {isEdit ? (
             <>
               <div className="field">
@@ -1090,6 +1083,20 @@ export function DeskNewInquiryForm() {
               Returning guest
             </button>
           </div>
+
+          {/* Agent / corporate bookings also name WHO is booking: the account carries the
+              negotiated rate card and (for corporates) the contract ref + coordinator that
+              pre-fill below. Shown under the New/Returning tabs (operator request 2026-07-31 —
+              it used to sit above them) so the guest-identity choice stays the block's lead. */}
+          {partyKind && (
+            <PartySearch
+              kind={partyKind}
+              party={party}
+              setParty={setParty}
+              contact={partyContact}
+              setContact={setPartyContact}
+            />
+          )}
 
           {/* Adopted existing guest (from phone match or returning search) */}
           {selectedGuest ? (
@@ -1356,8 +1363,13 @@ export function DeskNewInquiryForm() {
                 ))}
               </div>
               <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
-                Ages drive the child policy (under {minAdultAge} counts as a child) and CNB pricing at
-                quotation. Anyone aged {minAdultAge}+ should be counted under Adults.
+                List everyone under {minAdultAge} here — the age sets the charge: under {youngMaxAge + 1} stay
+                and eat free · {youngMaxAge + 1}–{childMaxAge} pay child rates ·{" "}
+                <b>
+                  {childMaxAge + 1}–{maxChildAge} are charged as adults
+                </b>{" "}
+                (own bed, full room &amp; meals) while still counting as minors for supervision. Anyone{" "}
+                {minAdultAge}+ goes under Adults.
               </p>
             </div>
           )}

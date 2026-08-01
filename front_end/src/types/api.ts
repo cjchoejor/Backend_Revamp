@@ -84,6 +84,8 @@ export type QuotationSummary = {
   versionNumber: number;
   referenceNumber: string;
   state: QuotationState;
+  /** Set once the PDF artifact was rendered — the frozen document that went out. */
+  pdfStorageKey?: string | null;
   commercialTerms?: Record<string, unknown> | null;
   totalAmount: string | number;
   currency: string;
@@ -112,6 +114,7 @@ export type SpeculativeHoldSummary = {
 export type SegmentSummary = {
   id: string;
   segmentNumber: number;
+  startedAt?: string;
   sealedAt?: string | null;
 };
 
@@ -165,6 +168,11 @@ export type InvoiceSummary = {
   folioId: string;
   invoiceType: string;
   state: string;
+  invoiceNumber?: string | null;
+  versionNumber?: number;
+  supersededById?: string | null;
+  /** Set once the PDF artifact was rendered — the frozen document that went out. */
+  pdfStorageKey?: string | null;
   templateKey?: string | null;
   dispatchedAt?: string | null;
   dispatchedTo?: string | null;
@@ -234,8 +242,26 @@ export type PaymentStatusSummary = {
   shortfall: number;
   creditExtensionActive: boolean;
   ceilingAmount: number | null;
+  /** ISO expiry of the credit extension, when the FOM set a time limit (2026-08-01). */
+  creditExtensionExpiresAt?: string | null;
+  /** True when an extension exists but its clock ran out — it no longer satisfies the condition. */
+  creditExtensionExpired?: boolean;
+  /** Where requiredAmount came from: the desk's per-booking requirement or the config thresholds. */
+  requirementSource?: "OPERATOR" | "CONFIG";
+  /** Present for OPERATOR requirements: { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }. */
+  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string } | null;
+  /**
+   * What the CONFIG thresholds demand (incl. group boost), independent of any per-booking pin
+   * (2026-08-03). Lets the desk show "hotel minimum unchanged at X" next to a pinned figure.
+   */
+  configuredBaseAmount?: number;
   /** Present only when the group-boost policy raised the requiredAmount above the base. */
   groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
+  /**
+   * The advance-payment window (2026-08-01): due between proforma dispatch (`opensAt`) and the
+   * check-in date (`deadline`). `active` = clock running; `overdue` = check-in passed unpaid.
+   */
+  advanceWindow?: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
 };
 
 export type CancellationDisclosureSummary = {

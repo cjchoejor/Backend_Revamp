@@ -3,6 +3,10 @@ import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceAdvancePaymentInboundRecordAtS3 } from "../../policies/12-advance-payment/p27-advance-payment-inbound-record-at-s3.js";
+import {
+  enforceProformaDispatchedBeforeAdvancePayment,
+  enforceProformaGuestAnswerRecordedBeforeAdvancePayment,
+} from "../../policies/12-advance-payment/p27-advance-payment-reconciliation.js";
 import { applyInboundPaymentToFolioOutstanding } from "../../lib/folio-outstanding-from-payment.js";
 import {
   cancelScheduledAdvancePaymentFollowUpForEntry,
@@ -105,11 +109,38 @@ export async function recordPayment(
 ) {
   const amountNum = input.amount;
   return prisma.$transaction(async (tx) => {
-    const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
+    const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true, invoices: true } });
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
     enforceEntryAtS3ForS3DomainOperations({ currentStage: folio.entry.currentStage });
     enforceAdvancePaymentInboundRecordAtS3({ folioState: folio.state, amount: amountNum });
+    // Order of operations (2026-08-01): the bill goes out first, then the money comes in —
+    // an advance can't be logged until a proforma has been dispatched to the guest.
+    enforceProformaDispatchedBeforeAdvancePayment({
+      proformaInvoices: folio.invoices
+        .filter((i) => i.invoiceType === InvoiceType.PROFORMA)
+        .map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
+    });
+    // …and the guest's ANSWER to that bill must be on record before money is taken
+    // (2026-08-03 operator ruling). Segment-scoped like the p40 freeze gate —
+    // CommunicationRecord carries no segmentId, so the current segment's window is the scope.
+    const currentSegForComms = await tx.segment.findFirst({
+      where: { entryId: input.entryId },
+      orderBy: { segmentNumber: "desc" },
+      select: { startedAt: true },
+    });
+    const latestProformaComm = await tx.communicationRecord.findFirst({
+      where: {
+        entryId: input.entryId,
+        commType: "PROFORMA_INVOICE",
+        direction: "OUTBOUND",
+        sendStatus: "DISPATCHED",
+        ...(currentSegForComms?.startedAt ? { createdAt: { gte: currentSegForComms.startedAt } } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      select: { acknowledgementStatus: true },
+    });
+    enforceProformaGuestAnswerRecordedBeforeAdvancePayment({ latestDispatchedProformaComm: latestProformaComm });
 
     const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
     const created = await tx.paymentRecord.create({

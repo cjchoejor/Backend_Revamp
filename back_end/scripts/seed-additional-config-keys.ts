@@ -65,6 +65,21 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     value: 120,
     notes: "Per-OTA-channel no-show cutoff (minutes after expected arrival before no-show treatment fires).",
   },
+  // Billing rates (FinancialConfigurationService) — GST is compound: 5% of (net + service
+  // charge), the same base every engine already uses (room-composition, compute-stay-charges,
+  // S7/S8 charge posting, invoice rendering). serviceChargeRate was never seeded at all, and
+  // salesTaxRate was seeded 0 (GST off) until 2026-08-03 — this script only CREATES missing
+  // keys, so an existing DB with the old 0 row needs a supersede via /admin/financial instead.
+  {
+    key: "billing.salesTaxRate",
+    value: 0.05,
+    notes: "GST 5% — compound, applied to (net value + service charge) everywhere (quotes, charge posting, invoices).",
+  },
+  {
+    key: "billing.serviceChargeRate",
+    value: 0.1,
+    notes: "Service charge 10% of net value. GST is computed on top of (net + this).",
+  },
   {
     key: "noShow.penaltyStructure",
     value: {

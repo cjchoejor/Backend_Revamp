@@ -13,6 +13,7 @@ import {
   reassignFolioLinesBulkRequestSchema,
   recordCreditExtensionRequestSchema,
   recordFolioPaymentRequestSchema,
+  setAdvanceRequirementRequestSchema,
   recordInvoicePaymentEventRequestSchema,
   updateBillingModelDefaultsRequestSchema,
   writeOffOutstandingBalanceRequestSchema,
@@ -104,10 +105,10 @@ foliosRouter.post("/entries/:id/credit-extension", requireActorLevel("L2"), vali
       next(new NotFoundError("Entry/folio"));
       return;
     }
-    const { ceilingAmount, reason } = req.body;
+    const { ceilingAmount, reason, validForHours } = req.body;
     const out = await s3PaymentService.recordCreditExtensionApproval(
       prisma,
-      { entryId: entry.id, folioId: entry.folio.id, ceilingAmount, reason },
+      { entryId: entry.id, folioId: entry.folio.id, ceilingAmount, reason, validForHours },
       { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
     );
     res.status(201).json(out);
@@ -115,6 +116,42 @@ foliosRouter.post("/entries/:id/credit-extension", requireActorLevel("L2"), vali
     next(e);
   }
 });
+
+/**
+ * Operator-set advance requirement (2026-08-01): pin how much the guest must pay before the
+ * booking confirms — a flat amount, or a percentage of the operative quotation's total
+ * (converted to an amount server-side, Decimal-safe). CLEAR reverts to the configured
+ * thresholds. Overrides the config default in the payment evaluation and prints as
+ * "Advance due now" on the proforma. Returns the fresh payment-status so the desk shows
+ * the new figure without a second round-trip.
+ */
+foliosRouter.post(
+  "/entries/:id/advance-requirement",
+  requireActorLevel("L1"),
+  validateBody(setAdvanceRequirementRequestSchema),
+  async (req, res, next) => {
+    try {
+      const entry = await prisma.entry.findUnique({ where: { id: req.params.id }, include: { folio: true } });
+      if (!entry || !entry.folio) {
+        next(new NotFoundError("Entry/folio"));
+        return;
+      }
+      const { mode, amount, percent } = req.body;
+      const result = await s3PaymentService.setAdvanceRequirement(
+        prisma,
+        { entryId: entry.id, folioId: entry.folio.id, mode, amount, percent },
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      );
+      const status = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
+      // `reissuedProforma` is set when the changed requirement superseded a frozen (rendered/
+      // dispatched) proforma and minted a fresh DRAFT — the desk toasts it so the operator
+      // knows to dispatch the new bill.
+      res.json({ ...status, reissuedProforma: result.reissuedProforma });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 foliosRouter.post("/folios/:id/charges", requireActorLevel("L1"), validateBody(postFolioChargesBodySchema), async (req, res, next) => {
   try {

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Mail, Percent, Timer } from "lucide-react";
+import { Check, Eye, EyeOff, Mail, Percent, Route, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -19,6 +19,8 @@ import {
   type RoomCompositionInput,
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "./room-compositions-board";
+import { QuotationPreview } from "./quotation-preview";
+import { PriceResolutionPanel } from "./price-resolution";
 import { money } from "@/lib/desk/workspace";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
@@ -38,8 +40,10 @@ function BlockH({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Operator language: a created quote IS the offer, ready to go — "Draft" undersold it
+// (operator ruling 2026-08-01). The backend state stays DRAFT; only the label changed.
 const STATE_TAG: Record<QuotationState, { label: string; cls: string }> = {
-  DRAFT: { label: "Draft", cls: "" },
+  DRAFT: { label: "Ready to send", cls: "" },
   SENT: { label: "Sent", cls: "warn" },
   ACCEPTED: { label: "Accepted", cls: "" },
   SUPERSEDED: { label: "Superseded", cls: "" },
@@ -56,10 +60,32 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
 
   const segment = entry.segments?.[0] ?? null;
   const segmentId = segment?.id;
+  // Actions (draft/send/accept/supersede) bind to the CURRENT segment's quotes only.
   const quotations = useMemo(
     () => (entry.quotations ?? []).filter((q) => !segmentId || q.segmentId === segmentId),
     [entry.quotations, segmentId],
   );
+  // The history shows EVERY segment's quotes (2026-08-01, operator request): after a re-entry
+  // the prior segment's quotation must stay visible next to the new one, labeled by segment
+  // number so old vs current is unambiguous. Prior-segment rows are read-only reference
+  // (View / PDF only — the action blocks below never target them).
+  const segNoById = useMemo(
+    () => new Map((entry.segments ?? []).map((s) => [s.id, s.segmentNumber])),
+    [entry.segments],
+  );
+  const multiSegment = useMemo(
+    () => new Set((entry.quotations ?? []).map((q) => q.segmentId)).size > 1,
+    [entry.quotations],
+  );
+  const allQuotations = useMemo(() => {
+    // Current segment first, then older segments; newest version first within each.
+    return [...(entry.quotations ?? [])].sort((a, b) => {
+      const sa = segNoById.get(a.segmentId) ?? 0;
+      const sb = segNoById.get(b.segmentId) ?? 0;
+      if (sa !== sb) return sb - sa;
+      return (b.versionNumber ?? 0) - (a.versionNumber ?? 0);
+    });
+  }, [entry.quotations, segNoById]);
 
   const draft = quotations.find((q) => q.state === "DRAFT");
   const sent = quotations.find((q) => q.state === "SENT");
@@ -101,8 +127,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     + Math.max(0, Math.floor(Number(holdHours) || 0)) * 3_600
     + Math.max(0, Math.floor(Number(holdMinutes) || 0)) * 60;
   const [releaseReason, setReleaseReason] = useState("");
-  const [mealPlan, setMealPlan] = useState<"" | "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP">("");
-  const [extraBedCount, setExtraBedCount] = useState("0");
+  // Which quotation's inline document preview is open in the history block (one at a time).
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  // Which quote's "How this price was resolved" panel is open (one at a time, like previews).
+  const [resolutionId, setResolutionId] = useState<string | null>(null);
   // Per-room composition (Phase E of per-room track, 2026-07-27). Managed by the
   // `RoomCompositionsEditor` child; parent just holds the current array and forwards it
   // in the createQuotation body.
@@ -119,6 +147,9 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+    // The inline document preview recomposes from the quotation's current terms — a discount,
+    // supersede or send changes what it should show.
+    void queryClient.invalidateQueries({ queryKey: ["quotation-preview"] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
@@ -138,19 +169,18 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             discountPercent.trim() !== ""
               ? { discountPercent: Number(discountPercent), discountBasis: discountBasis.trim() || "negotiation" }
               : undefined,
-          mealPlan: mealPlan || null,
-          extraBedCount: Number(extraBedCount) || 0,
-          // Send per-room compositions when the operator filled the composition editor.
-          // Backend uses per-room iteration when this is non-empty; falls back to booking-
-          // level meal plan / extra bed otherwise.
+          // Per-room compositions carry the meal plans / extra beds / negotiated rates.
+          // The planner always emits one row per sealed room, so the backend's legacy
+          // booking-wide mealPlan/extraBedCount fallback is never needed from the desk
+          // (its UI was removed 2026-08-01; the API fields remain for other frontends).
           roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
         }),
-      "Quote drafted",
+      "Quote created — ready to send",
     ),
   );
   const discountM = useMutation(
     wrap(() => {
-      if (!draft) throw new Error("No draft quote");
+      if (!draft) throw new Error("No quote to adjust");
       return applyQuotationDiscount(session!, draft.id, {
         discountPercent: Number(discountPercent),
         discountBasis: discountBasis.trim() || "negotiation",
@@ -159,13 +189,13 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   );
   const approveM = useMutation(
     wrap(() => {
-      if (!draft) throw new Error("No draft quote");
+      if (!draft) throw new Error("No quote to adjust");
       return approveQuotationDiscount(session!, draft.id);
     }, "Discount approved"),
   );
   const sendM = useMutation(
     wrap(() => {
-      if (!draft) throw new Error("No draft quote");
+      if (!draft) throw new Error("No quote to send");
       return sendQuotation(session!, draft.id, {
         validDays: Number(validDays) || 2,
         channel: sendChannel,
@@ -284,11 +314,40 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         </p>
       </div>
 
-      {quotations.length > 0 && (
+      {allQuotations.length > 0 && (
         <div className="block">
           <BlockH>Quote history</BlockH>
-          {quotations.map((q) => (
-            <QuoteRow key={q.id} q={q} />
+          {multiSegment && (
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 4px" }}>
+              This booking has been re-worked — quotes from earlier segments stay here for reference
+              (view only); the current segment&rsquo;s quote is the live one.
+            </p>
+          )}
+          {allQuotations.map((q) => (
+            <div key={q.id}>
+              <QuoteRow
+                q={q}
+                segmentNumber={segNoById.get(q.segmentId) ?? null}
+                isCurrentSegment={!segmentId || q.segmentId === segmentId}
+                showSegment={multiSegment}
+                previewOpen={previewId === q.id}
+                onTogglePreview={() => setPreviewId((cur) => (cur === q.id ? null : q.id))}
+                resolutionOpen={resolutionId === q.id}
+                onToggleResolution={() => setResolutionId((cur) => (cur === q.id ? null : q.id))}
+              />
+              {/* Display-only rendering of the pricing pipeline's stored trail — each version's
+                  commercialTerms are immutable, so this is exactly how THAT version priced. */}
+              {resolutionId === q.id && <PriceResolutionPanel terms={q.commercialTerms} currency={q.currency} />}
+              {/* Old rows that have a stored PDF show the FROZEN artifact (what was actually
+                  sent); other rows recompose — safe here even for old versions, because each
+                  quotation row's commercialTerms are immutable per version. */}
+              {previewId === q.id && (
+                <QuotationPreview
+                  quotationId={q.id}
+                  frozenPdf={(q.state === "SUPERSEDED" || q.state === "EXPIRED") && !!q.pdfStorageKey}
+                />
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -321,7 +380,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
             </div>
             <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
               Place each guest in a room and pick their meal plan — tap to select, tap a room to place, or drag.
-              Falls back to the booking-level meal plan below if left empty.
             </p>
             <RoomCompositionPlanner
               sealedRoomIds={sealedRoomIds}
@@ -329,32 +387,13 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               entryCheckOut={entry.checkOutDate ?? null}
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
+              persistKey={entry.id}
+              entryId={entry.id}
               onChange={setRoomCompositions}
             />
           </div>
-          <details style={{ marginBottom: 10 }}>
-            <summary style={{ fontSize: 11.5, color: "var(--ink-3)", cursor: "pointer" }}>
-              Legacy booking-level meal plan (used when per-room composition is empty)
-            </summary>
-            <div className="frow" style={{ marginTop: 8 }}>
-              <div className="field">
-                <label>Meal plan</label>
-                <select value={mealPlan} onChange={(e) => setMealPlan(e.target.value as typeof mealPlan)}>
-                  <option value="">EP — room only (no meals)</option>
-                  <option value="CP">CP — breakfast</option>
-                  <option value="MAP_LUNCH">MAP — breakfast + lunch</option>
-                  <option value="MAP_DINNER">MAP — breakfast + dinner</option>
-                  <option value="AP">AP — all meals</option>
-                </select>
-              </div>
-              <div className="field">
-                <label>Extra beds</label>
-                <input type="number" min={0} max={10} value={extraBedCount} onChange={(e) => setExtraBedCount(e.target.value)} />
-              </div>
-            </div>
-          </details>
           <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
-            {createM.isPending ? "Drafting…" : "Create draft quote"}
+            {createM.isPending ? "Creating…" : "Create quote"}
           </button>
         </div>
       )}
@@ -484,6 +523,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
                 entryCheckOut={entry.checkOutDate ?? null}
                 entryAdults={entry.adultCount ?? entry.guestCount ?? null}
                 entryChildAges={entry.childAges ?? null}
+                persistKey={entry.id}
+                entryId={entry.id}
                 onChange={setRoomCompositions}
               />
             </div>
@@ -605,7 +646,25 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   );
 }
 
-function QuoteRow({ q }: { q: QuotationSummary }) {
+function QuoteRow({
+  q,
+  segmentNumber,
+  isCurrentSegment,
+  showSegment,
+  previewOpen,
+  onTogglePreview,
+  resolutionOpen,
+  onToggleResolution,
+}: {
+  q: QuotationSummary;
+  segmentNumber: number | null;
+  isCurrentSegment: boolean;
+  showSegment: boolean;
+  previewOpen: boolean;
+  onTogglePreview: () => void;
+  resolutionOpen: boolean;
+  onToggleResolution: () => void;
+}) {
   const tag = STATE_TAG[q.state];
   const { session } = useSession();
   return (
@@ -618,15 +677,52 @@ function QuoteRow({ q }: { q: QuotationSummary }) {
         padding: "8px 0",
         borderBottom: "1px dashed var(--line)",
         fontSize: 13,
+        opacity: isCurrentSegment ? 1 : 0.75,
       }}
     >
-      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <b>{q.referenceNumber}</b>
+        {showSegment && (
+          <span
+            className="tag"
+            style={
+              isCurrentSegment
+                ? { borderColor: "var(--green-t2)", background: "var(--green-t)", color: "var(--green-d)" }
+                : undefined
+            }
+            title={
+              isCurrentSegment
+                ? "From the segment you are working now"
+                : "From an earlier pass of this booking — kept for reference, view only"
+            }
+          >
+            {segmentNumber != null ? `Segment ${segmentNumber}` : "Earlier segment"}
+            {isCurrentSegment ? " · current" : ""}
+          </span>
+        )}
         <span className={`tag ${tag.cls}`}>{tag.label}</span>
       </span>
       <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span className="mono">{money(q.totalAmount, q.currency)}</span>
-        {session && <PdfButton label="Quotation PDF" open={() => openQuotationPdf(session, q.id)} />}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onToggleResolution}
+          title="How this price was resolved — the pricing pipeline's recorded trail for this version"
+        >
+          <Route style={{ width: 14, height: 14 }} />
+          {resolutionOpen ? "Hide price" : "Why this price"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onTogglePreview}
+          title="Show the quotation document right here — no PDF needed"
+        >
+          {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+          {previewOpen ? "Hide" : "View"}
+        </button>
+        {session && <PdfButton label="PDF" open={() => openQuotationPdf(session, q.id)} />}
       </span>
     </div>
   );

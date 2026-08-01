@@ -17,16 +17,17 @@ import {
 } from "@/lib/api/availability";
 import { type SealPayload } from "./multi-room-select";
 import { RoomStatusTable, roomStatusRows, type RoomStatusRow } from "./room-status-table";
+import { RoomSelectBoard, type BoardPerNight } from "./room-select-board";
 import { listRooms } from "@/lib/api/rooms";
 import { getInquiry } from "@/lib/api/inquiries";
-import { getAllowedRoomCounts } from "@/lib/api/child-policy";
+import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { updateEntryIntake } from "@/lib/api/entries";
 import { formatDMY, guestName, nightsBetween } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { DateField, nextDayIso } from "@/components/desk/date-field";
 import type { BackendItem } from "@/lib/desk/backend-map";
-import type { EntryDetail } from "@/types/api";
+import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
 
 /**
@@ -218,6 +219,17 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     queryFn: () => getInquiry(session!, entry.inquiryId),
     enabled: !!session && !!entry.inquiryId,
   });
+  // Live child-policy bands for the edit form's age hint (cache-shared with intake/boards).
+  // Pricing cut ≠ supervision cut: 11+ is charged as an adult while still a minor.
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+    staleTime: 10 * 60_000,
+  });
+  const cpYoungMax = childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5;
+  const cpChildMax = childPolicyQuery.data?.ageBands.childMaxAge ?? 10;
+  const cpMinAdult = childPolicyQuery.data?.unaccompaniedMinor.minimumAge ?? 18;
   const inquiry = inquiryQuery.data;
   const channel = inquiry?.sourceChannel;
   // Head count is now structured on the entry (adultCount/childCount/childAges) — no longer
@@ -507,6 +519,15 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     }
     return m;
   }, [roomsCatalog.data]);
+  // Max occupancy per room (catalog data) — the guest board's advisory over-full hint.
+  const capacityByRoomId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of roomsCatalog.data?.items ?? []) {
+      const cap = r.roomType?.maxCapacity ?? r.roomType?.standardCapacity;
+      if (typeof cap === "number") m.set(r.id, cap);
+    }
+    return m;
+  }, [roomsCatalog.data]);
   const statusRows = useMemo(
     () => roomStatusRows(availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId),
     [availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId],
@@ -541,11 +562,19 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     return stayNights;
   }, [perDate, searchResult, checkIn, checkOut, stayNights]);
 
+  // Canonical form of the last SUBMITTED selection — lets the save button show "Saved"
+  // right away on success instead of waiting for the entry refetch (see `showSaved` below).
+  const submittedCanonRef = useRef<string | null>(null);
   const handleMultiSeal = (p: SealPayload) => {
     if (!activeConfigId && !latestConfig?.id) {
       toast.error("Run availability search first");
       return;
     }
+    // Remember exactly what was submitted so the button can show "Saved" immediately on
+    // success, before the entry refetch brings the server's copy back (see `showSaved`).
+    submittedCanonRef.current = p.perNight
+      ? canonNights(p.perNight)
+      : `*=${[...(p.roomIds ?? [])].sort().join(",")}`;
     selectMutation.mutate({ roomIds: p.roomIds, perNight: p.perNight, deficientRoomIds: p.deficientRoomIds });
   };
 
@@ -556,6 +585,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   // select endpoint requires at least one room: a saved selection can't be cleared server-side,
   // but an unsaved click can simply be taken back.
   const [tableSel, setTableSel] = useState<string[]>(() => sealedIds.filter(Boolean).slice(0, numberOfRooms));
+  // In-progress (unsaved) picks survive leaving the workspace and coming back — same
+  // sessionStorage-per-entry pattern as the view prefs below. Saved selections already survive
+  // via the server; this covers the half-done ones. Hydrated in an effect (SSR-safe); an empty
+  // stored list is NOT restored, so the sealed-selection seed above keeps priority.
+  const selStoreKey = `desk:rst-sel:${entry.id}`;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(selStoreKey);
+      if (!raw) return;
+      const v = JSON.parse(raw) as { tableSel?: string[]; varySel?: Record<string, string[]> };
+      if (Array.isArray(v.tableSel) && v.tableSel.length > 0) {
+        setTableSel(v.tableSel.filter((x) => typeof x === "string").slice(0, numberOfRooms));
+      }
+      if (v.varySel && typeof v.varySel === "object") setVarySel(v.varySel);
+    } catch {
+      /* corrupt / private mode — start from the sealed selection as before */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selStoreKey]);
   const toggleTableRow = (row: RoomStatusRow) => {
     setTableSel((prev) =>
       prev.includes(row.roomId)
@@ -585,6 +633,21 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   // single-room bookings (a mid-stay room change is one room per night, different rooms).
   const [assignMode, setAssignMode] = useState<"same" | "vary">("same");
   const varyActive = assignMode === "vary" && displayNights.length > 1;
+
+  // Guest-board selection (2026-07-31) — the S2 quote board's chips-into-bins interaction as an
+  // alternative way to pick rooms: place the party, and the occupied rooms ARE the selection.
+  // It writes the same `tableSel` the table rows write, so the seal button, counter and
+  // deficient-acknowledgement flow are shared unchanged. Whole-stay only (per-night vary stays
+  // table-only) and needs the intake party breakdown for chips.
+  const canBoardParty = (entry.adultCount ?? 0) > 0 || (entry.childAges ?? []).length > 0;
+  const [viewMode, setViewMode] = useState<"table" | "board">("table");
+  const boardActive = viewMode === "board" && canBoardParty && !varyActive;
+  // The board's full per-night picture (2026-07-31) — one entry per stay night, so a placement
+  // that differs by night (mid-stay room change) flows into the SAME per-night save the table's
+  // vary mode uses. Mirrored into varySel too, so switching to the table's per-night view shows
+  // the board's picks instead of losing them.
+  const [boardPerNight, setBoardPerNight] = useState<BoardPerNight | null>(null);
+  const [boardNightDiffs, setBoardNightDiffs] = useState(false);
 
   // Expanded view — the room list is the full property (27 rooms on real data), which does not
   // fit the canvas column. Expanding lifts the same table to a full-screen layer with compact
@@ -628,6 +691,14 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     };
   }, [expanded]);
   const [varySel, setVarySel] = useState<Record<string, string[]>>({});
+  // Persist the in-progress picks (both modes) whenever they change — hydrated above.
+  useEffect(() => {
+    try {
+      localStorage.setItem(selStoreKey, JSON.stringify({ tableSel, varySel }));
+    } catch {
+      /* non-fatal — the picks just won't survive navigation */
+    }
+  }, [selStoreKey, tableSel, varySel]);
   const toggleVaryCell = (row: RoomStatusRow, night: string) => {
     setVarySel((prev) => {
       const cur = prev[night] ?? [];
@@ -663,26 +734,102 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     return () => cancelAnimationFrame(id);
   }, [scrollToRooms, statusRows.length]);
 
-  const sealReady = varyActive ? varyComplete : tableSel.length === numberOfRooms;
+  // Board-mode seal: use the board's per-night payload so night-differing placements save
+  // exactly like the table's vary mode. Uniform placements produce the same payload the
+  // whole-stay expansion would have.
+  const sealBoardSelection = () => {
+    if (!boardPerNight || boardPerNight.length === 0) {
+      sealTableSelection();
+      return;
+    }
+    const allIds = new Set(boardPerNight.flatMap((p) => p.roomIds));
+    const deficientRoomIds = [...allIds].filter(
+      (id) => statusRows.find((r) => r.roomId === id)?.bucket === "deficient",
+    );
+    handleMultiSeal({ perNight: boardPerNight, deficientRoomIds });
+  };
+  const boardNightsReady = boardPerNight
+    ? boardPerNight.filter((n) => n.roomIds.length === numberOfRooms).length
+    : 0;
+  const boardComplete =
+    boardPerNight && boardPerNight.length > 0
+      ? boardNightsReady === boardPerNight.length
+      : tableSel.length === numberOfRooms;
+  const sealReady = boardActive ? boardComplete : varyActive ? varyComplete : tableSel.length === numberOfRooms;
+
+  // ---- Saved-vs-dirty button state (2026-08-01, operator request) ----------------------------
+  // The standard "settings form" pattern: the button reads "Save…" while the picks differ from
+  // what the server holds, and flips to a green "✓ Saved…" (disabled — nothing to do) once they
+  // match. It's DERIVED by comparing selections, not a flag set on click — so any change to the
+  // picks (table click, board drag, per-night cell) flips it back to "Save…" automatically, and
+  // reloading the page shows the truth rather than a stale flag.
+  const canonNights = (pn: Array<{ date: string; roomIds: string[] }>) =>
+    pn
+      .map((p) => `${String(p.date).slice(0, 10)}=${[...p.roomIds].sort().join(",")}`)
+      .sort()
+      .join("|");
+  // What the server currently holds, normalised to the same shape the save paths submit.
+  const savedCanon = useMemo(() => {
+    const opt = preferredConfig?.optionSelected as AvailabilityOptionSelected | null | undefined;
+    if (!opt) return null;
+    if ("perNight" in opt && Array.isArray(opt.perNight)) {
+      return canonNights(opt.perNight.map((p) => ({ date: p.date, roomIds: p.roomIds.map((r) => r.roomId) })));
+    }
+    const ids = optionSelectedRoomIds(opt);
+    if (ids.length === 0) return null;
+    return stayNights.length > 0
+      ? canonNights(stayNights.map((date) => ({ date, roomIds: ids })))
+      : `*=${[...ids].sort().join(",")}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredConfig?.optionSelected, stayNights]);
+  // What clicking Save right now would submit.
+  const currentCanon = useMemo(() => {
+    if (boardActive && boardPerNight && boardPerNight.length > 0) return canonNights(boardPerNight);
+    if (varyActive) return canonNights(displayNights.map((date) => ({ date, roomIds: varySel[date] ?? [] })));
+    if (tableSel.length === 0) return null;
+    return stayNights.length > 0
+      ? canonNights(stayNights.map((date) => ({ date, roomIds: tableSel })))
+      : `*=${[...tableSel].sort().join(",")}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardActive, boardPerNight, varyActive, varySel, displayNights, tableSel, stayNights]);
+  // Bridge the gap between a successful save and the entry refetch delivering the server's copy.
+  const justSaved = selectMutation.isSuccess && submittedCanonRef.current != null && submittedCanonRef.current === currentCanon;
+  const showSaved =
+    !selectMutation.isPending && currentCanon != null && ((savedCanon != null && savedCanon === currentCanon) || justSaved);
+
+  const perNightLabel = varyActive || (boardActive && boardNightDiffs);
+  const saveLabel = perNightLabel ? "Save per-night rooms" : numberOfRooms === 1 ? "Save room selection" : `Save ${numberOfRooms} rooms`;
+  const savedLabel = perNightLabel ? "✓ Saved per-night rooms" : numberOfRooms === 1 ? "✓ Room selection saved" : `✓ Saved ${numberOfRooms} rooms`;
+
   const sealControls = (
     <>
       <button
-        className="btn btn-primary btn-sm"
-        disabled={!sealReady || selectMutation.isPending}
-        onClick={varyActive ? sealVarySelection : sealTableSelection}
+        className={`btn btn-sm${showSaved ? "" : " btn-primary"}`}
+        style={
+          showSaved
+            ? {
+                background: "var(--green-t)",
+                borderColor: "var(--green-t2)",
+                color: "var(--green-d)",
+                // Beat `.btn[disabled]`'s dimming — this is a settled state, not an unavailable action.
+                opacity: 1,
+              }
+            : undefined
+        }
+        disabled={showSaved || !sealReady || selectMutation.isPending}
+        title={showSaved ? "This selection is saved — change a room to edit it" : undefined}
+        onClick={boardActive ? sealBoardSelection : varyActive ? sealVarySelection : sealTableSelection}
       >
-        {selectMutation.isPending
-          ? "Saving…"
-          : varyActive
-            ? "Seal per-night rooms"
-            : numberOfRooms === 1
-              ? "Save room selection"
-              : `Seal ${numberOfRooms} rooms`}
+        {/* One verb everywhere — this is a SAVE (re-doable via "Change selection"), and the
+            old Save/Seal split by room count read as two different actions. */}
+        {selectMutation.isPending ? "Saving…" : showSaved ? savedLabel : saveLabel}
       </button>
       <span style={{ fontSize: 11.5, fontWeight: 600, color: sealReady ? "var(--green-d)" : "var(--ink-3)" }}>
         {varyActive
           ? `${nightsAssigned} of ${displayNights.length} nights assigned`
-          : `${tableSel.length} of ${numberOfRooms} selected`}
+          : boardActive && boardNightDiffs && boardPerNight
+            ? `${boardNightsReady} of ${boardPerNight.length} nights ready`
+            : `${tableSel.length} of ${numberOfRooms} selected`}
       </span>
     </>
   );
@@ -805,6 +952,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                       key={i}
                       type="number"
                       min={0}
+                      max={Math.max(0, cpMinAdult - 1)}
                       className="dinput"
                       style={{ width: 80 }}
                       placeholder={`#${i + 1}`}
@@ -813,6 +961,15 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     />
                   ))}
                 </div>
+                <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                  The age sets the charge: under {cpYoungMax + 1} stay and eat free · {cpYoungMax + 1}–{cpChildMax}{" "}
+                  pay child rates ·{" "}
+                  <b>
+                    {cpChildMax + 1}–{Math.max(0, cpMinAdult - 1)} are charged as adults
+                  </b>{" "}
+                  (own bed, full room &amp; meals) while still counting as minors for supervision. Anyone{" "}
+                  {cpMinAdult}+ goes under Adults.
+                </p>
               </div>
             )}
             <div className="frow">
@@ -974,7 +1131,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
               This booking needs {numberOfRooms} rooms
               {sealedIds.length > 0 && (
                 <span className="tag" style={{ background: "var(--terra-wash, transparent)" }}>
-                  {sealedIds.length} sealed
+                  {sealedIds.length} saved
                 </span>
               )}
             </div>
@@ -992,31 +1149,67 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                 </div>
               )}
               <div className="rst-tools">
-                {displayNights.length > 1 && (
+                {canBoardParty && (
+                  <div className="seg">
+                    <button
+                      type="button"
+                      className={!boardActive ? "on" : ""}
+                      onClick={() => setViewMode("table")}
+                      title="Room-status grid — rows are rooms, columns are nights; click a row to select"
+                    >
+                      Table
+                    </button>
+                    <button
+                      type="button"
+                      className={boardActive ? "on" : ""}
+                      onClick={() => {
+                        // The board only does whole-stay selection — entering it leaves per-night
+                        // mode (the per-night picks stay in memory for switching back) and the
+                        // full-screen layer, which is a table affordance.
+                        setAssignMode("same");
+                        setExpanded(false);
+                        setViewMode("board");
+                      }}
+                      title="Place each guest in a room — rooms with guests become the selection"
+                    >
+                      Guest board
+                    </button>
+                  </div>
+                )}
+                {displayNights.length > 1 && !boardActive && (
                   <div className="seg">
                     <button type="button" className={assignMode === "same" ? "on" : ""} onClick={() => setAssignMode("same")}>
                       Same room{numberOfRooms === 1 ? "" : "s"} every night
                     </button>
-                    <button type="button" className={assignMode === "vary" ? "on" : ""} onClick={() => setAssignMode("vary")}>
+                    <button
+                      type="button"
+                      className={assignMode === "vary" ? "on" : ""}
+                      onClick={() => {
+                        setAssignMode("vary");
+                        setViewMode("table");
+                      }}
+                    >
                       Different rooms per night
                     </button>
                   </div>
                 )}
                 <span className="ln" />
-                <button
-                  type="button"
-                  className={`btn btn-ghost btn-sm${showNames ? " on" : ""}`}
-                  onClick={() => setShowNames((v) => !v)}
-                  title={
-                    showNames
-                      ? "Show status words (Reserved / Held) in the cells"
-                      : "Print the guest or agent name on each taken room instead of hovering"
-                  }
-                >
-                  {showNames ? <UserCheck style={{ width: 13, height: 13 }} /> : <Users style={{ width: 13, height: 13 }} />}
-                  {showNames ? "Names on" : "Show names"}
-                </button>
-                {!expanded && (
+                {!boardActive && (
+                  <button
+                    type="button"
+                    className={`btn btn-ghost btn-sm${showNames ? " on" : ""}`}
+                    onClick={() => setShowNames((v) => !v)}
+                    title={
+                      showNames
+                        ? "Show status words (Reserved / Held) in the cells"
+                        : "Print the guest or agent name on each taken room instead of hovering"
+                    }
+                  >
+                    {showNames ? <UserCheck style={{ width: 13, height: 13 }} /> : <Users style={{ width: 13, height: 13 }} />}
+                    {showNames ? "Names on" : "Show names"}
+                  </button>
+                )}
+                {!expanded && !boardActive && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
@@ -1031,20 +1224,47 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     finish — and past the "N of M selected" counter that says whether you can. */}
                 {sealControls}
               </div>
-              <RoomStatusTable
-                rows={statusRows}
-                nights={displayNights}
-                perDate={perDate}
-                mode={varyActive ? "vary" : "same"}
-                selectedIds={tableSel}
-                perNightSel={varySel}
-                maxSelect={numberOfRooms}
-                onToggle={toggleTableRow}
-                onToggleCell={toggleVaryCell}
-                disabled={selectMutation.isPending}
-                dense={expanded}
-                showNames={showNames}
-              />
+              {boardActive ? (
+                <RoomSelectBoard
+                  rows={statusRows}
+                  nights={displayNights}
+                  perDate={perDate}
+                  entryAdults={entry.adultCount}
+                  entryChildAges={entry.childAges}
+                  maxRooms={numberOfRooms}
+                  selectedRoomIds={tableSel}
+                  onSelectionChange={setTableSel}
+                  onPerNightChange={(pn, diffs) => {
+                    setBoardPerNight(pn);
+                    setBoardNightDiffs(diffs);
+                    // Mirror into the table's per-night selection so switching views keeps the picks.
+                    if (diffs) setVarySel(Object.fromEntries(pn.map((p) => [p.date, p.roomIds])));
+                  }}
+                  capacityByRoomId={capacityByRoomId}
+                  capacitiesReady={roomsCatalog.isSuccess || roomsCatalog.isError}
+                  disabled={selectMutation.isPending}
+                />
+              ) : (
+                <RoomStatusTable
+                  rows={statusRows}
+                  nights={displayNights}
+                  perDate={perDate}
+                  mode={varyActive ? "vary" : "same"}
+                  selectedIds={tableSel}
+                  perNightSel={varySel}
+                  maxSelect={numberOfRooms}
+                  onToggle={toggleTableRow}
+                  onToggleCell={toggleVaryCell}
+                  onCappedClick={() =>
+                    toast.info(
+                      `All ${numberOfRooms} rooms this booking needs are selected — unselect one first to swap it for this one.`,
+                    )
+                  }
+                  disabled={selectMutation.isPending}
+                  dense={expanded}
+                  showNames={showNames}
+                />
+              )}
               {!expanded && statusRows.some((r) => r.bucket === "deficient") && (
                 <p style={{ fontSize: 11, color: "var(--warn)", margin: "10px 0 0", display: "inline-flex", gap: 5, alignItems: "center" }}>
                   <AlertTriangle style={{ width: 12, height: 12 }} />
@@ -1057,7 +1277,8 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   color: "var(--ink-3)",
                   margin: "10px 0 0",
                   lineHeight: 1.5,
-                  display: expanded ? "none" : undefined,
+                  // The board block carries its own hints — this paragraph explains table clicks.
+                  display: expanded || boardActive ? "none" : undefined,
                 }}
               >
                 {varyActive ? (

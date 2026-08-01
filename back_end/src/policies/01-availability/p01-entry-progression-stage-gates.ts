@@ -114,6 +114,24 @@ export function enforceEntryActiveForStageTransition(input: { status: EntryStatu
   );
 }
 
+/**
+ * Sealed records are read-only (2026-07-31). EXPIRED / CANCELLED / CLOSED are terminal — the
+ * desk shows those bookings as history, and the API must refuse working writes against them
+ * too, or any frontend can keep shaping a booking that operationally no longer exists (the
+ * reported case: an availability search + room selection saved onto an EXPIRED entry).
+ *
+ * PARKED is deliberately allowed through: a park is a pause, not a seal — exploring
+ * availability while parked is legitimate, and progression is separately gated by
+ * `enforceEntryActiveForStageTransition`.
+ */
+export function enforceEntryNotSealedForWorkingAction(input: { status: EntryStatus }) {
+  if (input.status === EntryStatus.ACTIVE || input.status === EntryStatus.PARKED) return;
+  throw new StateTransitionError(
+    `This booking is ${input.status} — sealed records are read-only`,
+    "ENTRY_SEALED_READ_ONLY",
+  );
+}
+
 /** Policy 1 — S2→S3 progression requires entry at S2 (StateTransitionError matches prior service). */
 export function enforceEntryAtS2ForS2ToS3Progression(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S2) return;

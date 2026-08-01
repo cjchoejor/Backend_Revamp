@@ -26,6 +26,7 @@ import { buildBookingJourneySummary } from "../../services/domain/booking-journe
 import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
+import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
 
 export const entriesRouter = Router();
 
@@ -93,6 +94,21 @@ entriesRouter.get("/:id/journey-summary", requireActorLevel("L1"), async (req, r
   try {
     const summary = await buildBookingJourneySummary(prisma, req.params.id);
     res.json(summary);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Rate reference for the S2 composition editors (L1+). Per sealed room type: the room rate the
+ * pricing will default to (agent/corporate card incl. overrides, else standard rate plan), the
+ * card's extra-bed/meal add-on rates, the standard-plan rate + MSR as the negotiation floor, and
+ * the config GST/service-charge rates. Pure read — mirrors `prepareQuotationDraft`'s defaults so
+ * the reference the desk shows is exactly what an un-negotiated draft will charge.
+ */
+entriesRouter.get("/:id/rate-reference", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await buildEntryRateReference(prisma, req.params.id));
   } catch (e) {
     next(e);
   }

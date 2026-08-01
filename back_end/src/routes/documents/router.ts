@@ -12,8 +12,8 @@ import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { readDocument } from "../../lib/document-storage.js";
-import { generateOrLoadQuotationPdf } from "../../services/domain/quotation-pdf-service.js";
-import { generateOrLoadInvoicePdf } from "../../services/domain/invoice-pdf-service.js";
+import { generateOrLoadQuotationPdf, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
+import { generateOrLoadInvoicePdf, renderInvoicePreviewHtml } from "../../services/domain/invoice-pdf-service.js";
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
 import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
 import { readCancellationFiguresFromTrace } from "../../services/domain/cancellation-confirmation-figures.js";
@@ -50,6 +50,27 @@ documentsRouter.get("/quotations/:id/pdf", requireActorLevel("L1"), async (req, 
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.send(bytes);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * GET /api/quotations/:id/preview-html — the quotation document as inline HTML (2026-08-01).
+ * Composed fresh from the quotation's CURRENT commercialTerms via the same A1 house-format
+ * template the PDF uses, but with NO side effects: no PDF render, no storage write, no
+ * QuotationLine snapshot, no trace. Lets the desk show the document for a DRAFT before
+ * anything is generated or sent — and always reflects the latest terms (a stored PDF, by
+ * contrast, is frozen at dispatch). Staff-only (L1+), same as the PDF routes.
+ */
+documentsRouter.get("/quotations/:id/preview-html", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { html } = await renderQuotationPreviewHtml(prisma, req.params.id);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // Never cache — the preview must track live edits to the draft terms.
+    res.setHeader("Cache-Control", "no-store");
+    res.send(html);
   } catch (e) {
     next(e);
   }
@@ -96,6 +117,26 @@ documentsRouter.get(
     }
   },
 );
+
+/**
+ * GET /api/invoices/:id/preview-html — the proforma document as inline HTML (2026-08-01).
+ * Composed fresh from the invoice's CURRENT data (folio payments, the desk's advance
+ * requirement, accepted quote terms) via the same A2 house-format template the PDF uses,
+ * with NO side effects — so the desk shows the live document, including "Advance received"
+ * and "Advance due now", without generating a PDF. Proforma only; staff-only (L1+).
+ */
+documentsRouter.get("/invoices/:id/preview-html", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { html } = await renderInvoicePreviewHtml(prisma, req.params.id);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // Never cache — the preview must track payments and requirement changes live.
+    res.setHeader("Cache-Control", "no-store");
+    res.send(html);
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * GET /api/invoices/:id/pdf — stream the stored invoice PDF (PROFORMA at S3, FINAL/ROOM at
