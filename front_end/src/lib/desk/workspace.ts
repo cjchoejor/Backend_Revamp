@@ -153,6 +153,8 @@ export type CommForReadiness = {
   direction: string | null;
   sendStatus: string | null;
   acknowledgementStatus: string | null;
+  /** ISO creation instant — used to scope the check to the current segment's window. */
+  createdAt?: string | null;
 };
 
 export function s3Readiness(
@@ -222,20 +224,28 @@ export function s3Readiness(
     // dispatched proforma communication decides (items arrive newest-first); while the
     // communications feed hasn't loaded the item reads unmet rather than green, so the desk
     // never declares freeze-ready on data it doesn't have.
-    ...(proformaDispatched
-      ? [
-          {
-            label: "Guest's answer to the proforma recorded",
-            met:
-              (opts?.communications ?? []).find(
-                (c) =>
-                  c.commType === "PROFORMA_INVOICE" &&
-                  c.direction === "OUTBOUND" &&
-                  c.sendStatus === "DISPATCHED",
-              )?.acknowledgementStatus === "RECEIVED",
-          },
-        ]
-      : []),
+    // Segment-scoped (2026-08-02, mirrors the backend gate): only THIS segment's dispatches
+    // count — a prior segment's bill and its answer belong to a sealed pass.
+    ...((() => {
+      const segStartIso = (entry.segments ?? [])[0]?.startedAt ?? null;
+      const dispatchedThisSegment = proformas
+        .filter((i) => i.state !== "SUPERSEDED" && (!segStartIso || i.createdAt >= segStartIso))
+        .some((i) => i.dispatchedAt != null || i.state !== "DRAFT");
+      if (!dispatchedThisSegment) return [];
+      return [
+        {
+          label: "Guest's answer to the proforma recorded",
+          met:
+            (opts?.communications ?? []).find(
+              (c) =>
+                c.commType === "PROFORMA_INVOICE" &&
+                c.direction === "OUTBOUND" &&
+                c.sendStatus === "DISPATCHED" &&
+                (!segStartIso || (c.createdAt ?? "") >= segStartIso),
+            )?.acknowledgementStatus === "RECEIVED",
+        },
+      ];
+    })()),
     // Shown only when an advance is actually DEMANDED (required > 0 — config threshold or the
     // desk's per-booking requirement), when money has already come in, or when the requirement
     // is unknown (status not fetched — conservative). With required = 0 the hotel asks for

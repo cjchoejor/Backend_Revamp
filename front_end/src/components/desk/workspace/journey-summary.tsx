@@ -3,7 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, User } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
-import { getJourneySummary, type BookingJourneySummary, type JourneyRoomRef, type JourneySectionStatus } from "@/lib/api/entries";
+import {
+  getJourneySummary,
+  type JourneyRoomRef,
+  type JourneySectionStatus,
+  type JourneySectionTimeline,
+} from "@/lib/api/entries";
 import { moneyOrDash } from "@/lib/desk/workspace";
 
 /**
@@ -44,12 +49,19 @@ function Pill({ status }: { status: JourneySectionStatus }) {
 function Card({
   title,
   status,
+  timeline,
   children,
 }: {
   title: string;
   status?: JourneySectionStatus;
+  timeline?: JourneySectionTimeline;
   children: React.ReactNode;
 }) {
+  const tl = timeline?.enteredAt
+    ? timeline.exitedAt
+      ? `In this step ${fmtDateTime(timeline.enteredAt)} → ${fmtDateTime(timeline.exitedAt)}`
+      : `In this step since ${fmtDateTime(timeline.enteredAt)}`
+    : null;
   return (
     <div
       style={{
@@ -60,10 +72,11 @@ function Card({
         marginTop: 10,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: tl ? 2 : 8 }}>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", letterSpacing: 0.2 }}>{title}</div>
         {status ? <Pill status={status} /> : null}
       </div>
+      {tl ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 8 }}>{tl}</div> : null}
       {children}
     </div>
   );
@@ -180,7 +193,10 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
       </div>
 
       {/* S1 — Inquiry */}
-      <Card title="Inquiry — what they asked for" status={s1.status}>
+      <Card title="Inquiry — what they asked for" status={s1.status} timeline={s1.timeline}>
+        <Row label="Received">
+          {s1.receivedAt ? `${fmtDateTime(s1.receivedAt)}${s1.takenBy ? ` · taken by ${s1.takenBy}` : ""}` : "—"}
+        </Row>
         <Row label="Came in as">{dash(s1.sourceChannel)}</Row>
         <Row label="Dates">
           {s1.dates.checkIn || s1.dates.checkOut
@@ -202,6 +218,15 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
             {s1.commercialContext.gstNumber ? ` · GST ${s1.commercialContext.gstNumber}` : ""}
           </Row>
         ) : null}
+        <Row label="Availability">
+          {s1.availabilitySearches
+            ? `${s1.availabilitySearches} search${s1.availabilitySearches === 1 ? "" : "es"} run${
+                s1.selectionSealedAt
+                  ? ` · selection sealed ${fmtDateTime(s1.selectionSealedAt)}${s1.selectionSealedBy ? ` by ${s1.selectionSealedBy}` : ""}`
+                  : " · no selection sealed yet"
+              }`
+            : "No availability search yet"}
+        </Row>
         <Row label="Room selection">
           {s1.roomSelection.rooms.length ? (
             <span>
@@ -224,15 +249,45 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
       </Card>
 
       {/* S2 — Negotiation */}
-      <Card title="Negotiation — the price they agreed to" status={s2.status}>
+      <Card title="Negotiation — the price they agreed to" status={s2.status} timeline={s2.timeline}>
         <Row label="Quotation">
-          {s2.reference ? `${s2.reference}${s2.versionNumber ? ` · v${s2.versionNumber}` : ""}${s2.state ? ` · ${s2.state}` : ""}` : "—"}
+          {s2.reference
+            ? `${s2.reference}${s2.versionNumber ? ` · v${s2.versionNumber}` : ""}${s2.state ? ` · ${s2.state}` : ""}${
+                s2.versionsIssued > 1 ? ` · ${s2.versionsIssued} versions issued` : ""
+              }`
+            : "—"}
+        </Row>
+        <Row label="Drafted">
+          {s2.draftedAt ? `${fmtDateTime(s2.draftedAt)}${s2.draftedBy ? ` · by ${s2.draftedBy}` : ""}` : "—"}
+        </Row>
+        <Row label="Sent to guest">
+          {s2.sentAt ? `${fmtDateTime(s2.sentAt)}${s2.sentTo ? ` · to ${s2.sentTo}` : ""}` : "Not sent — generated only"}
         </Row>
         <Row label="Rate">{rateLine}</Row>
         <Row label="Total">{moneyOrDash(s2.total, cur)}</Row>
+        {s2.discount ? (
+          <Row label="Discount">
+            {`${s2.discount.percent}%${s2.discount.basis ? ` · ${s2.discount.basis}` : ""}`}
+          </Row>
+        ) : null}
         {s2.mealPlan ? <Row label="Meal plan">{s2.mealPlan}</Row> : null}
         {s2.inclusions.length ? <Row label="Inclusions">{s2.inclusions.join(", ")}</Row> : null}
-        {s2.agentRate ? <Row label="Negotiated rate">Agent/corporate rate card applied</Row> : null}
+        {s2.agentRateDetail ? (
+          <Row label="Negotiated rate">
+            {`${s2.agentRateDetail.partyType === "CORPORATE" ? "Corporate" : "Travel agent"} rate card applied`}
+            {s2.agentRateDetail.roomRate != null ? ` · ${moneyOrDash(s2.agentRateDetail.roomRate, cur)}/night` : ""}
+            {s2.agentRateDetail.cnbPercent ? ` · CNB ${s2.agentRateDetail.cnbPercent}%` : ""}
+          </Row>
+        ) : s2.agentRate ? (
+          <Row label="Negotiated rate">Agent/corporate rate card applied</Row>
+        ) : null}
+        {s2.speculativeHold ? (
+          <Row label="Speculative hold">
+            {`${s2.speculativeHold.state}${s2.speculativeHold.roomNumber ? ` · room ${s2.speculativeHold.roomNumber}` : ""}${
+              s2.speculativeHold.placedAt ? ` · placed ${fmtDateTime(s2.speculativeHold.placedAt)}` : ""
+            }${s2.speculativeHold.state === "PLACED" && s2.speculativeHold.expiresAt ? ` · expires ${fmtDateTime(s2.speculativeHold.expiresAt)}` : ""}`}
+          </Row>
+        ) : null}
         {s2.belowMsr ? (
           <Row label="Below MSR">
             <span style={{ color: "var(--warn)", fontWeight: 600 }}>Yes — GM waiver path</span>
@@ -241,7 +296,9 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
         {s2.focRoomsRequested ? <Row label="FOC rooms">{s2.focRoomsRequested}</Row> : null}
         <Row label="Valid until">{fmtDate(s2.validUntil)}</Row>
         <Row label="Accepted">
-          {s2.acceptedAt ? `${fmtDateTime(s2.acceptedAt)}${s2.acceptedBy ? ` · ${s2.acceptedBy}` : ""}` : "Not yet accepted"}
+          {s2.acceptedAt
+            ? `${fmtDateTime(s2.acceptedAt)}${s2.acceptedByName || s2.acceptedBy ? ` · recorded by ${s2.acceptedByName ?? s2.acceptedBy}` : ""}`
+            : "Not yet accepted"}
         </Row>
         {s2.lines.length ? (
           <div style={{ marginTop: 8 }}>
@@ -264,13 +321,45 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
       </Card>
 
       {/* S3 — Set up */}
-      <Card title="Set up — billing & holds" status={s3.status}>
+      <Card title="Set up — billing & holds" status={s3.status} timeline={s3.timeline}>
         <Row label="Billing model">{dash(s3.billingModel)}</Row>
         <Row label="Folio">{dash(s3.folioState)}</Row>
         <Row label="Committed hold">
-          {s3.committedHold
-            ? `${dash(s3.committedHold.state)}${s3.committedHold.rooms.length ? ` · ${s3.committedHold.rooms.map(roomLabel).join(", ")}` : ""}`
-            : "—"}
+          {s3.committedHold ? (
+            <span>
+              {dash(s3.committedHold.state)}
+              {s3.committedHold.rooms.length ? ` · ${s3.committedHold.rooms.map(roomLabel).join(", ")}` : ""}
+              {s3.committedHold.placedAt
+                ? ` · placed ${fmtDateTime(s3.committedHold.placedAt)}${s3.committedHold.placedBy ? ` by ${s3.committedHold.placedBy}` : ""}`
+                : ""}
+              {s3.committedHold.state === "PLACED" && s3.committedHold.expiresAt
+                ? ` · expires ${fmtDateTime(s3.committedHold.expiresAt)}`
+                : ""}
+            </span>
+          ) : (
+            "—"
+          )}
+        </Row>
+        {s3.committedHold?.justification ? <Row label="Hold justification">{s3.committedHold.justification}</Row> : null}
+        <Row label="Advance required">
+          {s3.advancePayment ? (
+            <span>
+              {moneyOrDash(s3.advancePayment.requiredAmount, cur)}
+              {s3.advancePayment.requirementSource === "OPERATOR"
+                ? " · set by the desk for this booking"
+                : s3.advancePayment.requirementSource === "CONFIG"
+                  ? " · from the configured thresholds"
+                  : ""}
+              {s3.advancePayment.groupBoostApplied
+                ? ` · group boost ×${s3.advancePayment.groupBoostApplied.multiplierPercent / 100} (base ${moneyOrDash(
+                    s3.advancePayment.groupBoostApplied.baseAmount,
+                    cur,
+                  )})`
+                : ""}
+            </span>
+          ) : (
+            "—"
+          )}
         </Row>
         <Row label="Advance payment">
           {s3.advancePayment ? (
@@ -281,33 +370,89 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
               ) : (
                 <span style={{ color: "var(--warn)", fontWeight: 600 }}> · short {moneyOrDash(s3.advancePayment.shortfall, cur)}</span>
               )}
-              {s3.advancePayment.creditExtensionActive
-                ? ` · credit ceiling ${moneyOrDash(s3.advancePayment.ceilingAmount, cur)}`
-                : ""}
+              {s3.advancePayment.creditExtensionActive ? (
+                <span>
+                  {` · credit ceiling ${moneyOrDash(s3.advancePayment.ceilingAmount, cur)}`}
+                  {s3.advancePayment.creditExtensionExpiresAt
+                    ? ` (until ${fmtDateTime(s3.advancePayment.creditExtensionExpiresAt)})`
+                    : ""}
+                </span>
+              ) : s3.advancePayment.creditExtensionExpired ? (
+                <span style={{ color: "var(--warn)", fontWeight: 600 }}> · credit extension expired</span>
+              ) : null}
             </span>
           ) : (
             "—"
           )}
         </Row>
+        {s3.advancePayment?.advanceWindow && (s3.advancePayment.advanceWindow.active || s3.advancePayment.advanceWindow.overdue) ? (
+          <Row label="Payment window">
+            {s3.advancePayment.advanceWindow.overdue ? (
+              <span style={{ color: "var(--stop)", fontWeight: 600 }}>
+                Overdue — check-in date passed with the advance unpaid
+              </span>
+            ) : (
+              <span>
+                {`Proforma sent ${fmtDateTime(s3.advancePayment.advanceWindow.opensAt)} → pay by check-in ${fmtDate(
+                  s3.advancePayment.advanceWindow.deadline,
+                )}`}
+              </span>
+            )}
+          </Row>
+        ) : null}
+        {s3.payments.length ? (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 4 }}>Payments received</div>
+            <div style={{ fontSize: 11.5, fontFamily: "var(--deskmono)" }}>
+              {s3.payments.map((p) => (
+                <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", color: "var(--ink-2)" }}>
+                  <span>
+                    {fmtDateTime(p.receivedAt)}
+                    {p.method ? ` · ${p.method}` : ""}
+                    {p.recordedBy ? ` · by ${p.recordedBy}` : ""}
+                  </span>
+                  <span>{moneyOrDash(p.amount, cur)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <Row label="Cancellation">
           {s3.cancellation?.disclosed
             ? `Disclosed${s3.cancellation.disclosedAt ? ` ${fmtDate(s3.cancellation.disclosedAt)}` : ""}${
-                s3.cancellation.noShowTreatment ? ` · ${s3.cancellation.noShowTreatment}` : ""
-              }`
+                s3.cancellation.disclosedBy ? ` by ${s3.cancellation.disclosedBy}` : ""
+              }${s3.cancellation.noShowTreatment ? ` · ${s3.cancellation.noShowTreatment}` : ""}`
             : "Not disclosed"}
         </Row>
-        {s3.proformaInvoiceRef ? <Row label="Proforma invoice">{s3.proformaInvoiceRef}</Row> : null}
+        {s3.proforma ? (
+          <Row label="Proforma invoice">
+            {`${s3.proforma.id} · v${s3.proforma.versionNumber}`}
+            {s3.proforma.totalAmount != null ? ` · ${moneyOrDash(s3.proforma.totalAmount, cur)}` : ""}
+            {s3.proforma.dispatchedAt
+              ? ` · sent ${fmtDateTime(s3.proforma.dispatchedAt)}${s3.proforma.dispatchedTo ? ` to ${s3.proforma.dispatchedTo}` : ""}`
+              : " · generated, not sent"}
+            {s3.proforma.priorVersions > 0 ? (
+              <span style={{ color: "var(--ink-3)" }}>{` · ${s3.proforma.priorVersions} earlier version${
+                s3.proforma.priorVersions === 1 ? "" : "s"
+              } superseded`}</span>
+            ) : null}
+          </Row>
+        ) : s3.proformaInvoiceRef ? (
+          <Row label="Proforma invoice">{s3.proformaInvoiceRef}</Row>
+        ) : null}
         {s3.coordinator ? <Row label="Coordinator">{s3.coordinator}</Row> : null}
       </Card>
 
       {/* S4 — Confirmation */}
-      <Card title="Confirmation — the frozen commitment" status={s4.status}>
+      <Card title="Confirmation — the frozen commitment" status={s4.status} timeline={s4.timeline}>
         {s4.confirmed ? (
           <>
             <Row label="Reservation">{dash(s4.reservationId)}</Row>
             <Row label="Frozen rate">{moneyOrDash(s4.frozenRate, cur)}</Row>
             <Row label="Frozen dates">
-              {`${fmtDate(s4.frozenCheckIn)} → ${fmtDate(s4.frozenCheckOut)}`}
+              {`${fmtDate(s4.frozenCheckIn)} → ${fmtDate(s4.frozenCheckOut)}${
+                s4.frozenNights ? ` · ${s4.frozenNights} night${s4.frozenNights === 1 ? "" : "s"}` : ""
+              }`}
             </Row>
             <Row label="Frozen billing">{dash(s4.frozenBillingModel)}</Row>
             <Row label="Frozen guests">{dash(s4.frozenGuestCount)}</Row>
@@ -315,9 +460,19 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
               <Row label="Credit ceiling">{moneyOrDash(s4.creditCeilingIfExtended, cur)}</Row>
             ) : null}
             <Row label="Confirmed">
-              {s4.confirmedAt ? `${fmtDateTime(s4.confirmedAt)}${s4.confirmedBy ? ` · ${s4.confirmedBy}` : ""}` : "—"}
+              {s4.confirmedAt
+                ? `${fmtDateTime(s4.confirmedAt)}${
+                    s4.confirmedByName || s4.confirmedBy ? ` · by ${s4.confirmedByName ?? s4.confirmedBy}` : ""
+                  }`
+                : "—"}
             </Row>
-            <Row label="Voucher sent">{s4.voucherSent ? "Yes" : "No"}</Row>
+            <Row label="Voucher">
+              {s4.voucherSent
+                ? `Sent to guest${s4.voucherRenderedAt ? ` · PDF rendered ${fmtDateTime(s4.voucherRenderedAt)}` : ""}`
+                : s4.voucherRenderedAt
+                  ? `PDF rendered ${fmtDateTime(s4.voucherRenderedAt)} · not sent`
+                  : "Not sent"}
+            </Row>
           </>
         ) : (
           <div style={{ fontSize: 12.5, color: "var(--ink-3)" }}>Not yet confirmed — this is what freezing will lock in.</div>

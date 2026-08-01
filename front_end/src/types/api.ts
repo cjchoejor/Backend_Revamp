@@ -252,6 +252,11 @@ export type PaymentStatusSummary = {
   requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string } | null;
   /** Present only when the group-boost policy raised the requiredAmount above the base. */
   groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
+  /**
+   * The advance-payment window (2026-08-01): due between proforma dispatch (`opensAt`) and the
+   * check-in date (`deadline`). `active` = clock running; `overdue` = check-in passed unpaid.
+   */
+  advanceWindow?: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
 };
 
 export type CancellationDisclosureSummary = {

@@ -20,10 +20,13 @@ function DocumentPreviewFrame({
   queryKey,
   fetchHtml,
   title,
+  notice,
 }: {
   queryKey: readonly unknown[];
   fetchHtml: () => Promise<string>;
   title: string;
+  /** Amber caveat strip above the frame — e.g. "reconstruction, no frozen copy exists". */
+  notice?: string;
 }) {
   const [height, setHeight] = useState(480);
   const query = useQuery({
@@ -48,6 +51,24 @@ function DocumentPreviewFrame({
   }
 
   return (
+    <>
+    {notice ? (
+      <p
+        style={{
+          fontSize: 11,
+          color: "var(--warn)",
+          background: "var(--warn-t)",
+          border: "1px solid var(--warn)",
+          borderRadius: 6,
+          padding: "5px 9px",
+          margin: "6px auto 0",
+          width: "min(100%, 470px)",
+          lineHeight: 1.5,
+        }}
+      >
+        {notice}
+      </p>
+    ) : null}
     <iframe
       title={title}
       sandbox="allow-same-origin"
@@ -70,6 +91,7 @@ function DocumentPreviewFrame({
         margin: "6px auto 4px",
       }}
     />
+    </>
   );
 }
 
@@ -146,7 +168,7 @@ export function QuotationPreview({ quotationId, frozenPdf }: { quotationId: stri
  * S3 — the proforma document. Live rows compose from folio payments + the desk's advance
  * requirement; pass `frozenPdf` on a superseded row to show the stored artifact instead.
  */
-export function ProformaPreview({ invoiceId, frozenPdf }: { invoiceId: string; frozenPdf?: boolean }) {
+export function ProformaPreview({ invoiceId, frozenPdf, notice }: { invoiceId: string; frozenPdf?: boolean; notice?: string }) {
   const { session } = useSession();
   if (frozenPdf) {
     return <FrozenPdfFrame path={`/api/invoices/${invoiceId}/pdf`} title="Proforma invoice (as sent)" />;
@@ -156,6 +178,7 @@ export function ProformaPreview({ invoiceId, frozenPdf }: { invoiceId: string; f
       queryKey={["invoice-preview", invoiceId] as const}
       fetchHtml={() => fetchInvoicePreviewHtml(session!, invoiceId)}
       title="Proforma invoice document"
+      notice={notice}
     />
   );
 }

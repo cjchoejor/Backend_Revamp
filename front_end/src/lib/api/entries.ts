@@ -224,6 +224,7 @@ export type JourneyRoomRef = {
   roomTypeCode: string | null;
   roomTypeName: string | null;
 };
+export type JourneySectionTimeline = { enteredAt: string | null; exitedAt: string | null };
 
 export type BookingJourneySummary = {
   entryId: string;
@@ -246,6 +247,12 @@ export type BookingJourneySummary = {
   };
   s1Inquiry: {
     status: JourneySectionStatus;
+    timeline: JourneySectionTimeline;
+    receivedAt: string | null;
+    takenBy: string | null;
+    availabilitySearches: number;
+    selectionSealedAt: string | null;
+    selectionSealedBy: string | null;
     sourceChannel: string | null;
     party: {
       adults: number | null;
@@ -274,10 +281,20 @@ export type BookingJourneySummary = {
   };
   s2Quote: {
     status: JourneySectionStatus;
+    timeline: JourneySectionTimeline;
     hasAcceptedQuotation: boolean;
+    versionsIssued: number;
     reference: string | null;
     versionNumber: number | null;
     state: string | null;
+    draftedAt: string | null;
+    draftedBy: string | null;
+    sentAt: string | null;
+    sentTo: string | null;
+    discount: { percent: number; basis: string | null } | null;
+    agentRateDetail: { partyType: string | null; roomRate: number | null; cnbPercent: number | null; source: string | null } | null;
+    speculativeHold: { state: string; roomNumber: string | null; placedAt: string | null; expiresAt: string | null } | null;
+    acceptedByName: string | null;
     currency: string | null;
     nightlyRate: number | null;
     roomCount: number | null;
@@ -303,9 +320,17 @@ export type BookingJourneySummary = {
   };
   s3Setup: {
     status: JourneySectionStatus;
+    timeline: JourneySectionTimeline;
     billingModel: string | null;
     folioState: string | null;
-    committedHold: { state: string | null; rooms: JourneyRoomRef[]; expiresAt: string | null } | null;
+    committedHold: {
+      state: string | null;
+      rooms: JourneyRoomRef[];
+      expiresAt: string | null;
+      placedAt: string | null;
+      placedBy: string | null;
+      justification: string | null;
+    } | null;
     advancePayment: {
       satisfied: boolean;
       requiredAmount: number | null;
@@ -313,13 +338,39 @@ export type BookingJourneySummary = {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
+      requirementSource: "OPERATOR" | "CONFIG" | null;
+      requirementBasis: unknown | null;
+      creditExtensionExpiresAt: string | null;
+      creditExtensionExpired: boolean;
+      groupBoostApplied: { multiplierPercent: number; baseAmount: number } | null;
+      advanceWindow: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
     } | null;
-    cancellation: { disclosed: boolean; noShowTreatment: string | null; disclosedAt: string | null } | null;
+    payments: Array<{
+      id: string;
+      amount: number | null;
+      method: string | null;
+      receivedAt: string | null;
+      recordedBy: string | null;
+      notes: string | null;
+    }>;
+    cancellation: { disclosed: boolean; noShowTreatment: string | null; disclosedAt: string | null; disclosedBy: string | null } | null;
     proformaInvoiceRef: string | null;
+    proforma: {
+      id: string;
+      invoiceNumber: string | null;
+      versionNumber: number;
+      state: string;
+      totalAmount: number | null;
+      createdAt: string | null;
+      dispatchedAt: string | null;
+      dispatchedTo: string | null;
+      priorVersions: number;
+    } | null;
     coordinator: string | null;
   };
   s4Confirmation: {
     status: JourneySectionStatus;
+    timeline: JourneySectionTimeline;
     confirmed: boolean;
     reservationId: string | null;
     frozenRate: number | null;
@@ -327,11 +378,14 @@ export type BookingJourneySummary = {
     frozenBillingModel: string | null;
     frozenCheckIn: string | null;
     frozenCheckOut: string | null;
+    frozenNights: number | null;
     frozenGuestCount: number | null;
     creditCeilingIfExtended: number | null;
     confirmedAt: string | null;
     confirmedBy: string | null;
+    confirmedByName: string | null;
     voucherSent: boolean;
+    voucherRenderedAt: string | null;
   };
 };
 

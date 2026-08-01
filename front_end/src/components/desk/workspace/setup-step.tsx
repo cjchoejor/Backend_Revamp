@@ -25,6 +25,7 @@ import {
   setAdvanceRequirement,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
+import { countdownTo } from "@/lib/desk/timers";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -158,6 +159,18 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   });
   const paymentStatus = paymentStatusQuery.data;
 
+  // Advance-payment window countdown (backend fact: proforma dispatch → check-in date).
+  // 30s tick keeps the label honest without re-rendering every second.
+  const advanceWindow = paymentStatus?.advanceWindow ?? null;
+  const [advanceNowTick, setAdvanceNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!advanceWindow?.active) return;
+    const t = setInterval(() => setAdvanceNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [advanceWindow?.active]);
+  const advanceCountdown =
+    advanceWindow?.active && advanceWindow.deadline ? countdownTo(advanceWindow.deadline, advanceNowTick) : null;
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
@@ -228,8 +241,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     },
     onSuccess: (status) => {
       if (status.reissuedProforma) {
+        // supersededIds empty = the fresh-mint path (a re-entry had superseded every proforma,
+        // so nothing live existed to supersede — a new one was generated for this segment).
         toast.success(
-          `Advance requirement set — ${money(status.requiredAmount)}. The sent proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it again.`,
+          status.reissuedProforma.supersededIds.length > 0
+            ? `Advance requirement set — ${money(status.requiredAmount)}. The previous proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it.`
+            : `Advance requirement set — ${money(status.requiredAmount)}. A fresh proforma (v${status.reissuedProforma.versionNumber}) was generated for this segment — dispatch it.`,
         );
       } else {
         toast.success(`Advance requirement set — ${money(status.requiredAmount)}`);
@@ -244,7 +261,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     onSuccess: (status) => {
       toast.success(
         status.reissuedProforma
-          ? `Requirement cleared — hotel default applies. The sent proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it again.`
+          ? status.reissuedProforma.supersededIds.length > 0
+            ? `Requirement cleared — hotel default applies. The previous proforma was superseded; a new one (v${status.reissuedProforma.versionNumber}) is ready — dispatch it.`
+            : `Requirement cleared — hotel default applies. A fresh proforma (v${status.reissuedProforma.versionNumber}) was generated for this segment — dispatch it.`
           : "Requirement cleared — hotel default applies",
       );
       invalidate();
@@ -446,8 +465,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         </BlockH>
         {paymentStatus && (
           <div className="fact b-transit" style={{ marginBottom: 6, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
+            {/* "Requested" when the desk pinned a figure for this booking; "min threshold"
+                when it's the hotel's configured default — "required" blurred the two. */}
             <span>
-              Received {money(paymentStatus.totalReceived, folio?.lines?.[0]?.currency)} / required{" "}
+              Received {money(paymentStatus.totalReceived, folio?.lines?.[0]?.currency)} ·{" "}
+              {paymentStatus.requirementSource === "OPERATOR" ? "requested" : "min threshold"}{" "}
               {money(paymentStatus.requiredAmount, folio?.lines?.[0]?.currency)}
             </span>
             <span className={`tag ${paymentStatus.satisfied ? "" : "warn"}`}>
@@ -593,29 +615,42 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                         </span>
                       )}
                       <span className="tag">{invoiceStateLabel(inv)}</span>
-                      {/* Live rows preview by recomposing from current data; OLD rows embed the
-                          STORED PDF instead — the frozen artifact that actually went out (a
-                          recomposition would show today's figures under yesterday's number).
-                          An old row with no stored artifact has nothing to show — no View. */}
-                      {(!isOldDoc || inv.pdfStorageKey != null || inv.dispatchedAt != null) && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setProformaPreviewId((cur) => (cur === inv.id ? null : inv.id))}
-                          title={
-                            isOldDoc
+                      {/* Live rows preview by recomposing from current data; OLD rows with a
+                          stored/sent artifact embed the FROZEN PDF instead — the document that
+                          actually went out (a recomposition would show today's figures under
+                          yesterday's number). Old rows with NO artifact (e.g. drafts superseded
+                          by a re-entry) are still viewable (2026-08-02, operator request) as a
+                          reconstruction, flagged with a caveat strip so nobody mistakes it for
+                          what was sent — nothing ever went out for those. */}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setProformaPreviewId((cur) => (cur === inv.id ? null : inv.id))}
+                        title={
+                          isOldDoc
+                            ? inv.pdfStorageKey != null || inv.dispatchedAt != null
                               ? "Show this superseded issue as it was sent (stored PDF)"
-                              : "Show the proforma document right here — no PDF needed"
-                          }
-                        >
-                          {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
-                          {previewOpen ? "Hide" : "View"}
-                        </button>
-                      )}
+                              : "Show this superseded version — reconstructed, it was never sent"
+                            : "Show the proforma document right here — no PDF needed"
+                        }
+                      >
+                        {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+                        {previewOpen ? "Hide" : "View"}
+                      </button>
                       {session && <PdfButton label="PDF" open={() => openInvoicePdf(session, inv.id)} />}
                     </span>
                   </div>
-                  {previewOpen && <ProformaPreview invoiceId={inv.id} frozenPdf={isOldDoc} />}
+                  {previewOpen && (
+                    <ProformaPreview
+                      invoiceId={inv.id}
+                      frozenPdf={isOldDoc && (inv.pdfStorageKey != null || inv.dispatchedAt != null)}
+                      notice={
+                        isOldDoc && inv.pdfStorageKey == null && inv.dispatchedAt == null
+                          ? "Superseded version that was never rendered or sent — no frozen copy exists, so this is a reconstruction using the booking's current figures."
+                          : undefined
+                      }
+                    />
+                  )}
                 </div>
               );
             })}
@@ -641,9 +676,17 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
 
       {/* 4b. Guest's answer on the proforma — only meaningful once it has actually been sent.
           Evidence for the file; it gates nothing (see communication-acceptance.tsx). */}
-      {proformaInvoices.some((i) => i.dispatchedAt != null) && (
-        <CommunicationAcceptanceBlock entryId={entry.id} commType="PROFORMA_INVOICE" />
-      )}
+      {/* Guest's answer to the proforma — always present on S3 (2026-08-02, operator request:
+          after a re-entry the section vanished because only prior-segment dispatches existed).
+          Scoped to the CURRENT segment via its startedAt: a sealed segment's dispatch (and its
+          recorded answer) never stands in for this segment's; before this segment's proforma
+          goes out the block says "nothing to answer" instead of disappearing. */}
+      <CommunicationAcceptanceBlock
+        entryId={entry.id}
+        commType="PROFORMA_INVOICE"
+        sinceIso={segments[0]?.startedAt ?? null}
+      />
+
 
       {/* 5. Money received from the guest — after the proforma, so the page reads in the
           order the desk works: set the requirement, show/send the bill, take the money. */}
@@ -654,9 +697,28 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         </BlockH>
         {paymentStatus && (
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
-            Received {money(paymentStatus.totalReceived)} of {money(paymentStatus.requiredAmount)} required
+            Received {money(paymentStatus.totalReceived)} of the{" "}
+            {paymentStatus.requirementSource === "OPERATOR" ? "requested" : "min threshold"}{" "}
+            {money(paymentStatus.requiredAmount)}
             {paymentStatus.satisfied ? " — satisfied" : ""}.
           </p>
+        )}
+        {/* The payment window: the advance is due between the proforma going out and the
+            check-in date. Facts come from payment-status (backend); only the countdown label
+            ticks here. Overdue keeps showing until the money arrives or check-in gates catch it. */}
+        {advanceWindow && (advanceWindow.active || advanceWindow.overdue) && (
+          <div style={{ margin: "0 0 11px", display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+            <span className={`timer ${advanceWindow.overdue ? "crit" : advanceCountdown?.level || "warn"}`}>
+              {advanceWindow.overdue
+                ? "Advance overdue — check-in date passed with the advance unpaid"
+                : `Advance due ${advanceCountdown?.text ?? "before check-in"} · by ${advanceWindow.deadline?.slice(0, 10) ?? ""}`}
+            </span>
+            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+              Window opened when the proforma went out
+              {advanceWindow.opensAt ? ` (${advanceWindow.opensAt.slice(0, 16).replace("T", " ")})` : ""} — it closes at
+              check-in.
+            </span>
+          </div>
         )}
         {inPayments.length > 0 && (
           <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 11px" }}>

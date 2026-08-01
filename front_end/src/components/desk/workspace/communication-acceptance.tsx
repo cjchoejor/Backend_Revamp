@@ -71,11 +71,18 @@ export function CommunicationAcceptanceBlock({
   entryId,
   commType,
   title,
+  sinceIso,
 }: {
   entryId: string;
   commType: EntryCommunicationType;
   /** Override the default heading (e.g. when the host step already names the artifact). */
   title?: string;
+  /**
+   * Only consider communications created at/after this instant — pass the current segment's
+   * `startedAt` so a prior segment's dispatch (and its answer) never stands in for this
+   * segment's (2026-08-02). Omit for entry-wide behaviour.
+   */
+  sinceIso?: string | null;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -90,7 +97,8 @@ export function CommunicationAcceptanceBlock({
 
   // Newest first from the backend, so the first match is the live one. Earlier ones are prior
   // rounds (a superseded quote, a re-issued proforma) and are history, not actionable.
-  const items = commsQuery.data?.items ?? [];
+  // ISO-8601 strings compare lexicographically, so the sinceIso cut needs no Date parsing.
+  const items = (commsQuery.data?.items ?? []).filter((c) => !sinceIso || (c.createdAt ?? "") >= sinceIso);
   const comm: EntryCommunication | undefined = items.find((c) => c.commType === commType);
 
   const ackM = useMutation({
