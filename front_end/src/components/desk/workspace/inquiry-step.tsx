@@ -27,7 +27,7 @@ import { money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { DateField, nextDayIso } from "@/components/desk/date-field";
 import type { BackendItem } from "@/lib/desk/backend-map";
-import type { EntryDetail } from "@/types/api";
+import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
 
 /**
@@ -562,11 +562,19 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     return stayNights;
   }, [perDate, searchResult, checkIn, checkOut, stayNights]);
 
+  // Canonical form of the last SUBMITTED selection — lets the save button show "Saved"
+  // right away on success instead of waiting for the entry refetch (see `showSaved` below).
+  const submittedCanonRef = useRef<string | null>(null);
   const handleMultiSeal = (p: SealPayload) => {
     if (!activeConfigId && !latestConfig?.id) {
       toast.error("Run availability search first");
       return;
     }
+    // Remember exactly what was submitted so the button can show "Saved" immediately on
+    // success, before the entry refetch brings the server's copy back (see `showSaved`).
+    submittedCanonRef.current = p.perNight
+      ? canonNights(p.perNight)
+      : `*=${[...(p.roomIds ?? [])].sort().join(",")}`;
     selectMutation.mutate({ roomIds: p.roomIds, perNight: p.perNight, deficientRoomIds: p.deficientRoomIds });
   };
 
@@ -748,22 +756,73 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       ? boardNightsReady === boardPerNight.length
       : tableSel.length === numberOfRooms;
   const sealReady = boardActive ? boardComplete : varyActive ? varyComplete : tableSel.length === numberOfRooms;
+
+  // ---- Saved-vs-dirty button state (2026-08-01, operator request) ----------------------------
+  // The standard "settings form" pattern: the button reads "Save…" while the picks differ from
+  // what the server holds, and flips to a green "✓ Saved…" (disabled — nothing to do) once they
+  // match. It's DERIVED by comparing selections, not a flag set on click — so any change to the
+  // picks (table click, board drag, per-night cell) flips it back to "Save…" automatically, and
+  // reloading the page shows the truth rather than a stale flag.
+  const canonNights = (pn: Array<{ date: string; roomIds: string[] }>) =>
+    pn
+      .map((p) => `${String(p.date).slice(0, 10)}=${[...p.roomIds].sort().join(",")}`)
+      .sort()
+      .join("|");
+  // What the server currently holds, normalised to the same shape the save paths submit.
+  const savedCanon = useMemo(() => {
+    const opt = preferredConfig?.optionSelected as AvailabilityOptionSelected | null | undefined;
+    if (!opt) return null;
+    if ("perNight" in opt && Array.isArray(opt.perNight)) {
+      return canonNights(opt.perNight.map((p) => ({ date: p.date, roomIds: p.roomIds.map((r) => r.roomId) })));
+    }
+    const ids = optionSelectedRoomIds(opt);
+    if (ids.length === 0) return null;
+    return stayNights.length > 0
+      ? canonNights(stayNights.map((date) => ({ date, roomIds: ids })))
+      : `*=${[...ids].sort().join(",")}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredConfig?.optionSelected, stayNights]);
+  // What clicking Save right now would submit.
+  const currentCanon = useMemo(() => {
+    if (boardActive && boardPerNight && boardPerNight.length > 0) return canonNights(boardPerNight);
+    if (varyActive) return canonNights(displayNights.map((date) => ({ date, roomIds: varySel[date] ?? [] })));
+    if (tableSel.length === 0) return null;
+    return stayNights.length > 0
+      ? canonNights(stayNights.map((date) => ({ date, roomIds: tableSel })))
+      : `*=${[...tableSel].sort().join(",")}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardActive, boardPerNight, varyActive, varySel, displayNights, tableSel, stayNights]);
+  // Bridge the gap between a successful save and the entry refetch delivering the server's copy.
+  const justSaved = selectMutation.isSuccess && submittedCanonRef.current != null && submittedCanonRef.current === currentCanon;
+  const showSaved =
+    !selectMutation.isPending && currentCanon != null && ((savedCanon != null && savedCanon === currentCanon) || justSaved);
+
+  const perNightLabel = varyActive || (boardActive && boardNightDiffs);
+  const saveLabel = perNightLabel ? "Save per-night rooms" : numberOfRooms === 1 ? "Save room selection" : `Save ${numberOfRooms} rooms`;
+  const savedLabel = perNightLabel ? "✓ Saved per-night rooms" : numberOfRooms === 1 ? "✓ Room selection saved" : `✓ Saved ${numberOfRooms} rooms`;
+
   const sealControls = (
     <>
       <button
-        className="btn btn-primary btn-sm"
-        disabled={!sealReady || selectMutation.isPending}
+        className={`btn btn-sm${showSaved ? "" : " btn-primary"}`}
+        style={
+          showSaved
+            ? {
+                background: "var(--green-t)",
+                borderColor: "var(--green-t2)",
+                color: "var(--green-d)",
+                // Beat `.btn[disabled]`'s dimming — this is a settled state, not an unavailable action.
+                opacity: 1,
+              }
+            : undefined
+        }
+        disabled={showSaved || !sealReady || selectMutation.isPending}
+        title={showSaved ? "This selection is saved — change a room to edit it" : undefined}
         onClick={boardActive ? sealBoardSelection : varyActive ? sealVarySelection : sealTableSelection}
       >
         {/* One verb everywhere — this is a SAVE (re-doable via "Change selection"), and the
             old Save/Seal split by room count read as two different actions. */}
-        {selectMutation.isPending
-          ? "Saving…"
-          : varyActive || (boardActive && boardNightDiffs)
-            ? "Save per-night rooms"
-            : numberOfRooms === 1
-              ? "Save room selection"
-              : `Save ${numberOfRooms} rooms`}
+        {selectMutation.isPending ? "Saving…" : showSaved ? savedLabel : saveLabel}
       </button>
       <span style={{ fontSize: 11.5, fontWeight: 600, color: sealReady ? "var(--green-d)" : "var(--ink-3)" }}>
         {varyActive

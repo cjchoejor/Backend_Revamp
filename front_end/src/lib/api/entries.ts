@@ -544,3 +544,39 @@ export async function progressStage(
   });
   return normalizeEntryResponse(data);
 }
+
+/**
+ * Rate reference for the S2 composition editors (2026-08-01). One item per sealed room type:
+ * the per-night room rate the backend will price with when no negotiated rate is typed
+ * (agent/corporate card incl. per-type override, else standard rate plan), the card's
+ * extra-bed/meal add-on rates, and the standard rate + MSR as the negotiation floor.
+ * Backend-authoritative — displayed verbatim, never re-computed here.
+ */
+export type RoomTypeRateReference = {
+  roomTypeId: string;
+  code: string | null;
+  name: string;
+  roomNumbers: string[];
+  roomRate: number | null;
+  roomRateSource: "AGENT_RATE_CARD" | "STANDARD_RATE_PLAN" | null;
+  standardRate: number | null;
+  msrValue: number | null;
+  extraBedRate: number | null;
+  breakfastRate: number | null;
+  lunchRate: number | null;
+  dinnerRate: number | null;
+};
+
+export type EntryRateReference = {
+  entryId: string;
+  currency: string;
+  nights: number | null;
+  gstRate: number;
+  serviceChargeRate: number;
+  party: { type: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
+  roomTypes: RoomTypeRateReference[];
+};
+
+export async function getRateReference(session: Session, entryId: string) {
+  return apiRequest<EntryRateReference>(`/api/entries/${entryId}/rate-reference`, { session });
+}

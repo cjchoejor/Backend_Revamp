@@ -8,6 +8,7 @@ import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionsTable } from "./room-compositions-table";
+import { RateReferenceStrip } from "./rate-reference-strip";
 
 /**
  * Guest-board composition planner (2026-07-28) — the people-first replacement for the
@@ -1091,6 +1092,9 @@ export function RoomCompositionPlanner(props: {
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */
   persistKey?: string;
+  /** When set, the reference-rate strip (per-type room/bed/meal rates from the backend)
+   *  renders below the active editor as the anchor for the negotiated-rate cells. */
+  entryId?: string;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
@@ -1133,7 +1137,14 @@ export function RoomCompositionPlanner(props: {
     }
     onChange(compositions);
   };
-  if (!canBoard) return <RoomCompositionsTable {...props} />;
+  const rateRef = props.entryId ? <RateReferenceStrip entryId={props.entryId} /> : null;
+  if (!canBoard)
+    return (
+      <div style={{ display: "grid", gap: 8 }}>
+        <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current ?? []} />
+        {rateRef}
+      </div>
+    );
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div className="seg rce-seg" style={{ justifySelf: "start" }}>
@@ -1173,6 +1184,7 @@ export function RoomCompositionPlanner(props: {
           onFocusRoom={setFocusRoomId}
         />
       )}
+      {rateRef}
     </div>
   );
 }

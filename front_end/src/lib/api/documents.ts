@@ -52,6 +52,40 @@ export function openQuotationPdf(session: Session, quotationId: string): Promise
   return openPdf(session, `/api/quotations/${quotationId}/pdf`);
 }
 
+/**
+ * S2 — the quotation document as inline HTML (2026-08-01). Composed server-side from the
+ * quotation's CURRENT terms via the same house template as the PDF, but with no PDF render or
+ * storage write — so the desk can show the document for a draft before anything is generated.
+ * Rendered into a sandboxed iframe via `srcDoc`.
+ */
+export async function fetchQuotationPreviewHtml(session: Session, quotationId: string): Promise<string> {
+  return fetchPreviewHtml(session, `/api/quotations/${quotationId}/preview-html`, "quotation");
+}
+
+/**
+ * S3 — the proforma document as inline HTML (2026-08-01). Same zero-side-effect composition
+ * as the quotation preview: reflects the folio's current payments and the desk's advance
+ * requirement live, without generating a PDF.
+ */
+export async function fetchInvoicePreviewHtml(session: Session, invoiceId: string): Promise<string> {
+  return fetchPreviewHtml(session, `/api/invoices/${invoiceId}/preview-html`, "proforma");
+}
+
+async function fetchPreviewHtml(session: Session, path: string, label: string): Promise<string> {
+  const res = await fetch(path, { headers: authHeaders(session), credentials: "same-origin" });
+  if (!res.ok) {
+    let message = `Could not load ${label} preview (HTTP ${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // non-JSON error body — keep the generic message
+    }
+    throw new Error(message);
+  }
+  return res.text();
+}
+
 /** S3 proforma / S8·S9 final — invoice PDF. `GET /api/invoices/:id/pdf`. */
 export function openInvoicePdf(session: Session, invoiceId: string): Promise<void> {
   return openPdf(session, `/api/invoices/${invoiceId}/pdf`);
