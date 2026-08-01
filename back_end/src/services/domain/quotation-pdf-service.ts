@@ -15,6 +15,11 @@
  * Idempotency: if the quotation already has a `pdfStorageKey`, we don't re-render — we read
  * the stored file and return it. This matches the invoice-immutability principle: what the
  * guest received is what stays. Corrections use a new quotation version.
+ *
+ * The document COMPOSITION (terms → A1 house-format HTML) is factored into
+ * `buildQuotationDocRender` so the desk's inline preview (`renderQuotationPreviewHtml`,
+ * 2026-08-01) shows the exact same document WITHOUT rendering a PDF, writing storage, or
+ * snapshotting QuotationLine rows — pure read, always from the quotation's current terms.
  */
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
@@ -30,6 +35,7 @@ type QuotationTerms = {
   roomCount?: number;
   effectiveRate?: string | number;
   currency?: string;
+  roomTypeId?: string;
   pricingBreakdown?: { nightlyRate?: number | string; nights?: number; roomCount?: number; subTotal?: number | string };
   mealPlan?: string;
   extraBeds?: string | number;
@@ -43,11 +49,18 @@ export type QuotationPdfArtifact = {
   invoiceNumber: string;
 };
 
-export async function generateOrLoadQuotationPdf(
-  prisma: PrismaClient,
-  quotationId: string,
-  actorId: string,
-): Promise<QuotationPdfArtifact> {
+type LoadedQuotation = Prisma.QuotationGetPayload<{
+  include: {
+    entry: {
+      include: {
+        guestProfile: true;
+        inquiry: { include: { travelAgent: true; corporateAccount: true } };
+      };
+    };
+  };
+}>;
+
+async function loadQuotationForRender(prisma: PrismaClient, quotationId: string): Promise<LoadedQuotation> {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
     include: {
@@ -60,18 +73,50 @@ export async function generateOrLoadQuotationPdf(
     },
   });
   if (!q) throw new NotFoundError("Quotation");
+  return q;
+}
 
-  // === Idempotency: already rendered → serve the stored file. ===
-  if (q.pdfStorageKey && q.pdfChecksum) {
-    const bytes = await readDocument(q.pdfStorageKey);
-    return {
-      storageKey: q.pdfStorageKey,
-      checksum: q.pdfChecksum,
-      bytes,
-      invoiceNumber: q.referenceNumber,
-    };
-  }
+/** Intermediate print row — collapsed into the A1 table's four columns at render time. */
+type PrintLine = {
+  date: Date;
+  roomNo?: string | null;
+  roomTypeName?: string | null;
+  occupants: string;
+  mealPlan: string | null;
+  extraBeds: string | null;
+  amount: string | number;
+};
 
+/** Everything the PDF path persists plus the composed HTML — shared with the preview path. */
+type QuotationDocRender = {
+  html: string;
+  linesForTemplate: PrintLine[];
+  nights: number;
+  roomCount: number;
+  nightlyRate: number;
+  perNightAmount: number;
+  totalAmount: number;
+  advanceAmount: number;
+  focAmount: number;
+  totalPayable: number;
+  guestName: string;
+  occupantsString: string;
+  mealPlanDisplay: string;
+  extraBeds: string;
+  checkIn: Date;
+  checkOut: Date;
+  toEmail: string;
+  fromName: string;
+  documentDate: Date;
+  hotel: Awaited<ReturnType<typeof loadHotelProfileForRender>>;
+};
+
+/**
+ * Compose the A1 house-format quotation document from the quotation's CURRENT commercialTerms.
+ * Pure read — no writes, no storage. Both the stored-PDF path and the desk's live preview run
+ * through here, so the two can never disagree about what the quotation says.
+ */
+async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation): Promise<QuotationDocRender> {
   const terms = (q.commercialTerms as QuotationTerms) ?? {};
   const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
   const roomCount = Math.max(1, Number(terms?.roomCount ?? terms?.pricingBreakdown?.roomCount ?? 1));
@@ -131,18 +176,17 @@ export async function generateOrLoadQuotationPdf(
     }>;
   })?.compositionTotals?.perRoom;
 
-  /** Intermediate print row — collapsed into the A1 table's four columns at render time. */
-  type PrintLine = {
-    date: Date;
-    roomNo?: string | null;
-    occupants: string;
-    mealPlan: string | null;
-    extraBeds: string | null;
-    amount: string | number;
-  };
   const linesForTemplate: PrintLine[] = [];
   let totalAmount = 0;
+  // Room-type names for the description column — the reference A1 leads its description with
+  // the type ("Deluxe · 1 room · 2 adults · MAP"), so resolve names for whichever rooms the
+  // lines will mention (composition rooms, else the legacy sealed room type).
   if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
+    const roomRows = await prisma.room.findMany({
+      where: { id: { in: compositionPerRoom.map((r) => r.roomId) } },
+      select: { id: true, roomType: { select: { name: true } } },
+    });
+    const typeNameByRoomId = new Map(roomRows.map((r) => [r.id, r.roomType?.name ?? null]));
     // One row per room summarising the whole stay for that room.
     const inputsByRoomId = new Map(
       ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
@@ -154,15 +198,18 @@ export async function generateOrLoadQuotationPdf(
       const roomOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
       const planParts: string[] = [];
       if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);
-      if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAPL`);
-      if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAPD`);
+      if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAP+L`);
+      if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAP+D`);
       if (raw?.mealPlanApCount) planParts.push(`${raw.mealPlanApCount} AP`);
       if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
-      const planStr = planParts.length > 0 ? planParts.join(" · ") : null;
+      // EP is stated explicitly rather than leaving the meal slot blank — the guest reading
+      // the quotation should see "room only" was a choice, not an omission.
+      const planStr = planParts.length > 0 ? planParts.join(" · ") : "EP (room only)";
       const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
       linesForTemplate.push({
         date: checkIn,
         roomNo: r.roomNumber ?? r.roomId.slice(0, 6),
+        roomTypeName: typeNameByRoomId.get(r.roomId) ?? null,
         occupants: roomOccupants,
         mealPlan: planStr,
         extraBeds: eb,
@@ -172,10 +219,16 @@ export async function generateOrLoadQuotationPdf(
     }
   } else {
     // Legacy: one row per stay night. Kept for backward compat.
+    let legacyTypeName: string | null = null;
+    if (terms?.roomTypeId) {
+      const rt = await prisma.roomType.findUnique({ where: { id: terms.roomTypeId }, select: { name: true } });
+      legacyTypeName = rt?.name ?? null;
+    }
     for (let i = 0; i < nights; i++) {
       const date = new Date(checkIn.getTime() + i * 86_400_000);
       linesForTemplate.push({
         date,
+        roomTypeName: legacyTypeName,
         occupants: occupantsString,
         mealPlan: mealPlanDisplay || null,
         extraBeds,
@@ -225,7 +278,13 @@ export async function generateOrLoadQuotationPdf(
     attn: null,
     stay: formatStayRange(checkIn, checkOut, nights),
     lines: linesForTemplate.map((l) => ({
-      description: [l.roomNo ? `Room ${l.roomNo}` : null, l.occupants, l.mealPlan, l.extraBeds && l.extraBeds !== "None" ? l.extraBeds : null]
+      description: [
+        l.roomTypeName,
+        l.roomNo ? `Room ${l.roomNo}` : null,
+        l.occupants,
+        l.mealPlan,
+        l.extraBeds && l.extraBeds !== "None" ? l.extraBeds : null,
+      ]
         .filter(Boolean)
         .join(" · "),
       nights: String(nights),
@@ -244,7 +303,66 @@ export async function generateOrLoadQuotationPdf(
     tariffVersion: "T1.0",
   });
 
-  const bytes = await renderHtmlToPdf(html, { fitToPage: true });
+  return {
+    html,
+    linesForTemplate,
+    nights,
+    roomCount,
+    nightlyRate,
+    perNightAmount,
+    totalAmount,
+    advanceAmount,
+    focAmount,
+    totalPayable,
+    guestName,
+    occupantsString,
+    mealPlanDisplay,
+    extraBeds,
+    checkIn,
+    checkOut,
+    toEmail,
+    fromName,
+    documentDate,
+    hotel,
+  };
+}
+
+/**
+ * Desk inline preview (2026-08-01): the quotation document as HTML, composed fresh from the
+ * quotation's CURRENT terms. No PDF render, no storage write, no QuotationLine snapshot, no
+ * trace — a pure read the operator can call on a DRAFT to see the document before anything
+ * is generated or sent. The stored PDF (when later rendered) runs the same composition.
+ */
+export async function renderQuotationPreviewHtml(
+  prisma: PrismaClient,
+  quotationId: string,
+): Promise<{ html: string; referenceNumber: string }> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+  const model = await buildQuotationDocRender(prisma, q);
+  return { html: model.html, referenceNumber: q.referenceNumber };
+}
+
+export async function generateOrLoadQuotationPdf(
+  prisma: PrismaClient,
+  quotationId: string,
+  actorId: string,
+): Promise<QuotationPdfArtifact> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+
+  // === Idempotency: already rendered → serve the stored file. ===
+  if (q.pdfStorageKey && q.pdfChecksum) {
+    const bytes = await readDocument(q.pdfStorageKey);
+    return {
+      storageKey: q.pdfStorageKey,
+      checksum: q.pdfChecksum,
+      bytes,
+      invoiceNumber: q.referenceNumber,
+    };
+  }
+
+  const m = await buildQuotationDocRender(prisma, q);
+
+  const bytes = await renderHtmlToPdf(m.html, { fitToPage: true });
   const checksum = hashSha256(bytes);
   const now = new Date();
   // Revision suffix so a re-render after a price change (operator previewed, then applied a
@@ -260,7 +378,7 @@ export async function generateOrLoadQuotationPdf(
     // QuotationLine snapshot — one row per booking-table row, immutable. Uses each line's
     // own amount so per-room composition rows carry their true tax-inclusive stay total,
     // not the legacy per-night value.
-    const lineData: Prisma.QuotationLineCreateManyInput[] = linesForTemplate.map((l, i) => ({
+    const lineData: Prisma.QuotationLineCreateManyInput[] = m.linesForTemplate.map((l, i) => ({
       quotationId: q.id,
       lineNumber: i + 1,
       date: l.date,
@@ -287,30 +405,30 @@ export async function generateOrLoadQuotationPdf(
           documentTitle: "QUOTATION",
           referenceNumber: q.referenceNumber,
           versionNumber: q.versionNumber,
-          toEmail,
-          fromName,
-          documentDate: documentDate.toISOString(),
-          checkIn: checkIn.toISOString(),
-          checkOut: checkOut.toISOString(),
-          nights,
-          roomCount,
-          nightlyRate,
-          perNightAmount,
-          totalAmount,
-          advanceAmount,
-          focAmount,
-          totalPayable,
-          primaryGuestName: guestName,
-          occupantsString,
-          mealPlanDisplay,
-          extraBeds,
+          toEmail: m.toEmail,
+          fromName: m.fromName,
+          documentDate: m.documentDate.toISOString(),
+          checkIn: m.checkIn.toISOString(),
+          checkOut: m.checkOut.toISOString(),
+          nights: m.nights,
+          roomCount: m.roomCount,
+          nightlyRate: m.nightlyRate,
+          perNightAmount: m.perNightAmount,
+          totalAmount: m.totalAmount,
+          advanceAmount: m.advanceAmount,
+          focAmount: m.focAmount,
+          totalPayable: m.totalPayable,
+          primaryGuestName: m.guestName,
+          occupantsString: m.occupantsString,
+          mealPlanDisplay: m.mealPlanDisplay,
+          extraBeds: m.extraBeds,
           hotel: {
-            hotelName: hotel.hotelName,
-            registeredAddress: hotel.registeredAddress,
-            primaryEmail: hotel.primaryEmail,
-            accountNumber: hotel.accountNumber,
-            tpnNumber: hotel.tpnNumber,
-            gstTpnNumber: hotel.gstTpnNumber,
+            hotelName: m.hotel.hotelName,
+            registeredAddress: m.hotel.registeredAddress,
+            primaryEmail: m.hotel.primaryEmail,
+            accountNumber: m.hotel.accountNumber,
+            tpnNumber: m.hotel.tpnNumber,
+            gstTpnNumber: m.hotel.gstTpnNumber,
           },
         } as any,
       },

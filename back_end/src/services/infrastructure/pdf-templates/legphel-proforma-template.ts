@@ -58,6 +58,13 @@ export type LegphelProformaInput = {
   decompositionGst: string;
   /** The ruled total row — what must be paid now. */
   advanceDueNow: string;
+  /**
+   * Optional qualifier appended to the "Advance due now" key, e.g. "(30% of quote)" when the
+   * desk pinned the requirement as a percentage (2026-08-01). Null = plain key.
+   */
+  advanceDueQualifier?: string | null;
+  /** Optional "Advance received" row — shown when the guest has already paid something in. */
+  advanceReceived?: string | null;
   balanceAtCheckout: string;
   currencyLabel?: string;
   bank: { bankName: string | null; accountName: string | null; accountsPhone: string | null };
@@ -101,7 +108,12 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
       "",
       { rawKey: true },
     ),
-    row(`Advance due now · ${currency}`, input.advanceDueNow, { total: true }),
+    input.advanceReceived ? row("Advance received", input.advanceReceived) : "",
+    row(
+      `Advance due now${input.advanceDueQualifier ? ` ${input.advanceDueQualifier}` : ""} · ${currency}`,
+      input.advanceDueNow,
+      { total: true },
+    ),
     row("Balance at checkout", input.balanceAtCheckout),
     bankStrip(bankPairs),
     note(input.closingNote, "quiet"),
