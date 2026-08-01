@@ -1,5 +1,5 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { PaymentDirection, Stage } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+import { PaymentDirection, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -8,7 +8,8 @@ import { enforceAdvancePaymentReconciliationRequiresPayment } from "../../polici
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
-import { maxZeroSub, sumMoneyBy, toDecimal } from "../../lib/money.js";
+import { maxZeroSub, pctOf, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
+import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -61,6 +62,15 @@ async function computeAdvancePaymentEvaluation(
     }
   }
 
+  // Operator-set requirement (2026-08-01) — when the desk pinned an advance for THIS booking
+  // (flat amount or a percentage resolved at set time), it overrides the config thresholds AND
+  // the group boost: an explicit per-booking decision beats every derived default.
+  const operatorRequired = folio.advanceRequiredAmount != null ? Number(folio.advanceRequiredAmount.toString()) : null;
+  if (operatorRequired != null) {
+    requiredAmount = operatorRequired;
+    boostApplied = null;
+  }
+
   // Decimal-safe sum — reducing Number(p.amount) with `+` produced 4999.999999999999 for
   // three partial payments totalling exactly 5000 and wrongly blocked check-in at the gate.
   const inPayments = (folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.IN);
@@ -68,7 +78,11 @@ async function computeAdvancePaymentEvaluation(
   const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
 
   const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } });
-  const creditExtensionActive = !!credit;
+  // An extension past its expiry no longer satisfies the condition — enforcement is at read
+  // time, so no worker is needed; the clock simply runs out.
+  const now = new Date();
+  const creditExtensionExpired = !!credit?.expiresAt && credit.expiresAt.getTime() <= now.getTime();
+  const creditExtensionActive = !!credit && !creditExtensionExpired;
 
   const satisfied = creditExtensionActive
     || (Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0));
@@ -84,10 +98,102 @@ async function computeAdvancePaymentEvaluation(
     shortfall: Number(shortfallDec.toFixed(2)),
     creditExtensionActive,
     ceilingAmount: credit ? Number(credit.ceilingAmount.toString()) : null,
+    // Expiry facts so the desk can show the credit-extension countdown honestly. `Expired`
+    // distinguishes "there is an extension but its clock ran out" from "no extension".
+    creditExtensionExpiresAt: credit?.expiresAt ? credit.expiresAt.toISOString() : null,
+    creditExtensionExpired,
+    // Where the required amount came from: the operator's per-booking requirement or the
+    // configured thresholds. Basis carries the percent/base detail for display.
+    requirementSource: operatorRequired != null ? ("OPERATOR" as const) : ("CONFIG" as const),
+    requirementBasis: operatorRequired != null ? (folio.advanceRequiredBasis ?? null) : null,
     // Present only when the group boost actually raised the required amount above the base.
     // The frontend can show a hint on the payment card explaining WHY the amount is higher.
     ...(boostApplied ? { groupBoostApplied: boostApplied } : {}),
   };
+}
+
+/**
+ * Operator-set advance requirement (2026-08-01): pin how much the guest must pay for THIS
+ * booking — a flat amount, or a percentage of the operative quotation's total (resolved to an
+ * amount HERE, Decimal-safe, so the stored value is unambiguous even if the quote later
+ * changes; re-set the requirement to track a renegotiated quote). CLEAR reverts to the
+ * configured `advancePayment.thresholds`. The resolved amount overrides config + group boost
+ * in the payment evaluation and prints as "Advance due now" on the proforma.
+ */
+export async function setAdvanceRequirement(
+  prisma: PrismaClient,
+  input: { entryId: string; folioId: string; mode: "AMOUNT" | "PERCENT" | "CLEAR"; amount?: number; percent?: number },
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+) {
+  const folio = await prisma.folio.findUnique({ where: { id: input.folioId } });
+  if (!folio) throw new ValidationError("folioId invalid");
+  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+
+  const now = new Date();
+  let requiredDec: Prisma.Decimal | null = null;
+  let basis: Record<string, unknown> | null = null;
+
+  if (input.mode === "AMOUNT") {
+    if (!Number.isFinite(input.amount) || (input.amount ?? 0) <= 0) throw new ValidationError("amount must be positive");
+    requiredDec = round2(toDecimal(input.amount!));
+    basis = { mode: "AMOUNT", setBy: actor.actorId, setAt: now.toISOString() };
+  } else if (input.mode === "PERCENT") {
+    if (!Number.isFinite(input.percent) || (input.percent ?? 0) <= 0 || (input.percent ?? 0) > 100) {
+      throw new ValidationError("percent must be in (0, 100]");
+    }
+    // Percentage of the operative quotation's total (the current segment's commercial basis).
+    const entry = await prisma.entry.findUnique({
+      where: { id: input.entryId },
+      include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 }, quotations: true },
+    });
+    const segmentId = entry?.segments[0]?.id;
+    const operative = segmentId ? resolveOperativeQuotation(entry!.quotations, segmentId) : null;
+    if (!operative) {
+      throw new ValidationError("No quotation to base a percentage on — create the quote first, or set a flat amount");
+    }
+    const baseTotalDec = toDecimal(operative.totalAmount as unknown as string);
+    requiredDec = round2(pctOf(baseTotalDec, input.percent!));
+    basis = {
+      mode: "PERCENT",
+      percent: input.percent,
+      baseTotal: Number(baseTotalDec.toFixed(2)),
+      quotationId: operative.id,
+      setBy: actor.actorId,
+      setAt: now.toISOString(),
+    };
+  }
+  // mode === "CLEAR" leaves requiredDec/basis null → falls back to config thresholds.
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.folio.update({
+      where: { id: input.folioId },
+      data: { advanceRequiredAmount: requiredDec, advanceRequiredBasis: basis === null ? Prisma.DbNull : (basis as any) },
+    });
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: input.mode === "CLEAR" ? "ADVANCE_PAYMENT.REQUIREMENT_CLEARED" : "ADVANCE_PAYMENT.REQUIREMENT_SET",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel,
+        entityType: "Folio",
+        entityId: input.folioId,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: Stage.S3,
+        entryId: input.entryId,
+        payload: {
+          entryId: input.entryId,
+          folioId: input.folioId,
+          mode: input.mode,
+          requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null,
+          basis: basis as any,
+        },
+        createdBy: actor.actorId,
+      },
+    });
+
+    return updated;
+  });
 }
 
 export async function evaluateAdvancePaymentCondition(
@@ -174,12 +280,18 @@ export async function recommendCreditCeilingForEntry(
 
 export async function recordCreditExtensionApproval(
   prisma: PrismaClient,
-  input: { entryId: string; folioId: string; ceilingAmount: number; reason: string },
+  input: { entryId: string; folioId: string; ceilingAmount: number; reason: string; validForHours?: number | null },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ) {
   enforceCreditExtensionConstraints({ actorLevel: actor.actorLevel, ceilingAmount: input.ceilingAmount, reason: input.reason });
 
   const now = new Date();
+  // Optional time limit (2026-08-01): the extension satisfies the advance condition only
+  // until this instant — enforced at read time in the payment evaluation. Null = open-ended.
+  const expiresAt =
+    input.validForHours != null && Number.isFinite(input.validForHours) && input.validForHours > 0
+      ? new Date(now.getTime() + input.validForHours * 3_600_000)
+      : null;
 
   return prisma.$transaction(async (tx) => {
     // Pre-allocate a readable ID; if upsert hits the update path it's discarded harmlessly.
@@ -194,12 +306,15 @@ export async function recordCreditExtensionApproval(
         approvedBy: actor.actorId,
         approvedAt: now,
         reason: input.reason.trim(),
+        expiresAt,
       },
       update: {
         ceilingAmount: input.ceilingAmount,
         approvedBy: actor.actorId,
         approvedAt: now,
         reason: input.reason.trim(),
+        // A re-approval resets the clock (or removes it when no duration is given).
+        expiresAt,
       },
     });
 
@@ -216,7 +331,12 @@ export async function recordCreditExtensionApproval(
         timestamp: now,
         stageContext: Stage.S3,
         entryId: input.entryId,
-        payload: { entryId: input.entryId, folioId: input.folioId, ceilingAmount: input.ceilingAmount },
+        payload: {
+          entryId: input.entryId,
+          folioId: input.folioId,
+          ceilingAmount: input.ceilingAmount,
+          expiresAt: expiresAt ? expiresAt.toISOString() : null,
+        },
         createdBy: actor.actorId,
       },
     });

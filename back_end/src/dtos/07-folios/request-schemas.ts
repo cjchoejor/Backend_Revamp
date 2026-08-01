@@ -29,8 +29,35 @@ export type AdvancePaymentReconcileRequestDto = z.infer<typeof advancePaymentRec
 export const recordCreditExtensionRequestSchema = z.object({
   ceilingAmount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "ceilingAmount must be positive"),
   reason: z.string().min(1),
+  /**
+   * Optional time limit (2026-08-01): the extension stops satisfying the advance-payment
+   * condition this many hours after approval. Omit/null = no expiry.
+   */
+  validForHours: z.coerce
+    .number()
+    .refine((n) => Number.isFinite(n) && n > 0, "validForHours must be positive")
+    .optional()
+    .nullable(),
 });
 export type RecordCreditExtensionRequestDto = z.infer<typeof recordCreditExtensionRequestSchema>;
+
+/**
+ * Operator-set advance requirement (2026-08-01): how much the guest has to pay before the
+ * booking confirms — a flat amount, a percentage of the operative quotation's total
+ * (converted server-side), or CLEAR to fall back to the configured thresholds.
+ */
+export const setAdvanceRequirementRequestSchema = z
+  .object({
+    mode: z.enum(["AMOUNT", "PERCENT", "CLEAR"]),
+    amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive").optional(),
+    percent: z.coerce
+      .number()
+      .refine((n) => Number.isFinite(n) && n > 0 && n <= 100, "percent must be in (0, 100]")
+      .optional(),
+  })
+  .refine((b) => (b.mode === "AMOUNT" ? b.amount != null : true), { message: "amount is required for mode AMOUNT" })
+  .refine((b) => (b.mode === "PERCENT" ? b.percent != null : true), { message: "percent is required for mode PERCENT" });
+export type SetAdvanceRequirementRequestDto = z.infer<typeof setAdvanceRequirementRequestSchema>;
 
 /** Same route serves S7 charges and S9 post-stay charges; only `entryId` is universally required before stage split. */
 export const postFolioChargesBodySchema = z
