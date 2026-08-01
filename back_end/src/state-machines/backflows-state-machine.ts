@@ -122,14 +122,18 @@ async function runBackflow(
 
   // Cancel pg-boss jobs BEFORE the tx (side-effect-free to DB retry) so pre-tx failure doesn't
   // leave orphan cancelled rows. Idempotent per code.
-  if (input.cancelTimerCodes?.length) {
-    await cancelEntryTimersByCode(prisma, {
-      entryId: entry.id,
-      timerCodes: input.cancelTimerCodes,
-      cancelledBy: input.actor.actorId,
-      cancelledReason: `BACKFLOW_${input.modeKey}_${input.fromStage}_TO_${input.toStage}`,
-    });
-  }
+  // ACKNOWLEDGEMENT_WINDOW_W22 is cancelled on EVERY backflow (2026-08-02): each backflow opens
+  // a new segment, and a prior segment's reply windows (quote / proforma / voucher /
+  // pre-arrival) are moot there — segment-scoped acknowledgement means they no longer gate or
+  // inform anything, and a stale voucher countdown was surfacing on the desk at S3. Late
+  // answers can still be captured (p52 allows it); only the ticking window dies.
+  const timerCodesToCancel = Array.from(new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22"]));
+  await cancelEntryTimersByCode(prisma, {
+    entryId: entry.id,
+    timerCodes: timerCodesToCancel,
+    cancelledBy: input.actor.actorId,
+    cancelledReason: `BACKFLOW_${input.modeKey}_${input.fromStage}_TO_${input.toStage}`,
+  });
 
   const now = new Date();
   const nextSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;

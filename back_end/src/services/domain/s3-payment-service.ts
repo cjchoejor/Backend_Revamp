@@ -17,6 +17,34 @@ function toNumber(v: any): number {
   return NaN;
 }
 
+/**
+ * The operator-pinned advance requirement, scoped to the CURRENT segment (2026-08-02 operator
+ * ruling). The folio is a per-entry singleton, so a requirement pinned in segment 1 would
+ * otherwise survive a re-entry and resurface as segment 2's threshold — but each segment must
+ * start from the admin-configured `advancePayment.thresholds` until the desk pins one afresh.
+ * Scoping is by set-time: a `basis.setAt` before the current segment's `startedAt` is a prior
+ * segment's decision and returns null (config applies). Requirements stored before `setAt`
+ * existed can't be scoped and stay honored. Shared by the payment evaluation, the
+ * requirement-change detection, and the proforma composition so all three agree.
+ */
+export function resolveOperatorAdvanceRequirement(
+  folio: { advanceRequiredAmount: Prisma.Decimal | null; advanceRequiredBasis: unknown },
+  currentSegmentStartedAt: Date | null | undefined,
+): number | null {
+  if (folio.advanceRequiredAmount == null) return null;
+  const basis = folio.advanceRequiredBasis as { setAt?: unknown } | null;
+  const setAt = typeof basis?.setAt === "string" ? new Date(basis.setAt) : null;
+  if (
+    setAt &&
+    Number.isFinite(setAt.getTime()) &&
+    currentSegmentStartedAt &&
+    setAt.getTime() < currentSegmentStartedAt.getTime()
+  ) {
+    return null;
+  }
+  return Number(folio.advanceRequiredAmount.toString());
+}
+
 async function computeAdvancePaymentEvaluation(
   db: PrismaClient | Prisma.TransactionClient,
   input: { entryId: string; folioId: string },
@@ -32,7 +60,11 @@ async function computeAdvancePaymentEvaluation(
   // When the entry has an ota/source, per-source overrides the DEFAULT; otherwise DEFAULT wins.
   const entry = await db.entry.findUnique({
     where: { id: input.entryId },
-    include: { inquiry: { select: { sourceChannel: true } } },
+    include: {
+      inquiry: { select: { sourceChannel: true } },
+      // Current segment's start — scopes the operator-pinned requirement (see helper above).
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } },
+    },
     // groupBillingMode + sourceChannel needed for both boost and per-source resolution.
   });
   const isGroup = entry?.groupBillingMode === "GROUP_MASTER";
@@ -64,8 +96,10 @@ async function computeAdvancePaymentEvaluation(
 
   // Operator-set requirement (2026-08-01) — when the desk pinned an advance for THIS booking
   // (flat amount or a percentage resolved at set time), it overrides the config thresholds AND
-  // the group boost: an explicit per-booking decision beats every derived default.
-  const operatorRequired = folio.advanceRequiredAmount != null ? Number(folio.advanceRequiredAmount.toString()) : null;
+  // the group boost: an explicit per-booking decision beats every derived default. Segment-
+  // scoped (2026-08-02): a pin from a PRIOR segment does not carry across a re-entry — each
+  // segment starts from the configured thresholds until the desk pins one afresh.
+  const operatorRequired = resolveOperatorAdvanceRequirement(folio, entry?.segments?.[0]?.startedAt ?? null);
   if (operatorRequired != null) {
     requiredAmount = operatorRequired;
     boostApplied = null;
@@ -78,6 +112,23 @@ async function computeAdvancePaymentEvaluation(
   const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
 
   const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } });
+
+  // Advance-payment window (2026-08-01 operator ruling, deadline side): the advance is due
+  // BETWEEN the proforma going out and the check-in date. The start is already enforced by
+  // p27 (`enforceProformaDispatchedBeforeAdvancePayment` — no money before the bill); the
+  // deadline here is a READ-TIME fact like the credit-extension expiry below — no worker,
+  // because the S5/S6 arrival gates are the enforcement teeth if check-in arrives unpaid.
+  // Superseded proformas don't open the window (a re-issued bill has to go out again).
+  const dispatchedProforma = await db.invoice.findFirst({
+    where: {
+      folioId: folio.id,
+      invoiceType: InvoiceType.PROFORMA,
+      state: { not: InvoiceState.SUPERSEDED },
+      dispatchedAt: { not: null },
+    },
+    orderBy: { dispatchedAt: "desc" },
+    select: { dispatchedAt: true },
+  });
   // An extension past its expiry no longer satisfies the condition — enforcement is at read
   // time, so no worker is needed; the clock simply runs out.
   const now = new Date();
@@ -87,6 +138,14 @@ async function computeAdvancePaymentEvaluation(
   const satisfied = creditExtensionActive
     || (Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0));
   const shortfallDec = Number.isFinite(requiredAmount) ? maxZeroSub(requiredAmountDec, totalReceivedDec) : toDecimal(0);
+
+  // Window facts. `active` = the clock is running (bill went out, money still due, deadline
+  // ahead); `overdue` = check-in date passed with the advance still unmet. A satisfied
+  // requirement closes the window — nothing to count down.
+  const windowOpensAt = dispatchedProforma?.dispatchedAt ?? null;
+  const windowDeadline = entry?.checkInDate ?? null;
+  const windowOverdue = !!windowOpensAt && !!windowDeadline && !satisfied && windowDeadline.getTime() <= now.getTime();
+  const windowActive = !!windowOpensAt && !!windowDeadline && !satisfied && !windowOverdue;
 
   // Response uses numbers because downstream JSON consumers (frontend, other services) expect
   // number, not Decimal. Precision loss on the SERIALISED value is fine — the GATE decision above
@@ -106,6 +165,14 @@ async function computeAdvancePaymentEvaluation(
     // configured thresholds. Basis carries the percent/base detail for display.
     requirementSource: operatorRequired != null ? ("OPERATOR" as const) : ("CONFIG" as const),
     requirementBasis: operatorRequired != null ? (folio.advanceRequiredBasis ?? null) : null,
+    // The payment window: opens at proforma dispatch (p27 blocks money before it), closes at
+    // the check-in date. Deadline facts only — the desk renders the countdown from these.
+    advanceWindow: {
+      opensAt: windowOpensAt ? windowOpensAt.toISOString() : null,
+      deadline: windowDeadline ? windowDeadline.toISOString() : null,
+      active: windowActive,
+      overdue: windowOverdue,
+    },
     // Present only when the group boost actually raised the required amount above the base.
     // The frontend can show a hint on the payment card explaining WHY the amount is higher.
     ...(boostApplied ? { groupBoostApplied: boostApplied } : {}),
@@ -165,8 +232,16 @@ export async function setAdvanceRequirement(
   // mode === "CLEAR" leaves requiredDec/basis null → falls back to config thresholds.
 
   // Did the requirement actually change? Drives the proforma re-issue below — setting the
-  // same figure again must not spawn a new document version.
-  const priorStr = folio.advanceRequiredAmount != null ? toDecimal(folio.advanceRequiredAmount).toFixed(2) : null;
+  // same figure again must not spawn a new document version. The prior is the segment-scoped
+  // EFFECTIVE requirement (a prior segment's pin counts as "nothing set"), so re-pinning any
+  // amount after a re-entry registers as a change and re-issues correctly.
+  const currentSegment = await prisma.segment.findFirst({
+    where: { entryId: input.entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
+  const priorEffective = resolveOperatorAdvanceRequirement(folio, currentSegment?.startedAt ?? null);
+  const priorStr = priorEffective != null ? toDecimal(priorEffective).toFixed(2) : null;
   const nextStr = requiredDec != null ? requiredDec.toFixed(2) : null;
   const requirementChanged = priorStr !== nextStr;
 
@@ -207,39 +282,54 @@ export async function setAdvanceRequirement(
     // NOT superseded: nothing frozen exists yet — its preview/PDF composes the new figures on
     // demand, and re-issuing would only mint noise versions.
     let reissued: { newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null = null;
-    if (requirementChanged) {
-      const proformas = await tx.invoice.findMany({
-        where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA },
-        orderBy: { versionNumber: "desc" },
-      });
-      const live = proformas.filter((i) => i.state !== InvoiceState.SUPERSEDED);
-      const frozen = live.filter((i) => i.dispatchedAt != null || i.pdfStorageKey != null || i.state === InvoiceState.DISPATCHED);
-      if (frozen.length > 0) {
-        const nextVersion = Math.max(...proformas.map((i) => i.versionNumber ?? 1)) + 1;
-        const newId = await allocateReadableId(tx, "INVOICE" as const, now);
-        const created = await tx.invoice.create({
-          data: {
-            id: newId,
-            folioId: input.folioId,
-            entryId: input.entryId,
-            invoiceType: InvoiceType.PROFORMA,
-            state: InvoiceState.DRAFT,
-            versionNumber: nextVersion,
-            templateKey: frozen[0].templateKey ?? "proforma-v1",
-            issuedAt: now,
-            issuedBy: actor.actorId,
-            metadata: {
-              basis: "ADVANCE_REQUIREMENT_CHANGED",
-              supersedes: frozen.map((i) => i.id),
-              requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null,
-            },
+    const proformas = await tx.invoice.findMany({
+      where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA },
+      orderBy: { versionNumber: "desc" },
+    });
+    const live = proformas.filter((i) => i.state !== InvoiceState.SUPERSEDED);
+    // Two triggers for a fresh issue:
+    //   1. The requirement CHANGED (2026-08-02 operator ruling: unconditional) — "Set
+    //      requirement" mints a fresh proforma every time the figure changes, superseding
+    //      whatever was live: a dispatched issue (the guest's bill now misstates the deal)
+    //      AND a never-rendered DRAFT (previously kept since it recomposes on demand, but
+    //      the desk treats each set as a new issue). Setting the SAME figure again still
+    //      doesn't spam versions.
+    //   2. Post-re-entry restart — NO live proforma exists at all. A re-entry supersedes
+    //      every pending proforma (`supersedePendingInvoicesTx`) and the folio singleton
+    //      survives into the new segment, so `ensureProvisionalFolio…` never mints a starter
+    //      again. Without this branch, setting the advance in the new segment left nothing
+    //      to dispatch and the bill-before-money guard dead-ended the whole S3 flow. Fires
+    //      even when the figure is unchanged (the folio remembers the old segment's pin).
+    const supersedeLive = requirementChanged && live.length > 0;
+    if (requirementChanged || live.length === 0) {
+      const basis = requirementChanged ? "ADVANCE_REQUIREMENT_CHANGED" : "REISSUED_AFTER_REENTRY";
+      const supersededIds = supersedeLive ? live.map((i) => i.id) : [];
+      const nextVersion = proformas.length > 0 ? Math.max(...proformas.map((i) => i.versionNumber ?? 1)) + 1 : 1;
+      const newId = await allocateReadableId(tx, "INVOICE" as const, now);
+      const created = await tx.invoice.create({
+        data: {
+          id: newId,
+          folioId: input.folioId,
+          entryId: input.entryId,
+          invoiceType: InvoiceType.PROFORMA,
+          state: InvoiceState.DRAFT,
+          versionNumber: nextVersion,
+          templateKey: (live[0] ?? proformas[0])?.templateKey ?? "proforma-v1",
+          issuedAt: now,
+          issuedBy: actor.actorId,
+          metadata: {
+            basis,
+            supersedes: supersededIds,
+            requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null,
           },
-        });
+        },
+      });
+      if (supersedeLive) {
         await tx.invoice.updateMany({
-          where: { id: { in: frozen.map((i) => i.id) } },
+          where: { id: { in: supersededIds } },
           data: { state: InvoiceState.SUPERSEDED, supersededById: created.id },
         });
-        for (const old of frozen) {
+        for (const old of live) {
           await tx.traceEvent.create({
             data: {
               eventType: "INVOICE.SUPERSEDED",
@@ -256,23 +346,23 @@ export async function setAdvanceRequirement(
             },
           });
         }
-        await tx.traceEvent.create({
-          data: {
-            eventType: "INVOICE.CREATED",
-            actorId: actor.actorId,
-            actorLevel: actor.actorLevel,
-            entityType: "Invoice",
-            entityId: created.id,
-            operation: "CREATE",
-            timestamp: now,
-            stageContext: Stage.S3,
-            entryId: input.entryId,
-            payload: { folioId: input.folioId, invoiceId: created.id, invoiceType: "PROFORMA", basis: "ADVANCE_REQUIREMENT_CHANGED" },
-            createdBy: actor.actorId,
-          },
-        });
-        reissued = { newInvoiceId: created.id, supersededIds: frozen.map((i) => i.id), versionNumber: nextVersion };
       }
+      await tx.traceEvent.create({
+        data: {
+          eventType: "INVOICE.CREATED",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Invoice",
+          entityId: created.id,
+          operation: "CREATE",
+          timestamp: now,
+          stageContext: Stage.S3,
+          entryId: input.entryId,
+          payload: { folioId: input.folioId, invoiceId: created.id, invoiceType: "PROFORMA", basis },
+          createdBy: actor.actorId,
+        },
+      });
+      reissued = { newInvoiceId: created.id, supersededIds, versionNumber: nextVersion };
     }
 
     return { folio: updated, reissuedProforma: reissued };

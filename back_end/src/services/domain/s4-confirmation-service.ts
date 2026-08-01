@@ -111,12 +111,22 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   // …and once the proforma actually went OUT, the guest's answer must be on record before the
   // freeze (2026-07-31 operator ruling — narrows the 2026-07-28 "evidence, never a gate" rule for
   // this one boundary). Latest dispatch decides: a re-issued proforma re-opens the question.
+  // Segment-scoped (2026-08-02): only dispatches from the CURRENT segment count — a prior
+  // segment's bill (and its answer, or lack of one) belongs to a sealed pass and must neither
+  // satisfy nor block this segment's freeze. CommunicationRecord carries no segmentId, so the
+  // scope is the segment's time window, same convention as segment-history.
+  const currentSegmentForComms = await prisma.segment.findFirst({
+    where: { entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
   const latestProformaComm = await prisma.communicationRecord.findFirst({
     where: {
       entryId,
       commType: CommunicationType.PROFORMA_INVOICE,
       direction: "OUTBOUND",
       sendStatus: "DISPATCHED",
+      ...(currentSegmentForComms?.startedAt ? { createdAt: { gte: currentSegmentForComms.startedAt } } : {}),
     },
     orderBy: { createdAt: "desc" },
     select: { acknowledgementStatus: true },

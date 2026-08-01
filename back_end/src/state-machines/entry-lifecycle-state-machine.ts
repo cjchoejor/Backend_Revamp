@@ -333,6 +333,14 @@ export async function reEnterS6ToS1(prisma: PrismaClient, entryId: string, actor
       });
     }
 
+    // Prior-segment reply windows (quote / proforma / voucher / pre-arrival W22) are moot in
+    // the new segment (2026-08-02, segment-scoped acknowledgement). Row-level cancel like the
+    // W25 block above — a pg-boss job that still fires no-ops on a CANCELLED TimerRecord.
+    await tx.timerRecord.updateMany({
+      where: { entryId, timerCode: "ACKNOWLEDGEMENT_WINDOW_W22", status: "SCHEDULED" },
+      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "REENTRY_S6_TO_S1" },
+    });
+
     // Release ALL rooms the entry references — the primary assignment plus any additional
     // rooms held via CommittedHold.perNightBreakdown (multi-room bookings). Previously only
     // freed roomAssignments[0].room and relied on releaseCommittedHoldForRoomChange below

@@ -36,7 +36,7 @@ import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
-import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import { evaluateAdvancePaymentCondition, resolveOperatorAdvanceRequirement } from "./s3-payment-service.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 
 type QuotationTerms = {
@@ -275,9 +275,18 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
 
   // The requirement: operator-pinned (Folio.advanceRequiredAmount) wins; else the configured
-  // thresholds evaluation; else null (no requirement resolvable).
-  let requiredAdvance: number | null =
-    inv.folio?.advanceRequiredAmount != null ? Number(toDecimal(inv.folio.advanceRequiredAmount).toFixed(2)) : null;
+  // thresholds evaluation; else null (no requirement resolvable). The pin is SEGMENT-SCOPED
+  // (2026-08-02, shared resolver): one set in a prior segment doesn't survive a re-entry, so
+  // a new segment's proforma prints the configured default, not the old segment's figure.
+  const currentSegmentForAdvance = await prisma.segment.findFirst({
+    where: { entryId: inv.entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
+  const pinnedAdvance = inv.folio
+    ? resolveOperatorAdvanceRequirement(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
+    : null;
+  let requiredAdvance: number | null = pinnedAdvance != null ? Number(toDecimal(pinnedAdvance).toFixed(2)) : null;
   let advanceDueQualifier: string | null = null;
   const basis = (inv.folio?.advanceRequiredBasis ?? null) as { mode?: string; percent?: number } | null;
   if (requiredAdvance != null && basis?.mode === "PERCENT" && typeof basis.percent === "number") {

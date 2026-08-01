@@ -441,12 +441,20 @@ export async function releaseOnReEntry(
   prisma: PrismaClient | Prisma.TransactionClient,
   entryId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  // Which re-entry is releasing — stamped on the claim events, timer cancellations and trace.
+  // Default preserves what the original (S3→S1-only) call sites recorded.
+  reason: string = "REENTRY_S3_TO_S1",
 ) {
   enforceCommittedHoldReleaseOnReEntryAuthority({ actorLevel: actor.actorLevel });
   const tx = prisma as any;
   const hold = await tx.committedHold.findUnique({ where: { entryId } });
-  if (!hold) throw new NotFoundError("CommittedHold");
-  if (hold.state !== HoldState.PLACED) return hold;
+  // No hold yet (operator re-entered before placing one) — nothing to release, not an error.
+  if (!hold) return null;
+  // Releasable states: PLACED (pre-freeze) and CONFIRMED (post-freeze — S4 upgrades the hold,
+  // so the S4→S1 / S5→S1 backflows arrive here with a CONFIRMED hold; bailing on it silently
+  // no-opped the declared HOLD_RELEASED consequence and the rooms stayed pinned into the new
+  // segment, 2026-08-02). RELEASED/EXPIRED still short-circuit.
+  if (hold.state !== HoldState.PLACED && hold.state !== HoldState.CONFIRMED) return hold;
   const now = new Date();
 
   // Multi-room: release every room this hold was covering.
@@ -456,16 +464,16 @@ export async function releaseOnReEntry(
     if (room.currentClaimState === InventoryClaimState.FREE) continue;
     await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
     await tx.roomClaimStateEvent.create({
-      data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason: "REENTRY_S3_TO_S1_HOLD_RELEASED", effectiveFrom: now },
+      data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason: `${reason}_HOLD_RELEASED`, effectiveFrom: now },
     });
   }
 
   const engine = await getTimerEngine();
   const timers = await tx.timerRecord.findMany({ where: { entityType: "CommittedHold", entityId: hold.id, status: "SCHEDULED" }, select: { id: true, pgBossJobId: true } });
   await Promise.all(timers.map((t: any) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
-  await tx.timerRecord.updateMany({ where: { id: { in: timers.map((t: any) => t.id) } }, data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: "REENTRY_S3_TO_S1" } as any });
+  await tx.timerRecord.updateMany({ where: { id: { in: timers.map((t: any) => t.id) } }, data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: reason } as any });
 
-  const updated = await tx.committedHold.update({ where: { id: hold.id }, data: { state: HoldState.RELEASED, releasedAt: now, releasedBy: actor.actorId, releaseReason: "REENTRY_S3_TO_S1" } });
+  const updated = await tx.committedHold.update({ where: { id: hold.id }, data: { state: HoldState.RELEASED, releasedAt: now, releasedBy: actor.actorId, releaseReason: reason } });
 
   await tx.traceEvent.create({
     data: {
@@ -478,7 +486,7 @@ export async function releaseOnReEntry(
       timestamp: now,
       stageContext: Stage.S3,
       entryId,
-      payload: { entryId, committedHoldId: hold.id, releaseReason: "REENTRY_S3_TO_S1" },
+      payload: { entryId, committedHoldId: hold.id, releaseReason: reason },
       createdBy: actor.actorId,
     },
   });

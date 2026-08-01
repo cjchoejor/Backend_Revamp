@@ -38,6 +38,12 @@ export type SectionStatus = "COMPLETE" | "READY" | "IN_PROGRESS" | "NOT_STARTED"
 
 export type RoomRef = { roomId: string; roomNumber: string | null; roomTypeCode: string | null; roomTypeName: string | null };
 
+/**
+ * When the entry entered / left a stage, from StageDwellRecords (first entry, last exit — an
+ * entry that re-visited a stage via backflow shows the full span). `exitedAt` null = still there.
+ */
+export type SectionTimeline = { enteredAt: string | null; exitedAt: string | null };
+
 export interface BookingJourneySummary {
   entryId: string;
   inquiryReference: string | null;
@@ -61,6 +67,14 @@ export interface BookingJourneySummary {
 
   s1Inquiry: {
     status: SectionStatus;
+    timeline: SectionTimeline;
+    /** When the inquiry was taken and by whom (staff name when resolvable, else actor id). */
+    receivedAt: string | null;
+    takenBy: string | null;
+    /** How many availability searches were run before the selection was sealed. */
+    availabilitySearches: number;
+    selectionSealedAt: string | null;
+    selectionSealedBy: string | null;
     sourceChannel: string | null;
     party: {
       adults: number | null;
@@ -90,10 +104,24 @@ export interface BookingJourneySummary {
 
   s2Quote: {
     status: SectionStatus;
+    timeline: SectionTimeline;
     hasAcceptedQuotation: boolean;
+    /** Total quotation versions issued across the negotiation (supersedes included). */
+    versionsIssued: number;
     reference: string | null;
     versionNumber: number | null;
     state: string | null;
+    draftedAt: string | null;
+    draftedBy: string | null;
+    sentAt: string | null;
+    sentTo: string | null;
+    /** Structured view of commercialTerms.requestedDiscount (raw blob stays in discountRequested). */
+    discount: { percent: number; basis: string | null } | null;
+    /** Structured view of commercialTerms.agentRate (raw blob stays in agentRate). */
+    agentRateDetail: { partyType: string | null; roomRate: number | null; cnbPercent: number | null; source: string | null } | null;
+    /** Latest speculative hold placed during the negotiation, if any. */
+    speculativeHold: { state: string; roomNumber: string | null; placedAt: string | null; expiresAt: string | null } | null;
+    acceptedByName: string | null;
     currency: string | null;
     nightlyRate: number | null;
     roomCount: number | null;
@@ -114,9 +142,17 @@ export interface BookingJourneySummary {
 
   s3Setup: {
     status: SectionStatus;
+    timeline: SectionTimeline;
     billingModel: string | null;
     folioState: string | null;
-    committedHold: { state: string | null; rooms: RoomRef[]; expiresAt: string | null } | null;
+    committedHold: {
+      state: string | null;
+      rooms: RoomRef[];
+      expiresAt: string | null;
+      placedAt: string | null;
+      placedBy: string | null;
+      justification: string | null;
+    } | null;
     advancePayment: {
       satisfied: boolean;
       requiredAmount: number | null;
@@ -124,14 +160,44 @@ export interface BookingJourneySummary {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
+      /** Where the required amount came from: operator-pinned for this booking, or config thresholds. */
+      requirementSource: "OPERATOR" | "CONFIG" | null;
+      requirementBasis: unknown | null;
+      creditExtensionExpiresAt: string | null;
+      creditExtensionExpired: boolean;
+      groupBoostApplied: { multiplierPercent: number; baseAmount: number } | null;
+      /** The advance is due between proforma dispatch (opensAt) and check-in (deadline). */
+      advanceWindow: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
     } | null;
-    cancellation: { disclosed: boolean; noShowTreatment: string | null; disclosedAt: string | null } | null;
+    /** Individual advance payments received (IN direction) — amounts are DB values, never re-summed. */
+    payments: Array<{
+      id: string;
+      amount: number | null;
+      method: string | null;
+      receivedAt: string | null;
+      recordedBy: string | null;
+      notes: string | null;
+    }>;
+    cancellation: { disclosed: boolean; noShowTreatment: string | null; disclosedAt: string | null; disclosedBy: string | null } | null;
     proformaInvoiceRef: string | null;
+    /** The live proforma in full (priorVersions counts superseded re-issues). */
+    proforma: {
+      id: string;
+      invoiceNumber: string | null;
+      versionNumber: number;
+      state: string;
+      totalAmount: number | null;
+      createdAt: string | null;
+      dispatchedAt: string | null;
+      dispatchedTo: string | null;
+      priorVersions: number;
+    } | null;
     coordinator: string | null;
   };
 
   s4Confirmation: {
     status: SectionStatus;
+    timeline: SectionTimeline;
     confirmed: boolean;
     reservationId: string | null;
     frozenRate: number | null;
@@ -139,11 +205,14 @@ export interface BookingJourneySummary {
     frozenBillingModel: string | null;
     frozenCheckIn: string | null;
     frozenCheckOut: string | null;
+    frozenNights: number | null;
     frozenGuestCount: number | null;
     creditCeilingIfExtended: number | null;
     confirmedAt: string | null;
     confirmedBy: string | null;
+    confirmedByName: string | null;
     voucherSent: boolean;
+    voucherRenderedAt: string | null;
   };
 }
 
@@ -221,9 +290,11 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
       availabilityConfigs: { orderBy: { createdAt: "desc" } },
       quotations: { orderBy: { versionNumber: "desc" }, include: { lines: { orderBy: { createdAt: "asc" } } } },
+      speculativeHolds: { orderBy: { placedAt: "desc" }, take: 1, include: { room: { select: { roomNumber: true } } } },
       folio: {
         include: {
           invoices: { orderBy: { createdAt: "desc" } },
+          payments: { orderBy: { createdAt: "asc" } },
           billingModelTransitions: { orderBy: { createdAt: "desc" }, take: 1 },
         },
       },
@@ -235,6 +306,19 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   if (!entry) throw new NotFoundError("Entry");
 
   const currentSegmentId = entry.segments[0]?.id ?? null;
+
+  // --- Per-stage timeline from StageDwellRecords: first entry, last exit ----------------------
+  const dwells = await prisma.stageDwellRecord.findMany({
+    where: { entryId },
+    orderBy: { enteredAt: "asc" },
+    select: { stage: true, enteredAt: true, exitedAt: true },
+  });
+  const timelineFor = (stage: "S1" | "S2" | "S3" | "S4"): SectionTimeline => {
+    const rows = dwells.filter((d) => d.stage === stage);
+    if (rows.length === 0) return { enteredAt: null, exitedAt: null };
+    const last = rows[rows.length - 1];
+    return { enteredAt: iso(rows[0].enteredAt), exitedAt: last.exitedAt ? iso(last.exitedAt) : null };
+  };
 
   // --- S1: sealed room selection -------------------------------------------------------------
   // Use the most recent availability config that actually has a sealed selection.
@@ -288,6 +372,52 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   const terms = (acceptedQuote?.commercialTerms ?? null) as Record<string, unknown> | null;
   const pricingBreakdown = (terms?.pricingBreakdown ?? null) as Record<string, unknown> | null;
 
+  // Structured views of the commercialTerms blobs the desk actually renders (the raw blobs stay
+  // on the payload for consumers that want everything).
+  const discountRaw = (terms?.requestedDiscount ?? null) as Record<string, unknown> | null;
+  const discount =
+    discountRaw && num(discountRaw.discountPercent) != null
+      ? { percent: num(discountRaw.discountPercent)!, basis: typeof discountRaw.discountBasis === "string" ? discountRaw.discountBasis : null }
+      : null;
+  const agentRateRaw = (terms?.agentRate ?? null) as Record<string, unknown> | null;
+  const agentRateDetail = agentRateRaw
+    ? {
+        partyType: typeof agentRateRaw.partyType === "string" ? agentRateRaw.partyType : null,
+        roomRate: num(agentRateRaw.roomRate),
+        cnbPercent: num(agentRateRaw.cnbPercent),
+        source: typeof agentRateRaw.source === "string" ? agentRateRaw.source : null,
+      }
+    : null;
+  const specHold = entry.speculativeHolds[0] ?? null;
+
+  // --- S3: individual advance payments (IN direction) — DB rows, never re-summed here ---------
+  const paymentsIn = (entry.folio?.payments ?? []).filter((p) => p.paymentDirection === "IN");
+
+  // --- Proformas: the live one (non-superseded) + how many re-issues preceded it --------------
+  const proformas = entry.folio?.invoices.filter((i) => i.invoiceType === "PROFORMA") ?? [];
+  const liveProforma = proformas.find((i) => i.state !== "SUPERSEDED") ?? proformas[0] ?? null;
+
+  // --- Resolve every actor id we surface to a staff name in ONE query -------------------------
+  const actorIds = Array.from(
+    new Set(
+      [
+        entry.inquiry?.createdBy,
+        sealedConfig?.createdBy,
+        acceptedQuote?.createdBy,
+        acceptedQuote?.acceptedBy,
+        entry.committedHold?.placedBy,
+        entry.cancellationDisclosure?.disclosedBy,
+        entry.reservation?.confirmedBy,
+        ...paymentsIn.map((p) => p.recordedBy),
+      ].filter((x): x is string => typeof x === "string" && x.length > 0),
+    ),
+  );
+  const staffRows = actorIds.length
+    ? await prisma.staffUser.findMany({ where: { id: { in: actorIds } }, select: { id: true, fullName: true } })
+    : [];
+  const staffNameById = new Map(staffRows.map((s) => [s.id, s.fullName]));
+  const who = (id: string | null | undefined): string | null => (id ? staffNameById.get(id) ?? id : null);
+
   // --- S3: advance-payment status (Decimal-safe, via the shared service) ---------------------
   let advancePayment: BookingJourneySummary["s3Setup"]["advancePayment"] = null;
   if (entry.folio) {
@@ -300,6 +430,12 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
         shortfall: ps.shortfall ?? null,
         creditExtensionActive: ps.creditExtensionActive,
         ceilingAmount: ps.ceilingAmount ?? null,
+        requirementSource: ps.requirementSource ?? null,
+        requirementBasis: ps.requirementBasis ?? null,
+        creditExtensionExpiresAt: ps.creditExtensionExpiresAt ?? null,
+        creditExtensionExpired: ps.creditExtensionExpired ?? false,
+        groupBoostApplied: (ps as { groupBoostApplied?: { multiplierPercent: number; baseAmount: number } }).groupBoostApplied ?? null,
+        advanceWindow: ps.advanceWindow ?? null,
       };
     } catch {
       // Missing advancePayment.thresholds config etc. — leave null rather than fail the summary.
@@ -308,7 +444,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   }
 
   const billingModel = entry.folio?.billingModelTransitions[0]?.toModel ?? entry.folio?.billingModel ?? null;
-  const proforma = entry.folio?.invoices.find((i) => i.invoiceType === "PROFORMA") ?? null;
+  const proforma = liveProforma;
 
   const guest = entry.guestProfile ?? inq?.guestProfile ?? null;
   const guestName = guest ? [guest.firstName, guest.lastName].filter(Boolean).join(" ").trim() || null : null;
@@ -338,6 +474,12 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
 
     s1Inquiry: {
       status: stageStatus(entry.currentStage, "S1"),
+      timeline: timelineFor("S1"),
+      receivedAt: iso(inq?.createdAt),
+      takenBy: who(inq?.createdBy),
+      availabilitySearches: entry.availabilityConfigs.length,
+      selectionSealedAt: iso(sealedConfig?.sealedAt),
+      selectionSealedBy: who(sealedConfig?.createdBy),
       sourceChannel: inq?.sourceChannel ?? null,
       party: {
         adults: entry.adultCount ?? null,
@@ -371,10 +513,27 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
 
     s2Quote: {
       status: stageStatus(entry.currentStage, "S2"),
+      timeline: timelineFor("S2"),
       hasAcceptedQuotation: entry.quotations.some((q) => q.state === "ACCEPTED"),
+      versionsIssued: entry.quotations.length,
       reference: acceptedQuote?.referenceNumber ?? null,
       versionNumber: acceptedQuote?.versionNumber ?? null,
       state: acceptedQuote?.state ?? null,
+      draftedAt: iso(acceptedQuote?.createdAt),
+      draftedBy: who(acceptedQuote?.createdBy),
+      sentAt: iso(acceptedQuote?.sentAt),
+      sentTo: acceptedQuote?.sentTo ?? null,
+      discount,
+      agentRateDetail,
+      speculativeHold: specHold
+        ? {
+            state: specHold.state,
+            roomNumber: specHold.room?.roomNumber ?? null,
+            placedAt: iso(specHold.placedAt),
+            expiresAt: iso(specHold.expiresAt),
+          }
+        : null,
+      acceptedByName: who(acceptedQuote?.acceptedBy),
       currency: acceptedQuote?.currency ?? null,
       nightlyRate: nightlyRateFromTerms(terms),
       roomCount: num(terms?.roomCount) ?? num(pricingBreakdown?.roomCount),
@@ -417,6 +576,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
           (advancePayment == null || advancePayment.satisfied);
         return evidence ? "READY" : "IN_PROGRESS";
       })(),
+      timeline: timelineFor("S3"),
       billingModel,
       folioState: entry.folio?.state ?? null,
       committedHold: entry.committedHold
@@ -424,22 +584,51 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
             state: entry.committedHold.state,
             rooms: holdRoomIds.length ? Array.from(new Set(holdRoomIds)).map(refFor) : [],
             expiresAt: iso(entry.committedHold.expiresAt),
+            placedAt: iso(entry.committedHold.placedAt),
+            placedBy: who(entry.committedHold.placedBy),
+            justification:
+              entry.committedHold.commercialJustification && entry.committedHold.commercialJustification !== "seed"
+                ? entry.committedHold.commercialJustification
+                : null,
           }
         : null,
       advancePayment,
+      payments: paymentsIn.map((p) => ({
+        id: p.id,
+        amount: money(p.amount),
+        method: p.paymentMethod ?? null,
+        receivedAt: iso(p.receivedAt ?? p.createdAt),
+        recordedBy: who(p.recordedBy),
+        notes: p.notes ?? null,
+      })),
       cancellation: entry.cancellationDisclosure
         ? {
             disclosed: true,
             noShowTreatment: entry.cancellationDisclosure.noShowTreatmentStatement ?? null,
             disclosedAt: iso(entry.cancellationDisclosure.disclosedAt),
+            disclosedBy: who(entry.cancellationDisclosure.disclosedBy),
           }
         : null,
       proformaInvoiceRef: proforma?.id ?? null,
+      proforma: proforma
+        ? {
+            id: proforma.id,
+            invoiceNumber: proforma.invoiceNumber ?? null,
+            versionNumber: proforma.versionNumber,
+            state: proforma.state,
+            totalAmount: money(proforma.totalAmount ?? null),
+            createdAt: iso(proforma.createdAt),
+            dispatchedAt: iso(proforma.dispatchedAt),
+            dispatchedTo: proforma.dispatchedTo ?? null,
+            priorVersions: Math.max(0, proformas.length - 1),
+          }
+        : null,
       coordinator,
     },
 
     s4Confirmation: {
       status: stageStatus(entry.currentStage, "S4"),
+      timeline: timelineFor("S4"),
       confirmed: !!res,
       reservationId: res?.id ?? null,
       frozenRate: money(res?.frozenRate ?? null),
@@ -447,11 +636,14 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       frozenBillingModel: res?.frozenBillingModel ?? null,
       frozenCheckIn: iso(res?.frozenCheckInDate),
       frozenCheckOut: iso(res?.frozenCheckOutDate),
+      frozenNights: nightsBetween(res?.frozenCheckInDate, res?.frozenCheckOutDate),
       frozenGuestCount: res?.frozenGuestCount ?? null,
       creditCeilingIfExtended: money(res?.creditCeilingIfExtended ?? null),
       confirmedAt: iso(res?.confirmedAt),
       confirmedBy: res?.confirmedBy ?? null,
+      confirmedByName: who(res?.confirmedBy),
       voucherSent: res?.confirmationVoucherSent ?? false,
+      voucherRenderedAt: iso(res?.confirmationVoucherRenderedAt),
     },
   };
 }

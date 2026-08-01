@@ -7,6 +7,7 @@ import {
   enforceEntryAtS7ForRoomChangeReEntry,
 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 
 export async function createAmendmentEvent(
@@ -88,6 +89,15 @@ export async function roomChangeReEntryToS1(
   if (!currentAssignment) throw new ValidationError("Entry has no current room assignment");
 
   const now = new Date();
+
+  // Prior-segment reply windows are moot in the new segment (2026-08-02) — cancel pre-tx,
+  // same pattern as runBackflow.
+  await cancelEntryTimersByCode(prisma, {
+    entryId: input.entryId,
+    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22"],
+    cancelledBy: actorId,
+    cancelledReason: "REENTRY_S7_ROOM_CHANGE",
+  });
 
   return prisma.$transaction(async (tx) => {
     // AC-S7-22: compute consequences before any commit.
