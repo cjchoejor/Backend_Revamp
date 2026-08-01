@@ -32,3 +32,24 @@ export function enforceProformaDispatchedBeforeAdvancePayment(input: {
   );
 }
 
+/**
+ * …and once the bill HAS gone out, the guest's ANSWER must be on record before money is
+ * taken (2026-08-03 operator ruling — extends the bill-before-money order): dispatching the
+ * proforma asks "do you accept this bill?", and the payment is the consequence of a yes, so
+ * the yes gets written down first (p52 capture, verbal or written — a late answer counts).
+ * Keyed on the LATEST dispatched proforma communication of the CURRENT segment; the caller
+ * passes it already segment-scoped, same convention as the p40 freeze gate. No communication
+ * at all → the dispatch guard above is the one doing the blocking, not this.
+ */
+export function enforceProformaGuestAnswerRecordedBeforeAdvancePayment(input: {
+  latestDispatchedProformaComm: { acknowledgementStatus: string | null } | null;
+}) {
+  const comm = input.latestDispatchedProformaComm;
+  if (!comm) return;
+  if (comm.acknowledgementStatus === "RECEIVED") return;
+  throw new PolicyGateBlockedError(
+    "PROFORMA_GUEST_ANSWER_REQUIRED_FOR_ADVANCE",
+    "Note down the guest's response to the proforma first — record their answer (verbal or written), then log the money received",
+  );
+}
+

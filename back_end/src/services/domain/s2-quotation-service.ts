@@ -1027,6 +1027,21 @@ export async function supersedeQuotationWithNewDraft(
 
   // Full re-price with the same pipeline createQuotation uses (validations included).
   const prep = await prepareQuotationDraft(prisma, q.entryId, actorId, mergedInput);
+
+  // Freeze the outgoing version's document before it is marked SUPERSEDED (2026-08-02,
+  // operator ruling): a superseded version without a stored PDF can only recompose — and
+  // while a quotation's own commercialTerms are immutable, the composition still reads live
+  // context (entry dates, current tax config on the flat path). Rendering now pins the
+  // document to exactly what this version said. Best-effort — a render failure degrades to
+  // recomposition, never blocks the renegotiation.
+  if (!q.pdfStorageKey) {
+    try {
+      await generateOrLoadQuotationPdf(prisma, q.id, actorId);
+    } catch {
+      /* recomposition fallback remains */
+    }
+  }
+
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {

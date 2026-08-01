@@ -284,7 +284,8 @@ async function main() {
     { configKey: "cancellation.policyTiers", configValue: { sameDayPenaltyAmount: 100, postCheckInEarlyDeparturePenaltyAmount: 150 } },
     { configKey: "creditCeiling.proximityThresholds", configValue: { tier1Percent: 75, tier2Percent: 90 } },
     { configKey: "nightAudit.expectedDailyFAndBCharge", configValue: { amount: 50, currency: "BTN" } },
-    { configKey: "billing.salesTaxRate", configValue: 0, notes: "S7 charge posting — optional decimal rate (e.g. 0.05); 0 disables automatic tax lines" },
+    { configKey: "billing.salesTaxRate", configValue: 0.05, notes: "GST 5% — compound, applied to (net value + service charge) everywhere (quotes, charge posting, invoices). 0 disables automatic tax lines." },
+    { configKey: "billing.serviceChargeRate", configValue: 0.1, notes: "Service charge 10% of net value. GST is computed on top of (net + this)." },
     {
       configKey: "dispute.sla",
       configValue: { firstResponseDueMinutes: 240, resolutionReminderMinutes: 1440 },

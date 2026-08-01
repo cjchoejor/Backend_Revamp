@@ -30,6 +30,8 @@ import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
+import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pdf-service.js";
+import { generateOrLoadQuotationPdf } from "../services/domain/quotation-pdf-service.js";
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import {
@@ -362,6 +364,9 @@ export async function backflowS4ToS1(
 ) {
   enforceS4ToS1BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // The hook supersedes pending proformas — freeze the never-rendered ones first (pre-tx)
+  // so their stored PDFs retain this segment's figures (2026-08-02 operator ruling).
+  await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId);
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S4,
@@ -400,6 +405,19 @@ export async function backflowS4ToS2(
 ) {
   enforceS4ToS2BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // The hook supersedes the ACCEPTED quotation — freeze a never-rendered one first so its
+  // stored PDF retains the accepted figures (2026-08-02 operator ruling).
+  const acceptedQuotes = await prisma.quotation.findMany({
+    where: { entryId, state: "ACCEPTED", pdfStorageKey: null },
+    select: { id: true },
+  });
+  for (const q of acceptedQuotes) {
+    try {
+      await generateOrLoadQuotationPdf(prisma, q.id, actor.actorId);
+    } catch {
+      /* degrade to recomposition for this one */
+    }
+  }
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S4,
@@ -458,6 +476,9 @@ export async function backflowS5ToS1(
 ) {
   enforceS5ToS1BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // The hook supersedes pending proformas — freeze the never-rendered ones first (pre-tx)
+  // so their stored PDFs retain this segment's figures (2026-08-02 operator ruling).
+  await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId);
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S5,

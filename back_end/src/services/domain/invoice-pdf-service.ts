@@ -34,8 +34,7 @@ import { renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legph
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { evaluateAdvancePaymentCondition, resolveOperatorAdvanceRequirement } from "./s3-payment-service.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 
@@ -392,6 +391,42 @@ export async function renderInvoicePreviewHtml(
   return { html: m.html, invoiceRef: m.invoiceRef };
 }
 
+/**
+ * Freeze every live, never-rendered proforma for an entry by rendering its PDF NOW —
+ * called just BEFORE something supersedes them (advance-requirement change, re-entry).
+ *
+ * Why (2026-08-02, operator ruling): a superseded proforma without a stored artifact can
+ * only be shown by RECOMPOSING from current data, so every later requirement change
+ * rewrote what old versions displayed. Rendering the artifact at supersession time freezes
+ * the figures that were actually on the table when that version was live; the desk's
+ * frozen-PDF view then serves it unchanged forever (write-once storage).
+ *
+ * Best-effort per invoice: a render failure falls back to the existing caveat-labelled
+ * reconstruction rather than blocking the operation that triggered the supersession.
+ */
+export async function freezeUnrenderedProformasForEntry(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+): Promise<void> {
+  const live = await prisma.invoice.findMany({
+    where: {
+      entryId,
+      invoiceType: InvoiceType.PROFORMA,
+      state: { not: "SUPERSEDED" },
+      pdfStorageKey: null,
+    },
+    select: { id: true },
+  });
+  for (const inv of live) {
+    try {
+      await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+    } catch {
+      /* degrade to the caveat-labelled reconstruction for this one */
+    }
+  }
+}
+
 export async function generateOrLoadInvoicePdf(
   prisma: PrismaClient,
   invoiceId: string,
@@ -523,8 +558,10 @@ export async function generateOrLoadInvoicePdf(
   // ================================================================
   const hotel = await loadHotelProfileForRender(prisma);
   const { nights, nightlyRate, guest, guestName, adultCount, childCount, checkIn, checkOut } = invoicePrelude(inv);
-  const gstRate = Number(await requireActiveConfigValue<number>(prisma, "billing.salesTaxRate")) || 0.05;
-  const svcRate = Number(await requireActiveConfigValue<number>(prisma, "billing.serviceChargeRate")) || 0.10;
+  // Same resolver as quotes and charge posting (2026-08-03) — the prior
+  // `requireActiveConfigValue(...) || 0.05` threw when the key was unseeded and silently
+  // overrode a configured 0, so invoices could print rates the folio never charged.
+  const { gstRate, serviceChargeRate: svcRate } = await resolveChargeRates(prisma);
 
   // Two independent filters:
   //   1. Split-billing filter: only lines whose billingModel matches this invoice's bucket.

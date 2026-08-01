@@ -100,6 +100,11 @@ async function computeAdvancePaymentEvaluation(
   // scoped (2026-08-02): a pin from a PRIOR segment does not carry across a re-entry — each
   // segment starts from the configured thresholds until the desk pins one afresh.
   const operatorRequired = resolveOperatorAdvanceRequirement(folio, entry?.segments?.[0]?.startedAt ?? null);
+  // What the CONFIG demands (thresholds + group boost), before any per-booking pin — carried
+  // on the response so the desk can show both figures side by side: the pin lives on this
+  // booking's folio alone and never touches the configured minimum (2026-08-03, after an
+  // operator read a pinned figure as "the minimum threshold changed").
+  const configuredBaseAmount = Number.isFinite(requiredAmount) ? Number(toDecimal(requiredAmount).toFixed(2)) : 0;
   if (operatorRequired != null) {
     requiredAmount = operatorRequired;
     boostApplied = null;
@@ -165,6 +170,9 @@ async function computeAdvancePaymentEvaluation(
     // configured thresholds. Basis carries the percent/base detail for display.
     requirementSource: operatorRequired != null ? ("OPERATOR" as const) : ("CONFIG" as const),
     requirementBasis: operatorRequired != null ? (folio.advanceRequiredBasis ?? null) : null,
+    // The config's own figure, independent of any per-booking pin — always present so the
+    // desk can state "hotel minimum unchanged at X" next to a pinned requirement.
+    configuredBaseAmount,
     // The payment window: opens at proforma dispatch (p27 blocks money before it), closes at
     // the check-in date. Deadline facts only — the desk renders the countdown from these.
     advanceWindow: {
@@ -244,6 +252,17 @@ export async function setAdvanceRequirement(
   const priorStr = priorEffective != null ? toDecimal(priorEffective).toFixed(2) : null;
   const nextStr = requiredDec != null ? requiredDec.toFixed(2) : null;
   const requirementChanged = priorStr !== nextStr;
+
+  // Freeze what the outgoing versions LOOKED LIKE before the change lands (2026-08-02,
+  // operator ruling): a superseded proforma without a stored artifact recomposes from
+  // current data, so old versions silently adopted every later figure. Rendering their PDFs
+  // NOW — before the folio update — captures the figures that were actually on the table.
+  // Dynamic import: invoice-pdf-service statically imports this module (evaluation +
+  // requirement resolver), so a static import back would create a cycle.
+  if (requirementChanged) {
+    const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
+    await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId);
+  }
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.folio.update({

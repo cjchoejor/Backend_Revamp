@@ -6,7 +6,6 @@ import { calculateTax } from "../../engines/tax-engine.js";
 import { enforceCreditCeilingChargePostingGate } from "../../policies/18-credit-extension-ceiling/p45-credit-ceiling-charge-posting-gate.js";
 import { enforceChargeDateNotSealedByCompleteNightAudit } from "../../policies/24-night-audit/p61-charge-date-not-sealed-by-complete-night-audit.js";
 import {
-  enforceEntryAtS7ForChargePosting,
   enforceEntryAtS7OrS8ForChargePosting,
   enforceFolioLiveForS7ChargePosting,
 } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
@@ -395,7 +394,10 @@ export async function correctCharge(
 
   const entry = await prisma.entry.findUnique({ where: { id: input.entryId } });
   if (!entry) throw new NotFoundError("Entry");
-  enforceEntryAtS7ForChargePosting({ currentStage: entry.currentStage });
+  // Corrections follow the same stage envelope as posting (2026-08-03): the checkout review
+  // is exactly when a wrong charge gets caught, so S8 pre-settlement must be able to fix it.
+  // The folio-LIVE gate above still blocks corrections once the folio has settled.
+  enforceEntryAtS7OrS8ForChargePosting({ currentStage: entry.currentStage });
 
   const originalAmount = num(original.amount);
   if (hasTarget && input.correctToAmount! < 0 && originalAmount > 0) {
