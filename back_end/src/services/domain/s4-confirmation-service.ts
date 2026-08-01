@@ -34,6 +34,7 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
 import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -325,6 +326,19 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   });
 
   await scheduleS4StageDwellWarningMonitor(prisma, entryId, actorId);
+
+  // Handoff-to-front-desk prep (2026-08-02, operator request): seed the pre-arrival task set
+  // at confirmation so the S4 desk can already work the front-desk handoff items (payment
+  // reconciliation, special-request fulfilment, late-arrival meal coordination, site visit)
+  // before activating the arrival window. Idempotent (`@@unique(entryId, taskType)` +
+  // skipDuplicates), so the S4→S5 activation's lazy init simply finds them present.
+  // Best-effort: a seeding hiccup must not fail a committed confirmation — the S5 activation
+  // path self-heals (task count 0 → initialise).
+  try {
+    await initialisePreArrivalTasks(prisma, entryId, actorId);
+  } catch {
+    /* S5 activation lazy init covers it */
+  }
 
   // Phase 2 — outbound confirmation email. Runs AFTER the transaction commits so an SMTP
   // failure cannot roll back the reservation. The send is best-effort; a failure is logged

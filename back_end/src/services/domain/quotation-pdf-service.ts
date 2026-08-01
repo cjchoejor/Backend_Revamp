@@ -34,12 +34,21 @@ import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 type QuotationTerms = {
   roomCount?: number;
   effectiveRate?: string | number;
+  /** Undiscounted plan rate — effectiveRate is this after the discount is folded in. */
+  resolvedNightlyRate?: string | number;
+  discountAppliedPercent?: number;
+  requestedDiscount?: { discountPercent?: number; discountBasis?: string } | null;
   currency?: string;
   roomTypeId?: string;
   pricingBreakdown?: { nightlyRate?: number | string; nights?: number; roomCount?: number; subTotal?: number | string };
   mealPlan?: string;
   extraBeds?: string | number;
   perGuestMealBreakdown?: { total?: number | string };
+  /** Original (undiscounted) figures, stored at quote time when a discount moved the rate. */
+  compositionTotalsPreDiscount?: {
+    total?: number;
+    perRoom?: Array<{ roomId: string; total: number }>;
+  } | null;
 } | null;
 
 export type QuotationPdfArtifact = {
@@ -176,8 +185,31 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
     }>;
   })?.compositionTotals?.perRoom;
 
+  // Discount display (2026-08-02, operator ruling): the table prints the ORIGINAL
+  // (pre-discount) prices and the discount appears as an explicit deduction row, instead of
+  // silently printing discounted rates. Applies only when the rate actually moved
+  // (agent/corporate card rates are negotiated, not discounted — pre === post there).
+  const preDiscountRate = Number(terms?.resolvedNightlyRate ?? NaN);
+  const postDiscountRate = Number(terms?.effectiveRate ?? NaN);
+  const discountPercent = Number(
+    terms?.discountAppliedPercent ?? terms?.requestedDiscount?.discountPercent ?? NaN,
+  );
+  const discountApplied =
+    Number.isFinite(preDiscountRate) &&
+    Number.isFinite(postDiscountRate) &&
+    Number.isFinite(discountPercent) &&
+    discountPercent > 0 &&
+    preDiscountRate > postDiscountRate;
+  const preTotalsByRoomId = new Map(
+    (terms?.compositionTotalsPreDiscount?.perRoom ?? []).map((r) => [r.roomId, Number(r.total)]),
+  );
+
   const linesForTemplate: PrintLine[] = [];
   let totalAmount = 0;
+  // Sum of the amounts actually PRINTED in the table (pre-discount when originals are shown).
+  let printedRowsTotal = 0;
+  // True when the rows show original prices — decides deduction-row vs disclosure fallback.
+  let originalsPrinted = false;
   // Room-type names for the description column — the reference A1 leads its description with
   // the type ("Deluxe · 1 room · 2 adults · MAP"), so resolve names for whichever rooms the
   // lines will mention (composition rooms, else the legacy sealed room type).
@@ -206,6 +238,11 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       // the quotation should see "room only" was a choice, not an omission.
       const planStr = planParts.length > 0 ? planParts.join(" · ") : "EP (room only)";
       const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
+      // Print the room's ORIGINAL total when the stored pre-discount run has it; the final
+      // total below still comes from the discounted figures.
+      const preTotal = discountApplied ? preTotalsByRoomId.get(r.roomId) : undefined;
+      const printedAmount = preTotal != null && Number.isFinite(preTotal) ? preTotal : Number(r.total);
+      if (preTotal != null && Number.isFinite(preTotal)) originalsPrinted = true;
       linesForTemplate.push({
         date: checkIn,
         roomNo: r.roomNumber ?? r.roomId.slice(0, 6),
@@ -213,8 +250,9 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
         occupants: roomOccupants,
         mealPlan: planStr,
         extraBeds: eb,
-        amount: r.total,
+        amount: printedAmount,
       });
+      printedRowsTotal += printedAmount;
       totalAmount += Number(r.total);
     }
   } else {
@@ -224,6 +262,14 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       const rt = await prisma.roomType.findUnique({ where: { id: terms.roomTypeId }, select: { name: true } });
       legacyTypeName = rt?.name ?? null;
     }
+    // Flat path: the original per-night amount is recomputable directly from the undiscounted
+    // rate — same Decimal-safe charge computation, no stored snapshot needed.
+    let printedPerNight = perNightAmount;
+    if (discountApplied) {
+      const preBreakdown = await computeStayCharges(prisma, preDiscountRate, 1, roomCount);
+      printedPerNight = preBreakdown.total;
+      originalsPrinted = true;
+    }
     for (let i = 0; i < nights; i++) {
       const date = new Date(checkIn.getTime() + i * 86_400_000);
       linesForTemplate.push({
@@ -232,9 +278,10 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
         occupants: occupantsString,
         mealPlan: mealPlanDisplay || null,
         extraBeds,
-        amount: perNightAmount,
+        amount: printedPerNight,
       });
     }
+    printedRowsTotal = printedPerNight * nights;
     totalAmount = perNightAmount * nights;
   }
 
@@ -266,6 +313,17 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
   const serviceCharge = ct ? Number(ct.serviceCharge ?? 0) : 0;
   const gstValue = ct ? Number(ct.gst ?? 0) : 0;
 
+  // Discount row: when the table shows ORIGINAL prices, this is a real deduction (printed
+  // rows sum − final total). Older discounted quotes without a stored pre-discount snapshot
+  // fall back to the rate-movement disclosure — their rows still show discounted amounts.
+  const discountAmount = originalsPrinted ? printedRowsTotal - totalAmount : 0;
+  const discountLabel = discountApplied ? `Discount ${discountPercent}%` : null;
+  const discountValue = !discountApplied
+    ? null
+    : originalsPrinted
+      ? `− ${formatMoney(discountAmount)}`
+      : `${formatMoney(preDiscountRate)} → ${formatMoney(postDiscountRate)} / room / night`;
+
   const html = renderLegphelQuotationHtml({
     masthead: mastheadFromHotelProfile(hotel),
     quotationNo: q.referenceNumber,
@@ -291,6 +349,8 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       ratePerNight: formatMoney(Number(l.amount) / Math.max(1, nights)),
       amount: formatMoney(l.amount),
     })),
+    discountLabel,
+    discountValue,
     netValue: formatMoney(netValue),
     serviceChargeLabel: scRate > 0 ? `Service charge ${(scRate * 100).toFixed(0)}%` : "Service charge",
     serviceCharge: formatMoney(serviceCharge),
