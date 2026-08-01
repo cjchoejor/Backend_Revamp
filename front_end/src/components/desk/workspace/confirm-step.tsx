@@ -132,10 +132,9 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
           </div>
         )}
 
-        {/* If the proforma went out, the guest's answer must be on record before the freeze
-            (backend p40 gate, 2026-07-31). Capturing it here spares the operator reopening
-            Set up just for that; when nothing was dispatched the block says so and gates nothing. */}
-        {!confirmed && <CommunicationAcceptanceBlock entryId={entry.id} commType="PROFORMA_INVOICE" />}
+        {/* The proforma answer capture lives on Set up ONLY (2026-08-01, operator request —
+            it was duplicated here). Set up stays editable until the freeze, so the p40 gate's
+            checklist item points the operator back there when the answer is still missing. */}
 
         {/* Multi-booking overlap acknowledgement (FOM+) */}
         {!confirmed && elevated && (

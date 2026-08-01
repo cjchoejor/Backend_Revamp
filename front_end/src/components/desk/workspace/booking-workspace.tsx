@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, PenLine, Play } from "lucide-react";
+import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
 import { SegmentHistoryPanel } from "./segment-history";
 import { toast } from "sonner";
@@ -602,19 +602,14 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<number | null>(null);
-  // "Set up is finished" — the desk-side marker that promotes Confirm to the current step while
-  // the backend stage is still S3. The Confirm review shares stage S3 with Set up, so the stage
-  // number alone never moves past Set up until the freeze — which left Set up fully editable
-  // after the operator crossed into the review, unlike every other completed step. Engaged when
-  // the operator reaches Confirm with all gates green (or the workspace opens in that state);
-  // released by the explicit "Reopen" on the read-only Set up view. Deliberately sticky rather
-  // than derived from canConfirm each render, so completing the last gate never flips the step
-  // inert under the operator's cursor. Irrelevant once a reservation exists (S4+, or an S3
-  // re-entry where setup must be editable again).
-  const [setupDone, setSetupDone] = useState(false);
-  const setupSealedForReview =
-    !!entry && entry.currentStage === "S3" && !entry.reservation && setupDone;
-  const currentOrder = setupSealedForReview ? 4 : entry ? currentStepOrder(entry) : 1;
+  // The journey rail tells the truth about the backend stage (2026-08-01, operator ruling):
+  // Set up (3) stays the CURRENT step — never green, never sealed — until the freeze actually
+  // moves the entry to S4. The Confirm review (4) is still reachable from S3 via
+  // maxReachableOrder, but visiting it is just viewing a screen; only "Freeze & confirm"
+  // advances the stage. (The former `setupDone` promotion marked Set up completed the moment
+  // the review was reached with green gates, which read as "S3 done / stage moved" while the
+  // backend was still at S3 — exactly the confusion this removes.)
+  const currentOrder = entry ? currentStepOrder(entry) : 1;
   const maxReach = entry ? maxReachableOrder(entry) : 1;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [guestPresent, setGuestPresent] = useState(false);
@@ -762,12 +757,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     },
   });
 
-  // Default the viewing pointer once loaded — land on Confirm when it's ready to freeze, and in
-  // that case mark Set up finished so it presents as a completed (read-only) step from the start.
+  // Default the viewing pointer once loaded — land on the Confirm review when it's ready to
+  // freeze (a view choice only; Set up remains the current step until the freeze).
   useEffect(() => {
     if (!entry || selected !== null) return;
     const ready = canConfirm(entry, { paymentSatisfied, totalReceived, communications });
-    if (ready && !entry.reservation) setSetupDone(true);
     setSelected(ready ? 4 : currentStepOrder(entry));
   }, [entry, selected, paymentSatisfied, totalReceived, communications]);
 
@@ -1116,7 +1110,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
           <nav className="jrail">
             {DESK_STEPS.map((s) => {
               const future = s.order > maxReach;
-              const cls = ["jnode", viewing === s.order ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
+              // Pre-freeze, the Confirm review is just a screen — the stage indicator stays on
+              // Set up (3) because the backend is still at S3; nothing moves until the freeze
+              // (2026-08-01, operator ruling).
+              const isCur = confirmStepActive ? s.order === 3 : viewing === s.order;
+              const cls = ["jnode", isCur ? "cur" : "", s.order < currentOrder ? "done" : "", future ? "future" : ""]
                 .filter(Boolean)
                 .join(" ");
               // Done steps show their stage number (white on the filled green node) rather than a
@@ -1204,13 +1202,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             ) : setupStepActive ? (
               <button
                 className="adv commit"
-                onClick={() => {
-                  // Crossing into the Confirm review with every gate green is the desk's
-                  // "S3 → S4" moment: Set up seals as a completed (read-only) step, like S1/S2
-                  // after their stage advances. With gates still open it stays the working step.
-                  if (ready) setSetupDone(true);
-                  setSelected(4);
-                }}
+                onClick={() => setSelected(4)}
+                title="Open the Confirm review — the stage stays Set up (S3) until you freeze"
               >
                 <Lock />
                 Review &amp; confirm
@@ -1338,20 +1331,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                   <Lock style={{ width: 12, height: 12 }} />
                   {sealed ? sealedOutcome : "Completed step · read-only"}
                 </div>
-                {/* Pre-freeze only: Set up is sealed by the desk (all gates green, review reached),
-                    not by the backend stage — so a deliberate change (billing model, another
-                    payment, a regressed gate) is still allowed via an explicit reopen. Once the
-                    booking freezes at S4 this button disappears and the seal is absolute. */}
-                {!sealed && setupSealedForReview && step.key === "setup" && (
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setSetupDone(false)}
-                    title="Unlock Set up to make a change before the freeze"
-                  >
-                    <PenLine style={{ width: 13, height: 13 }} />
-                    Reopen for changes
-                  </button>
-                )}
                 </div>
                 {/* `inert` (React 19) makes the whole subtree non-interactive + non-focusable,
                     so the full step surface is visible but nothing can be actioned. */}
