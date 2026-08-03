@@ -140,7 +140,14 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
   const childCount = q.entry.childCount ?? 0;
   const occupantsString = `${adultCount} adult${adultCount === 1 ? "" : "s"}, ${childCount} child${childCount === 1 ? "" : "ren"}`;
   const mealPlanCode = String(terms?.mealPlan ?? "").trim();
-  const mealPlanDisplay = mealPlanCode ? `${adultCount + childCount} ${mealPlanCode}` : "";
+  // Booking-wide meal charge on the flat path — `perGuestMealBreakdown.total` is what the pricing
+  // engine attached for the whole stay, so the per-night row states its share.
+  const legacyMealTotal = Number(terms?.perGuestMealBreakdown?.total ?? NaN);
+  const legacyMealPerNight =
+    Number.isFinite(legacyMealTotal) && legacyMealTotal > 0 ? legacyMealTotal / Math.max(1, nights) : null;
+  const mealPlanDisplay = mealPlanCode
+    ? `${adultCount + childCount} ${mealPlanCode}${legacyMealPerNight != null ? ` — meals ${formatMoney(legacyMealPerNight)}` : ""}`
+    : "";
   const extraBeds = terms?.extraBeds != null && String(terms.extraBeds).trim() && String(terms.extraBeds) !== "0" ? String(terms.extraBeds) : "None";
 
   const checkIn = q.entry.checkInDate ?? new Date();
@@ -236,7 +243,17 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
       // EP is stated explicitly rather than leaving the meal slot blank — the guest reading
       // the quotation should see "room only" was a choice, not an omission.
-      const planStr = planParts.length > 0 ? planParts.join(" · ") : "EP (room only)";
+      // What the meals actually COST, next to the plan they were booked on. The stay-total meal
+      // charge is already stored per room by the pricing run (`mealsSubtotal`), so it is read
+      // rather than recomputed — and it stays the net figure, matching the Net value row below
+      // (the row Amount is tax-inclusive, and apportioning tax across the room/meal split would
+      // invent precision the pricing never produced).
+      const mealsAmount = Number((r as unknown as { mealsSubtotal?: number | string }).mealsSubtotal ?? 0);
+      const mealsPriced = Number.isFinite(mealsAmount) && mealsAmount > 0;
+      const planStr =
+        planParts.length > 0
+          ? `${planParts.join(" · ")}${mealsPriced ? ` — meals ${formatMoney(mealsAmount)}` : ""}`
+          : "EP (room only)";
       const eb = raw?.extraBedCount && raw.extraBedCount > 0 ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}` : "None";
       // Print the room's ORIGINAL total when the stored pre-discount run has it; the final
       // total below still comes from the discounted figures.
@@ -358,7 +375,8 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
     gst: formatMoney(gstValue),
     total: formatMoney(totalAmount),
     closingNote:
-      "Rates are inclusive of service charge and GST. Subject to availability at confirmation. " +
+      "Rates are inclusive of service charge and GST, and of the meal charges shown against each " +
+      "meal plan (those are stated before tax). Subject to availability at confirmation. " +
       "A proforma invoice with advance terms follows on acceptance.",
     tariffVersion: "T1.0",
   });
