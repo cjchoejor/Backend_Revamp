@@ -169,6 +169,18 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   // entry.numberOfRooms), so a changed value is PATCHed to the entry when the search runs.
   const [roomsInput, setRoomsInput] = useState(String(entry.numberOfRooms ?? 1));
   const roomsNum = Math.max(0, parseInt(roomsInput || "0", 10) || 0);
+  // Follow the entry when the rooms-required changes upstream — "Edit details" on this very step
+  // PATCHes it, and a useState initialiser only runs once. Left stale this field didn't merely
+  // display the old number: the search below PATCHes the entry back to whatever it holds, so the
+  // edit was silently reverted the next time the operator searched. Keyed on the entry's value so
+  // typing in the field is never overwritten mid-edit.
+  const lastEntryRoomsRef = useRef(entry.numberOfRooms ?? 1);
+  useEffect(() => {
+    const n = entry.numberOfRooms ?? 1;
+    if (n === lastEntryRoomsRef.current) return;
+    lastEntryRoomsRef.current = n;
+    setRoomsInput(String(n));
+  }, [entry.numberOfRooms]);
 
   useEffect(() => {
     if (!checkIn) return;
@@ -647,6 +659,29 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selStoreKey]);
+  // Rooms-required can change AFTER rooms were picked ("Edit details" on this step). The cap is
+  // enforced on every click, but a lowered number would otherwise leave a selection standing that
+  // is over the new limit — visibly "3 of 2 selected", and unsaveable with no way to tell which
+  // room to drop. Trim to the new count instead, oldest picks kept, and say so.
+  useEffect(() => {
+    const over =
+      baseSel.length > numberOfRooms ||
+      Object.values(nightOverrides).some((ids) => ids.length > numberOfRooms);
+    if (!over) return;
+    setBaseSel((prev) => (prev.length > numberOfRooms ? prev.slice(0, numberOfRooms) : prev));
+    setNightOverrides((prev) => {
+      const next: Record<string, string[]> = {};
+      for (const [night, ids] of Object.entries(prev)) {
+        next[night] = ids.length > numberOfRooms ? ids.slice(0, numberOfRooms) : ids;
+      }
+      return next;
+    });
+    toast.info(
+      `This booking now needs ${numberOfRooms} room${numberOfRooms === 1 ? "" : "s"} — the extra picks were dropped. Check the selection before saving.`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [numberOfRooms]);
+
   /** The rooms actually in force on one night — its override, else the whole-stay rooms. */
   const effectiveNight = (n: string): string[] => nightOverrides[n] ?? baseSel;
   const effectiveByNight = useMemo(
@@ -1047,7 +1082,6 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   onChange={(e) => roomsChange(setEdRooms)(e.target.value)}
                 />
                 {roomEnvelopeHint}
-            {roomsCapNotice}
                 {roomsCapNotice}
               </div>
               <div className="field" />
