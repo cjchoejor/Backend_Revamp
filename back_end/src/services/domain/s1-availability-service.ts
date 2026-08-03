@@ -693,6 +693,15 @@ export async function selectOption(
       data: {
         optionSelected: optionSelected as Prisma.InputJsonValue,
         deficientAcknowledgements: anyDeficient ? (input.deficientAcknowledgements as any) : null,
+        // Saving a selection IS the seal — this is the only route that records one, and every
+        // downstream consumer looks for `sealedAt != null && optionSelected != null`:
+        // s2-quotation-service (both entry points) and its p01 gate, s3-hold-service,
+        // room-assignment-service and rate-reference-service. Nothing anywhere else in the
+        // backend ever set this column, so a booking whose rooms were saved from the desk had
+        // `sealedAt` null and could not be quoted at all (NO_PREFERRED_CONFIGURATION), could not
+        // place a committed hold, and returned no reference rates. Re-saving re-stamps it; the
+        // room-change path in entry-lifecycle-state-machine deliberately clears it back to null.
+        sealedAt: new Date(),
       },
     });
     await tx.traceEvent.create({
