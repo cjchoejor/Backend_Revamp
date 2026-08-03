@@ -132,6 +132,12 @@ export type AvailabilityConfigSummary = {
   isStale: boolean;
   sealedAt: string | null;
   resultSet?: unknown;
+  /**
+   * The inputs this search ran with — `{ checkInDate, checkOutDate, guestCount, useType, … }`.
+   * Persisted server-side on every search, so the desk can restore the search form to what was
+   * last actually run instead of snapping back to the entry's intake dates.
+   */
+  searchCriteria?: unknown;
   createdAt?: string;
 };
 
@@ -264,6 +270,13 @@ export type ReservationSummary = {
   confirmedAt: string;
   confirmedBy: string;
   confirmationVoucherSent: boolean;
+  // Confirmation-voucher PDF artifact (write-once, checksum-signed). Returned by the entry-detail
+  // endpoint (reservation scalars); null until the PDF has been rendered at least once.
+  confirmationVoucherStorageKey?: string | null;
+  confirmationVoucherChecksum?: string | null;
+  confirmationVoucherChecksumAlgo?: string | null;
+  confirmationVoucherRenderedAt?: string | null;
+  confirmationVoucherRenderedBy?: string | null;
 };
 
 export type HandoffSummary = {
@@ -332,6 +345,9 @@ export type RoomAssignmentSummary = {
   id: string;
   entryId: string;
   roomId: string;
+  /** Date-scoped assignment window (multi-room / per-night bookings). Null for whole-stay. */
+  startDate?: string | null;
+  endDate?: string | null;
   deficientAtAssignment?: boolean;
   acknowledgementActorId?: string | null;
   acknowledgementAt?: string | null;
@@ -343,6 +359,31 @@ export type RoomAssignmentSummary = {
     expectedReadyAt?: string | null;
     deficientConditionRecords?: DeficientConditionSummary[];
   };
+  // Per-room composition (Phase A of per-room track, 2026-07-27). Populated when the
+  // quotation was built via per-room composition; null on legacy bookings.
+  occupantCount?: number | null;
+  adultCount?: number | null;
+  cnb6To10Count?: number | null;
+  cnbUnder6Count?: number | null;
+  extraBedCount?: number | null;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
+  mealPlanOthersCount?: number;
+  othersBreakfastPax?: number | null;
+  othersLunchPax?: number | null;
+  othersDinnerPax?: number | null;
+  negotiatedRoomRate?: string | number | null;
+  negotiatedExtraBedRate?: string | number | null;
+  negotiatedBreakfastRate?: string | number | null;
+  negotiatedLunchRate?: string | number | null;
+  negotiatedDinnerRate?: string | number | null;
+  serviceChargeApplies?: boolean;
+  gstApplies?: boolean;
+  isFoc?: boolean;
+  frozenSubtotal?: string | number | null;
+  frozenTotal?: string | number | null;
 };
 
 export type KeyReturnSummary = {
@@ -423,7 +464,7 @@ export type EntryDetail = EntryListItem & {
   commissionDueRecords?: CommissionDueSummary[];
   followUpTasks?: FollowUpTaskSummary[];
   noShowDetermination?: NoShowDeterminationSummary | null;
-  inquiry?: { agentProfile?: AgentProfileSummary | null } | null;
+  inquiry?: { notes?: string | null; agentProfile?: AgentProfileSummary | null } | null;
   closedAt?: string | null;
   closedBy?: string | null;
   walkInCompressed?: boolean;

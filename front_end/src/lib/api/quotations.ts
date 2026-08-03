@@ -2,6 +2,38 @@ import type { QuotationSummary, SpeculativeHoldSummary } from "@/types/api";
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/**
+ * Per-room composition captured at S2 quotation build (per-room track Phase B/E, 2026-07-27).
+ * Mirrors the backend's `roomCompositionInputSchema` DTO. All fields optional so the operator
+ * can progressively fill the form.
+ */
+export type RoomCompositionInput = {
+  roomId: string;
+  startDate?: string;
+  endDate?: string;
+  occupantCount?: number;
+  adultCount?: number;
+  cnb6To10Count?: number;
+  cnbUnder6Count?: number;
+  extraBedCount?: number;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
+  mealPlanOthersCount?: number;
+  othersBreakfastPax?: number;
+  othersLunchPax?: number;
+  othersDinnerPax?: number;
+  negotiatedRoomRate?: number;
+  negotiatedExtraBedRate?: number;
+  negotiatedBreakfastRate?: number;
+  negotiatedLunchRate?: number;
+  negotiatedDinnerRate?: number;
+  serviceChargeApplies?: boolean;
+  gstApplies?: boolean;
+  isFoc?: boolean;
+};
+
 export async function createQuotation(
   session: Session,
   entryId: string,
@@ -11,6 +43,10 @@ export async function createQuotation(
     currency?: string;
     focRoomsRequested?: number;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string };
+    mealPlan?: "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP" | null;
+    extraBedCount?: number;
+    /** Per-room composition (Phase B/E). When supplied, backend uses per-room iteration. */
+    roomCompositions?: RoomCompositionInput[];
   },
 ) {
   return apiRequest<QuotationSummary>(`/api/entries/${entryId}/quotations`, {
@@ -23,7 +59,16 @@ export async function createQuotation(
 export async function supersedeQuotation(
   session: Session,
   quotationId: string,
-  body?: { notes?: string; requestedDiscount?: { discountPercent: number; discountBasis: string } | null },
+  body?: {
+    notes?: string;
+    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    /**
+     * Renegotiated per-room compositions (2026-07-28). Send the editor's current state so
+     * meal-plan / extra-bed / negotiated-rate changes re-price on the regenerated draft.
+     * Omit to carry the prior version's compositions forward unchanged.
+     */
+    roomCompositions?: RoomCompositionInput[];
+  },
 ) {
   return apiRequest<QuotationSummary>(`/api/quotations/${quotationId}/supersede`, {
     method: "POST",

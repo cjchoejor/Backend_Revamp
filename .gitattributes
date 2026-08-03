@@ -1,0 +1,29 @@
+# Protect the authoritative backend from the friend's branch.
+#
+# Since the 2026-07-31 folder rename, his UI (`front_end/`) and ours share a path, so
+# `git merge origin/UI-experiment2` is finally possible. But merging a branch takes the WHOLE
+# branch — and he makes real backend changes too (tax, quotation, handoff logic). Without this,
+# a merge silently replays 124 backend files over ours, and `back_end/` is the source of truth
+# on both branches.
+#
+# `merge=ours` tells git to keep OUR version of these paths on every merge, always.
+#
+# ⚠ THIS ONLY WORKS IF THE MACHINE HAS THE DRIVER REGISTERED. Run once, per clone:
+#
+#     git config merge.ours.driver true
+#
+# Without it git silently falls back to a normal merge and his backend WILL land on ours.
+# Verify with `git config --get merge.ours.driver` before merging his branch.
+back_end/**            merge=ours
+
+# Reference-only snapshot of his backend — we never wire against it, so never let a merge
+# rewrite our copy either.
+friend_back_end/**     merge=ours
+
+# Ours by definition; his branch has no such folder, but be explicit.
+my_front_end/**        merge=ours
+
+# Repo-level docs and operating notes are ours.
+CLAUDE.md              merge=ours
+docs/**                merge=ours
+.claude/**             merge=ours

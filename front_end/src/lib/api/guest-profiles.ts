@@ -44,8 +44,8 @@ export async function createGuestProfile(
   });
 }
 
-export function guestDisplayName(g: Pick<GuestProfileSummary, "firstName" | "lastName" | "email" | "phone">) {
-  const name = `${g.firstName} ${g.lastName}`.trim();
-  const contact = g.email ?? g.phone ?? "";
-  return contact ? `${name} · ${contact}` : name;
+/** The plain name, with no contact detail appended. */
+export function guestFullName(g: Pick<GuestProfileSummary, "firstName" | "lastName">) {
+  return `${g.firstName} ${g.lastName}`.trim() || "Guest";
 }
+

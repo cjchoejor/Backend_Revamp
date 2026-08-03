@@ -89,4 +89,17 @@ export async function reEnterS8ToS7(session: Session, entryId: string, version: 
   }) as Promise<EntryDetail>;
 }
 
+/**
+ * S8 → S2 re-entry — re-open a checkout for a full rate renegotiation (rate dispute). Seals the
+ * current segment and starts a fresh one at Quote; the LIVE folio persists. Backend requires L2+
+ * and a reEntryReason (SIG-S8 §1.2 / §3.7).
+ */
+export async function reEnterS8ToS2(session: Session, entryId: string, version: number, reEntryReason: string) {
+  return progressStage(session, entryId, {
+    targetStage: "S2",
+    version,
+    transitionData: { reEntryReason },
+  }) as Promise<EntryDetail>;
+}
+
 export { recordFolioPayment };

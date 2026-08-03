@@ -4,12 +4,12 @@ This file is the operating reference for Claude when working in this repo. Updat
 
 ## ⚠️ Two frontends exist — backend must stay UI-agnostic
 
-The user (cjchoejor) maintains the frontend at `front_end/` **for testing only**. The **real production frontend** is being built by a separate developer with a different UX design and different component structure. That means:
+The user (cjchoejor) maintains the frontend at `my_front_end/` **for testing only**. The **real production frontend** is being built by a separate developer with a different UX design and different component structure. That means:
 
 - **Business logic MUST live in the backend.** Anywhere the testing frontend has a calculation, classification, envelope check, or validation, the backend has to expose it via an endpoint or shared service. Duplicating logic in the testing frontend is fine for local convenience but the backend is always the source of truth.
 - **No backend endpoint should assume the testing UI's shape.** Endpoints take inputs (JSON) and return outputs (JSON) — don't design them around what the current form fields look like.
 - **When adding a new feature: expose a backend endpoint FIRST, then have the testing UI consume it.** The friend's frontend consumes the same endpoint with a different UI. If the calculation only lives in the testing frontend, the friend's UI can't use it and business rules diverge.
-- **When you find business logic in `front_end/` that shouldn't be there** — extract it to a backend service + lookup endpoint, delete the frontend duplicate, and update the testing UI to call the endpoint.
+- **When you find business logic in `my_front_end/` that shouldn't be there** — extract it to a backend service + lookup endpoint, delete the frontend duplicate, and update the testing UI to call the endpoint.
 
 Existing backend-authoritative endpoints that show this pattern:
 - `GET /api/lookups/child-policy` → child age bands, meal pricing, unaccompanied-minor cutoff
@@ -22,20 +22,24 @@ Two long-lived branches on the same GitHub repo:
 
 | Branch | Contains | Purpose |
 |---|---|---|
-| `main` | `back_end/` + user's testing `front_end/` | Daily dev branch — the user's testing UI + backend, untouched by friend's code. |
-| `integration-prod-frontend` | `back_end/` + user's `front_end/` + `friend_back_end/` + `friend_front_end/` | Integration branch. Holds the friend's production frontend + a snapshot of the friend's backend for reference. User's backend is the source of truth on both branches. |
+| `main` | `back_end/` + user's testing `my_front_end/` | Daily dev branch — the user's testing UI + backend, untouched by friend's code. |
+| `integration-prod-frontend` | `back_end/` + user's `my_front_end/` + `friend_back_end/` + `front_end/` | Integration branch. Holds the friend's production frontend + a snapshot of the friend's backend for reference. User's backend is the source of truth on both branches. |
 
-The friend pushes to his branch `UI-experiment` on the same repo. To pull his latest frontend/backend into the integration branch, use the worktree flow documented under **Working conventions → Pulling friend's latest from UI-experiment**.
+The friend pushes to his branch `UI-experiment2` on the same repo. To pull his latest frontend into the integration branch, see **Working conventions → Pulling friend's latest from UI-experiment2**.
+
+**Folders renamed 2026-07-31.** The testing UI moved `front_end/` → `my_front_end/` on **both** branches, and the friend's UI moved `friend_front_end/` → `front_end/` on the integration branch only. Reason: his UI lives at `front_end/` on his branch, and git merges by path — so while the names disagreed, pulling his work could only ever be a destructive folder copy, and merging his branch would have poured his UI into the testing UI's folder. The rename had to happen on `main` too, otherwise the next `main → integration` merge would pour main's testing UI straight into the friend's UI folder: same name, two different meanings.
+
+Net effect: `front_end/` now means "friend's production UI" everywhere it exists, and `my_front_end/` always means "user's testing UI".
 
 **Never merge integration-prod-frontend → main.** Backend changes flow `main → integration-prod-frontend`, never the other direction. Frontend changes stay branch-local.
 
 ## Wired: friend's production frontend runs on user's backend (2026-07-14)
 
-The friend's frontend (at `friend_front_end/` on the integration branch) is wired to run against **user's backend** (at `back_end/`). Both were forked from the same base, so the auth contract, endpoint shapes, and DTO structure are byte-equivalent — **no code changes** were needed on his frontend. The wiring is purely config:
+The friend's frontend (at `front_end/` on the integration branch) is wired to run against **user's backend** (at `back_end/`). Both were forked from the same base, so the auth contract, endpoint shapes, and DTO structure are byte-equivalent — **no code changes** were needed on his frontend. The wiring is purely config:
 
 **How it works**:
 - Friend's `next.config.ts` proxies `/api/*` to `http://127.0.0.1:4000` (user's backend default port) via the `BACKEND_URL` env var. Default already matches — no override needed.
-- Friend's `apiRequest` client at [`friend_front_end/src/lib/api/client.ts`](friend_front_end/src/lib/api/client.ts) already sends `Authorization: Bearer <jwt>` from the stored session — matches user's JWT auth middleware.
+- Friend's `apiRequest` client at [`front_end/src/lib/api/client.ts`](front_end/src/lib/api/client.ts) already sends `Authorization: Bearer <jwt>` from the stored session — matches user's JWT auth middleware.
 - Friend's login form calls `POST /api/auth/authenticate` with `{ username, pin, terminalId }` — matches user's endpoint shape exactly.
 - Friend's session shape (`{ sessionId, userId, username, actorLevel, terminalId, jwtToken, ... }`) matches what user's `session-service.authenticate` returns.
 
@@ -47,11 +51,11 @@ cd back_end
 npm run dev:workers            # or npm run dev
 
 # Terminal 2 — user's testing frontend (port 3001, default)
-cd front_end
+cd my_front_end
 npm run dev
 
 # Terminal 3 — friend's production frontend on a DIFFERENT port
-cd friend_front_end
+cd front_end
 npm install                    # first time only — his deps aren't installed yet
 PORT=3002 npm run dev          # override the 3001 default to avoid collision
 ```
@@ -66,7 +70,7 @@ Log in with the seeded users (`admin` / `4444`, `gm` / `3333`, `fom` / `2222`, `
 Once friend's frontend is confirmed working end-to-end against user's backend, delete the two temporary references:
 ```bash
 git rm -r friend_back_end
-git rm -r front_end   # ONLY if user decides to retire the testing frontend
+git rm -r my_front_end   # ONLY if user decides to retire the testing frontend
 git commit -m "Retire scaffolding: friend's backend + user's testing frontend"
 ```
 
@@ -115,7 +119,7 @@ When a user asks "what does the spec say about X?", the relevant document above 
 ## Stack
 
 - **Backend**: Node + TypeScript (ESM), Express, Prisma 5, PostgreSQL (DB: `legphel_pms_dev`), pg-boss for timer queue. Path: `back_end/`. Dev port 4000.
-- **Frontend**: Next.js (App Router) + TypeScript + TanStack Query + sonner toasts. Path: `front_end/`. Dev port 3001 (proxies `/api/*` to backend).
+- **Frontend**: Next.js (App Router) + TypeScript + TanStack Query + sonner toasts. Path: `my_front_end/`. Dev port 3001 (proxies `/api/*` to backend).
 
 ## Repo map — where things live
 
@@ -144,7 +148,7 @@ Anchor these in your head before searching:
 | `src/dtos/08-admin/request-schemas.ts` | Zod schemas for every admin write. |
 | `src/middleware/` | `auth.ts` (PIN-session + actor-level checks), `validate-body.ts`. |
 
-### Frontend (`front_end/`)
+### Frontend (`my_front_end/`)
 
 | Location | What's there |
 |---|---|
@@ -171,7 +175,7 @@ Anchor these in your head before searching:
 
 ## Admin console — sidebar structure
 
-As of 2026-06-10, the L4 sidebar is organised into **9 collapsible domain groups** matching ACIG §6.2 / `docs/admin-console-visual.html`, plus a pinned **Overview** at the top and a pinned **Utilities** group at the bottom. The drawer containing the active page auto-expands; the others stay collapsed. Source: [admin-nav.ts](front_end/src/config/admin-nav.ts) (`adminNavGroups`), rendered by [admin-shell.tsx](front_end/src/components/admin/admin-shell.tsx).
+As of 2026-06-10, the L4 sidebar is organised into **9 collapsible domain groups** matching ACIG §6.2 / `docs/admin-console-visual.html`, plus a pinned **Overview** at the top and a pinned **Utilities** group at the bottom. The drawer containing the active page auto-expands; the others stay collapsed. Source: [admin-nav.ts](my_front_end/src/config/admin-nav.ts) (`adminNavGroups`), rendered by [admin-shell.tsx](my_front_end/src/components/admin/admin-shell.tsx).
 
 Every ConfigurationEntry key now appears on **exactly one page** (its spec-owner per `config-key-registry.ts`):
 
@@ -203,7 +207,7 @@ The Overview page (`/admin`) shows four numbers at the top:
 
 | Number | What it means |
 |---|---|
-| **Domains: 9** | The ACIG admin surface is organised into 9 functional domains (Identity & Org, Inventory, Commercial, Workflow Governance, Communications & Templates, Financial & Operational Schedule, Post-Stay & Governance, OTA & AI Agent, Generic & Readiness). Source: `docs/admin-console-visual.html`. Defined in `front_end/src/config/admin-nav.ts` as `adminDomains`. |
+| **Domains: 9** | The ACIG admin surface is organised into 9 functional domains (Identity & Org, Inventory, Commercial, Workflow Governance, Communications & Templates, Financial & Operational Schedule, Post-Stay & Governance, OTA & AI Agent, Generic & Readiness). Source: `docs/admin-console-visual.html`. Defined in `my_front_end/src/config/admin-nav.ts` as `adminDomains`. |
 | **Services: 26** | The 26 admin services per ACIG §6.2 (full list in §6.3). Each service owns specific config keys and exposes its own admin endpoints. The number is hardcoded in `back_end/src/routes/admin/overview-router.ts` and matches the sum across all 9 domains. |
 | **Config keys: ~80** | Count of distinct `configKey` values in the `configuration_entries` table — i.e. how many keyed configuration items have at least one row. The number varies with seeded + manually-created keys. A "config key" is a single named tunable parameter (e.g. `expiry.s3.committedHoldTtlSeconds`, `acknowledgement.windowPerType`, `nightAudit.scheduleTime`). Each key can have many versions over time; the count is of distinct keys, not rows. The full canonical list is in ACIG §9. |
 | **Readiness: OK / Gaps** | Aggregated result of `runReadinessCheck` ([back_end/src/services/admin/readiness-admin-service.ts](back_end/src/services/admin/readiness-admin-service.ts)) — green when all 13 critical config items are seeded and ≥1 rate plan / L4 staff / room exists; red otherwise. |
@@ -222,7 +226,7 @@ Run from `back_end/`:
 | Run pending migrations | `npm run db:migrate` (interactive) or `npx prisma migrate deploy` (non-interactive) |
 | Re-seed (destructive — wipes tables it owns) | `npm run db:seed` |
 
-Run from `front_end/`:
+Run from `my_front_end/`:
 
 | What you want | Command |
 |---|---|
@@ -320,7 +324,7 @@ Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **Corporat
 
 **Versioning**: TravelAgent and CorporateAccount were added to `TRACKED_ENTITY_TYPES` in [entity-version-snapshot.ts](back_end/src/lib/admin/entity-version-snapshot.ts) — every CRUD save on either captures a snapshot. RateCard is versioned natively via the append-only pattern (no EntityVersionSnapshot needed).
 
-**Reusable rate-card editor** at [`front_end/src/components/admin/rate-card-editor.tsx`](front_end/src/components/admin/rate-card-editor.tsx) — used by both the Travel Agents and Corporate Accounts pages. Handles the full grid of rate fields, per-room-type override CRUD, and historical version listing in one self-contained component.
+**Reusable rate-card editor** at [`my_front_end/src/components/admin/rate-card-editor.tsx`](my_front_end/src/components/admin/rate-card-editor.tsx) — used by both the Travel Agents and Corporate Accounts pages. Handles the full grid of rate fields, per-room-type override CRUD, and historical version listing in one self-contained component.
 
 **Phase C — done 2026-06-12**: front-desk wiring complete.
 
@@ -328,7 +332,7 @@ Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **Corporat
 - **L1-accessible lookup routes** at [`back_end/src/routes/lookups/router.ts`](back_end/src/routes/lookups/router.ts) — `GET /api/lookups/travel-agents/search?q=…` and `/api/lookups/corporate-accounts/search?q=…`. These mirror the L4-only admin search but with L1 authority so receptionists can use them during intake.
 - **S1 inquiry service** ([s1-inquiry-service.ts](back_end/src/services/domain/s1-inquiry-service.ts)): `createInquiry` accepts `travelAgentId` and `corporateAccountId`, validates mutual exclusivity, verifies the referenced party exists and is active, and includes both relations in `getInquiryById`. DTO updated with Zod `.refine()` enforcing the XOR.
 - **S2 quotation service** ([s2-quotation-service.ts](back_end/src/services/domain/s2-quotation-service.ts)): new helper `resolveAgentRateForEntryQuotation` looks up the inquiry's linked party, calls `resolveAgentRate` ([agent-rate-resolution.ts](back_end/src/lib/agent-rate-resolution.ts)), and when a card exists overrides `effectiveRate` / `resolvedNightlyRate` / `currency` with the negotiated rate. `commercialTerms` now carries an `agentRate` block (rateCardId, partyType, partyId, roomRate, source, addOns, cnbPercent, currency) plus a `standardPricing` reference of what the hotel's standard rate plan would have charged. Below-MSR check is skipped for agent rates (they're negotiated, not subject to MSR). Currently only wired into single-party `createQuotation`; group quotations still use standard pricing.
-- **Front-desk picker** ([agent-corporate-picker.tsx](front_end/src/components/inquiries/agent-corporate-picker.tsx)): reusable mutually-exclusive picker (None / Travel agent / Corporate) with debounced search-by-name and click-to-select. Wired into the new-inquiry form ([new-inquiry-form.tsx](front_end/src/components/inquiries/new-inquiry-form.tsx)).
+- **Front-desk picker** ([agent-corporate-picker.tsx](my_front_end/src/components/inquiries/agent-corporate-picker.tsx)): reusable mutually-exclusive picker (None / Travel agent / Corporate) with debounced search-by-name and click-to-select. Wired into the new-inquiry form ([new-inquiry-form.tsx](my_front_end/src/components/inquiries/new-inquiry-form.tsx)).
 - **Backward compatibility**: legacy `Inquiry.agentProfileId` and `Inquiry.corporateClientRef` columns remain. Pre-Phase-B inquiries still work; new intake writes to the two FK columns instead.
 
 ### Backflows / re-entry transitions (2026-07-14)
@@ -377,7 +381,7 @@ The 13 spec-mandated regression paths (SIG-S2 §1.3, SIG-S4 §3.1, SIG-S5 §1.3,
 
 All three share the same engine — release hold → cancel timers → supersede invoices → post penalty → refund net → transition entry to CANCELLED/TERMINAL → audit trace.
 
-S3 cancel UI lives on the S3 workspace ([s3-workspace.tsx](front_end/src/components/stages/s3/s3-workspace.tsx)) as a destructive-styled "Cancel booking" card, fronted by a two-step confirm (prompt for reason, then danger-variant confirm).
+S3 cancel UI lives on the S3 workspace ([s3-workspace.tsx](my_front_end/src/components/stages/s3/s3-workspace.tsx)) as a destructive-styled "Cancel booking" card, fronted by a two-step confirm (prompt for reason, then danger-variant confirm).
 
 ### HouseTariff — the hotel's own add-on price list (2026-07-30)
 
@@ -401,7 +405,7 @@ Extra-bed and meal rates only ever existed on `RateCard`, which is per-agent. Ev
 - **Resolution**: [`lib/house-tariff.ts`](back_end/src/lib/house-tariff.ts) — `resolveActiveHouseTariff(db, asOf?)`, 30s TTL cache on the "now" lookup, `invalidateHouseTariffCache()` called by admin writes.
 - **Applies only when there is no rate card.** Agent/corporate cards do NOT fall back to the house tariff — a blank field on a negotiated card stays 0 (operator decision). The two sources never mix on one booking.
 - **Admin**: [`house-tariff-admin-service.ts`](back_end/src/services/admin/house-tariff-admin-service.ts) + [`house-tariff-router.ts`](back_end/src/routes/admin/house-tariff-router.ts) — `GET /api/admin/house-tariff[?asOf=]`, `GET /api/admin/house-tariff/versions`, `POST /api/admin/house-tariff`. L4-only. Audit event `ADMIN.HOUSE_TARIFF_VERSION_CREATED` carries a field-level diff. Belongs to Domain 03 Commercial; it is a **user-requested extension, not one of the 26 ACIG §6.2 services** — leave the hardcoded `26` in `overview-router.ts` alone.
-- **Admin UI**: `/admin/house-tariff` in the friend's frontend ([page.tsx](friend_front_end/src/app/(app)/admin/house-tariff/page.tsx)), nav entry under **Domain 03 · Commercial** between Rate plans and Seasons. Client fns `getHouseTariff` / `listHouseTariffVersions` / `saveHouseTariff` in [`lib/api/admin.ts`](friend_front_end/src/lib/api/admin.ts). The page shows a live "what each plan will charge" table distinguishing explicitly-set prices from ones added up from their meals, plus the version history. Note `friend_front_end` DOES have a full 32-page admin console under `src/app/(app)/admin/` — a glob that doesn't traverse the `(app)` route group will wrongly report none.
+- **Admin UI**: `/admin/house-tariff` in the friend's frontend ([page.tsx](front_end/src/app/(app)/admin/house-tariff/page.tsx)), nav entry under **Domain 03 · Commercial** between Rate plans and Seasons. Client fns `getHouseTariff` / `listHouseTariffVersions` / `saveHouseTariff` in [`lib/api/admin.ts`](front_end/src/lib/api/admin.ts). The page shows a live "what each plan will charge" table distinguishing explicitly-set prices from ones added up from their meals, plus the version history. Note `front_end` DOES have a full 32-page admin console under `src/app/(app)/admin/` — a glob that doesn't traverse the `(app)` route group will wrongly report none.
 
 **Per-room negotiation beats a configured plan price, per plan.** If the hotel sets CP = 350 and the operator negotiates breakfast to 300 for one room, CP guests in that room are charged 300 — otherwise the negotiation would silently do nothing. The override is scoped to plans that actually include a re-priced meal: negotiating dinner re-derives MAPD and AP but leaves CP (breakfast-only) on the configured price. Verified: with tariff bf 350 / ln 440 / dn 440 and plan prices CP 350 / MAPL 750 / MAPD 750 / AP 1100, negotiating lunch to 0 gives CP 350 · MAPL 350 · MAPD 750 · AP 790.
 
@@ -484,7 +488,7 @@ Currently wired (each editable on `/admin/policies` with typed forms):
 24. `registry.child.adultToChildRatio` → capacity-validation-service (WARN issue `ADULT_CHILD_RATIO_EXCEEDED`)
 25. `registry.groupBooking.advancePaymentBoost` → s3-payment-service `computeAdvancePaymentEvaluation`. Multiplies the resolved base amount (respects per-source thresholds too) by `multiplierPercent` when parent entry is `GROUP_MASTER`. Default 200%.
 
-Frontend schema registry at [`front_end/src/lib/admin/policy-schemas.ts`](front_end/src/lib/admin/policy-schemas.ts) — typed field metadata per known policy ID; supports `number`, `text`, `boolean`, and `json` field kinds. `boolean` renders as a checkbox with an "On/Off" text indicator; `buildDefinition` in `/admin/policies` page coerces to a real boolean before persisting. Adding a new policy = new schema entry + new seed row + new `getRegistryPolicy()` consumer.
+Frontend schema registry at [`my_front_end/src/lib/admin/policy-schemas.ts`](my_front_end/src/lib/admin/policy-schemas.ts) — typed field metadata per known policy ID; supports `number`, `text`, `boolean`, and `json` field kinds. `boolean` renders as a checkbox with an "On/Off" text indicator; `buildDefinition` in `/admin/policies` page coerces to a real boolean before persisting. Adding a new policy = new schema entry + new seed row + new `getRegistryPolicy()` consumer.
 
 ### Unwired policy inventory (audit 2026-06-27)
 
@@ -514,23 +518,23 @@ Migration `20260625105007_add_entry_guest_breakdown` added `Entry.adultCount`, `
 
 ### Unified booking flow at `/inquiries/new` (2026-06-24 → 2026-06-27)
 
-Replaces the previous standalone inquiry-form page with a **three-step vertical accordion** ([`booking-flow.tsx`](front_end/src/components/booking-flow/booking-flow.tsx)):
+Replaces the previous standalone inquiry-form page with a **three-step vertical accordion** ([`booking-flow.tsx`](my_front_end/src/components/booking-flow/booking-flow.tsx)):
 
 - **Step 1** — Guest & inquiry intake (embeds `NewInquiryForm` with `keepMounted` so state survives the collapse-when-done cycle; PATCH support via new `updateEntryIntake` API + `updateEntryIntakeFields` service for editing after creation, S1-stage-gated)
 - **Step 2** — S1 workspace (availability search, seal preferred room type)
 - **Step 3** — S2 workspace (quotation, progress to S3)
 
 Key infrastructure:
-- [`step-card.tsx`](front_end/src/components/booking-flow/step-card.tsx) — locked/active/done visual states with optional `keepMounted` (keeps children mounted for state preservation), `onEdit` / `onClose` handlers, `isEditing` flag
-- [`booking-context-bar.tsx`](front_end/src/components/booking-flow/booking-context-bar.tsx) — sticky top breadcrumb rendering chips for guest, contact (email + phone), agent/corporate, dates + nights, adults/children (with child ages), sealed room, accepted quotation, and current stage
-- [`booking-flow-context.tsx`](front_end/src/components/booking-flow/booking-flow-context.tsx) — signal wrapping the embedded workspaces. `ProgressStageButton` consults it via `useIsInBookingFlow()` and skips `router.push` so stage advances stay inline; the orchestrator auto-advances steps based on entry state
+- [`step-card.tsx`](my_front_end/src/components/booking-flow/step-card.tsx) — locked/active/done visual states with optional `keepMounted` (keeps children mounted for state preservation), `onEdit` / `onClose` handlers, `isEditing` flag
+- [`booking-context-bar.tsx`](my_front_end/src/components/booking-flow/booking-context-bar.tsx) — sticky top breadcrumb rendering chips for guest, contact (email + phone), agent/corporate, dates + nights, adults/children (with child ages), sealed room, accepted quotation, and current stage
+- [`booking-flow-context.tsx`](my_front_end/src/components/booking-flow/booking-flow-context.tsx) — signal wrapping the embedded workspaces. `ProgressStageButton` consults it via `useIsInBookingFlow()` and skips `router.push` so stage advances stay inline; the orchestrator auto-advances steps based on entry state
 - `step2Done` gated on `entry.currentStage !== "S1"` (not just sealed config) so step 3 opens only after the operator clicks "Progress to S2"
 - Auto-fulfil button in S2 workspace is now hidden when `entry.currentStage !== "S1"` (its label was misleading — the backend requires stage S1)
 - Timezone-safe date math (`Date.UTC`-based) in the intake form — check-in change auto-fills check-out to next day and syncs a "Number of nights" field. S1 workspace's search form syncs check-in/check-out from entry via `useEffect` on entry field changes so upstream edits reflect
 
 ### Availability calendar grid (Phase 2 of the booking flow)
 
-[`availability-calendar.tsx`](front_end/src/components/stages/s1/availability-calendar.tsx) replaces the flat rooms-list display in S1 workspace with a date × room-type matrix. Dates as columns (one per night), room types as rows, each cell showing available-count badge. Type filter sourced from ALL room types (not just result set) — via [`GET /api/rooms`](back_end/src/routes/availability/router.ts) which now returns `floorNumber` + `roomType { id, code, name }`. Floor filter from `Room.floorNumber`. Clicking a row selects that type (backend receives one room of the type for sealing; specific room number is assigned later at pre-arrival or check-in per user's operational preference). Per-row room chips deliberately removed — commitment at S1 is to type only.
+[`availability-calendar.tsx`](my_front_end/src/components/stages/s1/availability-calendar.tsx) replaces the flat rooms-list display in S1 workspace with a date × room-type matrix. Dates as columns (one per night), room types as rows, each cell showing available-count badge. Type filter sourced from ALL room types (not just result set) — via [`GET /api/rooms`](back_end/src/routes/availability/router.ts) which now returns `floorNumber` + `roomType { id, code, name }`. Floor filter from `Room.floorNumber`. Clicking a row selects that type (backend receives one room of the type for sealing; specific room number is assigned later at pre-arrival or check-in per user's operational preference). Per-row room chips deliberately removed — commitment at S1 is to type only.
 
 **Caveat (Phase 2.5 pending)**: current availability engine ignores reservations/holds when computing availability — it returns rooms based on present physical state. So every date column shows the same count. When the engine grows per-date conflict detection, columns will diverge without any UI change.
 
@@ -538,12 +542,12 @@ Key infrastructure:
 
 Two floating right-side panels visible on `/inquiries/new` once an entry exists:
 
-- **[`booking-timer-panel.tsx`](front_end/src/components/booking-flow/booking-timer-panel.tsx)** — reads new `GET /api/entries/:id/timers` endpoint (returns SCHEDULED `TimerRecord` rows sorted by `firesAt`). Minimized state shows a labeled countdown pill (e.g. `Inquiry expiry 12:34`); expanded state lists all active timers with friendly `labelForTimer()` mapping (Inquiry expiry / Quote validity / Speculative hold / Reservation hold / Advance payment follow-up / etc). Tone-aware (amber < 30 min, red < 5 min). Countdown ticks every second regardless of open/closed state.
+- **[`booking-timer-panel.tsx`](my_front_end/src/components/booking-flow/booking-timer-panel.tsx)** — reads new `GET /api/entries/:id/timers` endpoint (returns SCHEDULED `TimerRecord` rows sorted by `firesAt`). Minimized state shows a labeled countdown pill (e.g. `Inquiry expiry 12:34`); expanded state lists all active timers with friendly `labelForTimer()` mapping (Inquiry expiry / Quote validity / Speculative hold / Reservation hold / Advance payment follow-up / etc). Tone-aware (amber < 30 min, red < 5 min). Countdown ticks every second regardless of open/closed state.
 - **`EntryTracePanel`** — adapted to take an optional `entryId` prop so it works outside the `/entries/[entryId]` route context.
 
 ### Child policy lookup (2026-06-26)
 
-New L1-accessible endpoint [`GET /api/lookups/child-policy`](back_end/src/routes/lookups/router.ts) returns the live `ChildPolicyBundle` for the front-desk forms. Used by the booking-flow inquiry form to drive the child-age input's `max` attribute dynamically (`unaccompaniedMinor.minimumAge - 1`) — no hardcoded 17. Frontend client at [`front_end/src/lib/api/child-policy.ts`](front_end/src/lib/api/child-policy.ts).
+New L1-accessible endpoint [`GET /api/lookups/child-policy`](back_end/src/routes/lookups/router.ts) returns the live `ChildPolicyBundle` for the front-desk forms. Used by the booking-flow inquiry form to drive the child-age input's `max` attribute dynamically (`unaccompaniedMinor.minimumAge - 1`) — no hardcoded 17. Frontend client at [`my_front_end/src/lib/api/child-policy.ts`](my_front_end/src/lib/api/child-policy.ts).
 
 ### Config-key ownership registry cleanup (2026-06-27)
 
@@ -563,7 +567,7 @@ Was a latent flag; now wired end-to-end. Policy 64 sets `groupBillingMode = GROU
 | **S6 check-in** | `completeCheckInToS7` iterates ALL distinct room assignments for group entries. Per-room physical-ready enforcement (fail-fast if any room isn't ready). One H2 + one H3 handoff created per room, dedup keyed off the new `HandoffRecord.roomAssignmentId` FK (falls back to `checklistContent.roomNumber` for pre-migration rows). Per-room rejection check via `perRoomHandoffs` map. Room state CONFIRMED→OCCUPIED transitions run per room. |
 | **S7 amendments** | `AmendmentEventRecord.affectsGroup` populated from the parent entry's `groupBillingMode` at create time. Both `s7-amendment-service.recordAmendment` and `entry-lifecycle-state-machine`'s room-change flow read the flag. |
 | **S8 final invoicing** | `resolveGroupInvoiceOverrides` helper in [`s8-settlement-service.ts`](back_end/src/services/domain/s8-settlement-service.ts) applies at all 3 FINAL invoice create sites (issueInvoiceAtS8, DIRECT_BILL settle, VOUCHER settle). Prefixes `templateKey` with `group-` and adds `{ groupBooking: true, roomCount, guestCount, groupLeader }` to metadata. Frontend (S9 workspace invoice list) shows an indigo `Group · N rooms` pill. |
-| **All views** | `<GroupBadge>` component ([front_end/src/components/entries/group-badge.tsx](front_end/src/components/entries/group-badge.tsx)) — indigo pill with Users icon. Only renders when `groupBillingMode === "GROUP_MASTER"`. Placed on entry list, EntryHeader (workspace pages), S3 folio card, BookingContextBar sticky breadcrumb. |
+| **All views** | `<GroupBadge>` component ([my_front_end/src/components/entries/group-badge.tsx](my_front_end/src/components/entries/group-badge.tsx)) — indigo pill with Users icon. Only renders when `groupBillingMode === "GROUP_MASTER"`. Placed on entry list, EntryHeader (workspace pages), S3 folio card, BookingContextBar sticky breadcrumb. |
 
 **Manual override:** `PATCH /api/entries/:id/group-billing-mode` — L3+ endpoint, Zod-validated body `{ mode: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null, reason: string, clearManualOverride?: boolean }`. Sets `Entry.groupBillingMode` explicitly + flips `Entry.groupBillingModeManualOverride = true` so subsequent intake edits don't re-classify. Setting `clearManualOverride: true` re-enables Policy 64 auto-reclassify. Audit trace `ENTRY.GROUP_BILLING_MODE_MANUALLY_SET` records reason + prior state. Service at [`back_end/src/services/admin/group-billing-mode-admin-service.ts`](back_end/src/services/admin/group-billing-mode-admin-service.ts).
 
@@ -733,7 +737,7 @@ Each renders on-demand if the artifact hasn't been stored yet (internal preview 
 
 ### Editable JSON safety
 
-`SmartConfigEditor` ([`front_end/src/components/admin/smart-config-editor.tsx`](front_end/src/components/admin/smart-config-editor.tsx)) is the fallback editor when no typed schema exists. As of the recent UX pass:
+`SmartConfigEditor` ([`my_front_end/src/components/admin/smart-config-editor.tsx`](my_front_end/src/components/admin/smart-config-editor.tsx)) is the fallback editor when no typed schema exists. As of the recent UX pass:
 
 - Field names are **read-only by default** (rendered as labels) to prevent accidental shape mutation. Operational code consumes objects by exact field name; a rename breaks the workflow.
 - A "Show structure controls" checkbox unlocks rename + remove (with an amber warning banner) for power users.
@@ -746,13 +750,13 @@ The admin console is a Next.js (App Router) client-side SPA. When the user feels
 
 1. **Next.js dev-mode JIT compilation** (the biggest factor in `npm run dev`). On first visit to any route, Next.js compiles the page chunk on demand — usually 500ms–2s. Subsequent visits to the same route are near-instant because the chunk is cached. **This is unfixable in dev.** To measure real-world speed, run a production build:
    ```
-   cd front_end
+   cd my_front_end
    npm run build
    npm run start
    ```
    Production builds pre-compile every route. Most "slow" feelings disappear.
 
-2. **Per-page React Query fetches.** Each admin page fires its own `useQuery` calls on mount. The default React Query cache config in [front_end/src/components/providers/app-providers.tsx](front_end/src/components/providers/app-providers.tsx) is now:
+2. **Per-page React Query fetches.** Each admin page fires its own `useQuery` calls on mount. The default React Query cache config in [my_front_end/src/components/providers/app-providers.tsx](my_front_end/src/components/providers/app-providers.tsx) is now:
    - `staleTime: 5 * 60_000` (5 min) — a re-visited page within 5 minutes uses cached data, no network round-trip.
    - `gcTime: 30 * 60_000` (30 min) — even after a page unmounts, its data stays cached for 30 min.
    - `refetchOnWindowFocus: false` — alt-tabbing back doesn't trigger refetches.
@@ -760,7 +764,7 @@ The admin console is a Next.js (App Router) client-side SPA. When the user feels
 
    Pages still call `queryClient.invalidateQueries(...)` after their own mutations, so freshness after edits is preserved. Cross-page reads tolerate 5 min staleness — fine for admin config.
 
-3. **Session-loading flash.** Every admin page early-returns `if (!session) return null` before render. The session is held in React state in [session-provider.tsx](front_end/src/components/providers/session-provider.tsx) — once loaded, it persists across navigations, so this should not cause a visible flash after the first auth. If you ever see a flash on every nav, check that the provider isn't remounting.
+3. **Session-loading flash.** Every admin page early-returns `if (!session) return null` before render. The session is held in React state in [session-provider.tsx](my_front_end/src/components/providers/session-provider.tsx) — once loaded, it persists across navigations, so this should not cause a visible flash after the first auth. If you ever see a flash on every nav, check that the provider isn't remounting.
 
 Next.js `<Link>` from `next/link` defaults to viewport-based auto-prefetch in App Router. All 29 sidebar admin links sit in a visible (or scrollable) sidebar, so their JS chunks are prefetched in the background on idle. No manual `router.prefetch()` needed.
 
@@ -787,32 +791,43 @@ If the change is single-file and contained (e.g., bugfix in one route handler), 
 
 When updating: edit the relevant section in place rather than appending — keep the file scannable. If a section grows past ~15 rows, split it into sub-sections rather than letting it bloat.
 
-### Pulling friend's latest from UI-experiment (integration branch only)
+### Pulling friend's latest from UI-experiment2 (integration branch only)
 
-When the friend pushes updates to `origin/UI-experiment`, sync them into `friend_back_end/` and `friend_front_end/` on the `integration-prod-frontend` branch. Uses a temporary `git worktree` — no submodules or subtrees.
+His current branch is **`UI-experiment2`** (not `UI-experiment` — that is the older one).
+
+**Folder names line up as of the 2026-07-31 rename.** His UI is `front_end/` on his branch and `front_end/` here, so `git merge` can finally do a real three-way merge on it instead of a destructive copy. That is the intended future flow — but it has **not been exercised yet**, and it carries one serious hazard: merging his branch also drags his `back_end/` (124 files, and he makes real backend changes) on top of ours, which is the source of truth. `.gitattributes` marks `back_end/**` as `merge=ours`, but that driver only takes effect if the machine has run `git config merge.ours.driver true` — **verify that before ever merging his branch**, or your backend gets overwritten.
+
+Until that flow is proven, use the copy-and-replace below.
+
+**Copy-and-replace (proven, but destroys local edits inside `front_end/`).** Since the rename, our own work lives in `front_end/` — the house-tariff admin page, the 2-decimal money rule, the renegotiate UI. A blind copy wipes all of it, so take a patch first and replay it after.
 
 ```bash
-# Make sure you're on the integration branch
 git checkout integration-prod-frontend
-git fetch origin UI-experiment
+git fetch origin UI-experiment2
 
-# 1. Create a temporary parallel checkout of his branch at ../friend-tmp
-git worktree add ../friend-tmp origin/UI-experiment
+# 0. Save our own changes to his UI since the last sync. Find the last sync commit with:
+#      git log --oneline --grep="Sync friend"
+git diff <last-sync-commit>..HEAD -- front_end > ../our-frontend-work.patch
 
-# 2. Wipe current friend_* folders so removed files on his side actually go away
-rm -rf friend_back_end friend_front_end
+# 1. Temporary parallel checkout of his branch (git allows only ONE branch per folder)
+git worktree add ../friend-tmp origin/UI-experiment2
 
-# 3. Copy his latest back_end/ and front_end/ into your working tree under NEW names
+# 2. Wipe so files he DELETED actually disappear here too
+rm -rf friend_back_end front_end
+
+# 3. Copy across. NOTE the source names are HIS layout: back_end/ and front_end/.
+#    friend_back_end/ is reference-only — we never wire against it.
 cp -r ../friend-tmp/back_end ./friend_back_end
-cp -r ../friend-tmp/front_end ./friend_front_end
+cp -r ../friend-tmp/front_end ./front_end
 
-# 4. Remove the temporary worktree
+# 4. Throw the worktree away
 git worktree remove ../friend-tmp
 
-# 5. Commit + push
-git add -A friend_back_end friend_front_end
-git commit -m "Sync friend_back_end + friend_front_end from UI-experiment"
+# 5. Replay our work. --3way gives real conflict markers instead of failing silently.
+git apply --3way ../our-frontend-work.patch
+
+# 6. Commit + push
+git add -A friend_back_end front_end
+git commit -m "Sync friend_back_end + front_end from UI-experiment2"
 git push
 ```
-
-The reason for the temp worktree: git can only check out ONE branch per folder. To grab friend's files with a DIFFERENT folder name (so both his and yours can coexist), we need a second working tree pointed at his branch, then copy from it and throw it away. See the branch-management section for why this workflow exists.

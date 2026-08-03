@@ -749,6 +749,53 @@ export async function deactivateSeason(session: Session, id: string) {
   return apiRequest<SeasonAdmin>(`/api/admin/seasons/${id}/deactivate`, { method: "POST", session });
 }
 
+// --- House tariff (hotel's own add-on price list) ------------------------
+// Used for every booking with NO negotiated rate card (walk-in, direct, OTA). Append-only:
+// saving creates a new version and closes the previous one, so historical quotes stay
+// re-derivable. The room rate is NOT here — that lives on rate plans, which own the MSR floor,
+// the season multiplier and the discount pipeline.
+
+export type HouseTariffAdmin = {
+  id: string;
+  extraBedRate: string | null;
+  breakfastRate: string | null;
+  lunchRate: string | null;
+  dinnerRate: string | null;
+  cpRate: string | null;
+  mapLunchRate: string | null;
+  mapDinnerRate: string | null;
+  apRate: string | null;
+  currency: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  notes: string | null;
+  createdBy: string;
+};
+
+/** `null` means "not configured" and is distinct from 0 ("deliberately free"). */
+export type HouseTariffInput = {
+  extraBedRate?: number | null;
+  breakfastRate?: number | null;
+  lunchRate?: number | null;
+  dinnerRate?: number | null;
+  cpRate?: number | null;
+  mapLunchRate?: number | null;
+  mapDinnerRate?: number | null;
+  apRate?: number | null;
+  currency?: string;
+  notes?: string | null;
+};
+
+export async function getHouseTariff(session: Session) {
+  return apiRequest<{ active: HouseTariffAdmin | null }>("/api/admin/house-tariff", { session });
+}
+export async function listHouseTariffVersions(session: Session) {
+  return apiRequest<{ versions: HouseTariffAdmin[] }>("/api/admin/house-tariff/versions", { session });
+}
+export async function saveHouseTariff(session: Session, body: HouseTariffInput) {
+  return apiRequest<HouseTariffAdmin>("/api/admin/house-tariff", { method: "POST", session, body });
+}
+
 // --- Packages (ACIG §6.2.10) --------------------------------------------
 
 export type PackageAdmin = {
@@ -1072,6 +1119,8 @@ export async function reactivateTravelAgent(session: Session, id: string) {
 
 // ----- Corporate accounts (Phase B) -----
 
+export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+
 export type CorporateAccountAdmin = {
   id: string;
   displayName: string;
@@ -1080,6 +1129,8 @@ export type CorporateAccountAdmin = {
   modeOfContact: ContactMode;
   gstNumber: string | null;
   billingAddress: string | null;
+  contractRefs: string[];
+  coordinators: CoordinatorContact[] | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1094,6 +1145,8 @@ export type CorporateAccountInput = {
   modeOfContact?: ContactMode | null;
   gstNumber?: string | null;
   billingAddress?: string | null;
+  contractRefs?: string[];
+  coordinators?: CoordinatorContact[];
   notes?: string | null;
   isActive?: boolean;
 };

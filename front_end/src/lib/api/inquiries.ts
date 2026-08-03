@@ -31,7 +31,40 @@ export async function createInquiry(
   });
 }
 
+/**
+ * Capture the corporate/government commercial context on an inquiry (SIG-S1 §100.6, Policy 17).
+ * Required for `sourceChannel` CORPORATE or GOVERNMENT before the entry can exit S1 — the backend
+ * bills the organisation, so it needs the client reference (their PO/account/authorisation ref)
+ * and the coordinator (their contact person). `PATCH /api/inquiries/:id/corporate-context` (L1+).
+ */
+export async function captureCorporateContext(
+  session: Session,
+  inquiryId: string,
+  body: { corporateClientRef: string; corporateCoordinator: string },
+) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/corporate-context`, {
+    method: "PATCH",
+    session,
+    body,
+  });
+}
+
+/**
+ * Edit the free-text special-preference note (`Inquiry.notes`) from any stage. Stage-agnostic
+ * (L1+); an empty string clears it. Overwrites in place so the preference is never duplicated.
+ * `PATCH /api/inquiries/:id/notes`.
+ */
+export async function updateInquiryNotes(session: Session, inquiryId: string, notes: string) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/notes`, {
+    method: "PATCH",
+    session,
+    body: { notes },
+  });
+}
+
 // ----- Phase C operational lookups (L1-accessible search) -----
+
+export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
 
 export type LookupPartyMatch = {
   id: string;
@@ -40,6 +73,9 @@ export type LookupPartyMatch = {
   contactEmail: string | null;
   modeOfContact: string;
   gstNumber?: string | null;
+  /** Corporate accounts only — contract references + coordinators inherited at intake (spec §2.6.2). */
+  contractRefs?: string[];
+  coordinators?: CoordinatorContact[];
 };
 
 export async function searchTravelAgentsLookup(session: Session, q: string) {

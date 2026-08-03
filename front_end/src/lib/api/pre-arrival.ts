@@ -90,6 +90,23 @@ export async function assignRoom(
   });
 }
 
+/**
+ * Bulk-assign every room from the entry's sealed per-night AvailabilityConfiguration. Used for
+ * multi-room bookings (Entry.numberOfRooms > 1): the backend reads `optionSelected.perNight`
+ * and creates one RoomAssignment per contiguous (room, date-range) slice — folding same-room
+ * nights into a single full-range assignment and representing mid-stay room changes as separate
+ * date-scoped rows. Idempotent on retry.
+ */
+export async function assignRoomsFromSealedPerNight(session: Session, entryId: string) {
+  return apiRequest<{
+    assignments: Array<{ id: string; roomId: string; startDate: string; endDate: string }>;
+    count: number;
+  }>(`/api/entries/${entryId}/room-assignments/from-sealed-per-night`, {
+    method: "POST",
+    session,
+  });
+}
+
 export async function acknowledgeCreditCeilingTier2(session: Session, entryId: string) {
   return apiRequest<EntryDetail>(`/api/entries/${entryId}/credit-ceiling-tier2-ack`, {
     method: "POST",
