@@ -10,11 +10,14 @@ import type { AvailabilityRoomResult, PerDateAvailabilityResult } from "@/lib/ap
  * columns are the stay's nights, each cell a Vacant / Reserved / Deficient chip (mirrors the
  * hotel's previous software so the desk reads it at a glance).
  *
- * Two selection modes:
- *  - "same"  — whole-stay: clicking a row toggles that room for every night (up to `maxSelect`).
- *              A room qualifies only when it's free on all nights.
- *  - "vary"  — per-night: each vacant cell is its own click target; a room is assigned night by
- *              night (mid-stay room changes). Each night needs `maxSelect` rooms.
+ * ONE table, one selection (2026-08-01 — replaces the old "same rooms" / "different rooms per
+ * night" mode toggle, whose two separate selections silently fell out of step):
+ *  - clicking a row's LEADING cells (room no / type / beds / booked-by) toggles the room for the
+ *    whole stay — it edits the base selection every night shares;
+ *  - clicking one night's Vacant cell toggles the room for that night alone — that night then
+ *    carries its own room list (a mid-stay room change) until it matches the base again.
+ * `selectedIds` is the whole-stay base; `perNightSel` is the night-by-night EFFECTIVE selection
+ * (override or base), so what the cells show is always what saving would submit.
  *
  * Purely presentational over the existing availability result; no new data is fetched here.
  */
@@ -143,7 +146,6 @@ export function RoomStatusTable({
   rows,
   nights,
   perDate,
-  mode = "same",
   selectedIds,
   perNightSel,
   maxSelect,
@@ -158,13 +160,14 @@ export function RoomStatusTable({
   /** ISO YYYY-MM-DD for every night of the stay (check-in inclusive, check-out exclusive). */
   nights: string[];
   perDate?: PerDateAvailabilityResult[];
-  mode?: "same" | "vary";
-  /** Whole-stay selection ("same" mode). */
+  /** The whole-stay base selection — what a row click edits. */
   selectedIds: string[];
-  /** Per-night selection ("vary" mode): night → roomIds. */
+  /** Effective selection per night (override or base) — what the cells show and edit. */
   perNightSel?: Record<string, string[]>;
   maxSelect: number;
+  /** Toggle a room for the whole stay. */
   onToggle: (row: RoomStatusRow) => void;
+  /** Toggle a room for one night only. */
   onToggleCell?: (row: RoomStatusRow, night: string) => void;
   /** Fired when a pickable room is clicked while the selection is already full — the parent
    *  explains (toast) instead of the click dying silently. */
@@ -216,10 +219,16 @@ export function RoomStatusTable({
     row.bucket !== "unavailable" && nights.every((n) => !occupiedByNight.get(n)?.has(row.roomId));
 
   const anyExtBeds = rows.some((r) => r.extBeds != null);
-  const vary = mode === "vary";
   // Only surface the attribution column when something in this result set is actually taken —
   // an all-vacant search shouldn't grow a column of dashes.
   const anyOccupancy = rows.some((r) => (r.occupiedBy?.length ?? 0) > 0 || !!r.blockedReason);
+
+  /** Effective rooms on one night — the parent supplies override-or-base per night. */
+  const nightSel = (n: string): string[] => perNightSel?.[n] ?? selectedIds;
+  const setEq = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  // Any night deviating from the base gets the per-night counts in the header — completion is
+  // then per night, and the counter alone can't say which night is short.
+  const anyNightDiffers = nights.some((n) => !setEq(nightSel(n), selectedIds));
 
   // When names are shown in-cell they replace the status word, so the chip carries the colour
   // and the text carries the identity. `cellText` keeps that decision in one place.
@@ -267,11 +276,13 @@ export function RoomStatusTable({
               </th>
             )}
             {nights.map((n, i) => {
-              const count = perNightSel?.[n]?.length ?? 0;
+              const count = nightSel(n).length;
+              const differs = !setEq(nightSel(n), selectedIds);
               return (
-                <th key={n} style={{ textAlign: "center" }}>
+                <th key={n} style={{ textAlign: "center" }} title={differs ? "This night has its own rooms" : undefined}>
                   {formatDMY(n) || n} <span style={{ fontWeight: 500 }}>({i + 1})</span>
-                  {vary && (
+                  {differs && <span style={{ color: "var(--warn)", fontWeight: 700 }}> •</span>}
+                  {anyNightDiffers && (
                     <span className={`rst-nightcount${count === maxSelect ? " done" : ""}`}>
                       {count}/{maxSelect} picked
                     </span>
@@ -283,29 +294,31 @@ export function RoomStatusTable({
         </thead>
         <tbody>
           {rows.map((row) => {
-            const sel = !vary && selectedIds.includes(row.roomId);
-            const canPick = !vary && pickable(row);
+            const sel = selectedIds.includes(row.roomId);
+            const canPick = pickable(row);
             // Single-room mode never hits the cap: clicking another room SWITCHES to it
             // (the parent replaces the selection) instead of being blocked.
             const atCap = !sel && selectedIds.length >= maxSelect && maxSelect > 1;
             const rowClickable = canPick && !disabled && !atCap;
+            // Nights (beyond the base) this room is in — a room picked per-night shows its
+            // membership on the row even though the whole-stay check is off.
+            const nightsWithRoom = nights.filter((n) => nightSel(n).includes(row.roomId)).length;
+            const partial = !sel && nightsWithRoom > 0;
             // "capped" = would be pickable, but the selection is full — dimmed harder than a
             // merely-unavailable row, and clicking it explains itself via onCappedClick.
             const rowCls = sel ? "sel" : rowClickable ? "pick" : canPick && atCap ? "dis capped" : "dis";
-            const title = vary
-              ? `Room ${row.roomNumber} — pick nights in the columns`
-              : !canPick
-                ? `Room ${row.roomNumber} — not free for the whole stay`
-                : atCap
-                  ? "Selection limit reached — unselect another room first"
-                  : `${sel ? "Unselect" : "Select"} room ${row.roomNumber}`;
+            const title = !canPick
+              ? `Room ${row.roomNumber} — not free for the whole stay${nights.length > 1 ? "; free nights can still be picked in their columns" : ""}`
+              : atCap
+                ? "Selection limit reached — unselect another room first"
+                : `${sel ? "Unselect" : "Select"} room ${row.roomNumber} for the whole stay — single nights in the columns`;
             return (
               <tr
                 key={row.roomId}
-                className={vary ? "dis" : rowCls}
+                className={rowCls}
                 title={title}
                 onClick={() => {
-                  if (vary || disabled) return;
+                  if (disabled) return;
                   if (rowClickable || sel) onToggle(row);
                   else if (canPick && atCap) onCappedClick?.();
                 }}
@@ -313,6 +326,14 @@ export function RoomStatusTable({
                 <td className={`rst-no ${pinCls(0)}`} style={pin(0)}>
                   {sel && <Check style={{ width: 11, height: 11, marginRight: 4, verticalAlign: "-1px" }} />}
                   {row.roomNumber}
+                  {partial && (
+                    <span
+                      style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, color: "var(--warn)" }}
+                      title={`In the selection on ${nightsWithRoom} of ${nights.length} nights`}
+                    >
+                      {nightsWithRoom}/{nights.length}
+                    </span>
+                  )}
                 </td>
                 <td className={`rst-type ${pinCls(1)}`} style={pin(1)}>
                   {row.roomTypeName}
@@ -331,49 +352,43 @@ export function RoomStatusTable({
                 )}
                 {nights.map((n) => {
                   const { status, label, occ } = cellStatus(row, n);
-                  if (vary) {
-                    const cellSel = (perNightSel?.[n] ?? []).includes(row.roomId);
-                    const selectable = status === "vacant" || status === "deficient";
-                    const nightFull = !cellSel && (perNightSel?.[n]?.length ?? 0) >= maxSelect;
+                  const selectable = status === "vacant" || status === "deficient";
+                  if (selectable && onToggleCell) {
+                    const cellSel = nightSel(n).includes(row.roomId);
+                    // Single-room bookings switch on click (parent replaces), so never "full".
+                    const nightFull = !cellSel && maxSelect > 1 && nightSel(n).length >= maxSelect;
                     return (
                       <td key={n} style={{ textAlign: "center" }}>
-                        {selectable ? (
-                          <button
-                            type="button"
-                            className={`rst-chip ${cellSel ? "sel" : status}`}
-                            disabled={disabled || nightFull}
-                            title={
-                              cellSel
-                                ? `Unassign room ${row.roomNumber} on ${formatDMY(n) || n}`
-                                : nightFull
-                                  ? "This night already has its rooms — unassign one first"
-                                  : `Assign room ${row.roomNumber} on ${formatDMY(n) || n}`
-                            }
-                            onClick={() => onToggleCell?.(row, n)}
-                          >
-                            {cellSel ? "Selected" : label ?? CELL_LABEL[status]}
-                          </button>
-                        ) : (
-                          <span
-                            className={`rst-chip ${status}${showNames && occ ? " named" : ""}`}
-                            title={occ ? occupantDetail(occ) : undefined}
-                          >
-                            {cellText(status, label, occ)}
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          className={`rst-chip ${cellSel ? "sel" : status}`}
+                          disabled={disabled || nightFull}
+                          title={
+                            cellSel
+                              ? `Unassign room ${row.roomNumber} on ${formatDMY(n) || n} only — the row unselects the whole stay`
+                              : nightFull
+                                ? "This night already has its rooms — unassign one on this night first"
+                                : `Assign room ${row.roomNumber} on ${formatDMY(n) || n} only — the row selects the whole stay`
+                          }
+                          onClick={(e) => {
+                            // The row behind this cell toggles the whole stay — a night click
+                            // must stay a night click.
+                            e.stopPropagation();
+                            onToggleCell(row, n);
+                          }}
+                        >
+                          {cellSel ? "Selected" : label ?? CELL_LABEL[status]}
+                        </button>
                       </td>
                     );
                   }
-                  const taken = status === "reserved" || status === "held" || status === "blocked";
-                  const cls = sel && !taken ? "sel" : status;
-                  const text = sel && cls === "sel" ? "Selected" : cellText(status, label, occ);
                   return (
                     <td key={n} style={{ textAlign: "center" }}>
                       <span
-                        className={`rst-chip ${cls}${showNames && occ && cls !== "sel" ? " named" : ""}`}
+                        className={`rst-chip ${status}${showNames && occ ? " named" : ""}`}
                         title={occ ? occupantDetail(occ) : undefined}
                       >
-                        {text}
+                        {cellText(status, label, occ)}
                       </span>
                     </td>
                   );

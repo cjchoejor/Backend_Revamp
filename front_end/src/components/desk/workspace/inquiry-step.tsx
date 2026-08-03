@@ -17,7 +17,7 @@ import {
 } from "@/lib/api/availability";
 import { type SealPayload } from "./multi-room-select";
 import { RoomStatusTable, roomStatusRows, type RoomStatusRow } from "./room-status-table";
-import { RoomSelectBoard, type BoardPerNight } from "./room-select-board";
+import { RoomSelectBoard } from "./room-select-board";
 import { listRooms } from "@/lib/api/rooms";
 import { getInquiry } from "@/lib/api/inquiries";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
@@ -578,34 +578,80 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     selectMutation.mutate({ roomIds: p.roomIds, perNight: p.perNight, deficientRoomIds: p.deficientRoomIds });
   };
 
-  // --- Room-status-table selection ------------------------------------------------------------
-  // The table is THE selection surface (legacy-PMS layout). Clicks toggle a LOCAL selection for
-  // every mode — click a room to select it, click another to switch (single-room replaces),
-  // click the selected one to unselect — then "Save" commits. Local-first because the backend's
-  // select endpoint requires at least one room: a saved selection can't be cleared server-side,
-  // but an unsaved click can simply be taken back.
-  const [tableSel, setTableSel] = useState<string[]>(() => sealedIds.filter(Boolean).slice(0, numberOfRooms));
-  // In-progress (unsaved) picks survive leaving the workspace and coming back — same
-  // sessionStorage-per-entry pattern as the view prefs below. Saved selections already survive
-  // via the server; this covers the half-done ones. Hydrated in an effect (SSR-safe); an empty
-  // stored list is NOT restored, so the sealed-selection seed above keeps priority.
+  // --- Room selection: ONE authority ----------------------------------------------------------
+  // A single canonical selection drives every view (2026-08-01, operator request — the old
+  // same/vary/board triple kept three parallel stores, so per-night picks were invisible in the
+  // whole-stay view and vice versa). `baseSel` is the rooms used on every night; `nightOverrides`
+  // holds the FULL room list for any night that deliberately differs (a mid-stay room change).
+  // Table row clicks edit baseSel, night cells edit overrides, the guest board writes both —
+  // there is no second selection to fall out of step with.
+  const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  const seedFromSaved = (): { base: string[]; overrides: Record<string, string[]> } => {
+    const opt = preferredConfig?.optionSelected as AvailabilityOptionSelected | null | undefined;
+    if (opt && "perNight" in opt && Array.isArray(opt.perNight) && opt.perNight.length > 0) {
+      const perNight = opt.perNight.map((p) => ({
+        date: String(p.date).slice(0, 10),
+        roomIds: p.roomIds.map((r) => r.roomId),
+      }));
+      const base = perNight[0].roomIds
+        .filter((id) => perNight.every((p) => p.roomIds.includes(id)))
+        .slice(0, numberOfRooms);
+      const overrides: Record<string, string[]> = {};
+      for (const p of perNight) {
+        if (!sameSet(p.roomIds, base)) overrides[p.date] = [...p.roomIds];
+      }
+      return { base, overrides };
+    }
+    return { base: sealedIds.filter(Boolean).slice(0, numberOfRooms), overrides: {} };
+  };
+  const [baseSel, setBaseSel] = useState<string[]>(() => seedFromSaved().base);
+  const [nightOverrides, setNightOverrides] = useState<Record<string, string[]>>(() => seedFromSaved().overrides);
+  // In-progress (unsaved) picks survive leaving the workspace and coming back. Hydrated in an
+  // effect (SSR-safe); an empty stored list is NOT restored, so the saved-selection seed above
+  // keeps priority. Reads the pre-unification `{tableSel, varySel}` shape too.
   const selStoreKey = `desk:rst-sel:${entry.id}`;
   useEffect(() => {
     try {
       const raw = localStorage.getItem(selStoreKey);
       if (!raw) return;
-      const v = JSON.parse(raw) as { tableSel?: string[]; varySel?: Record<string, string[]> };
-      if (Array.isArray(v.tableSel) && v.tableSel.length > 0) {
-        setTableSel(v.tableSel.filter((x) => typeof x === "string").slice(0, numberOfRooms));
+      const v = JSON.parse(raw) as {
+        base?: string[];
+        overrides?: Record<string, string[]>;
+        tableSel?: string[];
+        varySel?: Record<string, string[]>;
+      };
+      const base = Array.isArray(v.base) ? v.base : Array.isArray(v.tableSel) ? v.tableSel : null;
+      if (base && base.length > 0) {
+        const clean = base.filter((x) => typeof x === "string").slice(0, numberOfRooms);
+        setBaseSel(clean);
+        const ov = v.overrides ?? v.varySel;
+        if (ov && typeof ov === "object") {
+          const next: Record<string, string[]> = {};
+          for (const [night, ids] of Object.entries(ov)) {
+            if (Array.isArray(ids) && !sameSet(ids, clean)) next[night] = ids.filter((x) => typeof x === "string");
+          }
+          setNightOverrides(next);
+        }
       }
-      if (v.varySel && typeof v.varySel === "object") setVarySel(v.varySel);
     } catch {
-      /* corrupt / private mode — start from the sealed selection as before */
+      /* corrupt / private mode — start from the saved selection as before */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selStoreKey]);
+  /** The rooms actually in force on one night — its override, else the whole-stay rooms. */
+  const effectiveNight = (n: string): string[] => nightOverrides[n] ?? baseSel;
+  const effectiveByNight = useMemo(
+    () => Object.fromEntries(displayNights.map((n) => [n, nightOverrides[n] ?? baseSel])),
+    [displayNights, nightOverrides, baseSel],
+  );
+  const differingNights = useMemo(
+    () => displayNights.filter((n) => nightOverrides[n] != null && !sameSet(nightOverrides[n], baseSel)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [displayNights, nightOverrides, baseSel],
+  );
+  const nightsDiffer = differingNights.length > 0;
   const toggleTableRow = (row: RoomStatusRow) => {
-    setTableSel((prev) =>
+    setBaseSel((prev) =>
       prev.includes(row.roomId)
         ? prev.filter((x) => x !== row.roomId) // clicked the selected room → unselect
         : numberOfRooms === 1
@@ -615,39 +661,44 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             : prev,
     );
   };
-  const sealTableSelection = () => {
-    const deficientRoomIds = tableSel.filter(
-      (id) => statusRows.find((r) => r.roomId === id)?.bucket === "deficient",
-    );
-    // Same expansion the old whole-stay picker used: per-night payload (identical rooms each
-    // night) so downstream arrival assignment consumes one uniform shape.
-    if (stayNights.length === 0) {
-      handleMultiSeal({ roomIds: tableSel, deficientRoomIds });
-      return;
-    }
-    handleMultiSeal({ perNight: stayNights.map((date) => ({ date, roomIds: [...tableSel] })), deficientRoomIds });
+  /** One night's cell: copy-on-first-edit from the whole-stay rooms; an override that comes back
+   *  to match them is dropped, so "differs" is always real rather than a stale flag. */
+  const toggleNightCell = (row: RoomStatusRow, night: string) => {
+    setNightOverrides((prev) => {
+      const cur = prev[night] ?? baseSel;
+      const next = cur.includes(row.roomId)
+        ? cur.filter((x) => x !== row.roomId)
+        : numberOfRooms === 1
+          ? [row.roomId]
+          : cur.length < numberOfRooms
+            ? [...cur, row.roomId]
+            : cur;
+      if (next === cur) return prev; // night already full — the cell shows why
+      const out = { ...prev };
+      if (sameSet(next, baseSel)) delete out[night];
+      else out[night] = next;
+      return out;
+    });
   };
-
-  // Per-night assignment ("Different rooms per night") — cells become the click targets and each
-  // night needs exactly numberOfRooms rooms. Available on any multi-night stay, including
-  // single-room bookings (a mid-stay room change is one room per night, different rooms).
-  const [assignMode, setAssignMode] = useState<"same" | "vary">("same");
-  const varyActive = assignMode === "vary" && displayNights.length > 1;
 
   // Guest-board selection (2026-07-31) — the S2 quote board's chips-into-bins interaction as an
   // alternative way to pick rooms: place the party, and the occupied rooms ARE the selection.
-  // It writes the same `tableSel` the table rows write, so the seal button, counter and
-  // deficient-acknowledgement flow are shared unchanged. Whole-stay only (per-night vary stays
-  // table-only) and needs the intake party breakdown for chips.
+  // Writes the same canonical selection the table writes (base via onSelectionChange, overrides
+  // via onPerNightChange), so the seal button, counter and deficient-acknowledgement flow are
+  // shared unchanged. Needs the intake party breakdown for chips.
   const canBoardParty = (entry.adultCount ?? 0) > 0 || (entry.childAges ?? []).length > 0;
   const [viewMode, setViewMode] = useState<"table" | "board">("table");
-  const boardActive = viewMode === "board" && canBoardParty && !varyActive;
-  // The board's full per-night picture (2026-07-31) — one entry per stay night, so a placement
-  // that differs by night (mid-stay room change) flows into the SAME per-night save the table's
-  // vary mode uses. Mirrored into varySel too, so switching to the table's per-night view shows
-  // the board's picks instead of losing them.
-  const [boardPerNight, setBoardPerNight] = useState<BoardPerNight | null>(null);
-  const [boardNightDiffs, setBoardNightDiffs] = useState(false);
+  const boardActive = viewMode === "board" && canBoardParty;
+  // The board emits base rooms first, then the per-night picture (same effect, in that order) —
+  // the ref carries the fresh base into the per-night handler without waiting for a re-render.
+  const boardBaseRef = useRef<string[]>([]);
+  // The board mounts knowing only the whole-stay rooms, so its first uniform emission is an echo
+  // of its own seed, not the operator saying "make every night the same" — don't let it wipe
+  // per-night picks made in the table. Any LATER uniform emission is a real decision and clears.
+  const boardEchoRef = useRef(false);
+  useEffect(() => {
+    if (boardActive) boardEchoRef.current = true;
+  }, [boardActive]);
 
   // Expanded view — the room list is the full property (27 rooms on real data), which does not
   // fit the canvas column. Expanding lifts the same table to a full-screen layer with compact
@@ -690,41 +741,19 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       document.body.style.overflow = prev;
     };
   }, [expanded]);
-  const [varySel, setVarySel] = useState<Record<string, string[]>>({});
-  // Persist the in-progress picks (both modes) whenever they change — hydrated above.
+  // Persist the in-progress picks whenever they change — hydrated above.
   useEffect(() => {
     try {
-      localStorage.setItem(selStoreKey, JSON.stringify({ tableSel, varySel }));
+      localStorage.setItem(selStoreKey, JSON.stringify({ base: baseSel, overrides: nightOverrides }));
     } catch {
       /* non-fatal — the picks just won't survive navigation */
     }
-  }, [selStoreKey, tableSel, varySel]);
-  const toggleVaryCell = (row: RoomStatusRow, night: string) => {
-    setVarySel((prev) => {
-      const cur = prev[night] ?? [];
-      const next = cur.includes(row.roomId)
-        ? cur.filter((x) => x !== row.roomId)
-        : cur.length < numberOfRooms
-          ? [...cur, row.roomId]
-          : cur;
-      return { ...prev, [night]: next };
-    });
-  };
-  const nightsAssigned = displayNights.filter((n) => (varySel[n] ?? []).length === numberOfRooms).length;
-  const varyComplete = displayNights.length > 0 && nightsAssigned === displayNights.length;
-  const sealVarySelection = () => {
-    const perNight = displayNights.map((date) => ({ date, roomIds: varySel[date] ?? [] }));
-    const allIds = new Set(perNight.flatMap((p) => p.roomIds));
-    const deficientRoomIds = Array.from(allIds).filter(
-      (id) => statusRows.find((r) => r.roomId === id)?.bucket === "deficient",
-    );
-    handleMultiSeal({ perNight, deficientRoomIds });
-  };
+  }, [selStoreKey, baseSel, nightOverrides]);
 
   // The commit action + progress counter. Rendered below the table normally, hoisted into the
   // toolbar when expanded so nothing but the grid occupies the screen.
   // Fires on the render where the rows first exist. `scrollToRooms` is cleared immediately so a
-  // later re-render (selecting a room, toggling per-night mode) never yanks the page again.
+  // later re-render (selecting a room, toggling a night cell) never yanks the page again.
   useEffect(() => {
     if (!scrollToRooms || statusRows.length === 0) return;
     setScrollToRooms(false);
@@ -734,28 +763,33 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     return () => cancelAnimationFrame(id);
   }, [scrollToRooms, statusRows.length]);
 
-  // Board-mode seal: use the board's per-night payload so night-differing placements save
-  // exactly like the table's vary mode. Uniform placements produce the same payload the
-  // whole-stay expansion would have.
-  const sealBoardSelection = () => {
-    if (!boardPerNight || boardPerNight.length === 0) {
-      sealTableSelection();
-      return;
-    }
-    const allIds = new Set(boardPerNight.flatMap((p) => p.roomIds));
-    const deficientRoomIds = [...allIds].filter(
+  // ONE seal for every view, reading the canonical selection. Uniform stays keep the historic
+  // whole-stay expansion over the entry's own nights; per-night differences submit exactly the
+  // nights on display (what the operator saw and assigned).
+  const sealSelection = () => {
+    const allIds = nightsDiffer
+      ? [...new Set(displayNights.flatMap((n) => effectiveNight(n)))]
+      : baseSel;
+    const deficientRoomIds = allIds.filter(
       (id) => statusRows.find((r) => r.roomId === id)?.bucket === "deficient",
     );
-    handleMultiSeal({ perNight: boardPerNight, deficientRoomIds });
+    if (nightsDiffer) {
+      handleMultiSeal({
+        perNight: displayNights.map((date) => ({ date, roomIds: [...effectiveNight(date)] })),
+        deficientRoomIds,
+      });
+      return;
+    }
+    if (stayNights.length === 0) {
+      handleMultiSeal({ roomIds: baseSel, deficientRoomIds });
+      return;
+    }
+    handleMultiSeal({ perNight: stayNights.map((date) => ({ date, roomIds: [...baseSel] })), deficientRoomIds });
   };
-  const boardNightsReady = boardPerNight
-    ? boardPerNight.filter((n) => n.roomIds.length === numberOfRooms).length
-    : 0;
-  const boardComplete =
-    boardPerNight && boardPerNight.length > 0
-      ? boardNightsReady === boardPerNight.length
-      : tableSel.length === numberOfRooms;
-  const sealReady = boardActive ? boardComplete : varyActive ? varyComplete : tableSel.length === numberOfRooms;
+  const nightsReady = displayNights.filter((n) => effectiveNight(n).length === numberOfRooms).length;
+  const sealReady = nightsDiffer
+    ? displayNights.length > 0 && nightsReady === displayNights.length
+    : baseSel.length === numberOfRooms;
 
   // ---- Saved-vs-dirty button state (2026-08-01, operator request) ----------------------------
   // The standard "settings form" pattern: the button reads "Save…" while the picks differ from
@@ -782,24 +816,22 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
       : `*=${[...ids].sort().join(",")}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferredConfig?.optionSelected, stayNights]);
-  // What clicking Save right now would submit.
+  // What clicking Save right now would submit — mirrors sealSelection exactly.
   const currentCanon = useMemo(() => {
-    if (boardActive && boardPerNight && boardPerNight.length > 0) return canonNights(boardPerNight);
-    if (varyActive) return canonNights(displayNights.map((date) => ({ date, roomIds: varySel[date] ?? [] })));
-    if (tableSel.length === 0) return null;
+    if (nightsDiffer) return canonNights(displayNights.map((date) => ({ date, roomIds: nightOverrides[date] ?? baseSel })));
+    if (baseSel.length === 0) return null;
     return stayNights.length > 0
-      ? canonNights(stayNights.map((date) => ({ date, roomIds: tableSel })))
-      : `*=${[...tableSel].sort().join(",")}`;
+      ? canonNights(stayNights.map((date) => ({ date, roomIds: baseSel })))
+      : `*=${[...baseSel].sort().join(",")}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boardActive, boardPerNight, varyActive, varySel, displayNights, tableSel, stayNights]);
+  }, [nightsDiffer, nightOverrides, displayNights, baseSel, stayNights]);
   // Bridge the gap between a successful save and the entry refetch delivering the server's copy.
   const justSaved = selectMutation.isSuccess && submittedCanonRef.current != null && submittedCanonRef.current === currentCanon;
   const showSaved =
     !selectMutation.isPending && currentCanon != null && ((savedCanon != null && savedCanon === currentCanon) || justSaved);
 
-  const perNightLabel = varyActive || (boardActive && boardNightDiffs);
-  const saveLabel = perNightLabel ? "Save per-night rooms" : numberOfRooms === 1 ? "Save room selection" : `Save ${numberOfRooms} rooms`;
-  const savedLabel = perNightLabel ? "✓ Saved per-night rooms" : numberOfRooms === 1 ? "✓ Room selection saved" : `✓ Saved ${numberOfRooms} rooms`;
+  const saveLabel = nightsDiffer ? "Save per-night rooms" : numberOfRooms === 1 ? "Save room selection" : `Save ${numberOfRooms} rooms`;
+  const savedLabel = nightsDiffer ? "✓ Saved per-night rooms" : numberOfRooms === 1 ? "✓ Room selection saved" : `✓ Saved ${numberOfRooms} rooms`;
 
   const sealControls = (
     <>
@@ -818,19 +850,42 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         }
         disabled={showSaved || !sealReady || selectMutation.isPending}
         title={showSaved ? "This selection is saved — change a room to edit it" : undefined}
-        onClick={boardActive ? sealBoardSelection : varyActive ? sealVarySelection : sealTableSelection}
+        onClick={sealSelection}
       >
         {/* One verb everywhere — this is a SAVE (re-doable via "Change selection"), and the
             old Save/Seal split by room count read as two different actions. */}
         {selectMutation.isPending ? "Saving…" : showSaved ? savedLabel : saveLabel}
       </button>
       <span style={{ fontSize: 11.5, fontWeight: 600, color: sealReady ? "var(--green-d)" : "var(--ink-3)" }}>
-        {varyActive
-          ? `${nightsAssigned} of ${displayNights.length} nights assigned`
-          : boardActive && boardNightDiffs && boardPerNight
-            ? `${boardNightsReady} of ${boardPerNight.length} nights ready`
-            : `${tableSel.length} of ${numberOfRooms} selected`}
+        {nightsDiffer
+          ? `${nightsReady} of ${displayNights.length} nights ready`
+          : `${baseSel.length} of ${numberOfRooms} selected`}
       </span>
+      {/* The selection has exactly one authority — this chip says what it currently holds, in
+          BOTH views, so "which one is active" is never a guess. Differences are droppable in one
+          click rather than by hunting each overridden cell. */}
+      {displayNights.length > 1 &&
+        (nightsDiffer ? (
+          <span
+            className="tag warn"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            title={`Nights with their own rooms: ${differingNights.map((n) => formatDMY(n) || n).join(", ")}`}
+          >
+            {differingNights.length} night{differingNights.length === 1 ? "" : "s"} differ
+            <button
+              type="button"
+              onClick={() => setNightOverrides({})}
+              style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "inherit", textDecoration: "underline", font: "inherit" }}
+              title="Drop the per-night differences — every night goes back to the whole-stay rooms"
+            >
+              reset
+            </button>
+          </span>
+        ) : (
+          <span className="tag" title="One selection applies to every night. Click a single night's cell in the table to make that night differ.">
+            Same rooms every night
+          </span>
+        ))}
     </>
   );
 
@@ -1155,7 +1210,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                       type="button"
                       className={!boardActive ? "on" : ""}
                       onClick={() => setViewMode("table")}
-                      title="Room-status grid — rows are rooms, columns are nights; click a row to select"
+                      title="Room-status grid — click a room to use it every night, or a single night's cell to change just that night"
                     >
                       Table
                     </button>
@@ -1163,33 +1218,13 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                       type="button"
                       className={boardActive ? "on" : ""}
                       onClick={() => {
-                        // The board only does whole-stay selection — entering it leaves per-night
-                        // mode (the per-night picks stay in memory for switching back) and the
-                        // full-screen layer, which is a table affordance.
-                        setAssignMode("same");
+                        // The full-screen layer is a table affordance.
                         setExpanded(false);
                         setViewMode("board");
                       }}
                       title="Place each guest in a room — rooms with guests become the selection"
                     >
                       Guest board
-                    </button>
-                  </div>
-                )}
-                {displayNights.length > 1 && !boardActive && (
-                  <div className="seg">
-                    <button type="button" className={assignMode === "same" ? "on" : ""} onClick={() => setAssignMode("same")}>
-                      Same room{numberOfRooms === 1 ? "" : "s"} every night
-                    </button>
-                    <button
-                      type="button"
-                      className={assignMode === "vary" ? "on" : ""}
-                      onClick={() => {
-                        setAssignMode("vary");
-                        setViewMode("table");
-                      }}
-                    >
-                      Different rooms per night
                     </button>
                   </div>
                 )}
@@ -1232,13 +1267,28 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   entryAdults={entry.adultCount}
                   entryChildAges={entry.childAges}
                   maxRooms={numberOfRooms}
-                  selectedRoomIds={tableSel}
-                  onSelectionChange={setTableSel}
+                  selectedRoomIds={baseSel}
+                  onSelectionChange={(ids) => {
+                    boardBaseRef.current = ids;
+                    setBaseSel(ids);
+                  }}
                   onPerNightChange={(pn, diffs) => {
-                    setBoardPerNight(pn);
-                    setBoardNightDiffs(diffs);
-                    // Mirror into the table's per-night selection so switching views keeps the picks.
-                    if (diffs) setVarySel(Object.fromEntries(pn.map((p) => [p.date, p.roomIds])));
+                    // Writes the SAME canonical store the table edits — overrides are the nights
+                    // whose placement differs from the base the board just emitted.
+                    const base = boardBaseRef.current;
+                    if (diffs) {
+                      boardEchoRef.current = false;
+                      setNightOverrides(
+                        Object.fromEntries(
+                          pn.filter((p) => !sameSet(p.roomIds, base)).map((p) => [p.date, p.roomIds]),
+                        ),
+                      );
+                    } else if (boardEchoRef.current) {
+                      // Mount echo — the board seeds uniform; the table's per-night picks stand.
+                      boardEchoRef.current = false;
+                    } else {
+                      setNightOverrides({});
+                    }
                   }}
                   capacityByRoomId={capacityByRoomId}
                   capacitiesReady={roomsCatalog.isSuccess || roomsCatalog.isError}
@@ -1249,12 +1299,11 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   rows={statusRows}
                   nights={displayNights}
                   perDate={perDate}
-                  mode={varyActive ? "vary" : "same"}
-                  selectedIds={tableSel}
-                  perNightSel={varySel}
+                  selectedIds={baseSel}
+                  perNightSel={effectiveByNight}
                   maxSelect={numberOfRooms}
                   onToggle={toggleTableRow}
-                  onToggleCell={toggleVaryCell}
+                  onToggleCell={toggleNightCell}
                   onCappedClick={() =>
                     toast.info(
                       `All ${numberOfRooms} rooms this booking needs are selected — unselect one first to swap it for this one.`,
@@ -1281,25 +1330,24 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   display: expanded || boardActive ? "none" : undefined,
                 }}
               >
-                {varyActive ? (
+                {multiRoom ? (
                   <>
-                    Click a <b>Vacant</b> cell to assign that room for that night — each night needs{" "}
-                    {numberOfRooms} room{numberOfRooms === 1 ? "" : "s"}. Rooms may differ night to night (a
-                    mid-stay room change).
-                  </>
-                ) : multiRoom ? (
-                  <>
-                    Click a room&rsquo;s row to add it to the selection; click a selected room to unselect it.
-                    <b> Reserved</b> means the room is taken on that night; a room must be free on every night to be
-                    picked here.
+                    Click a room&rsquo;s row (the left columns) to add it for the <b>whole stay</b>; click a
+                    selected room to unselect it.
                   </>
                 ) : (
                   <>
-                    Click a room to select it, click another to switch, or click the selected room again to
-                    unselect. <b>Reserved</b> means the room is taken on that night; a room must be free on every
-                    night to be picked here.
+                    Click a room&rsquo;s row (the left columns) to select it for the <b>whole stay</b> — click
+                    another to switch, or the selected room again to unselect.
                   </>
                 )}{" "}
+                {displayNights.length > 1 && (
+                  <>
+                    Click a single night&rsquo;s <b>Vacant</b> cell to change just that night (a mid-stay room
+                    change) — that night then keeps its own rooms until you reset it.{" "}
+                  </>
+                )}
+                <b>Reserved</b> means the room is taken on that night.{" "}
                 Nothing is recorded until you save. The price is indicative only, and the final room is confirmed
                 at arrival.
               </p>
