@@ -519,12 +519,21 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     }
     return m;
   }, [roomsCatalog.data]);
-  // Max occupancy per room (catalog data) — the guest board's advisory over-full hint.
+  // Max occupancy per room (catalog data) — the guest board's capacity ceiling.
   const capacityByRoomId = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of roomsCatalog.data?.items ?? []) {
       const cap = r.roomType?.maxCapacity ?? r.roomType?.standardCapacity;
       if (typeof cap === "number") m.set(r.id, cap);
+    }
+    return m;
+  }, [roomsCatalog.data]);
+  // The second ceiling the backend enforces (OVER_MAX_CHILDREN): capacity counts only chargeable
+  // guests, so without this a bed-full room would take unlimited under-11s.
+  const maxChildrenByRoomId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of roomsCatalog.data?.items ?? []) {
+      if (typeof r.roomType?.maxChildren === "number") m.set(r.id, r.roomType.maxChildren);
     }
     return m;
   }, [roomsCatalog.data]);
@@ -1291,6 +1300,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     }
                   }}
                   capacityByRoomId={capacityByRoomId}
+                  maxChildrenByRoomId={maxChildrenByRoomId}
                   capacitiesReady={roomsCatalog.isSuccess || roomsCatalog.isError}
                   disabled={selectMutation.isPending}
                 />

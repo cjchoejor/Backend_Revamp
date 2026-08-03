@@ -65,6 +65,7 @@ export function RoomSelectBoard({
   onSelectionChange,
   onPerNightChange,
   capacityByRoomId,
+  maxChildrenByRoomId,
   capacitiesReady = true,
   disabled,
 }: {
@@ -89,6 +90,9 @@ export function RoomSelectBoard({
   onPerNightChange?: (perNight: BoardPerNight, hasNightDifferences: boolean) => void;
   /** roomId → max occupancy (catalog data, maxCapacity ?? standardCapacity). */
   capacityByRoomId?: Map<string, number>;
+  /** roomId → RoomType.maxChildren. The second ceiling: a bed-full room still can't take
+   *  unlimited children, and this is what stops it (mirrors backend OVER_MAX_CHILDREN). */
+  maxChildrenByRoomId?: Map<string, number>;
   /** False while the rooms catalog is loading — the mount auto-spread waits for it. */
   capacitiesReady?: boolean;
   disabled?: boolean;
@@ -216,22 +220,91 @@ export function RoomSelectBoard({
     guests.filter((g) => map[g.key] === roomId && g.band === "ADULT").length;
   const totalIn = (map: Record<string, string>, roomId: string) =>
     guests.filter((g) => map[g.key] === roomId).length;
+  /**
+   * The room type's own ceiling on children (RoomType.maxChildren). A separate limit from
+   * capacity, and the reason a bed-full room is not necessarily closed: under-11s share bedding
+   * so they never consume a capacity slot, but a room still only takes so many of them. Mirrors
+   * the backend's OVER_MAX_CHILDREN check in capacity-validation-service.
+   */
+  const maxChildrenOf = (roomId: string) => maxChildrenByRoomId?.get(roomId) ?? null;
+  const childrenIn = (map: Record<string, string>, roomId: string) =>
+    guests.filter((g) => map[g.key] === roomId && g.band !== "ADULT").length;
 
   /**
-   * Spread `guests` across `roomIds`, capacity-aware on CHARGEABLE load: children go to the
-   * earliest room (they consume no slot but should sit with the family lead), adults fill the
-   * least-loaded room with chargeable space. Whoever doesn't fit stays in the tray.
+   * Why `keys` cannot go into `roomId` — null when the move is allowed.
+   *
+   * THE single rule for placement, used by the drop guard, the drag feedback and the place
+   * button alike, so what the board refuses and what it looks like it will refuse can't drift.
+   * Both ceilings are the backend's (capacity-validation-service): chargeable occupants against
+   * the room's maxCapacity, and children against maxChildren.
+   */
+  const rejectReason = (
+    roomId: string,
+    keys: string[],
+    map: Record<string, string> = scopeMap,
+  ): string | null => {
+    if (keys.length === 0) return null;
+    const label = rows.find((r) => r.roomId === roomId)?.roomNumber ?? "";
+    const moving = keys.filter((k) => map[k] !== roomId);
+
+    const cap = capOf(roomId);
+    if (cap != null) {
+      const current = chargeableIn(map, roomId);
+      const incoming = moving.filter((k) => isChargeable(k)).length;
+      if (current + incoming > cap) {
+        const spots = Math.max(0, cap - current);
+        return `Room ${label} sleeps ${cap} — ${
+          spots === 0 ? "it's full" : `only space for ${spots} more adult${spots === 1 ? "" : "s"}`
+        }. Children under ${childMax + 1} share bedding and don't take a slot.`;
+      }
+    }
+
+    const maxKids = maxChildrenOf(roomId);
+    if (maxKids != null) {
+      const currentKids = childrenIn(map, roomId);
+      const incomingKids = moving.filter((k) => !isChargeable(k)).length;
+      if (currentKids + incomingKids > maxKids) {
+        return maxKids === 0
+          ? `Room ${label} doesn't take children.`
+          : `Room ${label} takes at most ${maxKids} child${maxKids === 1 ? "" : "ren"} — it already has ${currentKids}.`;
+      }
+    }
+
+    const next = { ...map };
+    for (const k of keys) next[k] = roomId;
+    const distinct = new Set(Object.values(next).filter((id) => binIds.has(id)));
+    if (distinct.size > maxRooms) {
+      return `This booking needs ${maxRooms} room${maxRooms === 1 ? "" : "s"}${
+        scopeNight ? ` on ${nightLabel(scopeNight)}` : ""
+      } — move everyone out of one room first, or raise "Rooms required" and search again.`;
+    }
+    return null;
+  };
+
+  /**
+   * Spread `guests` across `roomIds`: adults fill the least-loaded room with chargeable space,
+   * children sit with the family lead but roll on to the next room once one hits its
+   * `maxChildren` ceiling. Whoever doesn't fit stays in the tray.
    */
   const spreadAcross = (roomIds: string[]): Record<string, string> => {
     const next: Record<string, string> = {};
     if (roomIds.length === 0) return next;
     const load = new Map<string, number>(roomIds.map((id) => [id, 0]));
+    const kids = new Map<string, number>(roomIds.map((id) => [id, 0]));
     const fits = (id: string) => {
       const cap = capOf(id);
       return cap == null || (load.get(id) ?? 0) < cap;
     };
+    const fitsChild = (id: string) => {
+      const m = maxChildrenOf(id);
+      return m == null || (kids.get(id) ?? 0) < m;
+    };
     for (const g of guests.filter((x) => x.band !== "ADULT")) {
-      next[g.key] = roomIds[0]; // no capacity slot consumed — keep the family together
+      // Earliest room with room for another child — keeps the family together where it can.
+      const id = roomIds.find(fitsChild);
+      if (!id) continue;
+      next[g.key] = id;
+      kids.set(id, (kids.get(id) ?? 0) + 1);
     }
     for (const g of guests.filter((x) => x.band === "ADULT")) {
       const open = roomIds.filter(fits);
@@ -268,39 +341,20 @@ export function RoomSelectBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, nightOverrides, rows, guests, nights]);
 
-  /** Write a placement into the current scope, guarding room-count and chargeable capacity. */
+  /** Write a placement into the current scope. Every refusal comes from `rejectReason`. */
   const placeKeys = (keys: string[], roomId: string | null) => {
     const cur = scopeMap;
     if (roomId) {
-      const cap = capOf(roomId);
-      if (cap != null) {
-        const current = chargeableIn(cur, roomId);
-        const incoming = keys.filter((k) => cur[k] !== roomId && isChargeable(k)).length;
-        if (current + incoming > cap) {
-          const spots = Math.max(0, cap - current);
-          const row = binRows.find((r) => r.roomId === roomId);
-          flash(
-            `Room ${row?.roomNumber ?? ""} sleeps ${cap} — ${
-              spots === 0 ? "it's full" : `only space for ${spots} more adult${spots === 1 ? "" : "s"}`
-            }. Children under ${childMax + 1} share bedding and don't take a slot.`,
-          );
-          return;
-        }
+      const why = rejectReason(roomId, keys, cur);
+      if (why) {
+        flash(why);
+        return;
       }
     }
     const next = { ...cur };
     for (const k of keys) {
       if (roomId) next[k] = roomId;
       else delete next[k];
-    }
-    const distinct = new Set(Object.values(next).filter((id) => binIds.has(id)));
-    if (roomId && distinct.size > maxRooms) {
-      flash(
-        `This booking needs ${maxRooms} room${maxRooms === 1 ? "" : "s"}${
-          scopeNight ? ` on ${nightLabel(scopeNight)}` : ""
-        } — move everyone out of one room first, or raise "Rooms required" and search again.`,
-      );
-      return;
     }
     if (scopeNight == null) setBase(next);
     else setNightOverrides((prev) => ({ ...prev, [scopeNight]: next }));
@@ -346,23 +400,42 @@ export function RoomSelectBoard({
 
   // Drag carries the dragged chip — or the whole selection when the chip is part of it.
   const dragKeysRef = useRef<string[]>([]);
+  // Mirrored into state so the rooms can re-render as the drag moves: a room that would refuse
+  // this particular guest is shown as closed WHILE dragging, rather than accepting the drop and
+  // explaining afterwards.
+  const [dragging, setDragging] = useState<string[]>([]);
+  const endDrag = () => {
+    dragKeysRef.current = [];
+    setDragging([]);
+    setDragOver(null);
+  };
   const onChipDragStart = (key: string) => (e: React.DragEvent) => {
     const keys = selected.has(key) ? [...selected] : [key];
     dragKeysRef.current = keys;
+    setDragging(keys);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", keys.join(","));
   };
   const onZoneDrop = (roomId: string | null) => (e: React.DragEvent) => {
     e.preventDefault();
-    setDragOver(null);
     const keys = dragKeysRef.current.length
       ? dragKeysRef.current
       : (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
-    dragKeysRef.current = [];
+    endDrag();
     if (keys.length) placeKeys(keys, roomId);
   };
-  const zoneDragProps = (zone: string, roomId: string | null) => ({
+  /**
+   * `reject` (non-null) makes the zone refuse the drag outright: without `preventDefault` on
+   * dragover the browser treats it as a non-target, so the cursor shows "no drop" and no drop
+   * event fires at all. The reason is surfaced on the room, so the refusal explains itself
+   * before the operator lets go instead of after.
+   */
+  const zoneDragProps = (zone: string, roomId: string | null, reject?: string | null) => ({
     onDragOver: (e: React.DragEvent) => {
+      if (reject) {
+        e.dataTransfer.dropEffect = "none";
+        return;
+      }
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       setDragOver(zone);
@@ -394,10 +467,7 @@ export function RoomSelectBoard({
         className={`rcb-chip band-${g.band.toLowerCase()}${isSel ? " sel" : ""}`}
         draggable={!disabled}
         onDragStart={onChipDragStart(g.key)}
-        onDragEnd={() => {
-          dragKeysRef.current = [];
-          setDragOver(null);
-        }}
+        onDragEnd={endDrag}
         onClick={() => toggleSelect(g.key)}
         title={isSel ? "Tap to deselect" : "Tap to select, then tap a room to place — or drag"}
       >
@@ -521,25 +591,44 @@ export function RoomSelectBoard({
           const cap = capOf(row.roomId);
           // Capacity is CHARGEABLE guests only — under-11s share bedding (backend rule).
           const overCap = cap != null && chargeable > cap;
-          const incomingChargeable = [...selected].filter((k) => scopeMap[k] !== row.roomId && isChargeable(k)).length;
-          const wontFit = cap != null && chargeable + incomingChargeable > cap;
-          const full = cap != null && chargeable >= cap;
-          // A full room still takes a selection of ONLY children (they consume no slot).
-          const blockedForSelection = wontFit && incomingChargeable > 0;
+          // Beds full is NOT the same as closed: an under-11 takes no slot, so the room may still
+          // have room for a child. `closed` is the honest "nothing more fits" — both ceilings hit.
+          const bedsFull = cap != null && chargeable >= cap;
+          const kidsMax = maxChildrenOf(row.roomId);
+          const kidsFull = kidsMax != null && childrenIn(scopeMap, row.roomId) >= kidsMax;
+          const closed = bedsFull && (kidsFull || kidsMax === 0);
+          // Would the CURRENT drag land here? Non-null = this room refuses it, and says why.
+          const dragReject = dragging.length > 0 ? rejectReason(row.roomId, dragging) : null;
+          const blockedForSelection = selected.size > 0 ? rejectReason(row.roomId, [...selected]) : null;
           return (
             <div
               key={row.roomId}
-              className={`rcb-room${full ? " full" : ""}${dragOver === row.roomId && !blockedForSelection ? " drop" : ""}`}
-              style={inUse && !full ? { borderColor: "var(--green)", boxShadow: "0 0 0 1px var(--green)" } : undefined}
-              {...zoneDragProps(row.roomId, row.roomId)}
+              className={`rcb-room${bedsFull ? " full" : ""}${dragOver === row.roomId && !dragReject ? " drop" : ""}`}
+              style={
+                dragReject
+                  ? { borderColor: "var(--stop)", opacity: 0.55, cursor: "not-allowed" }
+                  : inUse && !bedsFull
+                    ? { borderColor: "var(--green)", boxShadow: "0 0 0 1px var(--green)" }
+                    : undefined
+              }
+              title={dragReject ?? undefined}
+              {...zoneDragProps(row.roomId, row.roomId, dragReject)}
             >
               <div className="rcb-room-head">
                 <span className="rce-roomno">Room {row.roomNumber}</span>
                 <span className="rcb-type">{row.roomTypeName}</span>
                 <span className="ln" />
-                {full && (
-                  <span className="tag warn" style={{ fontSize: 9 }}>
-                    Full
+                {bedsFull && (
+                  <span
+                    className="tag warn"
+                    style={{ fontSize: 9 }}
+                    title={
+                      closed
+                        ? "Nothing more fits in this room"
+                        : `Beds are full, but a child under ${childMax + 1} shares bedding and can still join`
+                    }
+                  >
+                    {closed ? "Full" : "Beds full"}
                   </span>
                 )}
                 {row.bucket === "deficient" && (
@@ -559,21 +648,15 @@ export function RoomSelectBoard({
                 </span>
               </div>
 
-              {selected.size > 0 && !disabled && !(full && incomingChargeable > 0) && (
+              {selected.size > 0 && !disabled && (
                 <button
                   type="button"
                   className="rcb-place"
-                  disabled={blockedForSelection}
-                  title={
-                    blockedForSelection
-                      ? `Room ${row.roomNumber} sleeps ${cap} adults — the selection doesn't fit`
-                      : undefined
-                  }
+                  disabled={!!blockedForSelection}
+                  title={blockedForSelection ?? undefined}
                   onClick={() => placeSelection(row.roomId)}
                 >
-                  {blockedForSelection
-                    ? `Only space for ${Math.max(0, (cap ?? 0) - chargeable)}`
-                    : `+ Place ${selected.size} here`}
+                  {blockedForSelection ? "Doesn't fit here" : `+ Place ${selected.size} here`}
                 </button>
               )}
 
