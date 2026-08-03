@@ -700,6 +700,49 @@ export function DeskNewInquiryForm() {
   // is omitted, so the endpoint uses its default divisor of 3; that's ≤ the hotel's largest
   // room capacity, so the dropdown never offers a room count the create-entry check would reject.
   const adultsNum = Math.max(0, parseInt(adults || "0", 10) || 0);
+  /**
+   * Which of the entered child ages land in the ADULT pricing band.
+   *
+   * The boundary is the backend's, not a number chosen here: `classifyAge` treats
+   * `age > ageBands.childMaxAge` as ADULT, so with the configured childMaxAge of 10 that is 11 and
+   * above — and it moves the moment an L4 edits `registry.child.ageBands`. Everything below reads
+   * `childMaxAge` so nothing has to be re-hardcoded when it does.
+   */
+  const adultBandIndexes = useMemo(() => {
+    if (!childPolicyQuery.data) return new Set<number>();
+    const out = new Set<number>();
+    childAges.forEach((raw, i) => {
+      const n = parseInt(raw || "", 10);
+      if (Number.isFinite(n) && n > childMaxAge) out.add(i);
+    });
+    return out;
+  }, [childAges, childMaxAge, childPolicyQuery.data]);
+
+  // Tell the operator the moment an age crosses into the adult band, rather than letting them
+  // find out from the quote. Fires once per child as it crosses — re-arms if the age is corrected
+  // back down, so fixing a typo and re-entering an adult age warns again.
+  const warnedAdultRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (!childPolicyQuery.data) return;
+    childAges.forEach((raw, i) => {
+      const n = parseInt(raw || "", 10);
+      const isAdultBand = Number.isFinite(n) && n > childMaxAge;
+      if (!isAdultBand) {
+        warnedAdultRef.current.delete(i);
+        return;
+      }
+      if (warnedAdultRef.current.has(i)) return;
+      warnedAdultRef.current.add(i);
+      toast.warning(`Child ${i + 1} is ${n} — that counts as an adult`, {
+        description:
+          `Anyone over ${childMaxAge} is charged at the adult rate: their own bed, full room share and ` +
+          `${childPolicyQuery.data!.mealPricing.adultPercent}% meal charges (${youngMaxAge + 1}–${childMaxAge} pay ` +
+          `${childPolicyQuery.data!.mealPricing.childPercent}%). They still count as a minor for supervision.`,
+        duration: 9000,
+      });
+    });
+  }, [childAges, childMaxAge, youngMaxAge, childPolicyQuery.data]);
+
   const parsedChildAges = childAges.map((a) => parseInt(a || "", 10)).filter((n) => Number.isFinite(n));
   const roomCountsQuery = useQuery({
     queryKey: ["lookup", "allowed-room-counts", adultsNum, parsedChildAges.join(",")],
@@ -1346,21 +1389,37 @@ export function DeskNewInquiryForm() {
             <div className="field">
               <label>Child age{childCountNum === 1 ? "" : "s"} (years)</label>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {childAges.map((age, i) => (
-                  <input
-                    key={i}
-                    type="number"
-                    min={0}
-                    max={maxChildAge}
-                    className="dinput"
-                    style={{ width: 80 }}
-                    placeholder={`#${i + 1}`}
-                    value={age}
-                    onChange={(e) =>
-                      setChildAges((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
-                    }
-                  />
-                ))}
+                {childAges.map((age, i) => {
+                  // A toast fades; the charge doesn't. Mark the field itself so the operator can
+                  // still see which child is being charged as an adult when they review the form.
+                  const isAdultBand = adultBandIndexes.has(i);
+                  return (
+                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <input
+                        type="number"
+                        min={0}
+                        max={maxChildAge}
+                        className="dinput"
+                        style={{ width: 80, borderColor: isAdultBand ? "var(--warn)" : undefined }}
+                        placeholder={`#${i + 1}`}
+                        value={age}
+                        aria-describedby={isAdultBand ? `child-adult-${i}` : undefined}
+                        onChange={(e) =>
+                          setChildAges((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
+                        }
+                      />
+                      {isAdultBand && (
+                        <span
+                          id={`child-adult-${i}`}
+                          style={{ fontSize: 10, color: "var(--warn)", fontWeight: 600, textAlign: "center" }}
+                          title={`Over ${childMaxAge} — charged at the adult rate (own bed, full room share and meals)`}
+                        >
+                          adult rate
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
                 List everyone under {minAdultAge} here — the age sets the charge: under {youngMaxAge + 1} stay

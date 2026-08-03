@@ -147,7 +147,46 @@ export function RoomSelectBoard({
     [rows, nights, occupiedByNight, scopeNight],
   );
   const binIds = useMemo(() => new Set(binRows.map((r) => r.roomId)), [binRows]);
-  const hiddenCount = rows.length - binRows.length;
+
+  /**
+   * The rooms that can't take guests at the current scope — already booked, held, or out of
+   * service. They used to be dropped from the board entirely, leaving a bare count and a nudge to
+   * "switch to the table to see who holds them". The floor is easier to read when the taken rooms
+   * are visible in place, so they're rendered here too: same grid, muted, never a drop target.
+   */
+  const takenRows = useMemo(() => rows.filter((r) => !binIds.has(r.roomId)), [rows, binIds]);
+
+  /**
+   * Why a room is unavailable, at the scope being viewed. The engine supplies all of it — the
+   * whole-range `occupiedBy` (with the booking's own dates) and the per-night breakdown (with the
+   * guest on each night). Nothing about occupancy is inferred here.
+   */
+  const takenDetail = (row: RoomStatusRow) => {
+    const nightsInScope = scopeNight != null ? [scopeNight] : nights;
+    const takenNights = nightsInScope.filter((n) => occupiedByNight.get(n)?.has(row.roomId));
+    // Whoever the per-night breakdown names first, else the whole-range occupancy record.
+    let holder: { name: string | null; ref: string | null; source: "RESERVED" | "HOLD" } | null = null;
+    for (const n of takenNights) {
+      const o = perDate?.find((p) => p.date === n)?.occupiedRoomIds.find((x) => x.roomId === row.roomId);
+      if (o) {
+        holder = { name: o.guestName ?? o.agentName ?? null, ref: o.entryReferenceNumber ?? null, source: o.source };
+        break;
+      }
+    }
+    if (!holder && row.occupiedBy?.length) {
+      const o = row.occupiedBy[0];
+      holder = { name: o.guestName ?? o.agentName ?? null, ref: o.entryReferenceNumber ?? null, source: o.source };
+    }
+    const outOfService = !holder && (row.blockedReason || row.bucket === "unavailable");
+    return {
+      holder,
+      takenNights,
+      // Only worth spelling out the nights when the room is free on some of them.
+      partial: takenNights.length > 0 && takenNights.length < nightsInScope.length,
+      label: holder ? (holder.source === "HOLD" ? "On hold" : "Reserved") : outOfService ? "Out of service" : "Taken",
+      note: holder ? null : row.blockedReason ?? row.unavailabilityReason ?? null,
+    };
+  };
 
   // Placement state. `base` applies to every night; `nightOverrides[n]` is night n's FULL
   // map when it deliberately differs (copy-on-first-edit from the base, S2-board style).
@@ -550,12 +589,56 @@ export function RoomSelectBoard({
         })}
       </div>
 
-      {hiddenCount > 0 && (
-        <p style={{ fontSize: 11, color: "var(--ink-3)", margin: 0 }}>
-          {hiddenCount} room{hiddenCount === 1 ? "" : "s"} not shown — taken or out of service{" "}
-          {scopeNight ? `on ${nightLabel(scopeNight)}` : "for these dates"}. Switch to the table to see who
-          holds them.
-        </p>
+      {takenRows.length > 0 && (
+        <div>
+          <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 6px" }}>
+            {takenRows.length} room{takenRows.length === 1 ? "" : "s"} can&rsquo;t take guests{" "}
+            {scopeNight ? `on ${nightLabel(scopeNight)}` : "for these dates"} — shown so the floor reads
+            in full. Nobody can be placed in these.
+          </p>
+          <div className="rcb-rooms" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(215px, 1fr))" }}>
+            {takenRows.map((row) => {
+              const d = takenDetail(row);
+              return (
+                <div
+                  key={row.roomId}
+                  className="rcb-room"
+                  style={{ opacity: 0.62, background: "var(--cream-2)", cursor: "not-allowed" }}
+                  title={
+                    d.holder
+                      ? `${d.label}${d.holder.name ? ` by ${d.holder.name}` : ""}${d.holder.ref ? ` (${d.holder.ref})` : ""}`
+                      : d.note ?? d.label
+                  }
+                >
+                  <div className="rcb-room-head">
+                    <span className="rce-roomno">Room {row.roomNumber}</span>
+                    <span className="rcb-type">{row.roomTypeName}</span>
+                    <span className="ln" />
+                    <span className="tag" style={{ fontSize: 9 }}>
+                      {d.label}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 10.5, color: "var(--ink-3)", margin: "4px 0 0", lineHeight: 1.45 }}>
+                    {d.holder ? (
+                      <>
+                        {d.holder.name ?? "Another booking"}
+                        {d.holder.ref ? <span className="mono"> · {d.holder.ref}</span> : null}
+                      </>
+                    ) : (
+                      d.note ?? "Not available for these dates"
+                    )}
+                    {d.partial && (
+                      <>
+                        <br />
+                        Taken {d.takenNights.map(nightLabel).join(", ")} only
+                      </>
+                    )}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
       {unplaced.length > 0 && roomsInUse === maxRooms && (
         <p className="rce-warns" style={{ margin: 0 }}>
