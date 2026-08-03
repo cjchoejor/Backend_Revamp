@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownToLine, Wand2 } from "lucide-react";
+import { ArrowDownToLine, Maximize2, Minimize2, Wand2 } from "lucide-react";
+import { RateReferenceStrip } from "./rate-reference-strip";
 import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
+import { getRateReference } from "@/lib/api/entries";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 
 /**
@@ -143,6 +145,7 @@ function rowFromComposition(c: RoomCompositionInput): RowState {
 }
 
 export function RoomCompositionsTable({
+  entryId,
   sealedRoomIds,
   entryCheckIn,
   entryCheckOut,
@@ -154,6 +157,8 @@ export function RoomCompositionsTable({
 }: {
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
+  /** Enables the reference-rate placeholders in the negotiated-rate cells. */
+  entryId?: string;
   sealedRoomIds: string[];
   entryCheckIn?: string | null;
   entryCheckOut?: string | null;
@@ -182,6 +187,44 @@ export function RoomCompositionsTable({
   const youngMax = policyQuery.data?.ageBands.youngChildMaxAge ?? 5;
   const childMax = policyQuery.data?.ageBands.childMaxAge ?? 10;
 
+  /**
+   * Reference rates, resolved per ROOM. The endpoint answers by room type; each room's type comes
+   * from the catalogue above, so no extra call is needed. These become the rate cells' placeholder
+   * text: an empty negotiated cell is not "no rate", it is "price at this", and the operator had
+   * no way to see which figure that was without leaving the grid.
+   */
+  const rateRefQuery = useQuery({
+    queryKey: ["rate-reference", entryId],
+    queryFn: () => getRateReference(session!, entryId!),
+    enabled: !!session && !!entryId,
+    staleTime: 5 * 60_000,
+  });
+  const rateRef = rateRefQuery.data ?? null;
+  const refByRoomType = useMemo(
+    () => new Map((rateRef?.roomTypes ?? []).map((t) => [t.roomTypeId, t])),
+    [rateRef],
+  );
+  /** The reference figure a given rate cell would fall back to — null when nothing is on file. */
+  const refFor = (roomId: string, col: NumCol): number | null => {
+    const typeId = roomById.get(roomId)?.roomType?.id;
+    const t = typeId ? refByRoomType.get(typeId) : undefined;
+    if (!t) return null;
+    switch (col) {
+      case "rRoom":
+        return t.roomRate;
+      case "rBed":
+        return t.extraBedRate;
+      case "rBf":
+        return t.breakfastRate;
+      case "rLu":
+        return t.lunchRate;
+      case "rDi":
+        return t.dinnerRate;
+      default:
+        return null;
+    }
+  };
+
   const envAdults = Math.max(0, entryAdults ?? 0);
   const roomEnvelopeQuery = useQuery({
     queryKey: ["lookup", "allowed-room-counts", envAdults, (entryChildAges ?? []).join(",")],
@@ -198,6 +241,23 @@ export function RoomCompositionsTable({
       [c.negotiatedRoomRate, c.negotiatedExtraBedRate, c.negotiatedBreakfastRate, c.negotiatedLunchRate, c.negotiatedDinnerRate].some((v) => v != null),
     ),
   );
+  // Full-screen layer, same affordance as the S1 room table: with the rate columns open the grid
+  // is wider than the canvas column, so reading rooms against their rates meant scrolling
+  // sideways. Reuses the .rst-expandwrap / .rst-expandbar styles.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [expanded]);
   // Plans the operator switched on. A plan column is VISIBLE when toggled on OR when any
   // row carries pax for it — a column with data can never silently disappear.
   const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
@@ -597,16 +657,17 @@ export function RoomCompositionsTable({
     rowIdx: number,
     roomId: string,
     col: NumCol,
-    opts?: { warn?: boolean; decimal?: boolean; wide?: boolean },
+    opts?: { warn?: boolean; decimal?: boolean; wide?: boolean; placeholder?: string; title?: string },
   ) => {
     const raw = rows[roomId]?.[col] ?? "";
     return (
-      <td key={col} className={opts?.warn ? "warn" : undefined}>
+      <td key={col} className={opts?.warn ? "warn" : undefined} title={opts?.title}>
         <input
           type="text"
           inputMode={opts?.decimal ? "decimal" : "numeric"}
           className={opts?.wide ? "wide" : undefined}
           data-cell={`${rowIdx}:${col}`}
+          placeholder={opts?.placeholder}
           value={raw}
           onKeyDown={onCellKeyDown(rowIdx, col)}
           onFocus={(e) => e.currentTarget.select()}
@@ -647,7 +708,32 @@ export function RoomCompositionsTable({
     );
 
   return (
-    <div className="rct">
+    <div className={expanded ? "rct rst-expandwrap on" : "rct"}>
+      {expanded && (
+        <div className="rst-expandbar">
+          <b>Room composition · {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"}</b>
+          <span className="ln" />
+          <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)}>
+            <Minimize2 style={{ width: 13, height: 13 }} /> Close
+          </button>
+        </div>
+      )}
+      {/* Reference rates ride ABOVE the grid and stay put while the rows scroll — with many rooms
+          the anchor was off-screen exactly when a rate was being typed. */}
+      {entryId && (
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 3,
+            background: "var(--paper)",
+            paddingBottom: 4,
+            marginBottom: 2,
+          }}
+        >
+          <RateReferenceStrip entryId={entryId} compact />
+        </div>
+      )}
       <div className="rce-bar">
         {partySize > 0 && (
           <button
@@ -718,6 +804,16 @@ export function RoomCompositionsTable({
           <span className={`rce-tally${totalGuests !== partySize ? " off" : ""}`}>
             {totalGuests} of {partySize} guests placed
           </span>
+        )}
+        {!expanded && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setExpanded(true)}
+            title="Expand to full screen — fits every room and the rate columns on one screen"
+          >
+            <Maximize2 style={{ width: 13, height: 13 }} /> Expand
+          </button>
         )}
       </div>
       {limitMsg && (
@@ -837,15 +933,22 @@ export function RoomCompositionsTable({
                   {boolCell(rowIdx, id, "sc")}
                   {boolCell(rowIdx, id, "gst")}
                   {boolCell(rowIdx, id, "foc")}
-                  {ratesOpen && (
-                    <>
-                      {numCell(rowIdx, id, "rRoom", { decimal: true, wide: true })}
-                      {numCell(rowIdx, id, "rBed", { decimal: true, wide: true })}
-                      {numCell(rowIdx, id, "rBf", { decimal: true, wide: true })}
-                      {numCell(rowIdx, id, "rLu", { decimal: true, wide: true })}
-                      {numCell(rowIdx, id, "rDi", { decimal: true, wide: true })}
-                    </>
-                  )}
+                  {/* Each rate cell shows the figure it would price at when left empty, as the
+                      placeholder — so the column reads as rates rather than as blanks, and a
+                      negotiation is entered against a visible anchor. Typing overrides it. */}
+                  {ratesOpen &&
+                    (["rRoom", "rBed", "rBf", "rLu", "rDi"] as const).map((col) => {
+                      const ref = refFor(id, col);
+                      return numCell(rowIdx, id, col, {
+                        decimal: true,
+                        wide: true,
+                        placeholder: ref != null ? String(ref) : "—",
+                        title:
+                          ref != null
+                            ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
+                            : "No rate on file for this room type — leave empty and it prices at zero",
+                      });
+                    })}
                   <td />
                 </tr>
               );

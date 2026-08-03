@@ -1137,14 +1137,11 @@ export function RoomCompositionPlanner(props: {
     }
     onChange(compositions);
   };
+  // The TABLE carries its own sticky copy above the grid (its rate cells are what the reference
+  // anchors), so the strip is rendered here only for the guest board.
   const rateRef = props.entryId ? <RateReferenceStrip entryId={props.entryId} /> : null;
   if (!canBoard)
-    return (
-      <div style={{ display: "grid", gap: 8 }}>
-        <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current ?? []} />
-        {rateRef}
-      </div>
-    );
+    return <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current ?? []} />;
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div className="seg rce-seg" style={{ justifySelf: "start" }}>
@@ -1184,7 +1181,7 @@ export function RoomCompositionPlanner(props: {
           onFocusRoom={setFocusRoomId}
         />
       )}
-      {rateRef}
+      {mode === "board" && rateRef}
     </div>
   );
 }

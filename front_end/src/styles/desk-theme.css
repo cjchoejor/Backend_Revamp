@@ -2770,6 +2770,12 @@
   & .rst-expandwrap.on .rst-wrap {
     max-height: calc(100vh - 96px);
   }
+  /* Same layer reused by the S2 composition grid: cap the rows so the close bar, the sticky
+     reference rates and the toolbar stay put and only the rooms scroll. */
+  & .rst-expandwrap.on .rct-scroll {
+    max-height: calc(100vh - 210px);
+    overflow: auto;
+  }
   & .rst-tools {
     display: flex;
     align-items: center;

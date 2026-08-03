@@ -18,7 +18,7 @@ import { moneyOrDash } from "@/lib/desk/workspace";
 const TH: React.CSSProperties = { padding: "4px 26px 6px 0", fontWeight: 600, whiteSpace: "nowrap", textAlign: "left" };
 const TD: React.CSSProperties = { padding: "6px 26px 6px 0", whiteSpace: "nowrap" };
 
-export function RateReferenceStrip({ entryId }: { entryId: string }) {
+export function RateReferenceStrip({ entryId, compact }: { entryId: string; compact?: boolean }) {
   const { session } = useSession();
   const query = useQuery({
     queryKey: ["rate-reference", entryId],
@@ -33,8 +33,8 @@ export function RateReferenceStrip({ entryId }: { entryId: string }) {
   const pct = (rate: number) => `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
 
   return (
-    <div style={{ marginTop: 12, fontSize: 11.5, color: "var(--ink-3, #7a6a52)" }}>
-      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+    <div style={{ marginTop: compact ? 0 : 12, fontSize: 11.5, color: "var(--ink-3, #7a6a52)" }}>
+      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: compact ? 3 : 6 }}>
         REFERENCE RATES · per night
         {ref.party && (
           <span style={{ fontWeight: 400 }}>
@@ -97,7 +97,7 @@ export function RateReferenceStrip({ entryId }: { entryId: string }) {
           </tbody>
         </table>
       </div>
-      <p style={{ margin: "6px 0 0", lineHeight: 1.6 }}>
+      <p style={{ margin: "6px 0 0", lineHeight: 1.6, display: compact ? "none" : undefined }}>
         These are what the draft prices with when a negotiated cell is left empty. Service charge {pct(ref.serviceChargeRate)}{" "}
         and GST {pct(ref.gstRate)} are added on top{ref.nights != null ? ` · ${ref.nights} night${ref.nights === 1 ? "" : "s"}` : ""}.
         {ref.roomTypes.some((t) => t.breakfastRate == null) &&
