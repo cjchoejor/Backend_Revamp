@@ -175,7 +175,7 @@ The audit is telling you: don't confuse this pattern with the dead one. What mat
 
 ### "`policy-schemas.ts` (front-end) parity"
 
-The frontend admin console has a file at `front_end/src/lib/admin/policy-schemas.ts` that describes what fields each policy has (so the `/admin/policies` page can render a typed editor). The audit checked that every seeded policy ID has a matching frontend schema entry.
+The frontend admin console has a file at `my_front_end/src/lib/admin/policy-schemas.ts` that describes what fields each policy has (so the `/admin/policies` page can render a typed editor). The audit checked that every seeded policy ID has a matching frontend schema entry.
 
 Result: **24 seeded IDs = 24 frontend schema entries**. Perfect parity. The only frontend entry with no live backend consumer is (again) `registry.shadowInventory.l4Only` — the admin can edit it, but the value goes nowhere.
 

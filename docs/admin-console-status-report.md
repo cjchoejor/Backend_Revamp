@@ -69,7 +69,7 @@ Also included: **dev helper** endpoint `POST /api/admin/enqueue` to schedule tim
 
 ### Frontend (Admin pages)
 
-Admin pages exist under `front_end/src/app/(app)/admin/**/page.tsx` including:
+Admin pages exist under `my_front_end/src/app/(app)/admin/**/page.tsx` including:
 
 - Overview, Hotel profile, Departments, Roles & sessions, Staff
 - Room types, Rooms, Spaces
@@ -82,10 +82,10 @@ Admin pages exist under `front_end/src/app/(app)/admin/**/page.tsx` including:
 
 - **Structured (non-JSON) admin UI added for many timer/worker settings**
   - New metadata + editors:
-    - `front_end/src/lib/admin/config-schemas.ts`
-    - `front_end/src/components/admin/config-form-editor.tsx`
-    - `front_end/src/components/admin/structured-config-panel.tsx`
-  - New admin page: `front_end/src/app/(app)/admin/timers-workers/page.tsx`
+    - `my_front_end/src/lib/admin/config-schemas.ts`
+    - `my_front_end/src/components/admin/config-form-editor.tsx`
+    - `my_front_end/src/components/admin/structured-config-panel.tsx`
+  - New admin page: `my_front_end/src/app/(app)/admin/timers-workers/page.tsx`
   - `Workflow`, `Financial`, and `Operational` pages now use structured forms where available and fall back to advanced JSON mode.
 
 - **Reduced JSON burden**
@@ -319,19 +319,19 @@ Action items:
 
 ### New/updated frontend files
 
-- `front_end/src/app/(app)/admin/timers-workers/page.tsx`
-- `front_end/src/lib/admin/config-schemas.ts`
-- `front_end/src/components/admin/config-form-editor.tsx`
-- `front_end/src/components/admin/structured-config-panel.tsx`
+- `my_front_end/src/app/(app)/admin/timers-workers/page.tsx`
+- `my_front_end/src/lib/admin/config-schemas.ts`
+- `my_front_end/src/components/admin/config-form-editor.tsx`
+- `my_front_end/src/components/admin/structured-config-panel.tsx`
 - Updated:
-  - `front_end/src/app/(app)/admin/workflow/page.tsx`
-  - `front_end/src/app/(app)/admin/financial/page.tsx`
-  - `front_end/src/app/(app)/admin/operational/page.tsx`
-  - `front_end/src/app/(app)/admin/configuration/page.tsx` (uses structured editor where available)
-  - `front_end/src/app/(app)/admin/hotel-profile/page.tsx`
-  - `front_end/src/app/(app)/admin/vip-routing/page.tsx`
-  - `front_end/src/app/(app)/admin/policies/page.tsx`
-  - `front_end/src/config/admin-nav.ts`
+  - `my_front_end/src/app/(app)/admin/workflow/page.tsx`
+  - `my_front_end/src/app/(app)/admin/financial/page.tsx`
+  - `my_front_end/src/app/(app)/admin/operational/page.tsx`
+  - `my_front_end/src/app/(app)/admin/configuration/page.tsx` (uses structured editor where available)
+  - `my_front_end/src/app/(app)/admin/hotel-profile/page.tsx`
+  - `my_front_end/src/app/(app)/admin/vip-routing/page.tsx`
+  - `my_front_end/src/app/(app)/admin/policies/page.tsx`
+  - `my_front_end/src/config/admin-nav.ts`
 
 ### New/updated backend files
 
