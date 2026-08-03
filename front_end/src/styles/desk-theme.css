@@ -1874,6 +1874,23 @@
     opacity: 0.45;
     cursor: not-allowed;
   }
+  /* In the selection on SOME nights but not all. Amber, matching the n/N marker and the
+     night-differs dot, so a per-night room is as scannable down the column as a whole-stay one
+     without being mistaken for it (that's the terracotta above). Declared after .dis/.capped so
+     it wins on source order at equal specificity. */
+  & .rst tr.part {
+    background: var(--warn-t);
+  }
+  & .rst tr.part .rst-no,
+  & .rst tr.part.dis .rst-no {
+    color: var(--warn);
+    font-weight: 700;
+  }
+  /* A partly-selected room is IN the booking, so it must not fade like an unavailable one — it
+     is "capped" only in the sense that it can't take a whole-stay click while nights are full. */
+  & .rst tr.capped.part {
+    opacity: 1;
+  }
   /* ---- S2 per-room composition editor (room-compositions-editor.tsx) ---- */
   & .rce {
     display: grid;

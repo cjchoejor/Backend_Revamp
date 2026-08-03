@@ -312,7 +312,11 @@ export function RoomStatusTable({
             const rowClickable = canPick && !disabled && !atCap;
             // "capped" = would be pickable, but the selection is full — dimmed harder than a
             // merely-unavailable row, and clicking it explains itself via onCappedClick.
-            const rowCls = sel ? "sel" : rowClickable ? "pick" : canPick && atCap ? "dis capped" : "dis";
+            // "part" tints rows that are in the selection on SOME nights, so a per-night pick is
+            // as visible down the room column as a whole-stay one.
+            const rowCls =
+              (sel ? "sel" : rowClickable ? "pick" : canPick && atCap ? "dis capped" : "dis") +
+              (partial ? " part" : "");
             const title = !canPick
               ? `Room ${row.roomNumber} — not free for the whole stay${nights.length > 1 ? "; free nights can still be picked in their columns" : ""}`
               : atCap
