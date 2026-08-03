@@ -31,6 +31,21 @@ The friend pushes to his branch `UI-experiment2` on the same repo. To pull his l
 
 Net effect: `front_end/` now means "friend's production UI" everywhere it exists, and `my_front_end/` always means "user's testing UI".
 
+**One-time snag on the next `main → integration-prod-frontend` merge.** Both branches renamed `front_end/` → `my_front_end/` independently, and on integration the vacated name was immediately reused by the friend's UI. Git's directory-rename heuristic misreads that: it sees "main renamed front_end/ → my_front_end/" and "integration has new files in front_end/", and concludes the friend's UI files should be moved into `my_front_end/`. They must not be.
+
+Verified with `git merge-tree` (read-only). Merging as-is reports 5 conflicts; adding `-c merge.directoryRenames=false` drops it to 1:
+
+```bash
+git merge -c merge.directoryRenames=false origin/main
+# one conflict remains, always resolve it OUR way:
+#   CONFLICT (rename/delete): front_end/src/components/stages/s1/availability-calendar.tsx
+#   -> the file already lives at my_front_end/src/components/stages/s1/availability-calendar.tsx
+git checkout --ours my_front_end/src/components/stages/s1/availability-calendar.tsx
+git rm --cached front_end/src/components/stages/s1/availability-calendar.tsx 2>/dev/null || true
+```
+
+Sanity-check before committing the merge: `front_end/`, `my_front_end/` and `back_end/` tree hashes should all be unchanged from integration's pre-merge state, because main carries nothing integration lacks except the rename commit itself. This is a one-off — once that merge is recorded, later merges see the rename as already reconciled.
+
 **Never merge integration-prod-frontend → main.** Backend changes flow `main → integration-prod-frontend`, never the other direction. Frontend changes stay branch-local.
 
 ## Wired: friend's production frontend runs on user's backend (2026-07-14)
