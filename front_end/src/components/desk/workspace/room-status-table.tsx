@@ -294,23 +294,29 @@ export function RoomStatusTable({
         </thead>
         <tbody>
           {rows.map((row) => {
-            const sel = selectedIds.includes(row.roomId);
-            const canPick = pickable(row);
-            // Single-room mode never hits the cap: clicking another room SWITCHES to it
-            // (the parent replaces the selection) instead of being blocked.
-            const atCap = !sel && selectedIds.length >= maxSelect && maxSelect > 1;
-            const rowClickable = canPick && !disabled && !atCap;
-            // Nights (beyond the base) this room is in — a room picked per-night shows its
-            // membership on the row even though the whole-stay check is off.
+            // Row state comes from the NIGHTS, never from the base list: once a night carries its
+            // own rooms the base applies to nothing, so a base-derived tick would claim a room is
+            // in the stay while every one of its cells reads Vacant.
             const nightsWithRoom = nights.filter((n) => nightSel(n).includes(row.roomId)).length;
+            const sel = nights.length > 0 ? nightsWithRoom === nights.length : selectedIds.includes(row.roomId);
             const partial = !sel && nightsWithRoom > 0;
+            const canPick = pickable(row);
+            // A whole-stay pick needs space on EVERY night — the per-night counts are the cap.
+            // Single-room mode never hits it: clicking another room SWITCHES to it.
+            const atCap =
+              !sel &&
+              maxSelect > 1 &&
+              (nights.length > 0
+                ? nights.some((n) => !nightSel(n).includes(row.roomId) && nightSel(n).length >= maxSelect)
+                : selectedIds.length >= maxSelect);
+            const rowClickable = canPick && !disabled && !atCap;
             // "capped" = would be pickable, but the selection is full — dimmed harder than a
             // merely-unavailable row, and clicking it explains itself via onCappedClick.
             const rowCls = sel ? "sel" : rowClickable ? "pick" : canPick && atCap ? "dis capped" : "dis";
             const title = !canPick
               ? `Room ${row.roomNumber} — not free for the whole stay${nights.length > 1 ? "; free nights can still be picked in their columns" : ""}`
               : atCap
-                ? "Selection limit reached — unselect another room first"
+                ? `Every night already has its ${maxSelect} rooms — free one up first, or pick this room on single nights in the columns`
                 : `${sel ? "Unselect" : "Select"} room ${row.roomNumber} for the whole stay — single nights in the columns`;
             return (
               <tr

@@ -694,15 +694,60 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     [displayNights, nightOverrides, baseSel],
   );
   const nightsDiffer = differingNights.length > 0;
+  /**
+   * Row click = "use this room for the WHOLE stay", so it writes every night, not just the base.
+   *
+   * Editing the base alone was wrong once any night carried an override: the base then applies to
+   * no night at all, so its length is not the selection size. A 6-room booking with all 6 rooms
+   * placed per night could still take two more row clicks — the base was only at 4 — and those
+   * rooms showed a row checkmark while every one of their night cells read Vacant. The cap has to
+   * be measured per night, because that is what actually gets saved.
+   */
   const toggleTableRow = (row: RoomStatusRow) => {
-    setBaseSel((prev) =>
-      prev.includes(row.roomId)
-        ? prev.filter((x) => x !== row.roomId) // clicked the selected room → unselect
-        : numberOfRooms === 1
-          ? [row.roomId] // single-room → switch to the clicked room
-          : prev.length < numberOfRooms
-            ? [...prev, row.roomId]
-            : prev,
+    const id = row.roomId;
+    const onEveryNight =
+      displayNights.length > 0
+        ? displayNights.every((n) => effectiveNight(n).includes(id))
+        : baseSel.includes(id);
+    // A room can sit in the base while every night overrides it away — nothing uses it, but it
+    // would return the moment the differences are reset. Clicking such a room clears it rather
+    // than trying (and failing) to add a room that is already there.
+    const inertInBase =
+      baseSel.includes(id) && displayNights.length > 0 && !displayNights.some((n) => effectiveNight(n).includes(id));
+
+    if (onEveryNight || inertInBase) {
+      setBaseSel((prev) => prev.filter((x) => x !== id));
+      setNightOverrides((prev) =>
+        Object.fromEntries(Object.entries(prev).map(([night, ids]) => [night, ids.filter((x) => x !== id)])),
+      );
+      return;
+    }
+
+    // Single-room bookings switch outright — per-night differences are meaningless for one room.
+    if (numberOfRooms === 1) {
+      setBaseSel([id]);
+      setNightOverrides({});
+      return;
+    }
+
+    const fullNights = displayNights.filter(
+      (n) => !effectiveNight(n).includes(id) && effectiveNight(n).length >= numberOfRooms,
+    );
+    if (fullNights.length > 0) {
+      toast.info(
+        `${fullNights.length === displayNights.length ? "Every night" : `${fullNights.map((n) => formatDMY(n) || n).join(", ")}`} already ${
+          fullNights.length === 1 ? "has" : "have"
+        } ${numberOfRooms} room${numberOfRooms === 1 ? "" : "s"} — free one up on ${
+          fullNights.length === 1 ? "that night" : "those nights"
+        } first, or change just the nights you want this room on.`,
+      );
+      return;
+    }
+    setBaseSel((prev) => (prev.includes(id) || prev.length >= numberOfRooms ? prev : [...prev, id]));
+    setNightOverrides((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([night, ids]) => [night, ids.includes(id) ? ids : [...ids, id]]),
+      ),
     );
   };
   /** One night's cell: copy-on-first-edit from the whole-stay rooms; an override that comes back
@@ -1350,7 +1395,9 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   onToggleCell={toggleNightCell}
                   onCappedClick={() =>
                     toast.info(
-                      `All ${numberOfRooms} rooms this booking needs are selected — unselect one first to swap it for this one.`,
+                      nightsDiffer
+                        ? `Every night already has its ${numberOfRooms} room${numberOfRooms === 1 ? "" : "s"} — free one up first, or click this room under a single night to use it on that night only.`
+                        : `All ${numberOfRooms} rooms this booking needs are selected — unselect one first to swap it for this one.`,
                     )
                   }
                   disabled={selectMutation.isPending}
