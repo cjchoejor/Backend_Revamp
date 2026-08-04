@@ -5,6 +5,7 @@ import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { appendContact, normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 
 export type { CoordinatorContact };
 
@@ -221,13 +222,18 @@ export async function reactivateCorporateAccount(prisma: PrismaClient, id: strin
   });
 }
 
-/** Search by name (case-insensitive substring), for the front-desk picker. */
+/**
+ * Search by name (case-insensitive substring), for the front-desk picker.
+ *
+ * An empty query lists every active account rather than nothing, so the picker opens as a
+ * browsable dropdown and narrows as the operator types — see `PARTY_LOOKUP_LIMIT` for the cap
+ * and what a caller should do on hitting it.
+ */
 export async function searchCorporateAccounts(prisma: PrismaClient, query: string) {
   const q = query.trim();
-  if (!q) return [];
   return prisma.corporateAccount.findMany({
-    where: { isActive: true, displayName: { contains: q, mode: "insensitive" } },
+    where: { isActive: true, ...(q ? { displayName: { contains: q, mode: "insensitive" } } : {}) },
     orderBy: { displayName: "asc" },
-    take: 25,
+    take: PARTY_LOOKUP_LIMIT,
   });
 }

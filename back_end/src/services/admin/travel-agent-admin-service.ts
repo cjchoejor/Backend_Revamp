@@ -5,6 +5,7 @@ import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { appendContact, normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 
 export type { CoordinatorContact };
 
@@ -206,13 +207,20 @@ export async function reactivateTravelAgent(prisma: PrismaClient, id: string, ac
   });
 }
 
-/** Search by name (case-insensitive substring), for the front-desk picker. */
+/**
+ * Search by name (case-insensitive substring), for the front-desk picker.
+ *
+ * An empty query lists every active agent rather than nothing: the operator taking a call
+ * usually knows the agency by sight, not by spelling, so the picker opens as a browsable
+ * dropdown and narrows as they type. The cap is sized to clear the real roster (127 agents
+ * came in from the legacy import) — a caller that receives exactly `PARTY_LOOKUP_LIMIT` rows
+ * should say the list was cut rather than present it as the whole roster.
+ */
 export async function searchTravelAgents(prisma: PrismaClient, query: string) {
   const q = query.trim();
-  if (!q) return [];
   return prisma.travelAgent.findMany({
-    where: { isActive: true, displayName: { contains: q, mode: "insensitive" } },
+    where: { isActive: true, ...(q ? { displayName: { contains: q, mode: "insensitive" } } : {}) },
     orderBy: { displayName: "asc" },
-    take: 25,
+    take: PARTY_LOOKUP_LIMIT,
   });
 }
