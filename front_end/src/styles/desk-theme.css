@@ -1868,6 +1868,12 @@
   & .rst tr.dis .rst-type {
     color: var(--ink-3);
   }
+  /* Free on SOME nights but not the whole stay. The row click (whole stay) is off, but its free
+     cells and "Select all" both still work — so it keeps full weight. Dimming it here is what
+     made a half-filled table look finished while rooms were still needed on the early nights. */
+  & .rst tr.open {
+    cursor: default;
+  }
   /* Selection full: pickable-but-capped rows fade harder than merely-unavailable ones, and the
      cursor says the click won't select (it explains instead — onCappedClick toast). */
   & .rst tr.capped {

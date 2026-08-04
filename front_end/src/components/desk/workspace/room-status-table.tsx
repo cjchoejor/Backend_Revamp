@@ -334,17 +334,47 @@ export function RoomStatusTable({
                 ? nights.some((n) => !nightSel(n).includes(row.roomId) && nightSel(n).length >= maxSelect)
                 : selectedIds.length >= maxSelect);
             const rowClickable = canPick && !disabled && !atCap;
-            // "capped" = would be pickable, but the selection is full — dimmed harder than a
-            // merely-unavailable row, and clicking it explains itself via onCappedClick.
-            // "part" tints rows that are in the selection on SOME nights, so a per-night pick is
-            // as visible down the room column as a whole-stay one.
+            /**
+             * Nights this room could still be added to — free on that night, and that night not
+             * already carrying its full complement of rooms.
+             *
+             * The row used to grey out whenever a WHOLE-STAY pick was impossible, which is a
+             * much weaker condition: a room booked on two of three nights, or one night short of
+             * the cap, went fully dim even though its free cells and "Select all" both still
+             * worked. On a three-night stay needing three rooms, taking one room for the stay and
+             * another for a single night was enough to make most of the table look finished while
+             * two rooms were still needed on the first two nights. A row now only reads as dead
+             * when there is genuinely nothing left to do with it.
+             */
+            const openNights = nights.filter((n) => {
+              const s = cellStatus(row, n).status;
+              if (s !== "vacant" && s !== "deficient") return false;
+              if (nightSel(n).includes(row.roomId)) return false;
+              return maxSelect <= 1 || nightSel(n).length < maxSelect;
+            }).length;
+            const unusable = !sel && openNights === 0;
+            // "capped" = would be pickable for the whole stay, but every night is full — dimmed
+            // harder, and clicking explains itself via onCappedClick. "open" = not whole-stay
+            // pickable but still has free nights, so it keeps normal weight. "part" tints rows in
+            // the selection on SOME nights, so a per-night pick is as visible as a whole-stay one.
             const rowCls =
-              (sel ? "sel" : rowClickable ? "pick" : canPick && atCap ? "dis capped" : "dis") +
-              (partial ? " part" : "");
+              (sel
+                ? "sel"
+                : rowClickable
+                  ? "pick"
+                  : unusable
+                    ? canPick && atCap
+                      ? "dis capped"
+                      : "dis"
+                    : "open") + (partial ? " part" : "");
             const title = !canPick
-              ? `Room ${row.roomNumber} — not free for the whole stay${nights.length > 1 ? "; free nights can still be picked in their columns" : ""}`
+              ? openNights > 0
+                ? `Room ${row.roomNumber} is free on ${openNights} of ${nights.length} nights — use "Select all" or pick the free nights in their columns`
+                : `Room ${row.roomNumber} — not free for any night of this stay`
               : atCap
-                ? `Every night already has its ${maxSelect} rooms — free one up first, or pick this room on single nights in the columns`
+                ? openNights > 0
+                  ? `Some nights already have their ${maxSelect} rooms — this room can still take ${openNights} of them`
+                  : `Every night already has its ${maxSelect} rooms — free one up first`
                 : `${sel ? "Unselect" : "Select"} room ${row.roomNumber} for the whole stay — single nights in the columns`;
             return (
               <tr

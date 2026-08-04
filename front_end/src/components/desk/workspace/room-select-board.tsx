@@ -62,6 +62,7 @@ export function RoomSelectBoard({
   entryChildAges,
   maxRooms,
   selectedRoomIds,
+  initialPerNight,
   onSelectionChange,
   onPerNightChange,
   capacityByRoomId,
@@ -80,6 +81,12 @@ export function RoomSelectBoard({
   maxRooms: number;
   /** Current whole-stay selection (shared with table mode) — mount-time seed for placement. */
   selectedRoomIds: string[];
+  /**
+   * The effective rooms per night, when some nights differ from the whole-stay base. Seeded as
+   * overrides so a room the table picked for a single night shows on that night's board too,
+   * instead of vanishing on the way across.
+   */
+  initialPerNight?: Record<string, string[]>;
   /** Emits the base (whole-stay) occupied rooms — keeps `tableSel` in step for mode switches. */
   onSelectionChange: (roomIds: string[]) => void;
   /**
@@ -327,14 +334,37 @@ export function RoomSelectBoard({
    */
   const initialSelectionRef = useRef<string[] | null>(null);
   if (initialSelectionRef.current === null) initialSelectionRef.current = selectedRoomIds;
+  /** Same capture for the per-night picks, for the same reason. */
+  const initialPerNightRef = useRef<Record<string, string[]> | null>(null);
+  if (initialPerNightRef.current === null) initialPerNightRef.current = initialPerNight ?? {};
 
-  // Mount-time seed: resume from the table mode's selection (spread the party across it).
-  // Waits for the capacities so the spread can't overfill blind.
+  /**
+   * Mount-time seed: resume from the table's selection, spreading the party across it, so the
+   * board opens showing the rooms already chosen with guests in them rather than an empty floor.
+   * Waits for the capacities so the spread can't overfill blind.
+   *
+   * Nights the table gave their own rooms are seeded as overrides, not folded into the base —
+   * a room picked for one night of three is exactly the case the base cannot express, and
+   * dropping it here would silently lose it on the way back out.
+   */
   const [seedApplied, setSeedApplied] = useState(false);
   useEffect(() => {
     if (seedApplied || guests.length === 0 || !capacitiesReady) return;
     const seedRooms = (initialSelectionRef.current ?? []).filter((id) => binIds.has(id)).slice(0, maxRooms);
-    if (seedRooms.length > 0) setBase(spreadAcross(seedRooms));
+    const seededBase = seedRooms.length > 0 ? spreadAcross(seedRooms) : {};
+    if (seedRooms.length > 0) setBase(seededBase);
+
+    const perNight = initialPerNightRef.current ?? {};
+    const overrides: Record<string, Record<string, string>> = {};
+    for (const [date, ids] of Object.entries(perNight)) {
+      const nightRooms = ids.filter((id) => binIds.has(id)).slice(0, maxRooms);
+      // Only nights that actually differ from the base are overrides; the rest follow it.
+      const sameAsBase =
+        nightRooms.length === seedRooms.length && nightRooms.every((id) => seedRooms.includes(id));
+      if (nightRooms.length === 0 || sameAsBase) continue;
+      overrides[date] = spreadAcross(nightRooms);
+    }
+    if (Object.keys(overrides).length > 0) setNightOverrides(overrides);
     setSeedApplied(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedApplied, guests.length, binIds, capacitiesReady]);

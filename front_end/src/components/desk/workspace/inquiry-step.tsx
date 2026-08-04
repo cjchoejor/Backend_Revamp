@@ -1384,6 +1384,9 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   entryChildAges={entry.childAges}
                   maxRooms={numberOfRooms}
                   selectedRoomIds={baseSel}
+                  // Nights the table gave their own rooms, so a single-night pick survives the
+                  // switch into the board instead of being dropped to the whole-stay base.
+                  initialPerNight={effectiveByNight}
                   onSelectionChange={(ids) => {
                     boardBaseRef.current = ids;
                     setBaseSel(ids);
