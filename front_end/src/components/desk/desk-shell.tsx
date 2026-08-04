@@ -12,6 +12,7 @@ import {
   Clock,
   LogOut,
   Menu,
+  PartyPopper,
   Receipt,
   Settings2,
 } from "lucide-react";
@@ -37,6 +38,7 @@ const DESK_NAV: DeskNavItem[] = [
   { title: "Today", href: "/desk/today", icon: Clock, group: "Operations" },
   { title: "Bookings", href: "/desk/bookings", icon: CalendarRange, group: "Operations" },
   { title: "Rooms", href: "/desk/rooms", icon: BedDouble, group: "Operations" },
+  { title: "Spaces", href: "/desk/spaces", icon: PartyPopper, group: "Operations" },
   { title: "Billing", href: "/desk/billing", icon: Receipt, group: "Money" },
   { title: "Reports", href: "/desk/reports", icon: BarChart3, group: "Money" },
   // The whole /admin tree (System health included) is L4-gated by AdminGuard.
@@ -55,6 +57,7 @@ const TITLES: Record<string, [string, string]> = {
   "/desk/today": ["Today", "What needs you next"],
   "/desk/bookings": ["Bookings", "Every booking on the desk"],
   "/desk/rooms": ["Rooms", "Status across the property"],
+  "/desk/spaces": ["Spaces", "Conference & event spaces"],
   "/desk/billing": ["Billing", "Folios & balances"],
   "/desk/reports": ["Reports", "How the property is doing"],
 };
