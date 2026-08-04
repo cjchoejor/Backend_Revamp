@@ -316,21 +316,38 @@ export function RoomSelectBoard({
     return next;
   };
 
+  /**
+   * The table's selection, captured on the first render.
+   *
+   * It cannot be read from the prop when the seed finally runs: the emit effect below calls
+   * `onSelectionChange` as soon as the board mounts, and until the seed has happened the board's
+   * placement is empty — so that first emit pushes `[]` back to the parent and overwrites the
+   * very selection the seed needs to read. Holding the mount-time value here makes the seed
+   * immune to it (bug: picking rooms in the table then opening the guest board cleared them).
+   */
+  const initialSelectionRef = useRef<string[] | null>(null);
+  if (initialSelectionRef.current === null) initialSelectionRef.current = selectedRoomIds;
+
   // Mount-time seed: resume from the table mode's selection (spread the party across it).
   // Waits for the capacities so the spread can't overfill blind.
-  const seededRef = useRef(false);
+  const [seedApplied, setSeedApplied] = useState(false);
   useEffect(() => {
-    if (seededRef.current || guests.length === 0 || !capacitiesReady) return;
-    seededRef.current = true;
-    const seedRooms = selectedRoomIds.filter((id) => binIds.has(id)).slice(0, maxRooms);
+    if (seedApplied || guests.length === 0 || !capacitiesReady) return;
+    const seedRooms = (initialSelectionRef.current ?? []).filter((id) => binIds.has(id)).slice(0, maxRooms);
     if (seedRooms.length > 0) setBase(spreadAcross(seedRooms));
+    setSeedApplied(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guests.length, binIds, capacitiesReady]);
+  }, [seedApplied, guests.length, binIds, capacitiesReady]);
 
-  // Emit on every change: base rooms for tableSel continuity + the full per-night picture
-  // for the seal. Skipped for a party-less entry so mounting can't wipe the table's picks.
+  /**
+   * Emit on every change: base rooms for tableSel continuity + the full per-night picture for
+   * the seal. Skipped for a party-less entry so mounting can't wipe the table's picks — and
+   * skipped until the seed has been applied, for the same reason. `seedApplied` is state rather
+   * than a ref precisely so this effect does not run in the same commit that schedules the seed,
+   * when `base` would still be the empty mount value.
+   */
   useEffect(() => {
-    if (guests.length === 0) return;
+    if (guests.length === 0 || !seedApplied) return;
     const roomsOf = (map: Record<string, string>) =>
       rows.filter((r) => guests.some((g) => map[g.key] === r.roomId)).map((r) => r.roomId);
     onSelectionChange(roomsOf(base));
@@ -339,7 +356,7 @@ export function RoomSelectBoard({
       onPerNightChange(perNight, Object.keys(nightOverrides).length > 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, nightOverrides, rows, guests, nights]);
+  }, [base, nightOverrides, rows, guests, nights, seedApplied]);
 
   /** Write a placement into the current scope. Every refusal comes from `rejectReason`. */
   const placeKeys = (keys: string[], roomId: string | null) => {
