@@ -27,6 +27,7 @@ import { buildSegmentHistory } from "../../services/domain/segment-history-servi
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
+import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 
 export const entriesRouter = Router();
 
@@ -109,6 +110,29 @@ entriesRouter.get("/:id/journey-summary", requireActorLevel("L1"), async (req, r
 entriesRouter.get("/:id/rate-reference", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.json(await buildEntryRateReference(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Live pricing for the composition table — the quote's own arithmetic with nothing persisted.
+ *
+ * The desk may not compute money, so without this the operator negotiates blind and only learns
+ * the total once the quote is generated. POST because the compositions being priced are the
+ * unsaved state of the editor, not anything addressable by URL. Writes nothing: no Quotation, no
+ * lines, no trace, no PDF.
+ */
+entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const body = req.body as { roomCompositions?: unknown; discount?: unknown };
+    res.setHeader("Cache-Control", "no-store");
+    res.json(
+      await buildQuotationPreview(prisma, req.params.id, {
+        roomCompositions: Array.isArray(body?.roomCompositions) ? (body.roomCompositions as never[]) : [],
+        discount: (body?.discount ?? null) as never,
+      }),
+    );
   } catch (e) {
     next(e);
   }
