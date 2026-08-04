@@ -401,3 +401,87 @@ export function computeQuotationCompositionTotals(
     total: sum((r) => r.total),
   };
 }
+
+export type CompositionTotals = ReturnType<typeof computeQuotationCompositionTotals>;
+
+/** How the operator expressed the booking discount — one of the two, never both. */
+export type BookingDiscountRequest = { percent?: number | null; amount?: number | null };
+
+export type BookingDiscountResult = {
+  /** Totals after the deduction — same shape as the undiscounted run. */
+  totals: CompositionTotals;
+  /** Money off the grand total, exactly as promised to the guest. */
+  amountOffTotal: Prisma.Decimal;
+  /** The same deduction as a share of the grand total. Authority ceilings are measured in this. */
+  effectivePercent: Prisma.Decimal;
+  /** The net-level reduction that produces it. */
+  netReduction: Prisma.Decimal;
+};
+
+/**
+ * Take a booking discount off the composition GRAND TOTAL — percent or flat amount, same result.
+ *
+ * Operator ruling 2026-08-04: a discount applies to everything in the table, meals and extra beds
+ * included, not to the room rate alone. Per-room negotiated rates are a separate mechanism — they
+ * decide what a room costs, and the discount then comes off whatever the table adds up to.
+ *
+ * The deduction is applied to each room's NET rather than subtracted from the tax-inclusive
+ * total. Subtracting at the end would leave service charge and GST computed on the undiscounted
+ * figure, so the hotel would remit GST on money it never received. Because
+ * `total = net × (1 + sc) × (1 + gst)` for every room, scaling all nets by one ratio scales the
+ * grand total by that same ratio — the guest sees exactly the figure asked for, and each room's
+ * tax follows the true consideration. Rooms differ in whether SC/GST apply at all, which is why
+ * this recomputes tax per room instead of working back through one blended factor.
+ *
+ * Displayed RATES are left untouched: they are what the operator negotiated, and the document
+ * prints them as the original prices with the deduction shown as its own line.
+ */
+export function applyBookingDiscountToTotals(
+  totals: CompositionTotals,
+  rooms: Array<{ input: RoomCompositionInput; ctx: RoomCompositionRateContext }>,
+  request: BookingDiscountRequest,
+): BookingDiscountResult | null {
+  const pct = request.percent ?? null;
+  const amt = request.amount ?? null;
+  const wantsPercent = pct != null && pct > 0;
+  const wantsAmount = amt != null && amt > 0;
+  if (!wantsPercent && !wantsAmount) return null;
+
+  const grand = totals.total;
+  if (grand.lte(ZERO)) return null;
+
+  const asked = wantsAmount ? new Prisma.Decimal(amt as number) : grand.mul(new Prisma.Decimal(pct as number)).div(100);
+  // A discount bigger than the bill settles the bill; it never turns into a refund.
+  const off = asked.gt(grand) ? grand : asked;
+  const ratio = grand.sub(off).div(grand);
+
+  const perRoom = totals.perRoom.map((r, i) => {
+    const ctx = rooms[i]?.ctx;
+    const flags = rooms[i]?.input;
+    const subtotal = r.subtotal.mul(ratio);
+    const serviceCharge =
+      flags?.serviceChargeApplies !== false && (ctx?.serviceChargeRate ?? 0) > 0
+        ? subtotal.mul(ctx!.serviceChargeRate)
+        : ZERO;
+    const gst =
+      flags?.gstApplies !== false && (ctx?.gstRate ?? 0) > 0
+        ? subtotal.add(serviceCharge).mul(ctx!.gstRate)
+        : ZERO;
+    return { ...r, subtotal, serviceCharge, gst, total: subtotal.add(serviceCharge).add(gst) };
+  });
+  const sum = (pick: (r: (typeof perRoom)[number]) => Prisma.Decimal) =>
+    perRoom.reduce<Prisma.Decimal>((acc, r) => acc.add(pick(r)), ZERO);
+
+  return {
+    totals: {
+      perRoom,
+      subtotal: sum((r) => r.subtotal),
+      serviceCharge: sum((r) => r.serviceCharge),
+      gst: sum((r) => r.gst),
+      total: sum((r) => r.total),
+    },
+    amountOffTotal: off,
+    effectivePercent: off.div(grand).mul(100),
+    netReduction: totals.subtotal.sub(sum((r) => r.subtotal)),
+  };
+}

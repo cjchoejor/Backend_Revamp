@@ -1,9 +1,23 @@
 import { z } from "zod";
 
-const discountShape = z.object({
-  discountPercent: z.coerce.number(),
+/**
+ * A booking discount, expressed either way (2026-08-04, operator ruling): a percentage, or a
+ * flat amount. Both are measured against the composition GRAND TOTAL — meals and extra beds
+ * included — so they are two ways of saying the same thing and exactly one may be given.
+ *
+ * `discountPercent` stays optional-but-usual so every existing caller (and the production
+ * frontend) keeps working unchanged.
+ */
+const discountObject = z.object({
+  discountPercent: z.coerce.number().optional(),
+  discountAmount: z.coerce.number().optional(),
   discountBasis: z.string().min(1),
 });
+/** Exactly one of the two — they are two ways of saying the same thing. */
+const exactlyOneDiscountForm = (d: { discountPercent?: number; discountAmount?: number }) =>
+  (d.discountPercent != null) !== (d.discountAmount != null);
+const oneFormMessage = { message: "Provide exactly one of discountPercent or discountAmount" };
+const discountShape = discountObject.refine(exactlyOneDiscountForm, oneFormMessage);
 
 const belowMsrGmWaiverSchema = z.object({
   acknowledged: z.literal(true),
@@ -124,9 +138,9 @@ export const sendQuotationRequestSchema = z.object({
 });
 export type SendQuotationRequestDto = z.infer<typeof sendQuotationRequestSchema>;
 
-export const applyDiscountRequestSchema = discountShape.extend({
-  belowMsrGmWaiver: belowMsrGmWaiverSchema.optional(),
-});
+export const applyDiscountRequestSchema = discountObject
+  .extend({ belowMsrGmWaiver: belowMsrGmWaiverSchema.optional() })
+  .refine(exactlyOneDiscountForm, oneFormMessage);
 export type ApplyDiscountRequestDto = z.infer<typeof applyDiscountRequestSchema>;
 
 export const acceptQuotationRequestSchema = z.object({

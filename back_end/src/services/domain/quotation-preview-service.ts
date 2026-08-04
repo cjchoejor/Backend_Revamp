@@ -18,6 +18,7 @@ import { Prisma } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { round2 } from "../../lib/money.js";
 import {
+  applyBookingDiscountToTotals,
   computeQuotationCompositionTotals,
   type RoomCompositionInput,
   type RoomCompositionRateContext,
@@ -130,7 +131,11 @@ export type QuotationPreview = {
     /** The net-level reduction that produces it (see `applyDiscountToTotals`). */
     netReduction: number;
   } | null;
-  /** Grand total minus the discount — what the guest pays. */
+  /** Column totals after the deduction. Equal to the pre-discount ones when there is none. */
+  payableSubtotal: number;
+  payableServiceCharge: number;
+  payableGst: number;
+  /** What the guest pays. */
   payable: number;
 };
 
@@ -285,22 +290,12 @@ export async function buildQuotationPreview(
   });
 
   // The discount is measured against the grand total, in whichever way the operator expressed it.
-  const grand = totals.total;
-  const reqPct = input.discount?.percent ?? null;
-  const reqAmt = input.discount?.amount ?? null;
-  let discount: QuotationPreview["discount"] = null;
-  if ((reqPct != null && reqPct > 0) || (reqAmt != null && reqAmt > 0)) {
-    const off = reqAmt != null && reqAmt > 0 ? new Prisma.Decimal(reqAmt) : grand.mul(new Prisma.Decimal(reqPct ?? 0)).div(100);
-    const cappedOff = off.gt(grand) ? grand : off;
-    const ratio = discountRatio(grand, cappedOff);
-    discount = {
-      requestedPercent: reqPct,
-      requestedAmount: reqAmt,
-      amountOffTotal: n2(cappedOff),
-      effectivePercent: grand.gt(ZERO) ? Number(round2(cappedOff.div(grand).mul(100))) : 0,
-      netReduction: n2(totals.subtotal.mul(new Prisma.Decimal(1).sub(ratio))),
-    };
-  }
+  // Exactly the helper the draft applies, so a previewed discount and a generated one cannot
+  // come out differently.
+  const applied = applyBookingDiscountToTotals(totals, priced, {
+    percent: input.discount?.percent ?? null,
+    amount: input.discount?.amount ?? null,
+  });
 
   return {
     entryId: entry.id,
@@ -312,8 +307,21 @@ export async function buildQuotationPreview(
     subtotal: n2(totals.subtotal),
     serviceCharge: n2(totals.serviceCharge),
     gst: n2(totals.gst),
-    grandTotal: n2(grand),
-    discount,
-    payable: n2(grand.sub(new Prisma.Decimal(discount?.amountOffTotal ?? 0))),
+    grandTotal: n2(totals.total),
+    discount: applied
+      ? {
+          requestedPercent: input.discount?.percent ?? null,
+          requestedAmount: input.discount?.amount ?? null,
+          amountOffTotal: n2(applied.amountOffTotal),
+          effectivePercent: Number(round2(applied.effectivePercent)),
+          netReduction: n2(applied.netReduction),
+        }
+      : null,
+    // Column totals AFTER the deduction — net, service charge and GST all move with it, which is
+    // the whole reason the discount is taken off net rather than off the tax-inclusive total.
+    payableSubtotal: applied ? n2(applied.totals.subtotal) : n2(totals.subtotal),
+    payableServiceCharge: applied ? n2(applied.totals.serviceCharge) : n2(totals.serviceCharge),
+    payableGst: applied ? n2(applied.totals.gst) : n2(totals.gst),
+    payable: applied ? n2(applied.totals.total) : n2(totals.total),
   };
 }

@@ -35,6 +35,7 @@ import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reade
 import { mulMoney, round2, sumMoney, toDecimal } from "../../lib/money.js";
 import { generateOrLoadQuotationPdf } from "./quotation-pdf-service.js";
 import {
+  applyBookingDiscountToTotals,
   computeQuotationCompositionTotals,
   type RoomCompositionInput,
   type RoomCompositionRateContext,
@@ -126,7 +127,7 @@ export type RoomCompositionServiceInput = {
 
 /** Input shape shared by `createQuotation` and `supersedeQuotationWithNewDraft`. */
 export type QuotationDraftInput = {
-  requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+  requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   notes?: string;
   currency?: string;
   belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
@@ -210,7 +211,28 @@ async function prepareQuotationDraft(
   // priced at full rate; only the separate applyDiscount endpoint re-priced, and it did so
   // with a different, room-type-blind rate resolution).
   const requested = input.requestedDiscount ?? null;
-  if (requested) {
+  /**
+   * Where the discount lands depends on which pricing model runs.
+   *
+   * COMPOSITION model (what the desk uses): the discount is a deduction off the GRAND TOTAL —
+   * meals and extra beds included — taken after the rooms are costed (operator ruling
+   * 2026-08-04; see `applyBookingDiscountToTotals`). The rate resolution must therefore NOT
+   * pre-apply it, or it would come off twice. This is also the only model that can accept a
+   * flat amount, since an amount means nothing until there is a total to measure it against.
+   *
+   * LEGACY FLAT model (no compositions — API compat for the production frontend and direct API
+   * callers): unchanged. The percent is still folded into the resolved room rate before pricing.
+   */
+  const usingCompositions = Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0;
+  // The DTO rejects both-at-once at the route; repeat it here so a direct service caller cannot
+  // slip past with two conflicting figures and have one silently ignored.
+  if (requested?.discountPercent != null && requested?.discountAmount != null) {
+    throw new ValidationError("Give the discount either as a percentage or as an amount, not both");
+  }
+  if (requested?.discountAmount != null && !usingCompositions) {
+    throw new ValidationError("A flat discount amount needs per-room compositions to measure against");
+  }
+  if (requested?.discountPercent != null) {
     await validateDiscountRequestAgainstAuthorityBands(prisma, {
       discountPercent: requested.discountPercent,
       discountBasis: requested.discountBasis,
@@ -230,7 +252,7 @@ async function prepareQuotationDraft(
     isDeficientGuestTier,
     roomTypeId,
     stay,
-    discountPercentOffRequested: requested?.discountPercent,
+    discountPercentOffRequested: usingCompositions ? undefined : requested?.discountPercent,
     actorMaxDiscountPercent,
   });
   if (requested && !pricing.discountWithinAuthorityBounds) {
@@ -361,6 +383,15 @@ async function prepareQuotationDraft(
   // Undiscounted reference run — populated only when a discount actually moved the room rate,
   // so the document can print ORIGINAL prices with an explicit deduction (2026-08-02).
   let compositionTotalsPreDiscount: ReturnType<typeof computeQuotationCompositionTotals> | null = null;
+  /** The booking discount as applied, once there was a grand total to measure it against. */
+  let compositionDiscount: {
+    requestedPercent: number | null;
+    requestedAmount: number | null;
+    amountOffTotal: number;
+    effectivePercent: number;
+    netReduction: number;
+    basis: string;
+  } | null = null;
   if (Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0) {
     // Fetch charge rates + hydrate room numbers for the perRoom breakdown.
     const { serviceChargeRate, gstRate } = await resolveChargeRates(prisma);
@@ -448,19 +479,13 @@ async function prepareQuotationDraft(
           });
           continue;
         }
+        // No discount here: under the composition model it comes off the grand total once the
+        // rooms are costed, so folding it into the rate as well would take it twice.
         const typePricing = await resolveRatePlanPricingForS2Quotation(prisma, {
           isDeficientGuestTier,
           roomTypeId: tid,
           stay,
-          discountPercentOffRequested: requested?.discountPercent,
-          actorMaxDiscountPercent,
         });
-        if (requested && !typePricing.discountWithinAuthorityBounds) {
-          throw new PolicyGateBlockedError(
-            "DISCOUNT_AUTHORITY",
-            "Requested discount exceeds the acting user's maximum discount authority",
-          );
-        }
         ratesByType.set(tid, {
           room: toDecimal(typePricing.effectiveRate ?? typePricing.resolvedNightlyRate ?? 0),
           roomPreDiscount: toDecimal(typePricing.resolvedNightlyRate ?? 0),
@@ -572,14 +597,46 @@ async function prepareQuotationDraft(
     // prints these as the original prices and shows the difference as a deduction. Rooms
     // with a per-room negotiatedRoomRate ignore defaultRoomRate, so they price identically
     // in both runs — accurate: a negotiated rate is not a discounted one.
-    // Per type now, same as the priced run: a mixed-type booking has no single "original" rate.
-    const anyTypeDiscounted = [...ratesByType.values()].some((t) => t.roomPreDiscount.gt(t.room));
-    if (requested && anyTypeDiscounted) {
-      const roomsPre = rooms.map((r) => ({
-        ...r,
-        ctx: { ...r.ctx, defaultRoomRate: ratesForRoom(r.roomId).roomPreDiscount },
-      }));
-      compositionTotalsPreDiscount = computeQuotationCompositionTotals(roomsPre);
+    /**
+     * The booking discount, taken off the GRAND TOTAL now that there is one.
+     *
+     * The undiscounted run becomes `compositionTotalsPreDiscount` — the ORIGINAL prices the
+     * document prints, with the deduction shown as its own line (2026-08-02 ruling). Rates are
+     * not touched: they are what the operator negotiated, so a room still shows the rate that
+     * was agreed and the concession appears once, at booking level, where it was given.
+     */
+    if (requested) {
+      const applied = applyBookingDiscountToTotals(compositionTotals, rooms, {
+        percent: requested.discountPercent ?? null,
+        amount: requested.discountAmount ?? null,
+      });
+      if (applied) {
+        // The ceiling is written in percent, so an amount is measured as its share of the total
+        // before being checked — otherwise a flat figure would slip past the L1/L2/L3 bands.
+        const effectivePct = Number(round2(applied.effectivePercent));
+        if (requested.discountAmount != null) {
+          await validateDiscountRequestAgainstAuthorityBands(prisma, {
+            discountPercent: effectivePct,
+            discountBasis: requested.discountBasis,
+          });
+        }
+        if (actorMaxDiscountPercent != null && effectivePct > actorMaxDiscountPercent) {
+          throw new PolicyGateBlockedError(
+            "DISCOUNT_AUTHORITY",
+            "Requested discount exceeds the acting user's maximum discount authority",
+          );
+        }
+        compositionTotalsPreDiscount = compositionTotals;
+        compositionTotals = applied.totals;
+        compositionDiscount = {
+          requestedPercent: requested.discountPercent ?? null,
+          requestedAmount: requested.discountAmount ?? null,
+          amountOffTotal: Number(round2(applied.amountOffTotal)),
+          effectivePercent: effectivePct,
+          netReduction: Number(round2(applied.netReduction)),
+          basis: requested.discountBasis,
+        };
+      }
     }
   }
 
@@ -691,6 +748,11 @@ async function prepareQuotationDraft(
                 },
               }
             : {}),
+          // The booking discount as actually applied: what was asked for (percent OR flat
+          // amount), the money it took off the grand total, and the same figure as a share of
+          // that total — which is what the authority bands are written in and what any later
+          // reader should quote. `netReduction` is where it was taken so tax follows it.
+          ...(compositionDiscount ? { compositionDiscount } : {}),
         }
       : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
@@ -827,7 +889,7 @@ export async function createGroupQuotation(
   entryId: string,
   actorId: string,
   input: {
-    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     notes?: string;
     currency?: string;
     focRoomsRequested?: number;
@@ -892,7 +954,12 @@ export async function createGroupQuotation(
   });
 
   const requested = input.requestedDiscount ?? null;
-  if (requested) {
+  // Group quotations price flat, with no composition table — so there is no grand total for a
+  // flat amount to be measured against. Percent only here.
+  if (requested?.discountAmount != null) {
+    throw new ValidationError("A group quotation discount must be a percentage, not a flat amount");
+  }
+  if (requested?.discountPercent != null) {
     await validateDiscountRequestAgainstAuthorityBands(prisma, {
       discountPercent: requested.discountPercent,
       discountBasis: requested.discountBasis,
@@ -1084,7 +1151,7 @@ export async function supersedeQuotationWithNewDraft(
   actorId: string,
   input: {
     notes?: string;
-    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     currency?: string;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
     roomCompositions?: RoomCompositionServiceInput[];
