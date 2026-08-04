@@ -474,6 +474,11 @@ The S1 availability engine has worked this way since 2026-07-24 (non-FREE rooms 
 
 **Helper**: [`lib/room-booking-conflicts.ts`](back_end/src/lib/room-booking-conflicts.ts) — `findRoomBookingConflicts(db, { roomIds, checkIn, checkOut, excludeEntryId })` returns overlapping reservations + committed holds with guest/booking context. `endDate` is the **exclusive** checkout, so back-to-back turnover is not a conflict.
 
+**What counts as "still holding a room" (2026-08-04)** — [`lib/entry-inventory-claim.ts`](back_end/src/lib/entry-inventory-claim.ts), shared by the S1 search and the S3 gate so they cannot drift (they had drifted the same way twice). Fixes three reachable faults, two found on live data:
+- **A confirmed booking could block nothing.** Reservations were fanned out to rooms via `RoomAssignment` rows, but assignments aren't created at confirmation — they arrive at pre-arrival/check-in. Until then the rooms live only on the `CommittedHold`, which leaves the query the moment its TTL lapses. ENT-20260727-0009 (S5, ACTIVE, reserved, 0 assignments, hold expired) was invisible to search — an overbooking hole, and the "some rooms aren't showing" report. `roomsClaimedByReservedEntry()` now falls back to the hold's `roomId` + `perNightBreakdown`, **ignoring the hold's expiry** (once a reservation exists the rooms are committed by the reservation, so a lapsed TTL must not un-block them).
+- **Finished bookings blocked forever.** Neither query filtered entry status. `stillHoldsInventory` excludes CANCELLED/EXPIRED/CLOSED; **PARKED deliberately still blocks** — a park is a pause, not a release.
+- **A confirmed booking could read as HELD.** S4 keeps the `CommittedHold` row, so the same room arrives twice (once RESERVED, once HOLD) and consumers key occupancy by room with last-write-wins, holds appended after reservations. The duplicate hold is now dropped per `(entryId, roomId)` — reservation is the stronger claim and the later stage.
+
 **Policy 26** ([p26-committed-hold-inventory-availability.ts](back_end/src/policies/11-committed-hold/p26-committed-hold-inventory-availability.ts)) now splits authority:
 - `enforceNoOverlappingBookingForCommittedHold` — commercial (is someone else booked on these dates?)
 - `enforceCommittedHoldRoomPhysicallyUsable` — physical (blocked / maintenance deadline inside the stay)
