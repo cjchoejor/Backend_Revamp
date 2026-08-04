@@ -16,7 +16,7 @@ import {
   type PerDateAvailabilityResult,
 } from "@/lib/api/availability";
 import { type SealPayload } from "./multi-room-select";
-import { RoomStatusTable, roomStatusRows, type RoomStatusRow } from "./room-status-table";
+import { RoomStatusTable, roomStatusRows, type RoomStatusRow, type SelectAllOutcome } from "./room-status-table";
 import { RoomSelectBoard } from "./room-select-board";
 import { listRooms } from "@/lib/api/rooms";
 import { getInquiry } from "@/lib/api/inquiries";
@@ -770,6 +770,34 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     });
   };
 
+  /**
+   * Says what a row's "Select all nights" click could NOT do.
+   *
+   * The click takes every night the room is free and leaves the rest — a guest wanting three
+   * nights in a room that is booked on the first still gets nights 2 and 3. That partial result
+   * has to be stated out loud, naming the dates and who holds them, or the operator reads a
+   * half-filled row as a whole-stay booking and promises a night the hotel has already sold.
+   */
+  const reportSelectAll = (row: RoomStatusRow, outcome: SelectAllOutcome) => {
+    const { picked, blocked, full } = outcome;
+    const label = (d: string) => formatDMY(d) || d;
+    const gaps = [
+      ...blocked.map((b) => `${label(b.date)} — ${b.status === "held" ? "held" : b.status === "blocked" ? "out of service" : "reserved"}${b.holder ? ` (${b.holder})` : ""}`),
+      ...full.map((d) => `${label(d)} — this night already has its ${numberOfRooms} room${numberOfRooms === 1 ? "" : "s"}`),
+    ];
+    if (gaps.length === 0) {
+      toast.success(`Room ${row.roomNumber} taken on all ${picked.length} night${picked.length === 1 ? "" : "s"}.`);
+      return;
+    }
+    const total = displayNights.length;
+    toast.warning(
+      picked.length > 0
+        ? `Room ${row.roomNumber} taken on ${picked.length} of ${total} night${total === 1 ? "" : "s"}.`
+        : `Room ${row.roomNumber} is not free on any night of this stay.`,
+      { description: `Not available: ${gaps.join(" · ")}`, duration: 9000 },
+    );
+  };
+
   // Guest-board selection (2026-07-31) — the S2 quote board's chips-into-bins interaction as an
   // alternative way to pick rooms: place the party, and the occupied rooms ARE the selection.
   // Writes the same canonical selection the table writes (base via onSelectionChange, overrides
@@ -1393,6 +1421,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   maxSelect={numberOfRooms}
                   onToggle={toggleTableRow}
                   onToggleCell={toggleNightCell}
+                  onSelectAllNights={reportSelectAll}
                   onCappedClick={() =>
                     toast.info(
                       nightsDiffer

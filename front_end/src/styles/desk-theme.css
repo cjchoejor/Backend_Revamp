@@ -2930,9 +2930,9 @@
     font-size: var(--rst-fs);
     border-radius: 4px;
   }
-  & .rst-wrap.dense .rst .rst-bookedby {
-    max-width: clamp(140px, 14vw, 230px);
-    font-size: var(--rst-fs);
+  & .rst-wrap.dense .rst .rst-selall-btn {
+    padding: 2px 7px;
+    font-size: calc(var(--rst-fs) * 0.92);
   }
   & .rst-wrap.dense .rst .rst-nightcount {
     font-size: calc(var(--rst-fs) * 0.75);
@@ -2952,41 +2952,46 @@
     max-width: clamp(76px, 8vw, 150px);
   }
 
-  /* "Booked by" attribution column — who holds an already-taken room. */
-  & .rst .rst-bookedby {
-    max-width: 230px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  /* "Select all" row action — replaced the old "Booked by" column, which could only name one
+     holder per row when a room is booked night by night. Per-night attribution lives in the
+     night cells (hover, or in-cell under "Show who holds each room"). */
+  & .rst .rst-selall {
+    text-align: center;
+    white-space: nowrap;
+  }
+  & .rst .rst-selall-btn {
+    padding: 3px 9px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line-2);
+    background: #fff;
     color: var(--ink-2);
-  }
-  & .rst .rst-bookedby-none {
-    color: var(--ink-3);
-  }
-  & .rst .rst-who {
+    font-size: 10.5px;
     font-weight: 600;
-    color: var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
   }
-  & .rst .rst-holdtag {
-    display: inline-block;
-    margin-left: 6px;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--warn-t);
-    border: 1px solid #d9a441;
-    color: #8a5a13;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    vertical-align: 1px;
+  & .rst .rst-selall-btn:hover:not(:disabled) {
+    border-color: var(--terra);
+    color: var(--terra);
+    background: var(--terra-t);
   }
-  & .rst .rst-more {
-    margin-left: 6px;
-    color: var(--ink-3);
-    font-size: 10px;
+  & .rst .rst-selall-btn.on {
+    border-color: var(--green);
+    background: var(--green-t);
+    color: var(--green-d);
   }
-  & .rst .rst-oos {
-    color: var(--stop);
-    font-size: 11px;
+  & .rst .rst-selall-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  /* How many nights the click could not take — the toast names them; this keeps the count
+     visible on the row afterwards. */
+  & .rst .rst-selall-gap {
+    display: block;
+    margin-top: 2px;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--warn);
   }
   & .rst .rst-nightcount {
     display: block;

@@ -71,7 +71,26 @@ export function roomStatusRows(
   return out.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
 }
 
-type CellStatus = "vacant" | "reserved" | "held" | "deficient" | "blocked";
+export type CellStatus = "vacant" | "reserved" | "held" | "deficient" | "blocked";
+
+/**
+ * What one "Select all nights" click actually achieved on a row.
+ *
+ * The click is deliberately partial: a room booked on night 1 but free on nights 2–3 takes the
+ * two free nights rather than refusing outright, because that is the booking the operator is
+ * trying to build. The parent reports the gaps — the caller names the dates and who holds them,
+ * so a partial result is never mistaken for a whole-stay pick.
+ */
+export type SelectAllOutcome = {
+  /** Nights the room was just added to. */
+  picked: string[];
+  /** Nights it was already assigned to before the click. */
+  alreadyPicked: string[];
+  /** Nights it cannot take, and why — these are what the popup names. */
+  blocked: { date: string; status: CellStatus; holder?: string }[];
+  /** Nights already carrying their full complement of rooms. */
+  full: string[];
+};
 
 const CELL_LABEL: Record<CellStatus, string> = {
   vacant: "Vacant",
@@ -115,12 +134,6 @@ function occupantName(o: OccupantLike): string {
   return o.agentName?.trim() || guest || "Guest";
 }
 
-/** Compact one-liner for the "Booked by" cell: who + reference. */
-function occupantSummary(o: OccupantLike): string {
-  const ref = o.entryReferenceNumber?.trim();
-  return ref ? `${occupantName(o)} · ${ref}` : occupantName(o);
-}
-
 /**
  * Full detail for the hover tooltip — everything the backend resolved, so the operator can
  * call the holder without leaving the availability screen.
@@ -151,6 +164,7 @@ export function RoomStatusTable({
   maxSelect,
   onToggle,
   onToggleCell,
+  onSelectAllNights,
   onCappedClick,
   disabled,
   dense,
@@ -169,6 +183,9 @@ export function RoomStatusTable({
   onToggle: (row: RoomStatusRow) => void;
   /** Toggle a room for one night only. */
   onToggleCell?: (row: RoomStatusRow, night: string) => void;
+  /** Reports what a "Select all nights" click managed to take, so the parent can say what it
+   *  could not — which dates are reserved or held, and by whom. */
+  onSelectAllNights?: (row: RoomStatusRow, outcome: SelectAllOutcome) => void;
   /** Fired when a pickable room is clicked while the selection is already full — the parent
    *  explains (toast) instead of the click dying silently. */
   onCappedClick?: () => void;
@@ -219,9 +236,12 @@ export function RoomStatusTable({
     row.bucket !== "unavailable" && nights.every((n) => !occupiedByNight.get(n)?.has(row.roomId));
 
   const anyExtBeds = rows.some((r) => r.extBeds != null);
-  // Only surface the attribution column when something in this result set is actually taken —
-  // an all-vacant search shouldn't grow a column of dashes.
-  const anyOccupancy = rows.some((r) => (r.occupiedBy?.length ?? 0) > 0 || !!r.blockedReason);
+  // Replaced the old "Booked by" column (2026-08-04, operator ruling). That column named ONE
+  // holder per row, but a room is booked night by night — one guest can hold the first week and
+  // another the next, so a single row-level name was wrong as often as it was right. The exact
+  // per-night attribution was never lost: it lives in the night cells themselves, on hover and
+  // in-cell under "Show who holds each room". The column is now the row action instead.
+  const showSelectAll = nights.length > 0 && !!onToggleCell;
 
   /** Effective rooms on one night — the parent supplies override-or-base per night. */
   const nightSel = (n: string): string[] => perNightSel?.[n] ?? selectedIds;
@@ -242,7 +262,7 @@ export function RoomStatusTable({
   // between Type and Booked by, and leaving a gap in the middle would let it slide underneath.
   const pinWidths: number[] = [dense ? 54 : 64, dense ? 92 : 110];
   if (anyExtBeds) pinWidths.push(dense ? 48 : 58);
-  if (anyOccupancy) pinWidths.push(dense ? 150 : 190);
+  if (showSelectAll) pinWidths.push(dense ? 84 : 96);
   const pinLefts = pinWidths.map((_, i) => pinWidths.slice(0, i).reduce((a, b) => a + b, 0));
   const pin = (i: number, extra?: CSSProperties): CSSProperties => ({
     left: pinLefts[i],
@@ -270,9 +290,13 @@ export function RoomStatusTable({
                 Ext. Beds
               </th>
             )}
-            {anyOccupancy && (
-              <th className={pinCls(anyExtBeds ? 3 : 2)} style={pin(anyExtBeds ? 3 : 2)}>
-                Booked by
+            {showSelectAll && (
+              <th
+                className={pinCls(anyExtBeds ? 3 : 2)}
+                style={pin(anyExtBeds ? 3 : 2, { textAlign: "center" })}
+                title="Take every night this room is free — nights someone else holds are reported, not silently skipped"
+              >
+                Select all
               </th>
             )}
             {nights.map((n, i) => {
@@ -353,13 +377,63 @@ export function RoomStatusTable({
                     {row.extBeds ?? "—"}
                   </td>
                 )}
-                {anyOccupancy && (
-                  <BookedByCell
-                    row={row}
-                    className={pinCls(anyExtBeds ? 3 : 2)}
-                    style={pin(anyExtBeds ? 3 : 2)}
-                  />
-                )}
+                {showSelectAll && (() => {
+                  // Sort every night of the stay into what this room can and cannot take. Done
+                  // from current props, which is safe in a loop: assigning a room on one night
+                  // never changes another night's occupancy or its remaining capacity.
+                  const picked: string[] = [];
+                  const alreadyPicked: string[] = [];
+                  const blocked: SelectAllOutcome["blocked"] = [];
+                  const full: string[] = [];
+                  for (const n of nights) {
+                    const { status, occ } = cellStatus(row, n);
+                    if (status !== "vacant" && status !== "deficient") {
+                      blocked.push({ date: n, status, holder: occ ? occupantName(occ) : row.blockedReason ?? undefined });
+                    } else if (nightSel(n).includes(row.roomId)) {
+                      alreadyPicked.push(n);
+                    } else if (maxSelect > 1 && nightSel(n).length >= maxSelect) {
+                      full.push(n);
+                    } else {
+                      picked.push(n);
+                    }
+                  }
+                  // Once every night it CAN take is taken, the button's job flips to undoing it —
+                  // a permanently inert "Select all" would be the only dead control on the row.
+                  const takenAll = picked.length === 0 && alreadyPicked.length > 0;
+                  const nothingToDo = picked.length === 0 && alreadyPicked.length === 0;
+                  return (
+                    <td className={`rst-selall ${pinCls(anyExtBeds ? 3 : 2)}`} style={pin(anyExtBeds ? 3 : 2)}>
+                      <button
+                        type="button"
+                        className={`rst-selall-btn${takenAll ? " on" : ""}`}
+                        disabled={disabled || nothingToDo}
+                        title={
+                          nothingToDo
+                            ? `Room ${row.roomNumber} is not free on any night of this stay`
+                            : takenAll
+                              ? `Remove room ${row.roomNumber} from all ${alreadyPicked.length} of its nights`
+                              : `Take room ${row.roomNumber} on ${picked.length} free night${picked.length === 1 ? "" : "s"}` +
+                                (blocked.length > 0 ? ` — ${blocked.length} night${blocked.length === 1 ? " is" : "s are"} already taken` : "")
+                        }
+                        onClick={(e) => {
+                          // The row behind toggles the whole stay; this must stay its own action.
+                          e.stopPropagation();
+                          if (disabled) return;
+                          const nightsToFlip = takenAll ? alreadyPicked : picked;
+                          nightsToFlip.forEach((n) => onToggleCell?.(row, n));
+                          if (!takenAll) onSelectAllNights?.(row, { picked, alreadyPicked, blocked, full });
+                        }}
+                      >
+                        {takenAll ? "Clear" : "Select all"}
+                      </button>
+                      {blocked.length > 0 && !nothingToDo && (
+                        <span className="rst-selall-gap" title={blocked.map((b) => `${formatDMY(b.date) || b.date} — ${CELL_LABEL[b.status]}${b.holder ? ` (${b.holder})` : ""}`).join("\n")}>
+                          {blocked.length} taken
+                        </span>
+                      )}
+                    </td>
+                  );
+                })()}
                 {nights.map((n) => {
                   const { status, label, occ } = cellStatus(row, n);
                   const selectable = status === "vacant" || status === "deficient";
@@ -396,7 +470,9 @@ export function RoomStatusTable({
                     <td key={n} style={{ textAlign: "center" }}>
                       <span
                         className={`rst-chip ${status}${showNames && occ ? " named" : ""}`}
-                        title={occ ? occupantDetail(occ) : undefined}
+                        // The out-of-service reason used to live in the removed "Booked by"
+                        // column; it belongs on the cell that is actually blocked.
+                        title={occ ? occupantDetail(occ) : row.blockedReason ?? undefined}
                       >
                         {cellText(status, label, occ)}
                       </span>
@@ -412,46 +488,3 @@ export function RoomStatusTable({
   );
 }
 
-/**
- * "Booked by" cell — names whoever holds the room over the searched window. Reservations and
- * live committed holds both appear; holds carry a "Held" tag because they can still expire and
- * free the room up, which changes what the operator can promise. Rooms that are simply out of
- * service show the maintenance reason instead — nobody booked those.
- */
-function BookedByCell({
-  row,
-  className = "",
-  style,
-}: {
-  row: RoomStatusRow;
-  className?: string;
-  style?: CSSProperties;
-}) {
-  const occupants = row.occupiedBy ?? [];
-  if (occupants.length === 0) {
-    if (row.blockedReason) {
-      return (
-        <td className={`rst-bookedby ${className}`} style={style}>
-          <span className="rst-oos" title={row.blockedReason}>
-            Out of service — {row.blockedReason}
-          </span>
-        </td>
-      );
-    }
-    return (
-      <td className={`rst-bookedby rst-bookedby-none ${className}`} style={style}>
-        —
-      </td>
-    );
-  }
-
-  const [first, ...rest] = occupants;
-  const fullDetail = occupants.map(occupantDetail).join("\n\n");
-  return (
-    <td className={`rst-bookedby ${className}`} style={style} title={fullDetail}>
-      <span className="rst-who">{occupantSummary(first)}</span>
-      {first.source === "HOLD" && <span className="rst-holdtag">Held</span>}
-      {rest.length > 0 && <span className="rst-more">+{rest.length} more</span>}
-    </td>
-  );
-}
