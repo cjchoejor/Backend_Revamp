@@ -535,6 +535,37 @@ Two new domain services drive the child-policy runtime.
 
 **[`capacity-validation-service.ts`](back_end/src/services/domain/capacity-validation-service.ts)** — `validateCapacity(prisma, { roomTypeId?, adults, childAges })` returns issues with codes: `OVER_MAX_OCCUPANCY`, `OVER_MAX_CHILDREN`, `TOO_FEW_ADULTS`, `ADULT_CHILD_RATIO_EXCEEDED`, `UNACCOMPANIED_MINOR`, `CHILD_AGE_ABOVE_LEGAL_MINOR`, `NO_ROOM_TYPE`. Severity `BLOCK` or `WARN`. Two independent age cuts run: pricing bands (child-policy `ageBands`) for bed/meal/room-capacity math; legal age (`unaccompaniedMinor.minimumAge`) for supervision + responsibility. Called from `s1EntryService.createEntry` + `updateEntryIntakeFields` — BLOCK issues throw `ValidationError`.
 
+### Deficiency reporting — operational, verifiable, and covers spaces (2026-08-04)
+
+Reporting a fault used to be L4-only on `/admin/rooms`, so a broken room stayed sellable until an admin was available. It is now an operational surface with a two-tier authority model, and spaces are reportable too.
+
+**Two rules drive everything** (see [`deficient-condition-service.ts`](back_end/src/services/domain/deficient-condition-service.ts)):
+
+1. **The target leaves service the moment a fault is reported, before verification.** A genuinely broken room must never stay sellable overnight waiting for a supervisor. Verification answers "is this fault real?", not "may it take effect?". Rejecting returns it to service at once.
+2. **L2+ reports are self-verified.** They *are* the verifying authority; making them confirm their own report is ceremony. Only L1 reports land `PENDING_VERIFICATION`.
+
+`verificationStatus` (PENDING_VERIFICATION / VERIFIED / REJECTED) is deliberately independent of `status` (UNRESOLVED / RESOLVED): one asks whether the fault is real, the other whether it is fixed.
+
+**Schema** (migration `20260804120000_deficient_spaces_and_verification`): `DeficientConditionRecord.roomId` became nullable and gained `spaceId`, with a DB check constraint `deficient_target_xor` — exactly one target, enforced in the database because a record pointing at neither would silently vanish from every per-target query. `Space` gained `isDeficient`. Pre-existing rows were backfilled `VERIFIED` (they were all raised by L4, the verifying authority).
+
+**Routes** ([deficient-conditions/router.ts](back_end/src/routes/deficient-conditions/router.ts)):
+- `POST /api/rooms/:id/deficient-conditions` · `POST /api/spaces/:id/deficient-conditions` — **L1+**
+- `POST /api/deficient-conditions/:id/verify` — **L2+**, `{ accept, notes }`; a reason is required to reject
+- `GET /api/deficient-conditions/pending-verification` — the supervisor queue
+- `PATCH /api/deficient-conditions/:id/finalize` — unchanged L1 resolve, now delegating flag recomputation to the service
+
+**`isDeficient` is derived, never set directly.** `syncTargetFlag` recomputes it from outstanding reports, so resolving one of two open faults correctly leaves the room out of service — the old inline finalize set `isDeficient = false` unconditionally and would have released it.
+
+A deficient space is refused by `space-allocation-service`, mirroring how a deficient room leaves the booking pool.
+
+**UI**: one shared component, [`deficiency-panel.tsx`](front_end/src/components/deficiency/deficiency-panel.tsx), opened as a dialog from `/desk/rooms` (click a room tile), the new `/desk/spaces`, and inline on `/admin/spaces` → Faults. Shared deliberately so the surfaces can't drift on the rules.
+
+**`GET /api/spaces` (L1+)** was added in [availability/router.ts](back_end/src/routes/availability/router.ts) mirroring `/api/rooms`. `/api/admin/spaces` is L4-only — right for editing the inventory, but it left the desk unable to *see* spaces, so front desk could not report a fault against one. The operational list is read-only; create/rename/delete stay on the admin surface.
+
+Both desk boards now distinguish **"request failed"** from **"none configured"**. They previously rendered an outage as "No rooms configured yet", which reads as a setup problem and sends people hunting in the admin console for something that isn't wrong.
+
+⚠ **Any component shared between `/desk/*` and `/admin/*` must be styled inline.** `admin-theme.css` is imported by the admin layout only, so `admin-input` / `admin-btn` / `admin-panel` / `admin-tag` render as *nothing* on the desk; the desk theme's classes (`.scrim`, `.modal`, `.card`, `.btn`) are nested under `.desk-root` in `desk-theme.css` and are equally invisible under `/admin/*`. Inline styles are the only thing both surfaces render identically. The desk's `.modal` also caps at `max-width: 450px` with `overflow: hidden` — override both when embedding anything larger than a confirm prompt.
+
 ### Capacity lives on RoomType, never on Room (2026-08-04)
 
 Occupancy is a property of the room **type**. `RoomType.standardCapacity` / `maxCapacity` / `maxChildren` / `requiredAccompanyingAdults` / `maxExtraBeds` are what `capacity-validation-service` enforces, and what the allowed-room-count envelope is derived from.

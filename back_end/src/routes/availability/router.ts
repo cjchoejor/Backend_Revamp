@@ -46,6 +46,35 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
   }
 });
 
+/**
+ * Operational space list (L1+), mirroring `/rooms`.
+ *
+ * `/admin/spaces` is L4-only — correct for editing the inventory, but the desk needs to SEE
+ * spaces to report faults against them, and front desk are not admins. Read-only: creating,
+ * renaming and deleting spaces stay on the admin surface.
+ */
+availabilityRouter.get("/spaces", requireActorLevel("L1"), async (_req, res, next) => {
+  try {
+    const items = await prisma.space.findMany({
+      orderBy: { code: "asc" },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        spaceType: true,
+        capacity: true,
+        defaultCapacity: true,
+        isAvailable: true,
+        isEventInProgress: true,
+        isDeficient: true,
+      },
+    });
+    res.json({ items, count: items.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
 availabilityRouter.get("/availability/configurations/:id", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const out = await s1AvailabilityService.getConfiguration(prisma, req.params.id);

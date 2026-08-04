@@ -1164,11 +1164,16 @@ model Space {
   expansionLinks        Json?
   isAvailable           Boolean  @default(true)
   isEventInProgress     Boolean  @default(false)
+  /// Mirrors Room.isDeficient — set the moment a fault is reported (before verification) and
+  /// cleared when every unresolved fault on the space is resolved or rejected. A deficient
+  /// space is refused by space allocation, the same way a deficient room leaves the pool.
+  isDeficient           Boolean  @default(false)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @default(now()) @updatedAt
 
-  allocations      SpaceAllocation[]
-  speculativeHolds SpeculativeHold[]
+  allocations         SpaceAllocation[]
+  speculativeHolds    SpeculativeHold[]
+  deficientConditions DeficientConditionRecord[]
 
   @@map("spaces")
 }
@@ -1288,9 +1293,35 @@ model RoomClaimStateEvent {
   @@map("room_claim_state_events")
 }
 
+/**
+ * A fault reported against a room OR a space.
+ *
+ * 2026-08-04: two changes.
+ *
+ * 1. Spaces are now reportable. `roomId` became nullable and `spaceId` was added — EXACTLY ONE
+ *    must be set, enforced by a DB check constraint (`deficient_target_xor`) as well as in the
+ *    service, because a record pointing at neither (or both) would silently drop out of every
+ *    per-target query.
+ *
+ * 2. Reports are verifiable. Front desk (L1) can now raise a fault without waiting for a
+ *    supervisor, so reports need a confirmation step: an L1 report lands
+ *    `PENDING_VERIFICATION`, and L2+ either confirms or rejects it. A report raised BY an L2+
+ *    is `VERIFIED` on arrival — they are the verifying authority, so asking them to confirm
+ *    their own report would be theatre.
+ *
+ * `verificationStatus` is deliberately independent of `status` (UNRESOLVED/RESOLVED):
+ * verification is about "is this fault real?", resolution about "has it been fixed?". A fault
+ * can be verified and unresolved (confirmed, awaiting repair), or resolved while still pending
+ * verification (front desk fixed it themselves before anyone checked).
+ *
+ * The flagged target goes out of service the MOMENT the report is raised, before verification —
+ * a genuinely broken room must never stay sellable overnight waiting for a supervisor. A
+ * rejected report puts it straight back into service.
+ */
 model DeficientConditionRecord {
   id                 String                     @id @default(uuid())
-  roomId             String
+  roomId             String?
+  spaceId            String?
   category           DeficientConditionCategory
   description        String
   detectedAt         DateTime
@@ -1301,9 +1332,26 @@ model DeficientConditionRecord {
   resolutionNotes    String?
   status             String                     @default("UNRESOLVED")
 
-  room Room @relation(fields: [roomId], references: [id])
+  /// PENDING_VERIFICATION when raised by L1; VERIFIED when raised by L2+ or confirmed by them.
+  verificationStatus DeficientVerificationStatus @default(PENDING_VERIFICATION)
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  /// Why an L2+ rejected the report — required on reject so the reporter gets an explanation.
+  verificationNotes  String?
 
+  room  Room?  @relation(fields: [roomId], references: [id])
+  space Space? @relation(fields: [spaceId], references: [id])
+
+  @@index([roomId, status])
+  @@index([spaceId, status])
+  @@index([verificationStatus])
   @@map("deficient_condition_records")
+}
+
+enum DeficientVerificationStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
 }
 
 // --- Holds, Quotations -------------------------------------------------
