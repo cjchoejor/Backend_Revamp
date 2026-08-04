@@ -1,4 +1,9 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import {
+  reservedEntryRoomsSelect,
+  roomsClaimedByReservedEntry,
+  stillHoldsInventory,
+} from "./entry-inventory-claim.js";
 
 /**
  * A booking that already owns a room across some date range.
@@ -63,7 +68,10 @@ export async function findRoomBookingConflicts(
         frozenCheckInDate: { lt: input.checkOut },
         frozenCheckOutDate: { gt: input.checkIn },
         NOT: { entryId: input.excludeEntryId },
-        entry: { roomAssignments: { some: { roomId: { in: input.roomIds } } } },
+        // Not narrowed to entries with a matching RoomAssignment any more: a reservation made at
+        // S4 has none until pre-arrival, and its rooms live on the committed hold until then.
+        // `roomsClaimedByReservedEntry` resolves both, and the room filter happens below.
+        entry: { ...stillHoldsInventory },
       },
       select: {
         entryId: true,
@@ -73,7 +81,7 @@ export async function findRoomBookingConflicts(
           select: {
             inquiryId: true,
             guestProfile: { select: { firstName: true, lastName: true } },
-            roomAssignments: { select: { roomId: true } },
+            ...reservedEntryRoomsSelect,
           },
         },
       },
@@ -85,6 +93,7 @@ export async function findRoomBookingConflicts(
         NOT: { entryId: input.excludeEntryId },
         expiresAt: { gt: new Date() },
         entry: {
+          ...stillHoldsInventory,
           checkInDate: { lt: input.checkOut },
           checkOutDate: { gt: input.checkIn },
         },
@@ -106,12 +115,14 @@ export async function findRoomBookingConflicts(
 
   const conflicts: RoomBookingConflict[] = [];
 
-  // A reservation blocks every room assigned to its entry — but only the ones we asked about.
+  // A reservation blocks every room its entry claims — but only the ones we asked about.
+  const reservedKeys = new Set<string>();
   for (const r of reservations) {
-    for (const a of r.entry?.roomAssignments ?? []) {
-      if (!roomIdSet.has(a.roomId)) continue;
+    for (const roomId of roomsClaimedByReservedEntry(r.entry)) {
+      if (!roomIdSet.has(roomId)) continue;
+      reservedKeys.add(`${r.entryId}:${roomId}`);
       conflicts.push({
-        roomId: a.roomId,
+        roomId,
         source: "RESERVED",
         entryId: r.entryId,
         entryReferenceNumber: r.entry?.inquiryId ?? null,
@@ -124,6 +135,9 @@ export async function findRoomBookingConflicts(
 
   for (const h of holds) {
     if (!h.roomId || !h.entry?.checkInDate || !h.entry?.checkOutDate) continue;
+    // A confirmed booking keeps its hold row, so the same (entry, room) can appear twice. It is
+    // one conflict, and the reservation is the stronger claim — don't report it as held too.
+    if (reservedKeys.has(`${h.entryId}:${h.roomId}`)) continue;
     conflicts.push({
       roomId: h.roomId,
       source: "HOLD",

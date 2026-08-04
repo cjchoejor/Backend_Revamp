@@ -7,6 +7,11 @@ import { enforceAvailabilityQueryParamsForS1 } from "../../policies/01-availabil
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { resolveIndicativePricingForS1Availability } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s1-indicative.js";
 import { resolveAgentRate } from "../../lib/agent-rate-resolution.js";
+import {
+  reservedEntryRoomsSelect,
+  roomsClaimedByReservedEntry,
+  stillHoldsInventory,
+} from "../../lib/entry-inventory-claim.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
 import {
   createQuotedSpaceAllocationForAvailabilityQuery,
@@ -106,6 +111,8 @@ export async function runAvailabilityEngineForEntry(
         frozenCheckInDate: { lt: checkOut },
         frozenCheckOutDate: { gt: checkIn },
         NOT: { entryId: entry.id },
+        // A cancelled / expired / checked-out booking has let its rooms go.
+        entry: { ...stillHoldsInventory },
       },
       select: {
         frozenCheckInDate: true,
@@ -114,7 +121,7 @@ export async function runAvailabilityEngineForEntry(
         entry: {
           select: {
             ...contactSelect,
-            roomAssignments: { select: { roomId: true } },
+            ...reservedEntryRoomsSelect,
           },
         },
       },
@@ -126,6 +133,7 @@ export async function runAvailabilityEngineForEntry(
         NOT: { entryId: entry.id },
         expiresAt: { gt: new Date() },
         entry: {
+          ...stillHoldsInventory,
           checkInDate: { lt: checkOut },
           checkOutDate: { gt: checkIn },
         },
@@ -209,21 +217,31 @@ export async function runAvailabilityEngineForEntry(
     };
   };
 
-  // Fan out reservations to (roomId, start, end, contact-context) tuples via room assignments.
+  // Fan out reservations to (roomId, start, end, contact-context) tuples. Rooms come from the
+  // assignments once they exist, and from the committed hold before that — a reservation made
+  // at S4 has no assignments until pre-arrival, and without the fallback its rooms went
+  // unblocked the moment the hold's TTL lapsed.
+  const reservedBlockages = reservations.flatMap((r) =>
+    roomsClaimedByReservedEntry(r.entry).map((roomId) => ({
+      roomId,
+      startDate: r.frozenCheckInDate,
+      endDate: r.frozenCheckOutDate,
+      source: "RESERVED" as const,
+      entryId: r.entryId,
+      entryReferenceNumber: r.entry?.inquiryId ?? null,
+      ...contextFromEntry(r.entry),
+    })),
+  );
+  // A confirmed booking keeps its CommittedHold row, so the same room can arrive twice — once
+  // reserved, once held. Consumers key occupancy by room and take the last writer, so an
+  // unfiltered hold would relabel a confirmed booking as "Held". Reservation is the stronger
+  // claim and the later stage, so it wins and the duplicate hold is dropped.
+  const reservedRoomIds = new Set(reservedBlockages.map((b) => `${b.entryId}:${b.roomId}`));
   const roomBlockages = [
-    ...reservations.flatMap((r) =>
-      (r.entry?.roomAssignments ?? []).map((a) => ({
-        roomId: a.roomId,
-        startDate: r.frozenCheckInDate,
-        endDate: r.frozenCheckOutDate,
-        source: "RESERVED" as const,
-        entryId: r.entryId,
-        entryReferenceNumber: r.entry?.inquiryId ?? null,
-        ...contextFromEntry(r.entry),
-      })),
-    ),
+    ...reservedBlockages,
     ...committedHolds
       .filter((h) => h.roomId && h.entry?.checkInDate && h.entry?.checkOutDate)
+      .filter((h) => !reservedRoomIds.has(`${h.entryId}:${h.roomId}`))
       .map((h) => ({
         roomId: h.roomId!,
         startDate: h.entry!.checkInDate!,
