@@ -28,6 +28,7 @@ import { requireActiveMode, isTransitionAllowedByMode } from "../lib/mode-regist
 import { evaluateAutoFulfilment, type EntryFacts } from "../lib/mode-auto-fulfilment.js";
 import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
+import { supersedeAcceptedQuotationForBackflowToS2 } from "../lib/supersede-accepted-quotation-on-backflow.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
@@ -153,6 +154,24 @@ async function runBackflow(
           sealedBy: input.actor.actorId,
           notes: `BACKFLOW_${input.fromStage}_TO_${input.toStage}`,
         },
+      });
+    }
+
+    // 3b. Landing back at S2 means the agreed price is being renegotiated, so the outgoing
+    // segment's ACCEPTED quotation must stop counting as live. Leaving it accepted gave the
+    // booking two simultaneous agreed prices, and since versionNumber restarts per segment,
+    // readers that sort by version then picked an arbitrary one — the invoice PDF printed a
+    // superseded segment's price. Applies to every backflow whose target is S2
+    // (RATE_REVISION from S4/S7, COMPLAINT_RESOLUTION), not just S3→S2.
+    if (input.toStage === Stage.S2) {
+      await supersedeAcceptedQuotationForBackflowToS2(tx, {
+        entryId: entry.id,
+        segmentId: currentSeg.id,
+        actorId: input.actor.actorId,
+        actorLevel: input.actor.actorLevel,
+        reason: `BACKFLOW_${input.modeKey}_${input.fromStage}_TO_${input.toStage}`,
+        inquiryId: entry.inquiryId,
+        now,
       });
     }
 

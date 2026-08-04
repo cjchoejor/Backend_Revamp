@@ -74,7 +74,13 @@ export async function generateOrLoadInvoicePdf(
           guestProfile: true,
           reservation: true,
           inquiry: { include: { travelAgent: true, corporateAccount: true } },
-          quotations: { where: { state: "ACCEPTED" }, orderBy: { versionNumber: "desc" }, take: 1 },
+          // Ordered by createdAt, NOT versionNumber. versionNumber restarts at 1 for each new
+          // segment, so on any booking that flowed back to S2 to renegotiate, "highest version"
+          // is not "most recent" — this picked an older segment's quote and printed its price on
+          // the guest's invoice (ENT-20260728-0014: printed 1,747.52 for an agreed 1,865.33).
+          // Backflows now supersede the outgoing accepted quote, but ordering by createdAt keeps
+          // this correct for rows created before that fix.
+          quotations: { where: { state: "ACCEPTED" }, orderBy: { createdAt: "desc" }, take: 1 },
         },
       },
     },

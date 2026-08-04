@@ -181,9 +181,11 @@ export async function postCharge(
   //   3. Accepted quotation's commercialTerms.currency (S2 negotiated it — includes agent rate cards).
   //   4. Existing folio line currency (majority) — inherit from what's already posted.
   //   5. Fallback: BTN.
+  // Ordered by createdAt, NOT versionNumber: versionNumber restarts at 1 per segment, so after
+  // a backflow to S2 the highest version can belong to an older, superseded segment.
   const acceptedQ = await prisma.quotation.findFirst({
     where: { entryId: input.entryId, state: "ACCEPTED" as any },
-    orderBy: { versionNumber: "desc" },
+    orderBy: { createdAt: "desc" },
     select: { currency: true, commercialTerms: true },
   });
   const quotationCurrency =

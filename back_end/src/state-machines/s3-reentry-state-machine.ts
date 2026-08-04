@@ -7,6 +7,7 @@ import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.
 import { computeReEntryConsequences } from "../engines/re-entry-consequence-engine.js";
 import { enforceS3ReEntryAuthority } from "../policies/01-availability/p01-reentry-authority.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
+import { supersedeAcceptedQuotationForBackflowToS2 } from "../lib/supersede-accepted-quotation-on-backflow.js";
 
 export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { reason?: string }) {
   enforceS3ReEntryAuthority({ actorLevel: actor.actorLevel });
@@ -21,6 +22,23 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
   const updatedEntry = await prisma.$transaction(async (tx) => {
     await computeReEntryConsequences(tx as any, { entryId, fromStage: Stage.S3, toStage: Stage.S2, reason: input?.reason ?? "S3_TO_S2", actorId: actor.actorId });
     await tx.segment.update({ where: { id: currentSeg.id }, data: { sealedAt: now, sealedBy: actor.actorId, notes: "REENTRY_S3_TO_S2" } });
+
+    // Retire the outgoing segment's ACCEPTED quotation. Coming back to S2 means the agreed
+    // price is being renegotiated, so leaving it ACCEPTED gave the booking two live agreed
+    // prices at once — and because versionNumber restarts per segment, downstream readers that
+    // sort by version then picked an arbitrary one (the invoice PDF printed a superseded
+    // segment's price). It also left the desk stuck: the old quote could neither be sent nor
+    // superseded through the normal S2 paths.
+    await supersedeAcceptedQuotationForBackflowToS2(tx, {
+      entryId,
+      segmentId: currentSeg.id,
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      reason: "REENTRY_S3_TO_S2",
+      inquiryId: (existingEntry as { inquiryId?: string | null }).inquiryId ?? null,
+      now,
+    });
+
     await tx.segment.create({ data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S2, startedAt: now, createdBy: actor.actorId, notes: input?.reason ?? "REENTRY_S3_TO_S2" } });
 
     const s3Dwell = await tx.stageDwellRecord.findFirst({

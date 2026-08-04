@@ -38,12 +38,27 @@ export function moneyOrDash(amount: string | number | null | undefined, currency
   return amount == null ? "—" : money(amount, currency);
 }
 
-/** The quotation that currently represents the offer (latest, not superseded). */
+/**
+ * The quotation that currently represents the offer (latest, not superseded).
+ *
+ * Scoped to the CURRENT segment. A booking that flowed back to S2 to renegotiate opens a new
+ * segment, and `versionNumber` restarts at 1 there — so sorting by version across every segment
+ * made "highest version" stop meaning "most recent" and surfaced an older segment's price.
+ * Seen on ENT-20260728-0014: the desk showed 1,747.52 from a sealed segment while the live
+ * agreed price was 1,865.33.
+ *
+ * Falls back to all segments only when the current one has no quotation yet (e.g. immediately
+ * after a backflow, before the replacement quote is drafted) so the desk still shows the
+ * previous offer as context rather than a blank.
+ */
 export function activeQuotation(entry: EntryDetail): QuotationSummary | null {
   const qs = entry.quotations ?? [];
   if (qs.length === 0) return null;
-  const live = qs.filter((q) => q.state !== "SUPERSEDED");
-  const pool = live.length ? live : qs;
+  const currentSegmentId = entry.segments?.[0]?.id;
+  const inSegment = currentSegmentId ? qs.filter((q) => q.segmentId === currentSegmentId) : qs;
+  const scoped = inSegment.length ? inSegment : qs;
+  const live = scoped.filter((q) => q.state !== "SUPERSEDED");
+  const pool = live.length ? live : scoped;
   return [...pool].sort((a, b) => (b.versionNumber ?? 0) - (a.versionNumber ?? 0))[0] ?? null;
 }
 

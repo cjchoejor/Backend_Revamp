@@ -386,6 +386,18 @@ The 13 spec-mandated regression paths (SIG-S2 §1.3, SIG-S4 §3.1, SIG-S5 §1.3,
 
 **What still isn't there**: the frontend (testing UI) doesn't have buttons for the 9 new backflows yet. They're callable via API; front-desk-facing UI is a follow-up. Same for the friend's real production frontend — endpoints are stable so both can wire whenever.
 
+### Invariant: at most ONE live ACCEPTED quotation per entry (2026-08-04)
+
+`Quotation.versionNumber` **restarts at 1 for every new segment**, so "highest version" is not "most recent" once a booking has more than one segment. Any code that resolves "the accepted quotation" must therefore scope by `segmentId`, or order by `createdAt` — never by `versionNumber`.
+
+Backflows into S2 used to seal the outgoing segment without retiring its ACCEPTED quotation, leaving several simultaneous agreed prices. ENT-20260728-0014 accumulated three (1,767.15 / 1,747.52 / 1,865.33). Consequences seen in real data: the invoice PDF printed 1,747.52 for a booking whose agreed price was 1,865.33, and the desk displayed the same stale figure. It also produced the operator-visible symptom — after re-entering S2 the old quote could neither be sent (`Only DRAFT quotations can be sent`) nor superseded (`Cannot supersede an ACCEPTED quotation`).
+
+**Helper**: [`lib/supersede-accepted-quotation-on-backflow.ts`](back_end/src/lib/supersede-accepted-quotation-on-backflow.ts) — `supersedeAcceptedQuotationForBackflowToS2(tx, {...})`, called inside the backflow transaction. Emits `QUOTATION.SUPERSEDED_ON_BACKFLOW` with the retired quotes and amounts. Wired into **both** backflow paths: `initiateS3ToS2Backflow` and the unified `runBackflow` (which fires for any `toStage === S2`, i.e. RATE_REVISION from S4/S7 and COMPLAINT_RESOLUTION).
+
+**Readers fixed** to order by `createdAt` rather than `versionNumber`: [invoice-pdf-service.ts](back_end/src/services/domain/invoice-pdf-service.ts) and [s7-folio-lines-service.ts](back_end/src/services/domain/s7-folio-lines-service.ts). `s4-confirmation-service` was already correct (filters on `segmentId`) — copy that pattern for new code. Frontend `activeQuotation()` ([front_end/src/lib/desk/workspace.ts](front_end/src/lib/desk/workspace.ts)) now scopes to the current segment, falling back to all segments only when the current one has no quotation yet.
+
+**Backlog cleanup**: [`scripts/fix-stale-accepted-quotations.ts`](back_end/scripts/fix-stale-accepted-quotations.ts) retires ACCEPTED quotes stranded on sealed, non-newest segments. Dry run by default, `--commit` to write; already applied (4 rows across 3 entries). Safe because a booking that only moved forward has a single segment and is never matched.
+
 ### Cancellation entry points
 
 | Cancel type | Service function | Route | Stage gate | Authority |
