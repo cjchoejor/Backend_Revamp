@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Briefcase,
   Building2,
   ChevronLeft,
@@ -422,21 +423,49 @@ function PartySearch({
   const { session } = useSession();
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
+  // The list is a dropdown, not a permanent block: it opens on focus and closes on click-away,
+  // so it can show the whole roster without pushing the rest of the intake form down the page.
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(q), 300);
+    const t = setTimeout(() => setDebounced(q), 250);
     return () => clearTimeout(t);
   }, [q]);
 
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const term = debounced.trim();
+  // No minimum term: an empty query is a real request meaning "list them all", which is what
+  // makes this browsable for an operator who knows the agency by sight but not by spelling.
   const results = useQuery({
-    queryKey: ["desk-party-lookup", kind, debounced],
+    queryKey: ["desk-party-lookup", kind, term],
     queryFn: () =>
       kind === "TRAVEL_AGENT"
-        ? searchTravelAgentsLookup(session!, debounced)
-        : searchCorporateAccountsLookup(session!, debounced),
-    enabled: !!session && debounced.trim().length >= 2,
+        ? searchTravelAgentsLookup(session!, term)
+        : searchCorporateAccountsLookup(session!, term),
+    enabled: !!session && open,
   });
 
   const noun = kind === "TRAVEL_AGENT" ? "travel agent" : "corporate account";
+  const matches = results.data?.matches ?? [];
+  // Mirrors PARTY_LOOKUP_LIMIT in back_end/src/lib/admin/party-lookup.ts. Landing exactly on it
+  // means the roster was cut, so the count line says so instead of implying a complete list.
+  const atCap = matches.length >= 500;
 
   if (party) {
     return (
@@ -459,30 +488,134 @@ function PartySearch({
   }
 
   return (
-    <div className="field">
+    <div className="field" ref={wrapRef}>
       <label>Select {noun}</label>
       <div style={{ position: "relative" }}>
         <Search style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", width: 15, height: 15, color: "var(--ink-3)" }} />
-        <input className="dinput" style={{ paddingLeft: 32 }} placeholder={`Search ${noun}s by name…`} value={q} onChange={(e) => setQ(e.target.value)} />
+        <input
+          className="dinput"
+          style={{ paddingLeft: 32 }}
+          placeholder={`Search ${noun}s by name…`}
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+        />
       </div>
-      {debounced.trim().length >= 2 && (
-        <div className="picklist" style={{ marginTop: 7 }}>
-          {results.isLoading ? (
-            <div className="pickempty">Searching…</div>
-          ) : (results.data?.matches ?? []).length === 0 ? (
-            <div className="pickempty">No matches</div>
-          ) : (
-            results.data!.matches.map((m) => (
-              <button key={m.id} type="button" className="pickrow" onClick={() => setParty(m)}>
-                <span>
-                  <b>{m.displayName}</b>
-                  {m.contactEmail && <span style={{ color: "var(--ink-3)" }}> · {m.contactEmail}</span>}
-                </span>
-              </button>
-            ))
+      {open && (
+        <>
+          <div className="picklist" style={{ marginTop: 7 }}>
+            {results.isLoading ? (
+              <div className="pickempty">Loading…</div>
+            ) : matches.length === 0 ? (
+              <div className="pickempty">{term ? `No ${noun} matches “${term}”` : `No ${noun}s on file`}</div>
+            ) : (
+              matches.map((m) => (
+                <button key={m.id} type="button" className="pickrow" onClick={() => setParty(m)}>
+                  <span>
+                    <b>{m.displayName}</b>
+                    {m.contactEmail && <span style={{ color: "var(--ink-3)" }}> · {m.contactEmail}</span>}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+          {matches.length > 0 && (
+            <div style={{ marginTop: 5, fontSize: 11.5, color: "var(--ink-3)" }}>
+              {atCap
+                ? `First ${matches.length} shown — keep typing to narrow`
+                : term
+                  ? `${matches.length} match${matches.length === 1 ? "" : "es"}`
+                  : `${matches.length} on file — type to narrow`}
+            </div>
           )}
-        </div>
+        </>
       )}
+    </div>
+  );
+}
+
+/**
+ * The child-age charge bands, stated on the page permanently rather than in a toast.
+ *
+ * An age over `childMaxAge` is charged at the full adult rate — own bed, full room share, full
+ * meals — while the guest is still a minor for supervision. That used to surface as a one-shot
+ * toast when an age crossed the line, which an operator who looked away never saw; by the time
+ * the charge appeared on the quote there was nothing on screen explaining it.
+ *
+ * So the note is always visible while taking a booking, including before any child is entered —
+ * the rule is most useful *before* the operator types an age, not after. When an entered age is
+ * in the adult band the note turns amber and names the children concerned, and it stays that way
+ * for as long as the age does. Every boundary comes from the live child policy, so an L4 edit to
+ * `registry.child.ageBands` moves the text with it.
+ */
+function ChildAgeChargeNote({
+  childAges,
+  youngMaxAge,
+  childMaxAge,
+  maxChildAge,
+  minAdultAge,
+  adultMealPercent,
+  childMealPercent,
+}: {
+  childAges: string[];
+  youngMaxAge: number;
+  childMaxAge: number;
+  maxChildAge: number;
+  minAdultAge: number;
+  adultMealPercent: number | null;
+  childMealPercent: number | null;
+}) {
+  const inAdultBand = childAges
+    .map((raw, i) => ({ n: parseInt(raw || "", 10), i }))
+    .filter(({ n }) => Number.isFinite(n) && n > childMaxAge);
+  const active = inAdultBand.length > 0;
+
+  return (
+    <div
+      className="field"
+      style={{
+        marginTop: 2,
+        padding: "9px 11px",
+        borderRadius: "var(--r-md)",
+        border: `1px solid ${active ? "var(--warn)" : "var(--line-2)"}`,
+        background: active ? "var(--warn-t)" : "transparent",
+      }}
+    >
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <AlertTriangle
+          style={{
+            width: 14,
+            height: 14,
+            flexShrink: 0,
+            marginTop: 2,
+            color: active ? "var(--warn)" : "var(--ink-3)",
+          }}
+        />
+        <div style={{ fontSize: 11.5, color: "var(--ink-2)", lineHeight: 1.5 }}>
+          {active && (
+            <p style={{ margin: "0 0 4px", color: "var(--warn)", fontWeight: 700 }}>
+              {inAdultBand
+                .map(({ n, i }) => `Child ${i + 1} is ${n}`)
+                .join(" · ")}{" "}
+              — charged at the adult rate.
+            </p>
+          )}
+          <p style={{ margin: 0 }}>
+            List everyone under {minAdultAge} as a child — the age sets the charge: under{" "}
+            {youngMaxAge + 1} stay and eat free · {youngMaxAge + 1}–{childMaxAge} pay child rates
+            {childMealPercent !== null ? ` (${childMealPercent}% of meals)` : ""} ·{" "}
+            <b>
+              {childMaxAge + 1}–{maxChildAge} are charged as adults
+            </b>{" "}
+            (own bed, full room share
+            {adultMealPercent !== null ? ` and ${adultMealPercent}% meal charges` : " and full meals"}) while
+            still counting as minors for supervision. Anyone {minAdultAge}+ goes under Adults.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -718,30 +851,10 @@ export function DeskNewInquiryForm() {
     return out;
   }, [childAges, childMaxAge, childPolicyQuery.data]);
 
-  // Tell the operator the moment an age crosses into the adult band, rather than letting them
-  // find out from the quote. Fires once per child as it crosses — re-arms if the age is corrected
-  // back down, so fixing a typo and re-entering an adult age warns again.
-  const warnedAdultRef = useRef<Set<number>>(new Set());
-  useEffect(() => {
-    if (!childPolicyQuery.data) return;
-    childAges.forEach((raw, i) => {
-      const n = parseInt(raw || "", 10);
-      const isAdultBand = Number.isFinite(n) && n > childMaxAge;
-      if (!isAdultBand) {
-        warnedAdultRef.current.delete(i);
-        return;
-      }
-      if (warnedAdultRef.current.has(i)) return;
-      warnedAdultRef.current.add(i);
-      toast.warning(`Child ${i + 1} is ${n} — that counts as an adult`, {
-        description:
-          `Anyone over ${childMaxAge} is charged at the adult rate: their own bed, full room share and ` +
-          `${childPolicyQuery.data!.mealPricing.adultPercent}% meal charges (${youngMaxAge + 1}–${childMaxAge} pay ` +
-          `${childPolicyQuery.data!.mealPricing.childPercent}%). They still count as a minor for supervision.`,
-        duration: 9000,
-      });
-    });
-  }, [childAges, childMaxAge, youngMaxAge, childPolicyQuery.data]);
+  // The adult-band charge used to be announced by a one-shot `toast.warning` as each age crossed
+  // the ceiling. A toast is gone in nine seconds and the charge is not, so it is now stated
+  // permanently on the page by <ChildAgeChargeNote> below, which turns amber for as long as any
+  // entered age sits above `childMaxAge`.
 
   const parsedChildAges = childAges.map((a) => parseInt(a || "", 10)).filter((n) => Number.isFinite(n));
   const roomCountsQuery = useQuery({
@@ -1390,8 +1503,9 @@ export function DeskNewInquiryForm() {
               <label>Child age{childCountNum === 1 ? "" : "s"} (years)</label>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {childAges.map((age, i) => {
-                  // A toast fades; the charge doesn't. Mark the field itself so the operator can
-                  // still see which child is being charged as an adult when they review the form.
+                  // Mark the field itself, and keep it marked for as long as the age stays above
+                  // the ceiling, so the operator can see at review time which child is being
+                  // charged as an adult — not just at the moment they typed it.
                   const isAdultBand = adultBandIndexes.has(i);
                   return (
                     <div key={i} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -1400,7 +1514,12 @@ export function DeskNewInquiryForm() {
                         min={0}
                         max={maxChildAge}
                         className="dinput"
-                        style={{ width: 80, borderColor: isAdultBand ? "var(--warn)" : undefined }}
+                        style={{
+                          width: 80,
+                          borderColor: isAdultBand ? "var(--warn)" : undefined,
+                          background: isAdultBand ? "var(--warn-t)" : undefined,
+                          fontWeight: isAdultBand ? 700 : undefined,
+                        }}
                         placeholder={`#${i + 1}`}
                         value={age}
                         aria-describedby={isAdultBand ? `child-adult-${i}` : undefined}
@@ -1421,17 +1540,17 @@ export function DeskNewInquiryForm() {
                   );
                 })}
               </div>
-              <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
-                List everyone under {minAdultAge} here — the age sets the charge: under {youngMaxAge + 1} stay
-                and eat free · {youngMaxAge + 1}–{childMaxAge} pay child rates ·{" "}
-                <b>
-                  {childMaxAge + 1}–{maxChildAge} are charged as adults
-                </b>{" "}
-                (own bed, full room &amp; meals) while still counting as minors for supervision. Anyone{" "}
-                {minAdultAge}+ goes under Adults.
-              </p>
             </div>
           )}
+          <ChildAgeChargeNote
+            childAges={childCountNum > 0 ? childAges : []}
+            youngMaxAge={youngMaxAge}
+            childMaxAge={childMaxAge}
+            maxChildAge={maxChildAge}
+            minAdultAge={minAdultAge}
+            adultMealPercent={childPolicyQuery.data?.mealPricing.adultPercent ?? null}
+            childMealPercent={childPolicyQuery.data?.mealPricing.childPercent ?? null}
+          />
 
           <div className="field">
             <label>Number of rooms</label>
