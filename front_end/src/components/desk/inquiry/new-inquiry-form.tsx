@@ -463,9 +463,11 @@ function PartySearch({
 
   const noun = kind === "TRAVEL_AGENT" ? "travel agent" : "corporate account";
   const matches = results.data?.matches ?? [];
-  // Mirrors PARTY_LOOKUP_LIMIT in back_end/src/lib/admin/party-lookup.ts. Landing exactly on it
-  // means the roster was cut, so the count line says so instead of implying a complete list.
-  const atCap = matches.length >= 500;
+  // The cap is the server's, reported on the response — landing exactly on it means the roster
+  // was cut, so the count line says so instead of implying a complete list. Not mirrored here:
+  // a copy would silently go stale the day the backend raises it.
+  const cap = results.data?.limit;
+  const atCap = cap !== undefined && matches.length >= cap;
 
   if (party) {
     return (
@@ -548,11 +550,20 @@ function PartySearch({
  * So the note is always visible while taking a booking, including before any child is entered —
  * the rule is most useful *before* the operator types an age, not after. When an entered age is
  * in the adult band the note turns amber and names the children concerned, and it stays that way
- * for as long as the age does. Every boundary comes from the live child policy, so an L4 edit to
- * `registry.child.ageBands` moves the text with it.
+ * for as long as the age does.
+ *
+ * Every boundary is the backend's: they come from `GET /api/lookups/child-policy`, so an L4 edit
+ * to `registry.child.ageBands` or `registry.child.mealPricing` moves this text with it. Nothing
+ * here is hardcoded — and until that lookup resolves the note states no numbers at all rather
+ * than printing a built-in guess, because a confidently wrong charge band is the exact mistake
+ * this note exists to prevent. Which children are in the adult band is likewise decided by the
+ * caller's `adultBandIndexes` (already gated on the policy having loaded), not recomputed here,
+ * so the note and the highlighted age inputs can never disagree.
  */
 function ChildAgeChargeNote({
   childAges,
+  adultBandIndexes,
+  policyLoaded,
   youngMaxAge,
   childMaxAge,
   maxChildAge,
@@ -561,6 +572,8 @@ function ChildAgeChargeNote({
   childMealPercent,
 }: {
   childAges: string[];
+  adultBandIndexes: Set<number>;
+  policyLoaded: boolean;
   youngMaxAge: number;
   childMaxAge: number;
   maxChildAge: number;
@@ -570,7 +583,7 @@ function ChildAgeChargeNote({
 }) {
   const inAdultBand = childAges
     .map((raw, i) => ({ n: parseInt(raw || "", 10), i }))
-    .filter(({ n }) => Number.isFinite(n) && n > childMaxAge);
+    .filter(({ n, i }) => adultBandIndexes.has(i) && Number.isFinite(n));
   const active = inAdultBand.length > 0;
 
   return (
@@ -603,17 +616,23 @@ function ChildAgeChargeNote({
               — charged at the adult rate.
             </p>
           )}
-          <p style={{ margin: 0 }}>
-            List everyone under {minAdultAge} as a child — the age sets the charge: under{" "}
-            {youngMaxAge + 1} stay and eat free · {youngMaxAge + 1}–{childMaxAge} pay child rates
-            {childMealPercent !== null ? ` (${childMealPercent}% of meals)` : ""} ·{" "}
-            <b>
-              {childMaxAge + 1}–{maxChildAge} are charged as adults
-            </b>{" "}
-            (own bed, full room share
-            {adultMealPercent !== null ? ` and ${adultMealPercent}% meal charges` : " and full meals"}) while
-            still counting as minors for supervision. Anyone {minAdultAge}+ goes under Adults.
-          </p>
+          {policyLoaded ? (
+            <p style={{ margin: 0 }}>
+              List everyone under {minAdultAge} as a child — the age sets the charge: under{" "}
+              {youngMaxAge + 1} stay and eat free · {youngMaxAge + 1}–{childMaxAge} pay child rates
+              {childMealPercent !== null ? ` (${childMealPercent}% of meals)` : ""} ·{" "}
+              <b>
+                {childMaxAge + 1}–{maxChildAge} are charged as adults
+              </b>{" "}
+              (own bed, full room share
+              {adultMealPercent !== null ? ` and ${adultMealPercent}% meal charges` : " and full meals"}) while
+              still counting as minors for supervision. Anyone {minAdultAge}+ goes under Adults.
+            </p>
+          ) : (
+            <p style={{ margin: 0, color: "var(--ink-3)" }}>
+              Loading the child charge bands from the hotel&rsquo;s policy…
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -1544,6 +1563,8 @@ export function DeskNewInquiryForm() {
           )}
           <ChildAgeChargeNote
             childAges={childCountNum > 0 ? childAges : []}
+            adultBandIndexes={childCountNum > 0 ? adultBandIndexes : new Set()}
+            policyLoaded={!!childPolicyQuery.data}
             youngMaxAge={youngMaxAge}
             childMaxAge={childMaxAge}
             maxChildAge={maxChildAge}

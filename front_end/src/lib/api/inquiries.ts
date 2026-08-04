@@ -79,14 +79,21 @@ export type LookupPartyMatch = {
   coordinators?: CoordinatorContact[];
 };
 
+/**
+ * A blank `q` lists every active party — that is what lets the picker open as a browsable
+ * dropdown. `limit` is the server's own cap: receiving exactly that many rows means the roster
+ * was cut, so the caller can say so without hardcoding the number here.
+ */
+type PartyLookupResult = { matches: LookupPartyMatch[]; limit?: number };
+
 export async function searchTravelAgentsLookup(session: Session, q: string) {
   const qs = new URLSearchParams({ q });
-  return apiRequest<{ matches: LookupPartyMatch[] }>(`/api/lookups/travel-agents/search?${qs}`, { session });
+  return apiRequest<PartyLookupResult>(`/api/lookups/travel-agents/search?${qs}`, { session });
 }
 
 export async function searchCorporateAccountsLookup(session: Session, q: string) {
   const qs = new URLSearchParams({ q });
-  return apiRequest<{ matches: LookupPartyMatch[] }>(`/api/lookups/corporate-accounts/search?${qs}`, { session });
+  return apiRequest<PartyLookupResult>(`/api/lookups/corporate-accounts/search?${qs}`, { session });
 }
 
 export type AddPartyContactResult = {
