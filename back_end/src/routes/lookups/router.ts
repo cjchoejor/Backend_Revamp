@@ -12,6 +12,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
+import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
 import { computeChargeableOccupants, computeAllowedRoomCounts } from "../../services/domain/capacity-validation-service.js";
 
@@ -71,17 +72,20 @@ lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) =>
   }
 });
 
+// `limit` rides along so a caller can tell a capped list from a complete one without mirroring
+// the number: receiving exactly `limit` rows means the roster was cut. A blank `q` lists all
+// active parties, which is what lets the desk picker open as a browsable dropdown.
 lookupsRouter.get("/lookups/travel-agents/search", L1, async (req, res, next) => {
   try {
     const q = String(req.query.q ?? "");
-    res.json({ matches: await travelAgentSvc.searchTravelAgents(prisma, q) });
+    res.json({ matches: await travelAgentSvc.searchTravelAgents(prisma, q), limit: PARTY_LOOKUP_LIMIT });
   } catch (e) { next(e); }
 });
 
 lookupsRouter.get("/lookups/corporate-accounts/search", L1, async (req, res, next) => {
   try {
     const q = String(req.query.q ?? "");
-    res.json({ matches: await corporateSvc.searchCorporateAccounts(prisma, q) });
+    res.json({ matches: await corporateSvc.searchCorporateAccounts(prisma, q), limit: PARTY_LOOKUP_LIMIT });
   } catch (e) { next(e); }
 });
 
