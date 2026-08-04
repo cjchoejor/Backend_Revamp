@@ -100,6 +100,10 @@ export function ArrivalStep({
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+    // Sending the pre-arrival reminder creates the CommunicationRecord the acceptance block
+    // below reads — its own query key, not part of the entry payload (same omission that hid
+    // the S3 proforma reply block until a page refresh).
+    void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,

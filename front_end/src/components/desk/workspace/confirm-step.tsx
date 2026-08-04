@@ -69,6 +69,10 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    // Confirming the reservation dispatches the voucher, which creates the CommunicationRecord
+    // the acceptance block below reads. That feed is its own query key, not part of the entry
+    // payload — same omission that hid the S3 proforma reply block until a page refresh.
+    void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,

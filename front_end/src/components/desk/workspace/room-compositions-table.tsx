@@ -101,6 +101,83 @@ function cnt(v: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+/** Booking-wide discount, edited from inside the composition panel. */
+export type DiscountEdit = {
+  discountPercent?: string;
+  discountBasis?: string;
+  onDiscountChange?: (patch: { percent?: string; basis?: string }) => void;
+};
+
+/**
+ * Negotiation strip (2026-08-03, operator request) — the discount moved out of the form
+ * blocks below and into the composition panel, so rates, FOC and the discount are edited in
+ * one place and the panel reads as the negotiation surface.
+ *
+ * The discount is BOOKING-WIDE, not per room: the backend folds it into the resolved room
+ * rate before the compositions are costed (`prepareQuotationDraft`). Two consequences the
+ * strip states outright rather than leaving the operator to discover them from the total —
+ * a room carrying its own negotiated rate ignores the default rate and so prices the same
+ * discounted or not, and meals / extra beds are never discounted (they come off the rate
+ * card's add-ons). NO MONEY IS COMPUTED HERE — the backend prices on create/regenerate.
+ */
+export function NegotiationDiscountBar({
+  discountPercent,
+  discountBasis,
+  onDiscountChange,
+  negotiatedRoomCount = 0,
+}: DiscountEdit & { negotiatedRoomCount?: number }) {
+  if (!onDiscountChange) return null;
+  const pct = Number(discountPercent ?? "");
+  const live = Number.isFinite(pct) && pct > 0;
+  return (
+    <div className="rct-neg">
+      <span className="rce-lbl">Negotiate</span>
+      <label className="rct-neg-f">
+        Discount
+        <input
+          type="text"
+          inputMode="decimal"
+          value={discountPercent ?? ""}
+          placeholder="0"
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!/^\d*\.?\d*$/.test(v)) return;
+            // 100% off is a full waiver — use the per-room FOC toggle for that instead.
+            if (v !== "" && Number(v) > 100) return;
+            onDiscountChange({ percent: v });
+          }}
+          title="Percentage off the room rate for the whole booking"
+        />
+        <span className="u">%</span>
+      </label>
+      <label className="rct-neg-f wide">
+        Basis
+        <input
+          type="text"
+          value={discountBasis ?? ""}
+          placeholder="negotiation"
+          onChange={(e) => onDiscountChange({ basis: e.target.value })}
+          title="Why the discount is being given — recorded on the quote and audited"
+        />
+      </label>
+      {live && <span className="rct-neg-on">−{pct}% off the room rate</span>}
+      <span className="ln" />
+      <span className="rct-neg-note">
+        Applies to the whole booking. Meals and extra beds are not discounted, and a room with its
+        own negotiated rate prices at that rate. Priced by the backend when you create or
+        regenerate the quote.
+      </span>
+      {live && negotiatedRoomCount > 0 && (
+        <span className="rct-neg-warn">
+          {negotiatedRoomCount} room{negotiatedRoomCount === 1 ? "" : "s"} carry a negotiated room rate —
+          the discount won&rsquo;t move {negotiatedRoomCount === 1 ? "it" : "them"}. Clear the rate cell to
+          discount off the standard rate instead.
+        </span>
+      )}
+    </div>
+  );
+}
+
 function numOrUndef(v: string): number | undefined {
   if (v === "") return undefined;
   const n = Number(v);
@@ -154,7 +231,10 @@ export function RoomCompositionsTable({
   initial,
   onChange,
   onOpenRoomInBoard,
-}: {
+  discountPercent,
+  discountBasis,
+  onDiscountChange,
+}: DiscountEdit & {
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
   /** Enables the reference-rate placeholders in the negotiated-rate cells. */
@@ -718,22 +798,20 @@ export function RoomCompositionsTable({
           </button>
         </div>
       )}
-      {/* Reference rates ride ABOVE the grid and stay put while the rows scroll — with many rooms
-          the anchor was off-screen exactly when a rate was being typed. */}
-      {entryId && (
-        <div
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 3,
-            background: "var(--paper)",
-            paddingBottom: 4,
-            marginBottom: 2,
-          }}
-        >
-          <RateReferenceStrip entryId={entryId} compact />
-        </div>
-      )}
+      {/* Reference rates ride above the grid in NORMAL PAGE FLOW (2026-08-03, operator request).
+          The old `position: sticky` wrapper pinned the strip to the viewport whenever the canvas
+          scrolled — so it hung over unrelated blocks inline, and in the expanded layer it drifted
+          across the close bar. Inline it now simply scrolls away with the panel; expanded, the
+          layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
+          and the toolbar are held at the top structurally rather than by sticky positioning. */}
+      {entryId && <RateReferenceStrip entryId={entryId} compact />}
+      {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
+      <NegotiationDiscountBar
+        discountPercent={discountPercent}
+        discountBasis={discountBasis}
+        onDiscountChange={onDiscountChange}
+        negotiatedRoomCount={sealedRoomIds.filter((id) => (rows[id]?.rRoom ?? "") !== "").length}
+      />
       <div className="rce-bar">
         {partySize > 0 && (
           <button

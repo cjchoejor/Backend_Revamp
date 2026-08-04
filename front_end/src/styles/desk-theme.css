@@ -2500,6 +2500,74 @@
     justify-items: center;
     padding: 3px 0;
   }
+  /* Negotiation strip — the booking discount sits WITH the rates so the composition panel
+     reads as one negotiation surface (2026-08-03, operator request). Rendered by both the
+     table and the guest board; inside .rct so it stays on screen in the expanded layer. */
+  & .rct-neg {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 7px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--cream);
+  }
+  & .rct-neg-f {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  & .rct-neg-f input {
+    width: 56px;
+    padding: 3px 6px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: #fff;
+    font-family: var(--deskmono);
+    font-size: 12px;
+    color: var(--ink);
+    text-align: right;
+  }
+  & .rct-neg-f input:focus {
+    outline: none;
+    border-color: var(--green);
+  }
+  & .rct-neg-f.wide input {
+    width: 150px;
+    text-align: left;
+    font-family: inherit;
+    font-size: 11.5px;
+  }
+  & .rct-neg-f .u {
+    font-family: var(--deskmono);
+    color: var(--ink-3);
+  }
+  & .rct-neg-on {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--green-d);
+    background: var(--green-t);
+    border: 1px solid var(--green-t2);
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+  & .rct-neg-note {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    line-height: 1.45;
+    flex: 1 1 220px;
+    min-width: 170px;
+  }
+  & .rct-neg-warn {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--warn);
+    flex-basis: 100%;
+  }
   & .rct .ln {
     flex: 1 1 auto;
     height: 1px;
@@ -2770,11 +2838,29 @@
   & .rst-expandwrap.on .rst-wrap {
     max-height: calc(100vh - 96px);
   }
-  /* Same layer reused by the S2 composition grid: cap the rows so the close bar, the sticky
-     reference rates and the toolbar stay put and only the rooms scroll. */
-  & .rst-expandwrap.on .rct-scroll {
-    max-height: calc(100vh - 210px);
+  /* Same layer reused by the S2 composition grid: the close bar, reference rates, negotiation
+     strip and toolbar sit fixed at the top and ONLY the rows scroll. Flex sizing (the layer is
+     a flex column) replaces the old `100vh - 210px` cap — that constant assumed a fixed header
+     height, and whenever the header stack was taller the layer grew its own second scrollbar
+     and the then-sticky reference strip drifted over the close bar. The min-height keeps some
+     rows visible on short windows; in that edge the layer's own overflow:auto still bails out. */
+  & .rct.rst-expandwrap.on > * {
+    flex: 0 0 auto;
+  }
+  & .rct.rst-expandwrap.on > .rct-scroll {
+    flex: 1 1 auto;
+    min-height: 160px;
     overflow: auto;
+  }
+  /* Column headers stay readable while the rows scroll in the expanded layer. Sticky on the
+     whole thead (not per-cell) so the two stacked header rows need no per-row offsets; the
+     header cells' backgrounds are opaque, and the shadow doubles as the bottom hairline that
+     border-collapse can shed from stuck cells. */
+  & .rst-expandwrap.on .rct-t thead {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    box-shadow: 0 1px 0 var(--line-2);
   }
   & .rst-tools {
     display: flex;

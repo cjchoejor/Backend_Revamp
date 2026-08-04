@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, Check, Eye, EyeOff, FileCheck, Lock, RefreshCw, Shield } from "lucide-react";
@@ -179,6 +179,28 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   });
   const paymentStatus = paymentStatusQuery.data;
 
+  /**
+   * "Amount received" prefill (2026-08-03, operator request). The desk was retyping the advance
+   * figure on every booking, off a number already on screen two blocks up.
+   *
+   * The figure is `shortfall` — the BACKEND's own `requiredAmount − totalReceived`, computed
+   * Decimal-safe server-side and never re-derived here (no-money-math rule). That equals the
+   * full requested advance until anything is paid, and tracks what's still owed after a partial
+   * payment, so the prefill is right in both cases rather than only the first.
+   *
+   * Editable, and the prefill yields the moment it is: `paymentAmountEditedRef` latches on the
+   * first keystroke so a deliberately different figure (guest paid less, or paid more) is never
+   * overwritten by a refetch. It re-arms after a logged payment, so the field then refills with
+   * the new outstanding figure.
+   */
+  const suggestedPaymentAmount =
+    paymentStatus && paymentStatus.shortfall > 0 ? String(paymentStatus.shortfall) : "";
+  const paymentAmountEditedRef = useRef(false);
+  useEffect(() => {
+    if (paymentAmountEditedRef.current) return;
+    setPaymentAmount(suggestedPaymentAmount);
+  }, [suggestedPaymentAmount]);
+
   // Advance-payment window countdown (backend fact: proforma dispatch → check-in date).
   // 30s tick keeps the label honest without re-rendering every second.
   const advanceWindow = paymentStatus?.advanceWindow ?? null;
@@ -199,6 +221,13 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     // The inline proforma preview recomposes from the folio's current payments + advance
     // requirement — logging a payment or changing the requirement changes the document.
     void queryClient.invalidateQueries({ queryKey: ["invoice-preview"] });
+    // Dispatching the proforma CREATES the CommunicationRecord that the "record the guest's
+    // answer" block and the S3 checklist item both read. That feed lives on its own query key
+    // (shared with CommunicationAcceptanceBlock + booking-workspace) and isn't part of the
+    // entry payload, so without this it stayed cached for the app-wide 5-minute staleTime and
+    // the reply block only appeared after a page refresh. Re-issuing a proforma (an advance-
+    // requirement change) supersedes the old communication too, so this is not dispatch-only.
+    void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
   };
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
@@ -227,6 +256,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       toast.success("Advance payment recorded");
       setPaymentAmount("");
       setPaymentNotes("");
+      // Re-arm the prefill: once the refetched status lands, the field refills with whatever
+      // is still outstanding (blank when the advance is now settled).
+      paymentAmountEditedRef.current = false;
       invalidate();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
@@ -783,11 +815,37 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               step="0.01"
               value={paymentAmount}
               onChange={(e) => {
+                // First keystroke stops the prefill writing over the operator.
+                paymentAmountEditedRef.current = true;
                 setPaymentAmount(e.target.value);
                 if (paymentM.isSuccess) paymentM.reset();
               }}
               disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer}
             />
+            {suggestedPaymentAmount !== "" && (
+              <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, lineHeight: 1.4 }}>
+                {paymentAmount === suggestedPaymentAmount ? (
+                  <>
+                    Pre-filled with what&rsquo;s still owed on the advance ({money(paymentStatus?.shortfall ?? null)}) —
+                    change it if the guest paid a different amount.
+                  </>
+                ) : (
+                  <>
+                    Still owed on the advance: {money(paymentStatus?.shortfall ?? null)}.{" "}
+                    <button
+                      type="button"
+                      className="rcb-mini"
+                      onClick={() => {
+                        paymentAmountEditedRef.current = false;
+                        setPaymentAmount(suggestedPaymentAmount);
+                      }}
+                    >
+                      Use that
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div className="field">
             <label>Notes</label>

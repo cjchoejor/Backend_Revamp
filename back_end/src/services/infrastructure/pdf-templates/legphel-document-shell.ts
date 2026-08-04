@@ -90,6 +90,11 @@ export const LEGPHEL_DOCUMENT_CSS = `
   table.mini td { padding:3px 6px;border-bottom:1px solid var(--hair);color:#2E3238;line-height:1.4;vertical-align:top }
   table.mini td.r, table.mini th.r { text-align:right;font-family:var(--mono);font-size:8px;white-space:nowrap }
   table.mini tr:last-child td { border-bottom:0 }
+  /* Sub-line of the row above (a room's extra beds / meal plans). Hairline dropped so the room
+     and everything billed under it read as one block, with only the group's last row ruled. */
+  table.mini tr.sub td { border-bottom:0;color:var(--slate) }
+  table.mini tr.sub td:first-child { padding-left:16px }
+  table.mini tr.grp-end td { border-bottom:1px solid var(--hair) }
   .dnote { margin-top:6px;padding:4px 8px;font-size:8px;line-height:1.55;color:var(--ink);
     border-left:2px solid var(--crimson) }
   .dnote.q { border-left-color:var(--rule);color:var(--slate) }
@@ -245,17 +250,26 @@ export function bankStrip(pairs: Array<{ label: string; value: string }>): strin
 /** `table.mini` — the compact line-item table. `align: "r"` puts a column in right-aligned mono. */
 export type MiniColumn = { header: string; align?: "l" | "r" };
 
-export function miniTable(columns: MiniColumn[], rows: Array<Array<string | null>>): string {
+/**
+ * `rowClasses[i]` is applied to row `i` — used for the quotation's `sub` (indented sub-line of
+ * the room above) and `grp-end` (last row of a room's group, so the hairline lands there).
+ * Optional, so every existing two-argument caller is unaffected.
+ */
+export function miniTable(
+  columns: MiniColumn[],
+  rows: Array<Array<string | null>>,
+  rowClasses?: Array<string | null | undefined>,
+): string {
   const head = columns
     .map((c) => `<th${c.align === "r" ? ' class="r"' : ""}>${htmlEscape(c.header)}</th>`)
     .join("");
   const body = rows
-    .map(
-      (r) =>
-        `<tr>${r
-          .map((cell, i) => `<td${columns[i]?.align === "r" ? ' class="r"' : ""}>${htmlEscape(cell ?? "")}</td>`)
-          .join("")}</tr>`,
-    )
+    .map((r, ri) => {
+      const cls = rowClasses?.[ri];
+      return `<tr${cls ? ` class="${htmlEscape(cls)}"` : ""}>${r
+        .map((cell, i) => `<td${columns[i]?.align === "r" ? ' class="r"' : ""}>${htmlEscape(cell ?? "")}</td>`)
+        .join("")}</tr>`;
+    })
     .join("");
   return `<table class="mini"><tr>${head}</tr>${body}</table>`;
 }

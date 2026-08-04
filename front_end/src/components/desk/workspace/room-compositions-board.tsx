@@ -7,7 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
-import { RoomCompositionsTable } from "./room-compositions-table";
+import { NegotiationDiscountBar, RoomCompositionsTable, type DiscountEdit } from "./room-compositions-table";
 import { RateReferenceStrip } from "./rate-reference-strip";
 
 /**
@@ -173,7 +173,10 @@ export function RoomCompositionsBoard({
   onChange,
   focusRoomId,
   onFocusRoom,
-}: {
+  discountPercent,
+  discountBasis,
+  onDiscountChange,
+}: DiscountEdit & {
   sealedRoomIds: string[];
   entryCheckIn?: string | null;
   entryCheckOut?: string | null;
@@ -720,6 +723,14 @@ export function RoomCompositionsBoard({
 
   return (
     <div className="rcb">
+      {/* Same negotiation strip the table carries — the discount must not vanish when the
+          operator switches modes (it belongs to the booking, not to either editor). */}
+      <NegotiationDiscountBar
+        discountPercent={discountPercent}
+        discountBasis={discountBasis}
+        onDiscountChange={onDiscountChange}
+        negotiatedRoomCount={sealedRoomIds.filter((id) => (extras[id] ?? EMPTY_EXTRAS).rateRoom !== "").length}
+      />
       <div className="rce-bar">
         <button
           type="button"
@@ -1083,7 +1094,7 @@ function MiniNum({ label, value, onChange }: { label: string; value?: string; on
  * single `roomCompositions` state. The pre-2026-07-28 per-room-cards editor
  * (`RoomCompositionsEditor`) is retired from this wrapper.
  */
-export function RoomCompositionPlanner(props: {
+export function RoomCompositionPlanner(props: DiscountEdit & {
   sealedRoomIds: string[];
   entryCheckIn?: string | null;
   entryCheckOut?: string | null;

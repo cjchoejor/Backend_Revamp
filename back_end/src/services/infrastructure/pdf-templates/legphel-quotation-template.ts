@@ -24,12 +24,26 @@ import {
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
 
+/**
+ * One printed row. Since 2026-08-03 (operator request) a room is billed over SEVERAL rows —
+ * the room itself, then its extra beds and each meal plan beneath it — so that every row is a
+ * plain `rate × quantity = amount` the guest can check. `qty` therefore carries whatever the
+ * multiplier is for that row ("3 nights", "2 pax × 3 nights"), not just a night count.
+ *
+ * `indent` renders the row as a sub-line of the room above it.
+ */
 export type LegphelQuotationLine = {
-  /** "Deluxe · 1 room · 2 adults · MAP" */
+  /** "Room 201 · Deluxe · 2 adults" or, indented beneath it, "Meals · AP (all meals)". */
   description: string;
-  nights: string;
-  ratePerNight: string;
+  /** The multiplier as printed: "3 nights", "2 pax × 3 nights", "1 bed × 3 nights". */
+  qty: string;
+  /** Unit rate for this row — per night, or per head per night on meal rows. "—" when the row
+   *  has no single unit rate (e.g. meals that vary night to night). */
+  rate: string;
+  /** rate × qty. */
   amount: string;
+  /** Sub-line of the room above — indented, lighter. */
+  indent?: boolean;
 };
 
 export type LegphelQuotationInput = {
@@ -93,11 +107,19 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     miniTable(
       [
         { header: "Description" },
-        { header: "Nights", align: "r" },
-        { header: "Rate / night", align: "r" },
+        { header: "Qty", align: "r" },
+        { header: "Rate", align: "r" },
         { header: "Amount", align: "r" },
       ],
-      input.lines.map((l) => [l.description, l.nights, l.ratePerNight, l.amount]),
+      input.lines.map((l) => [l.description, l.qty, l.rate, l.amount]),
+      // A room's sub-lines are indented and share its block; the hairline is moved to the last
+      // row of each group so room + beds + meals read as one billed item.
+      input.lines.map((l, i) => {
+        const lastOfGroup = !input.lines[i + 1]?.indent;
+        return [l.indent ? "sub" : null, l.indent && lastOfGroup ? "grp-end" : null]
+          .filter(Boolean)
+          .join(" ") || null;
+      }),
     ),
     input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
     row("Net value", input.netValue),

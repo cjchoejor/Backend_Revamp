@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Eye, EyeOff, Mail, Percent, Route, Timer } from "lucide-react";
+import { Check, Eye, EyeOff, Mail, RefreshCw, Route, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import {
   acceptQuotation,
-  applyQuotationDiscount,
   approveQuotationDiscount,
   createQuotation,
   placeSpeculativeHold,
@@ -98,8 +97,35 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED");
 
   const [notes, setNotes] = useState("");
+  // Booking-wide discount. Edited inside the composition panel (2026-08-03, operator request):
+  // the negotiation happens on the grid, so the figure lives there rather than in a separate
+  // form block below. Still a single booking-level percent — the backend folds it into the
+  // resolved room rate before the per-room compositions are costed.
   const [discountPercent, setDiscountPercent] = useState("");
   const [discountBasis, setDiscountBasis] = useState("negotiation");
+  // What the live quote actually recorded — drives the FOM approval affordance and seeds the
+  // fields, so the panel opens showing the discount currently in force rather than blank
+  // (a blank field on regenerate would read as "no discount" when the backend would in fact
+  // carry the prior one forward).
+  const recordedDiscount = useMemo(() => {
+    const terms = (working ?? accepted)?.commercialTerms as Record<string, unknown> | null | undefined;
+    const d = terms?.requestedDiscount as { discountPercent?: unknown; discountBasis?: unknown } | undefined;
+    if (!d || typeof d.discountPercent !== "number" || d.discountPercent <= 0) return null;
+    return {
+      percent: d.discountPercent,
+      basis: typeof d.discountBasis === "string" && d.discountBasis.trim() ? d.discountBasis : "negotiation",
+    };
+  }, [working, accepted]);
+  const seededForRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = (working ?? accepted)?.id ?? null;
+    if (seededForRef.current === id) return;
+    seededForRef.current = id;
+    if (recordedDiscount) {
+      setDiscountPercent(String(recordedDiscount.percent));
+      setDiscountBasis(recordedDiscount.basis);
+    }
+  }, [working, accepted, recordedDiscount]);
   const [sendChannel, setSendChannel] = useState("EMAIL");
   const [validDays, setValidDays] = useState("2");
   // Guest contact for the send-to field. Falls back across the same profile chain the rest of the
@@ -150,7 +176,25 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     // The inline document preview recomposes from the quotation's current terms — a discount,
     // supersede or send changes what it should show.
     void queryClient.invalidateQueries({ queryKey: ["quotation-preview"] });
+    // Sending a quote creates a CommunicationRecord, and superseding cancels its reply window.
+    // That feed is its own query key (shared with CommunicationAcceptanceBlock + the workspace
+    // checklist) and isn't part of the entry payload — same omission that hid the S3 proforma
+    // reply block until a page refresh.
+    void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
   };
+  /**
+   * The discount as the API wants it. A blank or zero field is NOT the same as "no change":
+   * `supersede` carries the prior version's discount forward when the field is omitted, so
+   * clearing one has to be sent as an explicit `null`. Only a positive percent is sent as a
+   * request — a 0% "discount" would otherwise be recorded on the quote and pend FOM approval
+   * for nothing.
+   */
+  const discountValue = (() => {
+    const n = Number(discountPercent);
+    if (!discountPercent.trim() || !Number.isFinite(n) || n <= 0) return null;
+    return { discountPercent: n, discountBasis: discountBasis.trim() || "negotiation" };
+  })();
+
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
     onSuccess: () => {
@@ -165,10 +209,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
       () =>
         createQuotation(session!, entry.id, {
           notes: notes.trim() || undefined,
-          requestedDiscount:
-            discountPercent.trim() !== ""
-              ? { discountPercent: Number(discountPercent), discountBasis: discountBasis.trim() || "negotiation" }
-              : undefined,
+          requestedDiscount: discountValue ?? undefined,
           // Per-room compositions carry the meal plans / extra beds / negotiated rates.
           // The planner always emits one row per sealed room, so the backend's legacy
           // booking-wide mealPlan/extraBedCount fallback is never needed from the desk
@@ -177,15 +218,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         }),
       "Quote created — ready to send",
     ),
-  );
-  const discountM = useMutation(
-    wrap(() => {
-      if (!draft) throw new Error("No quote to adjust");
-      return applyQuotationDiscount(session!, draft.id, {
-        discountPercent: Number(discountPercent),
-        discountBasis: discountBasis.trim() || "negotiation",
-      });
-    }, "Discount applied"),
   );
   const approveM = useMutation(
     wrap(() => {
@@ -219,12 +251,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
       if (!id) throw new Error("No quote to supersede");
       return supersedeQuotation(session!, id, {
         notes: notes.trim() || undefined,
-        // Carry the renegotiated discount into the new version so the superseding round
-        // re-prices with it (matches the OLD S2 supersede behaviour).
-        requestedDiscount:
-          discountPercent.trim() !== ""
-            ? { discountPercent: Number(discountPercent), discountBasis: discountBasis.trim() || "negotiation" }
-            : undefined,
+        // The renegotiated discount, re-priced into the new version. `null` when the operator
+        // cleared it — omitting the field would carry the prior version's discount forward,
+        // so a cleared discount would silently survive the regeneration.
+        requestedDiscount: discountValue ?? (recordedDiscount ? null : undefined),
         // Renegotiated per-room composition (meal plans, extra beds, negotiated rates, FOC).
         // When the operator edited the composition editor, the regenerated draft re-prices
         // with it; when untouched (empty), the backend carries the prior version's forward.
@@ -270,8 +300,14 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const hasDiscount = quotations.some((q) => {
     const t = q.commercialTerms as Record<string, unknown> | null | undefined;
     if (!t) return false;
-    const d = t.discountPercent ?? t.appliedDiscountPercent ?? (t.discount as { discountPercent?: unknown } | undefined)?.discountPercent;
-    return typeof d === "number" ? d > 0 : d != null;
+    // The pricing pipeline writes `requestedDiscount.discountPercent` and, once it's folded
+    // into the rate, `discountAppliedPercent`. The names read here before (`discountPercent`
+    // / `appliedDiscountPercent` / `discount.discountPercent`) never existed on the payload,
+    // so the rail's discount group never lit up.
+    const d =
+      (t.requestedDiscount as { discountPercent?: unknown } | undefined)?.discountPercent ??
+      t.discountAppliedPercent;
+    return typeof d === "number" && d > 0;
   });
   const sendUsed = quotations.some((q) => q.sentAt != null || q.state === "SENT" || q.state === "ACCEPTED");
   const activeKeys = [
@@ -284,7 +320,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   ].filter(Boolean) as string[];
   const firingKey = createM.isPending
     ? "build"
-    : discountM.isPending || approveM.isPending
+    : approveM.isPending
       ? "discount"
       : sendM.isPending
         ? "send"
@@ -301,6 +337,74 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     { key: "hold", label: "On holding a room", items: BK.hold },
     { key: "advance", label: "On advancing to Set up", items: BK.advance },
   ];
+
+  /**
+   * The negotiation panel — rooms, meals, extra beds, negotiated rates, FOC and the booking
+   * discount, all in one surface. It stays OPEN once a quote exists (2026-08-03, operator
+   * request): a quote is a round of a negotiation, not a closed door, so the operator edits
+   * here and regenerates rather than being sent back through a collapsed drawer.
+   *
+   * It holds ONE position on the page whether or not a quote exists — only the button changes
+   * ("Create quote" → "Regenerate quote"). An earlier version moved it below the send block
+   * once a quote existed, which read as the table vanishing the instant you generated. It
+   * closes only on acceptance, where the terms bind and the backend refuses to supersede.
+   */
+  const negotiationPanel = accepted ? null : (
+    <div className="block">
+      <BlockH>{working ? "Negotiate & regenerate" : "Build the quote"}</BlockH>
+      {!sealedPreferred && (
+        <p style={{ fontSize: 12, color: "var(--warn)", marginTop: 0 }}>
+          A sealed availability configuration from Inquiry is needed first.
+        </p>
+      )}
+      {working && (
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 10px", lineHeight: 1.5 }}>
+          {working.referenceNumber} is live at {money(working.totalAmount, working.currency)}. Change anything
+          below — rooms, meals, rates, the discount — then regenerate: the quote is re-priced from scratch
+          under a new number, and this one is kept as superseded history.
+        </p>
+      )}
+      <div className="field">
+        <label>Internal notes (optional)</label>
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Not shown to the guest" />
+      </div>
+      <div style={{ marginTop: 10, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 6 }}>
+          PER-ROOM COMPOSITION &amp; PRICE
+        </div>
+        <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
+          Place each guest in a room, pick their meal plan, and negotiate the rates and discount — tap to
+          select, tap a room to place, or drag.
+        </p>
+        <RoomCompositionPlanner
+          sealedRoomIds={sealedRoomIds}
+          entryCheckIn={entry.checkInDate ?? null}
+          entryCheckOut={entry.checkOutDate ?? null}
+          entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+          entryChildAges={entry.childAges ?? null}
+          persistKey={entry.id}
+          entryId={entry.id}
+          onChange={setRoomCompositions}
+          discountPercent={discountPercent}
+          discountBasis={discountBasis}
+          onDiscountChange={(patch) => {
+            if (patch.percent !== undefined) setDiscountPercent(patch.percent);
+            if (patch.basis !== undefined) setDiscountBasis(patch.basis);
+          }}
+        />
+      </div>
+      {working ? (
+        <button className="btn btn-primary" disabled={supersedeM.isPending} onClick={() => supersedeM.mutate()}>
+          <RefreshCw style={{ width: 14, height: 14 }} />
+          {supersedeM.isPending ? "Regenerating…" : sent ? "Regenerate quote (new round)" : "Regenerate quote"}
+        </button>
+      ) : (
+        <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
+          {createM.isPending ? "Creating…" : "Create quote"}
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className="bx-split">
@@ -352,51 +456,11 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         </div>
       )}
 
-      {!working && !accepted && (
-        <div className="block">
-          <BlockH>Build the quote</BlockH>
-          {!sealedPreferred && (
-            <p style={{ fontSize: 12, color: "var(--warn)", marginTop: 0 }}>
-              A sealed availability configuration from Inquiry is needed first.
-            </p>
-          )}
-          <div className="field">
-            <label>Internal notes (optional)</label>
-            <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Not shown to the guest" />
-          </div>
-          <div className="frow">
-            <div className="field">
-              <label>Discount % (optional)</label>
-              <input type="number" min={0} max={100} value={discountPercent} onChange={(e) => setDiscountPercent(e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Discount basis</label>
-              <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
-            </div>
-          </div>
-          <div style={{ marginTop: 10, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 6 }}>
-              PER-ROOM COMPOSITION
-            </div>
-            <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
-              Place each guest in a room and pick their meal plan — tap to select, tap a room to place, or drag.
-            </p>
-            <RoomCompositionPlanner
-              sealedRoomIds={sealedRoomIds}
-              entryCheckIn={entry.checkInDate ?? null}
-              entryCheckOut={entry.checkOutDate ?? null}
-              entryAdults={entry.adultCount ?? entry.guestCount ?? null}
-              entryChildAges={entry.childAges ?? null}
-              persistKey={entry.id}
-              entryId={entry.id}
-              onChange={setRoomCompositions}
-            />
-          </div>
-          <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
-            {createM.isPending ? "Creating…" : "Create quote"}
-          </button>
-        </div>
-      )}
+      {/* ONE fixed position, always (2026-08-03, operator report). It previously moved below the
+          send / answer blocks once a quote existed — which reads as the table disappearing the
+          moment you generate, exactly when you might want to renegotiate. It now stays put and
+          only its button changes: "Create quote" → "Regenerate quote". */}
+      {negotiationPanel}
 
       {draft && (
         <div className="block">
@@ -424,35 +488,24 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               </div>
             );
           })()}
-          <div className="frow">
-            <div className="field">
-              <label>Apply discount %</label>
-              <input
-                type="number"
-                value={discountPercent}
-                onChange={(e) => {
-                  setDiscountPercent(e.target.value);
-                  if (discountM.isSuccess) discountM.reset();
-                  if (approveM.isSuccess) approveM.reset();
-                }}
-              />
+          {/* The discount figure itself is edited in the negotiation panel above. What stays
+              here is the governance step: create/regenerate records the request and defers the
+              actor-ceiling check to this approval (the backend skips the ceiling on those
+              paths on purpose). */}
+          {recordedDiscount && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 13 }}>
+              <span className="tag">
+                {recordedDiscount.percent}% off · {recordedDiscount.basis}
+              </span>
+              {elevated ? (
+                <button className="btn btn-ghost btn-sm" disabled={approveM.isPending || approveM.isSuccess} onClick={() => approveM.mutate()}>
+                  {approveM.isPending ? "Approving…" : approveM.isSuccess ? "✓ Discount approved" : "Approve discount (FOM)"}
+                </button>
+              ) : (
+                <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>An FOM approves the discount.</span>
+              )}
             </div>
-            <div className="field">
-              <label>Basis</label>
-              <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 13 }}>
-            <button className="btn btn-ghost btn-sm" disabled={discountM.isPending || !discountPercent} onClick={() => discountM.mutate()}>
-              <Percent style={{ width: 13, height: 13 }} />
-              {discountM.isPending ? "Applying…" : discountM.isSuccess ? "✓ Discount applied" : "Apply discount"}
-            </button>
-            {elevated && (
-              <button className="btn btn-ghost btn-sm" disabled={approveM.isPending || approveM.isSuccess} onClick={() => approveM.mutate()}>
-                {approveM.isPending ? "Approving…" : approveM.isSuccess ? "✓ Discount approved" : "Approve discount (FOM)"}
-              </button>
-            )}
-          </div>
+          )}
           <div style={{ height: 10 }} />
           <div className="frow">
             <div className="field">
@@ -497,44 +550,12 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               <input value={verbatim} onChange={(e) => setVerbatim(e.target.value)} placeholder="What the guest said" />
             </div>
           )}
-          {/* Renegotiation inputs (2026-07-28): the guest came back wanting changes — a new
-               discount and/or different per-room composition (meal plans, extra beds,
-               negotiated rates). Edit here, then "New round (supersede)" regenerates the
-               quote (fresh QUO number, fully re-priced) and the send flow re-arms the email
-               + acknowledgement window. Left untouched → prior terms carry forward. */}
-          <details style={{ margin: "4px 0 10px" }}>
-            <summary style={{ fontSize: 11.5, color: "var(--ink-3)", cursor: "pointer" }}>
-              Renegotiate terms for the new round (discount · per-room composition)
-            </summary>
-            <div className="frow" style={{ marginTop: 8 }}>
-              <div className="field">
-                <label>New discount %</label>
-                <input type="number" min={0} max={100} value={discountPercent} onChange={(e) => setDiscountPercent(e.target.value)} />
-              </div>
-              <div className="field">
-                <label>Discount basis</label>
-                <input value={discountBasis} onChange={(e) => setDiscountBasis(e.target.value)} />
-              </div>
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <RoomCompositionPlanner
-                sealedRoomIds={sealedRoomIds}
-                entryCheckIn={entry.checkInDate ?? null}
-                entryCheckOut={entry.checkOutDate ?? null}
-                entryAdults={entry.adultCount ?? entry.guestCount ?? null}
-                entryChildAges={entry.childAges ?? null}
-                persistKey={entry.id}
-                entryId={entry.id}
-                onChange={setRoomCompositions}
-              />
-            </div>
-          </details>
+          {/* Renegotiation now happens in the panel above, which stays open for exactly this
+              case: the guest came back wanting changes, so the operator edits the rooms /
+              meals / rates / discount there and hits "Regenerate quote (new round)". */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn btn-primary" disabled={acceptM.isPending} onClick={() => acceptM.mutate()}>
               {acceptM.isPending ? "Recording…" : "Record acceptance"}
-            </button>
-            <button className="btn btn-ghost" disabled={supersedeM.isPending} onClick={() => supersedeM.mutate()}>
-              New round (supersede)
             </button>
             {isElevated(session?.actorLevel) && (
               <button className="btn btn-ghost" disabled={resolveAckM.isPending} onClick={() => resolveAckM.mutate()}>
@@ -550,10 +571,20 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
       )}
 
       {accepted && (
-        <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 13 }}>
-          <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
-          Accepted · {accepted.referenceNumber} · {money(accepted.totalAmount, accepted.currency)}
-        </div>
+        <>
+          <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 13 }}>
+            <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
+            Accepted · {accepted.referenceNumber} · {money(accepted.totalAmount, accepted.currency)}
+          </div>
+          {/* Says WHERE the negotiation panel went — it is hidden here on purpose, and the
+              backend refuses to supersede an ACCEPTED quotation, so "just regenerate" is not
+              an option to offer. */}
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "7px 0 0", lineHeight: 1.5 }}>
+            These are the terms the guest agreed to, so the negotiation table is closed. To change
+            anything now, re-enter this booking to Quote from Set up — that opens a new segment
+            with a fresh quote.
+          </p>
+        </>
       )}
 
       <div className="block" style={{ marginTop: 14 }}>
