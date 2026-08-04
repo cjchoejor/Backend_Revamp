@@ -367,7 +367,7 @@ async function prepareQuotationDraft(
     const roomIds = input.roomCompositions.map((c) => c.roomId);
     const roomRows = await prisma.room.findMany({
       where: { id: { in: roomIds } },
-      select: { id: true, roomNumber: true },
+      select: { id: true, roomNumber: true, roomTypeId: true },
     });
     const numberByRoomId = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
 
@@ -387,6 +387,99 @@ async function prepareQuotationDraft(
     // `effectiveRate` equals `resolvedNightlyRate` when no discount is in play, so this is a
     // no-op for undiscounted quotes.
     const defaultRoomRate = toDecimal(effectiveRate ?? resolvedNightlyRate ?? 0);
+    const defaultRoomRatePreDiscount = toDecimal(resolvedNightlyRate ?? 0);
+
+    /**
+     * Rates PER ROOM TYPE (fixed 2026-08-04).
+     *
+     * Every room used to be costed at `defaultRoomRate` — one rate resolved from whichever room
+     * sorted first in the seal (`roomTypeId` above). On a booking mixing types that charged a
+     * Suite at the Standard rate, or a Standard at the Executive rate, decided by nothing more
+     * than seal order: observed on QUO-20260803-0002, where an Executive (3,000) and four
+     * Standards (1,800) were all billed at 2,100 because a Deluxe happened to be first.
+     *
+     * Each distinct type is now resolved on its own terms — its agent/corporate card if one
+     * covers it (including the per-room-type override), else its own rate plan — and each room
+     * is costed at its own type's rate. The booking-level `effectiveRate` / `resolvedNightlyRate`
+     * are left alone: they are the headline rate for the preferred type and carry MSR, the S4
+     * freeze and the legacy flat path, none of which are per room.
+     *
+     * A type whose rate cannot be resolved (no eligible plan) falls back to the booking rate
+     * rather than throwing — resolving a second type must not fail a quote that used to succeed.
+     */
+    type TypeRates = {
+      room: Prisma.Decimal;
+      roomPreDiscount: Prisma.Decimal;
+      extraBed: Prisma.Decimal;
+      breakfast: Prisma.Decimal;
+      lunch: Prisma.Decimal;
+      dinner: Prisma.Decimal;
+    };
+    const bookingTypeRates: TypeRates = {
+      room: defaultRoomRate,
+      roomPreDiscount: defaultRoomRatePreDiscount,
+      extraBed: defaultExtraBed,
+      breakfast: defaultBreakfast,
+      lunch: defaultLunch,
+      dinner: defaultDinner,
+    };
+    const ratesByType = new Map<string, TypeRates>();
+    for (const tid of new Set(roomRows.map((r) => r.roomTypeId).filter((t): t is string => !!t))) {
+      // The preferred type is already resolved above — reuse it rather than querying twice.
+      if (tid === roomTypeId) {
+        ratesByType.set(tid, bookingTypeRates);
+        continue;
+      }
+      try {
+        const typeAgentRate = entry.inquiryId
+          ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: tid, mealPlan })
+          : null;
+        if (typeAgentRate) {
+          // Card rates are negotiated, so no discount is folded in — the same rule the
+          // booking-level resolution applies (`effectiveRate = agentRate.roomRate`).
+          const r = toDecimal(typeAgentRate.roomRate);
+          ratesByType.set(tid, {
+            room: r,
+            roomPreDiscount: r,
+            extraBed: toDecimal(typeAgentRate.addOns?.extraBed ?? 0),
+            breakfast: toDecimal(typeAgentRate.addOns?.breakfast ?? 0),
+            lunch: toDecimal(typeAgentRate.addOns?.lunch ?? 0),
+            dinner: toDecimal(typeAgentRate.addOns?.dinner ?? 0),
+          });
+          continue;
+        }
+        const typePricing = await resolveRatePlanPricingForS2Quotation(prisma, {
+          isDeficientGuestTier,
+          roomTypeId: tid,
+          stay,
+          discountPercentOffRequested: requested?.discountPercent,
+          actorMaxDiscountPercent,
+        });
+        if (requested && !typePricing.discountWithinAuthorityBounds) {
+          throw new PolicyGateBlockedError(
+            "DISCOUNT_AUTHORITY",
+            "Requested discount exceeds the acting user's maximum discount authority",
+          );
+        }
+        ratesByType.set(tid, {
+          room: toDecimal(typePricing.effectiveRate ?? typePricing.resolvedNightlyRate ?? 0),
+          roomPreDiscount: toDecimal(typePricing.resolvedNightlyRate ?? 0),
+          // No card for this type — add-ons stay 0, exactly as they were for the whole booking
+          // before. Per-room negotiated rates still override.
+          extraBed: toDecimal(0),
+          breakfast: toDecimal(0),
+          lunch: toDecimal(0),
+          dinner: toDecimal(0),
+        });
+      } catch (e) {
+        if (e instanceof PolicyGateBlockedError) throw e;
+        ratesByType.set(tid, bookingTypeRates);
+      }
+    }
+    const ratesForRoom = (roomId: string): TypeRates => {
+      const tid = roomRows.find((r) => r.id === roomId)?.roomTypeId;
+      return (tid ? ratesByType.get(tid) : undefined) ?? bookingTypeRates;
+    };
 
     // Validate each room's composition BEFORE pricing so we reject early with a friendly
     // error (rather than persisting bad data). Both policies are no-ops when key fields
@@ -454,12 +547,13 @@ async function prepareQuotationDraft(
         startDate: c.startDate ? new Date(c.startDate) : stay?.checkIn ?? null,
         endDate: c.endDate ? new Date(c.endDate) : stay?.checkOut ?? null,
       };
+      const tr = ratesForRoom(c.roomId);
       const ctx: RoomCompositionRateContext = {
-        defaultRoomRate,
-        defaultExtraBedRate: defaultExtraBed,
-        defaultBreakfastRate: defaultBreakfast,
-        defaultLunchRate: defaultLunch,
-        defaultDinnerRate: defaultDinner,
+        defaultRoomRate: tr.room,
+        defaultExtraBedRate: tr.extraBed,
+        defaultBreakfastRate: tr.breakfast,
+        defaultLunchRate: tr.lunch,
+        defaultDinnerRate: tr.dinner,
         serviceChargeRate,
         gstRate,
         nights: nightsForPricing,
@@ -478,10 +572,13 @@ async function prepareQuotationDraft(
     // prints these as the original prices and shows the difference as a deduction. Rooms
     // with a per-room negotiatedRoomRate ignore defaultRoomRate, so they price identically
     // in both runs — accurate: a negotiated rate is not a discounted one.
-    const preRateDec = toDecimal(resolvedNightlyRate ?? 0);
-    const postRateDec = toDecimal(effectiveRate ?? 0);
-    if (requested && preRateDec.gt(postRateDec)) {
-      const roomsPre = rooms.map((r) => ({ ...r, ctx: { ...r.ctx, defaultRoomRate: preRateDec } }));
+    // Per type now, same as the priced run: a mixed-type booking has no single "original" rate.
+    const anyTypeDiscounted = [...ratesByType.values()].some((t) => t.roomPreDiscount.gt(t.room));
+    if (requested && anyTypeDiscounted) {
+      const roomsPre = rooms.map((r) => ({
+        ...r,
+        ctx: { ...r.ctx, defaultRoomRate: ratesForRoom(r.roomId).roomPreDiscount },
+      }));
       compositionTotalsPreDiscount = computeQuotationCompositionTotals(roomsPre);
     }
   }

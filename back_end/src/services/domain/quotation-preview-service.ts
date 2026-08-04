@@ -176,23 +176,22 @@ export async function buildQuotationPreview(
   const reference = await buildEntryRateReference(prisma, entryId);
 
   /**
-   * The draft resolves ONE room rate for the whole booking and applies it to every room —
-   * `prepareQuotationDraft` derives a single `roomTypeId` from the FIRST room in the seal and
-   * uses the resulting `defaultRoomRate` in every room's context. On a booking mixing room
-   * types that means a Deluxe is charged at the Standard rate (or the reverse), decided by
-   * whichever room happens to sort first. That is a real pricing defect, reported separately.
+   * Each room prices at its OWN type's rate, matching `prepareQuotationDraft` since 2026-08-04.
    *
-   * The preview mirrors it exactly rather than pricing each room at its own type's rate. A
-   * preview that quietly showed the "correct" per-type figure would tell the operator a total
-   * the quote will not produce, which is worse than the defect itself: the desk's contract is
-   * to show what the backend WILL charge. When the draft is fixed, this follows it.
+   * Both used to charge every room one rate — resolved from whichever room sorted first in the
+   * seal — so a mixed-type booking billed a Suite at the Standard rate or the reverse. The draft
+   * was fixed to resolve per type; this follows it, because the preview's whole value is being
+   * the figure the quote will actually produce.
+   *
+   * The fallback for a type the reference could not resolve is the preferred type's rate, which
+   * is what the draft falls back to as well.
    */
   const sealedCfg = entry.availabilityConfigs.find((c) => c.sealedAt != null && c.optionSelected != null) ?? null;
   const firstSealedRoomId = sealedCfg ? firstRoomId(readOptionSelected(sealedCfg.optionSelected)) : null;
   const firstSealedRoom = firstSealedRoomId
     ? await prisma.room.findUnique({ where: { id: firstSealedRoomId }, select: { roomTypeId: true } })
     : null;
-  const draftRateType = firstSealedRoom?.roomTypeId ?? null;
+  const fallbackRateType = firstSealedRoom?.roomTypeId ?? null;
 
   const roomIds = input.roomCompositions.map((c) => c.roomId);
   const rooms = roomIds.length
@@ -211,13 +210,11 @@ export async function buildQuotationPreview(
 
   const dec = (v: number | null | undefined): Prisma.Decimal => new Prisma.Decimal(v ?? 0);
 
-  // One reference for every room — the draft's single-rate behaviour (see above). Falls back to
-  // the room's own type only when the seal yields no type at all.
-  const draftRef = draftRateType ? refByType.get(draftRateType) : undefined;
+  const fallbackRef = fallbackRateType ? refByType.get(fallbackRateType) : undefined;
 
   const priced = input.roomCompositions.map((c) => {
     const room = roomById.get(c.roomId);
-    const ref = draftRef ?? (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined);
+    const ref = (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined) ?? fallbackRef;
     const compositionInput: RoomCompositionInput = {
       nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
       occupantCount: c.occupantCount,
