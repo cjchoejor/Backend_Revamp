@@ -206,7 +206,6 @@ export async function createRoom(
     roomNumber: string;
     roomTypeId: string;
     floorNumber?: number | null;
-    capacity?: number;
     isShadowInventory?: boolean;
   },
   actorId: string,
@@ -233,7 +232,9 @@ export async function createRoom(
           roomNumber,
           roomTypeId: input.roomTypeId,
           floorNumber: input.floorNumber ?? null,
-          capacity: input.capacity ?? 2,
+          // Room.capacity is a legacy column kept only so existing rows stay valid. Occupancy
+          // is governed by the room TYPE (standardCapacity / maxCapacity), so this is left at
+          // its schema default rather than being collected per room.
           currentClaimState: InventoryClaimState.FREE,
           physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
           isShadowInventory: input.isShadowInventory ?? false,
@@ -318,7 +319,7 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
 export async function updateRoom(
   prisma: PrismaClient,
   id: string,
-  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; capacity: number; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
+  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
   actorId: string,
 ) {
   const existing = await prisma.room.findUnique({ where: { id } });
@@ -353,7 +354,6 @@ export async function updateRoom(
           roomNumber: newRoomNumber,
           roomTypeId: input.roomTypeId,
           floorNumber: input.floorNumber,
-          capacity: input.capacity,
           isShadowInventory: input.isShadowInventory,
           isBlocked: input.isBlocked,
           blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason?.trim() || null,

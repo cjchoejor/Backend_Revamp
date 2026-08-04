@@ -261,7 +261,8 @@ export async function listAdminRooms(session: Session) {
       id: string;
       roomNumber: string;
       floorNumber: number | null;
-      capacity: number;
+      // No `capacity` — occupancy lives on the room TYPE (standard / max capacity), which is
+      // what the backend enforces. The per-room column was dropped 2026-08-04.
       currentClaimState: string;
       physicalState: string;
       isDeficient: boolean;

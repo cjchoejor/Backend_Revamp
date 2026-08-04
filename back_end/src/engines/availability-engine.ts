@@ -9,7 +9,6 @@ export type RoomAvailabilityRecord = {
   id: string;
   roomNumber: string;
   roomTypeId: string;
-  capacity: number;
   currentClaimState: InventoryClaimState;
   isShadowInventory?: boolean;
   isDeficient: boolean;

@@ -142,11 +142,15 @@ export const updateRoomTypeRequestSchema = z.object({
   maxExtraBeds: z.coerce.number().int().min(0).optional(),
 });
 
+// Capacity is deliberately NOT accepted per room (2026-08-04). It belongs to the room TYPE
+// (`RoomType.standardCapacity` / `maxCapacity`), which is what `capacity-validation-service`
+// actually enforces. `Room.capacity` was written by the admin form but never read by any
+// occupancy rule — a control that looked authoritative and did nothing. Zod strips unknown
+// keys, so an older client still sending it is silently ignored rather than erroring.
 export const createRoomRequestSchema = z.object({
   roomNumber: z.string().min(1),
   roomTypeId: z.string().min(1),
   floorNumber: z.coerce.number().int().optional().nullable(),
-  capacity: z.coerce.number().int().positive().optional(),
   isShadowInventory: z.boolean().optional(),
 });
 
@@ -154,7 +158,6 @@ export const updateRoomRequestSchema = z.object({
   roomNumber: z.string().min(1).optional(),
   roomTypeId: z.string().min(1).optional(),
   floorNumber: z.coerce.number().int().optional().nullable(),
-  capacity: z.coerce.number().int().positive().optional(),
   isShadowInventory: z.boolean().optional(),
   isBlocked: z.boolean().optional(),
   blockedReason: z.string().optional().nullable(),

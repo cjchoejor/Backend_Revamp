@@ -79,7 +79,6 @@ async function progressS5ToS6(entryId: string) {
           roomNumber: `S6-${Date.now()}`,
           roomTypeId: roomType.id,
           floorNumber: 6,
-          capacity: 2,
           currentClaimState: "CONFIRMED",
           physicalState: "AVAILABLE_CLEAN",
         },
@@ -426,7 +425,7 @@ async function run() {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const room = await prisma.room.create({
-      data: { roomNumber: `VIP-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 6, capacity: 2, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" },
+      data: { roomNumber: `VIP-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 6, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" },
     });
     const gpVip = await prisma.guestProfile.create({ data: { firstName: "VIP", lastName: "Guest", vipTier: "PLATINUM", createdBy: "test" } });
     const ci = new Date();
@@ -670,7 +669,6 @@ async function run() {
         roomNumber: `WI-${Date.now()}`,
         roomTypeId: roomType.id,
         floorNumber: 1,
-        capacity: 2,
         currentClaimState: "CONFIRMED",
         physicalState: "AVAILABLE_CLEAN",
         isDeficient: false,
@@ -742,7 +740,6 @@ async function run() {
         roomNumber: `WI-DIRTY-${Date.now()}`,
         roomTypeId: roomType.id,
         floorNumber: 1,
-        capacity: 2,
         currentClaimState: "CONFIRMED",
         physicalState: "DIRTY",
         isDeficient: false,
@@ -799,10 +796,10 @@ async function run() {
     const inquiry = await prisma.inquiry.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const roomType = await prisma.roomType.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
     const oldRoom = await prisma.room.create({
-      data: { roomNumber: `RE-OLD-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 9, capacity: 2, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" } as any,
+      data: { roomNumber: `RE-OLD-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 9, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" } as any,
     });
     const newRoom = await prisma.room.create({
-      data: { roomNumber: `RE-NEW-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 9, capacity: 2, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" } as any,
+      data: { roomNumber: `RE-NEW-${Date.now()}`, roomTypeId: roomType.id, floorNumber: 9, currentClaimState: "CONFIRMED", physicalState: "AVAILABLE_CLEAN" } as any,
     });
     const gp = await prisma.guestProfile.create({ data: { firstName: "Re", lastName: "Entry", createdBy: "test" } });
     const e = await prisma.entry.create({ data: { inquiryId: inquiry.id, guestProfileId: gp.id, currentStage: "S6", status: "ACTIVE", createdBy: "test", version: 1 } });

@@ -535,6 +535,16 @@ Two new domain services drive the child-policy runtime.
 
 **[`capacity-validation-service.ts`](back_end/src/services/domain/capacity-validation-service.ts)** — `validateCapacity(prisma, { roomTypeId?, adults, childAges })` returns issues with codes: `OVER_MAX_OCCUPANCY`, `OVER_MAX_CHILDREN`, `TOO_FEW_ADULTS`, `ADULT_CHILD_RATIO_EXCEEDED`, `UNACCOMPANIED_MINOR`, `CHILD_AGE_ABOVE_LEGAL_MINOR`, `NO_ROOM_TYPE`. Severity `BLOCK` or `WARN`. Two independent age cuts run: pricing bands (child-policy `ageBands`) for bed/meal/room-capacity math; legal age (`unaccompaniedMinor.minimumAge`) for supervision + responsibility. Called from `s1EntryService.createEntry` + `updateEntryIntakeFields` — BLOCK issues throw `ValidationError`.
 
+### Capacity lives on RoomType, never on Room (2026-08-04)
+
+Occupancy is a property of the room **type**. `RoomType.standardCapacity` / `maxCapacity` / `maxChildren` / `requiredAccompanyingAdults` / `maxExtraBeds` are what `capacity-validation-service` enforces, and what the allowed-room-count envelope is derived from.
+
+`Room.capacity` was collected by the Rooms admin form and passed into the availability engine, where it was only *declared* on `RoomAvailabilityRecord` and never read — `queryAvailability` decides on room type, blockages, blocked/maintenance flags and deficiency, never on capacity. A room set to 2 whose type allowed 3 behaved identically to every other room of that type: a control that looked authoritative and did nothing.
+
+**Column dropped** in migration `20260804090000_drop_room_capacity`, along with the Rooms admin page field, the create/update DTOs, the admin service writes, the engine's input type, the `s1-availability-service` / `s1-processing-lock-service` mappings, the seed, and the S5–S7 acceptance scripts.
+
+Don't reintroduce a per-room capacity field. It cannot be made meaningful: at S1 the guest count is validated **before** any specific room is chosen, so a per-room limit has nothing to attach to at the point occupancy is actually checked. `Space.capacity` is a different table and is genuinely used — conference spaces check attendee counts against it.
+
 ### RoomType capacity columns (2026-06-26)
 
 Migration `20260626053415_add_roomtype_capacity_fields` added four columns to `RoomType`: `maxOccupancy` (default 2), `maxChildren` (default 2), `requiredAccompanyingAdults` (default 1), `maxExtraBeds` (default 0). Editable per-type on the rewritten `/admin/room-types` page (new "Edit" affordance on each row with inline numeric editors). Backend DTOs `createRoomTypeRequestSchema` + `updateRoomTypeRequestSchema` accept them; `inventoryAdminService.createRoomType` + `.updateRoomType` persist them. Consumed by `capacity-validation-service`.

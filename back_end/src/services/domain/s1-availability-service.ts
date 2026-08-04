@@ -211,7 +211,6 @@ async function runAvailabilityEngineForEntry(
       id: r.id,
       roomNumber: r.roomNumber,
       roomTypeId: r.roomTypeId,
-      capacity: r.capacity,
       currentClaimState: r.currentClaimState,
       isShadowInventory: (r as any).isShadowInventory === true,
       isDeficient: r.isDeficient,

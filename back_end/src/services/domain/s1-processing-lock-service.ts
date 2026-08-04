@@ -167,7 +167,6 @@ export async function reconfirm(prisma: PrismaClient, actorId: string, expiredLo
             id: r.id,
             roomNumber: r.roomNumber,
             roomTypeId: r.roomTypeId,
-            capacity: r.capacity,
             currentClaimState: r.currentClaimState,
             isShadowInventory: (r as any).isShadowInventory === true,
             isDeficient: r.isDeficient,

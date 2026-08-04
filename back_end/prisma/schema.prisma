@@ -1236,7 +1236,10 @@ model Room {
   roomNumber        String              @unique
   roomTypeId        String
   floorNumber       Int?
-  capacity          Int                 @default(2)
+  // NOTE (2026-08-04): `capacity` was dropped. Occupancy is a property of the room TYPE —
+  // RoomType.standardCapacity / maxCapacity are what capacity-validation-service enforces.
+  // The per-room column was written by the admin form and read by nothing, and it cannot be
+  // made meaningful: at S1 the guest count is validated before any specific room is chosen.
   currentClaimState InventoryClaimState @default(FREE)
   physicalState     RoomPhysicalState   @default(AVAILABLE_CLEAN)
   expectedReadyAt   DateTime?
