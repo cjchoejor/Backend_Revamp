@@ -119,9 +119,18 @@ quotationsAndHoldsRouter.post(
   },
 );
 
+/**
+ * Releasing a hold is a GM decision (2026-08-04, operator ruling; was L2).
+ *
+ * A held room is inventory promised to a guest. Letting it go is the moment an overbooking or a
+ * lost booking becomes possible — two operators racing for the same room at S2/S3 is exactly the
+ * case this guards — so the call belongs with someone who can weigh both guests, not with the
+ * operator who wants the room. Placing a hold stays L1: taking inventory off the shelf is
+ * ordinary front-desk work, giving it away is not.
+ */
 quotationsAndHoldsRouter.post(
   "/entries/:id/holds/speculative/:holdId/release",
-  requireActorLevel("L2"),
+  requireActorLevel("L3"),
   validateBody(releaseSpeculativeHoldRequestSchema),
   async (req, res, next) => {
     try {

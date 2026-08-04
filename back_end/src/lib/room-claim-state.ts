@@ -104,25 +104,36 @@ export async function transitionRoomClaimState(tx: TxClient, input: TransitionIn
 }
 
 /**
- * Collect every room this entry currently references, from three sources:
+ * Collect every room this entry currently references, from four sources:
  *  1. `RoomAssignment` rows (post-check-in physical assignment)
  *  2. `CommittedHold.roomId` (legacy single-room hold pointer)
  *  3. `CommittedHold.perNightBreakdown` (multi-room sealed selection snapshot,
  *     populated by `s3-hold-service.placeCommittedHold` since 2026-07-13)
+ *  4. `SpeculativeHold.roomId` — live S2 holds (added 2026-08-04)
  *
  * Deduped. This is the pattern that every cancellation / expiry / closure needs
  * — releasing only `hold.roomId` leaks rooms 2..N of any multi-room booking.
+ *
+ * Source 4 was missing, so an entry that only ever got as far as a speculative hold — the
+ * common shape for a booking parked at S2 — left its room pinned `SPECULATIVELY_HELD` when the
+ * park timer expired and the entry was released. The room then read as taken on the floor grid
+ * with no live booking behind it.
  */
 export async function collectRoomsHeldByEntry(tx: TxClient, entryId: string): Promise<string[]> {
-  const [assignments, hold] = await Promise.all([
+  const [assignments, hold, speculative] = await Promise.all([
     tx.roomAssignment.findMany({ where: { entryId }, select: { roomId: true } }),
     tx.committedHold.findUnique({
       where: { entryId },
       select: { roomId: true, perNightBreakdown: true },
     }),
+    tx.speculativeHold.findMany({
+      where: { entryId, state: "PLACED", roomId: { not: null } },
+      select: { roomId: true },
+    }),
   ]);
   const ids = new Set<string>();
   for (const a of assignments) ids.add(a.roomId);
+  for (const s of speculative) if (s.roomId) ids.add(s.roomId);
   if (hold?.roomId) ids.add(hold.roomId);
   const breakdown = (hold?.perNightBreakdown ?? null) as
     | Array<{ date?: string; roomIds?: Array<{ roomId?: string }> }>

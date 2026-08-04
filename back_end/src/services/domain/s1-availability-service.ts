@@ -105,7 +105,7 @@ export async function runAvailabilityEngineForEntry(
     },
   } as const;
 
-  const [reservations, committedHolds] = await Promise.all([
+  const [reservations, committedHolds, speculativeHolds] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         frozenCheckInDate: { lt: checkOut },
@@ -141,6 +141,41 @@ export async function runAvailabilityEngineForEntry(
       select: {
         roomId: true,
         entryId: true,
+        entry: {
+          select: {
+            ...contactSelect,
+            checkInDate: true,
+            checkOutDate: true,
+          },
+        },
+      },
+    }),
+    /**
+     * Speculative holds (S2) block too — added 2026-08-04.
+     *
+     * They were queried by neither the search nor the S3 gate, so a room could carry a live
+     * speculative hold and still be offered as free. Two operators quoting different guests at
+     * the same time would each place a hold on the same room and both walk into S3, where the
+     * first committed hold wins and the second booking has to be unpicked in front of a guest.
+     * A speculative hold is a weaker claim than a committed one, but it is still a claim, and
+     * the point of showing it is precisely to stop the second operator taking the room.
+     */
+    prisma.speculativeHold.findMany({
+      where: {
+        state: "PLACED",
+        roomId: { not: null },
+        NOT: { entryId: entry.id },
+        expiresAt: { gt: new Date() },
+        entry: {
+          ...stillHoldsInventory,
+          checkInDate: { lt: checkOut },
+          checkOutDate: { gt: checkIn },
+        },
+      },
+      select: {
+        roomId: true,
+        entryId: true,
+        expiresAt: true,
         entry: {
           select: {
             ...contactSelect,
@@ -237,6 +272,10 @@ export async function runAvailabilityEngineForEntry(
   // unfiltered hold would relabel a confirmed booking as "Held". Reservation is the stronger
   // claim and the later stage, so it wins and the duplicate hold is dropped.
   const reservedRoomIds = new Set(reservedBlockages.map((b) => `${b.entryId}:${b.roomId}`));
+  // Claims rank RESERVED > COMMITTED hold > SPECULATIVE hold. One booking can carry all three
+  // for the same room, and it is one occupancy — report only the strongest.
+  const strongerClaim = new Set(reservedRoomIds);
+  for (const h of committedHolds) if (h.roomId) strongerClaim.add(`${h.entryId}:${h.roomId}`);
   const roomBlockages = [
     ...reservedBlockages,
     ...committedHolds
@@ -247,6 +286,23 @@ export async function runAvailabilityEngineForEntry(
         startDate: h.entry!.checkInDate!,
         endDate: h.entry!.checkOutDate!,
         source: "HOLD" as const,
+        holdKind: "COMMITTED" as const,
+        entryId: h.entryId,
+        entryReferenceNumber: h.entry?.inquiryId ?? null,
+        ...contextFromEntry(h.entry),
+      })),
+    // Weakest claim, so it is added last and skipped wherever a stronger one already covers the
+    // same room: a reservation or committed hold on the entry supersedes its speculative one.
+    ...speculativeHolds
+      .filter((h) => h.roomId && h.entry?.checkInDate && h.entry?.checkOutDate)
+      .filter((h) => !strongerClaim.has(`${h.entryId}:${h.roomId}`))
+      .map((h) => ({
+        roomId: h.roomId!,
+        startDate: h.entry!.checkInDate!,
+        endDate: h.entry!.checkOutDate!,
+        source: "HOLD" as const,
+        holdKind: "SPECULATIVE" as const,
+        holdExpiresAt: h.expiresAt,
         entryId: h.entryId,
         entryReferenceNumber: h.entry?.inquiryId ?? null,
         ...contextFromEntry(h.entry),
