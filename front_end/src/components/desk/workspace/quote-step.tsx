@@ -348,6 +348,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
    * ("Create quote" → "Regenerate quote"). An earlier version moved it below the send block
    * once a quote existed, which read as the table vanishing the instant you generated. It
    * closes only on acceptance, where the terms bind and the backend refuses to supersede.
+   *
+   * That position is FIRST, ahead of the quote history and the send / answer blocks, so that
+   * everything a generate produces lands below the button that produced it rather than above
+   * the table the operator is standing in.
    */
   const negotiationPanel = accepted ? null : (
     <div className="block">
@@ -418,6 +422,14 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         </p>
       </div>
 
+      {/* The negotiation panel leads the step, and everything the quote produces sits BELOW it
+          (2026-08-04, operator report). Quote history used to come first, so generating a quote
+          from the button at the panel's foot put the result off-screen ABOVE the whole
+          composition table — the operator had to scroll back up past it to see what they had
+          just made. Panel first means the new quote appears directly under the button that
+          created it. */}
+      {negotiationPanel}
+
       {allQuotations.length > 0 && (
         <div className="block">
           <BlockH>Quote history</BlockH>
@@ -455,12 +467,6 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           ))}
         </div>
       )}
-
-      {/* ONE fixed position, always (2026-08-03, operator report). It previously moved below the
-          send / answer blocks once a quote existed — which reads as the table disappearing the
-          moment you generate, exactly when you might want to renegotiate. It now stays put and
-          only its button changes: "Create quote" → "Regenerate quote". */}
-      {negotiationPanel}
 
       {draft && (
         <div className="block">
