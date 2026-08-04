@@ -18,6 +18,21 @@ So escalation lands at 2h and the gentle nudge at 24h. The two values live on di
 
 Config/policy locations: `/admin/financial` → `advancePayment.thresholds`, `advancePayment.followUpWindowSeconds`, `advancePayment.escalationWindowSeconds`. `/admin/policies` → `registry.advancePaymentFollowUp.windowSeconds`.
 
+## OPEN — "Set walk-in" on /admin/rate-plans is wired to nothing (found 2026-08-04)
+
+The column writes the config key `availability.walkIn.ratePlanId`, and that key is read in exactly two places, both administrative:
+
+- `getWalkInRatePlan` / `setWalkInRatePlan` in [rate-plan-admin-service.ts](../back_end/src/services/admin/rate-plan-admin-service.ts) — the endpoints behind the column
+- a guard in the same file that refuses to deactivate whichever plan is currently flagged
+
+**No pricing code reads it.** [`loadEligibleRatePlans`](../back_end/src/lib/load-eligible-rate-plans.ts) is the single source of rate plans for both the S1 indicative chip and S2 quotations; it loads every active plan, filters by `roomTypeId`, and lets the pricing engine choose by type priority (`INDIVIDUAL: 1` … `RACK: 5`). The walk-in key never enters that path.
+
+So the flag currently means only "this plan cannot be deactivated". What actually prices a walk-in is the plan's **type** plus its **room-type binding** — which is why seeding the 10 per-type `INDIVIDUAL` plans changed walk-in pricing and marking a plan "walk-in" would not have.
+
+→ Decide: **wire it** (e.g. use it as the fallback when no type-bound plan matches, instead of relying on RACK priority), or **remove the column**. Leaving a switch that looks like it sets the walk-in price but doesn't is the kind of thing that quietly misconfigures a property.
+
+Left as-is deliberately on 2026-08-04 — logged rather than fixed, per the user.
+
 ## OPEN — no way to reopen a closed or cancelled booking (found 2026-07-31)
 
 See the "reopen" analysis: `closeEntryAtS9` sets `status = CLOSED` and nothing anywhere sets it back; cancellation sets `status = CANCELLED` + `stage = TERMINAL` and there is no un-cancel. Post-stay CHARGES can still be posted after closure (the gate checks stage, not status) but PAYMENTS cannot (`recordPayment` requires `folio.state = PROVISIONAL`). That asymmetry means a late-discovered payment currently has no home.
