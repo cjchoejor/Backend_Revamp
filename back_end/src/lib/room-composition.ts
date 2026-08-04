@@ -93,6 +93,21 @@ export type RoomCompositionRateContext = {
   /** GST percentage (e.g., 0.05 for 5%). Comes from `billing.salesTaxRate`. */
   gstRate: number;
   /**
+   * Age-band meal shares from `registry.child.mealPricing` (admin-editable) — the percentage OF
+   * the adult meal rate each band pays: under-6 0, 6–10 70, adult 100 by default. Pass
+   * `loadChildPolicyBundle(db).mealPricing`.
+   *
+   * Optional only so a caller with no DB access still type-checks; when it is omitted every
+   * cover is charged the full adult rate, which is what the composition path did before
+   * 2026-08-04 and is wrong for any room with children. Every caller should pass it.
+   */
+  childMealPricing?: {
+    enabled: boolean;
+    youngChildPercent: number;
+    childPercent: number;
+    adultPercent: number;
+  };
+  /**
    * Nights the composition covers. Callers can either pass this explicitly (e.g., from
    * `entry.checkOutDate - entry.checkInDate`) or leave it undefined and rely on the
    * assignment's own `startDate`/`endDate`. When both are null → treated as 1 night
@@ -267,13 +282,46 @@ export function computeRoomComposition(
 
   const perNightRoom = toDecimal(roomRate);
   const perNightExtraBed = toDecimal(extraBedRate).mul(extraBeds);
+  /**
+   * One meal's covers, priced by age band (docs/Legphel-Child-Policy.md §4).
+   *
+   * The rule is a share OF the adult rate, not a discount off it: under-6 free, 6–10 at 70%,
+   * 11+ at the full rate. The percentages come from `registry.child.mealPricing` and are
+   * admin-editable — nothing here assumes 70.
+   *
+   * The row stores COUNTS, not who is on which plan, so covers are allocated adults first, then
+   * 6–10, then under-6. When everyone in the room takes the plan — the normal case, and what the
+   * guest board produces — that allocation is exact. When only some do, it charges the adults
+   * first, which is the conservative reading rather than the one that discounts most. Covers
+   * beyond the room's declared bands price as adults.
+   *
+   * With no children in the room, or with the policy disabled, this is `rate × pax` to the cent —
+   * so nothing changes for the bookings that were already correct.
+   */
+  const bandedMealCost = (rate: Prisma.Decimal, pax: number): Prisma.Decimal => {
+    const pricing = ctx.childMealPricing;
+    const kids = Math.max(0, input.cnb6To10Count ?? 0);
+    const young = Math.max(0, input.cnbUnder6Count ?? 0);
+    if (!pricing || pricing.enabled === false || pax <= 0 || (kids === 0 && young === 0)) {
+      return toDecimal(rate).mul(pax);
+    }
+    const adultCovers = Math.min(pax, Math.max(0, input.adultCount ?? 0));
+    const kidCovers = Math.min(pax - adultCovers, kids);
+    const youngCovers = Math.min(pax - adultCovers - kidCovers, young);
+    const unbanded = pax - adultCovers - kidCovers - youngCovers;
+    const weight =
+      (adultCovers + unbanded) * pricing.adultPercent +
+      kidCovers * pricing.childPercent +
+      youngCovers * pricing.youngChildPercent;
+    return toDecimal(rate).mul(weight).div(100);
+  };
+
   /** Cost of one night's meals for a given distribution. */
   const mealCostFor = (counts: RoomCompositionInput): Prisma.Decimal => {
     const p = paxFromMealPlanCounts(counts);
-    return toDecimal(breakfastRate)
-      .mul(p.breakfastPax)
-      .add(toDecimal(lunchRate).mul(p.lunchPax))
-      .add(toDecimal(dinnerRate).mul(p.dinnerPax));
+    return bandedMealCost(breakfastRate, p.breakfastPax)
+      .add(bandedMealCost(lunchRate, p.lunchPax))
+      .add(bandedMealCost(dinnerRate, p.dinnerPax));
   };
   // The room's usual night — what an un-overridden night costs, and what the UI shows as
   // "per night".

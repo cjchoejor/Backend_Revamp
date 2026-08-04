@@ -581,6 +581,9 @@ async function prepareQuotationDraft(
         defaultDinnerRate: tr.dinner,
         serviceChargeRate,
         gstRate,
+        // Age-band meal shares (under-6 free, 6–10 at 70% of the adult rate) — the composition
+        // path charged every cover the full adult rate until 2026-08-04.
+        childMealPricing: childPolicyBundle.mealPricing,
         nights: nightsForPricing,
       };
       return {

@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { computeRoomComposition, type RoomCompositionInput, type RoomCompositionRateContext } from "./room-composition.js";
 import { toDecimal } from "./money.js";
 import { resolveChargeRates } from "../services/infrastructure/compute-stay-charges.js";
+import { loadChildPolicyBundle } from "../services/domain/child-policy-service.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -114,6 +115,9 @@ export async function hydrateRoomAssignmentComposition(
   // caller should have persisted the resolved rates in commercialTerms.compositionTotals.perRoom.
   // Fallback: pull the room-rate from the composition's own negotiated field or 0.
   const { serviceChargeRate, gstRate } = await resolveChargeRates(db);
+  // Age-band meal shares, so the frozen figure matches what the quotation priced rather than
+  // charging a 6–10 child the adult rate at the moment of the freeze.
+  const childPolicy = await loadChildPolicyBundle(db as never);
   const ctx: RoomCompositionRateContext = {
     defaultRoomRate: decOrNull("negotiatedRoomRate") ?? toDecimal(0),
     defaultExtraBedRate: decOrNull("negotiatedExtraBedRate") ?? toDecimal(0),
@@ -122,6 +126,7 @@ export async function hydrateRoomAssignmentComposition(
     defaultDinnerRate: decOrNull("negotiatedDinnerRate") ?? toDecimal(0),
     serviceChargeRate,
     gstRate,
+    childMealPricing: childPolicy.mealPricing,
   };
 
   const computed = computeRoomComposition(compositionInput, ctx);

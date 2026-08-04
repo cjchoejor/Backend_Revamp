@@ -24,6 +24,7 @@ import {
   type RoomCompositionRateContext,
 } from "../../lib/room-composition.js";
 import { buildEntryRateReference } from "./rate-reference-service.js";
+import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 
 const ZERO = new Prisma.Decimal(0);
@@ -179,6 +180,8 @@ export async function buildQuotationPreview(
   // Same resolution the rate-reference strip shows and the draft uses: agent/corporate card
   // where one exists, else the standard rate plan, per ROOM TYPE.
   const reference = await buildEntryRateReference(prisma, entryId);
+  // Age-band meal shares, so a previewed child meal costs what the quote will charge.
+  const childPolicy = await loadChildPolicyBundle(prisma);
 
   /**
    * Each room prices at its OWN type's rate, matching `prepareQuotationDraft` since 2026-08-04.
@@ -254,6 +257,7 @@ export async function buildQuotationPreview(
       defaultDinnerRate: dec(ref?.dinnerRate),
       serviceChargeRate: reference.serviceChargeRate,
       gstRate: reference.gstRate,
+      childMealPricing: childPolicy.mealPricing,
       nights: reference.nights ?? stayNights,
     };
     return { input: compositionInput, ctx, roomId: c.roomId, roomNumber: room?.roomNumber ?? null };
