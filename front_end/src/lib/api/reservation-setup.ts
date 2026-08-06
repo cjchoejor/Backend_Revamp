@@ -151,6 +151,25 @@ export async function placeCommittedHold(
   });
 }
 
+/**
+ * Release another booking's committed hold, freeing its rooms. GM (L3) and above.
+ *
+ * The reason is required and is recorded against the booking that loses the room. The backend
+ * refuses once that booking is confirmed — at that point the rooms are bound to its reservation
+ * and the correct routes are cancellation or a room change.
+ */
+export async function releaseCommittedHold(
+  session: Session,
+  entryId: string,
+  body: { releaseReason: string },
+) {
+  return apiRequest<CommittedHoldSummary>(`/api/entries/${entryId}/holds/committed/release`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
 export async function issueProformaInvoice(
   session: Session,
   folioId: string,

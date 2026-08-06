@@ -145,6 +145,12 @@ export function RoomSelectBoard({
 
   /** Scope: null = the whole stay (base placement); a night key = that night alone. */
   const [scopeNight, setScopeNight] = useState<string | null>(null);
+  // With no "All nights" control there must always be a night in scope, so open on the first
+  // one. A single-night stay keeps the null scope — there is nothing to choose between, and the
+  // null path writes the base, which is what a one-night booking should carry.
+  useEffect(() => {
+    if (nights.length > 1 && scopeNight == null) setScopeNight(nights[0]);
+  }, [nights, scopeNight]);
 
   // Bins for the CURRENT scope. Whole-stay: free on every night (same rule as the table's
   // row-click). Single-night scope: free on that night — that's the whole point of the scope.
@@ -546,19 +552,13 @@ export function RoomSelectBoard({
         </span>
       </div>
 
-      {/* Night scope — placement can differ per night (mid-stay room change). "All nights"
-          edits the base; a marked night carries its own placement until reset. */}
+      {/* Night scope. Placement is always for ONE night (2026-08-06, operator request): the
+          "All nights" scope was removed, because a room is booked night by night and a
+          whole-stay placement quietly overwrote nights the operator had already set. A night
+          not yet touched still shows the rooms carried in from the table. */}
       {nights.length > 1 && (
         <div className="rcb-planbar rcb-nightbar">
           <span className="lbl">placing for:</span>
-          <button
-            type="button"
-            className={scopeNight == null ? "on" : ""}
-            onClick={() => setScopeNight(null)}
-            title="Place rooms for the whole stay"
-          >
-            All nights
-          </button>
           {nights.map((n) => (
             <button
               key={n}
