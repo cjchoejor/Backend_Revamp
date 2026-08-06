@@ -28,6 +28,7 @@ import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../servi
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
+import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 
 export const entriesRouter = Router();
 
@@ -110,6 +111,20 @@ entriesRouter.get("/:id/journey-summary", requireActorLevel("L1"), async (req, r
 entriesRouter.get("/:id/rate-reference", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.json(await buildEntryRateReference(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Competing claims on this booking's rooms & dates (2026-08-06): other live bookings holding a
+ * quotation / proforma / hold / reservation over the same (room, night) pairs. Advisory — the
+ * desk shows it at the S2→S3 boundary and on Set up; the hard race gate stays Policy 26.
+ */
+entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await buildCompetingClaims(prisma, req.params.id));
   } catch (e) {
     next(e);
   }

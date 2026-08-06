@@ -39,6 +39,7 @@ import {
   enforceNoOverlappingBookingForCommittedHold,
 } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
+import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
 import { enforceCancellationDisclosurePresent } from "../../policies/14-cancellation/p34-cancellation-terms-disclosure-required.js";
 import { enforceAdvancePaymentSatisfiedOrCreditExtensionPresent } from "../../policies/18-credit-extension-ceiling/p42-advance-payment-or-credit-extension-required.js";
 import {
@@ -154,26 +155,82 @@ export async function placeCommittedHold(
   const roomsUnderHold = [room, ...additionalRoomRows];
   const roomNumberById = new Map(roomsUnderHold.map((r) => [r.id, r.roomNumber]));
 
+  /**
+   * The nights each sealed room is actually claimed for — NOT the whole stay.
+   *
+   * A per-night seal is the whole point of the S1 room table: room 502 for four nights, 307 for
+   * the first three (someone else holds it on the fourth), 304 for the last. Checking every
+   * sealed room across the entry's full stay finds 307's night-4 conflict and refuses a hold the
+   * search legitimately offered — the same date-blind mistake this guard was rewritten to fix in
+   * 2026-07-29, one level down. Each room is checked only over the nights it is claimed on.
+   *
+   * Rooms with no per-night entry (a whole-stay seal, or the primary room of a legacy one) keep
+   * the full stay, so nothing about the uniform case changes.
+   */
+  const claimedRangesByRoom = (checkIn: Date, checkOut: Date) => {
+    const nightsByRoom = new Map<string, string[]>();
+    for (const night of sealedForHold.perNight ?? []) {
+      for (const id of night.roomIds) {
+        const list = nightsByRoom.get(id) ?? [];
+        list.push(String(night.date).slice(0, 10));
+        nightsByRoom.set(id, list);
+      }
+    }
+    const byRoom = new Map<string, Array<{ startDate: Date; endDate: Date }>>();
+    for (const r of roomsUnderHold) {
+      const nights = nightsByRoom.get(r.id);
+      if (!nights || nights.length === 0) {
+        byRoom.set(r.id, [{ startDate: checkIn, endDate: checkOut }]);
+        continue;
+      }
+      // Shared fold (entry-inventory-claim.ts): contiguous [start, exclusive-end) ranges — a
+      // room used on nights 1 and 3 but not 2 must not be checked against night 2.
+      const ranges = foldIsoNightsToRanges(nights);
+      byRoom.set(r.id, ranges.length > 0 ? ranges : [{ startDate: checkIn, endDate: checkOut }]);
+    }
+    return byRoom;
+  };
+
   if (entry.checkInDate && entry.checkOutDate) {
     const checkIn = entry.checkInDate;
     const checkOut = entry.checkOutDate;
+    const rangesByRoom = claimedRangesByRoom(checkIn, checkOut);
     for (const r of roomsUnderHold) {
-      enforceCommittedHoldRoomPhysicallyUsable({
-        roomNumber: r.roomNumber,
-        isBlocked: r.isBlocked,
-        blockedReason: r.blockedReason,
-        isUnderMaintenance: r.isUnderMaintenance,
-        maintenanceDeadline: r.maintenanceDeadline,
-        checkIn,
-        checkOut,
-      });
+      for (const range of rangesByRoom.get(r.id) ?? []) {
+        enforceCommittedHoldRoomPhysicallyUsable({
+          roomNumber: r.roomNumber,
+          isBlocked: r.isBlocked,
+          blockedReason: r.blockedReason,
+          isUnderMaintenance: r.isUnderMaintenance,
+          maintenanceDeadline: r.maintenanceDeadline,
+          checkIn: range.startDate,
+          checkOut: range.endDate,
+        });
+      }
     }
-    const conflicts = await findRoomBookingConflicts(prisma, {
-      roomIds: roomsUnderHold.map((r) => r.id),
-      checkIn,
-      checkOut,
-      excludeEntryId: entryId,
-    });
+    // One query per distinct range, with rooms sharing a range batched into it — the uniform
+    // case stays exactly one query, as before.
+    const byRange = new Map<string, { checkIn: Date; checkOut: Date; roomIds: string[] }>();
+    for (const r of roomsUnderHold) {
+      for (const range of rangesByRoom.get(r.id) ?? []) {
+        const key = `${range.startDate.toISOString()}|${range.endDate.toISOString()}`;
+        const bucket = byRange.get(key) ?? { checkIn: range.startDate, checkOut: range.endDate, roomIds: [] };
+        bucket.roomIds.push(r.id);
+        byRange.set(key, bucket);
+      }
+    }
+    const conflicts = (
+      await Promise.all(
+        [...byRange.values()].map((b) =>
+          findRoomBookingConflicts(prisma, {
+            roomIds: b.roomIds,
+            checkIn: b.checkIn,
+            checkOut: b.checkOut,
+            excludeEntryId: entryId,
+          }),
+        ),
+      )
+    ).flat();
     enforceNoOverlappingBookingForCommittedHold({
       conflicts: conflicts.map((c) => ({ ...c, roomNumber: roomNumberById.get(c.roomId) ?? null })),
     });

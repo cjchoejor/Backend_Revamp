@@ -166,7 +166,6 @@ export async function runAvailabilityEngineForEntry(
     prisma.speculativeHold.findMany({
       where: {
         state: "PLACED",
-        roomId: { not: null },
         NOT: { entryId: entry.id },
         expiresAt: { gt: new Date() },
         entry: {
@@ -180,6 +179,9 @@ export async function runAvailabilityEngineForEntry(
         // without it the desk can show the hold but has no way to act on it.
         id: true,
         roomId: true,
+        // The whole sealed selection the hold covers (2026-08-06) — one hold can pin several
+        // rooms, each over its own nights; `roomId` alone is just the anchor.
+        perNightBreakdown: true,
         entryId: true,
         expiresAt: true,
         entry: {
@@ -306,21 +308,27 @@ export async function runAvailabilityEngineForEntry(
     ...committedSpans,
     // Weakest claim, so it is added last and skipped wherever a stronger one already covers the
     // same room: a reservation or committed hold on the entry supersedes its speculative one.
+    // Spans resolve like committed holds (2026-08-06): the per-night snapshot when present —
+    // every room the hold pinned, on the nights it pinned them — else the anchor room across
+    // the entry's stay.
     ...speculativeHolds
-      .filter((h) => h.roomId && h.entry?.checkInDate && h.entry?.checkOutDate)
-      .filter((h) => !strongerClaim.has(`${h.entryId}:${h.roomId}`))
-      .map((h) => ({
-        roomId: h.roomId!,
-        startDate: h.entry!.checkInDate!,
-        endDate: h.entry!.checkOutDate!,
-        source: "HOLD" as const,
-        holdKind: "SPECULATIVE" as const,
-        holdId: h.id,
-        holdExpiresAt: h.expiresAt,
-        entryId: h.entryId,
-        entryReferenceNumber: h.entry?.inquiryId ?? null,
-        ...contextFromEntry(h.entry),
-      })),
+      .filter((h) => h.entry?.checkInDate && h.entry?.checkOutDate)
+      .flatMap((h) =>
+        committedHoldSpans(h, { checkIn: h.entry!.checkInDate!, checkOut: h.entry!.checkOutDate! })
+          .filter((s) => !strongerClaim.has(`${h.entryId}:${s.roomId}`))
+          .map((s) => ({
+            roomId: s.roomId,
+            startDate: s.startDate,
+            endDate: s.endDate,
+            source: "HOLD" as const,
+            holdKind: "SPECULATIVE" as const,
+            holdId: h.id,
+            holdExpiresAt: h.expiresAt,
+            entryId: h.entryId,
+            entryReferenceNumber: h.entry?.inquiryId ?? null,
+            ...contextFromEntry(h.entry),
+          })),
+      ),
   ];
 
   const engineRaw = availabilityEngineQuery({
@@ -680,6 +688,16 @@ export async function selectOption(
   const selectedRoomIds = Array.from(new Set(rawIds.map((r) => r.trim()).filter(Boolean)));
   if (selectedRoomIds.length === 0) throw new ValidationError("At least one roomId is required");
 
+  // Load all selected rooms once + compute per-room deficient status. Fetched BEFORE the
+  // availability guard so a rejection can name the room the operator clicked ("Room 307") rather
+  // than an opaque id.
+  const rooms = await prisma.room.findMany({
+    where: { id: { in: selectedRoomIds } },
+    include: { deficientConditionRecords: true },
+  });
+  if (rooms.length !== selectedRoomIds.length) throw new NotFoundError("Room");
+  const roomLabel = (id: string) => rooms.find((r) => r.id === id)?.roomNumber ?? id;
+
   // Guard: each selection must be present in the persisted resultSet and not in the
   // unavailable bucket. Fail-fast per id so the operator sees exactly which one's bad.
   const rs = (cfg.resultSet ?? {}) as any;
@@ -689,22 +707,81 @@ export async function selectOption(
   const unavailableById = new Map<string, any>(
     (rs.unavailableRooms ?? []).map((r: any) => [r.inventoryId ?? r.roomId, r]),
   );
-  for (const id of selectedRoomIds) {
-    if (unavailableById.has(id)) {
-      const u = unavailableById.get(id);
-      throw new ValidationError(`Room ${id} is not selectable (unavailableReason=${u.unavailabilityReason ?? "UNKNOWN"})`);
-    }
-    if (!availableIds.has(id)) {
-      throw new ValidationError(`Room ${id} must be selected from the persisted AvailabilityConfiguration resultSet`);
+
+  /**
+   * A PER-NIGHT selection is validated night by night — the whole-stay buckets cannot answer it.
+   *
+   * The whole-range buckets say "usable for the WHOLE stay", so a room held on one night of four
+   * lands in `unavailableRooms` even though it is free on the other three. Validating a per-night
+   * payload against them rejected exactly the booking the desk is built to express: room 502 for
+   * four nights, 307 for the first three, 304 for the last. The engine's own `perDate` breakdown
+   * is the authority for "free on THIS night" — the same source the S1 table renders its cells
+   * from, so what the operator was offered and what the save accepts cannot disagree.
+   *
+   * Rooms absent from `perDate` entirely (BLOCKED / MAINTENANCE / physically not ready — the
+   * engine only carries available, deficient and CLAIMED rooms into the breakdown) fall through
+   * to the whole-stay check below and are still refused. Same for configurations persisted
+   * before the breakdown existed: no `perDate` → the original whole-stay rule stands.
+   */
+  const perDateRows: any[] = Array.isArray(rs.perDate) ? rs.perDate : [];
+  const perDateByDate = new Map<string, { free: Set<string>; occupied: Map<string, any> }>(
+    perDateRows.map((d: any) => [
+      String(d.date).slice(0, 10),
+      {
+        free: new Set<string>([...(d.availableRoomIds ?? []), ...(d.deficientRoomIds ?? [])]),
+        occupied: new Map<string, any>((d.occupiedRoomIds ?? []).map((o: any) => [o.roomId, o])),
+      },
+    ]),
+  );
+
+  /** Ids the per-night pass cleared, and ids it could not answer for on at least one night. */
+  const clearedPerNight = new Set<string>();
+  const unresolvedPerNight = new Set<string>();
+  if (normalisedPerNight.length > 0 && perDateByDate.size > 0) {
+    for (const night of normalisedPerNight) {
+      const row = perDateByDate.get(String(night.date).slice(0, 10));
+      if (!row) {
+        // Night outside the searched window — no per-date truth for it, so every room claimed on
+        // it must still satisfy the whole-stay rule below.
+        night.roomIds.forEach((id) => unresolvedPerNight.add(id));
+        continue;
+      }
+      for (const id of night.roomIds) {
+        if (row.free.has(id)) {
+          clearedPerNight.add(id);
+          continue;
+        }
+        const occ = row.occupied.get(id);
+        if (occ) {
+          const holder = occ.guestName ?? occ.agentName ?? null;
+          throw new ValidationError(
+            `Room ${roomLabel(id)} is not free on ${String(night.date).slice(0, 10)} — ${
+              occ.source === "HOLD" ? "held" : "reserved"
+            }${holder ? ` by ${holder}` : ""}${occ.entryReferenceNumber ? ` (${occ.entryReferenceNumber})` : ""}. Pick another room for that night.`,
+          );
+        }
+        // Not free, not occupied on this night → not in the breakdown at all. Leave it to the
+        // whole-stay guard, which names the engine's own reason (BLOCKED, MAINTENANCE, …).
+        unresolvedPerNight.add(id);
+      }
     }
   }
 
-  // Load all selected rooms once + compute per-room deficient status.
-  const rooms = await prisma.room.findMany({
-    where: { id: { in: selectedRoomIds } },
-    include: { deficientConditionRecords: true },
-  });
-  if (rooms.length !== selectedRoomIds.length) throw new NotFoundError("Room");
+  for (const id of selectedRoomIds) {
+    // Already proven free on every night it was actually claimed for.
+    if (clearedPerNight.has(id) && !unresolvedPerNight.has(id)) continue;
+    if (unavailableById.has(id)) {
+      const u = unavailableById.get(id);
+      throw new ValidationError(
+        `Room ${roomLabel(id)} is not selectable (unavailableReason=${u.unavailabilityReason ?? "UNKNOWN"})`,
+      );
+    }
+    if (!availableIds.has(id)) {
+      throw new ValidationError(
+        `Room ${roomLabel(id)} must be selected from the persisted AvailabilityConfiguration resultSet`,
+      );
+    }
+  }
   const perRoom = selectedRoomIds.map((id) => {
     const room = rooms.find((r) => r.id === id)!;
     const isDeficient = (room.deficientConditionRecords ?? []).some((d) => d.status !== "RESOLVED");

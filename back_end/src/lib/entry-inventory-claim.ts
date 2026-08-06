@@ -51,6 +51,26 @@ type ReservedEntryRooms = {
 /** One room's claim over one span of nights. `endDate` is the EXCLUSIVE checkout. */
 export type ClaimSpan = { roomId: string; startDate: Date; endDate: Date };
 
+/**
+ * Fold ISO nights into contiguous `[start, exclusive-end)` ranges — a room used on nights 1
+ * and 3 but not 2 must not be checked (or blocked) for night 2. Shared by every consumer that
+ * turns a per-night seal into date ranges (S3 committed-hold gate, S2 speculative-hold gate),
+ * so the folding rule cannot drift between them.
+ */
+export function foldIsoNightsToRanges(nights: Iterable<string>): Array<{ startDate: Date; endDate: Date }> {
+  const ranges: Array<{ startDate: Date; endDate: Date }> = [];
+  for (const iso of [...new Set(nights)].sort()) {
+    const startDate = new Date(`${String(iso).slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(startDate.getTime())) continue;
+    const endDate = new Date(startDate);
+    endDate.setUTCDate(endDate.getUTCDate() + 1);
+    const last = ranges[ranges.length - 1];
+    if (last && last.endDate.getTime() === startDate.getTime()) last.endDate = endDate;
+    else ranges.push({ startDate, endDate });
+  }
+  return ranges;
+}
+
 /** `[{ date, roomIds: [{ roomId }] }]` → date → room ids, read defensively. */
 function perNightMap(breakdown: Prisma.JsonValue | null | undefined): Map<string, string[]> {
   const out = new Map<string, string[]>();
@@ -103,6 +123,17 @@ export function committedHoldSpans(
     if (spans.length > 0) return spans;
   }
   return hold.roomId ? [{ roomId: hold.roomId, startDate: stay.checkIn, endDate: stay.checkOut }] : [];
+}
+
+/**
+ * Every room a hold covers: the per-night snapshot's rooms plus the primary `roomId`. Works for
+ * both hold kinds — CommittedHold and (since 2026-08-06) SpeculativeHold share the breakdown
+ * shape, and both must release/inspect ALL their rooms, not just the primary.
+ */
+export function heldRoomIds(hold: { roomId: string | null; perNightBreakdown?: Prisma.JsonValue | null }): string[] {
+  const ids = new Set(roomIdsFromPerNight(hold.perNightBreakdown));
+  if (hold.roomId) ids.add(hold.roomId);
+  return [...ids];
 }
 
 /** Distinct room ids inside a `CommittedHold.perNightBreakdown` snapshot, read defensively. */

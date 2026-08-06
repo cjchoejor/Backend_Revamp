@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Stage } from "@prisma/client";
+import { heldRoomIds } from "../lib/entry-inventory-claim.js";
 
 export async function runSpeculativeHoldExpiryWorker(prisma: PrismaClient, input: { holdId?: string; timerRecordId?: string }) {
   const now = new Date();
@@ -18,21 +19,32 @@ export async function runSpeculativeHoldExpiryWorker(prisma: PrismaClient, input
       data: { state: HoldState.RELEASED, releasedAt: now, releasedBy: "SYSTEM", releaseReason: "EXPIRY" },
     });
 
-    if (hold.roomId) {
-      const room = await tx.room.findUnique({ where: { id: hold.roomId } });
-      if (room) {
-        await tx.room.update({ where: { id: hold.roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
-        await tx.roomClaimStateEvent.create({
-          data: {
-            roomId: hold.roomId,
-            entryId: hold.entryId,
-            fromState: InventoryClaimState.SPECULATIVELY_HELD,
-            toState: InventoryClaimState.FREE,
-            actorId: "SYSTEM",
-            reason: "SPECULATIVE_HOLD_EXPIRED",
-            effectiveFrom: now,
-          },
+    // Every room this hold covers (per-night snapshot + primary — 2026-08-06), each freed only
+    // when this hold owns the display flag and no other live speculative hold still covers it.
+    // Date-aware placement no longer pins the flag over a stronger claim, so an expiring hold
+    // must not reset a room another booking holds COMMITTED_HELD/CONFIRMED.
+    for (const roomId of heldRoomIds(hold)) {
+      const room = await tx.room.findUnique({ where: { id: roomId } });
+      if (room && room.currentClaimState === InventoryClaimState.SPECULATIVELY_HELD) {
+        const otherLive = await tx.speculativeHold.findMany({
+          where: { state: HoldState.PLACED, id: { not: holdId }, expiresAt: { gt: now } },
+          select: { roomId: true, perNightBreakdown: true },
         });
+        const stillCovered = otherLive.some((h) => heldRoomIds(h).includes(roomId));
+        if (!stillCovered) {
+          await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
+          await tx.roomClaimStateEvent.create({
+            data: {
+              roomId,
+              entryId: hold.entryId,
+              fromState: InventoryClaimState.SPECULATIVELY_HELD,
+              toState: InventoryClaimState.FREE,
+              actorId: "SYSTEM",
+              reason: "SPECULATIVE_HOLD_EXPIRED",
+              effectiveFrom: now,
+            },
+          });
+        }
       }
     }
 

@@ -123,11 +123,12 @@ export async function findRoomBookingConflicts(
     }),
     // Speculative holds (S2) are a weaker claim than a committed one, but still a claim — two
     // operators quoting different guests at the same moment must not both be able to commit the
-    // same room. Mirrors the sibling query in s1-availability-service.ts.
+    // same room. Mirrors the sibling query in s1-availability-service.ts. NOT narrowed by
+    // roomId (2026-08-06): a multi-room hold names only its anchor there and carries the rest
+    // in `perNightBreakdown` — the room filter happens below, against the resolved spans.
     db.speculativeHold.findMany({
       where: {
         state: "PLACED",
-        roomId: { in: input.roomIds },
         NOT: { entryId: input.excludeEntryId },
         expiresAt: { gt: new Date() },
         entry: {
@@ -139,6 +140,7 @@ export async function findRoomBookingConflicts(
       select: {
         entryId: true,
         roomId: true,
+        perNightBreakdown: true,
         entry: {
           select: {
             inquiryId: true,
@@ -197,20 +199,27 @@ export async function findRoomBookingConflicts(
   }
 
   for (const s of speculative) {
-    if (!s.roomId || !s.entry?.checkInDate || !s.entry?.checkOutDate) continue;
-    const key = `${s.entryId}:${s.roomId}`;
-    // Already reported under a stronger claim by the same booking.
-    if (reservedKeys.has(key) || heldKeys.has(key)) continue;
-    conflicts.push({
-      roomId: s.roomId,
-      source: "HOLD",
-      holdKind: "SPECULATIVE",
-      entryId: s.entryId,
-      entryReferenceNumber: s.entry.inquiryId ?? null,
-      guestName: guestNameOf(s.entry.guestProfile),
-      startDate: s.entry.checkInDate,
-      endDate: s.entry.checkOutDate,
-    });
+    if (!s.entry?.checkInDate || !s.entry?.checkOutDate) continue;
+    // Same span resolution as committed holds (2026-08-06): the per-night snapshot when present
+    // — one span per (room, contiguous nights) — else the primary room across the entry's stay.
+    for (const span of committedHoldSpans(s, { checkIn: s.entry.checkInDate, checkOut: s.entry.checkOutDate })) {
+      if (!roomIdSet.has(span.roomId)) continue;
+      if (span.startDate >= input.checkOut || span.endDate <= input.checkIn) continue;
+      const key = `${s.entryId}:${span.roomId}`;
+      // Already reported under a stronger claim by the same booking.
+      if (reservedKeys.has(key) || heldKeys.has(key)) continue;
+      heldKeys.add(key);
+      conflicts.push({
+        roomId: span.roomId,
+        source: "HOLD",
+        holdKind: "SPECULATIVE",
+        entryId: s.entryId,
+        entryReferenceNumber: s.entry.inquiryId ?? null,
+        guestName: guestNameOf(s.entry.guestProfile),
+        startDate: span.startDate,
+        endDate: span.endDate,
+      });
+    }
   }
 
   return conflicts;

@@ -1370,6 +1370,11 @@ model SpeculativeHold {
   segmentId     String
   roomId        String?
   spaceId       String?
+  /// Snapshot of the sealed per-night selection at placement (2026-08-06) — same shape as
+  /// CommittedHold.perNightBreakdown ([{date, roomIds: [{roomId}]}]). When present the hold
+  /// covers EVERY room it names, each over its own nights; `roomId` stays the primary/anchor.
+  /// Null on legacy and single-room holds — those cover `roomId` across the entry's stay.
+  perNightBreakdown Json?
   state         HoldState @default(PLACED)
   placedAt      DateTime  @default(now())
   placedBy      String
