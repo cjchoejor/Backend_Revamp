@@ -32,9 +32,10 @@ import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
-import { optionSelectedRoomIds } from "@/types/api";
+import { preferredHoldRoomId } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
+import { CompetingClaimsBanner } from "./competing-claims";
 import { ProformaPreview } from "./quotation-preview";
 
 const BK = STAGE_ACTIONS.S3;
@@ -76,7 +77,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
     [entry.quotations],
   );
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
-  const preferredRoomId = optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? null;
+  // Anchor room, same pick the S2 hold uses (2026-08-06) — placeCommittedHold pins ALL sealed
+  // rooms regardless, but the primary decides which speculative hold gets upgraded, so the two
+  // steps must agree on it.
+  const preferredRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   const proformaInvoices = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
   // Segment labeling for the proforma list (2026-08-01, operator request): after a re-entry the
   // prior segment's proforma stays listed next to the new one, labeled so old vs current is
@@ -420,6 +424,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           advance, and a committed hold on the room. Nothing is frozen yet — that happens at Confirm.
         </p>
       </div>
+
+      {/* Race telltale (2026-08-06): another live booking with a quotation or proforma on the
+          same rooms & nights. The committed hold below is what decides the race — this warns the
+          operator BEFORE money is taken on rooms someone else may pin first. */}
+      <CompetingClaimsBanner entryId={entry.id} />
 
       {/* 1. Provisional folio & billing model */}
       <div className="block">

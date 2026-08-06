@@ -18,15 +18,17 @@ import {
   type RoomCompositionInput,
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "./room-compositions-board";
+import { CompetingClaimsBanner } from "./competing-claims";
 import { QuotationPreview } from "./quotation-preview";
 import { PriceResolutionPanel } from "./price-resolution";
 import { money } from "@/lib/desk/workspace";
+import { formatDMY } from "@/lib/desk/model";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, QuotationState, QuotationSummary } from "@/types/api";
-import { optionSelectedRoomIds } from "@/types/api";
+import { optionSelectedRoomIds, preferredHoldRoomId } from "@/types/api";
 
 const BK = STAGE_ACTIONS.S2;
 
@@ -92,16 +94,37 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const working = draft ?? sent;
 
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
-  const preferredRoomId = optionSelectedRoomIds(sealedPreferred?.optionSelected)[0] ?? null;
+  // The booking's anchor room — claimed on every night when one is (2026-08-06; [0] used to
+  // pick whichever room the first night listed first, often the single-night, most-contested
+  // room of a per-night seal, and the hold then failed against its other-night holder).
+  const preferredRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   const holds = (entry.speculativeHolds ?? []).filter((h) => !segmentId || h.segmentId === segmentId);
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED");
+
+  /**
+   * Once the CURRENT segment carries a live proforma (minted at S3 setup), the quote is FINAL
+   * (2026-08-06, operator ruling) — the proforma bills its terms, so the backend refuses
+   * supersede/discount from that point and the desk closes the negotiation table. Same
+   * time-windowed segment attribution the setup step uses (invoices carry no segmentId).
+   */
+  const proformaLocked = useMemo(() => {
+    const segStart = segment?.startedAt ? new Date(segment.startedAt).getTime() : null;
+    return (entry.folio?.invoices ?? []).some(
+      (inv) =>
+        inv.invoiceType === "PROFORMA" &&
+        inv.state !== "SUPERSEDED" &&
+        !inv.supersededById &&
+        (segStart == null || new Date(inv.createdAt).getTime() >= segStart),
+    );
+  }, [entry.folio?.invoices, segment?.startedAt]);
 
   const [notes, setNotes] = useState("");
   // Booking-wide discount. Edited inside the composition panel (2026-08-03, operator request):
   // the negotiation happens on the grid, so the figure lives there rather than in a separate
-  // form block below. Still a single booking-level percent — the backend folds it into the
-  // resolved room rate before the per-room compositions are costed.
-  const [discountPercent, setDiscountPercent] = useState("");
+  // form block below. One booking-level figure, given as a PERCENT or a flat AMOUNT
+  // (2026-08-06) — `discountUnit` says which; the backend takes either off the grand total.
+  const [discountValue, setDiscountValue] = useState("");
+  const [discountUnit, setDiscountUnit] = useState<"percent" | "amount">("percent");
   const [discountBasis, setDiscountBasis] = useState("negotiation");
   // What the live quote actually recorded — drives the FOM approval affordance and seeds the
   // fields, so the panel opens showing the discount currently in force rather than blank
@@ -109,12 +132,18 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   // carry the prior one forward).
   const recordedDiscount = useMemo(() => {
     const terms = (working ?? accepted)?.commercialTerms as Record<string, unknown> | null | undefined;
-    const d = terms?.requestedDiscount as { discountPercent?: unknown; discountBasis?: unknown } | undefined;
-    if (!d || typeof d.discountPercent !== "number" || d.discountPercent <= 0) return null;
-    return {
-      percent: d.discountPercent,
-      basis: typeof d.discountBasis === "string" && d.discountBasis.trim() ? d.discountBasis : "negotiation",
-    };
+    const d = terms?.requestedDiscount as
+      | { discountPercent?: unknown; discountAmount?: unknown; discountBasis?: unknown }
+      | undefined;
+    if (!d) return null;
+    const basis = typeof d.discountBasis === "string" && d.discountBasis.trim() ? d.discountBasis : "negotiation";
+    if (typeof d.discountPercent === "number" && d.discountPercent > 0) {
+      return { unit: "percent" as const, value: d.discountPercent, basis };
+    }
+    if (typeof d.discountAmount === "number" && d.discountAmount > 0) {
+      return { unit: "amount" as const, value: d.discountAmount, basis };
+    }
+    return null;
   }, [working, accepted]);
   const seededForRef = useRef<string | null>(null);
   useEffect(() => {
@@ -122,12 +151,44 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     if (seededForRef.current === id) return;
     seededForRef.current = id;
     if (recordedDiscount) {
-      setDiscountPercent(String(recordedDiscount.percent));
+      setDiscountValue(String(recordedDiscount.value));
+      setDiscountUnit(recordedDiscount.unit);
       setDiscountBasis(recordedDiscount.basis);
     }
   }, [working, accepted, recordedDiscount]);
   const [sendChannel, setSendChannel] = useState("EMAIL");
+  // Validity window, chosen at GENERATE time (2026-08-06, operator request) — the created quote
+  // carries it and its W15 countdown from the moment it exists; sending doesn't restart it.
   const [validDays, setValidDays] = useState("2");
+  /**
+   * The largest validity the backend will take: 30 days hard cap, and the window must end
+   * before check-in. Calendar-day arithmetic only (no money); the backend re-validates.
+   */
+  const maxValidDays = useMemo(() => {
+    const iso = entry.checkInDate?.slice(0, 10);
+    const ci = iso ? new Date(`${iso}T00:00:00.000Z`) : null;
+    if (!ci || Number.isNaN(ci.getTime())) return 30;
+    const t = new Date();
+    const today = Date.UTC(t.getFullYear(), t.getMonth(), t.getDate());
+    const diff = Math.floor((ci.getTime() - today) / 86400_000);
+    // Check-in today / past / within a day: the backend clamps to check-in itself — offer 1.
+    return Math.max(1, Math.min(30, diff));
+  }, [entry.checkInDate]);
+  const validDaysNumber = (() => {
+    const n = Number(validDays);
+    return Number.isInteger(n) && n >= 1 ? Math.min(n, maxValidDays) : null;
+  })();
+  // The default ("2") can exceed the cap on a near-arrival booking — sync the DISPLAYED value
+  // to the clamp so the field never shows a figure the payload wouldn't send.
+  useEffect(() => {
+    const n = Number(validDays);
+    if (Number.isFinite(n) && n > maxValidDays) setValidDays(String(maxValidDays));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [maxValidDays]);
+  const validityEndLabel = useMemo(() => {
+    if (validDaysNumber == null) return null;
+    return formatDMY(new Date(Date.now() + validDaysNumber * 86400_000).toISOString().slice(0, 10));
+  }, [validDaysNumber]);
   // Guest contact for the send-to field. Falls back across the same profile chain the rest of the
   // workspace uses, preferring email. Resolved every render so it survives the entry being briefly
   // replaced by a lighter object (e.g. progressStage's setQueryData) before the refetch restores it.
@@ -183,16 +244,19 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
   };
   /**
-   * The discount as the API wants it. A blank or zero field is NOT the same as "no change":
-   * `supersede` carries the prior version's discount forward when the field is omitted, so
-   * clearing one has to be sent as an explicit `null`. Only a positive percent is sent as a
-   * request — a 0% "discount" would otherwise be recorded on the quote and pend FOM approval
-   * for nothing.
+   * The discount as the API wants it — `{discountPercent}` or `{discountAmount}` per the unit
+   * switch, never both. A blank or zero field is NOT the same as "no change": `supersede`
+   * carries the prior version's discount forward when the field is omitted, so clearing one has
+   * to be sent as an explicit `null`. Only a positive figure is sent as a request — a zero
+   * "discount" would otherwise be recorded on the quote and pend FOM approval for nothing.
    */
-  const discountValue = (() => {
-    const n = Number(discountPercent);
-    if (!discountPercent.trim() || !Number.isFinite(n) || n <= 0) return null;
-    return { discountPercent: n, discountBasis: discountBasis.trim() || "negotiation" };
+  const discountPayload = (() => {
+    const n = Number(discountValue);
+    if (!discountValue.trim() || !Number.isFinite(n) || n <= 0) return null;
+    const basis = discountBasis.trim() || "negotiation";
+    return discountUnit === "amount"
+      ? { discountAmount: n, discountBasis: basis }
+      : { discountPercent: n, discountBasis: basis };
   })();
 
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
@@ -209,7 +273,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
       () =>
         createQuotation(session!, entry.id, {
           notes: notes.trim() || undefined,
-          requestedDiscount: discountValue ?? undefined,
+          validDays: validDaysNumber ?? undefined,
+          requestedDiscount: discountPayload ?? undefined,
           // Per-room compositions carry the meal plans / extra beds / negotiated rates.
           // The planner always emits one row per sealed room, so the backend's legacy
           // booking-wide mealPlan/extraBedCount fallback is never needed from the desk
@@ -228,8 +293,8 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const sendM = useMutation(
     wrap(() => {
       if (!draft) throw new Error("No quote to send");
+      // No validDays: the window was set at generation and sending must not restart it.
       return sendQuotation(session!, draft.id, {
-        validDays: Number(validDays) || 2,
         channel: sendChannel,
         recipientAddress: recipient.trim(),
         sentTo: recipient.trim(),
@@ -251,10 +316,12 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
       if (!id) throw new Error("No quote to supersede");
       return supersedeQuotation(session!, id, {
         notes: notes.trim() || undefined,
+        // A new round is a new offer — its validity re-anchors to now with the input's value.
+        validDays: validDaysNumber ?? undefined,
         // The renegotiated discount, re-priced into the new version. `null` when the operator
         // cleared it — omitting the field would carry the prior version's discount forward,
         // so a cleared discount would silently survive the regeneration.
-        requestedDiscount: discountValue ?? (recordedDiscount ? null : undefined),
+        requestedDiscount: discountPayload ?? (recordedDiscount ? null : undefined),
         // Renegotiated per-room composition (meal plans, extra beds, negotiated rates, FOC).
         // When the operator edited the composition editor, the regenerated draft re-prices
         // with it; when untouched (empty), the backend carries the prior version's forward.
@@ -300,13 +367,12 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const hasDiscount = quotations.some((q) => {
     const t = q.commercialTerms as Record<string, unknown> | null | undefined;
     if (!t) return false;
-    // The pricing pipeline writes `requestedDiscount.discountPercent` and, once it's folded
-    // into the rate, `discountAppliedPercent`. The names read here before (`discountPercent`
-    // / `appliedDiscountPercent` / `discount.discountPercent`) never existed on the payload,
-    // so the rail's discount group never lit up.
-    const d =
-      (t.requestedDiscount as { discountPercent?: unknown } | undefined)?.discountPercent ??
-      t.discountAppliedPercent;
+    // The pricing pipeline writes `requestedDiscount.discountPercent` OR `.discountAmount`
+    // (one of the two — 2026-08-06) and, once folded in, `discountAppliedPercent`. The names
+    // read here before (`discountPercent` / `appliedDiscountPercent` / `discount.discountPercent`)
+    // never existed on the payload, so the rail's discount group never lit up.
+    const req = t.requestedDiscount as { discountPercent?: unknown; discountAmount?: unknown } | undefined;
+    const d = req?.discountPercent ?? req?.discountAmount ?? t.discountAppliedPercent;
     return typeof d === "number" && d > 0;
   });
   const sendUsed = quotations.some((q) => q.sentAt != null || q.state === "SENT" || q.state === "ACCEPTED");
@@ -353,7 +419,20 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
    * everything a generate produces lands below the button that produced it rather than above
    * the table the operator is standing in.
    */
-  const negotiationPanel = accepted ? null : (
+  const negotiationPanel = accepted ? null : proformaLocked ? (
+    // The proforma (Set up) is billing this quote's terms — in-place renegotiation is over, and
+    // the backend refuses supersede/discount with QUOTATION_LOCKED_BY_PROFORMA. Say where the
+    // path continues rather than showing a table whose button can only fail.
+    <div className="block">
+      <BlockH>Negotiation closed — proforma issued</BlockH>
+      <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, lineHeight: 1.6 }}>
+        A proforma invoice has been generated on <b>Set up</b>, so the quote&rsquo;s terms are what the guest
+        is being billed — they are final from that point. To change the price, use <b>Re-enter → Quote</b>{" "}
+        (a new segment with a fresh quote and a fresh proforma). Changing only the advance requirement
+        re-issues the proforma at the same terms from Set up.
+      </p>
+    </div>
+  ) : (
     <div className="block">
       <BlockH>{working ? "Negotiate & regenerate" : "Build the quote"}</BlockH>
       {!sealedPreferred && (
@@ -361,52 +440,85 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           A sealed availability configuration from Inquiry is needed first.
         </p>
       )}
+      {/* The live-quote fact reads as one strip, not a paragraph — the panel below is the work
+          surface and should start as close to the header as possible. */}
       {working && (
-        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 10px", lineHeight: 1.5 }}>
-          {working.referenceNumber} is live at {money(working.totalAmount, working.currency)}. Change anything
-          below — rooms, meals, rates, the discount — then regenerate: the quote is re-priced from scratch
-          under a new number, and this one is kept as superseded history.
-        </p>
-      )}
-      <div className="field">
-        <label>Internal notes (optional)</label>
-        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Not shown to the guest" />
-      </div>
-      <div style={{ marginTop: 10, marginBottom: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3, #7a6a52)", marginBottom: 6 }}>
-          PER-ROOM COMPOSITION &amp; PRICE
+        <div
+          className="fact b-transit"
+          style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between", marginBottom: 10 }}
+        >
+          <span>
+            <b>{working.referenceNumber}</b> · live at <b>{money(working.totalAmount, working.currency)}</b>
+          </span>
+          <span style={{ color: "var(--ink-3)", fontSize: 11.5 }}>
+            edit below &amp; regenerate — this version is kept as history
+          </span>
         </div>
-        <p style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)", margin: "0 0 8px", lineHeight: 1.4 }}>
-          Place each guest in a room, pick their meal plan, and negotiate the rates and discount — tap to
-          select, tap a room to place, or drag.
-        </p>
-        <RoomCompositionPlanner
-          sealedRoomIds={sealedRoomIds}
-          entryCheckIn={entry.checkInDate ?? null}
-          entryCheckOut={entry.checkOutDate ?? null}
-          entryAdults={entry.adultCount ?? entry.guestCount ?? null}
-          entryChildAges={entry.childAges ?? null}
-          persistKey={entry.id}
-          entryId={entry.id}
-          onChange={setRoomCompositions}
-          discountPercent={discountPercent}
-          discountBasis={discountBasis}
-          onDiscountChange={(patch) => {
-            if (patch.percent !== undefined) setDiscountPercent(patch.percent);
-            if (patch.basis !== undefined) setDiscountBasis(patch.basis);
-          }}
-        />
-      </div>
-      {working ? (
-        <button className="btn btn-primary" disabled={supersedeM.isPending} onClick={() => supersedeM.mutate()}>
-          <RefreshCw style={{ width: 14, height: 14 }} />
-          {supersedeM.isPending ? "Regenerating…" : sent ? "Regenerate quote (new round)" : "Regenerate quote"}
-        </button>
-      ) : (
-        <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
-          {createM.isPending ? "Creating…" : "Create quote"}
-        </button>
       )}
+      <RoomCompositionPlanner
+        sealedRoomIds={sealedRoomIds}
+        entryCheckIn={entry.checkInDate ?? null}
+        entryCheckOut={entry.checkOutDate ?? null}
+        entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+        entryChildAges={entry.childAges ?? null}
+        persistKey={entry.id}
+        entryId={entry.id}
+        onChange={setRoomCompositions}
+        discountValue={discountValue}
+        discountUnit={discountUnit}
+        discountBasis={discountBasis}
+        onDiscountChange={(patch) => {
+          if (patch.value !== undefined) setDiscountValue(patch.value);
+          if (patch.unit !== undefined) setDiscountUnit(patch.unit);
+          if (patch.basis !== undefined) setDiscountBasis(patch.basis);
+        }}
+      />
+      {/* The footer is the commit block, two rows (2026-08-06, operator request): the note on
+          its own full-width row, then the validity window + the button that consumes them both. */}
+      <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+        <label>Internal note (optional — not shown to the guest)</label>
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. matched last year's corporate rate" />
+      </div>
+      <div style={{ display: "flex", gap: 11, alignItems: "flex-end", flexWrap: "wrap", marginTop: 10 }}>
+        <div className="field" style={{ marginBottom: 0, width: 118 }}>
+          <label title="How long the offer stands, counting from the moment it is generated — max 30 days, and it must end before check-in">
+            Valid for (days)
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={maxValidDays}
+            value={validDays}
+            onChange={(e) => {
+              const v = e.target.value;
+              // Clamp to the check-in/30-day ceiling as it's typed — the backend re-validates.
+              const n = Number(v);
+              setValidDays(v !== "" && Number.isFinite(n) && n > maxValidDays ? String(maxValidDays) : v);
+            }}
+          />
+        </div>
+        {working ? (
+          <button className="btn btn-primary" disabled={supersedeM.isPending} onClick={() => supersedeM.mutate()}>
+            <RefreshCw style={{ width: 14, height: 14 }} />
+            {supersedeM.isPending ? "Regenerating…" : sent ? "Regenerate quote (new round)" : "Regenerate quote"}
+          </button>
+        ) : (
+          <button className="btn btn-primary" disabled={createM.isPending || !sealedPreferred} onClick={() => createM.mutate()}>
+            {createM.isPending ? "Creating…" : "Create quote"}
+          </button>
+        )}
+      </div>
+      <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "6px 0 0", lineHeight: 1.5 }}>
+        {validDaysNumber != null && validityEndLabel ? (
+          <>
+            The offer stands until <b>{validityEndLabel}</b> — the countdown starts the moment the quote is
+            generated and shows under <b>Timers</b> in the live-activity rail.
+          </>
+        ) : (
+          <>Validity must be 1–{maxValidDays} days.</>
+        )}{" "}
+        {maxValidDays < 30 && <>Capped at {maxValidDays} day{maxValidDays === 1 ? "" : "s"} — it must end before check-in.</>}
+      </p>
     </div>
   );
 
@@ -421,6 +533,11 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           margin, send it, and record the guest&rsquo;s answer.
         </p>
       </div>
+
+      {/* Race telltale (2026-08-06): another live booking quoting/billing the same rooms for the
+          same nights — seen HERE, before Set up, so the slower booking doesn't take money first
+          and lose the room at the committed hold. */}
+      <CompetingClaimsBanner entryId={entry.id} />
 
       {/* The negotiation panel leads the step, and everything the quote produces sits BELOW it
           (2026-08-04, operator report). Quote history used to come first, so generating a quote
@@ -501,7 +618,10 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
           {recordedDiscount && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 13 }}>
               <span className="tag">
-                {recordedDiscount.percent}% off · {recordedDiscount.basis}
+                {recordedDiscount.unit === "percent"
+                  ? `${recordedDiscount.value}% off`
+                  : `Nu ${recordedDiscount.value.toLocaleString()} off`}{" "}
+                · {recordedDiscount.basis}
               </span>
               {elevated ? (
                 <button className="btn btn-ghost btn-sm" disabled={approveM.isPending || approveM.isSuccess} onClick={() => approveM.mutate()}>
@@ -521,9 +641,13 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
                 <option value="WHATSAPP">WhatsApp</option>
               </select>
             </div>
+            {/* Read-only: validity was chosen at generation (footer of the panel above) and
+                sending does not restart the clock. */}
             <div className="field">
-              <label>Valid for (days)</label>
-              <input type="number" min={1} value={validDays} onChange={(e) => setValidDays(e.target.value)} />
+              <label title="Set when the quote was generated — regenerate to change it">Valid until</label>
+              <div className="val derived">
+                {draft.validUntil ? formatDMY(draft.validUntil.slice(0, 10)) || draft.validUntil.slice(0, 10) : "—"}
+              </div>
             </div>
           </div>
           <div className="field">
@@ -596,13 +720,22 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
       <div className="block" style={{ marginTop: 14 }}>
         <BlockH>
           <Timer style={{ width: 13, height: 13 }} />
-          Hold a room while negotiating (optional)
+          Hold the rooms while negotiating (optional)
         </BlockH>
         {activeHold ? (
           <>
             <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, marginBottom: 9 }}>
-              Hold on room {activeHold.room?.roomNumber ?? activeHold.roomId?.slice(0, 8) ?? "—"} · expires{" "}
-              {activeHold.expiresAt.slice(0, 16)}
+              {(() => {
+                // The hold's real coverage (2026-08-06): every room in the per-night snapshot,
+                // anchor included — a pre-snapshot hold covers its anchor room only.
+                const covered = new Set<string>(activeHold.roomId ? [activeHold.roomId] : []);
+                for (const n of activeHold.perNightBreakdown ?? []) for (const r of n.roomIds) covered.add(r.roomId);
+                const anchor = activeHold.room?.roomNumber ?? activeHold.roomId?.slice(0, 8) ?? "—";
+                return covered.size > 1
+                  ? `Hold on ${covered.size} rooms (all selected · anchor ${anchor})`
+                  : `Hold on room ${anchor}`;
+              })()}{" "}
+              · expires {activeHold.expiresAt.slice(0, 16)}
             </div>
             {elevated && (
               <div className="frow">
@@ -621,7 +754,7 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
         ) : (
           <>
             <div className="field">
-              <label>Why hold this room?</label>
+              <label>Why hold {sealedRoomIds.length > 1 ? "these rooms" : "this room"}?</label>
               <input value={holdBasis} onChange={(e) => setHoldBasis(e.target.value)} placeholder="Commercial basis" />
             </div>
             <div className="field">
@@ -671,7 +804,11 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               disabled={holdM.isPending || !preferredRoomId || !holdBasis.trim() || holdTtlSeconds <= 0}
               onClick={() => holdM.mutate()}
             >
-              {holdM.isPending ? "Placing…" : "Place hold on preferred room"}
+              {holdM.isPending
+                ? "Placing…"
+                : sealedRoomIds.length > 1
+                  ? `Place hold on all ${sealedRoomIds.length} selected rooms`
+                  : "Place hold on preferred room"}
             </button>
           </>
         )}

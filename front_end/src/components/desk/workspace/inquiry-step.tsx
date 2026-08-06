@@ -979,19 +979,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
         tableSel?: string[];
         varySel?: Record<string, string[]>;
       };
-      const base = Array.isArray(v.base) ? v.base : Array.isArray(v.tableSel) ? v.tableSel : null;
-      if (base && base.length > 0) {
-        const clean = base.filter((x) => typeof x === "string").slice(0, numberOfRooms);
-        setBaseSel(clean);
-        const ov = v.overrides ?? v.varySel;
-        if (ov && typeof ov === "object") {
-          const next: Record<string, string[]> = {};
-          for (const [night, ids] of Object.entries(ov)) {
-            if (Array.isArray(ids) && !sameSet(ids, clean)) next[night] = ids.filter((x) => typeof x === "string");
+      const rawBase = Array.isArray(v.base) ? v.base : Array.isArray(v.tableSel) ? v.tableSel : [];
+      const clean = rawBase.filter((x) => typeof x === "string").slice(0, numberOfRooms);
+      const rawOv = v.overrides ?? v.varySel;
+      const overrides: Record<string, string[]> = {};
+      if (rawOv && typeof rawOv === "object") {
+        for (const [night, ids] of Object.entries(rawOv)) {
+          if (Array.isArray(ids) && !sameSet(ids, clean)) {
+            overrides[night] = ids.filter((x) => typeof x === "string").slice(0, numberOfRooms);
           }
-          setNightOverrides(next);
         }
       }
+      // An EMPTY base is not an empty selection. A room free on only some nights can never enter
+      // the base — a row click would claim it on nights someone else holds — so that whole
+      // selection lives in the overrides. Restoring only when the base had rooms silently dropped
+      // every partial pick on the way back into the workspace (bug: "select all" on a row with a
+      // held night looked fine, then vanished on return).
+      if (clean.length === 0 && Object.keys(overrides).length === 0) return;
+      setBaseSel(clean);
+      setNightOverrides(overrides);
     } catch {
       /* corrupt / private mode — start from the saved selection as before */
     }
@@ -1288,6 +1294,16 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const saveLabel = nightsDiffer ? "Save per-night rooms" : numberOfRooms === 1 ? "Save room selection" : `Save ${numberOfRooms} rooms`;
   const savedLabel = nightsDiffer ? "✓ Saved per-night rooms" : numberOfRooms === 1 ? "✓ Room selection saved" : `✓ Saved ${numberOfRooms} rooms`;
 
+  /**
+   * The config the save would actually write to has gone stale (W1 marks results stale on a
+   * dwell threshold — leave-and-return usually crosses it). The backend rejects that save
+   * outright ("configuration is stale"), so letting the operator pick rooms and only failing at
+   * the save read exactly like the selection not being retained. The picks are all local state —
+   * they survive the re-search — so the honest affordance is a disabled Save that says to search
+   * again, not an error after the fact.
+   */
+  const saveTargetsStale = searchResult ? !!searchResult.isStale : !!latestConfig?.isStale;
+
   const sealControls = (
     <>
       <button
@@ -1303,13 +1319,19 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
               }
             : undefined
         }
-        disabled={showSaved || !sealReady || selectMutation.isPending}
-        title={showSaved ? "This selection is saved — change a room to edit it" : undefined}
+        disabled={showSaved || !sealReady || selectMutation.isPending || saveTargetsStale}
+        title={
+          showSaved
+            ? "This selection is saved — change a room to edit it"
+            : saveTargetsStale
+              ? "These results went stale — click Search again first. Your picked rooms are kept."
+              : undefined
+        }
         onClick={sealSelection}
       >
         {/* One verb everywhere — this is a SAVE (re-doable via "Change selection"), and the
             old Save/Seal split by room count read as two different actions. */}
-        {selectMutation.isPending ? "Saving…" : showSaved ? savedLabel : saveLabel}
+        {selectMutation.isPending ? "Saving…" : showSaved ? savedLabel : saveTargetsStale && !showSaved ? "Search again to save" : saveLabel}
       </button>
       <span style={{ fontSize: 11.5, fontWeight: 600, color: sealReady ? "var(--green-d)" : "var(--ink-3)" }}>
         {nightsDiffer

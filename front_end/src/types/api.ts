@@ -103,6 +103,9 @@ export type SpeculativeHoldSummary = {
   segmentId: string;
   roomId?: string | null;
   spaceId?: string | null;
+  /** Sealed per-night snapshot (2026-08-06) — when present the hold covers EVERY room it
+   *  names, each over its own nights; `roomId` is just the anchor. */
+  perNightBreakdown?: Array<{ date: string; roomIds: Array<{ roomId: string }> }> | null;
   state: string;
   placedAt: string;
   expiresAt: string;
@@ -160,6 +163,35 @@ export function optionSelectedRoomIds(opt: AvailabilityOptionSelected | null | u
   if ("roomIds" in opt && Array.isArray(opt.roomIds)) return opt.roomIds.map((r) => r.roomId);
   if ("roomId" in opt && typeof opt.roomId === "string") return [opt.roomId];
   return [];
+}
+
+/**
+ * The room a single-room hold (S2 speculative / S3 primary) should target (2026-08-06).
+ *
+ * `optionSelectedRoomIds(...)[0]` picked whichever room the FIRST night happened to list first —
+ * on a per-night seal that can be a room used one night only (chosen precisely because someone
+ * else holds it the other nights), so the hold went at the most contested room instead of the
+ * booking's anchor. Prefer a room claimed on EVERY night; else the one claimed on the most
+ * nights; whole-stay seals are unchanged (every room covers every night).
+ */
+export function preferredHoldRoomId(opt: AvailabilityOptionSelected | null | undefined): string | null {
+  const ids = optionSelectedRoomIds(opt);
+  if (ids.length === 0) return null;
+  if (!opt || !("perNight" in opt) || !Array.isArray(opt.perNight) || opt.perNight.length === 0) return ids[0];
+  const counts = new Map<string, number>();
+  for (const n of opt.perNight) for (const r of n.roomIds) counts.set(r.roomId, (counts.get(r.roomId) ?? 0) + 1);
+  const everyNight = ids.find((id) => (counts.get(id) ?? 0) === opt.perNight.length);
+  if (everyNight) return everyNight;
+  let best: string | null = null;
+  let bestCount = -1;
+  for (const id of ids) {
+    const c = counts.get(id) ?? 0;
+    if (c > bestCount) {
+      best = id;
+      bestCount = c;
+    }
+  }
+  return best;
 }
 
 export type InvoiceSummary = {

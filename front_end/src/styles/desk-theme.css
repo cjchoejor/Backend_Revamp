@@ -2568,6 +2568,59 @@
     border-radius: 999px;
     padding: 2px 8px;
   }
+  /* The discount figure keeps ONE width in both units — the box must not resize on toggle. */
+  & .rct-neg-f input.rct-neg-val {
+    width: 84px;
+  }
+  /* % / Nu unit switch on the discount figure — same mini-segmented language as .seg, with a
+     sliding thumb (the ::before) behind two EQUAL-WIDTH buttons, so toggling animates the
+     highlight across while nothing else moves or resizes. */
+  & .rct-neg-unit {
+    position: relative;
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: #fff;
+  }
+  & .rct-neg-unit::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 30px;
+    height: calc(100% - 4px);
+    border-radius: 999px;
+    background: var(--green);
+    transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  & .rct-neg-unit.amount::before {
+    transform: translateX(32px); /* button width + the 2px gap */
+  }
+  & .rct-neg-unit button {
+    position: relative; /* rides above the thumb */
+    width: 30px;
+    border: 0;
+    background: none;
+    border-radius: 999px;
+    padding: 1px 0;
+    text-align: center;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: color 0.18s ease;
+  }
+  & .rct-neg-unit button.on {
+    color: #fff;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    & .rct-neg-unit::before,
+    & .rct-neg-unit button {
+      transition: none;
+    }
+  }
   & .rct-neg-note {
     font-size: 10.5px;
     color: var(--ink-3);

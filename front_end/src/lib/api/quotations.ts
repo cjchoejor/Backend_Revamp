@@ -58,7 +58,10 @@ export async function createQuotation(
   entryId: string,
   body?: {
     notes?: string;
-    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    /** Percent or flat amount — exactly one; both are measured against the grand total. */
+    requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
+    /** Validity window in days, 1–30, ending before check-in — the clock starts at generation. */
+    validDays?: number;
     currency?: string;
     focRoomsRequested?: number;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string };
@@ -80,7 +83,10 @@ export async function supersedeQuotation(
   quotationId: string,
   body?: {
     notes?: string;
-    requestedDiscount?: { discountPercent: number; discountBasis: string } | null;
+    /** Percent or flat amount — exactly one; both are measured against the grand total. */
+    requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
+    /** Validity of the regenerated draft — same rules as create, re-anchored to now. */
+    validDays?: number;
     /**
      * Renegotiated per-room compositions (2026-07-28). Send the editor's current state so
      * meal-plan / extra-bed / negotiated-rate changes re-price on the regenerated draft.

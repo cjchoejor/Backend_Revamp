@@ -173,7 +173,8 @@ export function RoomCompositionsBoard({
   onChange,
   focusRoomId,
   onFocusRoom,
-  discountPercent,
+  discountValue,
+  discountUnit,
   discountBasis,
   onDiscountChange,
 }: DiscountEdit & {
@@ -726,10 +727,10 @@ export function RoomCompositionsBoard({
       {/* Same negotiation strip the table carries — the discount must not vanish when the
           operator switches modes (it belongs to the booking, not to either editor). */}
       <NegotiationDiscountBar
-        discountPercent={discountPercent}
+        discountValue={discountValue}
+        discountUnit={discountUnit}
         discountBasis={discountBasis}
         onDiscountChange={onDiscountChange}
-        negotiatedRoomCount={sealedRoomIds.filter((id) => (extras[id] ?? EMPTY_EXTRAS).rateRoom !== "").length}
       />
       <div className="rce-bar">
         <button

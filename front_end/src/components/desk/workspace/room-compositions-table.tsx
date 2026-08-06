@@ -101,11 +101,17 @@ function cnt(v: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Booking-wide discount, edited from inside the composition panel. */
+/**
+ * Booking-wide discount, edited from inside the composition panel. The figure can be a percent
+ * OR a flat Nu amount (2026-08-06, operator request) — `discountUnit` says which; both are
+ * measured against the grand total server-side (`applyBookingDiscountToTotals`).
+ */
+export type DiscountUnit = "percent" | "amount";
 export type DiscountEdit = {
-  discountPercent?: string;
+  discountValue?: string;
+  discountUnit?: DiscountUnit;
   discountBasis?: string;
-  onDiscountChange?: (patch: { percent?: string; basis?: string }) => void;
+  onDiscountChange?: (patch: { value?: string; unit?: DiscountUnit; basis?: string }) => void;
 };
 
 /**
@@ -120,15 +126,11 @@ export type DiscountEdit = {
  * discounted or not, and meals / extra beds are never discounted (they come off the rate
  * card's add-ons). NO MONEY IS COMPUTED HERE — the backend prices on create/regenerate.
  */
-export function NegotiationDiscountBar({
-  discountPercent,
-  discountBasis,
-  onDiscountChange,
-  negotiatedRoomCount = 0,
-}: DiscountEdit & { negotiatedRoomCount?: number }) {
+export function NegotiationDiscountBar({ discountValue, discountUnit, discountBasis, onDiscountChange }: DiscountEdit) {
   if (!onDiscountChange) return null;
-  const pct = Number(discountPercent ?? "");
-  const live = Number.isFinite(pct) && pct > 0;
+  const unit: DiscountUnit = discountUnit ?? "percent";
+  const n = Number(discountValue ?? "");
+  const live = Number.isFinite(n) && n > 0;
   return (
     <div className="rct-neg">
       <span className="rce-lbl">Negotiate</span>
@@ -137,19 +139,49 @@ export function NegotiationDiscountBar({
         <input
           type="text"
           inputMode="decimal"
-          value={discountPercent ?? ""}
+          className="rct-neg-val"
+          value={discountValue ?? ""}
           placeholder="0"
           onChange={(e) => {
             const v = e.target.value;
             if (!/^\d*\.?\d*$/.test(v)) return;
-            // 100% off is a full waiver — use the per-room FOC toggle for that instead.
-            if (v !== "" && Number(v) > 100) return;
-            onDiscountChange({ percent: v });
+            // 100% off is a full waiver — use the per-room FOC toggle for that instead. A flat
+            // amount has no such cap client-side; the backend clamps it to the bill.
+            if (unit === "percent" && v !== "" && Number(v) > 100) return;
+            onDiscountChange({ value: v });
           }}
-          title="Percentage off the room rate for the whole booking"
+          title={
+            unit === "percent"
+              ? "Percentage off the booking's grand total"
+              : "Flat amount off the booking's grand total (Nu)"
+          }
         />
-        <span className="u">%</span>
       </label>
+      {/* The unit is the operator's choice (2026-08-06): the same figure box holds a percent or
+          a flat Nu amount, and this switch says which the backend receives. The `amount` class
+          slides the pill thumb (CSS ::before) — the buttons themselves never move or resize. */}
+      <span className={`rct-neg-unit${unit === "amount" ? " amount" : ""}`} role="group" aria-label="Discount given as">
+        <button
+          type="button"
+          className={unit === "percent" ? "on" : ""}
+          title="Give the discount as a percentage of the grand total"
+          onClick={() =>
+            // A figure over 100 is legal as an amount but not as a percent — clear it on switch
+            // rather than carrying an untypeable value into the capped input.
+            onDiscountChange({ unit: "percent", ...(live && n > 100 ? { value: "" } : {}) })
+          }
+        >
+          %
+        </button>
+        <button
+          type="button"
+          className={unit === "amount" ? "on" : ""}
+          title="Give the discount as a flat amount in Nu"
+          onClick={() => onDiscountChange({ unit: "amount" })}
+        >
+          Nu
+        </button>
+      </span>
       <label className="rct-neg-f wide">
         Basis
         <input
@@ -160,20 +192,22 @@ export function NegotiationDiscountBar({
           title="Why the discount is being given — recorded on the quote and audited"
         />
       </label>
-      {live && <span className="rct-neg-on">−{pct}% off the room rate</span>}
-      <span className="ln" />
-      <span className="rct-neg-note">
-        Applies to the whole booking. Meals and extra beds are not discounted, and a room with its
-        own negotiated rate prices at that rate. Priced by the backend when you create or
-        regenerate the quote.
-      </span>
-      {live && negotiatedRoomCount > 0 && (
-        <span className="rct-neg-warn">
-          {negotiatedRoomCount} room{negotiatedRoomCount === 1 ? "" : "s"} carry a negotiated room rate —
-          the discount won&rsquo;t move {negotiatedRoomCount === 1 ? "it" : "them"}. Clear the rate cell to
-          discount off the standard rate instead.
+      {live && (
+        <span className="rct-neg-on">
+          −{unit === "percent" ? `${n}%` : `Nu ${n.toLocaleString()}`} off the total
         </span>
       )}
+      <span className="ln" />
+      {/* States the CURRENT model (operator ruling 2026-08-04, applyBookingDiscountToTotals):
+          the deduction comes off the grand total, meals and beds included — the earlier
+          "room rate only" wording described the superseded 2026-08-03 model. */}
+      <span
+        className="rct-neg-note"
+        style={{ textAlign: "right", flex: "0 1 auto" }}
+        title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). Priced by the backend when you create or regenerate the quote."
+      >
+        Comes off the grand total — meals &amp; beds included
+      </span>
     </div>
   );
 }
@@ -231,7 +265,8 @@ export function RoomCompositionsTable({
   initial,
   onChange,
   onOpenRoomInBoard,
-  discountPercent,
+  discountValue,
+  discountUnit,
   discountBasis,
   onDiscountChange,
 }: DiscountEdit & {
@@ -807,10 +842,10 @@ export function RoomCompositionsTable({
       {entryId && <RateReferenceStrip entryId={entryId} compact />}
       {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
       <NegotiationDiscountBar
-        discountPercent={discountPercent}
+        discountValue={discountValue}
+        discountUnit={discountUnit}
         discountBasis={discountBasis}
         onDiscountChange={onDiscountChange}
-        negotiatedRoomCount={sealedRoomIds.filter((id) => (rows[id]?.rRoom ?? "") !== "").length}
       />
       <div className="rce-bar">
         {partySize > 0 && (
@@ -870,17 +905,22 @@ export function RoomCompositionsTable({
           );
         })}
         <span className="ln" />
+        {/* Compact tallies — the long forms crowded the row until "Expand" wrapped onto its own
+            orphan line. Full wording rides on hover. */}
         {roomMin != null && (
           <span
             className={`rce-tally${sealedRoomIds.length < roomMin ? " off" : ""}`}
-            title="Backend capacity envelope: chargeable guests vs the largest room capacity"
+            title={`Backend capacity envelope: this party needs at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} sealed at Inquiry`}
           >
-            needs ≥ {roomMin} room{roomMin === 1 ? "" : "s"} · {sealedRoomIds.length} sealed
+            {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"} · needs ≥{roomMin}
           </span>
         )}
         {partySize > 0 && (
-          <span className={`rce-tally${totalGuests !== partySize ? " off" : ""}`}>
-            {totalGuests} of {partySize} guests placed
+          <span
+            className={`rce-tally${totalGuests !== partySize ? " off" : ""}`}
+            title={`${totalGuests} of ${partySize} intake guests placed in rooms`}
+          >
+            {totalGuests}/{partySize} placed
           </span>
         )}
         {!expanded && (
@@ -1071,12 +1111,13 @@ export function RoomCompositionsTable({
           draft until it fits.
         </p>
       )}
+      {/* One line. The old version also warned that child meal discounts were "pending a backend
+          update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band
+          (under-6 free, 6–10 at the child share), so children SHOULD be counted on the plans. */}
       <p className="rce-hint">
-        Occ is computed from the guest columns. Arrow keys / Enter move between cells. Meal-plan columns
-        appear as you switch plans on with the <b>Meals</b> chips (or <i>Everyone on…</i>). Totals are
-        priced by the backend when you create the draft. Child meal discounts on per-room plans are pending
-        a backend update; until then every counted guest pays the full plan rate (leave infants off the
-        plan columns if they eat free).
+        Occ is derived from the guest columns · arrow keys / Enter move between cells · totals are priced
+        by the backend on create. Count children on the meal plans — child pricing applies automatically
+        (under-6 free, 6–10 at the child rate).
       </p>
     </div>
   );

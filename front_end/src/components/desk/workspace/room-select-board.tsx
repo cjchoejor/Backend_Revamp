@@ -152,16 +152,46 @@ export function RoomSelectBoard({
     if (nights.length > 1 && scopeNight == null) setScopeNight(nights[0]);
   }, [nights, scopeNight]);
 
+  /** Rooms the engine returned a per-date breakdown for — those get per-night truth. */
+  const perNightRoomIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const pd of perDate ?? []) {
+      pd.availableRoomIds.forEach((id) => s.add(id));
+      pd.deficientRoomIds.forEach((id) => s.add(id));
+      pd.occupiedRoomIds.forEach((o) => s.add(o.roomId));
+    }
+    return s;
+  }, [perDate]);
+  const bucketById = useMemo(() => new Map(rows.map((r) => [r.roomId, r.bucket])), [rows]);
+
+  /**
+   * Can this room take guests on THIS night? Mirrors the table's `cellStatus` exactly.
+   *
+   * The whole-stay `bucket` must not decide it: a room held on one night of four sits in the
+   * "unavailable" bucket even though it is free on the other three — the engine says so itself
+   * in `perDate`, which carries CLAIMED rooms night by night. Filtering bins on the bucket
+   * (the pre-2026-08-06 rule) closed such a room on EVERY night's scope, so the very selection
+   * the table's partial "Select all" builds (307 on its three free nights) had no bin to show
+   * its guests in, and the seed dropped them. Only rooms with no per-date answer at all —
+   * BLOCKED / MAINTENANCE never enter `perDate` — fall back to the whole-stay bucket.
+   */
+  const freeOnNight = (roomId: string, n: string) => {
+    const bucket = bucketById.get(roomId);
+    if (bucket == null) return false; // not in this search's result set at all
+    if (occupiedByNight.get(n)?.has(roomId)) return false;
+    if (!perNightRoomIds.has(roomId) && bucket === "unavailable") return false;
+    return true;
+  };
+
   // Bins for the CURRENT scope. Whole-stay: free on every night (same rule as the table's
   // row-click). Single-night scope: free on that night — that's the whole point of the scope.
   const binRows = useMemo(
     () =>
-      rows.filter((r) => {
-        if (r.bucket === "unavailable") return false;
-        if (scopeNight != null) return !occupiedByNight.get(scopeNight)?.has(r.roomId);
-        return nights.every((n) => !occupiedByNight.get(n)?.has(r.roomId));
-      }),
-    [rows, nights, occupiedByNight, scopeNight],
+      rows.filter((r) =>
+        scopeNight != null ? freeOnNight(r.roomId, scopeNight) : nights.every((n) => freeOnNight(r.roomId, n)),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, nights, occupiedByNight, scopeNight, perNightRoomIds, bucketById],
   );
   const binIds = useMemo(() => new Set(binRows.map((r) => r.roomId)), [binRows]);
 
@@ -356,24 +386,31 @@ export function RoomSelectBoard({
   const [seedApplied, setSeedApplied] = useState(false);
   useEffect(() => {
     if (seedApplied || guests.length === 0 || !capacitiesReady) return;
-    const seedRooms = (initialSelectionRef.current ?? []).filter((id) => binIds.has(id)).slice(0, maxRooms);
+    // The base is the whole-stay rooms, so it keeps the whole-stay test: free on every night.
+    const seedRooms = (initialSelectionRef.current ?? [])
+      .filter((id) => nights.every((n) => freeOnNight(id, n)))
+      .slice(0, maxRooms);
     const seededBase = seedRooms.length > 0 ? spreadAcross(seedRooms) : {};
     if (seedRooms.length > 0) setBase(seededBase);
 
     const perNight = initialPerNightRef.current ?? {};
     const overrides: Record<string, Record<string, string>> = {};
     for (const [date, ids] of Object.entries(perNight)) {
-      const nightRooms = ids.filter((id) => binIds.has(id)).slice(0, maxRooms);
-      // Only nights that actually differ from the base are overrides; the rest follow it.
+      // Each night is judged on ITS OWN availability — that is the whole point of a night that
+      // carries its own rooms, and the only way a partially-free room survives the crossing.
+      const nightRooms = ids.filter((id) => freeOnNight(id, date)).slice(0, maxRooms);
+      // Only nights that actually differ from the base are overrides; the rest follow it. A night
+      // deliberately left EMPTY while the base has rooms is a real difference and is recorded as
+      // one — dropping it would silently re-inherit rooms the operator did not place there.
       const sameAsBase =
         nightRooms.length === seedRooms.length && nightRooms.every((id) => seedRooms.includes(id));
-      if (nightRooms.length === 0 || sameAsBase) continue;
+      if (sameAsBase) continue;
       overrides[date] = spreadAcross(nightRooms);
     }
     if (Object.keys(overrides).length > 0) setNightOverrides(overrides);
     setSeedApplied(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seedApplied, guests.length, binIds, capacitiesReady]);
+  }, [seedApplied, guests.length, bucketById, perNightRoomIds, occupiedByNight, nights, capacitiesReady]);
 
   /**
    * Emit on every change: base rooms for tableSel continuity + the full per-night picture for

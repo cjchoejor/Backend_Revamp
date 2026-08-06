@@ -365,6 +365,42 @@ export function RoomStatusTable({
               return maxSelect <= 1 || nightSel(n).length < maxSelect;
             }).length;
             const unusable = !sel && openNights === 0;
+            /**
+             * Sort every night of the stay into what this room can and cannot take. Hoisted to the
+             * row because BOTH the "Select all" button and the row click below need it: a room
+             * that is free on only some nights can never be picked for the whole stay, so its row
+             * click used to fall through every branch and do nothing at all — no selection, no
+             * explanation. It now takes the free nights, exactly like the button.
+             *
+             * Safe to compute once from current props and then loop: assigning a room on one
+             * night never changes another night's occupancy or its remaining capacity.
+             */
+            const picked: string[] = [];
+            const alreadyPicked: string[] = [];
+            const blocked: SelectAllOutcome["blocked"] = [];
+            const full: string[] = [];
+            for (const n of nights) {
+              const { status, occ } = cellStatus(row, n);
+              if (status !== "vacant" && status !== "deficient") {
+                blocked.push({ date: n, status, holder: occ ? occupantName(occ) : row.blockedReason ?? undefined });
+              } else if (nightSel(n).includes(row.roomId)) {
+                alreadyPicked.push(n);
+              } else if (maxSelect > 1 && nightSel(n).length >= maxSelect) {
+                full.push(n);
+              } else {
+                picked.push(n);
+              }
+            }
+            // Once every night it CAN take is taken, the job flips to undoing it — a permanently
+            // inert "Select all" would be the only dead control on the row.
+            const takenAll = picked.length === 0 && alreadyPicked.length > 0;
+            const nothingToDo = picked.length === 0 && alreadyPicked.length === 0;
+            /** Take (or, when already taken, release) every night this room is free on. */
+            const takeFreeNights = () => {
+              const nightsToFlip = takenAll ? alreadyPicked : picked;
+              nightsToFlip.forEach((n) => onToggleCell?.(row, n));
+              if (!takenAll) onSelectAllNights?.(row, { picked, alreadyPicked, blocked, full });
+            };
             // "capped" = would be pickable for the whole stay, but every night is full — dimmed
             // harder, and clicking explains itself via onCappedClick. "open" = not whole-stay
             // pickable but still has free nights, so it keeps normal weight. "part" tints rows in
@@ -381,8 +417,10 @@ export function RoomStatusTable({
                     : "open") + (partial ? " part" : "");
             const title = !canPick
               ? openNights > 0
-                ? `Room ${row.roomNumber} is free on ${openNights} of ${nights.length} nights — use "Select all" or pick the free nights in their columns`
-                : `Room ${row.roomNumber} — not free for any night of this stay`
+                ? `Room ${row.roomNumber} is free on ${openNights} of ${nights.length} nights — click to take those nights, or pick them one by one in their columns`
+                : takenAll
+                  ? `Room ${row.roomNumber} is in the stay on all ${alreadyPicked.length} night${alreadyPicked.length === 1 ? "" : "s"} it is free — click to remove it`
+                  : `Room ${row.roomNumber} — not free for any night of this stay`
               : atCap
                 ? openNights > 0
                   ? `Some nights already have their ${maxSelect} rooms — this room can still take ${openNights} of them`
@@ -397,6 +435,9 @@ export function RoomStatusTable({
                   if (disabled) return;
                   if (rowClickable || sel) onToggle(row);
                   else if (canPick && atCap) onCappedClick?.();
+                  // Free on SOME nights only: a whole-stay toggle would claim nights someone else
+                  // holds, so the row click takes the free ones and the parent names the rest.
+                  else if (onToggleCell && !nothingToDo) takeFreeNights();
                 }}
               >
                 <td className={`rst-no ${pinCls(0)}`} style={pin(0)}>
@@ -419,63 +460,36 @@ export function RoomStatusTable({
                     {row.extBeds ?? "—"}
                   </td>
                 )}
-                {showSelectAll && (() => {
-                  // Sort every night of the stay into what this room can and cannot take. Done
-                  // from current props, which is safe in a loop: assigning a room on one night
-                  // never changes another night's occupancy or its remaining capacity.
-                  const picked: string[] = [];
-                  const alreadyPicked: string[] = [];
-                  const blocked: SelectAllOutcome["blocked"] = [];
-                  const full: string[] = [];
-                  for (const n of nights) {
-                    const { status, occ } = cellStatus(row, n);
-                    if (status !== "vacant" && status !== "deficient") {
-                      blocked.push({ date: n, status, holder: occ ? occupantName(occ) : row.blockedReason ?? undefined });
-                    } else if (nightSel(n).includes(row.roomId)) {
-                      alreadyPicked.push(n);
-                    } else if (maxSelect > 1 && nightSel(n).length >= maxSelect) {
-                      full.push(n);
-                    } else {
-                      picked.push(n);
-                    }
-                  }
-                  // Once every night it CAN take is taken, the button's job flips to undoing it —
-                  // a permanently inert "Select all" would be the only dead control on the row.
-                  const takenAll = picked.length === 0 && alreadyPicked.length > 0;
-                  const nothingToDo = picked.length === 0 && alreadyPicked.length === 0;
-                  return (
-                    <td className={`rst-selall ${pinCls(anyExtBeds ? 3 : 2)}`} style={pin(anyExtBeds ? 3 : 2)}>
-                      <button
-                        type="button"
-                        className={`rst-selall-btn${takenAll ? " on" : ""}`}
-                        disabled={disabled || nothingToDo}
-                        title={
-                          nothingToDo
-                            ? `Room ${row.roomNumber} is not free on any night of this stay`
-                            : takenAll
-                              ? `Remove room ${row.roomNumber} from all ${alreadyPicked.length} of its nights`
-                              : `Take room ${row.roomNumber} on ${picked.length} free night${picked.length === 1 ? "" : "s"}` +
-                                (blocked.length > 0 ? ` — ${blocked.length} night${blocked.length === 1 ? " is" : "s are"} already taken` : "")
-                        }
-                        onClick={(e) => {
-                          // The row behind toggles the whole stay; this must stay its own action.
-                          e.stopPropagation();
-                          if (disabled) return;
-                          const nightsToFlip = takenAll ? alreadyPicked : picked;
-                          nightsToFlip.forEach((n) => onToggleCell?.(row, n));
-                          if (!takenAll) onSelectAllNights?.(row, { picked, alreadyPicked, blocked, full });
-                        }}
-                      >
-                        {takenAll ? "Clear" : "Select all"}
-                      </button>
-                      {blocked.length > 0 && !nothingToDo && (
-                        <span className="rst-selall-gap" title={blocked.map((b) => `${formatDMY(b.date) || b.date} — ${CELL_LABEL[b.status]}${b.holder ? ` (${b.holder})` : ""}`).join("\n")}>
-                          {blocked.length} taken
-                        </span>
-                      )}
-                    </td>
-                  );
-                })()}
+                {showSelectAll && (
+                  <td className={`rst-selall ${pinCls(anyExtBeds ? 3 : 2)}`} style={pin(anyExtBeds ? 3 : 2)}>
+                    <button
+                      type="button"
+                      className={`rst-selall-btn${takenAll ? " on" : ""}`}
+                      disabled={disabled || nothingToDo}
+                      title={
+                        nothingToDo
+                          ? `Room ${row.roomNumber} is not free on any night of this stay`
+                          : takenAll
+                            ? `Remove room ${row.roomNumber} from all ${alreadyPicked.length} of its nights`
+                            : `Take room ${row.roomNumber} on ${picked.length} free night${picked.length === 1 ? "" : "s"}` +
+                              (blocked.length > 0 ? ` — ${blocked.length} night${blocked.length === 1 ? " is" : "s are"} already taken` : "")
+                      }
+                      onClick={(e) => {
+                        // The row behind may toggle the whole stay; this must stay its own action.
+                        e.stopPropagation();
+                        if (disabled) return;
+                        takeFreeNights();
+                      }}
+                    >
+                      {takenAll ? "Clear" : "Select all"}
+                    </button>
+                    {blocked.length > 0 && !nothingToDo && (
+                      <span className="rst-selall-gap" title={blocked.map((b) => `${formatDMY(b.date) || b.date} — ${CELL_LABEL[b.status]}${b.holder ? ` (${b.holder})` : ""}`).join("\n")}>
+                        {blocked.length} taken
+                      </span>
+                    )}
+                  </td>
+                )}
                 {nights.map((n) => {
                   const { status, label, occ } = cellStatus(row, n);
                   const selectable = status === "vacant" || status === "deficient";

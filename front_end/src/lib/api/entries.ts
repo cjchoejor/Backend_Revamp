@@ -634,3 +634,31 @@ export type EntryRateReference = {
 export async function getRateReference(session: Session, entryId: string) {
   return apiRequest<EntryRateReference>(`/api/entries/${entryId}/rate-reference`, { session });
 }
+
+/**
+ * Competing claims (2026-08-06): other live bookings holding a quotation / proforma / hold /
+ * reservation over any of the same (room, night) pairs as this booking's sealed selection.
+ * Advisory — the first committed hold wins the room; Policy 26 enforces the outcome.
+ */
+export type CompetingClaimItem = {
+  entryId: string;
+  reference: string | null;
+  guestName: string | null;
+  currentStage: string;
+  kind: "RESERVED" | "COMMITTED_HOLD" | "SPECULATIVE_HOLD" | "PROFORMA_INVOICE" | "QUOTATION";
+  documentId: string | null;
+  documentState: string | null;
+  dispatched: boolean;
+  roomNumbers: string[];
+};
+
+export type CompetingClaims = {
+  checkIn: string | null;
+  checkOut: string | null;
+  roomNumbers: string[];
+  items: CompetingClaimItem[];
+};
+
+export async function getCompetingClaims(session: Session, entryId: string) {
+  return apiRequest<CompetingClaims>(`/api/entries/${entryId}/competing-claims`, { session });
+}

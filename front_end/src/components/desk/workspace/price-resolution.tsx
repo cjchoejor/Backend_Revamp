@@ -84,6 +84,18 @@ export function PriceResolutionPanel({
   const effectiveRate = num(t.effectiveRate);
   const discountPct =
     num(t.discountAppliedPercent) ?? num((t.requestedDiscount as { discountPercent?: unknown } | null)?.discountPercent);
+  // Composition-path discount (percent OR flat amount, off the grand total — 2026-08-04 model).
+  // When present it supersedes the legacy rate-fold row below: rates are not moved on this path,
+  // so "resolved → effective" would misread as "not applied".
+  const comp = (t.compositionDiscount ?? null) as {
+    requestedPercent?: unknown;
+    requestedAmount?: unknown;
+    amountOffTotal?: unknown;
+    effectivePercent?: unknown;
+  } | null;
+  const compAmountOff = num(comp?.amountOffTotal);
+  const compReqPct = num(comp?.requestedPercent);
+  const compEffPct = num(comp?.effectivePercent);
   const msrValue = num(t.msrValue);
   const belowMsr = t.belowMsr === true;
   const agent = (t.agentRate ?? null) as { partyType?: string; roomRate?: unknown; source?: string } | null;
@@ -167,13 +179,24 @@ export function PriceResolutionPanel({
 
           <div style={{ borderTop: "1px dashed var(--line)", paddingTop: 6 }}>
             {resolvedRate != null && <FactRow label="Plan rate / night">{money(resolvedRate, cur)}</FactRow>}
-            {discountPct != null && discountPct > 0 && (
+            {compAmountOff != null && compAmountOff > 0 ? (
               <FactRow label="Discount">
-                {discountPct}%
-                {resolvedRate != null && effectiveRate != null && effectiveRate < resolvedRate
-                  ? ` · ${money(resolvedRate, cur)} → ${money(effectiveRate, cur)}`
-                  : " · requested (not applied to this rate)"}
+                {compReqPct != null
+                  ? `${compReqPct}% off the grand total · − ${money(compAmountOff, cur)}`
+                  : `${money(compAmountOff, cur)} off the grand total${
+                      compEffPct != null ? ` (≈ ${Math.round(compEffPct * 10) / 10}%)` : ""
+                    }`}
               </FactRow>
+            ) : (
+              discountPct != null &&
+              discountPct > 0 && (
+                <FactRow label="Discount">
+                  {discountPct}%
+                  {resolvedRate != null && effectiveRate != null && effectiveRate < resolvedRate
+                    ? ` · ${money(resolvedRate, cur)} → ${money(effectiveRate, cur)}`
+                    : " · requested (not applied to this rate)"}
+                </FactRow>
+              )
             )}
             {effectiveRate != null && (
               <FactRow label="Effective rate / night">
