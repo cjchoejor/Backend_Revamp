@@ -9,6 +9,7 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { releaseCommittedHold } from "@/lib/api/reservation-setup";
 import { releaseRoomBlock } from "@/lib/api/rooms";
+import { releaseSpeculativeHold } from "@/lib/api/quotations";
 import {
   queryAvailabilityByEntry,
   roomsFromResultSet,
@@ -153,189 +154,333 @@ function enumerateNights(checkIn?: string | null, checkOut?: string | null): str
  * belongs to nobody and is simply out of service — different endpoints, different consequences,
  * so the dialog says different things.
  */
+/**
+ * What a release is being asked for. A held room belongs to another BOOKING; a blocked room
+ * belongs to nobody and is simply out of service — different endpoints, different consequences,
+ * so the dialog says different things.
+ */
 type ReleaseTarget =
-  | { kind: "HOLD"; entryId: string; roomLabel: string; holder: string; speculative?: boolean }
+  | {
+      kind: "HOLD";
+      entryId: string;
+      holdKind: "COMMITTED" | "SPECULATIVE";
+      /** Speculative holds are released by hold id, committed ones by entry. */
+      holdId?: string;
+      roomId: string;
+      roomLabel: string;
+      holder: string;
+      /** Every room this same booking holds over the searched window, this one included. */
+      siblings: Array<{ roomId: string; roomNumber: string }>;
+    }
   | { kind: "BLOCK"; roomId: string; roomLabel: string; blockedReason: string | null };
 
 /**
- * The one place a room gets freed from S1, shared by the held-rooms list and the double-click
+ * The one place a room gets freed from S1, shared by the taken-rooms panel and the double-click
  * on a taken cell so the two can't say different things.
  *
- * Both paths are GM-only and both require a written reason, because both take something away:
- * a hold takes a room off a guest who was promised it, and a block was raised by someone who
- * judged the room unfit to sell. Neither is undone by clicking once.
+ * A modal, not an inline panel: it was previously rendered at the foot of a long table, where
+ * an operator who double-clicked a cell near the top never saw it appear. Escape or the backdrop
+ * closes it and nothing is released — the safe outcome is always the one you get by walking away.
+ *
+ * Both paths are GM-only and both require a written reason, because both take something away: a
+ * hold takes a room off a guest who was promised it, and a block was raised by someone who
+ * judged the room unfit to sell.
  */
 function ReleaseRoomDialog({ target, onClose, onDone }: { target: ReleaseTarget; onClose: () => void; onDone: () => void }) {
   const { session } = useSession();
   const [reason, setReason] = useState("");
+  /** Committed holds can hand back one room or the lot; the choice only matters when >1. */
+  const siblings = target.kind === "HOLD" ? target.siblings : [];
+  const canScope = target.kind === "HOLD" && target.holdKind === "COMMITTED" && siblings.length > 1;
+  const [scope, setScope] = useState<"ROOM" | "ALL">("ROOM");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const release = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (target.kind === "HOLD") await releaseCommittedHold(session!, target.entryId, { releaseReason: reason.trim() });
-      else await releaseRoomBlock(session!, target.roomId, { releaseReason: reason.trim() });
+      if (target.kind === "BLOCK") {
+        await releaseRoomBlock(session!, target.roomId, { releaseReason: reason.trim() });
+      } else if (target.holdKind === "SPECULATIVE") {
+        await releaseSpeculativeHold(session!, target.entryId, target.holdId!, { releaseReason: reason.trim() });
+      } else {
+        await releaseCommittedHold(session!, target.entryId, {
+          releaseReason: reason.trim(),
+          // Omitted = the whole hold. Naming the room hands back only that one.
+          ...(canScope && scope === "ROOM" ? { roomIds: [target.roomId] } : {}),
+        });
+      }
     },
     onSuccess: () => {
-      toast.success(`Room ${target.roomLabel} released — search again to pick it up.`);
+      toast.success(
+        target.kind === "HOLD" && canScope && scope === "ALL"
+          ? `${siblings.length} rooms released — search again to pick them up.`
+          : `Room ${target.roomLabel} released — search again to pick it up.`,
+      );
       onClose();
       onDone();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not release the room"),
   });
 
-  if (target.kind === "HOLD" && target.speculative) {
-    return (
-      <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid var(--line-2)", borderRadius: "var(--r-md)" }}>
-        <div style={{ fontSize: 12, fontWeight: 700 }}>Room {target.roomLabel} is on a tentative hold</div>
-        <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "4px 0 8px", lineHeight: 1.5 }}>
-          Tentative holds lapse on their own timer, so this one will free itself. Releasing it early
-          isn&rsquo;t wired to this screen yet.
-        </p>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    );
-  }
-
+  const isHold = target.kind === "HOLD";
   return (
-    <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid var(--warn)", background: "var(--warn-t)", borderRadius: "var(--r-md)" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--warn)" }}>
-        {target.kind === "HOLD"
-          ? `Release room ${target.roomLabel} from ${target.holder}?`
-          : `Put room ${target.roomLabel} back in service?`}
-      </div>
-      <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "4px 0 8px", lineHeight: 1.5 }}>
-        {target.kind === "HOLD" ? (
-          <>
-            Their booking loses this room and nothing tells them automatically — someone has to.
-            Every room that booking is holding is freed, not just this one. Holds also lapse on
-            their own timer, so this is only worth doing when they won&rsquo;t confirm, or someone
-            else needs the room now.
-          </>
-        ) : (
-          <>
-            It was taken out of service{target.blockedReason ? ` — “${target.blockedReason}”` : ""}.
-            Clearing that says it is fit to sell again; if it isn&rsquo;t, the guest finds the
-            problem the block was there to prevent.
-          </>
-        )}
-      </p>
-      <input
-        className="dinput"
-        placeholder={target.kind === "HOLD" ? "Why is this being released? (recorded on their booking)" : "Why is it fit to sell again? (recorded on the room)"}
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-      />
-      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          disabled={reason.trim().length < 3 || release.isPending}
-          onClick={() => release.mutate()}
-        >
-          {release.isPending ? "Releasing…" : target.kind === "HOLD" ? "Release the room" : "Put back in service"}
-        </button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
-          {target.kind === "HOLD" ? "Keep the hold" : "Leave it blocked"}
-        </button>
+    <div className="scrim" style={{ placeItems: "start center", paddingTop: "8vh" }} onMouseDown={onClose}>
+      <div className="modal" style={{ maxWidth: 470 }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-top" style={{ background: "var(--warn-t)", borderBottom: "1px solid var(--warn)" }}>
+          <div className="modal-ic" style={{ background: "var(--warn)" }}>
+            <AlertTriangle style={{ width: 19, height: 19 }} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>
+              {isHold ? `Release room ${target.roomLabel}?` : `Put room ${target.roomLabel} back in service?`}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 2 }}>
+              {isHold
+                ? `Held by ${target.holder}${target.holdKind === "SPECULATIVE" ? " · tentative hold" : ""}`
+                : target.blockedReason
+                  ? `Out of service — ${target.blockedReason}`
+                  : "Out of service"}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 20px 18px" }}>
+          <p style={{ fontSize: 12, color: "var(--ink-2)", margin: "0 0 10px", lineHeight: 1.55 }}>
+            {isHold ? (
+              <>
+                Their booking loses the room and nothing tells them automatically — someone has to.
+                Holds also lapse on their own timer, so this is worth doing only when they
+                won&rsquo;t confirm, or another guest needs the room now.
+              </>
+            ) : (
+              <>
+                Clearing the block says this room is fit to sell again. If it isn&rsquo;t, the
+                guest walks into the problem the block was there to prevent.
+              </>
+            )}
+          </p>
+
+          {canScope && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-3)", marginBottom: 5 }}>
+                THIS BOOKING HOLDS {siblings.length} ROOMS OVER THESE DATES
+              </div>
+              {(
+                [
+                  { v: "ROOM" as const, label: `Just room ${target.roomLabel}`, hint: "The rest of their booking keeps its rooms." },
+                  {
+                    v: "ALL" as const,
+                    label: `All ${siblings.length} rooms — ${siblings.map((s) => s.roomNumber).join(", ")}`,
+                    hint: "Only this booking's rooms. Another booking by the same guest on different dates is untouched.",
+                  },
+                ]
+              ).map((o) => (
+                <label
+                  key={o.v}
+                  className="pickrow"
+                  style={{
+                    borderRadius: "var(--r-sm)",
+                    cursor: "pointer",
+                    background: scope === o.v ? "var(--terra-t)" : undefined,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    checked={scope === o.v}
+                    onChange={() => setScope(o.v)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span style={{ flex: 1 }}>
+                    <b style={{ fontSize: 12 }}>{o.label}</b>
+                    <span style={{ display: "block", fontSize: 11, color: "var(--ink-3)" }}>{o.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <input
+            className="dinput"
+            autoFocus
+            placeholder={isHold ? "Why is this being released? (recorded on their booking)" : "Why is it fit to sell again? (recorded on the room)"}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={reason.trim().length < 3 || release.isPending}
+              onClick={() => release.mutate()}
+            >
+              {release.isPending ? "Releasing…" : isHold ? "Release the room" : "Put back in service"}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+              {isHold ? "Keep the hold" : "Leave it blocked"}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
+/** One room a search found taken, with enough context for the operator to act on it. */
+type TakenRoom = {
+  roomId: string;
+  roomNumber: string;
+  kind: "COMMITTED" | "SPECULATIVE" | "BLOCKED";
+  entryId?: string;
+  holdId?: string;
+  holder?: string;
+  ref?: string | null;
+  nights: number;
+  blockedReason?: string | null;
+};
+
 /**
- * Rooms this search found under another booking's committed hold, and the GM's way to free one.
+ * What this search couldn't offer, and who can do something about it.
  *
- * A held room used to be a dead end: the only things that released a committed hold were a room
- * change, a re-entry, a cancellation or the TTL running out, so a room held for a booking that
- * had stalled sat unusable with a guest standing at the desk. Releasing is now possible, but
- * deliberately not casual — it is a GM decision, it needs a written reason that is recorded
- * against the booking that loses the room, and the backend refuses once that booking is
- * confirmed (then it is a cancellation or a room change, which carry consequences this does not).
- *
- * Speculative holds are listed but not releasable here: their release route is keyed by hold id,
- * which the availability payload does not carry yet.
+ * Two collapsed groups — Held and Blocked — because the counts are what an operator scans for
+ * ("three rooms held, two out of service"); the room numbers only matter once they've decided to
+ * look. Held opens to show committed and tentative holds separately, since only one of those is
+ * worth chasing a guest about.
  */
-function HeldRoomRelease({
+function TakenRoomsPanel({
   perDate,
   statusRows,
-  onReleased,
+  onOpen,
 }: {
   perDate?: PerDateAvailabilityResult[];
   statusRows: RoomStatusRow[];
-  onReleased: () => void;
+  onOpen: (t: ReleaseTarget) => void;
 }) {
   const { session } = useSession();
   const isGm = session?.actorLevel === "L3" || session?.actorLevel === "L4";
-  const [target, setTarget] = useState<ReleaseTarget | null>(null);
+  const [open, setOpen] = useState<"HELD" | "BLOCKED" | null>(null);
 
   const roomName = useMemo(() => new Map(statusRows.map((r) => [r.roomId, r.roomNumber])), [statusRows]);
-  /** One row per (booking, room) held over this window — a hold spanning three nights is one row. */
-  const held = useMemo(() => {
-    const out = new Map<string, { entryId: string; roomId: string; kind: string; holder: string; ref: string | null; nights: number }>();
+
+  const { held, blocked } = useMemo(() => {
+    const h = new Map<string, TakenRoom>();
     for (const d of perDate ?? []) {
       for (const o of d.occupiedRoomIds) {
         if (o.source !== "HOLD" || !o.entryId) continue;
         const key = `${o.entryId}:${o.roomId}`;
-        const cur = out.get(key);
+        const cur = h.get(key);
         if (cur) cur.nights += 1;
         else
-          out.set(key, {
-            entryId: o.entryId,
+          h.set(key, {
             roomId: o.roomId,
-            kind: (o as { holdKind?: string }).holdKind ?? "COMMITTED",
+            roomNumber: roomName.get(o.roomId) ?? o.roomId,
+            kind: ((o as { holdKind?: string }).holdKind as "COMMITTED" | "SPECULATIVE") ?? "COMMITTED",
+            entryId: o.entryId,
+            holdId: (o as { holdId?: string }).holdId,
             holder: o.guestName ?? "Guest",
             ref: o.entryReferenceNumber ?? null,
             nights: 1,
           });
       }
     }
-    return [...out.values()].sort((a, b) => (roomName.get(a.roomId) ?? "").localeCompare(roomName.get(b.roomId) ?? "", undefined, { numeric: true }));
-  }, [perDate, roomName]);
+    const b: TakenRoom[] = statusRows
+      .filter((r) => !!r.blockedReason)
+      .map((r) => ({ roomId: r.roomId, roomNumber: r.roomNumber, kind: "BLOCKED" as const, nights: 0, blockedReason: r.blockedReason }));
+    const byRoom = (x: TakenRoom, y: TakenRoom) => x.roomNumber.localeCompare(y.roomNumber, undefined, { numeric: true });
+    return { held: [...h.values()].sort(byRoom), blocked: b.sort(byRoom) };
+  }, [perDate, statusRows, roomName]);
 
-  if (held.length === 0) return null;
+  if (held.length === 0 && blocked.length === 0) return null;
+
+  /** Every room the SAME booking holds across this search — the "all rooms" release scope. */
+  const siblingsOf = (entryId: string) =>
+    held.filter((x) => x.entryId === entryId).map((x) => ({ roomId: x.roomId, roomNumber: x.roomNumber }));
+
+  const Group = ({ id, label, count, children }: { id: "HELD" | "BLOCKED"; label: string; count: number; children: React.ReactNode }) =>
+    count === 0 ? null : (
+      <div style={{ borderTop: "1px solid var(--line)" }}>
+        <button
+          type="button"
+          onClick={() => setOpen((c) => (c === id ? null : id))}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "8px 2px", background: "none", border: 0, cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--ink)",
+          }}
+        >
+          <span>
+            {label} <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>· {count} room{count === 1 ? "" : "s"}</span>
+          </span>
+          <span style={{ color: "var(--ink-3)", fontSize: 11 }}>{open === id ? "hide" : "show"}</span>
+        </button>
+        {open === id && <div style={{ paddingBottom: 6 }}>{children}</div>}
+      </div>
+    );
+
+  const Row = ({ r }: { r: TakenRoom }) => (
+    <div className="pickrow" style={{ borderRadius: "var(--r-sm)" }}>
+      <span>
+        <b>Room {r.roomNumber}</b>
+        <span style={{ color: "var(--ink-3)" }}>
+          {r.kind === "BLOCKED"
+            ? r.blockedReason
+              ? ` · ${r.blockedReason}`
+              : " · out of service"
+            : ` · ${r.kind === "SPECULATIVE" ? "tentative" : "committed"} · ${r.holder}${r.ref ? ` · ${r.ref}` : ""} · ${r.nights} night${r.nights === 1 ? "" : "s"}`}
+        </span>
+      </span>
+      {isGm ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() =>
+            onOpen(
+              r.kind === "BLOCKED"
+                ? { kind: "BLOCK", roomId: r.roomId, roomLabel: r.roomNumber, blockedReason: r.blockedReason ?? null }
+                : {
+                    kind: "HOLD",
+                    entryId: r.entryId!,
+                    holdKind: r.kind,
+                    holdId: r.holdId,
+                    roomId: r.roomId,
+                    roomLabel: r.roomNumber,
+                    holder: r.holder ?? "Guest",
+                    siblings: siblingsOf(r.entryId!),
+                  },
+            )
+          }
+        >
+          Release
+        </button>
+      ) : (
+        <span style={{ fontSize: 11, color: "var(--ink-3)" }}>GM can release</span>
+      )}
+    </div>
+  );
 
   return (
-    <div style={{ marginTop: 12, padding: "10px 12px", border: "1px solid var(--line-2)", borderRadius: "var(--r-md)" }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-3)", letterSpacing: "0.03em" }}>
-        HELD BY ANOTHER BOOKING
+    <div style={{ marginTop: 12, padding: "4px 12px 6px", border: "1px solid var(--line-2)", borderRadius: "var(--r-md)" }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-3)", letterSpacing: "0.03em", padding: "6px 0 2px" }}>
+        NOT AVAILABLE ON THESE DATES
       </div>
-      <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "4px 0 8px", lineHeight: 1.5 }}>
-        These rooms are promised to someone else. A hold can be released by a GM when the other
-        booking has stalled — the reason is recorded against it.
-      </p>
-      {held.map((h) => (
-        <div key={`${h.entryId}:${h.roomId}`} className="pickrow" style={{ borderRadius: "var(--r-sm)" }}>
-          <span>
-            <b>Room {roomName.get(h.roomId) ?? h.roomId}</b>
-            <span style={{ color: "var(--ink-3)" }}>
-              {" "}
-              · {h.kind === "SPECULATIVE" ? "tentative hold" : "committed hold"} · {h.holder}
-              {h.ref ? ` · ${h.ref}` : ""} · {h.nights} night{h.nights === 1 ? "" : "s"}
-            </span>
-          </span>
-          {h.kind === "SPECULATIVE" ? (
-            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>expires on its own</span>
-          ) : isGm ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() =>
-                setTarget({ kind: "HOLD", entryId: h.entryId, roomLabel: roomName.get(h.roomId) ?? h.roomId, holder: h.holder })
-              }
-            >
-              Release
-            </button>
-          ) : (
-            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>GM can release</span>
-          )}
-        </div>
-      ))}
-
-      {target && <ReleaseRoomDialog target={target} onClose={() => setTarget(null)} onDone={onReleased} />}
+      <Group id="HELD" label="Held" count={held.length}>
+        {held.map((r) => (
+          <Row key={`${r.entryId}:${r.roomId}`} r={r} />
+        ))}
+      </Group>
+      <Group id="BLOCKED" label="Blocked" count={blocked.length}>
+        {blocked.map((r) => (
+          <Row key={r.roomId} r={r} />
+        ))}
+      </Group>
     </div>
   );
 }
-
 export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -1628,12 +1773,28 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     if (status === "blocked") {
                       setReleaseTarget({ kind: "BLOCK", roomId: row.roomId, roomLabel: row.roomNumber, blockedReason: row.blockedReason ?? null });
                     } else if (occ?.entryId) {
+                      const holdEntryId = occ.entryId;
+                      // Every room this same booking holds across the searched window — the
+                      // "release all its rooms" option needs the list, and a booking by the same
+                      // guest on other dates is a different entry, so it is untouched.
+                      const nameOf = new Map(statusRows.map((r) => [r.roomId, r.roomNumber]));
+                      const siblings = Array.from(
+                        new Map(
+                          (perDate ?? [])
+                            .flatMap((d) => d.occupiedRoomIds)
+                            .filter((o) => o.source === "HOLD" && o.entryId === holdEntryId)
+                            .map((o) => [o.roomId, { roomId: o.roomId, roomNumber: nameOf.get(o.roomId) ?? o.roomId }]),
+                        ).values(),
+                      );
                       setReleaseTarget({
                         kind: "HOLD",
-                        entryId: occ.entryId,
+                        entryId: holdEntryId,
+                        holdKind: ((occ as { holdKind?: string }).holdKind as "COMMITTED" | "SPECULATIVE") ?? "COMMITTED",
+                        holdId: (occ as { holdId?: string }).holdId,
+                        roomId: row.roomId,
                         roomLabel: row.roomNumber,
                         holder: occ.guestName ?? "Guest",
-                        speculative: (occ as { holdKind?: string }).holdKind === "SPECULATIVE",
+                        siblings,
                       });
                     }
                   }}
@@ -1656,7 +1817,7 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   onDone={() => searchMutation.reset()}
                 />
               )}
-              {!expanded && <HeldRoomRelease perDate={perDate} statusRows={statusRows} onReleased={() => searchMutation.reset()} />}
+              {!expanded && <TakenRoomsPanel perDate={perDate} statusRows={statusRows} onOpen={setReleaseTarget} />}
               {!expanded && statusRows.some((r) => r.bucket === "deficient") && (
                 <p style={{ fontSize: 11, color: "var(--warn)", margin: "10px 0 0", display: "inline-flex", gap: 5, alignItems: "center" }}>
                   <AlertTriangle style={{ width: 12, height: 12 }} />
