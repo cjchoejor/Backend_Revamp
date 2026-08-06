@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
+  committedHoldSpans,
   reservedEntryRoomsSelect,
   roomsClaimedByReservedEntry,
   stillHoldsInventory,
@@ -94,8 +95,10 @@ export async function findRoomBookingConflicts(
     }),
     db.committedHold.findMany({
       where: {
+        // NOT narrowed by roomId: a multi-room hold pins every sealed room but names only one
+        // here, so filtering on it missed rooms 2..N entirely. The room filter happens below,
+        // against the spans `committedHoldSpans` resolves.
         state: { in: ["PLACED", "CONFIRMED"] },
-        roomId: { in: input.roomIds },
         NOT: { entryId: input.excludeEntryId },
         expiresAt: { gt: new Date() },
         entry: {
@@ -107,6 +110,7 @@ export async function findRoomBookingConflicts(
       select: {
         entryId: true,
         roomId: true,
+        perNightBreakdown: true,
         entry: {
           select: {
             inquiryId: true,
@@ -169,21 +173,27 @@ export async function findRoomBookingConflicts(
   }
 
   for (const h of holds) {
-    if (!h.roomId || !h.entry?.checkInDate || !h.entry?.checkOutDate) continue;
-    // A confirmed booking keeps its hold row, so the same (entry, room) can appear twice. It is
-    // one conflict, and the reservation is the stronger claim — don't report it as held too.
-    if (reservedKeys.has(`${h.entryId}:${h.roomId}`)) continue;
-    heldKeys.add(`${h.entryId}:${h.roomId}`);
-    conflicts.push({
-      roomId: h.roomId,
-      source: "HOLD",
-      holdKind: "COMMITTED",
-      entryId: h.entryId,
-      entryReferenceNumber: h.entry.inquiryId ?? null,
-      guestName: guestNameOf(h.entry.guestProfile),
-      startDate: h.entry.checkInDate,
-      endDate: h.entry.checkOutDate,
-    });
+    if (!h.entry?.checkInDate || !h.entry?.checkOutDate) continue;
+    for (const span of committedHoldSpans(h, { checkIn: h.entry.checkInDate, checkOut: h.entry.checkOutDate })) {
+      if (!roomIdSet.has(span.roomId)) continue;
+      // Only the nights this hold actually covers overlap the requested range.
+      if (span.startDate >= input.checkOut || span.endDate <= input.checkIn) continue;
+      // A confirmed booking keeps its hold row, so the same (entry, room) can appear twice. It
+      // is one conflict, and the reservation is the stronger claim — don't report it as held too.
+      const key = `${h.entryId}:${span.roomId}`;
+      if (reservedKeys.has(key) || heldKeys.has(key)) continue;
+      heldKeys.add(key);
+      conflicts.push({
+        roomId: span.roomId,
+        source: "HOLD",
+        holdKind: "COMMITTED",
+        entryId: h.entryId,
+        entryReferenceNumber: h.entry.inquiryId ?? null,
+        guestName: guestNameOf(h.entry.guestProfile),
+        startDate: span.startDate,
+        endDate: span.endDate,
+      });
+    }
   }
 
   for (const s of speculative) {

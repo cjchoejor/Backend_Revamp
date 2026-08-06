@@ -48,6 +48,63 @@ type ReservedEntryRooms = {
   committedHold?: { roomId: string | null; perNightBreakdown?: Prisma.JsonValue | null } | null;
 };
 
+/** One room's claim over one span of nights. `endDate` is the EXCLUSIVE checkout. */
+export type ClaimSpan = { roomId: string; startDate: Date; endDate: Date };
+
+/** `[{ date, roomIds: [{ roomId }] }]` → date → room ids, read defensively. */
+function perNightMap(breakdown: Prisma.JsonValue | null | undefined): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (!Array.isArray(breakdown)) return out;
+  for (const night of breakdown) {
+    const date = (night as { date?: unknown })?.date;
+    const rooms = (night as { roomIds?: unknown })?.roomIds;
+    if (typeof date !== "string" || !Array.isArray(rooms)) continue;
+    const ids: string[] = [];
+    for (const r of rooms) {
+      const id = typeof r === "string" ? r : (r as { roomId?: unknown })?.roomId;
+      if (typeof id === "string" && id) ids.push(id);
+    }
+    if (ids.length > 0) out.set(date.slice(0, 10), ids);
+  }
+  return out;
+}
+
+/**
+ * The (room, night) spans a committed hold actually covers.
+ *
+ * Both consumers used to emit ONE blockage — the hold's primary `roomId`, spanning the entry's
+ * whole stay. That was wrong twice over (found 2026-08-06):
+ *
+ *  - **Wrong nights.** A hold pinning a room on two nights of a three-night stay blocked all
+ *    three, so the third night was reported taken when it was free to sell.
+ *  - **Wrong rooms.** A multi-room hold pins every sealed room, but only `roomId` was blocked;
+ *    rooms 2..N of the hold blocked nothing at all until a reservation and its assignments
+ *    existed. That is an overbooking hole on every multi-room booking sitting at S3.
+ *
+ * `perNightBreakdown` is the sealed per-night selection and is authoritative when present: one
+ * span per (room, night). A hold without one — legacy, or a single-room hold placed before the
+ * breakdown existed — falls back to the primary room across the entry's stay, which is the old
+ * behaviour and the best that data supports.
+ */
+export function committedHoldSpans(
+  hold: { roomId: string | null; perNightBreakdown?: Prisma.JsonValue | null },
+  stay: { checkIn: Date; checkOut: Date },
+): ClaimSpan[] {
+  const nights = perNightMap(hold.perNightBreakdown);
+  if (nights.size > 0) {
+    const spans: ClaimSpan[] = [];
+    for (const [date, roomIds] of nights) {
+      const start = new Date(`${date}T00:00:00.000Z`);
+      if (Number.isNaN(start.getTime())) continue;
+      const end = new Date(start);
+      end.setUTCDate(end.getUTCDate() + 1);
+      for (const roomId of roomIds) spans.push({ roomId, startDate: start, endDate: end });
+    }
+    if (spans.length > 0) return spans;
+  }
+  return hold.roomId ? [{ roomId: hold.roomId, startDate: stay.checkIn, endDate: stay.checkOut }] : [];
+}
+
 /** Distinct room ids inside a `CommittedHold.perNightBreakdown` snapshot, read defensively. */
 function roomIdsFromPerNight(breakdown: Prisma.JsonValue | null | undefined): string[] {
   if (!Array.isArray(breakdown)) return [];

@@ -8,6 +8,7 @@ import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availab
 import { resolveIndicativePricingForS1Availability } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s1-indicative.js";
 import { resolveAgentRate } from "../../lib/agent-rate-resolution.js";
 import {
+  committedHoldSpans,
   reservedEntryRoomsSelect,
   roomsClaimedByReservedEntry,
   stillHoldsInventory,
@@ -128,8 +129,9 @@ export async function runAvailabilityEngineForEntry(
     }),
     prisma.committedHold.findMany({
       where: {
+        // Not narrowed by roomId — a multi-room hold names only its primary room there, and its
+        // other rooms live in the per-night breakdown. `committedHoldSpans` resolves both.
         state: { in: ["PLACED", "CONFIRMED"] },
-        roomId: { not: null },
         NOT: { entryId: entry.id },
         expiresAt: { gt: new Date() },
         entry: {
@@ -141,6 +143,7 @@ export async function runAvailabilityEngineForEntry(
       select: {
         roomId: true,
         entryId: true,
+        perNightBreakdown: true,
         entry: {
           select: {
             ...contactSelect,
@@ -274,23 +277,30 @@ export async function runAvailabilityEngineForEntry(
   const reservedRoomIds = new Set(reservedBlockages.map((b) => `${b.entryId}:${b.roomId}`));
   // Claims rank RESERVED > COMMITTED hold > SPECULATIVE hold. One booking can carry all three
   // for the same room, and it is one occupancy — report only the strongest.
+  // A committed hold covers the (room, night) pairs in its sealed per-night breakdown — every
+  // room it pinned, on the nights it pinned them — not just its primary room across the whole
+  // stay. See `committedHoldSpans` for the two faults that produced.
+  const committedSpans = committedHolds
+    .filter((h) => h.entry?.checkInDate && h.entry?.checkOutDate)
+    .flatMap((h) =>
+      committedHoldSpans(h, { checkIn: h.entry!.checkInDate!, checkOut: h.entry!.checkOutDate! })
+        .filter((s) => !reservedRoomIds.has(`${h.entryId}:${s.roomId}`))
+        .map((s) => ({
+          roomId: s.roomId,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          source: "HOLD" as const,
+          holdKind: "COMMITTED" as const,
+          entryId: h.entryId,
+          entryReferenceNumber: h.entry?.inquiryId ?? null,
+          ...contextFromEntry(h.entry),
+        })),
+    );
   const strongerClaim = new Set(reservedRoomIds);
-  for (const h of committedHolds) if (h.roomId) strongerClaim.add(`${h.entryId}:${h.roomId}`);
+  for (const s of committedSpans) strongerClaim.add(`${s.entryId}:${s.roomId}`);
   const roomBlockages = [
     ...reservedBlockages,
-    ...committedHolds
-      .filter((h) => h.roomId && h.entry?.checkInDate && h.entry?.checkOutDate)
-      .filter((h) => !reservedRoomIds.has(`${h.entryId}:${h.roomId}`))
-      .map((h) => ({
-        roomId: h.roomId!,
-        startDate: h.entry!.checkInDate!,
-        endDate: h.entry!.checkOutDate!,
-        source: "HOLD" as const,
-        holdKind: "COMMITTED" as const,
-        entryId: h.entryId,
-        entryReferenceNumber: h.entry?.inquiryId ?? null,
-        ...contextFromEntry(h.entry),
-      })),
+    ...committedSpans,
     // Weakest claim, so it is added last and skipped wherever a stronger one already covers the
     // same room: a reservation or committed hold on the entry supersedes its speculative one.
     ...speculativeHolds
