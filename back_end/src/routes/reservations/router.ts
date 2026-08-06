@@ -417,6 +417,33 @@ reservationsRouter.post("/entries/:id/holds/committed", requireActorLevel("L1"),
   }
 });
 
+/**
+ * Release another booking's committed hold, freeing its rooms — GM and above.
+ *
+ * The counterpart to placing one (L1 above): taking inventory off the shelf is ordinary desk
+ * work, taking it back off a guest who was promised it is not. The service enforces the same
+ * bar again, requires a written reason, and refuses outright once the booking is confirmed —
+ * at that point the room is bound to the reservation and the correct routes are cancellation or
+ * a room change, both of which carry consequences this path does not run.
+ */
+reservationsRouter.post(
+  "/entries/:id/holds/committed/release",
+  requireActorLevel("L3"),
+  async (req, res, next) => {
+    try {
+      const out = await s3HoldService.releaseCommittedHoldByAuthority(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        { releaseReason: String(req.body?.releaseReason ?? "") },
+      );
+      res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 reservationsRouter.post("/entries/:id/re-entry/s2", requireActorLevel("L2"), validateBody(s3ReEntryRequestSchema), async (req, res, next) => {
   try {
     const result = await s3ReEntryService.initiateS3ToS2Backflow(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);

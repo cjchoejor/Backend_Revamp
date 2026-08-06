@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 
 /**
@@ -41,7 +41,10 @@ import {
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
 import { enforceCancellationDisclosurePresent } from "../../policies/14-cancellation/p34-cancellation-terms-disclosure-required.js";
 import { enforceAdvancePaymentSatisfiedOrCreditExtensionPresent } from "../../policies/18-credit-extension-ceiling/p42-advance-payment-or-credit-extension-required.js";
-import { enforceCommittedHoldReleaseOnReEntryAuthority } from "../../policies/11-committed-hold/p26-committed-hold-release-on-reentry-requires-fom.js";
+import {
+  enforceCommittedHoldReleaseAuthority,
+  enforceCommittedHoldReleaseOnReEntryAuthority,
+} from "../../policies/11-committed-hold/p26-committed-hold-release-on-reentry-requires-fom.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceFolioPresentBeforeCommittedHoldS3 } from "../../policies/13-billing-model/p31-folio-required-before-committed-hold-s3.js";
 
@@ -384,6 +387,10 @@ export async function releaseCommittedHoldForRoomChange(
   actor: { actorId: string; actorLevel: string },
   reason: string,
   inquiryId: string | null,
+  /** Trace event to stamp. Defaults to what the original room-change call sites recorded; the
+   *  GM release below passes its own so the two are distinguishable in the audit trail. */
+  eventType: string = "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
+  stageContext: Stage = Stage.S6,
 ) {
   const hold = await tx.committedHold.findUnique({ where: { entryId } });
   if (!hold) return null;
@@ -419,22 +426,93 @@ export async function releaseCommittedHoldForRoomChange(
 
   await tx.traceEvent.create({
     data: {
-      eventType: "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
+      eventType,
       actorId: actor.actorId,
       actorLevel: (actor.actorLevel ?? "L1") as any,
       entityType: "CommittedHold",
       entityId: hold.id,
       operation: "RELEASE",
       timestamp: now,
-      stageContext: Stage.S6,
+      stageContext,
       inquiryId,
       entryId,
-      payload: { entryId, committedHoldId: hold.id, roomId: hold.roomId, priorState: hold.state, reason },
+      payload: {
+        entryId,
+        committedHoldId: hold.id,
+        roomId: hold.roomId,
+        releasedRoomIds: allHeldRoomIds(hold),
+        priorState: hold.state,
+        reason,
+      },
       createdBy: actor.actorId,
     },
   });
 
   return updated;
+}
+
+/**
+ * Release another booking's committed hold, on a GM's authority.
+ *
+ * There was no way to do this at all: holds were only ever released as a side effect of a room
+ * change, a re-entry, a cancellation, or the W3 expiry worker. So a room held for a booking that
+ * had stalled sat unusable until its TTL ran out, with no one — GM included — able to free it
+ * for a guest standing at the desk.
+ *
+ * It is deliberately not a plain delete. The protocol is:
+ *
+ *  1. **GM or above.** A held room is inventory already promised to someone; taking it back
+ *    belongs with an actor who can weigh both guests, not the one who wants the room.
+ *  2. **A reason, in writing.** Required and recorded on the hold and the trace, so the booking
+ *    that lost its room has a stated cause attached to it.
+ *  3. **Never under a confirmed reservation.** Once the booking is confirmed the room is bound
+ *    to it commercially — pulling it out from underneath is a cancellation or a room change,
+ *    both of which carry consequences (penalties, guest notification, invoice supersession) that
+ *    this path does not run. Those routes exist; this one refuses and says so.
+ *
+ * Releasing frees every room the hold pinned, cancels its timers and marks it RELEASED — the
+ * same machinery a room change uses, with its own trace event so the two read differently in
+ * the audit trail.
+ */
+export async function releaseCommittedHoldByAuthority(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  input: { releaseReason: string },
+) {
+  enforceCommittedHoldReleaseAuthority({ actorLevel: actor.actorLevel });
+  const reason = input.releaseReason?.trim();
+  if (!reason) throw new ValidationError("releaseReason is required — it is recorded against the booking that loses the room");
+
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: { id: true, inquiryId: true, currentStage: true, reservations: { select: { id: true }, take: 1 } },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+
+  const hold = await prisma.committedHold.findUnique({ where: { entryId } });
+  if (!hold) throw new NotFoundError("CommittedHold");
+  if (hold.state === HoldState.RELEASED || hold.state === HoldState.EXPIRED) {
+    throw new ValidationError("That hold is already released");
+  }
+  if (entry.reservations.length > 0) {
+    throw new PolicyGateBlockedError(
+      "HOLD_UNDER_CONFIRMED_RESERVATION",
+      "This booking is confirmed — its rooms are bound to the reservation. Cancel the booking or run a room change instead of releasing the hold.",
+    );
+  }
+
+  return prisma.$transaction((tx) =>
+    releaseCommittedHoldForRoomChange(
+      tx,
+      entryId,
+      actor,
+      reason,
+      entry.inquiryId,
+      "COMMITTED_HOLD.RELEASED_BY_AUTHORITY",
+      Stage.S3,
+    ),
+  );
 }
 
 export async function releaseOnReEntry(
