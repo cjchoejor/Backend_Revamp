@@ -43,6 +43,8 @@ export type RoomBlockage = {
    *  speculative hold (see `holdKind`). */
   source: "RESERVED" | "HOLD";
   holdKind?: "COMMITTED" | "SPECULATIVE";
+    /** Speculative holds only — their release route is keyed by hold id. */
+    holdId?: string;
   /** ID + readable ref of the booking so the frontend can show WHO holds the room on this night. */
   entryId?: string;
   entryReferenceNumber?: string | null; // e.g. "INQ-20260716-0005"
@@ -119,6 +121,8 @@ export type UnavailableRoomEntry = {
     /** Which kind of hold, when source is HOLD — a SPECULATIVE (S2) claim is weaker and shorter
      *  lived than a COMMITTED (S3) one, and the operator should see which they are up against. */
     holdKind?: "COMMITTED" | "SPECULATIVE";
+    /** Speculative holds only — their release route is keyed by hold id. */
+    holdId?: string;
     entryId?: string;
     entryReferenceNumber?: string | null;
     guestName?: string | null;
@@ -156,6 +160,8 @@ export type PerDateAvailability = {
     /** Which kind of hold, when source is HOLD — a SPECULATIVE (S2) claim is weaker and shorter
      *  lived than a COMMITTED (S3) one, and the operator should see which they are up against. */
     holdKind?: "COMMITTED" | "SPECULATIVE";
+    /** Speculative holds only — their release route is keyed by hold id. */
+    holdId?: string;
     entryId?: string;
     entryReferenceNumber?: string | null;
     guestName?: string | null;
@@ -238,6 +244,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
         occupiedBy: overlappingBlockages.map((b) => ({
           source: b.source,
           holdKind: b.holdKind,
+          holdId: b.holdId,
           entryId: b.entryId,
           entryReferenceNumber: b.entryReferenceNumber ?? null,
           guestName: b.guestName ?? null,
@@ -398,6 +405,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
             roomId,
             source: blocking.source,
             holdKind: blocking.holdKind,
+            holdId: blocking.holdId,
             entryId: blocking.entryId,
             entryReferenceNumber: blocking.entryReferenceNumber ?? null,
             guestName: blocking.guestName ?? null,
@@ -430,6 +438,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
       u.occupiedBy = bs.map((b) => ({
         source: b.source,
           holdKind: b.holdKind,
+          holdId: b.holdId,
         entryId: b.entryId,
         entryReferenceNumber: b.entryReferenceNumber ?? null,
         guestName: b.guestName ?? null,

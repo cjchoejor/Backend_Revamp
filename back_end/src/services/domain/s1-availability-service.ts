@@ -176,6 +176,9 @@ export async function runAvailabilityEngineForEntry(
         },
       },
       select: {
+        // The release route for a speculative hold is keyed by hold id, so carry it through —
+        // without it the desk can show the hold but has no way to act on it.
+        id: true,
         roomId: true,
         entryId: true,
         expiresAt: true,
@@ -312,6 +315,7 @@ export async function runAvailabilityEngineForEntry(
         endDate: h.entry!.checkOutDate!,
         source: "HOLD" as const,
         holdKind: "SPECULATIVE" as const,
+        holdId: h.id,
         holdExpiresAt: h.expiresAt,
         entryId: h.entryId,
         entryReferenceNumber: h.entry?.inquiryId ?? null,

@@ -478,7 +478,9 @@ export async function releaseCommittedHoldByAuthority(
   prisma: PrismaClient,
   entryId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-  input: { releaseReason: string },
+  /** `roomIds` narrows the release to specific rooms; omitted (or all of them) releases the
+   *  whole hold. A booking holding four rooms usually only needs to hand one back. */
+  input: { releaseReason: string; roomIds?: string[] },
 ) {
   enforceCommittedHoldReleaseAuthority({ actorLevel: actor.actorLevel });
   const reason = input.releaseReason?.trim();
@@ -502,17 +504,87 @@ export async function releaseCommittedHoldByAuthority(
     );
   }
 
-  return prisma.$transaction((tx) =>
-    releaseCommittedHoldForRoomChange(
-      tx,
-      entryId,
-      actor,
-      reason,
-      entry.inquiryId,
-      "COMMITTED_HOLD.RELEASED_BY_AUTHORITY",
-      Stage.S3,
-    ),
-  );
+  const allRooms = allHeldRoomIds(hold);
+  const requested = (input.roomIds ?? []).filter((id) => allRooms.includes(id));
+  const partial = requested.length > 0 && requested.length < allRooms.length;
+
+  // Whole hold — every room it pinned goes back, and the hold itself is done.
+  if (!partial) {
+    return prisma.$transaction((tx) =>
+      releaseCommittedHoldForRoomChange(
+        tx,
+        entryId,
+        actor,
+        reason,
+        entry.inquiryId,
+        "COMMITTED_HOLD.RELEASED_BY_AUTHORITY",
+        Stage.S3,
+      ),
+    );
+  }
+
+  /**
+   * Just the rooms asked for. A booking holding four rooms usually only needs to give one back,
+   * and releasing the whole hold to free a single room would cost the other three for no reason.
+   * The hold stays live over what remains: its per-night breakdown is rewritten without the
+   * released rooms, and its primary `roomId` is repointed if that was one of them.
+   */
+  const now = new Date();
+  const keep = allRooms.filter((id) => !requested.includes(id));
+  const breakdown = hold.perNightBreakdown as
+    | Array<{ date?: string; roomIds?: Array<{ roomId?: string }> }>
+    | null;
+  const trimmed = Array.isArray(breakdown)
+    ? breakdown
+        .map((n) => ({ ...n, roomIds: (n.roomIds ?? []).filter((r) => r?.roomId && !requested.includes(r.roomId)) }))
+        .filter((n) => (n.roomIds ?? []).length > 0)
+    : null;
+
+  return prisma.$transaction(async (tx) => {
+    for (const roomId of requested) {
+      const room = await tx.room.findUnique({ where: { id: roomId } });
+      if (room && room.currentClaimState !== InventoryClaimState.FREE) {
+        await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
+        await tx.roomClaimStateEvent.create({
+          data: {
+            roomId,
+            entryId,
+            fromState: room.currentClaimState,
+            toState: InventoryClaimState.FREE,
+            actorId: actor.actorId,
+            reason,
+            effectiveFrom: now,
+          },
+        });
+      }
+    }
+
+    const updated = await tx.committedHold.update({
+      where: { id: hold.id },
+      data: {
+        roomId: requested.includes(hold.roomId ?? "") ? keep[0] ?? null : hold.roomId,
+        perNightBreakdown: (trimmed ?? Prisma.DbNull) as never,
+      },
+    });
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: "COMMITTED_HOLD.ROOMS_RELEASED_BY_AUTHORITY",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel as never,
+        entityType: "CommittedHold",
+        entityId: hold.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: Stage.S3,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, committedHoldId: hold.id, releasedRoomIds: requested, remainingRoomIds: keep, reason },
+        createdBy: actor.actorId,
+      },
+    });
+    return updated;
+  });
 }
 
 export async function releaseOnReEntry(

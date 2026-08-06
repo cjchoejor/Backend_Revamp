@@ -435,7 +435,11 @@ reservationsRouter.post(
         prisma,
         req.params.id,
         { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
-        { releaseReason: String(req.body?.releaseReason ?? "") },
+        {
+          releaseReason: String(req.body?.releaseReason ?? ""),
+          // Omit to release the whole hold; name rooms to hand back only those.
+          roomIds: Array.isArray(req.body?.roomIds) ? (req.body.roomIds as string[]) : undefined,
+        },
       );
       res.json(out);
     } catch (e) {
