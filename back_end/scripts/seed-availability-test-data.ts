@@ -80,12 +80,12 @@ async function main() {
   const ratePlan = await prisma.ratePlanRegistry.findFirst({ select: { id: true } });
   if (!staff) throw new Error("no L4 staff user to own the test data");
 
-  const checkIn = dayStart(0);
+  const searchFrom = dayStart(0);
   // Free rooms across the whole window, so the seed does not collide with real bookings.
-  const windowEnd = dayStart(5);
+  const windowEnd = dayStart(8);
   const busy = new Set<string>();
   for (const r of await prisma.reservation.findMany({
-    where: { frozenCheckInDate: { lt: windowEnd }, frozenCheckOutDate: { gt: checkIn } },
+    where: { frozenCheckInDate: { lt: windowEnd }, frozenCheckOutDate: { gt: searchFrom } },
     select: { entry: { select: { roomAssignments: { select: { roomId: true } }, committedHold: { select: { roomId: true } } } } },
   })) {
     for (const a of r.entry?.roomAssignments ?? []) busy.add(a.roomId);
@@ -100,21 +100,29 @@ async function main() {
     where: { id: { notIn: [...busy] }, isBlocked: false },
     select: { id: true, roomNumber: true, roomTypeId: true },
     orderBy: { roomNumber: "asc" },
-    take: 8,
+    take: 10,
   });
-  if (rooms.length < 6) throw new Error(`need 6 free rooms, found ${rooms.length}`);
+  if (rooms.length < 8) throw new Error(`need 8 free rooms, found ${rooms.length}`);
 
-  /** name, nights, stage, what it should read as in S1. */
+  /**
+   * name, nights, stage, what it should read as in S1.
+   *
+   * Stays are staggered across the week rather than all starting today, so the table shows rooms
+   * freeing up and filling on different nights — which is the whole point of a per-night grid,
+   * and the shape that surfaced the "held for two nights, shown as three" bug.
+   */
   const plan = [
-    { key: "res-assigned", nights: 3, stage: "S4" as const, room: rooms[0], reads: "RESERVED (with room assignment)" },
-    { key: "res-holdonly", nights: 4, stage: "S4" as const, room: rooms[1], reads: "RESERVED (rooms only on a lapsed hold — the regression case)" },
-    { key: "held-committed", nights: 2, stage: "S3" as const, room: rooms[2], reads: "HELD · committed" },
-    { key: "held-speculative", nights: 3, stage: "S2" as const, room: rooms[3], reads: "HELD · speculative" },
+    { key: "res-assigned", startsIn: 0, nights: 3, stage: "S4" as const, room: rooms[0], reads: "RESERVED (with room assignment)" },
+    { key: "res-holdonly", startsIn: 0, nights: 5, stage: "S4" as const, room: rooms[1], reads: "RESERVED (rooms only on a lapsed hold — the regression case)" },
+    { key: "held-committed", startsIn: 0, nights: 2, stage: "S3" as const, room: rooms[2], reads: "HELD · committed (first 2 nights only — later nights must stay free)" },
+    { key: "held-speculative", startsIn: 1, nights: 3, stage: "S2" as const, room: rooms[3], reads: "HELD · speculative (starts tomorrow)" },
+    { key: "held-committed-late", startsIn: 3, nights: 3, stage: "S3" as const, room: rooms[6], reads: "HELD · committed (starts in 3 nights — free before that)" },
+    { key: "res-late", startsIn: 4, nights: 3, stage: "S4" as const, room: rooms[7], reads: "RESERVED (starts in 4 nights)" },
   ];
   const blockedRooms = [rooms[4], rooms[5]];
 
-  console.log(`window: ${iso(checkIn)} → ${iso(dayStart(4))}\n`);
-  for (const p of plan) console.log(`  ${p.room.roomNumber.padEnd(6)} ${p.reads}  (${p.nights} nights)`);
+  console.log(`window: ${iso(searchFrom)} → ${iso(dayStart(7))}\n`);
+  for (const p of plan) console.log(`  ${p.room.roomNumber.padEnd(6)} ${iso(dayStart(p.startsIn))} +${p.nights}n  ${p.reads}`);
   for (const r of blockedRooms) console.log(`  ${r.roomNumber.padEnd(6)} BLOCKED (out of service, no booking)`);
   if (!COMMIT) return console.log("\n(dry run — pass --commit to write)");
 
@@ -133,7 +141,8 @@ async function main() {
         notes: "Seeded availability test data",
       },
     });
-    const checkOut = dayStart(p.nights);
+    const checkIn = dayStart(p.startsIn);
+    const checkOut = dayStart(p.startsIn + p.nights);
     const entry = await prisma.entry.create({
       data: {
         id: `${P}ENT-${n}`,
@@ -160,7 +169,7 @@ async function main() {
       await prisma.speculativeHold.create({
         data: {
           id: `${P}SPEC-${n}`, entryId: entry.id, segmentId: seg.id, roomId: p.room.id, state: "PLACED",
-          placedBy: staff.id, ttlSeconds: 86_400, expiresAt: dayStart(2),
+          placedBy: staff.id, ttlSeconds: 86_400, expiresAt: dayStart(p.startsIn + p.nights),
         },
       });
     } else {
@@ -172,7 +181,7 @@ async function main() {
           id: `${P}CH-${n}`, entryId: entry.id, segmentId: seg.id, roomId: p.room.id,
           roomTypeId: p.room.roomTypeId, state: p.stage === "S4" ? "CONFIRMED" : "PLACED",
           placedBy: staff.id, ttlSeconds: 86_400,
-          expiresAt: lapsed ? dayStart(-1) : dayStart(3),
+          expiresAt: lapsed ? dayStart(-1) : dayStart(p.startsIn + p.nights),
           perNightBreakdown: [{ date: iso(checkIn), roomIds: [{ roomId: p.room.id }] }] as Prisma.InputJsonValue,
         },
       });

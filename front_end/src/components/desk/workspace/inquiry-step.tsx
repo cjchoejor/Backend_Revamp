@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { releaseCommittedHold } from "@/lib/api/reservation-setup";
+import { releaseRoomBlock } from "@/lib/api/rooms";
 import {
   queryAvailabilityByEntry,
   roomsFromResultSet,
@@ -148,6 +149,100 @@ function enumerateNights(checkIn?: string | null, checkOut?: string | null): str
 // legacy-PMS-style RoomStatusTable in ./room-status-table.tsx: rows = rooms, columns = nights.)
 
 /**
+ * What a release is being asked for. A held room belongs to another BOOKING; a blocked room
+ * belongs to nobody and is simply out of service — different endpoints, different consequences,
+ * so the dialog says different things.
+ */
+type ReleaseTarget =
+  | { kind: "HOLD"; entryId: string; roomLabel: string; holder: string; speculative?: boolean }
+  | { kind: "BLOCK"; roomId: string; roomLabel: string; blockedReason: string | null };
+
+/**
+ * The one place a room gets freed from S1, shared by the held-rooms list and the double-click
+ * on a taken cell so the two can't say different things.
+ *
+ * Both paths are GM-only and both require a written reason, because both take something away:
+ * a hold takes a room off a guest who was promised it, and a block was raised by someone who
+ * judged the room unfit to sell. Neither is undone by clicking once.
+ */
+function ReleaseRoomDialog({ target, onClose, onDone }: { target: ReleaseTarget; onClose: () => void; onDone: () => void }) {
+  const { session } = useSession();
+  const [reason, setReason] = useState("");
+  const release = useMutation({
+    mutationFn: async (): Promise<void> => {
+      if (target.kind === "HOLD") await releaseCommittedHold(session!, target.entryId, { releaseReason: reason.trim() });
+      else await releaseRoomBlock(session!, target.roomId, { releaseReason: reason.trim() });
+    },
+    onSuccess: () => {
+      toast.success(`Room ${target.roomLabel} released — search again to pick it up.`);
+      onClose();
+      onDone();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not release the room"),
+  });
+
+  if (target.kind === "HOLD" && target.speculative) {
+    return (
+      <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid var(--line-2)", borderRadius: "var(--r-md)" }}>
+        <div style={{ fontSize: 12, fontWeight: 700 }}>Room {target.roomLabel} is on a tentative hold</div>
+        <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "4px 0 8px", lineHeight: 1.5 }}>
+          Tentative holds lapse on their own timer, so this one will free itself. Releasing it early
+          isn&rsquo;t wired to this screen yet.
+        </p>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid var(--warn)", background: "var(--warn-t)", borderRadius: "var(--r-md)" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--warn)" }}>
+        {target.kind === "HOLD"
+          ? `Release room ${target.roomLabel} from ${target.holder}?`
+          : `Put room ${target.roomLabel} back in service?`}
+      </div>
+      <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "4px 0 8px", lineHeight: 1.5 }}>
+        {target.kind === "HOLD" ? (
+          <>
+            Their booking loses this room and nothing tells them automatically — someone has to.
+            Every room that booking is holding is freed, not just this one. Holds also lapse on
+            their own timer, so this is only worth doing when they won&rsquo;t confirm, or someone
+            else needs the room now.
+          </>
+        ) : (
+          <>
+            It was taken out of service{target.blockedReason ? ` — “${target.blockedReason}”` : ""}.
+            Clearing that says it is fit to sell again; if it isn&rsquo;t, the guest finds the
+            problem the block was there to prevent.
+          </>
+        )}
+      </p>
+      <input
+        className="dinput"
+        placeholder={target.kind === "HOLD" ? "Why is this being released? (recorded on their booking)" : "Why is it fit to sell again? (recorded on the room)"}
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+      />
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          disabled={reason.trim().length < 3 || release.isPending}
+          onClick={() => release.mutate()}
+        >
+          {release.isPending ? "Releasing…" : target.kind === "HOLD" ? "Release the room" : "Put back in service"}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+          {target.kind === "HOLD" ? "Keep the hold" : "Leave it blocked"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Rooms this search found under another booking's committed hold, and the GM's way to free one.
  *
  * A held room used to be a dead end: the only things that released a committed hold were a room
@@ -171,8 +266,7 @@ function HeldRoomRelease({
 }) {
   const { session } = useSession();
   const isGm = session?.actorLevel === "L3" || session?.actorLevel === "L4";
-  const [target, setTarget] = useState<{ entryId: string; roomLabel: string; holder: string } | null>(null);
-  const [reason, setReason] = useState("");
+  const [target, setTarget] = useState<ReleaseTarget | null>(null);
 
   const roomName = useMemo(() => new Map(statusRows.map((r) => [r.roomId, r.roomNumber])), [statusRows]);
   /** One row per (booking, room) held over this window — a hold spanning three nights is one row. */
@@ -197,17 +291,6 @@ function HeldRoomRelease({
     }
     return [...out.values()].sort((a, b) => (roomName.get(a.roomId) ?? "").localeCompare(roomName.get(b.roomId) ?? "", undefined, { numeric: true }));
   }, [perDate, roomName]);
-
-  const release = useMutation({
-    mutationFn: () => releaseCommittedHold(session!, target!.entryId, { releaseReason: reason.trim() }),
-    onSuccess: () => {
-      toast.success(`Room ${target?.roomLabel} released — search again to pick it up.`);
-      setTarget(null);
-      setReason("");
-      onReleased();
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not release the hold"),
-  });
 
   if (held.length === 0) return null;
 
@@ -236,10 +319,9 @@ function HeldRoomRelease({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={() => {
-                setTarget({ entryId: h.entryId, roomLabel: roomName.get(h.roomId) ?? h.roomId, holder: h.holder });
-                setReason("");
-              }}
+              onClick={() =>
+                setTarget({ kind: "HOLD", entryId: h.entryId, roomLabel: roomName.get(h.roomId) ?? h.roomId, holder: h.holder })
+              }
             >
               Release
             </button>
@@ -249,36 +331,7 @@ function HeldRoomRelease({
         </div>
       ))}
 
-      {target && (
-        <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid var(--warn)", background: "var(--warn-t)", borderRadius: "var(--r-md)" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--warn)" }}>
-            Release room {target.roomLabel} from {target.holder}?
-          </div>
-          <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "4px 0 8px", lineHeight: 1.5 }}>
-            Their booking loses this room and nothing tells them automatically — someone has to.
-            Every room that booking is holding is freed, not just this one.
-          </p>
-          <input
-            className="dinput"
-            placeholder="Why is this being released? (recorded on their booking)"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={reason.trim().length < 3 || release.isPending}
-              onClick={() => release.mutate()}
-            >
-              {release.isPending ? "Releasing…" : "Release the room"}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTarget(null)}>
-              Keep the hold
-            </button>
-          </div>
-        </div>
-      )}
+      {target && <ReleaseRoomDialog target={target} onClose={() => setTarget(null)} onDone={onReleased} />}
     </div>
   );
 }
@@ -286,6 +339,9 @@ function HeldRoomRelease({
 export function InquiryStep({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const isGm = session?.actorLevel === "L3" || session?.actorLevel === "L4";
+  /** Set by double-clicking a held / blocked cell; rendered by the shared release dialog. */
+  const [releaseTarget, setReleaseTarget] = useState<ReleaseTarget | null>(null);
 
   // The search form is seeded from the LAST SEARCH THAT ACTUALLY RAN, not from the entry's
   // intake dates. Every search persists its inputs to `AvailabilityConfiguration.searchCriteria`
@@ -1562,6 +1618,25 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   onToggle={toggleTableRow}
                   onToggleCell={toggleNightCell}
                   onSelectAllNights={reportSelectAll}
+                  // Double-click a held or blocked cell to offer its release. GM-gated below —
+                  // an operator gets told who can do it rather than a dialog that will 403.
+                  onBlockedCellOpen={(row, _night, occ, status) => {
+                    if (!isGm) {
+                      toast.info("A GM can release a held or blocked room — ask them to open this booking.");
+                      return;
+                    }
+                    if (status === "blocked") {
+                      setReleaseTarget({ kind: "BLOCK", roomId: row.roomId, roomLabel: row.roomNumber, blockedReason: row.blockedReason ?? null });
+                    } else if (occ?.entryId) {
+                      setReleaseTarget({
+                        kind: "HOLD",
+                        entryId: occ.entryId,
+                        roomLabel: row.roomNumber,
+                        holder: occ.guestName ?? "Guest",
+                        speculative: (occ as { holdKind?: string }).holdKind === "SPECULATIVE",
+                      });
+                    }
+                  }}
                   onCappedClick={() =>
                     toast.info(
                       nightsDiffer
@@ -1572,6 +1647,13 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                   disabled={selectMutation.isPending}
                   dense={expanded}
                   showNames={showNames}
+                />
+              )}
+              {releaseTarget && (
+                <ReleaseRoomDialog
+                  target={releaseTarget}
+                  onClose={() => setReleaseTarget(null)}
+                  onDone={() => searchMutation.reset()}
                 />
               )}
               {!expanded && <HeldRoomRelease perDate={perDate} statusRows={statusRows} onReleased={() => searchMutation.reset()} />}

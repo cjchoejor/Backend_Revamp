@@ -24,6 +24,18 @@ export type RoomListItem = {
   } | null;
 };
 
+/**
+ * Put a blocked room back in service — GM (L3) and above. The reason is recorded on a trace
+ * against the room. Blocks have no expiry, so unlike a hold this only ever clears by decision.
+ */
+export async function releaseRoomBlock(session: Session, roomId: string, body: { releaseReason: string }) {
+  return apiRequest<{ id: string; roomNumber: string }>(`/api/rooms/${roomId}/release-block`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
 export async function listRooms(session: Session) {
   return apiRequest<{ items: RoomListItem[]; count: number }>("/api/rooms", { session });
 }

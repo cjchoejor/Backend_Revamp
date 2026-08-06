@@ -1874,6 +1874,13 @@
   & .rst tr.open {
     cursor: default;
   }
+  /* Held / blocked cells a GM can release: double-click opens the dialog. The dotted underline
+     is the only hint that a taken cell is more than a dead end. */
+  & .rst .rst-chip.actionable {
+    cursor: pointer;
+    text-decoration: underline dotted currentColor 1px;
+    text-underline-offset: 2px;
+  }
   /* Selection full: pickable-but-capped rows fade harder than merely-unavailable ones, and the
      cursor says the click won't select (it explains instead — onCappedClick toast). */
   & .rst tr.capped {

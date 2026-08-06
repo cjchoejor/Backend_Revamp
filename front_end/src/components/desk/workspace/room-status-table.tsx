@@ -115,6 +115,10 @@ function reasonLabel(reason?: string): { status: CellStatus; label?: string } {
 /** Occupancy context as it arrives per-night (no dates) or whole-stay (with dates). */
 type OccupantLike = {
   source?: "RESERVED" | "HOLD";
+  /** Which kind of hold — a tentative S2 claim behaves differently from a committed one. */
+  holdKind?: "COMMITTED" | "SPECULATIVE";
+  /** The booking holding the room, so a GM can act on it straight from the cell. */
+  entryId?: string;
   entryReferenceNumber?: string | null;
   guestName?: string | null;
   guestPhone?: string | null;
@@ -165,6 +169,7 @@ export function RoomStatusTable({
   onToggle,
   onToggleCell,
   onSelectAllNights,
+  onBlockedCellOpen,
   onCappedClick,
   disabled,
   dense,
@@ -186,6 +191,13 @@ export function RoomStatusTable({
   /** Reports what a "Select all nights" click managed to take, so the parent can say what it
    *  could not — which dates are reserved or held, and by whom. */
   onSelectAllNights?: (row: RoomStatusRow, outcome: SelectAllOutcome) => void;
+  /**
+   * Double-click on a cell the booking cannot have — held, or blocked. The parent offers the
+   * release. Double rather than single because these cells sit inside a row whose single click
+   * already means something, and because freeing a room out from under someone should take a
+   * deliberate gesture.
+   */
+  onBlockedCellOpen?: (row: RoomStatusRow, night: string, occupant: OccupantLike | undefined, status: CellStatus) => void;
   /** Fired when a pickable room is clicked while the selection is already full — the parent
    *  explains (toast) instead of the click dying silently. */
   onCappedClick?: () => void;
@@ -496,13 +508,33 @@ export function RoomStatusTable({
                       </td>
                     );
                   }
+                  // Held and blocked cells are the ones a GM can do something about, so they
+                  // take a double-click. Reserved is deliberately excluded — a confirmed
+                  // booking's room is released by cancelling or amending it, not from here.
+                  const releasable = status === "held" || status === "blocked";
                   return (
                     <td key={n} style={{ textAlign: "center" }}>
                       <span
-                        className={`rst-chip ${status}${showNames && occ ? " named" : ""}`}
+                        className={`rst-chip ${status}${showNames && occ ? " named" : ""}${
+                          releasable && onBlockedCellOpen ? " actionable" : ""
+                        }`}
                         // The out-of-service reason used to live in the removed "Booked by"
                         // column; it belongs on the cell that is actually blocked.
-                        title={occ ? occupantDetail(occ) : row.blockedReason ?? undefined}
+                        title={
+                          releasable && onBlockedCellOpen
+                            ? `${occ ? occupantDetail(occ) : row.blockedReason ?? "Out of service"}\n\nDouble-click to release this room`
+                            : occ
+                              ? occupantDetail(occ)
+                              : row.blockedReason ?? undefined
+                        }
+                        onDoubleClick={
+                          releasable && onBlockedCellOpen
+                            ? (e) => {
+                                e.stopPropagation();
+                                onBlockedCellOpen(row, n, occ, status);
+                              }
+                            : undefined
+                        }
                       >
                         {cellText(status, label, occ)}
                       </span>

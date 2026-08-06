@@ -8,8 +8,30 @@ import {
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
+import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 
 export const availabilityRouter = Router();
+
+/**
+ * Put a blocked room back in service — GM and above.
+ *
+ * Blocking lives in the L4 admin console; unblocking is a decision the desk hits mid-booking,
+ * with a guest waiting and no admin on shift. Same authority bar as releasing another booking's
+ * committed hold, and the reason is recorded on a trace against the room.
+ */
+availabilityRouter.post("/rooms/:id/release-block", requireActorLevel("L3"), async (req, res, next) => {
+  try {
+    const out = await releaseRoomBlock(
+      prisma,
+      req.params.id,
+      { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      { releaseReason: String(req.body?.releaseReason ?? "") },
+    );
+    res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
 
 availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next) => {
   try {
