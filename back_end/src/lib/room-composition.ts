@@ -237,6 +237,14 @@ export function computeRoomComposition(
   perNightSubtotal: Prisma.Decimal;
   /** Meals across the whole stay. Equals `perNightMeals × nights` when no night is overridden. */
   mealsSubtotal: Prisma.Decimal;
+  /**
+   * The meals subtotal split by meal (2026-08-07, for the negotiation table's per-column
+   * money). Each is the whole-stay figure — banded by age and override-aware, exactly the
+   * components `mealsSubtotal` is the sum of.
+   */
+  breakfastSubtotal: Prisma.Decimal;
+  lunchSubtotal: Prisma.Decimal;
+  dinnerSubtotal: Prisma.Decimal;
   /** Populated only when overrides applied — one entry per stay-night, for display/audit. */
   perNightMealBreakdown: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean }>;
   subtotal: Prisma.Decimal;
@@ -262,6 +270,9 @@ export function computeRoomComposition(
       perNightMeals: ZERO,
       perNightSubtotal: ZERO,
       mealsSubtotal: ZERO,
+      breakfastSubtotal: ZERO,
+      lunchSubtotal: ZERO,
+      dinnerSubtotal: ZERO,
       perNightMealBreakdown: [],
       subtotal: ZERO,
       serviceCharge: ZERO,
@@ -316,16 +327,20 @@ export function computeRoomComposition(
     return toDecimal(rate).mul(weight).div(100);
   };
 
-  /** Cost of one night's meals for a given distribution. */
-  const mealCostFor = (counts: RoomCompositionInput): Prisma.Decimal => {
+  /** One night's meals for a given distribution, split by meal — the split is what the
+   *  negotiation table's per-column money reads; `mealsSubtotal` stays their exact sum. */
+  const mealCostByMeal = (counts: RoomCompositionInput) => {
     const p = paxFromMealPlanCounts(counts);
-    return bandedMealCost(breakfastRate, p.breakfastPax)
-      .add(bandedMealCost(lunchRate, p.lunchPax))
-      .add(bandedMealCost(dinnerRate, p.dinnerPax));
+    return {
+      breakfast: bandedMealCost(breakfastRate, p.breakfastPax),
+      lunch: bandedMealCost(lunchRate, p.lunchPax),
+      dinner: bandedMealCost(dinnerRate, p.dinnerPax),
+    };
   };
   // The room's usual night — what an un-overridden night costs, and what the UI shows as
   // "per night".
-  const perNightMeals = mealCostFor(input);
+  const perNightByMeal = mealCostByMeal(input);
+  const perNightMeals = perNightByMeal.breakfast.add(perNightByMeal.lunch).add(perNightByMeal.dinner);
   const perNightSubtotal = perNightRoom.add(perNightExtraBed).add(perNightMeals);
 
   // Room + extra bed are the same every night; only meals can vary. Summing meals night by
@@ -334,17 +349,30 @@ export function computeRoomComposition(
   const keys = overrides.size > 0 ? nightKeys(input, nights) : [];
   const perNight: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean }> = [];
   let mealsSubtotal: Prisma.Decimal;
+  let breakfastSubtotal: Prisma.Decimal;
+  let lunchSubtotal: Prisma.Decimal;
+  let dinnerSubtotal: Prisma.Decimal;
   if (keys.length === 0) {
     // No overrides (or no start date to place them against) — identical to the pre-2026-07-28
     // behaviour, to the cent.
     mealsSubtotal = perNightMeals.mul(nights);
+    breakfastSubtotal = perNightByMeal.breakfast.mul(nights);
+    lunchSubtotal = perNightByMeal.lunch.mul(nights);
+    dinnerSubtotal = perNightByMeal.dinner.mul(nights);
   } else {
     mealsSubtotal = ZERO;
+    breakfastSubtotal = ZERO;
+    lunchSubtotal = ZERO;
+    dinnerSubtotal = ZERO;
     for (const key of keys) {
       const o = overrides.get(key);
-      const meals = o ? mealCostFor(mealCountsForNight(input, o)) : perNightMeals;
+      const m = o ? mealCostByMeal(mealCountsForNight(input, o)) : perNightByMeal;
+      const meals = m.breakfast.add(m.lunch).add(m.dinner);
       perNight.push({ date: key, meals, overridden: !!o });
       mealsSubtotal = mealsSubtotal.add(meals);
+      breakfastSubtotal = breakfastSubtotal.add(m.breakfast);
+      lunchSubtotal = lunchSubtotal.add(m.lunch);
+      dinnerSubtotal = dinnerSubtotal.add(m.dinner);
     }
   }
 
@@ -376,6 +404,9 @@ export function computeRoomComposition(
     perNightMeals,
     perNightSubtotal,
     mealsSubtotal,
+    breakfastSubtotal,
+    lunchSubtotal,
+    dinnerSubtotal,
     perNightMealBreakdown: perNight,
     subtotal,
     serviceCharge,

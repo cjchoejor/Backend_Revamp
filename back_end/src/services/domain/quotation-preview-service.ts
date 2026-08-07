@@ -97,6 +97,11 @@ export type PreviewRoomLine = {
   roomSubtotal: number;
   extraBedSubtotal: number;
   mealsSubtotal: number;
+  /** `mealsSubtotal` split by meal — what the rate columns' per-row `heads × rate` shows.
+   *  Whole-stay figures, age-banded and per-night-override-aware. */
+  breakfastSubtotal: number;
+  lunchSubtotal: number;
+  dinnerSubtotal: number;
   /** Net of tax — room + extra beds + meals. */
   subtotal: number;
   serviceCharge: number;
@@ -115,6 +120,20 @@ export type QuotationPreview = {
   gstRate: number;
   serviceChargeRate: number;
   rooms: PreviewRoomLine[];
+  /**
+   * Per-column stay totals across every room (2026-08-07) — the Σ row under the negotiation
+   * table's rate columns. All NET of tax (they sum to `subtotal`); the discount does not touch
+   * them (the document prints originals with the deduction as its own row).
+   */
+  columns: {
+    room: number;
+    extraBed: number;
+    breakfast: number;
+    lunch: number;
+    dinner: number;
+    /** breakfast + lunch + dinner — for consumers that keep meals as one column. */
+    meals: number;
+  };
   /** Column totals across every room, before the discount. */
   subtotal: number;
   serviceCharge: number;
@@ -265,9 +284,20 @@ export async function buildQuotationPreview(
 
   const totals = computeQuotationCompositionTotals(priced);
 
+  // Column accumulators — summed as Decimals so the Σ row is exact, not a float re-sum.
+  let colRoom = ZERO;
+  let colExtraBed = ZERO;
+  let colBreakfast = ZERO;
+  let colLunch = ZERO;
+  let colDinner = ZERO;
   const roomsOut: PreviewRoomLine[] = totals.perRoom.map((r, i) => {
     const roomSubtotal = r.perNightRoom.mul(r.nights);
     const extraBedSubtotal = r.perNightExtraBed.mul(r.nights);
+    colRoom = colRoom.add(roomSubtotal);
+    colExtraBed = colExtraBed.add(extraBedSubtotal);
+    colBreakfast = colBreakfast.add(r.breakfastSubtotal);
+    colLunch = colLunch.add(r.lunchSubtotal);
+    colDinner = colDinner.add(r.dinnerSubtotal);
     return {
       roomId: r.roomId,
       roomNumber: r.roomNumber,
@@ -284,6 +314,9 @@ export async function buildQuotationPreview(
       roomSubtotal: n2(roomSubtotal),
       extraBedSubtotal: n2(extraBedSubtotal),
       mealsSubtotal: n2(r.mealsSubtotal),
+      breakfastSubtotal: n2(r.breakfastSubtotal),
+      lunchSubtotal: n2(r.lunchSubtotal),
+      dinnerSubtotal: n2(r.dinnerSubtotal),
       subtotal: n2(r.subtotal),
       serviceCharge: n2(r.serviceCharge),
       gst: n2(r.gst),
@@ -308,6 +341,14 @@ export async function buildQuotationPreview(
     gstRate: reference.gstRate,
     serviceChargeRate: reference.serviceChargeRate,
     rooms: roomsOut,
+    columns: {
+      room: n2(colRoom),
+      extraBed: n2(colExtraBed),
+      breakfast: n2(colBreakfast),
+      lunch: n2(colLunch),
+      dinner: n2(colDinner),
+      meals: n2(colBreakfast.add(colLunch).add(colDinner)),
+    },
     subtotal: n2(totals.subtotal),
     serviceCharge: n2(totals.serviceCharge),
     gst: n2(totals.gst),
