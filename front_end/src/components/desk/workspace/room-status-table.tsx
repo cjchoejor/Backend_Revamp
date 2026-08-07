@@ -117,6 +117,9 @@ type OccupantLike = {
   source?: "RESERVED" | "HOLD";
   /** Which kind of hold — a tentative S2 claim behaves differently from a committed one. */
   holdKind?: "COMMITTED" | "SPECULATIVE";
+  /** RESERVED only (2026-08-07): confirmed while the advance was still short — the rooms are
+   *  "held, payment pending" until the money completes. Blocks identically; label differs. */
+  paymentPending?: boolean;
   /** The booking holding the room, so a GM can act on it straight from the cell. */
   entryId?: string;
   entryReferenceNumber?: string | null;
@@ -144,7 +147,16 @@ function occupantName(o: OccupantLike): string {
  */
 function occupantDetail(o: OccupantLike): string {
   const lines: string[] = [];
-  lines.push(`${o.source === "HOLD" ? "Held by" : "Reserved by"} ${occupantName(o)}`);
+  lines.push(
+    o.source === "HOLD"
+      ? `Held by ${occupantName(o)}`
+      : o.paymentPending
+        ? `Held for ${occupantName(o)} — confirmed, advance not fully paid`
+        : `Reserved by ${occupantName(o)}`,
+  );
+  if (o.source !== "HOLD" && o.paymentPending) {
+    lines.push("Rooms turn Reserved when the advance is paid in full.");
+  }
   if (o.entryReferenceNumber) lines.push(`Booking: ${o.entryReferenceNumber}`);
   if (o.startDate && o.endDate) {
     lines.push(`Stay: ${formatDMY(o.startDate.slice(0, 10)) || o.startDate.slice(0, 10)} → ${formatDMY(o.endDate.slice(0, 10)) || o.endDate.slice(0, 10)}`);
@@ -264,8 +276,14 @@ export function RoomStatusTable({
 
   // When names are shown in-cell they replace the status word, so the chip carries the colour
   // and the text carries the identity. `cellText` keeps that decision in one place.
-  const cellText = (status: CellStatus, label: string | undefined, occ: OccupantLike | undefined) =>
-    showNames && occ ? occupantName(occ) : label ?? CELL_LABEL[status];
+  // A payment-pending reservation is flagged in the text ("· pending") — confirmed booking,
+  // advance still short, rooms held-not-reserved until the money completes (tooltip explains).
+  const cellText = (status: CellStatus, label: string | undefined, occ: OccupantLike | undefined) => {
+    const pending = occ?.source === "RESERVED" && occ.paymentPending;
+    if (showNames && occ) return pending ? `${occupantName(occ)} · pending` : occupantName(occ);
+    const base = label ?? CELL_LABEL[status];
+    return pending ? `${base} · pending` : base;
+  };
 
   // Frozen identity columns. A 20-night stay scrolls horizontally well past the room number, so
   // the leading block stays pinned — otherwise you scroll to night 18 and can no longer tell

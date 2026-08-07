@@ -28,4 +28,20 @@ export async function verifyConference(session: Session, entryId: string, checkl
   });
 }
 
+/**
+ * Re-send the confirmation voucher to the guest (2026-08-07): fresh tracked communication +
+ * reply window, same email body + PDF attachment the confirmation sent. `dispatchedTo`
+ * overrides the guest profile's email (corrected address).
+ */
+export async function resendConfirmationVoucher(
+  session: Session,
+  reservationId: string,
+  body?: { dispatchedTo?: string },
+) {
+  return apiRequest<{ communicationRecordId: string; dispatchedTo: string }>(
+    `/api/reservations/${reservationId}/confirmation-voucher/send`,
+    { method: "POST", session, body: body ?? {} },
+  );
+}
+
 export type ConfirmProgressResult = EntryDetail;

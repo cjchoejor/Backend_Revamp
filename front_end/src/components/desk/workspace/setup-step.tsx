@@ -37,6 +37,15 @@ import { DeskConfirmModal } from "./confirm-modal";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
 import { CompetingClaimsBanner } from "./competing-claims";
 import { ProformaPreview } from "./quotation-preview";
+import {
+  AdvancePlanCapture,
+  AdvancePlanFacts,
+  CreditExpiryPicker,
+  expiryModeForPlanDue,
+  InstallmentHistory,
+  resolveCreditExpiry,
+  type CreditExpiryChoice,
+} from "./advance-settlement";
 
 const BK = STAGE_ACTIONS.S3;
 
@@ -137,7 +146,13 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
   const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
 
-  const [billingModel, setBillingModel] = useState(folio?.billingModel ?? "GUEST_PAY");
+  // Billing-model default follows who booked (2026-08-07, operator request): a travel-agent
+  // booking settles by voucher, so pre-select TOUR_OPERATOR_VOUCHER; everyone else defaults to
+  // Guest pays. Only a DEFAULT — the select stays fully changeable, and a saved model wins.
+  const isTravelAgentBooking =
+    !!entry.inquiry?.travelAgentId || entry.inquiry?.sourceChannel === "TRAVEL_AGENT";
+  const defaultBillingModel = isTravelAgentBooking ? "TOUR_OPERATOR_VOUCHER" : "GUEST_PAY";
+  const [billingModel, setBillingModel] = useState(folio?.billingModel ?? defaultBillingModel);
   // Billing-model section collapses to a settled "Updated ✓ / Change" row once a model is on
   // the folio (same pattern as the disclosure block below). The form shows only on first
   // setup or after the operator clicks Change.
@@ -154,8 +169,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const [advReqValue, setAdvReqValue] = useState("");
   const [creditCeiling, setCreditCeiling] = useState("");
   const [creditReason, setCreditReason] = useState("");
-  // Optional time limit on the credit extension — hours until it stops satisfying the condition.
-  const [creditHours, setCreditHours] = useState("");
+  // Time limit on the credit extension — aligned to the guest's payment plan (promised date /
+  // check-in / check-out) or a plain hours count (2026-08-07; was hours-only).
+  const [creditExpiry, setCreditExpiry] = useState<CreditExpiryChoice>({ mode: "NONE", hours: "" });
   // Which proforma's inline document preview is open (one at a time).
   const [proformaPreviewId, setProformaPreviewId] = useState<string | null>(null);
   const [holdJustification, setHoldJustification] = useState("Reservation setup — committed inventory hold");
@@ -184,26 +200,46 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const paymentStatus = paymentStatusQuery.data;
 
   /**
-   * "Amount received" prefill (2026-08-03, operator request). The desk was retyping the advance
-   * figure on every booking, off a number already on screen two blocks up.
-   *
-   * The figure is `shortfall` — the BACKEND's own `requiredAmount − totalReceived`, computed
-   * Decimal-safe server-side and never re-derived here (no-money-math rule). That equals the
-   * full requested advance until anything is paid, and tracks what's still owed after a partial
-   * payment, so the prefill is right in both cases rather than only the first.
-   *
-   * Editable, and the prefill yields the moment it is: `paymentAmountEditedRef` latches on the
-   * first keystroke so a deliberately different figure (guest paid less, or paid more) is never
-   * overwritten by a refetch. It re-arms after a logged payment, so the field then refills with
-   * the new outstanding figure.
+   * "Amount received" prefill (2026-08-03, operator request; narrowed 2026-08-07). The figure
+   * is `shortfall` — the BACKEND's own `requiredAmount − totalReceived`, never re-derived here
+   * (no-money-math rule) — but it only prefills while NOTHING has been paid yet. After a
+   * partial payment the box refilling with the remainder read like the guest owed a second
+   * payment right now (operator report: asked 5,000, logged 2,000, box showed 3,000). Once any
+   * payment exists the box stays blank; the "still owed" hint below and the credit-extension
+   * ceiling default carry the remainder instead. `paymentAmountEditedRef` latches on the first
+   * keystroke so a deliberately different figure is never overwritten by a refetch.
    */
   const suggestedPaymentAmount =
-    paymentStatus && paymentStatus.shortfall > 0 ? String(paymentStatus.shortfall) : "";
+    paymentStatus && paymentStatus.shortfall > 0 && paymentStatus.totalReceived === 0
+      ? String(paymentStatus.shortfall)
+      : "";
   const paymentAmountEditedRef = useRef(false);
   useEffect(() => {
     if (paymentAmountEditedRef.current) return;
     setPaymentAmount(suggestedPaymentAmount);
   }, [suggestedPaymentAmount]);
+  // The credit-extension ceiling defaults to the shortfall — covering the uncovered remainder
+  // is exactly what the extension is for (2026-08-07, operator request). Same latch pattern.
+  const suggestedCeiling = paymentStatus && paymentStatus.shortfall > 0 ? String(paymentStatus.shortfall) : "";
+  const creditCeilingEditedRef = useRef(false);
+  useEffect(() => {
+    if (creditCeilingEditedRef.current) return;
+    setCreditCeiling(suggestedCeiling);
+  }, [suggestedCeiling]);
+  // "Cover the gate until" follows the guest's own plan (promised date / check-in / check-out)
+  // until the operator touches the dropdown — then their choice wins (it stays changeable).
+  const creditExpiryTouchedRef = useRef(false);
+  const planDueAt = paymentStatus?.paymentPlan?.balanceDueAt ?? null;
+  const planPromisedBy = paymentStatus?.paymentPlan?.promisedBy ?? null;
+  useEffect(() => {
+    if (creditExpiryTouchedRef.current) return;
+    const mode = expiryModeForPlanDue(planDueAt, {
+      promisedBy: planPromisedBy,
+      checkInDate: entry.checkInDate,
+      checkOutDate: entry.checkOutDate,
+    });
+    if (mode) setCreditExpiry((c) => (c.mode === mode ? c : { ...c, mode }));
+  }, [planDueAt, planPromisedBy, entry.checkInDate, entry.checkOutDate]);
 
   // Advance-payment window countdown (backend fact: proforma dispatch → check-in date).
   // 30s tick keeps the label honest without re-rendering every second.
@@ -279,7 +315,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         recordCreditExtension(session!, entry.id, {
           ceilingAmount: Number(creditCeiling),
           reason: creditReason.trim(),
-          validForHours: creditHours.trim() !== "" ? Number(creditHours) : null,
+          ...resolveCreditExpiry(creditExpiry, {
+            promisedBy: paymentStatus?.paymentPlan?.promisedBy,
+            checkInDate: entry.checkInDate,
+            checkOutDate: entry.checkOutDate,
+          }),
         }),
       "Credit extension approved",
     ),
@@ -471,6 +511,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                   </option>
                 ))}
               </select>
+              {!folio?.billingModel && isTravelAgentBooking && billingModel === "TOUR_OPERATOR_VOUCHER" && (
+                <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>
+                  Pre-selected — this booking came through a travel agent. Change it if they settle differently.
+                </p>
+              )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -753,6 +798,15 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         sinceIso={segments[0]?.startedAt ?? null}
       />
 
+      {/* 4c. The guest's payment plan (2026-08-07) — captured with their reply: full / part now,
+          rest later / installments, and WHEN the rest is coming. A dated before-check-in promise
+          arms the W38 countdown; at-check-in / at-check-out are collected at those desks. */}
+      <AdvancePlanCapture
+        entry={entry}
+        status={paymentStatus}
+        disabled={!folio}
+        disabledHint="Create the folio first — the plan is recorded against it."
+      />
 
       {/* 5. Money received from the guest — after the proforma, so the page reads in the
           order the desk works: set the requirement, show/send the bill, take the money. */}
@@ -786,14 +840,32 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             </span>
           </div>
         )}
-        {inPayments.length > 0 && (
-          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 11px" }}>
-            {/* Count the rows here (not money), and take the total from the server's payment-status
-                above — summing the amounts in the browser drifts on partial payments. */}
-            {inPayments.length} payment{inPayments.length === 1 ? "" : "s"} on this booking
-            {folio?.advancePaymentReconciliationComplete ? " · reconciled" : ""}
-          </p>
+        {/* The guest's plan + promise countdown + every payment so far (installment history) —
+            all backend facts from payment-status, never summed here. */}
+        <AdvancePlanFacts status={paymentStatus} />
+        <InstallmentHistory status={paymentStatus} currency={folio?.lines?.[0]?.currency} />
+        {inPayments.length > 0 && folio?.advancePaymentReconciliationComplete && (
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 11px" }}>Advance reconciled.</p>
         )}
+        {/* Partial payment + a stated plan → the remainder is legitimate, not an oversight.
+            Point the operator at the cover mechanism instead of leaving a red "Short" tag. */}
+        {paymentStatus &&
+          !paymentStatus.paidInFull &&
+          paymentStatus.totalReceived > 0 &&
+          paymentStatus.paymentPlan &&
+          paymentStatus.paymentPlan.plan !== "FULL" &&
+          !paymentStatus.creditExtensionActive && (
+            <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 11px", lineHeight: 1.5 }}>
+              The guest still owes {money(paymentStatus.shortfall)} and said the rest comes{" "}
+              {paymentStatus.paymentPlan.balanceDueAt === "BEFORE_CHECKIN"
+                ? "before check-in"
+                : paymentStatus.paymentPlan.balanceDueAt === "AT_CHECKIN"
+                  ? "at the check-in desk"
+                  : "at check-out"}
+              . To move the booking on before the money lands, have an FOM cover the remainder with the
+              credit extension below.
+            </p>
+          )}
         {folio && !proformaDispatchedNow && (
           <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px", lineHeight: 1.5 }}>
             Dispatch the proforma invoice above first — payments are logged against the bill the
@@ -831,22 +903,22 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
               }}
               disabled={!folio || !proformaDispatchedNow || paymentLockedForAnswer}
             />
-            {suggestedPaymentAmount !== "" && (
+            {paymentStatus && paymentStatus.shortfall > 0 && (
               <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, lineHeight: 1.4 }}>
-                {paymentAmount === suggestedPaymentAmount ? (
+                {suggestedPaymentAmount !== "" && paymentAmount === suggestedPaymentAmount ? (
                   <>
-                    Pre-filled with what&rsquo;s still owed on the advance ({money(paymentStatus?.shortfall ?? null)}) —
+                    Pre-filled with what&rsquo;s still owed on the advance ({money(paymentStatus.shortfall)}) —
                     change it if the guest paid a different amount.
                   </>
                 ) : (
                   <>
-                    Still owed on the advance: {money(paymentStatus?.shortfall ?? null)}.{" "}
+                    Still owed on the advance: {money(paymentStatus.shortfall)}.{" "}
                     <button
                       type="button"
                       className="rcb-mini"
                       onClick={() => {
-                        paymentAmountEditedRef.current = false;
-                        setPaymentAmount(suggestedPaymentAmount);
+                        paymentAmountEditedRef.current = true;
+                        setPaymentAmount(String(paymentStatus.shortfall));
                       }}
                     >
                       Use that
@@ -875,7 +947,27 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           </button>
           <button
             className="btn btn-ghost btn-sm"
-            disabled={!folio || reconcileM.isPending || !!folio?.advancePaymentReconciliationComplete}
+            // Mirrors the backend's p27 gate (2026-08-07, operator report: the button sat
+            // enabled with zero payments and the click could only fail): reconciling needs at
+            // least one logged payment, unless the folio is direct-bill-like — there the agent/
+            // government settles later and "no advance" is the legitimate position.
+            disabled={
+              !folio ||
+              reconcileM.isPending ||
+              !!folio?.advancePaymentReconciliationComplete ||
+              !(
+                (paymentStatus?.totalReceived ?? 0) > 0 ||
+                inPayments.length > 0 ||
+                ["DIRECT_BILL", "GOVERNMENT"].includes(folio?.billingModel ?? "")
+              )
+            }
+            title={
+              (paymentStatus?.totalReceived ?? 0) > 0 ||
+              inPayments.length > 0 ||
+              ["DIRECT_BILL", "GOVERNMENT"].includes(folio?.billingModel ?? "")
+                ? "Sign off the advance position as accepted — ticks the payment-reconciliation checklist and stops follow-up chasing. Use it when a shortfall is deliberately accepted (e.g. covered by credit or agent-settled)."
+                : "Log a payment first — reconciling records that the money position was reviewed, and with nothing received there is nothing to reconcile (direct-bill folios are the exception)."
+            }
             onClick={() => reconcileM.mutate()}
           >
             {reconcileM.isPending
@@ -884,7 +976,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
                 ? "✓ Reconciled"
                 : "Mark reconciled"}
           </button>
-          <button className="btn btn-ghost btn-sm" disabled={!folio || paymentStatusQuery.isFetching} onClick={() => paymentStatusQuery.refetch()}>
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={!folio || paymentStatusQuery.isFetching}
+            title="Re-read the payment status from the server — use it if money was logged on another terminal."
+            onClick={() => paymentStatusQuery.refetch()}
+          >
             <RefreshCw style={{ width: 12, height: 12 }} />
             Refresh
           </button>
@@ -900,23 +997,53 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             <div className="frow">
               <div className="field">
                 <label>Ceiling amount</label>
-                <input type="number" value={creditCeiling} onChange={(e) => setCreditCeiling(e.target.value)} />
+                <input
+                  type="number"
+                  value={creditCeiling}
+                  onChange={(e) => {
+                    creditCeilingEditedRef.current = true;
+                    setCreditCeiling(e.target.value);
+                  }}
+                />
+                {paymentStatus && paymentStatus.shortfall > 0 && (
+                  <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3 }}>
+                    {creditCeiling === String(paymentStatus.shortfall) ? (
+                      <>Pre-filled with what&rsquo;s still owed on the advance.</>
+                    ) : (
+                      <>
+                        Still owed: {money(paymentStatus.shortfall)}.{" "}
+                        <button
+                          type="button"
+                          className="rcb-mini"
+                          onClick={() => {
+                            creditCeilingEditedRef.current = true;
+                            setCreditCeiling(String(paymentStatus.shortfall));
+                          }}
+                        >
+                          Cover that
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="field">
                 <label>Reason</label>
                 <input value={creditReason} onChange={(e) => setCreditReason(e.target.value)} />
               </div>
-              <div className="field">
-                <label>Valid for (hours, optional)</label>
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="No limit"
-                  value={creditHours}
-                  onChange={(e) => setCreditHours(e.target.value)}
-                />
-              </div>
             </div>
+            <CreditExpiryPicker
+              choice={creditExpiry}
+              onChange={(c) => {
+                creditExpiryTouchedRef.current = true;
+                setCreditExpiry(c);
+              }}
+              anchors={{
+                promisedBy: paymentStatus?.paymentPlan?.promisedBy,
+                checkInDate: entry.checkInDate,
+                checkOutDate: entry.checkOutDate,
+              }}
+            />
             <button className="btn btn-ghost btn-sm" disabled={creditM.isPending || creditM.isSuccess || !creditCeiling || !creditReason.trim() || !folio} onClick={() => creditM.mutate()}>
               {creditM.isPending ? "Approving…" : creditM.isSuccess ? "✓ Credit extension approved" : "Approve credit extension"}
             </button>

@@ -145,6 +145,17 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
     }
     return null;
   }, [working, accepted]);
+  // Since 2026-08-07 a quote generated through the desk is BORN approved — the generating
+  // actor's authority band is checked at generation and `commercialTerms.discountAuthority`
+  // records who held it. The post-hoc approve button survives only for quotes without the
+  // stamp (generated before the change, or by bare API callers).
+  const discountApprovedAtGeneration = useMemo(() => {
+    const terms = (working ?? accepted)?.commercialTerms as Record<string, unknown> | null | undefined;
+    const auth = terms?.discountAuthority as { approvedLevel?: unknown; approvedAt?: unknown } | undefined;
+    return auth && typeof auth.approvedLevel === "string"
+      ? { level: auth.approvedLevel, at: typeof auth.approvedAt === "string" ? auth.approvedAt : null }
+      : null;
+  }, [working, accepted]);
   const seededForRef = useRef<string | null>(null);
   useEffect(() => {
     const id = (working ?? accepted)?.id ?? null;
@@ -611,10 +622,12 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
               </div>
             );
           })()}
-          {/* The discount figure itself is edited in the negotiation panel above. What stays
-              here is the governance step: create/regenerate records the request and defers the
-              actor-ceiling check to this approval (the backend skips the ceiling on those
-              paths on purpose). */}
+          {/* The discount figure itself is edited in the negotiation panel above. Since
+              2026-08-07 the authority check runs AT generation — a desk-generated quote with a
+              discount is born approved (`discountAuthority` on its terms) and shows a settled
+              chip here. The post-hoc approve button remains ONLY for quotes without the stamp:
+              generated before the change, or created by bare API callers that sent no actor
+              level — those still hit the p23 send/S2-exit gate until approved. */}
           {recordedDiscount && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 13 }}>
               <span className="tag">
@@ -623,12 +636,23 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
                   : `Nu ${recordedDiscount.value.toLocaleString()} off`}{" "}
                 · {recordedDiscount.basis}
               </span>
-              {elevated ? (
+              {discountApprovedAtGeneration ? (
+                <span
+                  className="tag"
+                  style={{ borderColor: "var(--green-t2)", background: "var(--green-t)", color: "var(--green-d)" }}
+                  title="The authority band was checked when the quote was generated — whoever generated it had the approval level for this discount, so no separate approval step exists."
+                >
+                  <Check style={{ width: 11, height: 11 }} /> Approved at generation ·{" "}
+                  {discountApprovedAtGeneration.level}
+                </span>
+              ) : elevated ? (
                 <button className="btn btn-ghost btn-sm" disabled={approveM.isPending || approveM.isSuccess} onClick={() => approveM.mutate()}>
                   {approveM.isPending ? "Approving…" : approveM.isSuccess ? "✓ Discount approved" : "Approve discount (FOM)"}
                 </button>
               ) : (
-                <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>An FOM approves the discount.</span>
+                <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
+                  Older quote — an FOM records the approval here (new quotes are approved when generated).
+                </span>
               )}
             </div>
           )}

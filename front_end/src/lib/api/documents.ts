@@ -116,3 +116,8 @@ export function openInvoicePdf(session: Session, invoiceId: string): Promise<voi
 export function openConfirmationVoucherPdf(session: Session, reservationId: string): Promise<void> {
   return openPdf(session, `/api/reservations/${reservationId}/confirmation-voucher-pdf`);
 }
+
+/** A5 — cancellation confirmation PDF. `GET /api/entries/:id/cancellation-confirmation-pdf`. */
+export function openCancellationConfirmationPdf(session: Session, entryId: string): Promise<void> {
+  return openPdf(session, `/api/entries/${entryId}/cancellation-confirmation-pdf`);
+}

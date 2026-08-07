@@ -31,6 +31,8 @@ const TIMER_LABELS: Record<string, string> = {
   SPECULATIVE_HOLD_EXPIRY_W2: "Speculative hold expiry",
   COMMITTED_HOLD_EXPIRY_W3: "Committed hold expiry",
   ADVANCE_PAYMENT_FOLLOW_UP_W34: "Advance payment follow-up",
+  // Armed when the guest promised the remaining advance BEFORE check-in by a given date.
+  ADVANCE_PROMISE_DEADLINE_W38: "Advance payment promise",
   PRE_ARRIVAL_COUNTDOWN_W4: "Pre-arrival countdown",
   NO_SHOW_CUTOFF_W5: "No-show cutoff",
   AWAITING_WRITTEN_CONFIRMATION_W5: "Awaiting written confirmation",

@@ -101,9 +101,37 @@ export async function reconcileAdvancePayment(
 export async function recordCreditExtension(
   session: Session,
   entryId: string,
-  body: { ceilingAmount: number; reason: string; validForHours?: number | null },
+  body: {
+    ceilingAmount: number;
+    reason: string;
+    validForHours?: number | null;
+    /** Absolute expiry (ISO) — aligns the extension with the guest's promise / check-in / check-out. */
+    validUntil?: string | null;
+  },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/credit-extension`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
+/**
+ * Record what the guest said about paying the advance (2026-08-07): full / partial /
+ * installments + when the remainder is coming. BEFORE_CHECKIN carries the promised date and
+ * arms a real deadline timer server-side. CLEAR wipes the plan. Returns fresh payment-status.
+ */
+export async function setAdvancePaymentPlan(
+  session: Session,
+  entryId: string,
+  body: {
+    plan: "FULL" | "PARTIAL" | "INSTALLMENTS" | "CLEAR";
+    balanceDueAt?: "BEFORE_CHECKIN" | "AT_CHECKIN" | "AT_CHECKOUT" | null;
+    promisedBy?: string | null;
+    note?: string | null;
+  },
+) {
+  return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/advance-payment-plan`, {
     method: "POST",
     session,
     body,

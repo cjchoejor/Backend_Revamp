@@ -16,6 +16,7 @@ import { openConfirmationVoucherPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { StepAction } from "./step-action";
 import { BackendRail, type RailGroup } from "./backend-inline";
+import { AdvanceSettlementBlock } from "./advance-settlement";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -323,13 +324,22 @@ export function CheckInStep({
         <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
           <span>Folio {folio?.state ?? "—"}</span>
           <span className={`tag ${paymentReconciled ? "" : "warn"}`}>
-            {paymentReconciled ? "Advance reconciled" : "Reconcile at Arrival"}
+            {paymentReconciled ? "Advance reconciled" : "Advance not settled"}
           </span>
         </div>
         {folio?.outstandingBalance != null && (
           <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "8px 0 0" }}>Outstanding {money(folio.outstandingBalance, currency)}</p>
         )}
       </div>
+
+      {/* Advance settlement (2026-08-07): the guest is standing at the desk — the classic moment
+          a "rest at check-in" plan pays out. Log the remainder here; the folio is still
+          provisional until "Check in & go live", so it lands as an advance payment. */}
+      <AdvanceSettlementBlock
+        entry={entry}
+        title="Collect the remaining advance"
+        intro="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs an FOM credit extension instead."
+      />
 
       {/* Registration & keys */}
       <div className="block">

@@ -319,6 +319,21 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         {/* Every figure here is read from the backend. The folio carries no charges-total field,
             so that row is gone rather than summed in the browser — the line list below still
             shows each backend-priced charge individually. */}
+        {/* Advance plan telltale (2026-08-07): a guest who said "I'll pay the rest at check-out"
+            arrives at this desk with the advance legitimately short — say so, name the figure,
+            and point at the settlement below. All figures from payment-status. */}
+        {paymentStatus.data?.paymentPlan && paymentStatus.data.paidInFull === false && (
+          <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", marginBottom: 9, display: "block", lineHeight: 1.55 }}>
+            The guest&rsquo;s advance plan was <b>{paymentStatus.data.paymentPlan.plan === "INSTALLMENTS" ? "installments" : "part now, rest later"}</b>
+            {paymentStatus.data.paymentPlan.balanceDueAt === "AT_CHECKOUT"
+              ? " with the remainder due at check-out — this is where it gets collected. "
+              : paymentStatus.data.paymentPlan.balanceDueAt === "AT_CHECKIN"
+                ? " with the remainder due at check-in, and it is still short. "
+                : " and the remainder is still short. "}
+            The advance is short <b>{money(paymentStatus.data.shortfall, currency)}</b>; the unpaid part is inside the
+            balance below — settlement collects it with the rest of the bill.
+          </div>
+        )}
         <div className="field">
           <label>Advance / payments received</label>
           <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BedDouble, Handshake, ListChecks, RefreshCw } from "lucide-react";
+import { BedDouble, Handshake, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -17,11 +17,11 @@ import {
   patchPreArrivalTask,
 } from "@/lib/api/pre-arrival";
 import { roomsFromResultSet } from "@/lib/api/availability";
-import { cancelEntryAtS5, getPaymentStatus, reconcileAdvancePayment } from "@/lib/api/reservation-setup";
+import { cancelEntryAtS5, getPaymentStatus } from "@/lib/api/reservation-setup";
+import { AdvanceSettlementBlock } from "./advance-settlement";
 import { listRooms } from "@/lib/api/rooms";
 import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
-import { money } from "@/lib/desk/workspace";
 import { StepAction } from "./step-action";
 import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -227,12 +227,6 @@ export function ArrivalStep({
       return res;
     }, "Rooms assigned"),
   );
-  const reconcileM = useMutation(
-    wrap(() => {
-      if (!folio?.id) throw new Error("No folio");
-      return reconcileAdvancePayment(session!, folio.id, { entryId: entry.id, note: "Arrival reconciliation" });
-    }, "Advance reconciled"),
-  );
   const creditAckM = useMutation(
     wrap(() => acknowledgeCreditCeilingTier2(session!, entry.id), "Credit ceiling acknowledged"),
   );
@@ -260,8 +254,6 @@ export function ArrivalStep({
     onError: (e) => toast.error(e instanceof Error ? e.message : "Task update failed"),
   });
 
-  const currency = folio?.lines?.[0]?.currency;
-
   // Persistent highlight: each group stays lit once its action has run (derived from real handoff /
   // assignment / reconciliation state). `firingKey` adds the transient "running now" pulse.
   const activeKeys = [
@@ -274,7 +266,7 @@ export function ArrivalStep({
     ? "handoff"
     : assignM.isPending
       ? "assign"
-      : reconcileM.isPending || creditAckM.isPending
+      : creditAckM.isPending
         ? "reconcile"
         : null;
   const railGroups: RailGroup[] = [
@@ -361,6 +353,24 @@ export function ArrivalStep({
           </>
         )}
       </div>
+
+      {/* Advance settlement (2026-08-07; moved above room assignment 2026-08-07, operator
+          request — settle the money story before the room one): the full picture — plan,
+          promise countdown, installment history, "log the remainder", FOM credit extension,
+          reconcile. A guest who promised the rest "before check-in" pays it in this window. */}
+      <AdvanceSettlementBlock
+        entry={entry}
+        title="Advance & credit"
+        intro="Confirm the advance before arrival: log any remainder the guest sends, or have an FOM cover the gap so check-in isn't blocked."
+      >
+        {creditNeedsAck && elevated && (
+          <div style={{ marginTop: 10 }}>
+            <button className="btn btn-ghost btn-sm" disabled={creditAckM.isPending} onClick={() => creditAckM.mutate()}>
+              FOM: acknowledge credit ceiling
+            </button>
+          </div>
+        )}
+      </AdvanceSettlementBlock>
 
       {/* Room assignment */}
       <div className="block">
@@ -490,39 +500,6 @@ export function ArrivalStep({
       {/* Guest's answer on the pre-arrival reminder. The reminder opens a W22 window when it goes
           out; this closes it. Evidence only — check-in is not held up by it. */}
       <CommunicationAcceptanceBlock entryId={entry.id} commType="PRE_ARRIVAL_REMINDER" />
-
-      {/* Payment & credit */}
-      <div className="block">
-        <BlockH>Advance &amp; credit</BlockH>
-        {paymentStatus && (
-          <div className="fact b-transit" style={{ marginBottom: 11, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
-            <span>
-              Received {money(paymentStatus.totalReceived, currency)} / required {money(paymentStatus.requiredAmount, currency)}
-            </span>
-            <span className={`tag ${paymentStatus.satisfied ? "" : "warn"}`}>
-              {paymentStatus.satisfied ? "Satisfied" : `Short ${money(paymentStatus.shortfall, currency)}`}
-            </span>
-          </div>
-        )}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <StepAction
-            label="Reconcile advance"
-            doneLabel="Reconciled"
-            done={!!folio?.advancePaymentReconciliationComplete}
-            pending={reconcileM.isPending}
-            onClick={() => reconcileM.mutate()}
-          />
-          <button className="btn btn-ghost btn-sm" disabled={paymentStatusQuery.isFetching} onClick={() => paymentStatusQuery.refetch()}>
-            <RefreshCw style={{ width: 12, height: 12 }} />
-            Refresh
-          </button>
-          {creditNeedsAck && elevated && (
-            <button className="btn btn-ghost btn-sm" disabled={creditAckM.isPending} onClick={() => creditAckM.mutate()}>
-              FOM: acknowledge credit ceiling
-            </button>
-          )}
-        </div>
-      </div>
 
       {/* Guest present attestation */}
       <div className="block">

@@ -1,18 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ListChecks, Lock, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { acknowledgeMultiBooking, verifyConference } from "@/lib/api/confirmation";
+import { getEntryTrace } from "@/lib/api/entries";
 import { patchPreArrivalTask } from "@/lib/api/pre-arrival";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { JourneySummaryBlock } from "./journey-summary";
 import { ConfirmationVoucherBlock } from "./confirmation-voucher";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
+import { AdvanceSettlementBlock } from "./advance-settlement";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -59,6 +61,23 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
   // Once the reservation is confirmed, this step becomes a read-back: the journey recap + the
   // confirmation-voucher receipt, not the pre-freeze gates.
   const confirmed = !!entry.reservation?.confirmedAt;
+
+  // Send before record (2026-08-07, operator ruling): the voucher's answer-capture form stays
+  // hidden until the voucher has actually been EMAILED (the auto-send at confirmation, or the
+  // manual "Send to guest" button). The communication record alone isn't enough — it's minted
+  // at confirmation even when the email was skipped or failed. Guests with no email on file
+  // are the exception: verbal capture is their only channel, so the form shows for them.
+  // Shares the ["entry-trace"] cache with ConfirmationVoucherBlock (same key + limit).
+  const traceQ = useQuery({
+    queryKey: ["entry-trace", entry.id],
+    queryFn: () => getEntryTrace(session!, entry.id, 80),
+    enabled: !!session && confirmed,
+  });
+  const voucherEmailSent = (traceQ.data?.items ?? []).some(
+    (e) => e.eventType === "RESERVATION_CONFIRMATION_EMAIL.SENT",
+  );
+  const guestHasEmail = !!entry.guestProfile?.email?.trim();
+  const voucherAnswerLocked = confirmed && guestHasEmail && !traceQ.isLoading && !voucherEmailSent;
 
   const [multiBookingNote, setMultiBookingNote] = useState("");
   const [conferenceChecklist, setConferenceChecklist] = useState(
@@ -149,10 +168,31 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
 
         {confirmed && <ConfirmationVoucherBlock entry={entry} />}
 
-        {/* The voucher goes out automatically on confirmation and opens a W22 window. This is the
-            desk's way to close that loop when the guest replies — evidence only, arrival is not
-            held up by it. */}
-        {confirmed && <CommunicationAcceptanceBlock entryId={entry.id} commType="CONFIRMATION_VOUCHER" />}
+        {/* The voucher goes out automatically on confirmation and opens a W22 window; the guest's
+            answer is recorded here. Since 2026-08-07 this is a GATE: Arrival (S5) won't open until
+            the answer is on record — and the form itself stays hidden until the voucher has
+            actually been sent (auto at confirmation, or the Send to guest button above). */}
+        {confirmed && (
+          <CommunicationAcceptanceBlock
+            entryId={entry.id}
+            commType="CONFIRMATION_VOUCHER"
+            lockedHint={
+              voucherAnswerLocked
+                ? "The voucher email hasn't gone out yet — send it with the Send to guest button above, then record the guest's answer here. Arrival can't open until their answer is on record."
+                : undefined
+            }
+          />
+        )}
+
+        {/* Advance settlement (2026-08-07): a guest who paid part of the advance at Set up and
+            promised the rest "before check-in" pays it in THIS window — the booking is frozen,
+            the front desk hasn't taken over yet. Log the remainder here the moment it lands. */}
+        {confirmed && (
+          <AdvanceSettlementBlock
+            entry={entry}
+            intro="The booking is frozen; the advance can still be settled here before the front-desk handoff. Money the guest sends now is logged against the same folio the proforma billed."
+          />
+        )}
 
         {!confirmed && (
           <div className="block">

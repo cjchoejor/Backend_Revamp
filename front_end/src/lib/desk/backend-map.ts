@@ -140,6 +140,7 @@ const S3: StageBackend = {
   workersTimers: [
     { name: "W3 — Committed hold expiry", ref: "COMMITTED_HOLD_EXPIRY_W3 · w3-committed-hold-expiry-worker.ts", detail: "Releases the committed hold if not confirmed before TTL." },
     { name: "W34 — Advance-payment follow-up", ref: "ADVANCE_PAYMENT_FOLLOW_UP_W34 · w34-advance-payment-follow-up-worker.ts", detail: "Chases the advance payment within its window." },
+    { name: "W38 — Advance payment promise", ref: "ADVANCE_PROMISE_DEADLINE_W38 · w38-advance-promise-worker.ts", detail: "Fires at the guest's promised pay-by date; traces the lapse if the advance is still short." },
   ],
   handoffs: [],
   services: [

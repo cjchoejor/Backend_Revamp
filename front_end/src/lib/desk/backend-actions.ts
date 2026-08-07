@@ -74,7 +74,9 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
     ],
     advance: [
       { name: "Advance payment service", ref: "services/domain (advance payment)", detail: "Records / reconciles the advance and recomputes payment status.", trace: "^FOLIO\\.PAYMENT_RECORDED$|^ADVANCE_PAYMENT\\.RECONCILED$" },
+      { name: "Payment plan", ref: "setAdvancePaymentPlan · advance-payment-plan", detail: "Stores the guest's full / partial / installments plan and when the remainder is due.", trace: "^ADVANCE_PAYMENT\\.PLAN_" },
       { name: "W34 — advance follow-up", ref: "ADVANCE_PAYMENT_FOLLOW_UP_W34 · w34", detail: "Chases the advance within its window.", trace: "^PAYMENT_FOLLOW_UP\\.FIRED$|^ADVANCE_PAYMENT\\.FOLLOW_UP" },
+      { name: "W38 — payment promise", ref: "ADVANCE_PROMISE_DEADLINE_W38 · w38", detail: "Fires at the promised pay-by date; flags the lapse if the money hasn't arrived.", trace: "^ADVANCE_PAYMENT\\.PROMISE_LAPSED$" },
     ],
     hold: [
       { name: "s3-hold-service", ref: "services/domain/s3-hold-service.ts", detail: "Places the committed hold against the room type.", trace: "^COMMITTED_HOLD\\.PLACED$" },

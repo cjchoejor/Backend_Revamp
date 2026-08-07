@@ -267,11 +267,30 @@ export type FolioDetail = {
   }>;
 };
 
+/** What the guest SAID about paying the advance (2026-08-07) — segment-scoped, advisory. */
+export type AdvancePaymentPlanSummary = {
+  plan: "FULL" | "PARTIAL" | "INSTALLMENTS";
+  balanceDueAt: "BEFORE_CHECKIN" | "AT_CHECKIN" | "AT_CHECKOUT" | null;
+  /** ISO deadline of a before-check-in promise (drives the W38 timer + countdown chip). */
+  promisedBy: string | null;
+  note: string | null;
+  setBy: string;
+  setAt: string;
+  /** Read-time fact: the promised date passed with the money still short. */
+  promiseOverdue: boolean;
+};
+
 export type PaymentStatusSummary = {
   satisfied: boolean;
   totalReceived: number;
   requiredAmount: number;
   shortfall: number;
+  /** Money alone — true only when received >= required (a credit extension doesn't count). */
+  paidInFull?: boolean;
+  /** The guest's stated payment plan for this segment, or null when none recorded. */
+  paymentPlan?: AdvancePaymentPlanSummary | null;
+  /** Every payment so far, oldest first — the installment history. */
+  installments?: Array<{ id: string; amount: number; receivedAt: string; stage: string | null; notes?: string | null }>;
   creditExtensionActive: boolean;
   ceilingAmount: number | null;
   /** ISO expiry of the credit extension, when the FOM set a time limit (2026-08-01). */
@@ -522,7 +541,14 @@ export type EntryDetail = EntryListItem & {
   commissionDueRecords?: CommissionDueSummary[];
   followUpTasks?: FollowUpTaskSummary[];
   noShowDetermination?: NoShowDeterminationSummary | null;
-  inquiry?: { notes?: string | null; agentProfile?: AgentProfileSummary | null } | null;
+  inquiry?: {
+    notes?: string | null;
+    /** Full Inquiry scalars come through the entry include; declared as needed. */
+    sourceChannel?: string | null;
+    travelAgentId?: string | null;
+    corporateAccountId?: string | null;
+    agentProfile?: AgentProfileSummary | null;
+  } | null;
   closedAt?: string | null;
   closedBy?: string | null;
   walkInCompressed?: boolean;

@@ -1,11 +1,16 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Clock, FileCheck2, Mail, Send } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, Clock, Eye, EyeOff, FileCheck2, FileX2, Mail, Send } from "lucide-react";
+import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { ApiError } from "@/lib/api/client";
 import { getEntryTimers, getEntryTrace } from "@/lib/api/entries";
-import { openConfirmationVoucherPdf } from "@/lib/api/documents";
+import { resendConfirmationVoucher } from "@/lib/api/confirmation";
+import { openConfirmationVoucherPdf, openCancellationConfirmationPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
+import { CancellationVoucherPreview, VoucherPreview } from "./quotation-preview";
 import type { EntryDetail } from "@/types/api";
 
 /**
@@ -83,7 +88,31 @@ function fmtDateTime(iso: string | null | undefined): string {
 
 export function ConfirmationVoucherBlock({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
+  const queryClient = useQueryClient();
   const res = entry.reservation;
+
+  // Inline document view (2026-08-07, operator request — "view like PI and quotation").
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Manual re-send to the guest — prefilled with the profile email, editable for corrections.
+  const guestEmail = entry.guestProfile?.email ?? "";
+  const [sendTo, setSendTo] = useState(guestEmail);
+  useEffect(() => {
+    if (guestEmail) setSendTo((prev) => prev || guestEmail);
+  }, [guestEmail]);
+
+  const sendM = useMutation({
+    mutationFn: () => resendConfirmationVoucher(session!, res!.id, { dispatchedTo: sendTo.trim() || undefined }),
+    onSuccess: (out) => {
+      toast.success(`Voucher sent to ${out.dispatchedTo}`);
+      void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+      // The re-send creates a fresh CONFIRMATION_VOUCHER communication — the acceptance block
+      // reads that feed on its own key.
+      void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Couldn't send the voucher"),
+  });
 
   const timersQ = useQuery({
     queryKey: ["entry-timers", entry.id],
@@ -145,12 +174,27 @@ export function ConfirmationVoucherBlock({ entry }: { entry: EntryDetail }) {
             : "No pending window (auto-acknowledged for OTA, or already elapsed)."}
       </StepRow>
 
-      {/* 3 — PDF rendered, with the view action */}
+      {/* 3 — PDF rendered, with inline view + open-in-tab actions */}
       <StepRow
         icon={<FileCheck2 style={{ width: 14, height: 14 }} />}
         title="PDF (write-once, checksum-signed)"
         tone={rendered ? "ok" : "muted"}
-        action={session ? <PdfButton label="View voucher PDF" open={() => openConfirmationVoucherPdf(session, res.id)} /> : undefined}
+        action={
+          session ? (
+            <span style={{ display: "inline-flex", gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setPreviewOpen((v) => !v)}
+                title="Show the voucher document right here (renders + stores it on first view)"
+              >
+                {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+                {previewOpen ? "Hide" : "View"}
+              </button>
+              <PdfButton label="PDF" open={() => openConfirmationVoucherPdf(session, res.id)} />
+            </span>
+          ) : undefined
+        }
       >
         {rendered ? (
           <>
@@ -165,9 +209,10 @@ export function ConfirmationVoucherBlock({ entry }: { entry: EntryDetail }) {
             ) : null}
           </>
         ) : (
-          "Not stored yet — opens (and renders) on first view."
+          "Not stored yet — renders on first view."
         )}
       </StepRow>
+      {previewOpen && <VoucherPreview reservationId={res.id} />}
 
       {/* 4 — emailed to guest */}
       <StepRow
@@ -210,6 +255,59 @@ export function ConfirmationVoucherBlock({ entry }: { entry: EntryDetail }) {
           "No guest email on file — nothing was emailed."
         )}
       </StepRow>
+
+      {/* Manual send (2026-08-07, operator request): the automatic send at confirmation may
+          have been skipped (no email on file), failed, or the guest wants it again. Sends the
+          same email + PDF and opens a fresh reply window. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", paddingTop: 10 }}>
+        <div className="field" style={{ flex: "1 1 220px", marginBottom: 0 }}>
+          <label>Send to</label>
+          <input value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
+        </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          disabled={!sendTo.trim() || sendM.isPending}
+          onClick={() => sendM.mutate()}
+          title="Email the voucher (PDF attached) to this address — recorded as a tracked communication with a fresh reply window"
+        >
+          <Send style={{ width: 13, height: 13 }} />
+          {sendM.isPending ? "Sending…" : "Send to guest"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Cancellation voucher (A5) — shown on a CANCELLED booking's read-only record (2026-08-07,
+ * operator request). The document was generated when the cancellation committed (or renders
+ * lazily on first view) and states what was held, what was retained under the disclosed
+ * ladder, and what was refunded.
+ */
+export function CancellationVoucherBlock({ entry }: { entry: EntryDetail }) {
+  const { session } = useSession();
+  const [previewOpen, setPreviewOpen] = useState(false);
+  if (entry.status !== "CANCELLED") return null;
+  return (
+    <div className="block" style={{ borderColor: "#e2b3ac" }}>
+      <div className="block-h">
+        <FileX2 style={{ width: 13, height: 13 }} />
+        Cancellation voucher
+        <span className="ln" />
+      </div>
+      <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 0, lineHeight: 1.55 }}>
+        The guest-facing record of this cancellation — the advance that was held, what the
+        disclosed cancellation terms retained, and what was refunded. Give it to the guest as
+        their proof of the outcome.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPreviewOpen((v) => !v)}>
+          {previewOpen ? <EyeOff style={{ width: 14, height: 14 }} /> : <Eye style={{ width: 14, height: 14 }} />}
+          {previewOpen ? "Hide" : "View"}
+        </button>
+        {session && <PdfButton label="PDF" open={() => openCancellationConfirmationPdf(session, entry.id)} />}
+      </div>
+      {previewOpen && <CancellationVoucherPreview entryId={entry.id} />}
     </div>
   );
 }

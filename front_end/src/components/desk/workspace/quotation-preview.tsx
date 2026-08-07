@@ -165,6 +165,27 @@ export function QuotationPreview({ quotationId, frozenPdf }: { quotationId: stri
 }
 
 /**
+ * S4 — the confirmation voucher, embedded inline as its PDF (2026-08-07, operator request:
+ * "view like PI and quotation"). The voucher is write-once; the route lazily renders + stores
+ * it on first view, so this works both before and after the artifact exists.
+ */
+export function VoucherPreview({ reservationId }: { reservationId: string }) {
+  return (
+    <FrozenPdfFrame path={`/api/reservations/${reservationId}/confirmation-voucher-pdf`} title="Confirmation voucher" />
+  );
+}
+
+/**
+ * The A5 cancellation confirmation — generated when the booking is cancelled (or lazily on
+ * first view). Embedded inline on the cancelled booking's read-only record.
+ */
+export function CancellationVoucherPreview({ entryId }: { entryId: string }) {
+  return (
+    <FrozenPdfFrame path={`/api/entries/${entryId}/cancellation-confirmation-pdf`} title="Cancellation confirmation" />
+  );
+}
+
+/**
  * S3 — the proforma document. Live rows compose from folio payments + the desk's advance
  * requirement; pass `frozenPdf` on a superseded row to show the stored artifact instead.
  */

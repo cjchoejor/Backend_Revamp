@@ -71,6 +71,7 @@ import { StayStep as StayStepBase } from "./stay-step";
 import { CheckOutStep as CheckOutStepBase } from "./checkout-step";
 import { PostStayStep as PostStayStepBase } from "./closed-step";
 import { ConfirmStep as ConfirmStepBase } from "./confirm-step";
+import { CancellationVoucherBlock } from "./confirmation-voucher";
 import { BackendRail, BackendRailSlotContext, LiveBackendFeed, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -905,6 +906,18 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const canCheckIn = s6Readiness(entry).every((c) => c.met) && registrationConfirmed && keysValid;
   // After the freeze, the Confirm step (still S4 until W4 fires) offers to open pre-arrival.
   const confirmedS4Active = viewing === 4 && fin.frozen && entry.currentStage === "S4";
+  // S4→S5 gate (2026-08-07, operator ruling): the guest's answer to the confirmation voucher
+  // must be RECORDED before Arrival opens. Mirrors the backend's W4 check (segment-scoped,
+  // OTA auto-acknowledges); the button locks with the reason instead of 409ing on click.
+  const segStartIsoForVoucher = (entry.segments ?? [])[0]?.startedAt ?? null;
+  const voucherAnswerRecorded = (communications ?? []).some(
+    (c) =>
+      c.commType === "CONFIRMATION_VOUCHER" &&
+      c.direction === "OUTBOUND" &&
+      c.sendStatus === "DISPATCHED" &&
+      c.acknowledgementStatus === "RECEIVED" &&
+      (!segStartIsoForVoucher || (c.createdAt ?? "") >= segStartIsoForVoucher),
+  );
   const onLiveStep =
     viewing === currentOrder &&
     !confirmStepActive &&
@@ -1246,7 +1259,16 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 Review &amp; confirm
               </button>
             ) : confirmedS4Active ? (
-              <button className="adv" disabled={activateMutation.isPending} onClick={() => activateMutation.mutate()}>
+              <button
+                className={`adv${voucherAnswerRecorded ? "" : " locked"}`}
+                disabled={!voucherAnswerRecorded || activateMutation.isPending}
+                onClick={() => voucherAnswerRecorded && activateMutation.mutate()}
+                title={
+                  voucherAnswerRecorded
+                    ? "Open the pre-arrival window (S5)"
+                    : "Record the guest's answer to the confirmation voucher first — send the voucher (if it hasn't gone out) and capture their reply on this step."
+                }
+              >
                 {activateMutation.isPending ? "Opening…" : "Continue to Arrival"}
                 <ArrowRight />
               </button>
@@ -1378,6 +1400,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 {/* `inert` (React 19) makes the whole subtree non-interactive + non-focusable,
                     so the full step surface is visible but nothing can be actioned. */}
                 <div inert>{readOnlyStepBody()}</div>
+                {/* Cancelled bookings carry their guest-facing outcome document at the end
+                    (2026-08-07, operator request) — OUTSIDE the inert wrapper, because viewing
+                    and printing the voucher must stay clickable on a read-only record. */}
+                {entry.status === "CANCELLED" && <CancellationVoucherBlock entry={entry} />}
               </div>
             ) : inquiryStepActive ? (
               <InquiryStep entry={entry} />

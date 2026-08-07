@@ -72,6 +72,7 @@ export function CommunicationAcceptanceBlock({
   commType,
   title,
   sinceIso,
+  lockedHint,
 }: {
   entryId: string;
   commType: EntryCommunicationType;
@@ -83,6 +84,13 @@ export function CommunicationAcceptanceBlock({
    * segment's (2026-08-02). Omit for entry-wide behaviour.
    */
   sinceIso?: string | null;
+  /**
+   * When set, the capture form is withheld and this message shows instead (2026-08-07) — for
+   * hosts that want a stricter order than "the communication record exists" (e.g. the S4
+   * voucher: the record is minted at confirmation, but the operator must actually SEND the
+   * document before an answer to it makes sense). Ignored once the answer is recorded.
+   */
+  lockedHint?: string | null;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -145,6 +153,17 @@ export function CommunicationAcceptanceBlock({
       <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 13 }}>
         <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
         {heading} accepted by guest · {fmt(comm.acknowledgementReceivedAt)}
+      </div>
+    );
+  }
+
+  // Host-imposed order (2026-08-07): the record exists but the host says the real-world send
+  // hasn't happened yet — no answer to capture until it has.
+  if (lockedHint) {
+    return (
+      <div className="block">
+        <BlockH>{heading} · guest response</BlockH>
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, lineHeight: 1.55 }}>{lockedHint}</p>
       </div>
     );
   }
