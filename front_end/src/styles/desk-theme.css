@@ -2786,6 +2786,77 @@
     background: var(--cream);
     font-size: 12px;
   }
+  /* Backend-priced `heads × rate` line under a rate input — the multiplication the operator
+     checks the rate against, and the row's contribution to the column total below. */
+  & .rct-t td .rct-sub {
+    display: block;
+    font-family: var(--deskmono);
+    font-size: 8.5px;
+    line-height: 1.1;
+    color: var(--ink-3);
+    padding: 0 3px 3px;
+    white-space: nowrap;
+  }
+  /* Dash cell — a rate that doesn't apply to this room (meal not in its plan / no extra
+     beds). Kept visible so the column stays honest for the rooms it DOES apply to. */
+  & .rct-t td.mut {
+    color: var(--ink-3);
+    background: var(--cream);
+    font-size: 11px;
+    padding: 5px 2px;
+  }
+  /* Σ money cells — each rate column's whole-stay total (net of tax), from the live preview. */
+  & .rct-t tfoot td.money {
+    font-size: 10.5px;
+    color: var(--green-d);
+  }
+  /* Per-room stay total (incl. SC + GST) in the trailing corner column; the footer's carries
+     the grand total. */
+  & .rct-t td.rowtot {
+    font-family: var(--deskmono);
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--green-d);
+    background: var(--green-t);
+    padding: 5px 6px;
+  }
+  /* Running backend-priced total strip under the grid. */
+  & .rct-live {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--green-t);
+    font-family: var(--deskmono);
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+  & .rct-live .k {
+    font-family: var(--deskui);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  & .rct-live b {
+    color: var(--green-d);
+  }
+  & .rct-live .disc {
+    color: var(--warn);
+  }
+  & .rct-live .disc b {
+    color: var(--green-d);
+  }
+  & .rct-live .src {
+    font-family: var(--deskui);
+    font-size: 9.5px;
+    color: var(--ink-3);
+  }
 
   /* Frozen identity columns — a 20-night stay scrolls far past the room number, so Room No /
      Type / Ext. Beds / Booked by stay put while the nights scroll under them. Offsets come from

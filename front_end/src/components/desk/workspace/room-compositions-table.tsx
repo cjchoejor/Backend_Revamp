@@ -8,7 +8,7 @@ import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { getRateReference } from "@/lib/api/entries";
-import type { RoomCompositionInput } from "@/lib/api/quotations";
+import { previewQuotationPricing, type RoomCompositionInput } from "@/lib/api/quotations";
 
 /**
  * Spreadsheet-style composition table (2026-07-28) — the pure-tabular alternative to the
@@ -94,6 +94,23 @@ const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
   md: { chip: "MAP+D", th: "M+D", title: "Breakfast + dinner" },
   ap: { chip: "AP", th: "AP", title: "All meals" },
   ot: { chip: "Others", th: "Oth", title: "Others — à-la-carte, set pax in the columns that appear" },
+};
+
+/**
+ * The negotiated-rate columns (2026-08-07, operator request). Room and Bed are the DEFAULT
+ * pair — always present while the rates group is open, because every booking sells a room
+ * and may sell beds. Each meal's column exists only while that meal is actually in play
+ * (some room's plan includes it, or à-la-carte pax order it): an EP booking negotiates room
+ * & bed alone; three CP rooms + one MAP+L show Breakfast for all and Lunch for that one
+ * room; no plan with dinner → no Dinner column at all.
+ */
+type RateCol = "rRoom" | "rBed" | "rBf" | "rLu" | "rDi";
+const RATE_META: Record<RateCol, { th: string; meal: string | null }> = {
+  rRoom: { th: "Room", meal: null },
+  rBed: { th: "Bed", meal: null },
+  rBf: { th: "B'fast", meal: "breakfast" },
+  rLu: { th: "Lunch", meal: "lunch" },
+  rDi: { th: "Dinner", meal: "dinner" },
 };
 
 function cnt(v: string): number {
@@ -540,6 +557,29 @@ export function RoomCompositionsTable({
     (c) => activePlans.has(c) || sealedRoomIds.some((id) => cnt(rows[id]?.[c] ?? "0") > 0),
   );
 
+  // ---- Which rate columns exist (2026-08-07) ---------------------------------------
+  // Room + Bed are the default pair; a meal's rate column exists only while that meal is in
+  // play somewhere — via a plan that includes it (chip on or pax present, i.e. the plan
+  // column is visible) or via à-la-carte pax. No plan with dinner → no Dinner column.
+  const anyPax = (col: NumCol) => sealedRoomIds.some((id) => cnt(rows[id]?.[col] ?? "0") > 0);
+  const bfInPlay = ["cp", "ml", "md", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("obf");
+  const luInPlay = ["ml", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("olu");
+  const diInPlay = ["md", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("odi");
+  const rateCols: RateCol[] = [
+    "rRoom",
+    "rBed",
+    ...(bfInPlay ? (["rBf"] as const) : []),
+    ...(luInPlay ? (["rLu"] as const) : []),
+    ...(diInPlay ? (["rDi"] as const) : []),
+  ];
+  /** Whether THIS row consumes each meal — its rate cell is editable only then; the other
+   *  rooms see a dash (their plan doesn't buy that meal, so there's nothing to negotiate). */
+  const rowConsumes = (r: RowState): Record<"rBf" | "rLu" | "rDi", boolean> => ({
+    rBf: cnt(r.cp) + cnt(r.ml) + cnt(r.md) + cnt(r.ap) + cnt(r.obf) > 0,
+    rLu: cnt(r.ml) + cnt(r.ap) + cnt(r.olu) > 0,
+    rDi: cnt(r.md) + cnt(r.ap) + cnt(r.odi) > 0,
+  });
+
   /** Chip toggle for a plan column. Switching a visible plan OFF zeroes its column
    *  (and the Others à-la-carte pax when it's `ot`) — a hidden column must not keep
    *  feeding the draft. */
@@ -660,12 +700,13 @@ export function RoomCompositionsTable({
     [],
   );
 
-  // Emit on every change. Occ is derived, so invariant (1) of Policy 79 holds by
-  // construction; invariant (2) (plan pax ≤ occ) is warned inline and enforced server-side.
-  useEffect(() => {
-    const out: RoomCompositionInput[] = sealedRoomIds
-      .filter((id) => rows[id])
-      .map((id) => {
+  // The editor's current state as compositions — what gets emitted to the parent AND what
+  // the live pricing preview prices. One builder so the two can never disagree.
+  const compositions: RoomCompositionInput[] = useMemo(
+    () =>
+      sealedRoomIds
+        .filter((id) => rows[id])
+        .map((id) => {
         const r = rows[id];
         const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
         return {
@@ -702,10 +743,52 @@ export function RoomCompositionsTable({
             ? { nightMealOverrides: nightOverridesBySeedRoom.get(id) }
             : {}),
         };
-      });
-    onChange(out);
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, sealedRoomIds, entryCheckIn, entryCheckOut]);
+    [rows, sealedRoomIds, entryCheckIn, entryCheckOut],
+  );
+
+  // Emit on every change. Occ is derived, so invariant (1) of Policy 79 holds by
+  // construction; invariant (2) (plan pax ≤ occ) is warned inline and enforced server-side.
+  useEffect(() => {
+    onChange(compositions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compositions]);
+
+  // ---- Live pricing (2026-08-07) ---------------------------------------------------
+  // The rate cells show `heads × rate` money and the Σ row shows column totals — all read
+  // from the quotation-preview endpoint (the quote's own arithmetic, nothing persisted),
+  // never computed here. Debounced so the grid re-prices ~half a second after typing stops.
+  const discNum = Number(discountValue ?? "");
+  const discUnitNow: DiscountUnit = discountUnit ?? "percent";
+  const [previewBody, setPreviewBody] = useState<{
+    roomCompositions: RoomCompositionInput[];
+    discount: { percent?: number; amount?: number } | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!ratesOpen || !entryId || compositions.length === 0) return;
+    const discount =
+      Number.isFinite(discNum) && discNum > 0
+        ? discUnitNow === "percent"
+          ? { percent: discNum }
+          : { amount: discNum }
+        : null;
+    const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount }), 450);
+    return () => clearTimeout(t);
+  }, [compositions, ratesOpen, entryId, discNum, discUnitNow]);
+  const previewQuery = useQuery({
+    queryKey: ["quotation-live-preview", entryId, previewBody],
+    queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),
+    enabled: !!session && !!entryId && !!previewBody && ratesOpen,
+    // Keep the previous figures on screen while the next debounce round-trips — totals
+    // shouldn't blink to dashes on every keystroke.
+    placeholderData: (prev) => prev,
+  });
+  const preview = previewQuery.data ?? null;
+  const pvByRoom = useMemo(() => new Map((preview?.rooms ?? []).map((l) => [l.roomId, l])), [preview]);
+  /** Backend money → display string. Formatting only — never arithmetic. */
+  const fmtNu = (n: number | null | undefined): string =>
+    n == null ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 
   // Others à-la-carte columns appear only once someone is on the Others plan.
   const othersVisible = sealedRoomIds.some((id) => cnt(rows[id]?.ot ?? "0") > 0);
@@ -721,16 +804,28 @@ export function RoomCompositionsTable({
     cols.push("bed", ...visibleMeals);
     if (othersVisible) cols.push("obf", "olu", "odi");
     cols.push("sc", "gst", "foc");
-    if (ratesOpen) cols.push("rRoom", "rBed", "rBf", "rLu", "rDi");
+    if (ratesOpen) cols.push(...rateCols);
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [othersVisible, ratesOpen, childColsVisible, visibleMeals.join(",")]);
+  }, [othersVisible, ratesOpen, childColsVisible, visibleMeals.join(","), rateCols.join(",")]);
 
   const focusCell = (rowIdx: number, col: string) => {
     const el = wrapRef.current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${col}"]`);
     if (el) {
       el.focus();
       if (el.type === "text") el.select();
+    }
+  };
+  /** Horizontal move that SKIPS cells with no input — a rate column can render a dash for
+   *  rows whose plan doesn't include that meal, and the walk must not dead-end on them. */
+  const focusSideways = (rowIdx: number, fromCi: number, dir: 1 | -1) => {
+    for (let i = fromCi + dir; i >= 0 && i < visibleCols.length; i += dir) {
+      const el = wrapRef.current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${visibleCols[i]}"]`);
+      if (el) {
+        el.focus();
+        if (el.type === "text") el.select();
+        return;
+      }
     }
   };
   const onCellKeyDown = (rowIdx: number, col: string) => (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -748,10 +843,10 @@ export function RoomCompositionsTable({
       focusCell(Math.max(0, rowIdx - 1), col);
     } else if (e.key === "ArrowRight" && atEnd && ci < visibleCols.length - 1) {
       e.preventDefault();
-      focusCell(rowIdx, visibleCols[ci + 1]);
+      focusSideways(rowIdx, ci, 1);
     } else if (e.key === "ArrowLeft" && atStart && ci > 0) {
       e.preventDefault();
-      focusCell(rowIdx, visibleCols[ci - 1]);
+      focusSideways(rowIdx, ci, -1);
     }
   };
 
@@ -772,7 +867,7 @@ export function RoomCompositionsTable({
     rowIdx: number,
     roomId: string,
     col: NumCol,
-    opts?: { warn?: boolean; decimal?: boolean; wide?: boolean; placeholder?: string; title?: string },
+    opts?: { warn?: boolean; decimal?: boolean; wide?: boolean; placeholder?: string; title?: string; sub?: string | null },
   ) => {
     const raw = rows[roomId]?.[col] ?? "";
     return (
@@ -801,6 +896,8 @@ export function RoomCompositionsTable({
             setCell(roomId, { [col]: v });
           }}
         />
+        {/* Backend-priced `heads × rate` line under the rate input — display only. */}
+        {opts?.sub != null && <span className="rct-sub">{opts.sub}</span>}
       </td>
     );
   };
@@ -958,7 +1055,14 @@ export function RoomCompositionsTable({
               {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
               {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
               <th colSpan={3}>Charges</th>
-              {ratesOpen && <th colSpan={5}>Negotiated rates (Nu., optional)</th>}
+              {ratesOpen && (
+                <th
+                  colSpan={rateCols.length}
+                  title="Columns follow the meal plans in use — room & bed always; a meal appears only while some room's plan includes it"
+                >
+                  Negotiated rates (Nu., optional{rateCols.length === 2 ? " · EP — room only" : ""})
+                </th>
+              )}
               <th className="ratebtn" rowSpan={2}>
                 <div className="rct-corner">
                   <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
@@ -993,15 +1097,21 @@ export function RoomCompositionsTable({
               <th title="Service charge applies">SC</th>
               <th title="GST applies">GST</th>
               <th title="Free of charge — room priced at zero">FOC</th>
-              {ratesOpen && (
-                <>
-                  <th>Room</th>
-                  <th>Bed</th>
-                  <th>B'fast</th>
-                  <th>Lunch</th>
-                  <th>Dinner</th>
-                </>
-              )}
+              {ratesOpen &&
+                rateCols.map((c) => (
+                  <th
+                    key={c}
+                    title={
+                      RATE_META[c].meal
+                        ? `Per-person ${RATE_META[c].meal} rate — editable only for rooms whose plan includes ${RATE_META[c].meal}`
+                        : c === "rRoom"
+                          ? "Per-night room rate"
+                          : "Per-bed per-night extra-bed rate"
+                    }
+                  >
+                    {RATE_META[c].th}
+                  </th>
+                ))}
             </tr>
           </thead>
           <tbody>
@@ -1053,21 +1163,76 @@ export function RoomCompositionsTable({
                   {boolCell(rowIdx, id, "foc")}
                   {/* Each rate cell shows the figure it would price at when left empty, as the
                       placeholder — so the column reads as rates rather than as blanks, and a
-                      negotiation is entered against a visible anchor. Typing overrides it. */}
+                      negotiation is entered against a visible anchor. Typing overrides it.
+                      A meal's cell is editable only for rooms whose plan includes that meal —
+                      the others get a dash (nothing to negotiate); same for Bed with no extra
+                      beds. Under each active input, the backend-priced `heads × rate` line. */}
                   {ratesOpen &&
-                    (["rRoom", "rBed", "rBf", "rLu", "rDi"] as const).map((col) => {
+                    rateCols.map((col) => {
+                      const consumes = rowConsumes(r);
+                      const active =
+                        col === "rRoom" ? true : col === "rBed" ? cnt(r.bed) > 0 : consumes[col];
+                      if (!active) {
+                        return (
+                          <td
+                            key={col}
+                            className="mut"
+                            title={
+                              col === "rBed"
+                                ? "No extra beds in this room — nothing to negotiate"
+                                : `Room ${roomNoOf(id)}'s meal plan doesn't include ${RATE_META[col].meal} — put someone on a plan that does (or à-la-carte pax) to unlock this rate`
+                            }
+                          >
+                            —
+                          </td>
+                        );
+                      }
                       const ref = refFor(id, col);
+                      const l = pvByRoom.get(id);
+                      const nn = l ? `${l.nights}n` : "";
+                      const sub = !l
+                        ? null
+                        : col === "rRoom"
+                          ? `${nn} · ${fmtNu(l.roomSubtotal)}`
+                          : col === "rBed"
+                            ? `${l.extraBedCount}×${nn} · ${fmtNu(l.extraBedSubtotal)}`
+                            : col === "rBf"
+                              ? l.hasNightMealOverrides
+                                ? `varies · ${fmtNu(l.breakfastSubtotal)}`
+                                : `${l.breakfastPax}×${nn} · ${fmtNu(l.breakfastSubtotal)}`
+                              : col === "rLu"
+                                ? l.hasNightMealOverrides
+                                  ? `varies · ${fmtNu(l.lunchSubtotal)}`
+                                  : `${l.lunchPax}×${nn} · ${fmtNu(l.lunchSubtotal)}`
+                                : l.hasNightMealOverrides
+                                  ? `varies · ${fmtNu(l.dinnerSubtotal)}`
+                                  : `${l.dinnerPax}×${nn} · ${fmtNu(l.dinnerSubtotal)}`;
                       return numCell(rowIdx, id, col, {
                         decimal: true,
                         wide: true,
                         placeholder: ref != null ? String(ref) : "—",
+                        sub,
                         title:
-                          ref != null
+                          (ref != null
                             ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
-                            : "No rate on file for this room type — leave empty and it prices at zero",
+                            : "No rate on file for this room type — leave empty and it prices at zero") +
+                          (RATE_META[col].meal
+                            ? ". Below: covers × nights · stay amount (children priced by age band)"
+                            : sub
+                              ? ". Below: the stay amount this rate produces"
+                              : ""),
                       });
                     })}
-                  <td />
+                  {ratesOpen && preview ? (
+                    <td
+                      className="rowtot"
+                      title="This room's stay total including service charge & GST — priced by the backend"
+                    >
+                      {fmtNu(pvByRoom.get(id)?.total)}
+                    </td>
+                  ) : (
+                    <td />
+                  )}
                 </tr>
               );
             })}
@@ -1095,12 +1260,66 @@ export function RoomCompositionsTable({
                 </>
               )}
               <td colSpan={3} />
-              {ratesOpen && <td colSpan={5} />}
-              <td />
+              {/* Column money totals (2026-08-07, operator request): each rate column's whole-stay
+                  total across every room — net of tax, straight from the live preview; the corner
+                  carries the tax-inclusive grand total. Never summed here. */}
+              {ratesOpen &&
+                rateCols.map((c) => (
+                  <td
+                    key={c}
+                    className="money"
+                    title={`${RATE_META[c].th} — whole-stay total across all rooms, before service charge & GST`}
+                  >
+                    {preview
+                      ? fmtNu(
+                          c === "rRoom"
+                            ? preview.columns.room
+                            : c === "rBed"
+                              ? preview.columns.extraBed
+                              : c === "rBf"
+                                ? preview.columns.breakfast
+                                : c === "rLu"
+                                  ? preview.columns.lunch
+                                  : preview.columns.dinner,
+                        )
+                      : "—"}
+                  </td>
+                ))}
+              {ratesOpen && preview ? (
+                <td className="rowtot" title="Grand total including service charge & GST">
+                  {fmtNu(preview.grandTotal)}
+                </td>
+              ) : (
+                <td />
+              )}
             </tr>
           </tfoot>
         </table>
       </div>
+
+      {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
+          carry — net, taxes, grand total, and the discount's effect when one is set. */}
+      {ratesOpen && preview && (
+        <div className="rct-live">
+          <span className="k">Live total</span>
+          <span>Net {fmtNu(preview.subtotal)}</span>
+          <span>+ SC {fmtNu(preview.serviceCharge)}</span>
+          <span>+ GST {fmtNu(preview.gst)}</span>
+          <b>
+            = {preview.currency} {fmtNu(preview.grandTotal)}
+          </b>
+          {preview.discount && (
+            <span className="disc">
+              − {fmtNu(preview.discount.amountOffTotal)} discount →{" "}
+              <b>
+                {preview.currency} {fmtNu(preview.payable)}
+              </b>
+            </span>
+          )}
+          <span className="ln" />
+          <span className="src">priced by the backend — the quote will match</span>
+        </div>
+      )}
 
       {sealedRoomIds.some((id) => {
         const r = rows[id] ?? EMPTY_ROW;
@@ -1115,9 +1334,11 @@ export function RoomCompositionsTable({
           update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band
           (under-6 free, 6–10 at the child share), so children SHOULD be counted on the plans. */}
       <p className="rce-hint">
-        Occ is derived from the guest columns · arrow keys / Enter move between cells · totals are priced
-        by the backend on create. Count children on the meal plans — child pricing applies automatically
-        (under-6 free, 6–10 at the child rate).
+        Occ is derived from the guest columns · arrow keys / Enter move between cells · every figure is
+        priced by the backend. Rate columns follow the meal plans in use — no plan (EP) negotiates room
+        &amp; bed only, and a meal&rsquo;s rate unlocks per room once its plan includes that meal. Count
+        children on the meal plans — child pricing applies automatically (under-6 free, 6–10 at the
+        child rate).
       </p>
     </div>
   );

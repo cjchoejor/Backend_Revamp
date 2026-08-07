@@ -53,6 +53,89 @@ export type RoomNightMealOverrideInput = {
   othersDinnerPax?: number;
 };
 
+/** One room's line in the live pricing preview — every figure priced by the backend. */
+export type QuotationLivePreviewRoom = {
+  roomId: string;
+  roomNumber: string | null;
+  nights: number;
+  /** Rates actually used — the negotiated one where set, else the resolved default. */
+  roomRate: number;
+  extraBedRate: number;
+  breakfastRate: number;
+  lunchRate: number;
+  dinnerRate: number;
+  extraBedCount: number;
+  /** Meal covers per night (what `heads × rate` multiplies). */
+  breakfastPax: number;
+  lunchPax: number;
+  dinnerPax: number;
+  /** Whole-stay money per column, net of tax. */
+  roomSubtotal: number;
+  extraBedSubtotal: number;
+  mealsSubtotal: number;
+  breakfastSubtotal: number;
+  lunchSubtotal: number;
+  dinnerSubtotal: number;
+  subtotal: number;
+  serviceCharge: number;
+  gst: number;
+  /** Tax-inclusive total for this room, before any booking discount. */
+  total: number;
+  isFoc: boolean;
+  /** True when per-date meal plans mean this room's meals are not one multiplication. */
+  hasNightMealOverrides: boolean;
+};
+
+/** `POST /api/entries/:id/quotation-preview` — the quote's own arithmetic, nothing persisted. */
+export type QuotationLivePreview = {
+  entryId: string;
+  currency: string;
+  nights: number | null;
+  gstRate: number;
+  serviceChargeRate: number;
+  rooms: QuotationLivePreviewRoom[];
+  /** Per-column stay totals across every room (net of tax) — the Σ row under the rate columns. */
+  columns: { room: number; extraBed: number; breakfast: number; lunch: number; dinner: number; meals: number };
+  subtotal: number;
+  serviceCharge: number;
+  gst: number;
+  grandTotal: number;
+  discount: {
+    requestedPercent: number | null;
+    requestedAmount: number | null;
+    amountOffTotal: number;
+    effectivePercent: number;
+    netReduction: number;
+  } | null;
+  payableSubtotal: number;
+  payableServiceCharge: number;
+  payableGst: number;
+  /** What the guest pays. */
+  payable: number;
+};
+
+/**
+ * Live pricing for the composition table (2026-08-04 backend, first consumed 2026-08-07). The
+ * desk may not compute money, so per-cell `heads × rate` figures, column totals and the running
+ * grand total all come from here. POST because the compositions being priced are the editor's
+ * unsaved state; the backend writes nothing.
+ */
+export async function previewQuotationPricing(
+  session: Session,
+  entryId: string,
+  body: {
+    roomCompositions: RoomCompositionInput[];
+    /** Percent or flat amount off the grand total — at most one. */
+    discount?: { percent?: number | null; amount?: number | null } | null;
+  },
+) {
+  return apiRequest<QuotationLivePreview>(`/api/entries/${entryId}/quotation-preview`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
 export async function createQuotation(
   session: Session,
   entryId: string,
