@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { InvoiceState, InvoiceType, PaymentDirection, Prisma, Stage } from "@prisma/client";
+import { InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Prisma, Stage, TaskStatus } from "@prisma/client";
 import { MissingConfigurationError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -43,6 +44,56 @@ export function resolveOperatorAdvanceRequirement(
     return null;
   }
   return Number(folio.advanceRequiredAmount.toString());
+}
+
+// ─── Advance payment plan (2026-08-07) ─────────────────────────────────────────────────────
+// What the guest SAID about paying the advance, captured with their answer to the proforma:
+// the whole amount at once, part now with the rest later, or in installments — and when the
+// remainder is coming (a dated promise before check-in, at check-in, or at check-out).
+// Advisory facts: the S5/S6 gates still run on money received + credit extension. The plan
+// drives the W38 promise timer and the settlement surfaces at S4–S8, and tells the desk which
+// credit-extension expiry to suggest for the uncovered remainder.
+
+export type AdvancePaymentPlanKind = "FULL" | "PARTIAL" | "INSTALLMENTS";
+export type AdvanceBalanceDueAt = "BEFORE_CHECKIN" | "AT_CHECKIN" | "AT_CHECKOUT";
+
+export type AdvancePaymentPlan = {
+  plan: AdvancePaymentPlanKind;
+  balanceDueAt: AdvanceBalanceDueAt | null;
+  promisedBy: string | null;
+  note: string | null;
+  setBy: string;
+  setAt: string;
+};
+
+/**
+ * The guest's payment plan, scoped to the CURRENT segment — same `setAt` scoping as the
+ * operator-pinned requirement above: a plan recorded in a sealed segment described a deal
+ * that segment superseded, so it does not carry across a re-entry.
+ */
+export function resolveAdvancePaymentPlan(
+  folio: { advancePaymentPlan: unknown },
+  currentSegmentStartedAt: Date | null | undefined,
+): AdvancePaymentPlan | null {
+  const raw = folio.advancePaymentPlan as Partial<AdvancePaymentPlan> | null;
+  if (!raw || typeof raw !== "object" || typeof raw.plan !== "string") return null;
+  const setAt = typeof raw.setAt === "string" ? new Date(raw.setAt) : null;
+  if (
+    setAt &&
+    Number.isFinite(setAt.getTime()) &&
+    currentSegmentStartedAt &&
+    setAt.getTime() < currentSegmentStartedAt.getTime()
+  ) {
+    return null;
+  }
+  return {
+    plan: raw.plan as AdvancePaymentPlanKind,
+    balanceDueAt: (raw.balanceDueAt as AdvanceBalanceDueAt | undefined) ?? null,
+    promisedBy: typeof raw.promisedBy === "string" ? raw.promisedBy : null,
+    note: typeof raw.note === "string" ? raw.note : null,
+    setBy: typeof raw.setBy === "string" ? raw.setBy : "",
+    setAt: typeof raw.setAt === "string" ? raw.setAt : "",
+  };
 }
 
 async function computeAdvancePaymentEvaluation(
@@ -143,6 +194,35 @@ async function computeAdvancePaymentEvaluation(
   const satisfied = creditExtensionActive
     || (Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0));
   const shortfallDec = Number.isFinite(requiredAmount) ? maxZeroSub(requiredAmountDec, totalReceivedDec) : toDecimal(0);
+  // Money alone — `satisfied` can be true on a credit extension while the guest still owes the
+  // remainder; `paidInFull` is the fact the promise timer and the settlement ticks care about.
+  const paidInFull = Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0);
+
+  // The guest's stated payment plan (2026-08-07), segment-scoped like the requirement pin.
+  // `promiseOverdue` is a read-time fact — the W38 worker traces the lapse, but the desk's red
+  // chip must not depend on workers running.
+  const plan = resolveAdvancePaymentPlan(folio, entry?.segments?.[0]?.startedAt ?? null);
+  const promisedByDate = plan?.promisedBy ? new Date(plan.promisedBy) : null;
+  const promiseOverdue =
+    !!plan &&
+    plan.balanceDueAt === "BEFORE_CHECKIN" &&
+    !!promisedByDate &&
+    Number.isFinite(promisedByDate.getTime()) &&
+    promisedByDate.getTime() <= Date.now() &&
+    !paidInFull;
+
+  // Each payment the guest has made so far, oldest first — the installment history the desk
+  // shows. Stage tells the story ("2,000 at Set up, 1,500 at Check-in").
+  const installments = inPayments
+    .slice()
+    .sort((a, b) => new Date(a.receivedAt as any).getTime() - new Date(b.receivedAt as any).getTime())
+    .map((p) => ({
+      id: p.id,
+      amount: Number(toDecimal(p.amount as unknown as string).toFixed(2)),
+      receivedAt: p.receivedAt instanceof Date ? p.receivedAt.toISOString() : String(p.receivedAt),
+      stage: (p as any).stage ?? null,
+      notes: (p as any).notes ?? null,
+    }));
 
   // Window facts. `active` = the clock is running (bill went out, money still due, deadline
   // ahead); `overdue` = check-in date passed with the advance still unmet. A satisfied
@@ -160,6 +240,13 @@ async function computeAdvancePaymentEvaluation(
     totalReceived: Number(totalReceivedDec.toFixed(2)),
     requiredAmount: Number(requiredAmountDec.toFixed(2)),
     shortfall: Number(shortfallDec.toFixed(2)),
+    // Money alone (credit extension NOT counted) — what the settlement surfaces + W38 check.
+    paidInFull,
+    // What the guest said about paying (FULL / PARTIAL / INSTALLMENTS + when the rest comes),
+    // with the read-time promise-overdue fact. Null when nothing recorded this segment.
+    paymentPlan: plan ? { ...plan, promiseOverdue } : null,
+    // Every payment so far, oldest first — the installment history.
+    installments,
     creditExtensionActive,
     ceilingAmount: credit ? Number(credit.ceilingAmount.toString()) : null,
     // Expiry facts so the desk can show the credit-extension countdown honestly. `Expired`
@@ -388,6 +475,237 @@ export async function setAdvanceRequirement(
   });
 }
 
+/** Stages where the advance can still be planned/collected — S3 (setup) through S6 (check-in);
+ *  from S7 the folio is LIVE and money flows through in-stay charges / S8 settlement. */
+const ADVANCE_COLLECTION_STAGES: ReadonlySet<Stage> = new Set([Stage.S3, Stage.S4, Stage.S5, Stage.S6]);
+
+/** Mirror of `cancelScheduledAdvancePaymentFollowUpForEntry` for the W38 promise deadline. */
+export async function cancelScheduledAdvancePromiseDeadlinesForEntry(
+  tx: Prisma.TransactionClient,
+  entryId: string,
+  cancelledBy: string,
+  reason: string,
+) {
+  const now = new Date();
+  const timers = await tx.timerRecord.findMany({
+    where: { entryId, timerType: "ADVANCE_PROMISE_DEADLINE_W38", status: "SCHEDULED" },
+    select: { id: true, pgBossJobId: true },
+  });
+  if (timers.length === 0) return { cancelled: 0 } as const;
+  const engine = await getTimerEngine();
+  await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+  await tx.timerRecord.updateMany({
+    where: { id: { in: timers.map((t) => t.id) } },
+    data: { status: "CANCELLED", cancelledAt: now, cancelledBy, cancelledReason: reason },
+  });
+  return { cancelled: timers.length } as const;
+}
+
+/**
+ * Once the advance is genuinely settled (or FOM explicitly reconciled it), the S5 handoff's
+ * "Payment reconciliation" tick should not sit PENDING waiting for someone to notice — flip it
+ * COMPLETE with a trace saying why. No-op when the task doesn't exist yet (tasks are seeded at
+ * S4 confirmation) or was already worked.
+ */
+export async function autoCompletePaymentReconciliationTaskTx(
+  tx: Prisma.TransactionClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  cause: "ADVANCE_PAID_IN_FULL" | "ADVANCE_RECONCILED",
+) {
+  const now = new Date();
+  const pending = await tx.preArrivalTask.findFirst({
+    where: { entryId, taskType: PreArrivalTaskType.PAYMENT_RECONCILIATION, status: TaskStatus.PENDING },
+    select: { id: true },
+  });
+  if (!pending) return { completed: false } as const;
+  await tx.preArrivalTask.update({
+    where: { id: pending.id },
+    data: { status: TaskStatus.COMPLETE, completedAt: now, completedBy: actor.actorId },
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "PRE_ARRIVAL_TASK.COMPLETED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "PreArrivalTask",
+      entityId: pending.id,
+      operation: "UPDATE",
+      timestamp: now,
+      entryId,
+      payload: { entryId, taskType: "PAYMENT_RECONCILIATION", auto: true, cause },
+      createdBy: actor.actorId,
+    },
+  });
+  return { completed: true } as const;
+}
+
+/**
+ * Record what the guest SAID about paying the advance (2026-08-07), captured alongside their
+ * answer to the proforma: FULL (the whole amount at once), PARTIAL (part now, rest later) or
+ * INSTALLMENTS (several payments) — and for the non-full plans, WHEN the remainder is coming:
+ *
+ *  - BEFORE_CHECKIN + a `promisedBy` date → a real W38 deadline timer is armed; if the money
+ *    hasn't arrived by then the lapse is traced and the desk shows the promise overdue.
+ *  - AT_CHECKIN / AT_CHECKOUT → no timer. The S5/S6 arrival gates (check-in) and the S8
+ *    settlement (check-out) are the enforcement teeth there — the plan tells the desk which
+ *    surface should collect, and which credit-extension expiry to suggest for the gap.
+ *
+ * Advisory, deliberately NOT a gate: the booking still needs the money or an FOM credit
+ * extension to pass S5/S6, exactly as before. CLEAR wipes the plan (guest changed their mind).
+ * Segment-scoped by `setAt` — a re-entry starts with no plan.
+ */
+export async function setAdvancePaymentPlan(
+  prisma: PrismaClient,
+  input: {
+    entryId: string;
+    folioId: string;
+    plan: AdvancePaymentPlanKind | "CLEAR";
+    balanceDueAt?: AdvanceBalanceDueAt | null;
+    promisedBy?: string | Date | null;
+    note?: string | null;
+  },
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+) {
+  const folio = await prisma.folio.findUnique({ where: { id: input.folioId } });
+  if (!folio) throw new ValidationError("folioId invalid");
+  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+
+  const entry = await prisma.entry.findUnique({
+    where: { id: input.entryId },
+    select: { id: true, status: true, currentStage: true, checkInDate: true },
+  });
+  if (!entry) throw new ValidationError("entryId invalid");
+  if (entry.status !== "ACTIVE") {
+    throw new ValidationError("The payment plan can only be recorded on an active booking");
+  }
+  if (!ADVANCE_COLLECTION_STAGES.has(entry.currentStage)) {
+    throw new ValidationError(
+      "The advance payment plan applies between setup and check-in (S3–S6) — from the stay onward money flows through the folio",
+    );
+  }
+
+  const now = new Date();
+  let stored: AdvancePaymentPlan | null = null;
+
+  if (input.plan !== "CLEAR") {
+    const balanceDueAt = input.balanceDueAt ?? null;
+    let promisedByIso: string | null = null;
+
+    if (input.plan === "FULL") {
+      if (balanceDueAt || input.promisedBy) {
+        throw new ValidationError("A full-payment plan carries no remainder — leave the timing fields empty");
+      }
+    } else {
+      if (!balanceDueAt) {
+        throw new ValidationError("Say when the remainder is coming: before check-in, at check-in, or at check-out");
+      }
+      if (balanceDueAt === "BEFORE_CHECKIN") {
+        if (!input.promisedBy) {
+          throw new ValidationError("A before-check-in promise needs the date the guest gave");
+        }
+        const promised = input.promisedBy instanceof Date ? input.promisedBy : new Date(input.promisedBy);
+        if (!Number.isFinite(promised.getTime())) throw new ValidationError("promisedBy is not a valid date");
+        if (promised.getTime() <= now.getTime()) {
+          throw new ValidationError("The promised date is already in the past — pick a future date");
+        }
+        // The advance window closes at check-in; a promise beyond it means "before check-in"
+        // in name only. Clamp rather than reject — the guest's words were "before check-in".
+        // A check-in already in the past makes the whole framing impossible (the clamp would
+        // land in the past and the timer would fire immediately) — refuse with the right
+        // alternatives instead.
+        const checkIn = entry.checkInDate ?? null;
+        if (checkIn && checkIn.getTime() <= now.getTime()) {
+          throw new ValidationError(
+            "Check-in has already arrived — record the remainder as due at the check-in desk or at check-out instead",
+          );
+        }
+        const clamped = checkIn && promised.getTime() > checkIn.getTime() ? checkIn : promised;
+        promisedByIso = clamped.toISOString();
+      } else if (input.promisedBy) {
+        throw new ValidationError("At-check-in / at-check-out plans don't take a date — the stage itself is the deadline");
+      }
+    }
+
+    stored = {
+      plan: input.plan,
+      balanceDueAt,
+      promisedBy: promisedByIso,
+      note: input.note?.trim() || null,
+      setBy: actor.actorId,
+      setAt: now.toISOString(),
+    };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.folio.update({
+      where: { id: input.folioId },
+      data: { advancePaymentPlan: stored === null ? Prisma.DbNull : (stored as any) },
+    });
+
+    // One live promise clock at most: whatever was armed before this plan is superseded by it.
+    await cancelScheduledAdvancePromiseDeadlinesForEntry(
+      tx,
+      input.entryId,
+      actor.actorId,
+      stored ? "PLAN_REPLACED" : "PLAN_CLEARED",
+    );
+
+    if (stored?.balanceDueAt === "BEFORE_CHECKIN" && stored.promisedBy) {
+      const firesAt = new Date(stored.promisedBy);
+      const timerRecordId = randomUUID();
+      const engine = await getTimerEngine();
+      const jobId = await engine.schedule(
+        "ADVANCE_PROMISE_DEADLINE_W38",
+        { entryId: input.entryId, folioId: input.folioId, timerRecordId },
+        { startAfter: firesAt },
+      );
+      await tx.timerRecord.create({
+        data: {
+          id: timerRecordId,
+          entryId: input.entryId,
+          entityType: "Folio",
+          entityId: input.folioId,
+          timerType: "ADVANCE_PROMISE_DEADLINE_W38",
+          timerCode: "ADVANCE_PROMISE_DEADLINE_W38",
+          stageContext: entry.currentStage,
+          firesAt,
+          dueAt: firesAt,
+          status: "SCHEDULED",
+          payload: { entryId: input.entryId, folioId: input.folioId, promisedBy: stored.promisedBy },
+          pgBossJobId: jobId,
+          createdBy: actor.actorId,
+        },
+      });
+    }
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: stored ? "ADVANCE_PAYMENT.PLAN_RECORDED" : "ADVANCE_PAYMENT.PLAN_CLEARED",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel,
+        entityType: "Folio",
+        entityId: input.folioId,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        entryId: input.entryId,
+        payload: {
+          entryId: input.entryId,
+          folioId: input.folioId,
+          plan: stored?.plan ?? null,
+          balanceDueAt: stored?.balanceDueAt ?? null,
+          promisedBy: stored?.promisedBy ?? null,
+          note: stored?.note ?? null,
+        },
+        createdBy: actor.actorId,
+      },
+    });
+
+    return { folio: updated, plan: stored };
+  });
+}
+
 export async function evaluateAdvancePaymentCondition(
   prisma: PrismaClient,
   input: { entryId: string; folioId: string; now?: Date },
@@ -472,7 +790,16 @@ export async function recommendCreditCeilingForEntry(
 
 export async function recordCreditExtensionApproval(
   prisma: PrismaClient,
-  input: { entryId: string; folioId: string; ceilingAmount: number; reason: string; validForHours?: number | null },
+  input: {
+    entryId: string;
+    folioId: string;
+    ceilingAmount: number;
+    reason: string;
+    validForHours?: number | null;
+    /** Absolute expiry (2026-08-07) — lets the desk align the extension with the guest's
+     *  promise ("covered until the check-in date"). Wins over validForHours when both given. */
+    validUntil?: string | Date | null;
+  },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ) {
   enforceCreditExtensionConstraints({ actorLevel: actor.actorLevel, ceilingAmount: input.ceilingAmount, reason: input.reason });
@@ -480,10 +807,15 @@ export async function recordCreditExtensionApproval(
   const now = new Date();
   // Optional time limit (2026-08-01): the extension satisfies the advance condition only
   // until this instant — enforced at read time in the payment evaluation. Null = open-ended.
-  const expiresAt =
-    input.validForHours != null && Number.isFinite(input.validForHours) && input.validForHours > 0
-      ? new Date(now.getTime() + input.validForHours * 3_600_000)
-      : null;
+  let expiresAt: Date | null = null;
+  if (input.validUntil != null) {
+    const parsed = input.validUntil instanceof Date ? input.validUntil : new Date(input.validUntil);
+    if (!Number.isFinite(parsed.getTime())) throw new ValidationError("validUntil is not a valid date");
+    if (parsed.getTime() <= now.getTime()) throw new ValidationError("validUntil is already in the past");
+    expiresAt = parsed;
+  } else if (input.validForHours != null && Number.isFinite(input.validForHours) && input.validForHours > 0) {
+    expiresAt = new Date(now.getTime() + input.validForHours * 3_600_000);
+  }
 
   return prisma.$transaction(async (tx) => {
     // Pre-allocate a readable ID; if upsert hits the update path it's discarded harmlessly.
@@ -577,6 +909,10 @@ export async function markAdvancePaymentReconciled(
     });
 
     await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actor.actorId, "ADVANCE_PAYMENT_RECONCILED");
+
+    // Reconciling IS the settlement decision — the S5 handoff's "Payment reconciliation" tick
+    // must not sit PENDING after it (2026-08-07).
+    await autoCompletePaymentReconciliationTaskTx(tx, input.entryId, actor, "ADVANCE_RECONCILED");
 
     await recomputeFolioOutstandingBalance(tx, input.folioId);
 

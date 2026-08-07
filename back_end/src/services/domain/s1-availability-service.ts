@@ -123,6 +123,9 @@ export async function runAvailabilityEngineForEntry(
           select: {
             ...contactSelect,
             ...reservedEntryRoomsSelect,
+            // Confirmed with the advance still short (2026-08-07) — surfaces the booking as
+            // "Held · payment pending" instead of fully Reserved. Blocks identically.
+            reservationPaymentPending: true,
           },
         },
       },
@@ -270,6 +273,9 @@ export async function runAvailabilityEngineForEntry(
       startDate: r.frozenCheckInDate,
       endDate: r.frozenCheckOutDate,
       source: "RESERVED" as const,
+      // Confirmed while the advance was still short — the desk labels these nights
+      // "Held · payment pending" rather than "Reserved". Same block either way.
+      paymentPending: (r.entry as { reservationPaymentPending?: boolean } | null)?.reservationPaymentPending === true,
       entryId: r.entryId,
       entryReferenceNumber: r.entry?.inquiryId ?? null,
       ...contextFromEntry(r.entry),

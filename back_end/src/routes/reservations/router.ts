@@ -83,6 +83,15 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
           next(new ValidationError("This booking is parked — resume it before activating pre-arrival."));
           return;
         }
+        if (activation.reason === "VOUCHER_ANSWER_MISSING") {
+          const detail = (activation as unknown as { detail?: { message?: string } }).detail;
+          next(
+            new ValidationError(
+              detail?.message ?? "Record the guest's answer to the confirmation voucher before opening Arrival.",
+            ),
+          );
+          return;
+        }
         next(new ValidationError(`Pre-arrival activation could not run: ${activation.reason ?? "unknown"}`));
         return;
       }
@@ -115,6 +124,24 @@ reservationsRouter.post("/entries/:id/confirm", requireActorLevel("L1"), validat
   try {
     const out = await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, req.body);
     res.json({ reservation: out.reservation, entry: out.entry });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Manual voucher re-send (2026-08-07, operator request): email the confirmation voucher (PDF
+ * attached) to the guest again — or to a corrected address. Creates a fresh tracked
+ * CONFIRMATION_VOUCHER communication and re-arms the W22 reply window (the prior one is
+ * cancelled so exactly one countdown is live).
+ */
+reservationsRouter.post("/reservations/:id/confirmation-voucher/send", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const dispatchedTo = typeof req.body?.dispatchedTo === "string" ? req.body.dispatchedTo : undefined;
+    const out = await reservationService.resendConfirmationVoucher(prisma, req.params.id, req.actor!.actorId, {
+      dispatchedTo,
+    });
+    res.json(out);
   } catch (e) {
     next(e);
   }

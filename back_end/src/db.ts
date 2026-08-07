@@ -22,7 +22,28 @@ const _ext = _base.$extends({
   name: "s6FolioVipGuards",
   query: {
     reservation: {
-      async update() {
+      async update({ args, query }) {
+        // Narrow carve-out (2026-08-07): the confirmation-voucher RENDER METADATA may be
+        // written onto an otherwise-immutable Reservation. These six fields are artifact
+        // bookkeeping (where the write-once PDF lives, its checksum, who rendered it) — not
+        // commercial terms; the frozen deal stays untouchable. Without this the voucher never
+        // generated at all: `generateOrLoadConfirmationVoucherPdf` rendered the PDF, then its
+        // reservation.update threw RESERVATION_IMMUTABLE and the whole call failed (traced as
+        // RESERVATION.CONFIRMATION_VOUCHER_PDF_RENDER_FAILED on every confirm since the
+        // per-segment immutability guard landed). Mirrors the invoice pattern, where p68
+        // allows dispatch metadata on a rendered invoice while the money fields stay frozen.
+        const VOUCHER_RENDER_FIELDS = new Set([
+          "confirmationVoucherStorageKey",
+          "confirmationVoucherChecksum",
+          "confirmationVoucherChecksumAlgo",
+          "confirmationVoucherRenderedAt",
+          "confirmationVoucherRenderedBy",
+          "confirmationVoucherInputSnapshot",
+        ]);
+        const keys = Object.keys((args.data ?? {}) as Record<string, unknown>);
+        if (keys.length > 0 && keys.every((k) => VOUCHER_RENDER_FIELDS.has(k))) {
+          return query(args);
+        }
         throwReservationMutationForbidden();
       },
       async updateMany() {

@@ -129,7 +129,12 @@ async function runBackflow(
   // pre-arrival) are moot there — segment-scoped acknowledgement means they no longer gate or
   // inform anything, and a stale voucher countdown was surfacing on the desk at S3. Late
   // answers can still be captured (p52 allows it); only the ticking window dies.
-  const timerCodesToCancel = Array.from(new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22"]));
+  // ADVANCE_PROMISE_DEADLINE_W38 likewise (2026-08-07): the guest's payment promise answered
+  // THIS segment's proforma — the plan is segment-scoped by setAt, so its clock dies with the
+  // segment (the W38 worker also skips stale-segment fires as defence in depth).
+  const timerCodesToCancel = Array.from(
+    new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22", "ADVANCE_PROMISE_DEADLINE_W38"]),
+  );
   await cancelEntryTimersByCode(prisma, {
     entryId: entry.id,
     timerCodes: timerCodesToCancel,

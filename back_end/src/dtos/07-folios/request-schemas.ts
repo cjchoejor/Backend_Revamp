@@ -26,20 +26,51 @@ export const advancePaymentReconcileRequestSchema = z.object({
 });
 export type AdvancePaymentReconcileRequestDto = z.infer<typeof advancePaymentReconcileRequestSchema>;
 
-export const recordCreditExtensionRequestSchema = z.object({
-  ceilingAmount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "ceilingAmount must be positive"),
-  reason: z.string().min(1),
-  /**
-   * Optional time limit (2026-08-01): the extension stops satisfying the advance-payment
-   * condition this many hours after approval. Omit/null = no expiry.
-   */
-  validForHours: z.coerce
-    .number()
-    .refine((n) => Number.isFinite(n) && n > 0, "validForHours must be positive")
-    .optional()
-    .nullable(),
-});
+export const recordCreditExtensionRequestSchema = z
+  .object({
+    ceilingAmount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "ceilingAmount must be positive"),
+    reason: z.string().min(1),
+    /**
+     * Optional time limit (2026-08-01): the extension stops satisfying the advance-payment
+     * condition this many hours after approval. Omit/null = no expiry.
+     */
+    validForHours: z.coerce
+      .number()
+      .refine((n) => Number.isFinite(n) && n > 0, "validForHours must be positive")
+      .optional()
+      .nullable(),
+    /**
+     * Absolute expiry (2026-08-07) — lets the desk align the extension's clock with the
+     * guest's payment promise (promised date / check-in / check-out). Wins over validForHours.
+     */
+    validUntil: z.string().datetime({ offset: true }).optional().nullable(),
+  })
+  .refine((b) => !(b.validForHours != null && b.validUntil != null), {
+    message: "Give validForHours or validUntil, not both",
+  });
 export type RecordCreditExtensionRequestDto = z.infer<typeof recordCreditExtensionRequestSchema>;
+
+/**
+ * The guest's stated advance payment plan (2026-08-07), captured with their answer to the
+ * proforma: FULL (whole amount at once), PARTIAL (part now, rest later), INSTALLMENTS
+ * (several payments) — plus WHEN the remainder is coming. BEFORE_CHECKIN carries the promised
+ * date and arms the W38 deadline timer; AT_CHECKIN / AT_CHECKOUT need no date (the stage is
+ * the deadline). CLEAR wipes the plan.
+ */
+export const setAdvancePaymentPlanRequestSchema = z
+  .object({
+    plan: z.enum(["FULL", "PARTIAL", "INSTALLMENTS", "CLEAR"]),
+    balanceDueAt: z.enum(["BEFORE_CHECKIN", "AT_CHECKIN", "AT_CHECKOUT"]).optional().nullable(),
+    promisedBy: z.string().datetime({ offset: true }).optional().nullable(),
+    note: z.string().max(500).optional().nullable(),
+  })
+  .refine((b) => (b.plan === "PARTIAL" || b.plan === "INSTALLMENTS" ? b.balanceDueAt != null : true), {
+    message: "Say when the remainder is coming: before check-in, at check-in, or at check-out",
+  })
+  .refine((b) => (b.balanceDueAt === "BEFORE_CHECKIN" ? b.promisedBy != null : true), {
+    message: "A before-check-in promise needs the date the guest gave",
+  });
+export type SetAdvancePaymentPlanRequestDto = z.infer<typeof setAdvancePaymentPlanRequestSchema>;
 
 /**
  * Operator-set advance requirement (2026-08-01): how much the guest has to pay before the

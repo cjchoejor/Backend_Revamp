@@ -66,6 +66,38 @@ export async function runPreArrivalWindowActivationWorker(
   });
   if (alreadyFired) return { skipped: true, reason: "ALREADY_FIRED" } as const;
 
+  // The guest's answer to the CONFIRMATION VOUCHER must be on record before the booking moves
+  // to pre-arrival (2026-08-07, operator ruling — extends the proforma answer-before-freeze
+  // rule one stage up): the voucher went out at confirmation asking "is this booking right?",
+  // and arrival prep starts on a yes. Segment-scoped like every communication gate; OTA
+  // bookings auto-acknowledge at dispatch and pass. TIMED_OUT does not satisfy — capture the
+  // late answer (p52 allows it), then activate. Skip (not throw): this is also the automatic
+  // W4 path, and pg-boss must not retry-and-fail forever; the manual /activate-pre-arrival
+  // route surfaces the message.
+  const voucherComm = await prisma.communicationRecord.findFirst({
+    where: {
+      entryId,
+      commType: "CONFIRMATION_VOUCHER",
+      direction: "OUTBOUND",
+      sendStatus: "DISPATCHED",
+      ...(activationSince ? { createdAt: { gte: activationSince } } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    select: { acknowledgementStatus: true },
+  });
+  if (!voucherComm || voucherComm.acknowledgementStatus !== "RECEIVED") {
+    return {
+      skipped: true,
+      reason: "VOUCHER_ANSWER_MISSING",
+      detail: {
+        voucherDispatched: !!voucherComm,
+        message: !voucherComm
+          ? "The confirmation voucher hasn't been sent this segment — send it to the guest, record their answer, then open Arrival."
+          : "Record the guest's answer to the confirmation voucher first — the voucher went out at confirmation; their reply (verbal or written) is captured on the Confirm step.",
+      },
+    } as const;
+  }
+
   const s4Dwell = await prisma.stageDwellRecord.findFirst({ where: { entryId, stage: Stage.S4, exitedAt: null }, orderBy: { enteredAt: "desc" } });
   // Policy registry override: admin-editable `registry.noShow.graceMinutes` row takes precedence
   // over the legacy `noShow.cutoffWindowMinutes` ConfigurationEntry. Set `enabled: false` on the

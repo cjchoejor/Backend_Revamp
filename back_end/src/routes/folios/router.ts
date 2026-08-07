@@ -13,6 +13,7 @@ import {
   reassignFolioLinesBulkRequestSchema,
   recordCreditExtensionRequestSchema,
   recordFolioPaymentRequestSchema,
+  setAdvancePaymentPlanRequestSchema,
   setAdvanceRequirementRequestSchema,
   recordInvoicePaymentEventRequestSchema,
   updateBillingModelDefaultsRequestSchema,
@@ -105,10 +106,10 @@ foliosRouter.post("/entries/:id/credit-extension", requireActorLevel("L2"), vali
       next(new NotFoundError("Entry/folio"));
       return;
     }
-    const { ceilingAmount, reason, validForHours } = req.body;
+    const { ceilingAmount, reason, validForHours, validUntil } = req.body;
     const out = await s3PaymentService.recordCreditExtensionApproval(
       prisma,
-      { entryId: entry.id, folioId: entry.folio.id, ceilingAmount, reason, validForHours },
+      { entryId: entry.id, folioId: entry.folio.id, ceilingAmount, reason, validForHours, validUntil },
       { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
     );
     res.status(201).json(out);
@@ -116,6 +117,37 @@ foliosRouter.post("/entries/:id/credit-extension", requireActorLevel("L2"), vali
     next(e);
   }
 });
+
+/**
+ * The guest's advance payment plan (2026-08-07): what they said about paying — full / partial /
+ * installments — and when the remainder is coming. BEFORE_CHECKIN arms the W38 promise timer.
+ * Advisory (the S5/S6 gates still need money or a credit extension); returns the fresh
+ * payment-status so the desk renders the plan without a second round-trip.
+ */
+foliosRouter.post(
+  "/entries/:id/advance-payment-plan",
+  requireActorLevel("L1"),
+  validateBody(setAdvancePaymentPlanRequestSchema),
+  async (req, res, next) => {
+    try {
+      const entry = await prisma.entry.findUnique({ where: { id: req.params.id }, include: { folio: true } });
+      if (!entry || !entry.folio) {
+        next(new NotFoundError("Entry/folio"));
+        return;
+      }
+      const { plan, balanceDueAt, promisedBy, note } = req.body;
+      await s3PaymentService.setAdvancePaymentPlan(
+        prisma,
+        { entryId: entry.id, folioId: entry.folio.id, plan, balanceDueAt, promisedBy, note },
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      );
+      const status = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
+      res.json(status);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /**
  * Operator-set advance requirement (2026-08-01): pin how much the guest must pay before the

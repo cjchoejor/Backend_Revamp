@@ -19,6 +19,7 @@ import { type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import {
   buildStorageKey,
+  documentExists,
   hashSha256,
   readDocument,
   writeDocument,
@@ -207,14 +208,23 @@ export async function generateOrLoadConfirmationVoucherPdf(
     tariffVersion: "T1.0",
   });
 
-  const bytes = await renderHtmlToPdf(html, { fitToPage: true });
-  const checksum = hashSha256(bytes);
+  let bytes = await renderHtmlToPdf(html, { fitToPage: true });
   const storageKey = buildStorageKey(
     "confirmation-voucher",
     `${entry.inquiryId}-v${1}`, // Reservation has no versionNumber; increment via reservation.confirmedAt-tied version later.
     now,
   );
-  await writeDocument(storageKey, bytes);
+  // Orphan adoption (2026-08-07): before the immutability carve-out in db.ts, every voucher
+  // render wrote its PDF to storage and THEN failed on the reservation.update — leaving a
+  // write-once file with no DB pointer. The key is deterministic, so a retry would collide.
+  // The reservation is immutable, so the orphan was rendered from the same data: adopt it as
+  // the artifact rather than failing on the write-once guard.
+  if (await documentExists(storageKey)) {
+    bytes = await readDocument(storageKey);
+  } else {
+    await writeDocument(storageKey, bytes);
+  }
+  const checksum = hashSha256(bytes);
 
   await prisma.$transaction(async (tx) => {
     await tx.reservation.update({

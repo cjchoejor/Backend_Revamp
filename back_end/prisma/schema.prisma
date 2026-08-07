@@ -886,6 +886,12 @@ model Entry {
   /// otherwise). Business rule enforced backend-side, not just in the form.
   contactPersonName              String?
   contactPersonPhone             String?
+  /// Confirmed while the advance was still short of full payment with the remainder due
+  /// before/at check-in (2026-08-07, operator ruling): the rooms stay COMMITTED_HELD ("Held")
+  /// instead of flipping to CONFIRMED ("Reserved") — the same inventory block either way, only
+  /// the confidence label differs. Cleared (and rooms upgraded to Reserved) the moment the
+  /// advance reaches full payment; an AT_CHECKOUT plan confirms straight to Reserved.
+  reservationPaymentPending      Boolean           @default(false)
   parkedAt                       DateTime?
   parkedBy                       String?
   parkedIndividually             Boolean           @default(false)
@@ -1546,6 +1552,14 @@ model Folio {
   /// baseTotal, quotationId }` + `{ setBy, setAt }`. Display/audit only — the amount above
   /// is the operative value.
   advanceRequiredBasis  Json?
+
+  /// The guest's stated payment plan for the advance (2026-08-07): `{ plan: "FULL" |
+  /// "PARTIAL" | "INSTALLMENTS", balanceDueAt: "BEFORE_CHECKIN" | "AT_CHECKIN" |
+  /// "AT_CHECKOUT" | null, promisedBy: ISO | null, note, setBy, setAt }`. Advisory facts —
+  /// the S5/S6 gates still run on money received + credit extension; this records WHAT the
+  /// guest said and WHEN the remainder is coming, drives the promise timer (W38) and the
+  /// settlement surfaces at S4–S8. Segment-scoped by `setAt` like the requirement pin.
+  advancePaymentPlan    Json?
 
   entry                   Entry                          @relation(fields: [entryId], references: [id])
   payments                PaymentRecord[]

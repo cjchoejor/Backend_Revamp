@@ -176,6 +176,17 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
     );
   }
 
+  // Held-vs-Reserved by payment confidence (2026-08-07, operator ruling): the freeze happens
+  // either way (Reservation row, frozen terms, no TTL), but the ROOMS only earn the "Reserved"
+  // label when the money story is closed — advance paid in full, or the remainder is a
+  // sanctioned at-check-out deferral. Anything else (partial/installments due before or at
+  // check-in, or a credit-extension cover) keeps the rooms visibly "Held" until the money
+  // lands; `confirmHeldRoomsAfterFullPaymentTx` flips them the moment it does. The claims
+  // block other bookings identically in both states — this is confidence display + escalation,
+  // never a weaker block.
+  const reservationPaymentPending =
+    !advanceEvaluation.paidInFull && advanceEvaluation.paymentPlan?.balanceDueAt !== "AT_CHECKOUT";
+
   const result = await prisma.$transaction(async (tx) => {
     const now = new Date();
 
@@ -234,9 +245,46 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
       data: { id: reservationId, entryId, ...reservationData },
     });
     // Point the entry at the newly-confirmed reservation; prior reservations remain read-only history.
-    await tx.entry.update({ where: { id: entryId }, data: { currentReservationId: res.id } });
+    await tx.entry.update({
+      where: { id: entryId },
+      data: { currentReservationId: res.id, reservationPaymentPending },
+    });
 
-    await confirmCommittedHoldTx(tx, { entryId, holdId: hold.id, actorId, inquiryId: entry.inquiryId });
+    await confirmCommittedHoldTx(tx, {
+      entryId,
+      holdId: hold.id,
+      actorId,
+      inquiryId: entry.inquiryId,
+      paymentPending: reservationPaymentPending,
+    });
+
+    if (reservationPaymentPending) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "RESERVATION.ROOMS_HELD_PAYMENT_PENDING",
+          actorId,
+          actorLevel: "L1",
+          entityType: "Reservation",
+          entityId: res.id,
+          operation: "CREATE",
+          timestamp: now,
+          stageContext: Stage.S4,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: {
+            entryId,
+            reservationId: res.id,
+            shortfall: advanceEvaluation.shortfall,
+            totalReceived: advanceEvaluation.totalReceived,
+            requiredAmount: advanceEvaluation.requiredAmount,
+            balanceDueAt: advanceEvaluation.paymentPlan?.balanceDueAt ?? null,
+            promisedBy: advanceEvaluation.paymentPlan?.promisedBy ?? null,
+            creditExtensionActive: advanceEvaluation.creditExtensionActive,
+          },
+          createdBy: actorId,
+        },
+      });
+    }
 
     // AC-S4-005 test support: dev-only failpoint to assert atomic rollback (after hold confirm).
     const failpointEnabled = await requireActiveConfigValue<boolean>(tx as any, "dev.failpoints.enabled").catch(() => false);
@@ -422,5 +470,175 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   );
 
   return result;
+}
+
+/**
+ * Manual "Send to guest" for the confirmation voucher (2026-08-07, operator request).
+ *
+ * The voucher goes out automatically at confirmation — this covers the cases where that
+ * wasn't enough: the guest email was missing/wrong at freeze time, the send failed, or the
+ * guest simply asks for it again. Mirrors what confirmation does: a tracked
+ * CONFIRMATION_VOUCHER communication (fresh W22 acknowledgement window; prior voucher windows
+ * are cancelled so exactly one countdown is live), the same confirmation email body with the
+ * voucher PDF attached, and the RESERVATION_CONFIRMATION_EMAIL trace family.
+ */
+export async function resendConfirmationVoucher(
+  prisma: PrismaClient,
+  reservationId: string,
+  actorId: string,
+  input: { dispatchedTo?: string | null },
+) {
+  const reservation = await prisma.reservation.findUnique({
+    where: { id: reservationId },
+    include: {
+      entry: {
+        include: {
+          guestProfile: true,
+          folio: true,
+          quotations: { orderBy: { createdAt: "desc" } },
+          segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
+        },
+      },
+    },
+  });
+  if (!reservation) throw new NotFoundError("Reservation");
+  if (!reservation.confirmedAt) throw new ValidationError("This reservation was never confirmed — nothing to send");
+  const entry = reservation.entry;
+
+  const recipient = input.dispatchedTo?.trim() || entry.guestProfile?.email?.trim() || null;
+  if (!recipient) {
+    throw new ValidationError("No email address — enter one, or add it to the guest profile first");
+  }
+
+  // Same email body the confirmation sent, composed from the frozen snapshot.
+  const ciDate = reservation.frozenCheckInDate;
+  const coDate = reservation.frozenCheckOutDate;
+  const frozenRate = Number(reservation.frozenRate?.toString?.() ?? reservation.frozenRate ?? 0);
+  const nights = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400_000));
+  const segmentId = entry.segments[0]?.id ?? reservation.segmentId;
+  const operative = resolveOperativeQuotation(entry.quotations, segmentId);
+  const operativeTerms = (operative?.commercialTerms ?? null) as { currency?: string; roomCount?: number } | null;
+  const currency = operativeTerms?.currency ?? "BTN";
+  const displayName =
+    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  const bookingRoomCount = Math.max(1, Number(operativeTerms?.roomCount) || entry.numberOfRooms || 1);
+  const breakdown = await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount);
+  const isGroup = entry.groupBillingMode === "GROUP_MASTER";
+  const content = renderReservationConfirmationEmail({
+    guestDisplayName: displayName,
+    reservationReadableId: reservation.id,
+    checkInDate: ciDate,
+    checkOutDate: coDate,
+    guestCount: reservation.frozenGuestCount ?? entry.guestCount ?? 1,
+    nightlyRate: frozenRate,
+    currency,
+    breakdown,
+    isGroup,
+    roomCount: isGroup ? bookingRoomCount : undefined,
+    billingModel: entry.folio?.billingModel ?? null,
+    groupLeaderName: isGroup ? entry.contactPersonName ?? displayName : undefined,
+  });
+
+  const ackWindows = await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(
+    () => null,
+  );
+  const voucherAckSeconds = Number((ackWindows as any)?.voucher ?? 172800);
+  const now = new Date();
+
+  const comm = await prisma.$transaction(async (tx) => {
+    // One live reply window per artifact: the earlier voucher dispatch's W22 (if still
+    // ticking) is superseded by this re-send.
+    const priorComms = await tx.communicationRecord.findMany({
+      where: { entryId: entry.id, commType: CommunicationType.CONFIRMATION_VOUCHER },
+      select: { id: true },
+    });
+    if (priorComms.length > 0) {
+      const timers = await tx.timerRecord.findMany({
+        where: {
+          entityType: "CommunicationRecord",
+          entityId: { in: priorComms.map((c) => c.id) },
+          timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
+          status: "SCHEDULED",
+        },
+        select: { id: true, pgBossJobId: true },
+      });
+      if (timers.length > 0) {
+        const engine = await getTimerEngine();
+        await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+        await tx.timerRecord.updateMany({
+          where: { id: { in: timers.map((t) => t.id) } },
+          data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "VOUCHER_RESENT" },
+        });
+      }
+    }
+
+    const created = await dispatchConfirmationVoucherTx(tx, {
+      entryId: entry.id,
+      actorId,
+      reservationId: reservation.id,
+      otaSource: entry.otaSource,
+      voucherAckSeconds,
+      voucherRef: reservation.id,
+      templateKey: "confirmation-voucher-resend",
+      contentSummary: `Confirmation voucher re-sent to ${recipient}`,
+    });
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: "RESERVATION.CONFIRMATION_VOUCHER_RESENT",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Reservation",
+        entityId: reservation.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: { reservationId: reservation.id, dispatchedTo: recipient, communicationRecordId: created.id },
+        createdBy: actorId,
+      },
+    });
+
+    return created;
+  });
+
+  // PDF attachment + email — post-tx, best-effort, same as confirmation.
+  try {
+    const artifact = await generateOrLoadConfirmationVoucherPdf(prisma, reservation.id, actorId);
+    content.attachments = [{ filename: artifact.filename, content: artifact.bytes, contentType: "application/pdf" }];
+  } catch (e) {
+    await prisma.traceEvent
+      .create({
+        data: {
+          eventType: "RESERVATION.CONFIRMATION_VOUCHER_PDF_RENDER_FAILED",
+          actorId,
+          actorLevel: "SYSTEM",
+          entityType: "Reservation",
+          entityId: reservation.id,
+          operation: "ALERT",
+          timestamp: new Date(),
+          entryId: entry.id,
+          payload: { reservationId: reservation.id, error: (e as Error)?.message ?? String(e) },
+          createdBy: actorId,
+        } as any,
+      })
+      .catch(() => {});
+  }
+
+  await dispatchStageEmailBestEffort(
+    {
+      prisma,
+      entryId: entry.id,
+      actorId,
+      inquiryId: entry.inquiryId,
+      guestEmail: recipient,
+      stage: Stage.S4,
+      eventTypePrefix: "RESERVATION_CONFIRMATION_EMAIL",
+    },
+    content,
+  );
+
+  return { communicationRecordId: comm.id, dispatchedTo: recipient };
 }
 

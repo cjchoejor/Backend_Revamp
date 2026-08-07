@@ -339,11 +339,15 @@ export async function completeCheckInToS7(
 
     // Every room being checked in transitions CONFIRMED → OCCUPIED. For non-group entries
     // there's only one assignment in the list; for groups this fires per room. Rooms not in
-    // CONFIRMED state (already OCCUPIED from a prior check-in, or in an unexpected state)
+    // an expected state (already OCCUPIED from a prior check-in, or something unexpected)
     // are skipped rather than force-transitioned — the physical-ready guard above already
     // rejected anything obviously wrong, so this branch is defensive.
+    // COMMITTED_HELD is expected too (2026-08-07): a payment-pending confirmation keeps its
+    // rooms "Held" until the advance completes, and a credit-extension-covered booking can
+    // legitimately reach check-in still Held — the guest walking in occupies the room either way.
     for (const a of assignmentsToCheckIn) {
-      if (a.room.currentClaimState !== InventoryClaimState.CONFIRMED) continue;
+      const fromState = a.room.currentClaimState;
+      if (fromState !== InventoryClaimState.CONFIRMED && fromState !== InventoryClaimState.COMMITTED_HELD) continue;
       await tx.room.update({
         where: { id: a.room.id },
         data: { currentClaimState: InventoryClaimState.OCCUPIED, updatedAt: now },
@@ -352,7 +356,7 @@ export async function completeCheckInToS7(
         data: {
           roomId: a.room.id,
           entryId,
-          fromState: InventoryClaimState.CONFIRMED,
+          fromState,
           toState: InventoryClaimState.OCCUPIED,
           actorId,
           reason: "CHECK_IN",

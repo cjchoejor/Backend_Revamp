@@ -2,16 +2,22 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
-import { enforceAdvancePaymentInboundRecordAtS3 } from "../../policies/12-advance-payment/p27-advance-payment-inbound-record-at-s3.js";
+import {
+  enforceAdvancePaymentInboundRecordAtS3,
+  enforceEntryWithinAdvanceCollectionWindow,
+} from "../../policies/12-advance-payment/p27-advance-payment-inbound-record-at-s3.js";
 import {
   enforceProformaDispatchedBeforeAdvancePayment,
   enforceProformaGuestAnswerRecordedBeforeAdvancePayment,
 } from "../../policies/12-advance-payment/p27-advance-payment-reconciliation.js";
 import { applyInboundPaymentToFolioOutstanding } from "../../lib/folio-outstanding-from-payment.js";
 import {
+  autoCompletePaymentReconciliationTaskTx,
   cancelScheduledAdvancePaymentFollowUpForEntry,
+  cancelScheduledAdvancePromiseDeadlinesForEntry,
   evaluateAdvancePaymentConditionTx,
 } from "./s3-payment-service.js";
+import { confirmHeldRoomsAfterFullPaymentTx } from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
@@ -99,7 +105,11 @@ export async function getOrCreateProvisionalFolioTx(
 }
 
 /**
- * SIG §6.3 — `FolioService.recordPayment`: advance IN payment on provisional folio at S3; cancel W34 when condition satisfied (same tx).
+ * SIG §6.3 — `FolioService.recordPayment`: advance IN payment on the provisional folio; cancel
+ * W34 when condition satisfied (same tx). Collection window is S3–S6 (2026-08-07, operator
+ * request): a guest who paid part of the advance at setup settles the remainder before
+ * arrival, at the check-in desk, or — via S8 settlement, not this path — at check-out. The
+ * payment row is stamped with the stage it was actually taken at.
  */
 export async function recordPayment(
   prisma: PrismaClient,
@@ -112,35 +122,40 @@ export async function recordPayment(
     const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true, invoices: true } });
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
-    enforceEntryAtS3ForS3DomainOperations({ currentStage: folio.entry.currentStage });
+    const stageAtPayment = folio.entry.currentStage;
+    enforceEntryWithinAdvanceCollectionWindow({ currentStage: stageAtPayment });
     enforceAdvancePaymentInboundRecordAtS3({ folioState: folio.state, amount: amountNum });
-    // Order of operations (2026-08-01): the bill goes out first, then the money comes in —
-    // an advance can't be logged until a proforma has been dispatched to the guest.
-    enforceProformaDispatchedBeforeAdvancePayment({
-      proformaInvoices: folio.invoices
-        .filter((i) => i.invoiceType === InvoiceType.PROFORMA)
-        .map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
-    });
-    // …and the guest's ANSWER to that bill must be on record before money is taken
-    // (2026-08-03 operator ruling). Segment-scoped like the p40 freeze gate —
-    // CommunicationRecord carries no segmentId, so the current segment's window is the scope.
-    const currentSegForComms = await tx.segment.findFirst({
-      where: { entryId: input.entryId },
-      orderBy: { segmentNumber: "desc" },
-      select: { startedAt: true },
-    });
-    const latestProformaComm = await tx.communicationRecord.findFirst({
-      where: {
-        entryId: input.entryId,
-        commType: "PROFORMA_INVOICE",
-        direction: "OUTBOUND",
-        sendStatus: "DISPATCHED",
-        ...(currentSegForComms?.startedAt ? { createdAt: { gte: currentSegForComms.startedAt } } : {}),
-      },
-      orderBy: { createdAt: "desc" },
-      select: { acknowledgementStatus: true },
-    });
-    enforceProformaGuestAnswerRecordedBeforeAdvancePayment({ latestDispatchedProformaComm: latestProformaComm });
+    // Order of operations at S3 (2026-08-01/03 rulings): the bill goes out first, then the
+    // guest's answer is recorded, then the money comes in. Both gates are S3-SCOPED — they
+    // govern the pre-confirmation negotiation. From S4 the freeze already bound the terms and
+    // the confirmation voucher is the guest's document, so remainder collection at S4–S6 must
+    // not dead-end on a proforma that (legitimately, generate-vs-send) never went out.
+    if (stageAtPayment === Stage.S3) {
+      enforceProformaDispatchedBeforeAdvancePayment({
+        proformaInvoices: folio.invoices
+          .filter((i) => i.invoiceType === InvoiceType.PROFORMA)
+          .map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
+      });
+      // Segment-scoped like the p40 freeze gate — CommunicationRecord carries no segmentId,
+      // so the current segment's window is the scope.
+      const currentSegForComms = await tx.segment.findFirst({
+        where: { entryId: input.entryId },
+        orderBy: { segmentNumber: "desc" },
+        select: { startedAt: true },
+      });
+      const latestProformaComm = await tx.communicationRecord.findFirst({
+        where: {
+          entryId: input.entryId,
+          commType: "PROFORMA_INVOICE",
+          direction: "OUTBOUND",
+          sendStatus: "DISPATCHED",
+          ...(currentSegForComms?.startedAt ? { createdAt: { gte: currentSegForComms.startedAt } } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        select: { acknowledgementStatus: true },
+      });
+      enforceProformaGuestAnswerRecordedBeforeAdvancePayment({ latestDispatchedProformaComm: latestProformaComm });
+    }
 
     const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
     const created = await tx.paymentRecord.create({
@@ -153,7 +168,7 @@ export async function recordPayment(
         currency: "BTN",
         receivedAt: new Date(),
         recordedBy: actorId,
-        stage: Stage.S3,
+        stage: stageAtPayment,
         notes: input.notes ?? null,
       },
     });
@@ -162,6 +177,22 @@ export async function recordPayment(
     const evalResult = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: input.entryId, folioId });
     if (evalResult.satisfied) {
       await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actorId, "ADVANCE_PAYMENT_CONDITION_MET");
+    }
+    // Promise kept — the W38 deadline (and the S5 settlement tick) only stand while money is
+    // still owed. `paidInFull` (money alone), not `satisfied`: a credit extension covers the
+    // gate but the guest's payment promise stands.
+    if (evalResult.paidInFull) {
+      await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, actorId, "ADVANCE_PAID_IN_FULL");
+      await autoCompletePaymentReconciliationTaskTx(
+        tx,
+        input.entryId,
+        { actorId, actorLevel: "L1" },
+        "ADVANCE_PAID_IN_FULL",
+      );
+      // Held → Reserved (2026-08-07): a booking confirmed while the advance was short kept its
+      // rooms visibly "Held"; the money just completed, so they earn the Reserved label now.
+      // No-op for bookings that weren't payment-pending.
+      await confirmHeldRoomsAfterFullPaymentTx(tx, { entryId: input.entryId, actorId });
     }
 
     const now = new Date();
@@ -174,10 +205,10 @@ export async function recordPayment(
         entityId: created.id,
         operation: "CREATE",
         timestamp: now,
-        stageContext: Stage.S3,
+        stageContext: stageAtPayment,
         inquiryId: folio.entry.inquiryId,
         entryId: input.entryId,
-        payload: { folioId, entryId: input.entryId, amount: amountNum, advanceSatisfiedAfter: evalResult.satisfied },
+        payload: { folioId, entryId: input.entryId, amount: amountNum, stage: stageAtPayment, advanceSatisfiedAfter: evalResult.satisfied },
         createdBy: actorId,
       },
     });
@@ -310,6 +341,10 @@ export async function supersedePendingInvoicesTx(tx: Prisma.TransactionClient, e
     where: { id: { in: milestones.map((t) => t.id) } },
     data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "REENTRY_S3_TO_S1" },
   });
+
+  // The guest's payment promise (W38) described THIS segment's deal — a re-entry supersedes it
+  // along with the proforma it answered (the plan itself is segment-scoped by setAt).
+  await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, entryId, actorId, "REENTRY_NEW_SEGMENT");
 
   return { superseded: invoices.length };
 }

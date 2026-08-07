@@ -359,7 +359,22 @@ export async function placeCommittedHold(
  */
 export async function confirmCommittedHoldTx(
   tx: Prisma.TransactionClient,
-  input: { entryId: string; holdId: string; actorId: string; inquiryId: string | null },
+  input: {
+    entryId: string;
+    holdId: string;
+    actorId: string;
+    inquiryId: string | null;
+    /**
+     * Held-vs-Reserved by payment confidence (2026-08-07, operator ruling): when the advance
+     * is still short of FULL payment at confirmation (and the remainder isn't a sanctioned
+     * at-check-out deferral), the rooms KEEP their COMMITTED_HELD claim — "Held" on every
+     * display — instead of flipping to CONFIRMED ("Reserved"). The hold row still confirms and
+     * the W3 TTL still dies (the freeze is real; the rooms block identically either way) —
+     * only the claim label and the escalation story differ. The upgrade to Reserved happens in
+     * `confirmHeldRoomsAfterFullPaymentTx` the moment the money completes.
+     */
+    paymentPending?: boolean;
+  },
 ) {
   const hold = await tx.committedHold.findUnique({ where: { id: input.holdId } });
   if (!hold || hold.entryId !== input.entryId) throw new NotFoundError("CommittedHold");
@@ -379,10 +394,12 @@ export async function confirmCommittedHoldTx(
     data: { state: HoldState.CONFIRMED, confirmedAt: now, confirmedBy: input.actorId },
   });
   // Confirm every held room in one pass — COMMITTED_HELD → CONFIRMED. Skip rooms already
-  // CONFIRMED (idempotent for retries).
+  // CONFIRMED (idempotent for retries). Payment-pending confirmations skip the flip entirely
+  // — the rooms stay visibly "Held" until the advance completes.
   for (const roomId of heldRoomIds) {
     const roomRow = await tx.room.findUnique({ where: { id: roomId } });
     if (!roomRow) throw new NotFoundError("Room");
+    if (input.paymentPending) continue;
     if (roomRow.currentClaimState === InventoryClaimState.CONFIRMED) continue;
     await tx.room.update({
       where: { id: roomId },
@@ -424,12 +441,78 @@ export async function confirmCommittedHoldTx(
       stageContext: Stage.S4,
       inquiryId: input.inquiryId,
       entryId: input.entryId,
-      payload: { entryId: input.entryId, committedHoldId: hold.id },
+      payload: {
+        entryId: input.entryId,
+        committedHoldId: hold.id,
+        // Rooms deliberately left "Held" — the advance is short and the remainder is due
+        // before/at check-in. They flip to Reserved when the money completes.
+        ...(input.paymentPending ? { roomsHeldPaymentPending: true, heldRoomIds } : {}),
+      },
       createdBy: input.actorId,
     },
   });
 
   return tx.committedHold.findUniqueOrThrow({ where: { id: hold.id } });
+}
+
+/**
+ * The advance just reached FULL payment on a confirmed booking whose rooms were left "Held"
+ * (payment-pending confirmation, 2026-08-07): upgrade every room the hold covers from
+ * COMMITTED_HELD → CONFIRMED ("Reserved") and clear the entry's pending flag. Idempotent —
+ * rooms already CONFIRMED/OCCUPIED and entries with no pending flag are left untouched.
+ * Runs inside the caller's transaction (recordPayment's, so the label flips with the money).
+ */
+export async function confirmHeldRoomsAfterFullPaymentTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; actorId: string },
+) {
+  const entry = await tx.entry.findUnique({
+    where: { id: input.entryId },
+    select: { id: true, reservationPaymentPending: true, currentReservationId: true, inquiryId: true, currentStage: true },
+  });
+  if (!entry?.reservationPaymentPending) return { upgraded: 0, cleared: false } as const;
+
+  const hold = await tx.committedHold.findUnique({ where: { entryId: input.entryId } });
+  const now = new Date();
+  let upgraded = 0;
+  if (hold && hold.state === HoldState.CONFIRMED) {
+    for (const roomId of allHeldRoomIds(hold)) {
+      const room = await tx.room.findUnique({ where: { id: roomId } });
+      if (!room || room.currentClaimState !== InventoryClaimState.COMMITTED_HELD) continue;
+      await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.CONFIRMED } });
+      await tx.roomClaimStateEvent.create({
+        data: {
+          roomId,
+          entryId: input.entryId,
+          fromState: InventoryClaimState.COMMITTED_HELD,
+          toState: InventoryClaimState.CONFIRMED,
+          actorId: input.actorId,
+          reason: "ADVANCE_PAID_IN_FULL",
+          effectiveFrom: now,
+        },
+      });
+      upgraded += 1;
+    }
+  }
+
+  await tx.entry.update({ where: { id: input.entryId }, data: { reservationPaymentPending: false } });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "RESERVATION.ROOMS_CONFIRMED_ON_FULL_PAYMENT",
+      actorId: input.actorId,
+      actorLevel: "L1",
+      entityType: "Entry",
+      entityId: input.entryId,
+      operation: "UPDATE",
+      timestamp: now,
+      stageContext: entry.currentStage,
+      inquiryId: entry.inquiryId,
+      entryId: input.entryId,
+      payload: { entryId: input.entryId, roomsUpgraded: upgraded, reservationId: entry.currentReservationId },
+      createdBy: input.actorId,
+    },
+  });
+  return { upgraded, cleared: true } as const;
 }
 
 /**

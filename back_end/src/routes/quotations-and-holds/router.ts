@@ -26,10 +26,17 @@ quotationsAndHoldsRouter.post("/entries/:id/quotations", requireActorLevel("L1")
       res.status(404).json({ error: "NotFoundError", message: "Entry not found" });
       return;
     }
+    // actorLevel comes from the VERIFIED session (never the body): with it present, the
+    // discount's authority band is enforced at generation and the quote is born approved
+    // (2026-08-07, operator ruling — approving after generation made no sense). The group
+    // path keeps its own percent-only handling.
     const created =
       entry.useType === "GROUP"
         ? await quotationService.createGroupQuotation(prisma, req.params.id, req.actor!.actorId, req.body)
-        : await quotationService.createQuotation(prisma, req.params.id, req.actor!.actorId, req.body);
+        : await quotationService.createQuotation(prisma, req.params.id, req.actor!.actorId, {
+            ...req.body,
+            actorLevel: req.actor!.level,
+          });
     res.status(201).json(created);
   } catch (e) {
     next(e);
@@ -38,7 +45,10 @@ quotationsAndHoldsRouter.post("/entries/:id/quotations", requireActorLevel("L1")
 
 quotationsAndHoldsRouter.post("/quotations/:id/supersede", requireActorLevel("L1"), validateBody(supersedeQuotationRequestSchema), async (req, res, next) => {
   try {
-    const created = await quotationService.supersedeQuotationWithNewDraft(prisma, req.params.id, req.actor!.actorId, req.body);
+    const created = await quotationService.supersedeQuotationWithNewDraft(prisma, req.params.id, req.actor!.actorId, {
+      ...req.body,
+      actorLevel: req.actor!.level,
+    });
     res.status(201).json(created);
   } catch (e) {
     next(e);

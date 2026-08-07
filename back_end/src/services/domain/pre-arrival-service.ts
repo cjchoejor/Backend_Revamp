@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { EntryUseType, PaymentDirection, PreArrivalTaskType, Stage, TaskCategory, TaskStatus } from "@prisma/client";
+import { PreArrivalTaskType, Stage, TaskCategory, TaskStatus } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -10,7 +10,8 @@ import {
 import { dispatchPreArrivalOutboundTx } from "./communication-service.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderPreArrivalEmail } from "../infrastructure/stage-email-templates.js";
-import { sumMoneyBy, toDecimal } from "../../lib/money.js";
+import { toDecimal } from "../../lib/money.js";
+import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 
 function categoryForTaskType(taskType: PreArrivalTaskType): TaskCategory {
   switch (taskType) {
@@ -48,17 +49,6 @@ export function listStayNightIsoDates(checkIn: Date, checkOut: Date): string[] {
   return nights;
 }
 
-function expectedAdvanceAmount(
-  thresholds: Record<string, { amount?: number } | undefined>,
-  useType: EntryUseType,
-): number {
-  const byUse = thresholds[String(useType)];
-  if (byUse && typeof byUse.amount === "number") return byUse.amount;
-  const def = thresholds.DEFAULT ?? thresholds.default;
-  if (def && typeof def.amount === "number") return def.amount;
-  return 0;
-}
-
 export async function initialiseTasks(prisma: PrismaClient, entryId: string, actorId: string) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
@@ -87,45 +77,43 @@ export async function initialiseTasks(prisma: PrismaClient, entryId: string, act
 }
 
 /**
- * SIG-S5 Policy 28 — compare advance received vs configured threshold; auto-complete folio flag or surface discrepancy.
- * FOM may still mark reconciled via `POST /folios/:id/advance-payment/reconcile` when shortfall is accepted.
+ * SIG-S5 Policy 28 — compare advance received vs the REQUIRED amount; auto-complete folio flag
+ * or surface discrepancy. FOM may still mark reconciled via
+ * `POST /folios/:id/advance-payment/reconcile` when shortfall is accepted.
+ *
+ * Since 2026-08-07 the comparison runs through `evaluateAdvancePaymentCondition` — the same
+ * evaluation the S5/S6 gates and the desk use — instead of re-deriving a threshold from raw
+ * config. The old derivation ignored the operator-pinned per-booking requirement, the group
+ * boost, per-source thresholds AND credit-extension expiry, so this tick could disagree with
+ * every other advance surface (e.g. auto-completing against the config default when the desk
+ * had pinned a higher figure, or honouring an extension whose clock had run out).
  */
 export async function reconcileAdvancePayments(prisma: PrismaClient, entryId: string, actorId: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
-      folio: { include: { payments: true } },
+      folio: true,
       reservation: true,
     },
   });
   if (!entry) throw new NotFoundError("Entry");
   if (!entry.folio) throw new NotFoundError("Folio");
 
-  const thresholds =
-    (await requireActiveConfigValue<Record<string, { amount?: number } | undefined>>(prisma, "advancePayment.thresholds", {
-      now: new Date(),
-    }).catch(() => ({}))) ?? {};
-  const expected = expectedAdvanceAmount(thresholds, entry.useType);
-  // Decimal-safe reduce — float `+` on money aggregates at reminder boundaries wrongly
-  // triggered/suppressed the "reconciled" branch at boundary sums.
-  const inRows = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.IN);
-  const totalInDec = sumMoneyBy(inRows, "amount");
-  const totalIn = Number(totalInDec.toFixed(2));
+  const evaluation = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio.id });
+  const expected = evaluation.requiredAmount;
+  const totalIn = evaluation.totalReceived;
 
   if (entry.folio.advancePaymentReconciliationComplete) {
     return { reconciled: true as const, expected, totalIn, alreadyComplete: true as const };
   }
 
-  // A credit extension (SIG-S3 Policy 42) satisfies the advance condition — the guest legitimately
-  // owes nothing up front (deferred / agent-settled). Reconcile cleanly rather than flagging a
-  // shortfall, mirroring evaluateAdvancePaymentCondition and the S4 confirm gate.
-  const creditExtension = await prisma.creditExtensionCeilingRecord
-    .findUnique({ where: { folioId: entry.folio.id } })
-    .catch(() => null);
-  const creditExtensionActive = !!creditExtension && creditExtension.ceilingAmount != null;
+  // A credit extension (SIG-S3 Policy 42) satisfies the advance condition — the guest
+  // legitimately owes nothing up front (deferred / agent-settled). The evaluation already
+  // enforces the extension's expiry at read time.
+  const creditExtensionActive = evaluation.creditExtensionActive;
 
   const now = new Date();
-  if (totalInDec.gte(toDecimal(expected)) || creditExtensionActive) {
+  if (evaluation.satisfied) {
     await prisma.$transaction(async (tx) => {
       await tx.folio.update({
         where: { id: entry.folio!.id },
@@ -163,12 +151,12 @@ export async function reconcileAdvancePayments(prisma: PrismaClient, entryId: st
       stageContext: entry.currentStage,
       inquiryId: entry.inquiryId,
       entryId,
-      payload: { entryId, folioId: entry.folio.id, expected, totalIn, shortfall: expected - totalIn },
+      payload: { entryId, folioId: entry.folio.id, expected, totalIn, shortfall: evaluation.shortfall },
       createdBy: actorId,
     },
   });
 
-  return { reconciled: false as const, expected, totalIn, shortfall: expected - totalIn };
+  return { reconciled: false as const, expected, totalIn, shortfall: evaluation.shortfall };
 }
 
 /**

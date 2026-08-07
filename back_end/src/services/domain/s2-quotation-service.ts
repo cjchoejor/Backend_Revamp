@@ -646,6 +646,51 @@ async function prepareQuotationDraft(
     }
   }
 
+  // ── Discount authority is settled at GENERATION (2026-08-07, operator ruling) ─────────────
+  // "Approving after the quotation is generated doesn't make sense": when the caller
+  // identified the acting user (the HTTP create/supersede routes now always inject the
+  // verified session level), the discount's authority band is decided HERE — the generating
+  // actor either holds the authority (the quote is born approved: stamped below, traced by
+  // the create/supersede transaction) or generation is refused naming the level required.
+  // The per-model ceiling checks above already ran; this last check covers the degenerate
+  // paths (e.g. a discount that priced to nothing) so a stamp can never appear unchecked.
+  // Bare service callers that omit actorLevel keep the legacy two-step (create unapproved →
+  // `approveDiscount`) — the p23 send/S2-exit gate holds either way.
+  let discountAuthority: {
+    approvedBy: string;
+    approvedLevel: "L1" | "L2" | "L3" | "L4";
+    approvedAt: string;
+    measuredPercent: number | null;
+    autoAtGeneration: true;
+  } | null = null;
+  if (requested && input.actorLevel) {
+    const measuredPercent = compositionDiscount?.effectivePercent ?? requested.discountPercent ?? null;
+    if (measuredPercent != null) {
+      const ceilings = await resolveActorDiscountCeilings(prisma);
+      const cap =
+        input.actorLevel === "L1"
+          ? ceilings.l1MaxPercent
+          : input.actorLevel === "L2"
+            ? ceilings.l2MaxPercent
+            : ceilings.l3MaxPercent;
+      if (toDecimal(measuredPercent).gt(toDecimal(cap))) {
+        throw new PolicyGateBlockedError(
+          "DISCOUNT_AUTHORITY",
+          `This discount (${measuredPercent}% of the total) is above your approval band — ${
+            toDecimal(measuredPercent).gt(toDecimal(ceilings.l2MaxPercent)) ? "a GM" : "an FOM"
+          } has to generate this quote`,
+        );
+      }
+      discountAuthority = {
+        approvedBy: actorId,
+        approvedLevel: input.actorLevel,
+        approvedAt: new Date().toISOString(),
+        measuredPercent,
+        autoAtGeneration: true,
+      };
+    }
+  }
+
   const commercialTerms = {
     roomTypeId,
     useType: entry.useType,
@@ -690,6 +735,11 @@ async function prepareQuotationDraft(
     // than leaving it to whichever caller happened to set it — previously only applyDiscount
     // wrote this field, so a superseded round silently dropped it.
     ...(requested ? { discountAppliedPercent: requested.discountPercent } : {}),
+    // The generation-time approval (2026-08-07): who held the authority when this quote was
+    // generated. Its presence tells every consumer (incl. the desk) that no separate
+    // "approve discount" step is pending; the matching S2.DISCOUNT.APPROVED trace is written
+    // by the create/supersede transaction.
+    ...(discountAuthority ? { discountAuthority } : {}),
     // Multi-room-aware pricing breakdown — always present so downstream can rely on it.
     roomCount,
     pricingBreakdown,
@@ -792,6 +842,7 @@ async function prepareQuotationDraft(
     now,
     msrWaiver,
     commercialTerms,
+    discountAuthority,
     compositionTotals,
     effectiveRate,
     roomCount,
@@ -889,6 +940,7 @@ export async function createQuotation(
     now,
     msrWaiver,
     commercialTerms,
+    discountAuthority,
     compositionTotals,
     effectiveRate,
     roomCount,
@@ -955,6 +1007,30 @@ export async function createQuotation(
     // The countdown is real from this moment — W15 expires a lapsed DRAFT, and the desk's
     // timer feed shows "Quote validity" alongside the other clocks.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId }, validity.validUntil, actorId);
+    // Discount approved AT generation (2026-08-07): the generating actor held the authority
+    // (checked in prepareQuotationDraft), so the approval trace lands with the creation and
+    // the p23 send / S2-exit gate is satisfied from birth — no post-hoc approval step.
+    if (discountAuthority) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "S2.DISCOUNT.APPROVED",
+          actorId,
+          actorLevel: discountAuthority.approvedLevel,
+          entityType: "Quotation",
+          entityId: created.id,
+          operation: "APPROVE",
+          timestamp: now,
+          stageContext: Stage.S2,
+          entryId,
+          payload: {
+            quotationId: created.id,
+            discountPercent: discountAuthority.measuredPercent,
+            autoAtGeneration: true,
+          },
+          createdBy: actorId,
+        },
+      });
+    }
     if (msrWaiver) {
       await tx.traceEvent.create({
         data: {
@@ -1254,6 +1330,8 @@ export async function supersedeQuotationWithNewDraft(
     /** Legacy booking-wide model. Omit to carry the prior version's forward. */
     mealPlan?: MealPlanType | null;
     extraBedCount?: number;
+    /** Verified session level (route-injected) — enables generation-time discount approval. */
+    actorLevel?: "L1" | "L2" | "L3" | "L4";
   },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
@@ -1288,6 +1366,7 @@ export async function supersedeQuotationWithNewDraft(
       input.roomCompositions !== undefined
         ? input.roomCompositions
         : ((priorTerms.roomCompositions as RoomCompositionServiceInput[] | undefined) ?? undefined),
+    actorLevel: input.actorLevel,
   };
 
   // Full re-price with the same pipeline createQuotation uses (validations included).
@@ -1366,6 +1445,30 @@ export async function supersedeQuotationWithNewDraft(
 
     // The new draft's validity clock, armed like create's — the prior version's was cancelled above.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId: prior.entryId }, validity.validUntil, actorId);
+
+    // Discount approved AT generation — same rule as createQuotation (2026-08-07): a
+    // regenerated round with a discount is a fresh offer, approved by whoever generated it.
+    if (prep.discountAuthority) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "S2.DISCOUNT.APPROVED",
+          actorId,
+          actorLevel: prep.discountAuthority.approvedLevel,
+          entityType: "Quotation",
+          entityId: created.id,
+          operation: "APPROVE",
+          timestamp: now,
+          stageContext: Stage.S2,
+          entryId: prior.entryId,
+          payload: {
+            quotationId: created.id,
+            discountPercent: prep.discountAuthority.measuredPercent,
+            autoAtGeneration: true,
+          },
+          createdBy: actorId,
+        },
+      });
+    }
 
     // Field-level audit of exactly what the renegotiation changed.
     const diff = diffQuotationTerms(priorTerms, prep.commercialTerms as Record<string, unknown>);
@@ -1541,6 +1644,30 @@ export async function applyDiscount(
     // button) must not be what the guest receives. Detaching bumps the render revision so
     // the next render writes a fresh artifact rather than colliding with write-once storage.
     await invalidateQuotationPdfArtifact(tx, quotationId);
+
+    // The authority check passed above, so this application IS the approval (2026-08-07 —
+    // same generation-time rule as create/supersede); the p23 send/S2-exit gate is satisfied.
+    if (prep.discountAuthority) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "S2.DISCOUNT.APPROVED",
+          actorId: actor.actorId,
+          actorLevel: prep.discountAuthority.approvedLevel,
+          entityType: "Quotation",
+          entityId: quotationId,
+          operation: "APPROVE",
+          timestamp: now,
+          stageContext: Stage.S2,
+          entryId: q.entryId,
+          payload: {
+            quotationId,
+            discountPercent: prep.discountAuthority.measuredPercent,
+            autoAtGeneration: true,
+          },
+          createdBy: actor.actorId,
+        },
+      });
+    }
 
     const msrWaiver = prep.msrWaiver;
     await tx.traceEvent.create({

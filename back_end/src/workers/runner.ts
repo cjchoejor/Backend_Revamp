@@ -11,6 +11,7 @@ import { runAcknowledgementWindowWorker } from "./w22-acknowledgement-window-wor
 import { runSpeculativeHoldExpiryWorker } from "./w2-speculative-hold-expiry-worker.js";
 import { runCommittedHoldExpiryWorker } from "./w3-committed-hold-expiry-worker.js";
 import { runAdvancePaymentFollowUpWorker } from "./w34-advance-payment-follow-up-worker.js";
+import { runAdvancePromiseDeadlineWorker } from "./w38-advance-promise-worker.js";
 import { runPreArrivalWindowActivationWorker } from "./w4-pre-arrival-window-activation-worker.js";
 import { runNoShowCutoffWorker } from "./w5-no-show-cutoff-worker.js";
 import { runRoomReadinessSlaWorker } from "./w23-room-readiness-sla-worker.js";
@@ -62,6 +63,7 @@ export async function startWorkers() {
   await (engine.boss as any).work("SPECULATIVE_HOLD_EXPIRY_W2", async (job: any) => runSpeculativeHoldExpiryWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("COMMITTED_HOLD_EXPIRY_W3", async (job: any) => runCommittedHoldExpiryWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("ADVANCE_PAYMENT_FOLLOW_UP_W34", async (job: any) => runAdvancePaymentFollowUpWorker(prisma, unwrapJobData(job)));
+  await (engine.boss as any).work("ADVANCE_PROMISE_DEADLINE_W38", async (job: any) => runAdvancePromiseDeadlineWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("PRE_ARRIVAL_COUNTDOWN_W4", async (job: any) => runPreArrivalWindowActivationWorker(prisma, engine, unwrapJobData(job)));
   await (engine.boss as any).work(
     "NO_SHOW_CUTOFF_W5",

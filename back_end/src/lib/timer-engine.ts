@@ -20,6 +20,9 @@ export type TimerJobName =
   | "SPECULATIVE_HOLD_EXPIRY_W2"
   | "COMMITTED_HOLD_EXPIRY_W3"
   | "ADVANCE_PAYMENT_FOLLOW_UP_W34"
+  /// Guest's advance-payment promise (2026-08-07): armed when the plan says the remainder is
+  /// coming BEFORE_CHECKIN by a given date; fires if the money still hasn't arrived.
+  | "ADVANCE_PROMISE_DEADLINE_W38"
   | "PRE_ARRIVAL_COUNTDOWN_W4"
   | "NO_SHOW_CUTOFF_W5"
   | "AWAITING_WRITTEN_CONFIRMATION_W5"
@@ -92,6 +95,7 @@ export function createTimerEngine(connectionString: string): TimerEngine {
         "SPECULATIVE_HOLD_EXPIRY_W2",
         "COMMITTED_HOLD_EXPIRY_W3",
         "ADVANCE_PAYMENT_FOLLOW_UP_W34",
+        "ADVANCE_PROMISE_DEADLINE_W38",
         "PRE_ARRIVAL_COUNTDOWN_W4",
         "NO_SHOW_CUTOFF_W5",
         "AWAITING_WRITTEN_CONFIRMATION_W5",

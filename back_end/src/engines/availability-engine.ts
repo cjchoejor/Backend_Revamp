@@ -45,6 +45,9 @@ export type RoomBlockage = {
   holdKind?: "COMMITTED" | "SPECULATIVE";
     /** Speculative holds only — their release route is keyed by hold id. */
     holdId?: string;
+  /** RESERVED only (2026-08-07): confirmed while the advance was still short — the booking's
+   *  rooms are "Held, payment pending" rather than fully Reserved. Blocks identically. */
+  paymentPending?: boolean;
   /** ID + readable ref of the booking so the frontend can show WHO holds the room on this night. */
   entryId?: string;
   entryReferenceNumber?: string | null; // e.g. "INQ-20260716-0005"
@@ -123,6 +126,8 @@ export type UnavailableRoomEntry = {
     holdKind?: "COMMITTED" | "SPECULATIVE";
     /** Speculative holds only — their release route is keyed by hold id. */
     holdId?: string;
+    /** RESERVED only — confirmed with the advance still short ("Held, payment pending"). */
+    paymentPending?: boolean;
     entryId?: string;
     entryReferenceNumber?: string | null;
     guestName?: string | null;
@@ -162,6 +167,8 @@ export type PerDateAvailability = {
     holdKind?: "COMMITTED" | "SPECULATIVE";
     /** Speculative holds only — their release route is keyed by hold id. */
     holdId?: string;
+    /** RESERVED only — confirmed with the advance still short ("Held, payment pending"). */
+    paymentPending?: boolean;
     entryId?: string;
     entryReferenceNumber?: string | null;
     guestName?: string | null;
@@ -406,6 +413,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
             source: blocking.source,
             holdKind: blocking.holdKind,
             holdId: blocking.holdId,
+            paymentPending: blocking.paymentPending,
             entryId: blocking.entryId,
             entryReferenceNumber: blocking.entryReferenceNumber ?? null,
             guestName: blocking.guestName ?? null,
@@ -439,6 +447,7 @@ export function queryAvailability(input: AvailabilityInput): AvailabilityResult 
         source: b.source,
           holdKind: b.holdKind,
           holdId: b.holdId,
+        paymentPending: b.paymentPending,
         entryId: b.entryId,
         entryReferenceNumber: b.entryReferenceNumber ?? null,
         guestName: b.guestName ?? null,

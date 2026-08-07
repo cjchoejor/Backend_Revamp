@@ -4,3 +4,4 @@
  */
 export { confirmReservation } from "./s4-confirmation-service.js";
 export { confirmReservation as confirm } from "./s4-confirmation-service.js";
+export { resendConfirmationVoucher } from "./s4-confirmation-service.js";
