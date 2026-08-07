@@ -6,6 +6,7 @@ import { queryAvailability as availabilityEngineQuery } from "../../engines/avai
 import { enforceAvailabilityQueryParamsForS1 } from "../../policies/01-availability/p01-availability-query-params-s1.js";
 import { resolveIndicativePricingForS1Availability } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s1-indicative.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
+import { heldRoomIdsOf } from "../../lib/committed-hold-rooms.js";
 import {
   createQuotedSpaceAllocationForAvailabilityQuery,
   isConferenceLikeUseType,
@@ -82,10 +83,28 @@ async function runAvailabilityEngineForEntry(
     }),
     prisma.committedHold.findMany({
       where: {
-        state: { in: ["PLACED", "CONFIRMED"] },
-        roomId: { not: null },
+        // Deliberately NOT filtered on `roomId` — a hold's extra rooms live in
+        // `perNightBreakdown`, so filtering here would drop holds that still cover rooms we care
+        // about. The fan-out below decides which rooms each hold blocks.
         NOT: { entryId: entry.id },
-        expiresAt: { gt: new Date() },
+        // Expiry applies to PLACED holds ONLY.
+        //
+        // 2026-08-04: this used to be a flat `expiresAt > now` across both states, which
+        // silently unblocked every confirmed booking. Confirming a hold sets state=CONFIRMED and
+        // cancels the W3 timer but never extends `expiresAt`, so the original short S3 TTL
+        // lapses within minutes — and the room went back on sale. The reservation does not cover
+        // the gap either, because reservations are matched through `roomAssignments` and no room
+        // is assigned until pre-arrival/check-in. Observed on ENT-20260804-0001: confirmed, S5,
+        // arriving that day, blocking nothing. All 13 CONFIRMED holds had lapsed timestamps.
+        //
+        // A CONFIRMED hold has no expiry semantics — the booking is agreed, so it blocks until
+        // released. The TTL check stays for PLACED holds, where it correctly frees a room whose
+        // hold was never completed. `expiresAt` is deliberately left untouched on confirm: the
+        // STATE decides, so no future path can reintroduce this by forgetting to bump a date.
+        OR: [
+          { state: "CONFIRMED" },
+          { state: "PLACED", expiresAt: { gt: new Date() } },
+        ],
         entry: {
           checkInDate: { lt: checkOut },
           checkOutDate: { gt: checkIn },
@@ -93,6 +112,9 @@ async function runAvailabilityEngineForEntry(
       },
       select: {
         roomId: true,
+        // The primary room is only part of the story on a multi-room booking — the rest live
+        // here. Without it a nine-room hold blocked one room (see committed-hold-rooms.ts).
+        perNightBreakdown: true,
         entryId: true,
         entry: {
           select: {
@@ -183,17 +205,22 @@ async function runAvailabilityEngineForEntry(
         ...contextFromEntry(r.entry),
       })),
     ),
+    // One blockage per (held room, hold) — NOT one per hold. `heldRoomIdsOf` returns the primary
+    // room plus every room in the per-night snapshot, so a multi-room booking blocks all of its
+    // rooms instead of only the first.
     ...committedHolds
-      .filter((h) => h.roomId && h.entry?.checkInDate && h.entry?.checkOutDate)
-      .map((h) => ({
-        roomId: h.roomId!,
-        startDate: h.entry!.checkInDate!,
-        endDate: h.entry!.checkOutDate!,
-        source: "HOLD" as const,
-        entryId: h.entryId,
-        entryReferenceNumber: h.entry?.inquiryId ?? null,
-        ...contextFromEntry(h.entry),
-      })),
+      .filter((h) => h.entry?.checkInDate && h.entry?.checkOutDate)
+      .flatMap((h) =>
+        heldRoomIdsOf(h).map((roomId) => ({
+          roomId,
+          startDate: h.entry!.checkInDate!,
+          endDate: h.entry!.checkOutDate!,
+          source: "HOLD" as const,
+          entryId: h.entryId,
+          entryReferenceNumber: h.entry?.inquiryId ?? null,
+          ...contextFromEntry(h.entry),
+        })),
+      ),
   ];
 
   const engineRaw = availabilityEngineQuery({

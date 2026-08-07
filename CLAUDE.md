@@ -459,7 +459,19 @@ The S1 availability engine has worked this way since 2026-07-24 (non-FREE rooms 
 - `enforceCommittedHoldRoomPhysicallyUsable` — physical (blocked / maintenance deadline inside the stay)
 - `enforceCommittedHoldInventoryAvailable` — **deprecated**, retained only for entries with no stay dates
 
-The overlap predicates deliberately **mirror the sibling query in `s1-availability-service.ts`** (reservations by frozen dates; holds by entry dates + PLACED/CONFIRMED + unexpired; both excluding self). Keep the two in step — if S1 offers a room, S3 must accept it. Divergence reintroduces this bug.
+The overlap predicates deliberately **mirror the sibling query in `s1-availability-service.ts`** (reservations by frozen dates; holds by entry dates + state, both excluding self). Keep the two in step — if S1 offers a room, S3 must accept it. Divergence reintroduces this bug.
+
+**Hold expiry applies to PLACED holds ONLY (2026-08-04).** Both queries used a flat `expiresAt > now` across both states, which silently unblocked every confirmed booking. `confirmCommittedHoldTx` sets `state = CONFIRMED` and cancels the W3 timer but **never extends `expiresAt`**, so the original short S3 TTL lapses within minutes and the room went back on sale. The reservation does not cover the gap either: reservations are matched through `roomAssignments`, and no room is assigned until pre-arrival/check-in. Net effect — between S4 confirmation and room assignment, a confirmed booking blocked *nothing*.
+
+Found on ENT-20260804-0001 (S5, arriving that day, room 301, confirmed hold, zero assignments) — its room was offered as free for its own dates. **All 13 CONFIRMED holds in the dev DB had lapsed timestamps**, so this hit every confirmed booking; it stayed hidden only because assigning a room restores the reservation blockage.
+
+The predicate is now `state = CONFIRMED OR (state = PLACED AND expiresAt > now)` in **both** places. `expiresAt` is deliberately **not** rewritten on confirm: the state decides, so no future path can reintroduce this by forgetting to bump a timestamp. Verified through the real service — room 301 now lands in `unavailableRooms` (reason `CLAIMED`, 1 blocking booking), the per-date cell reads occupied, and the S3 gate refuses a conflicting hold.
+
+**A hold blocks EVERY room it covers, not just `roomId` (2026-08-04).** A booking has one `CommittedHold` row with one `roomId` column; on a multi-room booking the extra rooms live in the `perNightBreakdown` JSON. Both queries read `roomId` alone and never opened the JSON, so a nine-room booking blocked one room. Found on ENT-20260722-0001 (S6, in-house, CONFIRMED): room 205 blocked while 301/302/303/304/305/307/501/502 were offered free for the same dates.
+
+[`lib/committed-hold-rooms.ts`](back_end/src/lib/committed-hold-rooms.ts) — `heldRoomIdsOf(hold)` returns the primary room plus every room in the snapshot. Both queries now **drop their `roomId` filter** (it would discard holds covering a requested room as an *extra*), narrow by date instead, and fan out one blockage per held room. Verified: all 9 rooms now refuse a conflicting hold at S3 and appear in `unavailableRooms` at S1.
+
+**Both gaps share a shape worth remembering: the hold under-reports what it holds, and `RoomAssignment` quietly covers for it later.** Between S4 confirmation and S5 assignment the `CommittedHold` row is the *only* thing protecting inventory — a reservation blocks solely through `roomAssignments`, which don't exist yet. Anything that reads holds must therefore read them completely.
 
 Housekeeping readiness (`DEPARTED_DIRTY`) is deliberately **not** a booking gate — same-day turnover is normal. It stays enforced at check-in by the SIG-S6 per-room physical-ready check.
 

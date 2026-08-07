@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { heldRoomIdsOf } from "./committed-hold-rooms.js";
 
 /**
  * A booking that already owns a room across some date range.
@@ -80,10 +81,19 @@ export async function findRoomBookingConflicts(
     }),
     db.committedHold.findMany({
       where: {
-        state: { in: ["PLACED", "CONFIRMED"] },
-        roomId: { in: input.roomIds },
+        // Deliberately NOT filtered on `roomId`. A multi-room hold names only its primary room
+        // there; the rest live in `perNightBreakdown`. Filtering here would miss a hold that
+        // covers a requested room as one of its extras — the exact blind spot that left eight
+        // rooms of ENT-20260722-0001 bookable. Narrowed by date, then fanned out below.
         NOT: { entryId: input.excludeEntryId },
-        expiresAt: { gt: new Date() },
+        // Expiry applies to PLACED holds only — a CONFIRMED hold blocks regardless of its
+        // original TTL, which is never extended on confirm. Kept identical to the sibling query
+        // in `s1-availability-service.ts` (see the long note there); if S1 offers a room, S3
+        // must accept it, and both must refuse a room already confirmed to someone else.
+        OR: [
+          { state: "CONFIRMED" },
+          { state: "PLACED", expiresAt: { gt: new Date() } },
+        ],
         entry: {
           checkInDate: { lt: input.checkOut },
           checkOutDate: { gt: input.checkIn },
@@ -92,6 +102,7 @@ export async function findRoomBookingConflicts(
       select: {
         entryId: true,
         roomId: true,
+        perNightBreakdown: true,
         entry: {
           select: {
             inquiryId: true,
@@ -122,17 +133,22 @@ export async function findRoomBookingConflicts(
     }
   }
 
+  // A hold blocks EVERY room it covers, not just its primary one. Narrow to the rooms actually
+  // asked about — the query is now date-scoped, so it returns holds on unrelated rooms too.
   for (const h of holds) {
-    if (!h.roomId || !h.entry?.checkInDate || !h.entry?.checkOutDate) continue;
-    conflicts.push({
-      roomId: h.roomId,
-      source: "HOLD",
-      entryId: h.entryId,
-      entryReferenceNumber: h.entry.inquiryId ?? null,
-      guestName: guestNameOf(h.entry.guestProfile),
-      startDate: h.entry.checkInDate,
-      endDate: h.entry.checkOutDate,
-    });
+    if (!h.entry?.checkInDate || !h.entry?.checkOutDate) continue;
+    for (const roomId of heldRoomIdsOf(h)) {
+      if (!roomIdSet.has(roomId)) continue;
+      conflicts.push({
+        roomId,
+        source: "HOLD",
+        entryId: h.entryId,
+        entryReferenceNumber: h.entry.inquiryId ?? null,
+        guestName: guestNameOf(h.entry.guestProfile),
+        startDate: h.entry.checkInDate,
+        endDate: h.entry.checkOutDate,
+      });
+    }
   }
 
   return conflicts;
