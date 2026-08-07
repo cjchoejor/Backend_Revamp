@@ -331,6 +331,9 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         currency,
         breakdown,
         amountPaid: paid,
+        // Real columns only — `ci` is today-defaulted above, and the template must not print a
+        // fabricated pay-by date for a dateless entry.
+        advanceDueBy: entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null,
       })
     : renderFinalInvoiceEmail({
         guestDisplayName: displayName,

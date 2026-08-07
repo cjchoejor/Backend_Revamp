@@ -304,6 +304,13 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   const totalPayable = Number((totalAmount - advanceReceived).toFixed(2));
   const balanceAtCheckout = Math.max(0, Number((totalAmount - advanceReceived - advanceDueNow).toFixed(2)));
 
+  // The advance deadline — mirrors payment-status `advanceWindow.deadline`: the advance is due
+  // between proforma dispatch and CHECK-IN, so the printed date is the check-in date (frozen at
+  // S4 when a reservation exists). Read from the real columns, not the prelude's `checkIn` —
+  // that one falls back to "today" for a dateless entry, and "Advance due by <today>" would be
+  // a fabricated demand. Omitted once nothing is due (the template doc says exactly that).
+  const advanceDeadline = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? null;
+
   // A2 Proforma Invoice, house format (docs/bills). The Net / Service / GST figures decompose
   // the tax-inclusive total; they are not added to it.
   const ctP =
@@ -327,9 +334,10 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
     proformaNo: invoiceRef,
     bookingRef: inv.entryId,
     date: formatDocDate(docDate),
-    // The advance deadline lives on the payment-condition evaluation, not the invoice row, so it
-    // is left off until that value is threaded through rather than printed as a guess.
-    advanceDueBy: null,
+    // "Advance due by <check-in date>" — the guest-facing validity of this document (2026-08-07,
+    // operator request: the guest must see the deadline on the bill itself, like the quotation's
+    // "Valid until" strip). See `advanceDeadline` above for where the date comes from.
+    advanceDueBy: advanceDeadline && advanceDueNow > 0 ? formatDocDate(advanceDeadline) : null,
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
     stayLabel: "Stay",
