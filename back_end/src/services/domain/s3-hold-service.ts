@@ -53,7 +53,26 @@ export async function placeCommittedHold(
   prisma: PrismaClient,
   entryId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-  input: { roomId: string; commercialJustification: string; isFoc?: boolean; roomsRequested?: number; focRoomsRequested?: number },
+  input: {
+    roomId: string;
+    commercialJustification: string;
+    isFoc?: boolean;
+    roomsRequested?: number;
+    focRoomsRequested?: number;
+    /**
+     * "PROFORMA_DISPATCH" = system placement fired by the proforma going OUT to the guest
+     * (2026-08-08 operator ruling: the dispatched bill is itself the commercial basis for
+     * holding the rooms). This trigger skips ONLY the advance-satisfied gate (p42) — by
+     * construction no money can exist yet, since payment is itself gated on dispatch + the
+     * guest's answer; the hold's own W3 TTL is the protection while the money follows, and
+     * the S4 freeze / S5–S6 arrival gates still demand the advance. Every other guard
+     * (S3 stage, folio, cancellation disclosure, date-overlap conflicts) applies unchanged.
+     * Omitted = manual placement, all gates as before.
+     */
+    trigger?: "PROFORMA_DISPATCH";
+    /** The proforma whose dispatch fired the auto-placement — recorded on the trace. */
+    triggerInvoiceId?: string;
+  },
 ) {
   if (!input.roomId?.trim()) throw new ValidationError("roomId is required");
   if (!input.commercialJustification?.trim()) throw new ValidationError("commercialJustification is required");
@@ -92,8 +111,13 @@ export async function placeCommittedHold(
 
   enforceFolioPresentBeforeCommittedHoldS3({ folio: entry.folio });
 
-  const payment = await paymentService.evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio!.id });
-  enforceAdvancePaymentSatisfiedOrCreditExtensionPresent({ isAdvancePaymentSatisfied: payment.satisfied });
+  // The advance gate applies to MANUAL placement only — see the `trigger` doc above: at
+  // proforma dispatch the money cannot exist yet (payment is gated on dispatch + answer), so
+  // demanding it here would make the auto-hold impossible by construction.
+  if (input.trigger !== "PROFORMA_DISPATCH") {
+    const payment = await paymentService.evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio!.id });
+    enforceAdvancePaymentSatisfiedOrCreditExtensionPresent({ isAdvancePaymentSatisfied: payment.satisfied });
+  }
 
   const useType = String((entry as any).useType ?? "");
   await enforceFocValidationForCommittedHold(prisma, {
@@ -345,7 +369,14 @@ export async function placeCommittedHold(
         stageContext: Stage.S3,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { committedHoldId: hold.id, roomId: input.roomId, expiresAt: expiresAt.toISOString(), upgradedFromSpeculative: !!spec },
+        payload: {
+          committedHoldId: hold.id,
+          roomId: input.roomId,
+          expiresAt: expiresAt.toISOString(),
+          upgradedFromSpeculative: !!spec,
+          trigger: input.trigger ?? "MANUAL",
+          ...(input.triggerInvoiceId ? { triggerInvoiceId: input.triggerInvoiceId } : {}),
+        },
         createdBy: actor.actorId,
       },
     });

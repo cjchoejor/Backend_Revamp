@@ -13,6 +13,8 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
+import { firstRoomId, readOptionSelected } from "../../lib/option-selected-reader.js";
+import { placeCommittedHold } from "./s3-hold-service.js";
 import { generateOrLoadInvoicePdf } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
@@ -123,7 +125,117 @@ export async function issueInvoiceAtS9(
   });
 }
 
-export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, actorId: string, input?: { dispatchedTo?: string }) {
+/**
+ * Outcome of the automatic committed-hold placement fired by a proforma dispatch
+ * (2026-08-08 operator ruling: sending the PI to the guest holds the rooms — the dispatched
+ * bill is the commercial basis; a generated-but-unsent PI leaves the hold a manual action).
+ * Best-effort: the dispatch itself never fails because the hold couldn't be placed — the
+ * desk reads this to tell the operator what happened.
+ */
+export type DispatchAutoHoldOutcome =
+  | { placed: true; holdId: string; roomId: string; expiresAt: string }
+  | {
+      placed: false;
+      reason: "NOT_AT_S3" | "ENTRY_NOT_ACTIVE" | "ALREADY_HELD" | "NO_SEALED_SELECTION" | "PLACEMENT_FAILED";
+      message: string;
+      holdId?: string;
+    };
+
+async function autoPlaceCommittedHoldOnProformaDispatch(
+  prisma: PrismaClient,
+  invoice: { id: string; entryId: string },
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+): Promise<DispatchAutoHoldOutcome | null> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: invoice.entryId },
+    select: {
+      id: true,
+      currentStage: true,
+      status: true,
+      inquiryId: true,
+      committedHold: { select: { id: true, state: true } },
+      availabilityConfigs: {
+        where: { sealedAt: { not: null } },
+        orderBy: { sealedAt: "desc" },
+        take: 1,
+        select: { optionSelected: true },
+      },
+    },
+  });
+  if (!entry) return null;
+  if (entry.currentStage !== Stage.S3) {
+    return { placed: false, reason: "NOT_AT_S3", message: "the booking isn't at Set up" };
+  }
+  if (entry.status !== EntryStatus.ACTIVE) {
+    return { placed: false, reason: "ENTRY_NOT_ACTIVE", message: `the booking is ${String(entry.status).toLowerCase()}` };
+  }
+  const holdState = entry.committedHold?.state ?? null;
+  if (holdState === "PLACED" || holdState === "CONFIRMED") {
+    return { placed: false, reason: "ALREADY_HELD", holdId: entry.committedHold!.id, message: "a committed hold is already in place" };
+  }
+  const sealed = readOptionSelected(entry.availabilityConfigs[0]?.optionSelected ?? null);
+  // Primary room = the anchor: the room claimed on the most nights of a per-night seal (ties →
+  // first), else the first sealed room. Matches the desk's `preferredHoldRoomId` pick so the
+  // speculative-hold upgrade lands on the same room the S2 hold targeted.
+  let primary: string | null = null;
+  if ((sealed.perNight?.length ?? 0) > 0) {
+    const counts = new Map<string, number>();
+    for (const night of sealed.perNight!) {
+      for (const roomId of night.roomIds) counts.set(roomId, (counts.get(roomId) ?? 0) + 1);
+    }
+    let best = -1;
+    for (const [roomId, n] of counts) {
+      if (n > best) {
+        best = n;
+        primary = roomId;
+      }
+    }
+  }
+  primary ??= firstRoomId(sealed) ?? null;
+  if (!primary) {
+    return { placed: false, reason: "NO_SEALED_SELECTION", message: "no sealed room selection from Inquiry" };
+  }
+  try {
+    const hold = await placeCommittedHold(prisma, entry.id, actor, {
+      roomId: primary,
+      commercialJustification: `Auto-held on proforma dispatch (${invoice.id})`,
+      trigger: "PROFORMA_DISPATCH",
+      triggerInvoiceId: invoice.id,
+    });
+    return { placed: true, holdId: hold.id, roomId: primary, expiresAt: hold.expiresAt.toISOString() };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    // The dispatch already committed — surface the miss to the operator AND the audit trail,
+    // never fail the dispatch over it.
+    await prisma.traceEvent
+      .create({
+        data: {
+          eventType: "COMMITTED_HOLD.AUTO_PLACE_ON_PI_DISPATCH_SKIPPED",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Invoice",
+          entityId: invoice.id,
+          operation: "UPDATE",
+          timestamp: new Date(),
+          stageContext: Stage.S3,
+          inquiryId: entry.inquiryId,
+          entryId: entry.id,
+          payload: { invoiceId: invoice.id, message },
+          createdBy: actor.actorId,
+        } as any,
+      })
+      .catch(() => {});
+    return { placed: false, reason: "PLACEMENT_FAILED", message };
+  }
+}
+
+export async function dispatchInvoice(
+  prisma: PrismaClient,
+  invoiceId: string,
+  actorId: string,
+  input?: { dispatchedTo?: string },
+  actorLevel?: "L1" | "L2" | "L3" | "L4",
+) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new NotFoundError("Invoice");
   if (invoice.state !== InvoiceState.DRAFT) return invoice;
@@ -265,11 +377,19 @@ export async function dispatchInvoice(prisma: PrismaClient, invoiceId: string, a
     return updated;
   });
 
+  // PI dispatch auto-holds the rooms (2026-08-08 operator ruling) — best-effort, post-tx:
+  // the dispatch is durable by now, and a hold that can't be placed (missing disclosure,
+  // room conflict, wrong stage) is reported back for the desk to say "place it manually".
+  const autoHold =
+    result.invoiceType === InvoiceType.PROFORMA
+      ? await autoPlaceCommittedHoldOnProformaDispatch(prisma, result, { actorId, actorLevel: actorLevel ?? "L1" })
+      : null;
+
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
   await sendInvoiceEmailBestEffort(prisma, actorId, result.id);
 
-  return result;
+  return { ...result, autoHold };
 }
 
 async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string, invoiceId: string) {
