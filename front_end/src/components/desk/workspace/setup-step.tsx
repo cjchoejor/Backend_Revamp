@@ -372,13 +372,33 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       return placeCommittedHold(session!, entry.id, { roomId: preferredRoomId, commercialJustification: holdJustification.trim() });
     }, "Committed hold placed"),
   );
-  const dispatchM = useMutation(
-    wrap(() => {
+  const dispatchM = useMutation({
+    mutationFn: () => {
       const inv = proformaInvoices.find((i) => i.state === "DRAFT") ?? proformaInvoices[0];
       if (!inv) throw new Error("No proforma invoice");
       return dispatchInvoice(session!, inv.id, { dispatchedTo: dispatchTo.trim() || undefined });
-    }, "Proforma invoice dispatched"),
-  );
+    },
+    onSuccess: (res) => {
+      toast.success("Proforma invoice dispatched");
+      // Sending the PI holds the rooms automatically (2026-08-08 operator ruling) — the
+      // backend reports what happened, and the hold block below flips to Held on refetch.
+      const ah = res.autoHold;
+      if (ah?.placed) {
+        toast.success("Rooms held for this booking", {
+          description:
+            "The proforma went to the guest, so the committed hold was placed automatically. It runs on the standard hold clock and frees itself if nothing follows.",
+          duration: 9000,
+        });
+      } else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD") {
+        toast.warning("Rooms not auto-held", {
+          description: `${ah.message} — place the committed hold manually below.`,
+          duration: 10000,
+        });
+      }
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+  });
   const coordinatorM = useMutation(
     wrap(() => confirmCoordinator(session!, entry.id, { coordinatorName: coordinatorName.trim(), authorityScope: coordinatorScope.trim() }), "Coordinator confirmed"),
   );
@@ -1061,6 +1081,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5 }}>
             <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
             Hold {hold.state} · room {hold.roomId?.slice(0, 10) ?? "—"} · expires {hold.expiresAt.slice(0, 16).replace("T", " ")}
+            {/* Auto-placed holds say so — the justification is stamped by the dispatch hook. */}
+            {hold.commercialJustification?.startsWith("Auto-held on proforma dispatch") && (
+              <span style={{ color: "var(--ink-3)", fontSize: 11 }}> · held automatically when the proforma was sent</span>
+            )}
           </div>
         ) : (
           <>
@@ -1077,6 +1101,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             </button>
             {!disclosure && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>Record cancellation terms before placing the hold.</p>}
             {!preferredRoomId && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>No preferred room — complete Inquiry first.</p>}
+            {/* 2026-08-08 ruling: dispatching the PI places this hold automatically. The manual
+                button is the path for bookings whose proforma is generated but never sent. */}
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 0 }}>
+              Sending the proforma to the guest places this hold automatically — use the button when the
+              proforma isn&rsquo;t being sent.
+            </p>
           </>
         )}
       </div>

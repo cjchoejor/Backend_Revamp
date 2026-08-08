@@ -210,8 +210,17 @@ export async function issueProformaInvoice(
   });
 }
 
+/**
+ * Outcome of the backend's automatic committed-hold placement on PI dispatch (2026-08-08:
+ * sending the proforma holds the rooms; a generated-but-unsent PI leaves the hold manual).
+ * `placed: false` carries a desk-readable `message` — the operator is told to hold manually.
+ */
+export type DispatchAutoHold =
+  | { placed: true; holdId: string; roomId: string; expiresAt: string }
+  | { placed: false; reason: string; message: string; holdId?: string };
+
 export async function dispatchInvoice(session: Session, invoiceId: string, body?: { dispatchedTo?: string }) {
-  return apiRequest<InvoiceSummary>(`/api/invoices/${invoiceId}/dispatch`, {
+  return apiRequest<InvoiceSummary & { autoHold?: DispatchAutoHold | null }>(`/api/invoices/${invoiceId}/dispatch`, {
     method: "POST",
     session,
     body: body ?? {},
