@@ -17,7 +17,11 @@ import {
   cancelScheduledAdvancePromiseDeadlinesForEntry,
   evaluateAdvancePaymentConditionTx,
 } from "./s3-payment-service.js";
-import { confirmHeldRoomsAfterFullPaymentTx } from "./s3-hold-service.js";
+import {
+  autoPlaceCommittedHoldOnAdvancePayment,
+  confirmHeldRoomsAfterFullPaymentTx,
+  type AdvancePaymentAutoHoldOutcome,
+} from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 
@@ -110,15 +114,23 @@ export async function getOrCreateProvisionalFolioTx(
  * request): a guest who paid part of the advance at setup settles the remainder before
  * arrival, at the check-in desk, or — via S8 settlement, not this path — at check-out. The
  * payment row is stamped with the stage it was actually taken at.
+ *
+ * Money received at S3 auto-places the committed hold (2026-08-10 operator ruling, replacing
+ * the 2026-08-08 dispatch-time auto-hold): a PARTIAL payment counts — the guest putting money
+ * down is the commercial basis for pinning the rooms. Best-effort and post-tx (the payment is
+ * durable first; a hold that can't be placed is reported back on `autoHold` for the desk to
+ * say "place it manually"). S4–S6 remainder collection never attempts it — the hold is
+ * confirmed at the freeze.
  */
 export async function recordPayment(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
   input: { entryId: string; amount: number; notes?: string | null },
+  actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
   const amountNum = input.amount;
-  return prisma.$transaction(async (tx) => {
+  const txResult = await prisma.$transaction(async (tx) => {
     const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true, invoices: true } });
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
@@ -213,8 +225,19 @@ export async function recordPayment(
       },
     });
 
-    return created;
+    return { created, stageAtPayment };
   });
+
+  const autoHold: AdvancePaymentAutoHoldOutcome | null =
+    txResult.stageAtPayment === Stage.S3
+      ? await autoPlaceCommittedHoldOnAdvancePayment(
+          prisma,
+          { id: txResult.created.id, entryId: input.entryId },
+          { actorId, actorLevel: actorLevel ?? "L1" },
+        )
+      : null;
+
+  return { ...txResult.created, autoHold };
 }
 
 /**

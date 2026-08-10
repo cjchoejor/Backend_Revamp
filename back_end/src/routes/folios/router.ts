@@ -35,7 +35,13 @@ export const foliosRouter = Router();
 foliosRouter.post("/folios/:id/payments", requireActorLevel("L1"), validateBody(recordFolioPaymentRequestSchema), async (req, res, next) => {
   try {
     const { entryId, amount, notes } = req.body;
-    const rec = await s3FolioService.recordPayment(prisma, req.params.id, req.actor!.actorId, { entryId, amount, notes: notes ?? null });
+    const rec = await s3FolioService.recordPayment(
+      prisma,
+      req.params.id,
+      req.actor!.actorId,
+      { entryId, amount, notes: notes ?? null },
+      req.actor!.level,
+    );
     res.status(201).json(rec);
   } catch (e) {
     next(e);
@@ -294,13 +300,7 @@ foliosRouter.post("/folios/:id/post-stay-charges", requireActorLevel("L2"), vali
 
 foliosRouter.post("/invoices/:id/dispatch", requireActorLevel("L1"), validateBody(dispatchInvoiceRequestSchema), async (req, res, next) => {
   try {
-    const updated = await s9Service.dispatchInvoice(
-      prisma,
-      req.params.id,
-      req.actor!.actorId,
-      req.body,
-      req.actor!.level,
-    );
+    const updated = await s9Service.dispatchInvoice(prisma, req.params.id, req.actor!.actorId, req.body);
     res.json(updated);
   } catch (e) {
     next(e);
