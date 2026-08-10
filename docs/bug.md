@@ -18,6 +18,23 @@ So escalation lands at 2h and the gentle nudge at 24h. The two values live on di
 
 Config/policy locations: `/admin/financial` → `advancePayment.thresholds`, `advancePayment.followUpWindowSeconds`, `advancePayment.escalationWindowSeconds`. `/admin/policies` → `registry.advancePaymentFollowUp.windowSeconds`.
 
+## FUTURE SCOPE — Stay packages (`PackageRegistry`) affect nothing (found 2026-08-04)
+
+**Deferred deliberately — the user will look at this last.** Logged so it isn't rediscovered as a surprise.
+
+`/admin/packages` ("Stay packages (inclusions)") manages `PackageRegistry`: a named bundle of inclusions plus a price adjustment. The one existing row is `Honeymoon Package` — inclusions "Welcome flowers" / "Candlelight dinner", `priceAdjustment` 1500, `isActive: false`.
+
+**Nothing reads it.** `git grep` over `back_end/src` finds only its own admin CRUD and an entry in `TRACKED_ENTITY_TYPES` for version snapshots. No pricing, quotation, folio or invoice code consults it, so buying a stay package changes no bill. There is also no way for an operator to attach one to a booking — no field on Inquiry/Entry, nothing in the S1 or S2 surfaces.
+
+Same shape as the walk-in flag below: a configuration surface that looks load-bearing and is not. Distinct from `RatePackage` — see the disambiguation table in CLAUDE.md:
+
+| Concept | Belongs to | Holds | Answers |
+|---|---|---|---|
+| `RatePackage` | an agency or company | room + meal **rates** | "what does this agent pay?" |
+| `PackageRegistry` | the hotel, offered to any guest | **inclusions** + price adjustment | "what extras did this guest buy?" |
+
+→ When picked up: decide whether a stay package is selected at S1 (like the rate package) or added at S7 as a folio line, then wire `priceAdjustment` into the pricing path and surface the inclusions on the confirmation voucher. Until then, treat the page as a place to record intent, not something that bills.
+
 ## OPEN — "Set walk-in" on /admin/rate-plans is wired to nothing (found 2026-08-04)
 
 The column writes the config key `availability.walkIn.ratePlanId`, and that key is read in exactly two places, both administrative:

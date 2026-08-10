@@ -18,6 +18,12 @@ export const createInquiryRequestSchema = z
     travelAgentId: z.string().min(1).nullable().optional(),
     /** Phase C — optional link to a CorporateAccount (Phase B model). Mutually exclusive with travelAgentId. */
     corporateAccountId: z.string().min(1).nullable().optional(),
+    /**
+     * Which negotiated package this booking is quoted on (2026-08-04). Omit to let pricing use
+     * the party's default package, then the COMMON one. The service verifies it belongs to the
+     * party — a package from another agency would price the wrong rate.
+     */
+    ratePackageId: z.string().min(1).nullable().optional(),
   })
   .refine((v) => !(v.travelAgentId && v.corporateAccountId), {
     message: "An inquiry can be linked to a travel agent OR a corporate account, not both",

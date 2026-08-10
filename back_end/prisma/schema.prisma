@@ -800,6 +800,12 @@ model Inquiry {
   /// pre-Phase-B data; new intake forms write to these two FKs.
   travelAgentId              String?
   corporateAccountId         String?
+  /// WHICH negotiated package the operator chose for this booking.
+  ///
+  /// Required once agents can carry several packages: linking to "Bhutan INC" alone no longer
+  /// says whether the guest gets the season, off-season or premium rate. Nullable because
+  /// pre-2026-08-04 inquiries predate the concept and direct bookings have no party at all.
+  ratePackageId              String?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
   createdBy                  String    @default("actor-seed-system")
@@ -812,10 +818,12 @@ model Inquiry {
   agentProfile     AgentProfile?            @relation(fields: [agentProfileId], references: [id])
   travelAgent      TravelAgent?             @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
   corporateAccount CorporateAccount?        @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
+  ratePackage      RatePackage?             @relation(fields: [ratePackageId], references: [id], onUpdate: Cascade)
 
   @@index([guestProfileId])
   @@index([travelAgentId])
   @@index([corporateAccountId])
+  @@index([ratePackageId])
   @@map("inquiries")
 }
 
@@ -1231,7 +1239,8 @@ model RoomType {
 
   rooms          Room[]
   committedHolds CommittedHold[]
-  rateOverrides  RoomTypeRateOverride[]
+  rateOverrides    RoomTypeRateOverride[]
+  packageOverrides RoomTypePackageOverride[]
 
   @@map("room_types")
 }
@@ -2364,19 +2373,30 @@ enum MealPlanType {
  * row at the time of booking, not here. This table carries agent identity + their
  * negotiated rate card.
  */
+/**
+ * A travel agency. Holds ONLY the agency's identity and contact details — never rates.
+ *
+ * 2026-08-04: rates moved out to `RatePackage`. Previously each negotiated rate variant was a
+ * SEPARATE agent row ("Bhutan INC (Off season)", "Bhutan INC (Season)", "Bhutan INC(premium)"),
+ * because agent and rate card were fused one-to-one. That made one agency look like three
+ * agencies, and every contact detail had to be kept in sync across them.
+ */
 model TravelAgent {
-  id            String      @id // readable TA-YYYYMMDD-NNNN
-  displayName   String
-  contactNumber String?
-  contactEmail  String?
-  modeOfContact ContactMode @default(PHONE)
-  notes         String?
-  isActive      Boolean     @default(true)
-  createdAt     DateTime    @default(now())
-  createdBy     String
-  updatedAt     DateTime    @updatedAt
+  id          String @id // readable TA-YYYYMMDD-NNNN
+  displayName String
+  /// An agency often has several numbers (office, owner, WhatsApp). `contactNumber` held one
+  /// and the rest were lost or crammed into notes.
+  contactNumbers String[]    @default([])
+  contactEmail   String?
+  modeOfContact  ContactMode @default(PHONE)
+  notes          String?
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  createdBy      String
+  updatedAt      DateTime    @updatedAt
 
   inquiries Inquiry[]
+  packages  RatePackage[]
 
   @@index([displayName])
   @@index([isActive])
@@ -2388,10 +2408,11 @@ model TravelAgent {
  * Distinct from TravelAgent because corporates carry tax + billing fields and don't
  * carry commission. Tracked by EntityVersionSnapshot.
  */
+/** A company account. Identity and billing details only — rates live on `RatePackage`. */
 model CorporateAccount {
   id             String      @id // readable CORP-YYYYMMDD-NNNN
   displayName    String
-  contactNumber  String?
+  contactNumbers String[]    @default([])
   contactEmail   String?
   modeOfContact  ContactMode @default(EMAIL)
   gstNumber      String?
@@ -2403,10 +2424,105 @@ model CorporateAccount {
   updatedAt      DateTime    @updatedAt
 
   inquiries Inquiry[]
+  packages  RatePackage[]
 
   @@index([displayName])
   @@index([isActive])
   @@map("corporate_accounts")
+}
+
+/**
+ * A named set of negotiated rates — the thing an operator actually picks when quoting.
+ *
+ * WHY THIS EXISTS (2026-08-04)
+ * ---------------------------
+ * Rates lived on `RateCard`, one per party, so a single agency that negotiated a season rate,
+ * an off-season rate and a premium rate had to be entered as THREE separate travel agents. The
+ * dev database carried exactly that: 136 parties, 136 rate cards, and nine agencies split
+ * across two to four rows each ("Vitogo Pvt Ltd (Rooms_season)", "(Apartment Off season)", …).
+ * Contact details were duplicated across the copies and drifted.
+ *
+ * A package now belongs to an agency, a company, or to nobody:
+ *   scope = TRAVEL_AGENT -> travelAgentId set
+ *   scope = CORPORATE    -> corporateAccountId set
+ *   scope = COMMON       -> both null; the house fallback used when a party has no package of
+ *                           its own, so a brand-new agent can be quoted the day they call.
+ * A DB check constraint enforces that pairing — a package pointing at the wrong party, or at
+ * both, would silently price the wrong booking.
+ *
+ * Versioned append-only like RateCard was: editing closes the current row with `effectiveTo`
+ * and inserts a new one, so a quotation issued last month can still be re-derived.
+ */
+model RatePackage {
+  id String @id @default(uuid())
+
+  /// Which kind of party this belongs to. Explicit rather than inferred from the FKs so a
+  /// query can filter on it directly and the check constraint has something to verify against.
+  scope              RatePackageScope
+  travelAgentId      String?
+  corporateAccountId String?
+
+  /// Operator-facing name: "Off season", "Season", "Premium", "5 Rooms & more".
+  /// Agencies with a single negotiated rate get "Standard".
+  name String
+
+  /// Preselected in the picker when this party has more than one package.
+  isDefault Boolean @default(false)
+
+  // === Rates (same shape RateCard carried) ===
+  roomBaseRate       Decimal  @db.Decimal(10, 2)
+  extraBedRate       Decimal? @db.Decimal(10, 2)
+  cnbPercent         Int?
+  breakfastRate      Decimal? @db.Decimal(10, 2)
+  lunchRate          Decimal? @db.Decimal(10, 2)
+  dinnerRate         Decimal? @db.Decimal(10, 2)
+  cpRate             Decimal? @db.Decimal(10, 2)
+  mapLunchRate       Decimal? @db.Decimal(10, 2)
+  mapDinnerRate      Decimal? @db.Decimal(10, 2)
+  apRate             Decimal? @db.Decimal(10, 2)
+  currency           String   @default("BTN")
+  rateIsTaxInclusive Boolean  @default(false)
+
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime? // null = currently active
+  notes         String?
+  createdAt     DateTime  @default(now())
+  createdBy     String
+
+  travelAgent      TravelAgent?      @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
+  corporateAccount CorporateAccount? @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
+  overrides        RoomTypePackageOverride[]
+  inquiries        Inquiry[]
+
+  @@index([scope, effectiveTo])
+  @@index([travelAgentId, effectiveTo])
+  @@index([corporateAccountId, effectiveTo])
+  @@map("rate_packages")
+}
+
+enum RatePackageScope {
+  TRAVEL_AGENT
+  CORPORATE
+  /// The house fallback, used when a party has no package of its own.
+  COMMON
+}
+
+/** Per-room-type room rate override on a package. Mirrors the old RoomTypeRateOverride. */
+model RoomTypePackageOverride {
+  id            String   @id @default(uuid())
+  ratePackageId String
+  roomTypeId    String
+  roomBaseRate  Decimal  @db.Decimal(10, 2)
+  notes         String?
+  createdAt     DateTime @default(now())
+  createdBy     String
+
+  ratePackage RatePackage @relation(fields: [ratePackageId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  roomType    RoomType    @relation(fields: [roomTypeId], references: [id], onUpdate: Cascade)
+
+  @@unique([ratePackageId, roomTypeId])
+  @@index([roomTypeId])
+  @@map("room_type_package_overrides")
 }
 
 /**
@@ -2416,6 +2532,15 @@ model CorporateAccount {
  * the rate card that was active at the time they were quoted.
  * `partyType` + `partyId` is a polymorphic reference; no Prisma FK constraint. The admin
  * service validates the referenced party exists on every write.
+ */
+/**
+ * ⚠ RETIRED 2026-08-04 — superseded by `RatePackage`. No code reads this.
+ *
+ * Kept only as the historical source the package migration copied from: every row was carried
+ * across by `scripts/migrate-rate-cards-to-packages.ts`, and that script reads this table, so
+ * dropping it would make the migration un-rerunnable while the grouping decisions are still
+ * being reviewed. Drop both this and `RoomTypeRateOverride` once the packages have been used in
+ * anger and nobody wants to re-run the grouping.
  */
 model RateCard {
   id                 String    @id // readable RC-YYYYMMDD-NNNN

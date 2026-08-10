@@ -4,10 +4,11 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { cleanNumbers } from "./travel-agent-admin-service.js";
 
 export type CorporateAccountInput = {
   displayName: string;
-  contactNumber?: string | null;
+  contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
   gstNumber?: string | null;
@@ -55,7 +56,7 @@ export async function createCorporateAccount(prisma: PrismaClient, input: Corpor
       data: {
         id,
         displayName: input.displayName.trim(),
-        contactNumber: input.contactNumber?.trim() || null,
+        contactNumbers: cleanNumbers(input.contactNumbers) ?? [],
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
         gstNumber: input.gstNumber?.trim() || null,
@@ -96,7 +97,7 @@ export async function updateCorporateAccount(
       where: { id },
       data: {
         displayName: input.displayName?.trim(),
-        contactNumber: input.contactNumber === undefined ? undefined : input.contactNumber?.trim() || null,
+        contactNumbers: input.contactNumbers === undefined ? undefined : (cleanNumbers(input.contactNumbers) ?? []),
         contactEmail: input.contactEmail === undefined ? undefined : input.contactEmail?.trim() || null,
         modeOfContact: input.modeOfContact ?? undefined,
         gstNumber: input.gstNumber === undefined ? undefined : input.gstNumber?.trim() || null,

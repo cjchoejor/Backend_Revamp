@@ -7,12 +7,19 @@ import { allocateReadableId } from "../../lib/readable-id.js";
 
 export type TravelAgentInput = {
   displayName: string;
-  contactNumber?: string | null;
+  /** An agency often has several numbers (office, owner, WhatsApp) — all are kept. */
+  contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
   notes?: string | null;
   isActive?: boolean;
 };
+
+/** Trim, drop blanks, de-duplicate — a stored empty string reads as "has a number" downstream. */
+export function cleanNumbers(v: string[] | null | undefined): string[] | null {
+  if (v == null) return null;
+  return [...new Set(v.map((s) => String(s).trim()).filter((s) => s.length > 0))];
+}
 
 const ALLOWED_CONTACT_MODES: ContactMode[] = [
   ContactMode.PHONE,
@@ -53,7 +60,7 @@ export async function createTravelAgent(prisma: PrismaClient, input: TravelAgent
       data: {
         id,
         displayName: input.displayName.trim(),
-        contactNumber: input.contactNumber?.trim() || null,
+        contactNumbers: cleanNumbers(input.contactNumbers) ?? [],
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
         notes: input.notes?.trim() || null,
@@ -92,7 +99,7 @@ export async function updateTravelAgent(
       where: { id },
       data: {
         displayName: input.displayName?.trim(),
-        contactNumber: input.contactNumber === undefined ? undefined : input.contactNumber?.trim() || null,
+        contactNumbers: input.contactNumbers === undefined ? undefined : (cleanNumbers(input.contactNumbers) ?? []),
         contactEmail: input.contactEmail === undefined ? undefined : input.contactEmail?.trim() || null,
         modeOfContact: input.modeOfContact ?? undefined,
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,

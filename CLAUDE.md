@@ -547,6 +547,64 @@ Two new domain services drive the child-policy runtime.
 
 **[`capacity-validation-service.ts`](back_end/src/services/domain/capacity-validation-service.ts)** — `validateCapacity(prisma, { roomTypeId?, adults, childAges })` returns issues with codes: `OVER_MAX_OCCUPANCY`, `OVER_MAX_CHILDREN`, `TOO_FEW_ADULTS`, `ADULT_CHILD_RATIO_EXCEEDED`, `UNACCOMPANIED_MINOR`, `CHILD_AGE_ABOVE_LEGAL_MINOR`, `NO_ROOM_TYPE`. Severity `BLOCK` or `WARN`. Two independent age cuts run: pricing bands (child-policy `ageBands`) for bed/meal/room-capacity math; legal age (`unaccompaniedMinor.minimumAge`) for supervision + responsibility. Called from `s1EntryService.createEntry` + `updateEntryIntakeFields` — BLOCK issues throw `ValidationError`.
 
+### RatePackage — rates move off the party (2026-08-04, IN PROGRESS)
+
+Agent and rate card were fused one-to-one, so every negotiated variant had to be its own travel-agent row: "Bhutan INC (Off season)", "(Season)", "(premium)" were three agencies with duplicated contact details. The dev DB held 136 parties / 136 rate cards, nine agencies split across 2–4 rows.
+
+**`RatePackage`** ([schema.prisma](back_end/prisma/schema.prisma), migration `20260804140000_rate_packages`) is a named set of rates belonging to an agency, a company, or nobody:
+
+| `scope` | FK set | Meaning |
+|---|---|---|
+| `TRAVEL_AGENT` | `travelAgentId` | that agency's package |
+| `CORPORATE` | `corporateAccountId` | that company's package |
+| `COMMON` | neither | house fallback when a party has no package of its own |
+
+A DB check constraint `rate_package_scope_matches_party` enforces the pairing — a package whose scope disagrees with its FK would price the wrong booking silently. `RoomTypePackageOverride` mirrors the old per-room-type override.
+
+**`Inquiry.ratePackageId`** records WHICH package the operator chose. Once an agency carries several packages, linking to the agency alone no longer says whether the guest gets season, off-season or premium.
+
+**`TravelAgent.contactNumber` / `CorporateAccount.contactNumber` became `contactNumbers String[]`** — an agency usually has several (office, owner, WhatsApp) and the single column lost the rest. Existing values carried across as the first entry.
+
+**Data migration**: [`scripts/migrate-rate-cards-to-packages.ts`](back_end/scripts/migrate-rate-cards-to-packages.ts), dry-run by default, `--commit` to write. Already applied. Grouping rules agreed with the operator: group by base name **case-insensitively** (so "WeGOauthentic" and "WegoAuthentic" merge); a trailing `(...)` becomes a package name **only** if it reads like a rate variant (season / premium / room count / room type), otherwise it stays part of the agency name (`(Jaigoan)`, `(Hotel Gumar)`); single-rate agencies get a package named "Standard"; the surviving row is the one with the most inquiries. Merged-away rows are **deactivated, not deleted**.
+
+Result: 128 agent rows → **114 agencies**, 137 packages (127 agent + 9 corporate + 1 common), 88 agent-linked inquiries **all** carrying a package, zero broken FKs.
+
+**Pricing now resolves from packages** ([`lib/rate-package-resolution.ts`](back_end/src/lib/rate-package-resolution.ts)). `resolveRatePackageForBooking` tries, in order:
+
+1. `Inquiry.ratePackageId` — the operator's explicit choice. **Not** date-filtered: a booking quoted on a since-superseded package must still resolve to the one it was quoted on.
+2. The party's own package — `isDefault` first, then most recent active.
+3. The `COMMON` package — so a newly-signed agency can be quoted the day they call.
+
+A booking with **no party** returns `null` and prices from rate plans + `HouseTariff`. The COMMON package is a fallback for agents and companies, never a substitute for walk-in pricing.
+
+`commercialTerms.agentRate` now carries `ratePackageId`, `packageName` and `resolvedVia` so any quote can be explained without re-deriving the order. Verified against real data: explicit selection returns each of Bhutan INC's three rates; no selection returns its default (Season); a package-less agent falls to COMMON; no party returns null; and all 127 agent cards have a package with identical rates.
+
+**Admin surface** — [`rate-package-admin-service.ts`](back_end/src/services/admin/rate-package-admin-service.ts) + [`rate-package-router.ts`](back_end/src/routes/admin/rate-package-router.ts), L4-only:
+
+- `GET /api/admin/rate-packages[?travelAgentId=|?corporateAccountId=]` — active packages; **no owner param = the COMMON package**
+- `GET …/history` · `POST …` (save = new version) · `POST …/:id/default` · `POST …/:id/retire`
+- `PUT …/:id/overrides` · `DELETE …/overrides/:overrideId`
+
+Saving a package whose **name already exists for that owner** closes the prior row and inserts a new one, carrying its room-type overrides forward — an admin adjusting a base rate must not silently lose the per-type exceptions. `scopeOf()` derives the scope from which owner is set and rejects an ambiguous pair before the DB check constraint has to.
+
+**UI**: [`rate-packages-editor.tsx`](front_end/src/components/admin/rate-packages-editor.tsx) replaces `rate-card-editor`, used on `/admin/travel-agents`, `/admin/corporate-accounts` and `/admin/common-rate-package`. Contact fields on both party pages now take a comma-separated list into `contactNumbers`.
+
+**The COMMON package has its own page** — `/admin/common-rate-package`, nav entry under Domain 03 next to House tariff. It was first placed in the travel-agents page's empty state, where nobody found it; a hotel-wide setting needs its own home, exactly as HouseTariff does. Note **three easily-confused Domain 03 entries**, deliberately renamed so they read differently in the sidebar:
+
+| Nav entry | What it is |
+|---|---|
+| Stay packages (inclusions) | ACIG §6.2.10 `PackageRegistry` — stay inclusions, **not rates** |
+| Travel agents & rate packages | agencies + their negotiated `RatePackage` rows |
+| Common rate package | the `COMMON`-scope fallback for a party with no package |
+
+Verified through the real service: a second save of "Season" produced two rows (old closed, new active); `setDefault` left exactly one default; a room-type override survived the next version and resolved at the overridden rate; the COMMON package is reachable with no owner; and an owner pair naming both an agent and a corporate was refused.
+
+**S1 picker** — `GET /api/lookups/rate-packages?travelAgentId=|corporateAccountId=` (L1) returns a party's sellable packages, default first. `PackagePicker` in [new-inquiry-form.tsx](front_end/src/components/desk/inquiry/new-inquiry-form.tsx) appears once a party is chosen and adapts to what the party has: a **dropdown** for several packages (default preselected), a **plain statement** for one (no decision to make), and a note that the **common package** applies when they have none. `createInquiry` accepts `ratePackageId` and rejects a package belonging to a different party — otherwise a booking could be priced on another agency's negotiated rate.
+
+Verified: choosing Premium resolves 2,640 via `INQUIRY_SELECTION` where the default gives 1,920 via `PARTY_DEFAULT`, so the choice genuinely moves the price; a cross-party package is refused; all 88 agent-linked inquiries carry a package.
+
+**`RateCard` is retired.** `rate-card-router.ts`, `rate-card-admin-service.ts`, `rate-card-editor.tsx`, `agent-rate-resolution.ts` and the rate-card API client functions are all **deleted**; `AgentRateBreakdown` moved to `rate-package-resolution.ts`. **The two tables are deliberately kept** — `scripts/migrate-rate-cards-to-packages.ts` reads them, so dropping them would make the migration un-rerunnable while the grouping decisions are still under review. Drop `RateCard` + `RoomTypeRateOverride` once the packages have been used in anger and nobody wants to redo the grouping.
+
 ### Deficiency reporting — operational, verifiable, and covers spaces (2026-08-04)
 
 Reporting a fault used to be L4-only on `/admin/rooms`, so a broken room stayed sellable until an admin was available. It is now an operational surface with a two-tier authority model, and spaces are reportable too.

@@ -29,7 +29,7 @@ import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-pla
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
+import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib/rate-package-resolution.js";
 import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
@@ -47,36 +47,55 @@ import { enforceCompositionCountsConsistent } from "../../policies/34-room-compo
 import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-pdf.js";
 
 /**
- * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
- * the rate-resolution helper. Returns null if no party is linked OR the linked party has no
- * active rate card. Callers use this to optionally override the standard rate plan resolution.
+ * Resolve the negotiated rate for this booking from `RatePackage` (2026-08-04, was RateCard).
+ *
+ * Order: the package the operator chose on the inquiry, else the party's own default package,
+ * else the COMMON house package so a newly-signed agency can still be quoted. Returns null when
+ * the booking has NO party — that is a walk-in, priced from rate plans + HouseTariff.
+ *
+ * Shape is deliberately the same as the old `AgentRateBreakdown` so the composition pricing
+ * below is untouched; `mealPlanRates` and `addOns` carry across field for field.
  */
 async function resolveAgentRateForEntryQuotation(
   prisma: PrismaClient,
   args: { inquiryId: string; roomTypeId: string; asOf?: Date },
-): Promise<AgentRateBreakdown | null> {
+): Promise<(AgentRateBreakdown & { ratePackageId: string; packageName: string; resolvedVia: string }) | null> {
   const inq = await prisma.inquiry.findUnique({
     where: { id: args.inquiryId },
-    select: { travelAgentId: true, corporateAccountId: true },
+    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true },
   });
   if (!inq) return null;
-  if (inq.travelAgentId) {
-    return resolveAgentRate(prisma, {
-      partyType: "TRAVEL_AGENT",
-      partyId: inq.travelAgentId,
-      roomTypeId: args.roomTypeId,
-      asOf: args.asOf,
-    });
-  }
-  if (inq.corporateAccountId) {
-    return resolveAgentRate(prisma, {
-      partyType: "CORPORATE",
-      partyId: inq.corporateAccountId,
-      roomTypeId: args.roomTypeId,
-      asOf: args.asOf,
-    });
-  }
-  return null;
+
+  const pkg = await resolveRatePackageForBooking(prisma, {
+    ratePackageId: inq.ratePackageId,
+    travelAgentId: inq.travelAgentId,
+    corporateAccountId: inq.corporateAccountId,
+    roomTypeId: args.roomTypeId,
+    asOf: args.asOf,
+  });
+  if (!pkg) return null;
+
+  // Adapt to the breakdown shape the pricing path already consumes. `rateCardId` keeps its name
+  // for the commercialTerms snapshot's sake but now carries the package id; `partyId`/`partyType`
+  // still describe who the rate belongs to, with COMMON reported as such.
+  return {
+    rateCardId: pkg.ratePackageId,
+    partyType: (pkg.scope === "CORPORATE" ? "CORPORATE" : "TRAVEL_AGENT") as AgentRateBreakdown["partyType"],
+    partyId: pkg.travelAgentId ?? pkg.corporateAccountId ?? "COMMON",
+    roomTypeId: pkg.roomTypeId,
+    roomRate: pkg.roomRate,
+    roomRateSource: pkg.roomRateSource,
+    mealPlan: null,
+    mealPlanRate: null,
+    mealPlanRates: pkg.mealPlanRates,
+    perNightTotal: pkg.roomRate,
+    addOns: pkg.addOns,
+    cnbPercent: pkg.cnbPercent,
+    currency: pkg.currency,
+    ratePackageId: pkg.ratePackageId,
+    packageName: pkg.packageName,
+    resolvedVia: pkg.resolvedVia,
+  };
 }
 
 /** Shape mirrors the Zod `roomCompositionInputSchema` DTO. Kept as a local type so the
@@ -509,8 +528,14 @@ async function prepareQuotationDraft(
             roomRate: agentRate.roomRate,
             roomRateSource: agentRate.roomRateSource,
             addOns: agentRate.addOns,
+            mealPlanRates: agentRate.mealPlanRates,
             cnbPercent: agentRate.cnbPercent,
             currency: agentRate.currency,
+            // Which package this came from, and how we got there — so a quote can always be
+            // explained without re-deriving the resolution order.
+            ratePackageId: (agentRate as { ratePackageId?: string }).ratePackageId ?? null,
+            packageName: (agentRate as { packageName?: string }).packageName ?? null,
+            resolvedVia: (agentRate as { resolvedVia?: string }).resolvedVia ?? null,
           },
           // Preserve the standard rate plan resolution as reference even when the agent rate is used.
           standardPricing: {
