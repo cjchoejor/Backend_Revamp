@@ -1162,10 +1162,20 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   }, [boardActive]);
 
   // Expanded view — the room list is the full property (27 rooms on real data), which does not
-  // fit the canvas column. Expanding lifts the same table to a full-screen layer with compact
-  // rows so every room is visible at once. `showNames` prints the holder in the cell instead of
-  // leaving it to a hover tooltip, which is unusable when scanning the whole grid.
+  // fit the canvas column. Expanding lifts the room block — table OR guest board — to a
+  // full-screen layer (the table gets compact rows so every room is visible at once), and a
+  // view switch keeps the layer open: collapsing on "Guest board" used to dump the operator at
+  // the top of the page with the board far below the fold (2026-08-10 report). `showNames`
+  // prints the holder in the cell instead of leaving it to a hover tooltip, which is unusable
+  // when scanning the whole grid.
   const [expanded, setExpanded] = useState(false);
+  // Closing the layer lands back ON the rooms block. The layer covered the whole viewport, so
+  // wherever the page was scrolled beneath it is meaningless to the operator — without this,
+  // Close/Escape read as "took me to the top of the page". Reuses the after-search scroller.
+  const closeExpanded = () => {
+    setExpanded(false);
+    setScrollToRooms(true);
+  };
   const [showNames, setShowNames] = useState(false);
   // Both survive a reload. Read in an effect rather than a useState initialiser so the server
   // render and the first client render agree (sessionStorage doesn't exist during SSR).
@@ -1191,7 +1201,10 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setExpanded(false);
+      if (e.key === "Escape") {
+        setExpanded(false);
+        setScrollToRooms(true);
+      }
     };
     window.addEventListener("keydown", onKey);
     // Stop the page behind the overlay scrolling with it.
@@ -1672,9 +1685,11 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
             <div ref={roomsRef} className={expanded ? "rst-expandwrap on" : "rst-expandwrap"}>
               {expanded && (
                 <div className="rst-expandbar">
-                  <b>Room status · {statusRows.length} rooms</b>
+                  <b>
+                    {boardActive ? "Guest board" : "Room status"} · {statusRows.length} rooms
+                  </b>
                   <span className="ln" />
-                  <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)}>
+                  <button type="button" className="btn btn-ghost" onClick={closeExpanded}>
                     <Minimize2 style={{ width: 13, height: 13 }} /> Close
                   </button>
                 </div>
@@ -1693,11 +1708,10 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     <button
                       type="button"
                       className={boardActive ? "on" : ""}
-                      onClick={() => {
-                        // The full-screen layer is a table affordance.
-                        setExpanded(false);
-                        setViewMode("board");
-                      }}
+                      // Deliberately does NOT touch `expanded`: switching views inside the
+                      // full-screen layer keeps the layer, so the board opens right where the
+                      // operator is looking instead of collapsing to the top of the page.
+                      onClick={() => setViewMode("board")}
                       title="Place each guest in a room — rooms with guests become the selection"
                     >
                       Guest board
@@ -1720,12 +1734,16 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
                     {showNames ? "Names on" : "Show names"}
                   </button>
                 )}
-                {!expanded && !boardActive && (
+                {!expanded && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
                     onClick={() => setExpanded(true)}
-                    title="Expand to full screen — fits every room on one screen"
+                    title={
+                      boardActive
+                        ? "Expand to full screen — room bins and the guest tray on one screen"
+                        : "Expand to full screen — fits every room on one screen"
+                    }
                   >
                     <Maximize2 style={{ width: 13, height: 13 }} /> Expand
                   </button>
