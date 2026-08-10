@@ -16,7 +16,7 @@ import {
 } from "@/lib/api/admin";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
-import { RateCardEditor } from "@/components/admin/rate-card-editor";
+import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 import { VersionsTab } from "@/components/admin/versions-tab";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
@@ -50,7 +50,7 @@ export default function AdminTravelAgentsPage() {
     setSelectedId(a.id);
     setDraft({
       displayName: a.displayName,
-      contactNumber: a.contactNumber,
+      contactNumbers: a.contactNumbers ?? [],
       contactEmail: a.contactEmail,
       modeOfContact: a.modeOfContact,
       notes: a.notes,
@@ -93,11 +93,11 @@ export default function AdminTravelAgentsPage() {
         <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
         <h1 className="admin-display text-3xl">Travel agents</h1>
         <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Travel agencies the hotel works with. Each agent carries a versioned rate card with base
-          room rate, optional per-room-type overrides, standalone meal add-ons (breakfast / lunch /
-          dinner), meal plan rates (CP / MAP / AP), extra bed, and CNB percentage. Saving the rate
-          card creates a new version; historical bookings always see the rate that was active when
-          quoted.
+          Travel agencies the hotel works with. This page holds the agency&rsquo;s <strong>identity</strong> —
+          name, contacts, notes. Its <strong>rates</strong> live in packages: one agency can carry Season,
+          Off season and Premium side by side, and the operator picks which applies when quoting. Saving a
+          package creates a new version, so a booking always keeps the rate it was quoted on.
+          Select no agent to edit the <strong>common package</strong> used when a party has none of its own.
         </p>
       </div>
 
@@ -136,7 +136,13 @@ export default function AdminTravelAgentsPage() {
         <div className="space-y-6">
           {selectedId == null && (
             <div className="admin-panel p-8 text-center text-sm text-[var(--admin-ink-soft)]">
-              Select an agent from the list or click <strong>+ New agent</strong> to begin.
+              <p>Select an agent from the list or click <strong>+ New agent</strong> to begin.</p>
+              {/* The fallback has its own page — editing it here as well would give one hotel-wide
+                  setting two homes, and this empty state is where it was previously undiscoverable. */}
+              <p className="mt-3 text-xs">
+                Looking for the rate used by an agency that has no package yet? That is the{" "}
+                <a className="underline" href="/admin/common-rate-package">Common rate package</a>.
+              </p>
             </div>
           )}
           {selectedId != null && (
@@ -157,8 +163,16 @@ export default function AdminTravelAgentsPage() {
                     </select>
                   </label>
                   <label className="block space-y-1">
-                    <span className="admin-muted text-xs">Contact number</span>
-                    <input className="admin-input" value={draft.contactNumber ?? ""} onChange={(e) => setDraft({ ...draft, contactNumber: e.target.value })} />
+                    <span className="admin-muted text-xs">Contact numbers</span>
+                    {/* An agency usually has several (office, owner, WhatsApp). Comma-separated
+                        in, array out — the service trims, drops blanks and de-duplicates. */}
+                    <input
+                      className="admin-input"
+                      placeholder="17123456, 77123456"
+                      value={(draft.contactNumbers ?? []).join(", ")}
+                      onChange={(e) => setDraft({ ...draft, contactNumbers: e.target.value.split(",").map((s) => s.trim()) })}
+                    />
+                    <span className="admin-muted block text-[10px] opacity-70">Separate multiple numbers with commas.</span>
                   </label>
                   <label className="block space-y-1">
                     <span className="admin-muted text-xs">Email</span>
@@ -202,7 +216,7 @@ export default function AdminTravelAgentsPage() {
 
               {!isNewMode && selected && (
                 <>
-                  <RateCardEditor partyType="TRAVEL_AGENT" partyId={selected.id} />
+                  <RatePackagesEditor owner={{ travelAgentId: selected.id }} ownerLabel={selected.displayName} />
                   <div className="admin-panel p-5">
                     <VersionsTab
                       entityType="TravelAgent"

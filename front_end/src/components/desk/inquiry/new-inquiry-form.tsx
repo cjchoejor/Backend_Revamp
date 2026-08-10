@@ -32,6 +32,7 @@ import {
   createInquiry,
   getInquiry,
   searchCorporateAccountsLookup,
+  listRatePackagesLookup,
   searchTravelAgentsLookup,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
@@ -194,6 +195,91 @@ function PresetOrCustom({
   );
 }
 
+/**
+ * Which negotiated package this booking is quoted on.
+ *
+ * An agency can carry several — Season, Off season, Premium — so linking the booking to the
+ * agency alone no longer says which rate applies. Shown only once a party is chosen.
+ *
+ * An agency with ONE package needs no decision, so the row states which rate is in force
+ * instead of offering a pointless dropdown. An agency with NONE falls back to the hotel's
+ * common package, which the row says plainly rather than looking broken.
+ */
+function PackagePicker({
+  kind,
+  partyId,
+  value,
+  onChange,
+}: {
+  kind: PartyKind;
+  partyId: string;
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const { session } = useSession();
+  const query = useQuery({
+    queryKey: ["desk-rate-packages", kind, partyId],
+    queryFn: () =>
+      listRatePackagesLookup(session!, kind === "TRAVEL_AGENT" ? { travelAgentId: partyId } : { corporateAccountId: partyId }),
+    enabled: !!session && !!partyId,
+  });
+
+  const items = query.data?.items ?? [];
+
+  // Preselect the default so the common case needs no interaction.
+  useEffect(() => {
+    if (!items.length) { if (value) onChange(null); return; }
+    if (value && items.some((p) => p.id === value)) return;
+    onChange((items.find((p) => p.isDefault) ?? items[0]!).id);
+  }, [items, value, onChange]);
+
+  if (query.isLoading) {
+    return <div className="field"><label>Rate package</label><div className="hint">Loading packages…</div></div>;
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="field">
+        <label>Rate package</label>
+        <div className="hint">
+          This party has no package of its own — the hotel&rsquo;s <b>common package</b> will be used. Add one in
+          Admin → Travel agents if they have negotiated their own rates.
+        </div>
+      </div>
+    );
+  }
+
+  const money = (v: string | null | undefined) =>
+    v == null ? "—" : Number.parseFloat(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  if (items.length === 1) {
+    const only = items[0]!;
+    return (
+      <div className="field">
+        <label>Rate package</label>
+        <div className="hint">
+          <b>{only.name}</b> — room {money(only.roomBaseRate)} {only.currency}. This is their only package, so it is used automatically.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="field">
+      <label>Rate package</label>
+      <select className="dinput" value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+        {items.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+            {p.isDefault ? " (default)" : ""} — room {money(p.roomBaseRate)} {p.currency}
+          </option>
+        ))}
+      </select>
+      <div className="hint">This agency has {items.length} negotiated rates. The quote at stage 2 uses the one chosen here.</div>
+    </div>
+  );
+}
+
 /** Debounced search + pick for a single party kind (travel agent or corporate). */
 function PartySearch({
   kind,
@@ -303,6 +389,8 @@ export function DeskNewInquiryForm() {
   // Inquiry & stay
   const [channelKey, setChannelKey] = useState<ChannelKey>("WALKIN");
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
+  // Which negotiated package this booking is quoted on. Preselected from the party's default.
+  const [ratePackageId, setRatePackageId] = useState<string | null>(null);
   // Policy 17 / SIG-S1 §100.6 — CORPORATE bookings must record a client reference + coordinator
   // on the inquiry, else the entry can't exit S1. Captured here at intake.
   const [corpClientRef, setCorpClientRef] = useState("");
@@ -567,6 +655,7 @@ export function DeskNewInquiryForm() {
         proposedCheckIn: checkIn || undefined,
         proposedCheckOut: checkOut || undefined,
         travelAgentId: partyKind === "TRAVEL_AGENT" ? party?.id ?? null : null,
+      ratePackageId: party ? ratePackageId : null,
         corporateAccountId: partyKind === "CORPORATE" ? party?.id ?? null : null,
       });
 
@@ -931,6 +1020,9 @@ export function DeskNewInquiryForm() {
           </div>
 
           {!isEdit && partyKind && <PartySearch kind={partyKind} party={party} setParty={setParty} />}
+      {!isEdit && partyKind && party && (
+        <PackagePicker kind={partyKind} partyId={party.id} value={ratePackageId} onChange={setRatePackageId} />
+      )}
 
           {needsCorporateContext &&
             (() => {

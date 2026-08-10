@@ -83,9 +83,13 @@ export const adminNavGroups: AdminNavGroup[] = [
       { title: "Rate plans", href: "/admin/rate-plans", icon: Receipt, description: "Rate plan registry & walk-in designation" },
       { title: "House tariff", href: "/admin/house-tariff", icon: Banknote, description: "Walk-in extra bed & meal prices (CP/MAPL/MAPD/AP)" },
       { title: "Seasons", href: "/admin/seasons", icon: Receipt, description: "Season calendar (non-overlapping)" },
-      { title: "Packages", href: "/admin/packages", icon: Receipt, description: "Package registry & inclusions" },
-      { title: "Travel agents", href: "/admin/travel-agents", icon: Users, description: "Travel agencies + their negotiated rate cards" },
-      { title: "Corporate accounts", href: "/admin/corporate-accounts", icon: Building2, description: "Company accounts + their negotiated rate cards" },
+      // Renamed 2026-08-04: "Packages" collided with the new negotiated RATE packages, which
+      // live on the travel-agent / corporate pages. This one is the ACIG §6.2.10 stay-package
+      // registry (inclusions), an unrelated concept.
+      { title: "Stay packages (inclusions)", href: "/admin/packages", icon: Receipt, description: "Stay package registry & inclusions — NOT agent rates" },
+      { title: "Travel agents & rate packages", href: "/admin/travel-agents", icon: Users, description: "Agencies and their negotiated rate packages" },
+      { title: "Common rate package", href: "/admin/common-rate-package", icon: Banknote, description: "Fallback rate for an agent or company with no package of their own" },
+      { title: "Corporate accounts & rate packages", href: "/admin/corporate-accounts", icon: Building2, description: "Company accounts + their negotiated rate packages" },
       { title: "Commercial thresholds", href: "/admin/commercial", icon: Receipt, description: "Discount, FOC, overbooking, credit ceiling, write-off" },
     ],
   },
