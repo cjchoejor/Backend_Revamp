@@ -63,8 +63,13 @@ export type LegphelProformaInput = {
    * desk pinned the requirement as a percentage (2026-08-01). Null = plain key.
    */
   advanceDueQualifier?: string | null;
+  /** "Full amount at once" / "Part now — remainder by 12 Aug 2026" — the guest's payment plan
+   *  (2026-08-08). Omitted when no plan is recorded. */
+  advancePlanLabel?: string | null;
   /** Optional "Advance received" row — shown when the guest has already paid something in. */
   advanceReceived?: string | null;
+  /** "(2 payments)" appended to the Advance-received key once installments are in. */
+  advanceReceivedQualifier?: string | null;
   balanceAtCheckout: string;
   currencyLabel?: string;
   bank: { bankName: string | null; accountName: string | null; accountsPhone: string | null };
@@ -108,7 +113,13 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
       "",
       { rawKey: true },
     ),
-    input.advanceReceived ? row("Advance received", input.advanceReceived) : "",
+    input.advancePlanLabel ? row("Payment plan", input.advancePlanLabel) : "",
+    input.advanceReceived
+      ? row(
+          `Advance received${input.advanceReceivedQualifier ? ` ${input.advanceReceivedQualifier}` : ""}`,
+          input.advanceReceived,
+        )
+      : "",
     row(
       `Advance due now${input.advanceDueQualifier ? ` ${input.advanceDueQualifier}` : ""} · ${currency}`,
       input.advanceDueNow,

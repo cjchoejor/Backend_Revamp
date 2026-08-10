@@ -55,7 +55,35 @@ export function resolveOperatorAdvanceRequirement(
 // credit-extension expiry to suggest for the uncovered remainder.
 
 export type AdvancePaymentPlanKind = "FULL" | "PARTIAL" | "INSTALLMENTS";
+/** AT_CHECKOUT is read-side only since 2026-08-08 (operator ruling: the advance settles before
+ *  or at check-in — check-out money is normal folio settlement). Stored legacy plans keep it;
+ *  new writes are refused. */
 export type AdvanceBalanceDueAt = "BEFORE_CHECKIN" | "AT_CHECKIN" | "AT_CHECKOUT";
+
+/**
+ * One guest-facing sentence for the plan — printed on the proforma and stated in its email
+ * (2026-08-08: "select one and reflect that in the PI"). The date formatter is the caller's
+ * (the PDF's `formatDocDate`, the email's `formatDate`) so each document keeps its own style.
+ * Null when no plan is recorded — the document then says nothing rather than assuming.
+ */
+export function describeAdvancePaymentPlan(
+  plan: AdvancePaymentPlan | null,
+  formatDate: (d: Date) => string,
+): string | null {
+  if (!plan) return null;
+  if (plan.plan === "FULL") return "Full amount at once";
+  const head = plan.plan === "PARTIAL" ? "Part now" : "In installments";
+  const promised = plan.promisedBy ? new Date(plan.promisedBy) : null;
+  const due =
+    plan.balanceDueAt === "BEFORE_CHECKIN" && promised && Number.isFinite(promised.getTime())
+      ? `by ${formatDate(promised)}`
+      : plan.balanceDueAt === "AT_CHECKIN"
+        ? "at check-in"
+        : plan.balanceDueAt === "AT_CHECKOUT"
+          ? "at check-out"
+          : null;
+  return due ? `${head} — remainder ${due}` : head;
+}
 
 export type AdvancePaymentPlan = {
   plan: AdvancePaymentPlanKind;
@@ -380,99 +408,129 @@ export async function setAdvanceRequirement(
     });
 
     // ── Class-1 supersession on a changed advance (2026-08-01, operator request) ─────────
-    // "Advance due now" is printed on the proforma, so a changed requirement makes a FROZEN
-    // proforma (PDF rendered and/or dispatched) misstate the deal. Those get superseded —
-    // kept as read-only history with `supersededById` pointing at a fresh DRAFT that prints
-    // the new figures (fresh INV number, versionNumber+1; the desk re-dispatches it, and the
-    // bill-before-money guard re-locks payments until it goes out). A never-rendered DRAFT is
-    // NOT superseded: nothing frozen exists yet — its preview/PDF composes the new figures on
-    // demand, and re-issuing would only mint noise versions.
-    let reissued: { newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null = null;
-    const proformas = await tx.invoice.findMany({
-      where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA },
-      orderBy: { versionNumber: "desc" },
-    });
-    const live = proformas.filter((i) => i.state !== InvoiceState.SUPERSEDED);
-    // Two triggers for a fresh issue:
-    //   1. The requirement CHANGED (2026-08-02 operator ruling: unconditional) — "Set
-    //      requirement" mints a fresh proforma every time the figure changes, superseding
-    //      whatever was live: a dispatched issue (the guest's bill now misstates the deal)
-    //      AND a never-rendered DRAFT (previously kept since it recomposes on demand, but
-    //      the desk treats each set as a new issue). Setting the SAME figure again still
-    //      doesn't spam versions.
-    //   2. Post-re-entry restart — NO live proforma exists at all. A re-entry supersedes
-    //      every pending proforma (`supersedePendingInvoicesTx`) and the folio singleton
-    //      survives into the new segment, so `ensureProvisionalFolio…` never mints a starter
-    //      again. Without this branch, setting the advance in the new segment left nothing
-    //      to dispatch and the bill-before-money guard dead-ended the whole S3 flow. Fires
-    //      even when the figure is unchanged (the folio remembers the old segment's pin).
-    const supersedeLive = requirementChanged && live.length > 0;
-    if (requirementChanged || live.length === 0) {
-      const basis = requirementChanged ? "ADVANCE_REQUIREMENT_CHANGED" : "REISSUED_AFTER_REENTRY";
-      const supersededIds = supersedeLive ? live.map((i) => i.id) : [];
-      const nextVersion = proformas.length > 0 ? Math.max(...proformas.map((i) => i.versionNumber ?? 1)) + 1 : 1;
-      const newId = await allocateReadableId(tx, "INVOICE" as const, now);
-      const created = await tx.invoice.create({
-        data: {
-          id: newId,
-          folioId: input.folioId,
-          entryId: input.entryId,
-          invoiceType: InvoiceType.PROFORMA,
-          state: InvoiceState.DRAFT,
-          versionNumber: nextVersion,
-          templateKey: (live[0] ?? proformas[0])?.templateKey ?? "proforma-v1",
-          issuedAt: now,
-          issuedBy: actor.actorId,
-          metadata: {
-            basis,
-            supersedes: supersededIds,
-            requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null,
-          },
-        },
-      });
-      if (supersedeLive) {
-        await tx.invoice.updateMany({
-          where: { id: { in: supersededIds } },
-          data: { state: InvoiceState.SUPERSEDED, supersededById: created.id },
-        });
-        for (const old of live) {
-          await tx.traceEvent.create({
-            data: {
-              eventType: "INVOICE.SUPERSEDED",
-              actorId: actor.actorId,
-              actorLevel: actor.actorLevel,
-              entityType: "Invoice",
-              entityId: old.id,
-              operation: "UPDATE",
-              timestamp: now,
-              stageContext: Stage.S3,
-              entryId: input.entryId,
-              payload: { entryId: input.entryId, invoiceId: old.id, supersededById: created.id, reason: "ADVANCE_REQUIREMENT_CHANGED" },
-              createdBy: actor.actorId,
-            },
-          });
-        }
-      }
-      await tx.traceEvent.create({
-        data: {
-          eventType: "INVOICE.CREATED",
-          actorId: actor.actorId,
-          actorLevel: actor.actorLevel,
-          entityType: "Invoice",
-          entityId: created.id,
-          operation: "CREATE",
-          timestamp: now,
-          stageContext: Stage.S3,
-          entryId: input.entryId,
-          payload: { folioId: input.folioId, invoiceId: created.id, invoiceType: "PROFORMA", basis },
-          createdBy: actor.actorId,
-        },
-      });
-      reissued = { newInvoiceId: created.id, supersededIds, versionNumber: nextVersion };
-    }
+    // "Advance due now" is printed on the proforma, so a changed requirement makes the live
+    // proformas misstate the deal — shared re-issue helper below (the payment PLAN prints on
+    // the proforma too since 2026-08-08 and runs the same machinery).
+    const reissued = await reissueProformaTx(
+      tx,
+      {
+        entryId: input.entryId,
+        folioId: input.folioId,
+        changed: requirementChanged,
+        basisWhenChanged: "ADVANCE_REQUIREMENT_CHANGED",
+        extraMetadata: { requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null },
+        now,
+      },
+      actor,
+    );
 
     return { folio: updated, reissuedProforma: reissued };
   });
+}
+
+/**
+ * Supersede every live proforma and mint a fresh DRAFT, inside the caller's transaction —
+ * the Class-1 supersession run whenever something the proforma PRINTS has changed: the
+ * advance figure (2026-08-01) or the guest's payment plan (2026-08-08). One helper so the
+ * two setters cannot drift.
+ *
+ * Two triggers for a fresh issue:
+ *   1. `changed` (operator rulings, unconditional) — every change mints a fresh proforma,
+ *      superseding whatever was live: a dispatched issue (the guest's bill now misstates
+ *      the deal) AND a never-rendered DRAFT (it recomposes on demand, but the desk treats
+ *      each set as a new issue). Setting the SAME value again doesn't spam versions.
+ *   2. Post-re-entry restart — NO live proforma exists at all. A re-entry supersedes every
+ *      pending proforma (`supersedePendingInvoicesTx`) and the folio singleton survives into
+ *      the new segment, so `ensureProvisionalFolio…` never mints a starter again. Without
+ *      this branch the S3 flow dead-ends (nothing to dispatch → bill-before-money locks
+ *      payments). Fires even when the value is unchanged.
+ *
+ * Callers that supersede FROZEN artifacts must run `freezeUnrenderedProformasForEntry`
+ * BEFORE their transaction (2026-08-02 ruling — old versions retain their figures).
+ */
+async function reissueProformaTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    entryId: string;
+    folioId: string;
+    changed: boolean;
+    /** metadata.basis + the supersede traces' reason when `changed` fired the re-issue. */
+    basisWhenChanged: string;
+    /** Extra fields for the fresh DRAFT's metadata (e.g. the new requirement / plan). */
+    extraMetadata?: Record<string, unknown>;
+    now: Date;
+  },
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+): Promise<{ newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null> {
+  const { entryId, folioId, changed, basisWhenChanged, now } = input;
+  const proformas = await tx.invoice.findMany({
+    where: { folioId, invoiceType: InvoiceType.PROFORMA },
+    orderBy: { versionNumber: "desc" },
+  });
+  const live = proformas.filter((i) => i.state !== InvoiceState.SUPERSEDED);
+  if (!changed && live.length > 0) return null;
+  const supersedeLive = changed && live.length > 0;
+  const basis = changed ? basisWhenChanged : "REISSUED_AFTER_REENTRY";
+  const supersededIds = supersedeLive ? live.map((i) => i.id) : [];
+  const nextVersion = proformas.length > 0 ? Math.max(...proformas.map((i) => i.versionNumber ?? 1)) + 1 : 1;
+  const newId = await allocateReadableId(tx, "INVOICE" as const, now);
+  const created = await tx.invoice.create({
+    data: {
+      id: newId,
+      folioId,
+      entryId,
+      invoiceType: InvoiceType.PROFORMA,
+      state: InvoiceState.DRAFT,
+      versionNumber: nextVersion,
+      templateKey: (live[0] ?? proformas[0])?.templateKey ?? "proforma-v1",
+      issuedAt: now,
+      issuedBy: actor.actorId,
+      metadata: {
+        basis,
+        supersedes: supersededIds,
+        ...(input.extraMetadata ?? {}),
+      },
+    },
+  });
+  if (supersedeLive) {
+    await tx.invoice.updateMany({
+      where: { id: { in: supersededIds } },
+      data: { state: InvoiceState.SUPERSEDED, supersededById: created.id },
+    });
+    for (const old of live) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "INVOICE.SUPERSEDED",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Invoice",
+          entityId: old.id,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S3,
+          entryId,
+          payload: { entryId, invoiceId: old.id, supersededById: created.id, reason: basisWhenChanged },
+          createdBy: actor.actorId,
+        },
+      });
+    }
+  }
+  await tx.traceEvent.create({
+    data: {
+      eventType: "INVOICE.CREATED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "Invoice",
+      entityId: created.id,
+      operation: "CREATE",
+      timestamp: now,
+      stageContext: Stage.S3,
+      entryId,
+      payload: { folioId, invoiceId: created.id, invoiceType: "PROFORMA", basis },
+      createdBy: actor.actorId,
+    },
+  });
+  return { newInvoiceId: created.id, supersededIds, versionNumber: nextVersion };
 }
 
 /** Stages where the advance can still be planned/collected — S3 (setup) through S6 (check-in);
@@ -541,15 +599,26 @@ export async function autoCompletePaymentReconciliationTaskTx(
 }
 
 /**
- * Record what the guest SAID about paying the advance (2026-08-07), captured alongside their
- * answer to the proforma: FULL (the whole amount at once), PARTIAL (part now, rest later) or
- * INSTALLMENTS (several payments) — and for the non-full plans, WHEN the remainder is coming:
+ * Record what the guest SAID about paying the advance (2026-08-07): FULL (the whole amount at
+ * once), PARTIAL (part now, rest later) or INSTALLMENTS (several payments) — and for the
+ * non-full plans, WHEN the remainder is coming:
  *
  *  - BEFORE_CHECKIN + a `promisedBy` date → a real W38 deadline timer is armed; if the money
  *    hasn't arrived by then the lapse is traced and the desk shows the promise overdue.
- *  - AT_CHECKIN / AT_CHECKOUT → no timer. The S5/S6 arrival gates (check-in) and the S8
- *    settlement (check-out) are the enforcement teeth there — the plan tells the desk which
- *    surface should collect, and which credit-extension expiry to suggest for the gap.
+ *  - AT_CHECKIN → no timer. The S5/S6 arrival gates are the enforcement teeth — the plan tells
+ *    the desk to collect at that desk, and which credit-extension expiry to suggest.
+ *  - AT_CHECKOUT is REFUSED since 2026-08-08 (operator ruling): the advance settles before or
+ *    at check-in; money due at check-out is ordinary folio settlement, not an advance plan.
+ *    Legacy stored plans keep the value read-side.
+ *
+ * Since 2026-08-08 the plan is captured BEFORE the proforma goes out and the proforma PRINTS
+ * it ("Payment plan: Part now — remainder by …"), so at S3 a plan CHANGE re-issues the
+ * proforma exactly like a requirement change does (shared `reissueProformaTx`; the desk
+ * re-dispatches, and the bill-before-money guard re-locks payments until it goes out). The
+ * canonical case: the PI went out saying "full amount", the guest replies they can't pay full
+ * right now — recording the new plan mints the corrected PI to send. At S4–S6 the plan still
+ * updates (advisory + W38) but no proforma is re-issued — post-freeze the voucher is the
+ * binding document.
  *
  * Advisory, deliberately NOT a gate: the booking still needs the money or an FOM credit
  * extension to pass S5/S6, exactly as before. CLEAR wipes the plan (guest changed their mind).
@@ -592,13 +661,20 @@ export async function setAdvancePaymentPlan(
     const balanceDueAt = input.balanceDueAt ?? null;
     let promisedByIso: string | null = null;
 
+    // 2026-08-08 operator ruling: the advance settles before or at check-in. See the doc above.
+    if (balanceDueAt === "AT_CHECKOUT") {
+      throw new ValidationError(
+        "The advance is settled before or at check-in — money due at check-out is ordinary folio settlement, not an advance plan",
+      );
+    }
+
     if (input.plan === "FULL") {
       if (balanceDueAt || input.promisedBy) {
         throw new ValidationError("A full-payment plan carries no remainder — leave the timing fields empty");
       }
     } else {
       if (!balanceDueAt) {
-        throw new ValidationError("Say when the remainder is coming: before check-in, at check-in, or at check-out");
+        throw new ValidationError("Say when the remainder is coming: before check-in, or at check-in");
       }
       if (balanceDueAt === "BEFORE_CHECKIN") {
         if (!input.promisedBy) {
@@ -617,13 +693,13 @@ export async function setAdvancePaymentPlan(
         const checkIn = entry.checkInDate ?? null;
         if (checkIn && checkIn.getTime() <= now.getTime()) {
           throw new ValidationError(
-            "Check-in has already arrived — record the remainder as due at the check-in desk or at check-out instead",
+            "Check-in has already arrived — record the remainder as due at the check-in desk instead",
           );
         }
         const clamped = checkIn && promised.getTime() > checkIn.getTime() ? checkIn : promised;
         promisedByIso = clamped.toISOString();
       } else if (input.promisedBy) {
-        throw new ValidationError("At-check-in / at-check-out plans don't take a date — the stage itself is the deadline");
+        throw new ValidationError("An at-check-in plan doesn't take a date — the desk itself is the deadline");
       }
     }
 
@@ -635,6 +711,30 @@ export async function setAdvancePaymentPlan(
       setBy: actor.actorId,
       setAt: now.toISOString(),
     };
+  }
+
+  // Did the plan MATERIALLY change? The proforma prints plan + timing, so those three fields
+  // decide the re-issue; a note-only edit re-saves without minting a new document version.
+  // Prior = the segment-scoped EFFECTIVE plan (a prior segment's plan counts as "nothing").
+  const currentSegment = await prisma.segment.findFirst({
+    where: { entryId: input.entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
+  const prior = resolveAdvancePaymentPlan(folio, currentSegment?.startedAt ?? null);
+  const planChanged =
+    (prior?.plan ?? null) !== (stored?.plan ?? null) ||
+    (prior?.balanceDueAt ?? null) !== (stored?.balanceDueAt ?? null) ||
+    (prior?.promisedBy ?? null) !== (stored?.promisedBy ?? null);
+
+  // Re-issue is an S3 concern only: post-freeze the voucher is the binding document, and the
+  // p40/p27 proforma gates are S3-scoped — minting proforma versions at S4–S6 would be noise.
+  const reissueAtS3 = entry.currentStage === Stage.S3;
+  if (reissueAtS3 && planChanged) {
+    // Freeze what the outgoing versions LOOKED LIKE before the change lands (2026-08-02 ruling;
+    // dynamic import — invoice-pdf-service statically imports this module).
+    const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
+    await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId);
   }
 
   return prisma.$transaction(async (tx) => {
@@ -702,7 +802,28 @@ export async function setAdvancePaymentPlan(
       },
     });
 
-    return { folio: updated, plan: stored };
+    // The proforma prints the plan (2026-08-08), so a changed plan re-issues it — same
+    // machinery as the requirement change; S3 only (see the doc above).
+    const reissued = reissueAtS3
+      ? await reissueProformaTx(
+          tx,
+          {
+            entryId: input.entryId,
+            folioId: input.folioId,
+            changed: planChanged,
+            basisWhenChanged: "ADVANCE_PAYMENT_PLAN_CHANGED",
+            extraMetadata: {
+              paymentPlan: stored?.plan ?? null,
+              balanceDueAt: stored?.balanceDueAt ?? null,
+              promisedBy: stored?.promisedBy ?? null,
+            },
+            now,
+          },
+          actor,
+        )
+      : null;
+
+    return { folio: updated, plan: stored, reissuedProforma: reissued };
   });
 }
 

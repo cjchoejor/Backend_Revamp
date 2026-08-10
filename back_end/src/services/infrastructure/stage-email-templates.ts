@@ -152,14 +152,20 @@ export type ProformaInvoiceEmailData = {
   currency: string;
   breakdown: StayChargeBreakdown;
   amountPaid?: number | null;
+  /** How many payments the amountPaid arrived in — ">1" shows the installment count. */
+  paymentCount?: number | null;
   /** Advance-window deadline (= check-in date). Null when the entry has no real check-in date —
    *  the caller must NOT pass a today-fallback, or the email demands payment by a made-up date. */
   advanceDueBy?: Date | null;
+  /** The guest's recorded payment plan, already worded ("Part now — remainder by 12 Aug 2026").
+   *  Null = no plan recorded, no line printed. */
+  paymentPlan?: string | null;
 };
 
 export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEmailContent {
   const due = Math.max(0, d.breakdown.total - (d.amountPaid ?? 0));
   const showDueBy = due > 0 && d.advanceDueBy != null;
+  const paidLabel = `Already received${(d.paymentCount ?? 0) > 1 ? ` (${d.paymentCount} payments)` : ""}`;
   const subject = COMMON_SUBJECT;
 
   const text = [
@@ -175,7 +181,8 @@ export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEm
     `Guests: ${d.guestCount}`,
     "",
     ...breakdownLines(d.breakdown, d.currency),
-    d.amountPaid != null ? `Already received:       ${formatMoney(d.amountPaid, d.currency)}` : null,
+    d.paymentPlan ? `Payment plan:           ${d.paymentPlan}` : null,
+    d.amountPaid != null ? `${paidLabel}:  ${formatMoney(d.amountPaid, d.currency)}` : null,
     `Balance due:            ${formatMoney(due, d.currency)}`,
     "",
     showDueBy ? `The advance is due by ${formatDate(d.advanceDueBy!)} — your check-in date.` : null,
@@ -197,7 +204,8 @@ ${detailsTable([
   tableRow("Check-out", formatDate(d.checkOutDate)),
   tableRow("Guests", String(d.guestCount), true),
   ...breakdownRows(d.breakdown, d.currency),
-  d.amountPaid != null ? tableRow("Already received", formatMoney(d.amountPaid, d.currency)) : "",
+  d.paymentPlan ? tableRow("Payment plan", d.paymentPlan, false, true) : "",
+  d.amountPaid != null ? tableRow(paidLabel, formatMoney(d.amountPaid, d.currency)) : "",
   tableRow("Balance due", formatMoney(due, d.currency), true, true),
 ])}
 ${showDueBy ? `<p style="font-size:13px;color:#555">The advance is due by <strong>${escapeHtml(formatDate(d.advanceDueBy!))}</strong> &mdash; your check-in date.</p>` : ""}

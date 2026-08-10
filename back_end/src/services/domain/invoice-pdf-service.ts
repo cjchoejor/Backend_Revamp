@@ -35,7 +35,12 @@ import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructur
 import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
-import { evaluateAdvancePaymentCondition, resolveOperatorAdvanceRequirement } from "./s3-payment-service.js";
+import {
+  describeAdvancePaymentPlan,
+  evaluateAdvancePaymentCondition,
+  resolveAdvancePaymentPlan,
+  resolveOperatorAdvanceRequirement,
+} from "./s3-payment-service.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 
 type QuotationTerms = {
@@ -304,6 +309,14 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   const totalPayable = Number((totalAmount - advanceReceived).toFixed(2));
   const balanceAtCheckout = Math.max(0, Number((totalAmount - advanceReceived - advanceDueNow).toFixed(2)));
 
+  // The guest's payment plan (2026-08-08, operator ruling: "select one and reflect that in the
+  // PI") — segment-scoped like the requirement pin, printed only when one is recorded. The same
+  // resolver feeds payment-status, so the document and the desk cannot disagree.
+  const paymentPlan = inv.folio
+    ? resolveAdvancePaymentPlan(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
+    : null;
+  const advancePlanLabel = describeAdvancePaymentPlan(paymentPlan, formatDocDate);
+
   // The advance deadline — mirrors payment-status `advanceWindow.deadline`: the advance is due
   // between proforma dispatch and CHECK-IN, so the printed date is the check-in date (frozen at
   // S4 when a reservation exists). Read from the real columns, not the prelude's `checkIn` —
@@ -350,7 +363,10 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
     decompositionNet: formatMoney(ctP?.subtotal ?? stayCharges.subTotal),
     decompositionService: formatMoney(ctP?.serviceCharge ?? stayCharges.serviceCharge),
     decompositionGst: formatMoney(ctP?.gst ?? stayCharges.gst),
+    advancePlanLabel,
     advanceReceived: advanceReceived > 0 ? formatMoney(advanceReceived) : null,
+    // "(2 payments)" once installments are in — the guest sees how many they've made so far.
+    advanceReceivedQualifier: inPayments.length > 1 ? `(${inPayments.length} payments)` : null,
     advanceDueQualifier,
     advanceDueNow: formatMoney(advanceDueNow),
     balanceAtCheckout: formatMoney(balanceAtCheckout),

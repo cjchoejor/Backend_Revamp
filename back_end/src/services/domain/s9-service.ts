@@ -15,6 +15,8 @@ import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { firstRoomId, readOptionSelected } from "../../lib/option-selected-reader.js";
 import { placeCommittedHold } from "./s3-hold-service.js";
+import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
+import { formatDate as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
 import { generateOrLoadInvoicePdf } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
@@ -403,6 +405,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
           // At S3 (PI dispatch) the reservation doesn't exist yet — the accepted quotation
           // carries the nightly rate in commercialTerms. Pull it in as a fallback.
           quotations: { where: { state: "ACCEPTED" }, orderBy: { createdAt: "desc" }, take: 1 },
+          // Current segment start — scopes the payment plan the PI email states (2026-08-08).
+          segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } },
         },
       },
       folio: { include: { payments: { where: { paymentDirection: "IN" } } } },
@@ -451,9 +455,17 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         currency,
         breakdown,
         amountPaid: paid,
+        paymentCount: inv.folio?.payments?.length ?? 0,
         // Real columns only — `ci` is today-defaulted above, and the template must not print a
         // fabricated pay-by date for a dateless entry.
         advanceDueBy: entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null,
+        // The guest's recorded plan, worded the same way the PDF prints it (2026-08-08).
+        paymentPlan: inv.folio
+          ? describeAdvancePaymentPlan(
+              resolveAdvancePaymentPlan(inv.folio, entry.segments?.[0]?.startedAt ?? null),
+              formatEmailDate,
+            )
+          : null,
       })
     : renderFinalInvoiceEmail({
         guestDisplayName: displayName,

@@ -136,13 +136,15 @@ foliosRouter.post(
         return;
       }
       const { plan, balanceDueAt, promisedBy, note } = req.body;
-      await s3PaymentService.setAdvancePaymentPlan(
+      const result = await s3PaymentService.setAdvancePaymentPlan(
         prisma,
         { entryId: entry.id, folioId: entry.folio.id, plan, balanceDueAt, promisedBy, note },
         { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
       );
       const status = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
-      res.json(status);
+      // The proforma prints the plan (2026-08-08), so a changed plan re-issued it — the desk
+      // toasts "dispatch the new version" off this field, same contract as the requirement route.
+      res.json({ ...status, reissuedProforma: result.reissuedProforma ?? null });
     } catch (e) {
       next(e);
     }

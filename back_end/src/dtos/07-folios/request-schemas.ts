@@ -60,12 +60,15 @@ export type RecordCreditExtensionRequestDto = z.infer<typeof recordCreditExtensi
 export const setAdvancePaymentPlanRequestSchema = z
   .object({
     plan: z.enum(["FULL", "PARTIAL", "INSTALLMENTS", "CLEAR"]),
-    balanceDueAt: z.enum(["BEFORE_CHECKIN", "AT_CHECKIN", "AT_CHECKOUT"]).optional().nullable(),
+    // AT_CHECKOUT removed 2026-08-08 (operator ruling): the advance settles before or at
+    // check-in — check-out money is ordinary folio settlement. Stored legacy plans keep the
+    // value read-side; new writes are refused here and in the service.
+    balanceDueAt: z.enum(["BEFORE_CHECKIN", "AT_CHECKIN"]).optional().nullable(),
     promisedBy: z.string().datetime({ offset: true }).optional().nullable(),
     note: z.string().max(500).optional().nullable(),
   })
   .refine((b) => (b.plan === "PARTIAL" || b.plan === "INSTALLMENTS" ? b.balanceDueAt != null : true), {
-    message: "Say when the remainder is coming: before check-in, at check-in, or at check-out",
+    message: "Say when the remainder is coming: before check-in, or at check-in",
   })
   .refine((b) => (b.balanceDueAt === "BEFORE_CHECKIN" ? b.promisedBy != null : true), {
     message: "A before-check-in promise needs the date the guest gave",
