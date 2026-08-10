@@ -241,14 +241,29 @@ export function AdvancePlanCapture({
 
   const [editing, setEditing] = useState(false);
   const [plan, setPlan] = useState<"FULL" | "PARTIAL" | "INSTALLMENTS">("FULL");
-  const [balanceDueAt, setBalanceDueAt] = useState<"BEFORE_CHECKIN" | "AT_CHECKIN" | "AT_CHECKOUT">("BEFORE_CHECKIN");
+  // AT_CHECKOUT removed 2026-08-08 (the advance settles before or at check-in) — the backend
+  // refuses it; legacy saved plans that carry it seed the form as AT_CHECKIN.
+  const [balanceDueAt, setBalanceDueAt] = useState<"BEFORE_CHECKIN" | "AT_CHECKIN">("BEFORE_CHECKIN");
   const [promisedBy, setPromisedBy] = useState("");
   const [note, setNote] = useState("");
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
+    // The proforma list rides on the entry detail — a plan change can re-issue it (2026-08-08).
+    void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+  };
+  /** The PI prints the plan, so a change mints a corrected version — tell the operator to send it. */
+  const toastReissue = (res: { reissuedProforma?: { versionNumber: number; supersededIds: string[] } | null }) => {
+    const r = res.reissuedProforma;
+    if (!r) return;
+    toast.info(
+      r.supersededIds.length > 0
+        ? `The proforma was re-issued with this plan (v${r.versionNumber}) — dispatch it to the guest again.`
+        : `A fresh proforma (v${r.versionNumber}) was generated with this plan — dispatch it when ready.`,
+      { duration: 9000 },
+    );
   };
 
   const saveM = useMutation({
@@ -265,8 +280,9 @@ export function AdvancePlanCapture({
       }
       return setAdvancePaymentPlan(session!, entry.id, { ...body, note: note.trim() || null });
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success("Guest's payment plan recorded");
+      toastReissue(res);
       setEditing(false);
       invalidate();
     },
@@ -274,8 +290,9 @@ export function AdvancePlanCapture({
   });
   const clearM = useMutation({
     mutationFn: () => setAdvancePaymentPlan(session!, entry.id, { plan: "CLEAR" }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success("Payment plan cleared");
+      toastReissue(res);
       setEditing(false);
       invalidate();
     },
@@ -295,9 +312,10 @@ export function AdvancePlanCapture({
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => {
-                // Seed the form from the saved plan so Change opens on what's in force.
+                // Seed the form from the saved plan so Change opens on what's in force. A legacy
+                // at-check-out plan seeds as at-check-in — the closest option still offered.
                 setPlan(saved.plan);
-                if (saved.balanceDueAt) setBalanceDueAt(saved.balanceDueAt);
+                if (saved.balanceDueAt) setBalanceDueAt(saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt);
                 setPromisedBy(saved.promisedBy ? saved.promisedBy.slice(0, 16) : "");
                 setNote(saved.note ?? "");
                 setEditing(true);
@@ -313,10 +331,11 @@ export function AdvancePlanCapture({
       ) : (
         <>
           <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0, lineHeight: 1.5 }}>
-            Note down what the guest said with their reply: the whole advance at once, part now with
-            the rest later, or several installments — and <b>when</b> the rest is coming. A dated
-            promise gets a real countdown; the check-in and check-out cases are collected at those
-            desks.
+            How will the guest pay the advance: the whole amount at once, part now with the rest
+            later, or several installments — and <b>when</b> the rest is coming (before check-in
+            on a dated promise, or at the check-in desk). The proforma <b>prints this plan</b>, so
+            record it before sending — and if the guest later says they can&rsquo;t pay that way,
+            change it here and a corrected proforma is issued to send again.
           </p>
           {disabled && disabledHint && (
             <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px" }}>{disabledHint}</p>
@@ -340,7 +359,6 @@ export function AdvancePlanCapture({
                 >
                   <option value="BEFORE_CHECKIN">Before check-in (dated promise)</option>
                   <option value="AT_CHECKIN">At the check-in desk</option>
-                  <option value="AT_CHECKOUT">At check-out</option>
                 </select>
               </div>
             )}
@@ -373,9 +391,7 @@ export function AdvancePlanCapture({
             <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "7px 0 0", lineHeight: 1.5 }}>
               {balanceDueAt === "BEFORE_CHECKIN"
                 ? "A countdown is armed to the promised date — if the money hasn't arrived by then the booking flags the lapse."
-                : balanceDueAt === "AT_CHECKIN"
-                  ? "No timer — the remainder is collected at the check-in desk. To pass check-in unpaid, an FOM credit extension covers the gap."
-                  : "No timer — the remainder rides to check-out and is collected with the final settlement. An FOM credit extension covers the check-in gate."}
+                : "No timer — the remainder is collected at the check-in desk. To pass check-in unpaid, an FOM credit extension covers the gap."}
             </p>
           )}
         </>
@@ -536,6 +552,7 @@ export function AdvanceSettlementBlock({
           <span>
             Received {money(status.totalReceived, currency)} of the{" "}
             {status.requirementSource === "OPERATOR" ? "requested" : "min threshold"} {money(status.requiredAmount, currency)}
+            {(status.installments?.length ?? 0) > 1 ? ` · ${status.installments!.length} payments` : ""}
           </span>
           <span className={`tag ${settled ? "" : status.satisfied ? "" : "warn"}`}>
             {settled

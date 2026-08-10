@@ -668,6 +668,18 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         </div>
       </div>
 
+      {/* 3b. The guest's payment plan — captured BEFORE the proforma goes out (2026-08-08,
+          operator ordering: how much → how it will be paid → the bill). The proforma PRINTS
+          this plan, and changing it at S3 re-issues the proforma (the capture toasts
+          "dispatch it again"). Full / part-now / installments; a dated before-check-in
+          promise arms the W38 countdown; at-check-in is collected at that desk. */}
+      <AdvancePlanCapture
+        entry={entry}
+        status={paymentStatus}
+        disabled={!folio}
+        disabledHint="Create the folio first — the plan is recorded against it."
+      />
+
       {/* 4. Proforma invoice — reflects the advance figures above; emailing it is optional */}
       <div className="block">
         <BlockH>
@@ -818,18 +830,9 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         sinceIso={segments[0]?.startedAt ?? null}
       />
 
-      {/* 4c. The guest's payment plan (2026-08-07) — captured with their reply: full / part now,
-          rest later / installments, and WHEN the rest is coming. A dated before-check-in promise
-          arms the W38 countdown; at-check-in / at-check-out are collected at those desks. */}
-      <AdvancePlanCapture
-        entry={entry}
-        status={paymentStatus}
-        disabled={!folio}
-        disabledHint="Create the folio first — the plan is recorded against it."
-      />
-
       {/* 5. Money received from the guest — after the proforma, so the page reads in the
-          order the desk works: set the requirement, show/send the bill, take the money. */}
+          order the desk works: set the requirement, record the plan, show/send the bill,
+          take the money. */}
       <div className="block">
         <BlockH>
           <Banknote style={{ width: 13, height: 13 }} />
@@ -840,7 +843,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             Received {money(paymentStatus.totalReceived)} of the{" "}
             {paymentStatus.requirementSource === "OPERATOR" ? "requested" : "min threshold"}{" "}
             {money(paymentStatus.requiredAmount)}
-            {paymentStatus.satisfied ? " — satisfied" : ""}.
+            {(paymentStatus.installments?.length ?? 0) > 1 ? ` in ${paymentStatus.installments!.length} payments` : ""}
+            {paymentStatus.satisfied ? " — satisfied" : ""}
+            {!paymentStatus.satisfied && paymentStatus.shortfall > 0
+              ? ` — ${money(paymentStatus.shortfall)} remaining`
+              : ""}
+            .
           </p>
         )}
         {/* The payment window: the advance is due between the proforma going out and the

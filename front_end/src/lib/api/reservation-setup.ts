@@ -120,18 +120,25 @@ export async function recordCreditExtension(
  * Record what the guest said about paying the advance (2026-08-07): full / partial /
  * installments + when the remainder is coming. BEFORE_CHECKIN carries the promised date and
  * arms a real deadline timer server-side. CLEAR wipes the plan. Returns fresh payment-status.
+ * AT_CHECKOUT was removed 2026-08-08 (the advance settles before or at check-in); the proforma
+ * prints the plan, so at S3 a plan CHANGE re-issues it — `reissuedProforma` says so.
  */
 export async function setAdvancePaymentPlan(
   session: Session,
   entryId: string,
   body: {
     plan: "FULL" | "PARTIAL" | "INSTALLMENTS" | "CLEAR";
-    balanceDueAt?: "BEFORE_CHECKIN" | "AT_CHECKIN" | "AT_CHECKOUT" | null;
+    balanceDueAt?: "BEFORE_CHECKIN" | "AT_CHECKIN" | null;
     promisedBy?: string | null;
     note?: string | null;
   },
 ) {
-  return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/advance-payment-plan`, {
+  return apiRequest<
+    PaymentStatusSummary & {
+      /** Set when the plan change superseded the live proforma and minted a fresh DRAFT. */
+      reissuedProforma?: { newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null;
+    }
+  >(`/api/entries/${entryId}/advance-payment-plan`, {
     method: "POST",
     session,
     body,
