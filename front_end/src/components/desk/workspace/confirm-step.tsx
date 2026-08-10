@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { acknowledgeMultiBooking, verifyConference } from "@/lib/api/confirmation";
-import { getEntryTrace } from "@/lib/api/entries";
+import { getEntryTrace, listEntryCommunications } from "@/lib/api/entries";
 import { patchPreArrivalTask } from "@/lib/api/pre-arrival";
 import { deriveFinancials, money } from "@/lib/desk/workspace";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -73,11 +73,33 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
     queryFn: () => getEntryTrace(session!, entry.id, 80),
     enabled: !!session && confirmed,
   });
-  const voucherEmailSent = (traceQ.data?.items ?? []).some(
-    (e) => e.eventType === "RESERVATION_CONFIRMATION_EMAIL.SENT",
+  const voucherEmailTraces = (traceQ.data?.items ?? []).filter((e) =>
+    e.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL."),
   );
+  const voucherEmailSent = voucherEmailTraces.some((e) => e.eventType === "RESERVATION_CONFIRMATION_EMAIL.SENT");
+  // Every attempt failed or was skipped (SMTP down / bad credentials / EMAIL_DISABLE): the
+  // email is not coming. Locking the answer form here dead-ended the whole flow (2026-08-08
+  // report — the operator clicked Send, the email 535'd, and Arrival could never open). A
+  // failed send puts the guest in the same position as one with no email on file — the voucher
+  // reaches them another way (View PDF → print/WhatsApp) and the answer is captured verbally —
+  // so the form UNLOCKS, with a loud strip saying the email never arrived.
+  const voucherEmailFailed = !voucherEmailSent && voucherEmailTraces.length > 0;
   const guestHasEmail = !!entry.guestProfile?.email?.trim();
-  const voucherAnswerLocked = confirmed && guestHasEmail && !traceQ.isLoading && !voucherEmailSent;
+  // Past S4 the gate already passed (the answer is on record) — never re-lock a later revisit
+  // just because the .SENT trace scrolled out of the 80-row feed.
+  const pastS4 = ["S5", "S6", "S7", "S8", "S9"].includes(entry.currentStage);
+  const voucherAnswerLocked =
+    confirmed && guestHasEmail && !pastS4 && !traceQ.isLoading && voucherEmailTraces.length === 0;
+  // Shared cache with CommunicationAcceptanceBlock — hides the email-failure strip once the
+  // guest's answer is on record (the story is then closed however the voucher travelled).
+  const commsQ = useQuery({
+    queryKey: ["entry-communications", entry.id],
+    queryFn: () => listEntryCommunications(session!, entry.id),
+    enabled: !!session && confirmed,
+  });
+  const voucherAnswerRecorded = (commsQ.data?.items ?? []).some(
+    (c) => c.commType === "CONFIRMATION_VOUCHER" && c.acknowledgementStatus === "RECEIVED",
+  );
 
   const [multiBookingNote, setMultiBookingNote] = useState("");
   const [conferenceChecklist, setConferenceChecklist] = useState(
@@ -172,6 +194,21 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
             answer is recorded here. Since 2026-08-07 this is a GATE: Arrival (S5) won't open until
             the answer is on record — and the form itself stays hidden until the voucher has
             actually been sent (auto at confirmation, or the Send to guest button above). */}
+        {/* The email is not coming (every attempt errored or was skipped) — say so LOUDLY and
+            leave the capture form open below: the voucher travels another way (View PDF →
+            print / WhatsApp / read out) and the answer is captured verbally. Without this the
+            flow dead-ended — Send failed silently and Arrival could never open. */}
+        {confirmed && !pastS4 && voucherEmailFailed && !voucherAnswerRecorded && (
+          <div
+            className="fact b-transit"
+            style={{ padding: "8px 12px", fontSize: 12, width: "100%", display: "block", lineHeight: 1.55, borderColor: "var(--warn)", marginBottom: 9 }}
+          >
+            <b>The voucher email could not be sent</b> — the mail server rejected it (see the
+            receipt panel above). The guest has NOT received it by email: share the voucher another
+            way (View voucher PDF above), record their answer below, and fix the email settings
+            before the next booking — or use Send to guest again once email works.
+          </div>
+        )}
         {confirmed && (
           <CommunicationAcceptanceBlock
             entryId={entry.id}
