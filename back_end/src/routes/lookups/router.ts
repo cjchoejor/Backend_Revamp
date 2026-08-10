@@ -14,7 +14,7 @@ import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
 import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
-import { computeChargeableOccupants, computeAllowedRoomCounts } from "../../services/domain/capacity-validation-service.js";
+import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot } from "../../services/domain/capacity-validation-service.js";
 
 export const lookupsRouter = Router();
 const L1 = requireActorLevel("L1");
@@ -36,14 +36,19 @@ lookupsRouter.get("/lookups/child-policy", L1, async (_req, res, next) => {
  * composition + optional maxCapacity ceiling, returns:
  *   - `chargeableOccupants`: adults + children in the pricing ADULT band (>= childMaxAge+1)
  *   - `allowedRoomCounts`: `{ min, max }` envelope the operator's number-of-rooms dropdown
- *     must render (min = ceil(CO / maxCap), max = CO)
+ *     must render (min = ceil(CO / maxCap), max = min(CO, registered rooms))
+ *   - `hotelRoomCount` / `hotelMaxOccupants` / `exceedsHotelCapacity`: the live room-registry
+ *     ceiling — a party larger than the hotel can sleep is flagged here AND rejected by the
+ *     same check inside validateCapacity at create-entry time. Counts come from the Room /
+ *     RoomType tables (never config), so admin room edits move them immediately.
  *
  * Kept as an endpoint so ANY frontend (main testing UI + the friend's real UI) can consume
  * the same computation without duplicating the classification logic. Business logic — age
  * bands, occupancy math — lives here on the backend.
  *
  * Body: `{ adults, childAges: number[], maxCapacity? }`. Response: `{ chargeableOccupants,
- * allowedRoomCounts: { min, max }, bandBreakdown: { young, child, adult } }`.
+ * allowedRoomCounts: { min, max }, bandBreakdown: { young, child, adult }, maxCapacityUsed,
+ * hotelRoomCount, hotelMaxOccupants, exceedsHotelCapacity }`.
  */
 lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) => {
   try {
@@ -52,10 +57,25 @@ lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) =>
     const childAges = Array.isArray(body.childAges)
       ? body.childAges.map((a: unknown) => Number(a)).filter((n: number) => Number.isFinite(n) && n >= 0)
       : [];
-    const maxCapacity = Number.isFinite(Number(body.maxCapacity)) ? Math.max(1, Number(body.maxCapacity)) : 3;
     const bundle = await loadChildPolicyBundle(prisma);
+    const hotelInventory = await loadHotelInventorySnapshot(prisma);
+    // Default divisor = the largest maxCapacity across the hotel's room types — the SAME
+    // fallback createEntry's validateCapacity uses, so the envelope this endpoint offers is
+    // exactly the envelope the create-entry check accepts (was a hardcoded 3).
+    let maxCapacity =
+      body.maxCapacity != null && Number.isFinite(Number(body.maxCapacity)) ? Math.max(1, Number(body.maxCapacity)) : null;
+    if (maxCapacity == null) {
+      const largest = await prisma.roomType.aggregate({ _max: { maxCapacity: true } });
+      maxCapacity = largest._max.maxCapacity ?? 3;
+    }
     const chargeableOccupants = computeChargeableOccupants({ adults, childAges }, bundle);
-    const allowedRoomCounts = computeAllowedRoomCounts(chargeableOccupants, maxCapacity);
+    const allowedRoomCounts = computeAllowedRoomCounts(chargeableOccupants, maxCapacity, hotelInventory.bookableRoomCount);
+    // Party physically can't fit: either it out-sleeps the whole hotel, or the minimum rooms
+    // it needs exceeds the rooms that exist. Mirrors validateCapacity's OVER_HOTEL_CAPACITY /
+    // empty-envelope BLOCKs so the form can refuse before the create call does.
+    const exceedsHotelCapacity =
+      chargeableOccupants > hotelInventory.maxSleepableOccupants ||
+      (chargeableOccupants > 0 && allowedRoomCounts.min > allowedRoomCounts.max);
     // Extra transparency: give the caller the per-band breakdown so it can render its own
     // "1 adult, 2 kids under 11, 1 teen" hint without re-classifying ages client-side.
     const bandBreakdown = { young: 0, child: 0, adult: adults };
@@ -66,7 +86,15 @@ lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) =>
       else if (age > youngMax) bandBreakdown.child++;
       else bandBreakdown.young++;
     }
-    res.json({ chargeableOccupants, allowedRoomCounts, bandBreakdown, maxCapacityUsed: maxCapacity });
+    res.json({
+      chargeableOccupants,
+      allowedRoomCounts,
+      bandBreakdown,
+      maxCapacityUsed: maxCapacity,
+      hotelRoomCount: hotelInventory.bookableRoomCount,
+      hotelMaxOccupants: hotelInventory.maxSleepableOccupants,
+      exceedsHotelCapacity,
+    });
   } catch (e) {
     next(e);
   }

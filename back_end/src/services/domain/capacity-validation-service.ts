@@ -20,7 +20,8 @@ export type CapacityIssueCode =
   | "UNACCOMPANIED_MINOR"
   | "CHILD_AGE_ABOVE_LEGAL_MINOR"
   | "NO_ROOM_TYPE"
-  | "INVALID_NUMBER_OF_ROOMS";
+  | "INVALID_NUMBER_OF_ROOMS"
+  | "OVER_HOTEL_CAPACITY";
 
 export type CapacityIssue = {
   code: CapacityIssueCode;
@@ -73,11 +74,54 @@ export function computeChargeableOccupants(input: { adults: number; childAges: n
  *   5 CO → { min: 2, max: 5 }
  *   6 CO → { min: 2, max: 6 }
  *   7 CO → { min: 3, max: 7 }
+ *
+ * When `bookableRoomCount` is given, `max` is additionally clamped to it — one guest per room
+ * is the widest possible spread, but never wider than the rooms the hotel actually has
+ * registered. A result with `min > max` means NO room count works for this party; callers
+ * must treat that as a hard block, not an envelope.
  */
-export function computeAllowedRoomCounts(chargeableOccupants: number, maxCapacity: number): { min: number; max: number } {
+export function computeAllowedRoomCounts(
+  chargeableOccupants: number,
+  maxCapacity: number,
+  bookableRoomCount?: number,
+): { min: number; max: number } {
   if (chargeableOccupants <= 0) return { min: 0, max: 0 };
   const safeMax = maxCapacity > 0 ? maxCapacity : 1;
-  return { min: Math.ceil(chargeableOccupants / safeMax), max: chargeableOccupants };
+  const min = Math.ceil(chargeableOccupants / safeMax);
+  const max =
+    bookableRoomCount != null && bookableRoomCount >= 0
+      ? Math.min(chargeableOccupants, bookableRoomCount)
+      : chargeableOccupants;
+  return { min, max };
+}
+
+/**
+ * Live counts from the room registry — deliberately NOT a config key. The bookable-room count
+ * and total sleepable capacity are derived from the Room/RoomType tables at call time, so
+ * registering a 28th room (or editing a type's maxCapacity on /admin/room-types) moves the
+ * intake ceiling immediately, with no second copy to drift. Shadow inventory is excluded — it
+ * is not part of the normally sellable surface (Policy 14). Blocked / under-maintenance rooms
+ * deliberately still count: those are transient physical states, and this ceiling is the
+ * static "physically impossible" line. Date-level availability stays the S1 search's job.
+ */
+export type HotelInventorySnapshot = {
+  /** Registered, non-shadow rooms. */
+  bookableRoomCount: number;
+  /** Σ of each bookable room's type maxCapacity — the most chargeable guests the hotel can sleep. */
+  maxSleepableOccupants: number;
+};
+
+export async function loadHotelInventorySnapshot(prisma: PrismaClient): Promise<HotelInventorySnapshot> {
+  const rooms = await prisma.room.findMany({
+    where: { isShadowInventory: false },
+    select: { roomType: { select: { maxCapacity: true } } },
+  });
+  let maxSleepableOccupants = 0;
+  for (const room of rooms) {
+    const cap = room.roomType.maxCapacity;
+    maxSleepableOccupants += cap > 0 ? cap : 1;
+  }
+  return { bookableRoomCount: rooms.length, maxSleepableOccupants };
 }
 
 export async function validateCapacity(
@@ -95,6 +139,8 @@ export async function validateCapacity(
   responsibleAdultCount: number;
   /** Adults + children who count toward room capacity (age >= ADULT band). */
   chargeableOccupants: number;
+  /** Live room-registry counts backing the hotel-wide ceiling checks. */
+  hotelInventory: HotelInventorySnapshot;
 }> {
   const bundle = preloadedBundle ?? (await loadChildPolicyBundle(prisma));
   const issues: CapacityIssue[] = [];
@@ -165,6 +211,21 @@ export async function validateCapacity(
 
   // Per-room-type caps — only checked if roomTypeId is given.
   const chargeableOccupants = computeChargeableOccupants({ adults: input.adults, childAges: input.childAges }, bundle);
+
+  // Hotel-wide ceiling — the party must physically fit in the hotel, whatever the room mix.
+  // Σ maxCapacity across all registered rooms is the absolute cap on chargeable bodies; beyond
+  // it no number of rooms works, so this blocks regardless of whether a room count was
+  // requested (500 adults is rejected even before the operator touches the rooms dropdown).
+  const hotelInventory = await loadHotelInventorySnapshot(prisma);
+  if (chargeableOccupants > hotelInventory.maxSleepableOccupants) {
+    issues.push({
+      code: "OVER_HOTEL_CAPACITY",
+      severity: "BLOCK",
+      message: `${chargeableOccupants} chargeable guests exceeds what the hotel can sleep — at most ${hotelInventory.maxSleepableOccupants} guests across its ${hotelInventory.bookableRoomCount} registered rooms.`,
+      detail: { chargeableOccupants, ...hotelInventory },
+    });
+  }
+
   if (input.roomTypeId) {
     const roomType = await prisma.roomType.findUnique({
       where: { id: input.roomTypeId },
@@ -184,7 +245,7 @@ export async function validateCapacity(
         severity: "BLOCK",
         message: `Unknown room type ${input.roomTypeId}`,
       });
-      return { issues, classifiedAdults, classifiedChildren, classifiedYoungChildren, legalMinorCount, responsibleAdultCount, chargeableOccupants };
+      return { issues, classifiedAdults, classifiedChildren, classifiedYoungChildren, legalMinorCount, responsibleAdultCount, chargeableOccupants, hotelInventory };
     }
 
     // OVER_MAX_OCCUPANCY now checks chargeable occupants against the room type's absolute
@@ -227,15 +288,23 @@ export async function validateCapacity(
       });
     }
 
-    // Number-of-rooms envelope — enforced against the SELECTED room type's maxCapacity.
+    // Number-of-rooms envelope — enforced against the SELECTED room type's maxCapacity, with
+    // the max clamped to the hotel's registered room count.
     if (input.numberOfRooms != null && input.numberOfRooms > 0) {
-      const { min, max } = computeAllowedRoomCounts(chargeableOccupants, roomType.maxCapacity);
-      if (input.numberOfRooms < min || input.numberOfRooms > max) {
+      const { min, max } = computeAllowedRoomCounts(chargeableOccupants, roomType.maxCapacity, hotelInventory.bookableRoomCount);
+      if (min > max) {
         issues.push({
           code: "INVALID_NUMBER_OF_ROOMS",
           severity: "BLOCK",
-          message: `Number of rooms must be between ${min} and ${max} for ${chargeableOccupants} chargeable guests at ${roomType.name} (max ${roomType.maxCapacity} per room).`,
-          detail: { requested: input.numberOfRooms, min, max, chargeableOccupants, maxCapacity: roomType.maxCapacity },
+          message: `${chargeableOccupants} chargeable guests at ${roomType.name} (max ${roomType.maxCapacity} per room) needs at least ${min} rooms, but the hotel only has ${hotelInventory.bookableRoomCount} registered.`,
+          detail: { requested: input.numberOfRooms, min, max, chargeableOccupants, maxCapacity: roomType.maxCapacity, bookableRoomCount: hotelInventory.bookableRoomCount },
+        });
+      } else if (input.numberOfRooms < min || input.numberOfRooms > max) {
+        issues.push({
+          code: "INVALID_NUMBER_OF_ROOMS",
+          severity: "BLOCK",
+          message: `Number of rooms must be between ${min} and ${max} for ${chargeableOccupants} chargeable guests at ${roomType.name} (max ${roomType.maxCapacity} per room; ${hotelInventory.bookableRoomCount} rooms registered).`,
+          detail: { requested: input.numberOfRooms, min, max, chargeableOccupants, maxCapacity: roomType.maxCapacity, bookableRoomCount: hotelInventory.bookableRoomCount },
         });
       }
     }
@@ -244,16 +313,23 @@ export async function validateCapacity(
     // the typical S1 intake path where the operator commits to a count before picking a
     // specific type; the type-specific validation runs again at seal time.
     const fallback = input.fallbackMaxCapacity && input.fallbackMaxCapacity > 0 ? input.fallbackMaxCapacity : 3;
-    const { min, max } = computeAllowedRoomCounts(chargeableOccupants, fallback);
-    if (input.numberOfRooms < min || input.numberOfRooms > max) {
+    const { min, max } = computeAllowedRoomCounts(chargeableOccupants, fallback, hotelInventory.bookableRoomCount);
+    if (min > max) {
       issues.push({
         code: "INVALID_NUMBER_OF_ROOMS",
         severity: "BLOCK",
-        message: `Number of rooms must be between ${min} and ${max} for ${chargeableOccupants} chargeable guests (assuming max ${fallback} per room).`,
-        detail: { requested: input.numberOfRooms, min, max, chargeableOccupants, fallbackMaxCapacity: fallback },
+        message: `${chargeableOccupants} chargeable guests needs at least ${min} rooms (max ${fallback} per room), but the hotel only has ${hotelInventory.bookableRoomCount} registered.`,
+        detail: { requested: input.numberOfRooms, min, max, chargeableOccupants, fallbackMaxCapacity: fallback, bookableRoomCount: hotelInventory.bookableRoomCount },
+      });
+    } else if (input.numberOfRooms < min || input.numberOfRooms > max) {
+      issues.push({
+        code: "INVALID_NUMBER_OF_ROOMS",
+        severity: "BLOCK",
+        message: `Number of rooms must be between ${min} and ${max} for ${chargeableOccupants} chargeable guests (assuming max ${fallback} per room; ${hotelInventory.bookableRoomCount} rooms registered).`,
+        detail: { requested: input.numberOfRooms, min, max, chargeableOccupants, fallbackMaxCapacity: fallback, bookableRoomCount: hotelInventory.bookableRoomCount },
       });
     }
   }
 
-  return { issues, classifiedAdults, classifiedChildren, classifiedYoungChildren, legalMinorCount, responsibleAdultCount, chargeableOccupants };
+  return { issues, classifiedAdults, classifiedChildren, classifiedYoungChildren, legalMinorCount, responsibleAdultCount, chargeableOccupants, hotelInventory };
 }
