@@ -56,8 +56,8 @@ async function runAvailabilityEngineForEntry(
     },
     inquiry: {
       select: {
-        travelAgent: { select: { displayName: true, contactNumber: true, contactEmail: true } },
-        corporateAccount: { select: { displayName: true, contactNumber: true, contactEmail: true } },
+        travelAgent: { select: { displayName: true, contactNumbers: true, contactEmail: true } },
+        corporateAccount: { select: { displayName: true, contactNumbers: true, contactEmail: true } },
       },
     },
   } as const;
@@ -147,8 +147,8 @@ async function runAvailabilityEngineForEntry(
           contactPersonPhone: string | null;
           guestProfile: { firstName?: string | null; lastName?: string | null; email?: string | null; phone?: string | null } | null;
           inquiry: {
-            travelAgent: { displayName: string; contactNumber?: string | null; contactEmail?: string | null } | null;
-            corporateAccount: { displayName: string; contactNumber?: string | null; contactEmail?: string | null } | null;
+            travelAgent: { displayName: string; contactNumbers?: string[] | null; contactEmail?: string | null } | null;
+            corporateAccount: { displayName: string; contactNumbers?: string[] | null; contactEmail?: string | null } | null;
           } | null;
         }>)
       | null
@@ -166,7 +166,8 @@ async function runAvailabilityEngineForEntry(
         guestEmail,
         agentType: "TRAVEL_AGENT" as const,
         agentName: ta.displayName,
-        agentPhone: ta.contactNumber ?? null,
+        // The tooltip shows one number to call; an agency may now have several.
+        agentPhone: ta.contactNumbers?.[0] ?? null,
         agentEmail: ta.contactEmail ?? null,
       };
     }
@@ -177,7 +178,7 @@ async function runAvailabilityEngineForEntry(
         guestEmail,
         agentType: "CORPORATE" as const,
         agentName: ca.displayName,
-        agentPhone: ca.contactNumber ?? null,
+        agentPhone: ca.contactNumbers?.[0] ?? null,
         agentEmail: ca.contactEmail ?? null,
       };
     }
