@@ -74,12 +74,22 @@ export async function getPaymentStatus(session: Session, entryId: string) {
   return apiRequest<PaymentStatusSummary>(`/api/entries/${entryId}/payment-status`, { session });
 }
 
+/**
+ * Outcome of the backend's automatic committed-hold placement on an S3 advance payment
+ * (2026-08-10: money received — full or partial — holds the rooms; the PI dispatch no longer
+ * does). `placed: false` carries a desk-readable `message` — the operator is told to hold
+ * manually. Null / absent when the payment was taken past S3 (the hold is already confirmed).
+ */
+export type AdvanceAutoHold =
+  | { placed: true; holdId: string; roomId: string; expiresAt: string }
+  | { placed: false; reason: string; message: string; holdId?: string };
+
 export async function recordFolioPayment(
   session: Session,
   folioId: string,
   body: { entryId: string; amount: number; notes?: string },
 ) {
-  return apiRequest<unknown>(`/api/folios/${folioId}/payments`, {
+  return apiRequest<{ id: string; autoHold?: AdvanceAutoHold | null }>(`/api/folios/${folioId}/payments`, {
     method: "POST",
     session,
     body,
@@ -217,17 +227,8 @@ export async function issueProformaInvoice(
   });
 }
 
-/**
- * Outcome of the backend's automatic committed-hold placement on PI dispatch (2026-08-08:
- * sending the proforma holds the rooms; a generated-but-unsent PI leaves the hold manual).
- * `placed: false` carries a desk-readable `message` — the operator is told to hold manually.
- */
-export type DispatchAutoHold =
-  | { placed: true; holdId: string; roomId: string; expiresAt: string }
-  | { placed: false; reason: string; message: string; holdId?: string };
-
 export async function dispatchInvoice(session: Session, invoiceId: string, body?: { dispatchedTo?: string }) {
-  return apiRequest<InvoiceSummary & { autoHold?: DispatchAutoHold | null }>(`/api/invoices/${invoiceId}/dispatch`, {
+  return apiRequest<InvoiceSummary>(`/api/invoices/${invoiceId}/dispatch`, {
     method: "POST",
     session,
     body: body ?? {},

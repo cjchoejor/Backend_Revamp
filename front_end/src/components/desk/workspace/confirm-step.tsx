@@ -305,8 +305,9 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
 
         {/* Handoff to front desk — kept at the BOTTOM of S4 (2026-08-02, operator request).
             The front-desk prep subset of the pre-arrival tasks, workable as soon as the
-            booking is frozen. Same records as the Arrival step's task list — whichever step
-            completes one, the other shows it done. */}
+            booking is frozen. PREP only since 2026-08-10 (operator ruling): opening the
+            arrival window resets completed tasks to PENDING, so the Arrival step verifies
+            them fresh — a tick here no longer carries into S5. */}
         {confirmed && (
           <div className="block">
             <BlockH>
@@ -314,8 +315,9 @@ export function ConfirmStep({ entry }: { entry: EntryDetail }) {
               Handoff to front desk
             </BlockH>
             <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0 }}>
-              What the front desk needs squared away before this guest arrives. These can be worked
-              here or on the Arrival step — it&rsquo;s the same list.
+              What the front desk needs squared away before this guest arrives. Ticking a task here
+              records the prep — the Arrival step starts its own verification fresh, so these
+              re-open there for the arrival operator to confirm.
             </p>
             {handoffTasks.every((h) => !h.task) ? (
               <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>

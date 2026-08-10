@@ -292,8 +292,23 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       if (!folio) throw new Error("Create the folio first");
       return recordFolioPayment(session!, folio.id, { entryId: entry.id, amount: Number(paymentAmount), notes: paymentNotes.trim() || undefined });
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success("Advance payment recorded");
+      // Money in holds the rooms automatically (2026-08-10 operator ruling — a partial payment
+      // counts). The backend reports what happened; the hold block below flips on refetch.
+      const ah = res.autoHold;
+      if (ah?.placed) {
+        toast.success("Rooms held for this booking", {
+          description:
+            "The advance came in, so the committed hold was placed automatically. It runs on the standard hold clock and frees itself if nothing follows.",
+          duration: 9000,
+        });
+      } else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD") {
+        toast.warning("Rooms not auto-held", {
+          description: `${ah.message} — place the committed hold manually below.`,
+          duration: 10000,
+        });
+      }
       setPaymentAmount("");
       setPaymentNotes("");
       // Re-arm the prefill: once the refetched status lands, the field refills with whatever
@@ -378,23 +393,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
       if (!inv) throw new Error("No proforma invoice");
       return dispatchInvoice(session!, inv.id, { dispatchedTo: dispatchTo.trim() || undefined });
     },
-    onSuccess: (res) => {
+    onSuccess: () => {
+      // Dispatch no longer auto-holds (2026-08-10 ruling) — the hold now follows the money:
+      // it is placed when the advance payment is recorded, partial included.
       toast.success("Proforma invoice dispatched");
-      // Sending the PI holds the rooms automatically (2026-08-08 operator ruling) — the
-      // backend reports what happened, and the hold block below flips to Held on refetch.
-      const ah = res.autoHold;
-      if (ah?.placed) {
-        toast.success("Rooms held for this booking", {
-          description:
-            "The proforma went to the guest, so the committed hold was placed automatically. It runs on the standard hold clock and frees itself if nothing follows.",
-          duration: 9000,
-        });
-      } else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD") {
-        toast.warning("Rooms not auto-held", {
-          description: `${ah.message} — place the committed hold manually below.`,
-          duration: 10000,
-        });
-      }
       invalidate();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
@@ -1089,7 +1091,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5 }}>
             <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
             Hold {hold.state} · room {hold.roomId?.slice(0, 10) ?? "—"} · expires {hold.expiresAt.slice(0, 16).replace("T", " ")}
-            {/* Auto-placed holds say so — the justification is stamped by the dispatch hook. */}
+            {/* Auto-placed holds say so — the justification is stamped by the auto-place hook.
+                The dispatch wording survives for holds placed under the superseded 2026-08-08
+                rule, so an old booking's hold still explains itself. */}
+            {hold.commercialJustification?.startsWith("Auto-held on advance payment") && (
+              <span style={{ color: "var(--ink-3)", fontSize: 11 }}> · held automatically when the advance payment came in</span>
+            )}
             {hold.commercialJustification?.startsWith("Auto-held on proforma dispatch") && (
               <span style={{ color: "var(--ink-3)", fontSize: 11 }}> · held automatically when the proforma was sent</span>
             )}
@@ -1109,11 +1116,12 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             </button>
             {!disclosure && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>Record cancellation terms before placing the hold.</p>}
             {!preferredRoomId && <p style={{ fontSize: 11.5, color: "var(--warn)", marginBottom: 0 }}>No preferred room — complete Inquiry first.</p>}
-            {/* 2026-08-08 ruling: dispatching the PI places this hold automatically. The manual
-                button is the path for bookings whose proforma is generated but never sent. */}
+            {/* 2026-08-10 ruling (supersedes the 2026-08-08 dispatch-time auto-hold): the hold
+                follows the MONEY — recording an advance payment, partial included, places it
+                automatically. The manual button is the path when no money is coming up front. */}
             <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 0 }}>
-              Sending the proforma to the guest places this hold automatically — use the button when the
-              proforma isn&rsquo;t being sent.
+              Recording an advance payment — even a partial one — places this hold automatically; use
+              the button when the rooms should be pinned before any money arrives.
             </p>
           </>
         )}
