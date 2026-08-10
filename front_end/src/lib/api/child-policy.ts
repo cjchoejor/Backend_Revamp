@@ -17,9 +17,15 @@ export function getChildPolicy(session: Session) {
 
 export type AllowedRoomCountsResponse = {
   chargeableOccupants: number;
+  /** min = rooms the party needs at least; max is clamped to the hotel's registered room count. */
   allowedRoomCounts: { min: number; max: number };
   bandBreakdown: { young: number; child: number; adult: number };
   maxCapacityUsed: number;
+  /** Live room-registry counts (Room / RoomType tables, never config). */
+  hotelRoomCount: number;
+  hotelMaxOccupants: number;
+  /** True when the party can't fit in the hotel at all — create-entry rejects it server-side too. */
+  exceedsHotelCapacity: boolean;
 };
 
 /**

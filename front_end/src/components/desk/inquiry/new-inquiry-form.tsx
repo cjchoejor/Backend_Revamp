@@ -293,14 +293,81 @@ function PartyContacts({
     onSuccess: (res) => {
       // Reflect the append locally so the list shows it without re-running the party search.
       setParty({ ...party, coordinators: res.coordinators });
-      setContact(res.contact);
+      // Adding while nothing is picked IS the picking action; adding once a contact is picked
+      // just files another person on the party — it must not silently steal the booking's contact.
+      if (!contact) setContact(res.contact);
       setAdding(false);
       setNewName("");
       setNewPhone("");
-      toast.success(res.added ? `Added ${res.contact.name} to ${party.displayName}` : `${res.contact.name} was already on file`);
+      toast.success(
+        !res.added
+          ? `${res.contact.name} was already on file`
+          : contact
+            ? `Added ${res.contact.name} to ${party.displayName} — ${contact.name} stays the contact for this booking`
+            : `Added ${res.contact.name} to ${party.displayName}`,
+      );
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not add the contact"),
   });
+
+  // Shared between both views (contact picked / not yet picked), so more people can be filed
+  // on the agency mid-call even after the booking's contact person is settled.
+  const addBlock = adding ? (
+    <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+      <input
+        className="dinput"
+        placeholder="Contact person's name"
+        value={newName}
+        onChange={(e) => setNewName(e.target.value)}
+        autoFocus
+      />
+      <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ flex: "0 0 auto" }}>
+          <PresetOrCustom
+            presets={PHONE_CODES}
+            value={newCode}
+            onChange={setNewCode}
+            customPlaceholder="+__"
+            selectStyle={{ width: 92 }}
+          />
+        </div>
+        <input
+          className="dinput"
+          style={{ flex: 1 }}
+          inputMode="tel"
+          placeholder="17 88 21 04"
+          value={newPhone}
+          onChange={(e) => setNewPhone(e.target.value)}
+        />
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          disabled={!newName.trim() || addMutation.isPending}
+          onClick={() => addMutation.mutate()}
+        >
+          {addMutation.isPending ? "Saving…" : `Save to ${noun}`}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdding(false)}>
+          Cancel
+        </button>
+      </div>
+      <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+        Saved onto {party.displayName}, so it&rsquo;s already here next time they book.
+      </p>
+    </div>
+  ) : (
+    <button
+      type="button"
+      className="btn btn-ghost btn-sm"
+      style={{ marginTop: 7 }}
+      onClick={() => setAdding(true)}
+    >
+      <Plus style={{ width: 14, height: 14 }} />
+      {contact ? "Add another contact person" : "New contact person"}
+    </button>
+  );
 
   if (contact) {
     return (
@@ -317,7 +384,9 @@ function PartyContacts({
         </div>
         <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "5px 0 0" }}>
           The hotel rings this person about the booking. The guest travelling is captured below.
+          {(party.coordinators?.length ?? 0) > 1 && " “Change” lists everyone on file."}
         </p>
+        {addBlock}
       </div>
     );
   }
@@ -346,62 +415,7 @@ function PartyContacts({
         </p>
       )}
 
-      {adding ? (
-        <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-          <input
-            className="dinput"
-            placeholder="Contact person's name"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            autoFocus
-          />
-          <div style={{ display: "flex", gap: 6 }}>
-            <div style={{ flex: "0 0 auto" }}>
-              <PresetOrCustom
-                presets={PHONE_CODES}
-                value={newCode}
-                onChange={setNewCode}
-                customPlaceholder="+__"
-                selectStyle={{ width: 92 }}
-              />
-            </div>
-            <input
-              className="dinput"
-              style={{ flex: 1 }}
-              inputMode="tel"
-              placeholder="17 88 21 04"
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-            />
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={!newName.trim() || addMutation.isPending}
-              onClick={() => addMutation.mutate()}
-            >
-              {addMutation.isPending ? "Saving…" : `Save to ${noun}`}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdding(false)}>
-              Cancel
-            </button>
-          </div>
-          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
-            Saved onto {party.displayName}, so it&rsquo;s already here next time they book.
-          </p>
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          style={{ marginTop: 7 }}
-          onClick={() => setAdding(true)}
-        >
-          <Plus style={{ width: 14, height: 14 }} />
-          New contact person
-        </button>
-      )}
+      {addBlock}
     </div>
   );
 }
@@ -563,6 +577,7 @@ function PartySearch({
 function ChildAgeChargeNote({
   childAges,
   adultBandIndexes,
+  overAgeIndexes,
   policyLoaded,
   youngMaxAge,
   childMaxAge,
@@ -573,6 +588,7 @@ function ChildAgeChargeNote({
 }: {
   childAges: string[];
   adultBandIndexes: Set<number>;
+  overAgeIndexes: Set<number>;
   policyLoaded: boolean;
   youngMaxAge: number;
   childMaxAge: number;
@@ -583,7 +599,15 @@ function ChildAgeChargeNote({
 }) {
   const inAdultBand = childAges
     .map((raw, i) => ({ n: parseInt(raw || "", 10), i }))
-    .filter(({ n, i }) => adultBandIndexes.has(i) && Number.isFinite(n));
+    .filter(({ n, i }) => adultBandIndexes.has(i) && !overAgeIndexes.has(i) && Number.isFinite(n));
+  // An 18+ age is not a warning about price — it is a refusal: the guest is an adult and does
+  // not fall under the child section at all. Red trumps the amber charge note, and the same
+  // condition is what keeps the submit button disabled (via `agesComplete`), so the box always
+  // explains WHY saving is off rather than leaving a silently grey button.
+  const overAge = childAges
+    .map((raw, i) => ({ n: parseInt(raw || "", 10), i }))
+    .filter(({ n, i }) => overAgeIndexes.has(i) && Number.isFinite(n));
+  const blocked = overAge.length > 0;
   const active = inAdultBand.length > 0;
 
   return (
@@ -593,8 +617,8 @@ function ChildAgeChargeNote({
         marginTop: 2,
         padding: "9px 11px",
         borderRadius: "var(--r-md)",
-        border: `1px solid ${active ? "var(--warn)" : "var(--line-2)"}`,
-        background: active ? "var(--warn-t)" : "transparent",
+        border: `1px solid ${blocked ? "var(--stop)" : active ? "var(--warn)" : "var(--line-2)"}`,
+        background: blocked ? "var(--stop-t)" : active ? "var(--warn-t)" : "transparent",
       }}
     >
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -604,10 +628,17 @@ function ChildAgeChargeNote({
             height: 14,
             flexShrink: 0,
             marginTop: 2,
-            color: active ? "var(--warn)" : "var(--ink-3)",
+            color: blocked ? "var(--stop)" : active ? "var(--warn)" : "var(--ink-3)",
           }}
         />
         <div style={{ fontSize: 11.5, color: "var(--ink-2)", lineHeight: 1.5 }}>
+          {blocked && (
+            <p style={{ margin: "0 0 4px", color: "var(--stop)", fontWeight: 700 }}>
+              {overAge.map(({ n, i }) => `Child ${i + 1} is ${n}`).join(" · ")} — that&rsquo;s an
+              adult and doesn&rsquo;t fall under the child section. Count them in the Adults field;
+              the booking can&rsquo;t be saved until this age is fixed.
+            </p>
+          )}
           {active && (
             <p style={{ margin: "0 0 4px", color: "var(--warn)", fontWeight: 700 }}>
               {inAdultBand
@@ -865,10 +896,27 @@ export function DeskNewInquiryForm() {
     const out = new Set<number>();
     childAges.forEach((raw, i) => {
       const n = parseInt(raw || "", 10);
-      if (Number.isFinite(n) && n > childMaxAge) out.add(i);
+      if (Number.isFinite(n) && n > childMaxAge && n <= maxChildAge) out.add(i);
     });
     return out;
-  }, [childAges, childMaxAge, childPolicyQuery.data]);
+  }, [childAges, childMaxAge, maxChildAge, childPolicyQuery.data]);
+
+  /**
+   * Ages at/above the legal adult threshold, which are a different thing from the amber band
+   * above: 11–17 is a real child entry with an adult PRICE; 18+ is not a child entry at all —
+   * the backend refuses it outright (CHILD_AGE_ABOVE_LEGAL_MINOR, BLOCK) and the person belongs
+   * in the Adults field. Shown red, and it is what keeps `agesComplete` false. Deliberately NOT
+   * gated on the policy having loaded (unlike the amber band): this is the refusal that disables
+   * submit, and enforcement can't wait on a lookup — the 18 fallback matches `agesComplete`'s.
+   */
+  const overAgeIndexes = useMemo(() => {
+    const out = new Set<number>();
+    childAges.forEach((raw, i) => {
+      const n = parseInt(raw || "", 10);
+      if (Number.isFinite(n) && n >= minAdultAge) out.add(i);
+    });
+    return out;
+  }, [childAges, minAdultAge]);
 
   // The adult-band charge used to be announced by a one-shot `toast.warning` as each age crossed
   // the ceiling. A toast is gone in nine seconds and the charge is not, so it is now stated
@@ -884,6 +932,13 @@ export function DeskNewInquiryForm() {
   const chargeableOccupants = roomCountsQuery.data?.chargeableOccupants ?? adultsNum;
   const largestMaxCapacity = roomCountsQuery.data?.maxCapacityUsed ?? 3;
   const roomRange = roomCountsQuery.data?.allowedRoomCounts ?? { min: adultsNum > 0 ? 1 : 0, max: adultsNum };
+  // Hotel-wide ceiling from the backend's live room registry — a party the hotel can't sleep
+  // is refused here (message + disabled submit) exactly as the create-entry check would refuse
+  // it server-side (OVER_HOTEL_CAPACITY BLOCK). Nothing hardcoded: add a room in admin and
+  // these numbers move on the next lookup.
+  const hotelRoomCount = roomCountsQuery.data?.hotelRoomCount;
+  const hotelMaxOccupants = roomCountsQuery.data?.hotelMaxOccupants;
+  const exceedsHotelCapacity = roomCountsQuery.data?.exceedsHotelCapacity ?? false;
   const allowedRoomCounts = useMemo(
     () =>
       roomRange.min > 0 && roomRange.max >= roomRange.min
@@ -980,8 +1035,8 @@ export function DeskNewInquiryForm() {
   const corporateContextComplete = !needsCorporateContext || (corpClientRef.trim() !== "" && corpCoordinator.trim() !== "");
   const canSubmit = isEdit
     ? // Editing an existing booking: guest + channel are fixed, so only the stay fields gate the save.
-      !!editEntry && agesComplete && !!checkIn && !!checkOut
-    : (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete && corporateContextComplete;
+      !!editEntry && agesComplete && !!checkIn && !!checkOut && !exceedsHotelCapacity
+    : (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete && corporateContextComplete && !exceedsHotelCapacity;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -1524,8 +1579,11 @@ export function DeskNewInquiryForm() {
                 {childAges.map((age, i) => {
                   // Mark the field itself, and keep it marked for as long as the age stays above
                   // the ceiling, so the operator can see at review time which child is being
-                  // charged as an adult — not just at the moment they typed it.
-                  const isAdultBand = adultBandIndexes.has(i);
+                  // charged as an adult — not just at the moment they typed it. An age at/above
+                  // the adult threshold is a different, harder state: not a priced-as-adult
+                  // child but an adult in the wrong field, shown red and blocking submit.
+                  const isOverAge = overAgeIndexes.has(i);
+                  const isAdultBand = !isOverAge && adultBandIndexes.has(i);
                   return (
                     <div key={i} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       <input
@@ -1535,18 +1593,27 @@ export function DeskNewInquiryForm() {
                         className="dinput"
                         style={{
                           width: 80,
-                          borderColor: isAdultBand ? "var(--warn)" : undefined,
-                          background: isAdultBand ? "var(--warn-t)" : undefined,
-                          fontWeight: isAdultBand ? 700 : undefined,
+                          borderColor: isOverAge ? "var(--stop)" : isAdultBand ? "var(--warn)" : undefined,
+                          background: isOverAge ? "var(--stop-t)" : isAdultBand ? "var(--warn-t)" : undefined,
+                          fontWeight: isOverAge || isAdultBand ? 700 : undefined,
                         }}
                         placeholder={`#${i + 1}`}
                         value={age}
-                        aria-describedby={isAdultBand ? `child-adult-${i}` : undefined}
+                        aria-invalid={isOverAge || undefined}
+                        aria-describedby={isOverAge || isAdultBand ? `child-adult-${i}` : undefined}
                         onChange={(e) =>
                           setChildAges((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
                         }
                       />
-                      {isAdultBand && (
+                      {isOverAge ? (
+                        <span
+                          id={`child-adult-${i}`}
+                          style={{ fontSize: 10, color: "var(--stop)", fontWeight: 700, textAlign: "center" }}
+                          title={`${minAdultAge}+ is an adult — count this guest in the Adults field, not here`}
+                        >
+                          adult — not a child
+                        </span>
+                      ) : isAdultBand ? (
                         <span
                           id={`child-adult-${i}`}
                           style={{ fontSize: 10, color: "var(--warn)", fontWeight: 600, textAlign: "center" }}
@@ -1554,7 +1621,7 @@ export function DeskNewInquiryForm() {
                         >
                           adult rate
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })}
@@ -1564,6 +1631,7 @@ export function DeskNewInquiryForm() {
           <ChildAgeChargeNote
             childAges={childCountNum > 0 ? childAges : []}
             adultBandIndexes={childCountNum > 0 ? adultBandIndexes : new Set()}
+            overAgeIndexes={childCountNum > 0 ? overAgeIndexes : new Set()}
             policyLoaded={!!childPolicyQuery.data}
             youngMaxAge={youngMaxAge}
             childMaxAge={childMaxAge}
@@ -1590,11 +1658,20 @@ export function DeskNewInquiryForm() {
                 ))
               )}
             </select>
-            <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
-              {chargeableOccupants} chargeable guest{chargeableOccupants === 1 ? "" : "s"} (adults + children aged{" "}
-              {maxChildAge + 1}+). Up to {largestMaxCapacity} per room, so {roomRange.min}–{roomRange.max} room
-              {roomRange.max === 1 ? "" : "s"} allowed. This is driven by party size only — not how the guest booked.
-            </p>
+            {exceedsHotelCapacity ? (
+              <p style={{ fontSize: 11.5, color: "var(--stop)", fontWeight: 600, margin: "6px 0 0", lineHeight: 1.5 }}>
+                This party can’t be accommodated: {chargeableOccupants} chargeable guest
+                {chargeableOccupants === 1 ? "" : "s"}, but the hotel’s {hotelRoomCount} registered room
+                {hotelRoomCount === 1 ? "" : "s"} sleep at most {hotelMaxOccupants}. Reduce the party or split the
+                booking.
+              </p>
+            ) : (
+              <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                {chargeableOccupants} chargeable guest{chargeableOccupants === 1 ? "" : "s"} (adults + children aged{" "}
+                {maxChildAge + 1}+). Up to {largestMaxCapacity} per room, so {roomRange.min}–{roomRange.max} room
+                {roomRange.max === 1 ? "" : "s"} allowed. This is driven by party size only — not how the guest booked.
+              </p>
+            )}
           </div>
 
           <div className="frow" style={{ gridTemplateColumns: "1fr 90px 1fr" }}>
