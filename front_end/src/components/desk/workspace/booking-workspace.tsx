@@ -794,6 +794,20 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
     setSelected(ready ? 4 : currentStepOrder(entry));
   }, [entry, selected, paymentSatisfied, totalReceived, requiredAmount, communications]);
 
+  // Start every step view at the TOP (2026-08-08 report: advancing S1→…→S9 opened the next
+  // step wherever the previous one was scrolled to — the canvas swaps content but the
+  // scroller keeps its position). One reset covers all nine steps, the Segments view and the
+  // sealed/read-only variants — they all render inside `.canvas-scroll`. Narrow layouts flip
+  // that div to overflow:visible and scroll the shell's `.content` (or the window) instead,
+  // so those reset too.
+  const canvasScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = canvasScrollRef.current;
+    el?.scrollTo({ top: 0 });
+    (el?.closest(".content") as HTMLElement | null)?.scrollTo({ top: 0 });
+    window.scrollTo({ top: 0 });
+  }, [selected, segmentsOpen]);
+
   const fin = useMemo(
     () => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null),
     [entry, paymentStatusQuery.data],
@@ -1339,7 +1353,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       {/* body — full-width canvas; the live feed + backend rail live in the right drawer */}
       <div className="ws-body">
         <div className="canvas-wrap">
-          <div className="canvas-scroll">
+          <div className="canvas-scroll" ref={canvasScrollRef}>
           <div
             className={`canvas${
               segmentsOpen ||
