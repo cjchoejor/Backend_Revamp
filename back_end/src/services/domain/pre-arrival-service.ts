@@ -11,7 +11,7 @@ import { dispatchPreArrivalOutboundTx } from "./communication-service.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderPreArrivalEmail } from "../infrastructure/stage-email-templates.js";
 import { toDecimal } from "../../lib/money.js";
-import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import { autoCompletePaymentReconciliationTaskTx, evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 
 function categoryForTaskType(taskType: PreArrivalTaskType): TaskCategory {
   switch (taskType) {
@@ -74,6 +74,74 @@ export async function initialiseTasks(prisma: PrismaClient, entryId: string, act
   });
 
   return { created: result.count, skipped: result.count === 0 } as const;
+}
+
+/**
+ * The Arrival checklist starts fresh when the arrival window opens (2026-08-10, operator
+ * ruling): the tasks are seeded at S4 confirmation so the front desk can PREP them early (the
+ * S4 "Handoff to front desk" section), but prep is not arrival verification — a task ticked at
+ * S4 must not land on S5 already green, or the Arrival step reads as done before the arrival
+ * operator has looked at anything. So at S4→S5 activation every COMPLETE task resets to
+ * PENDING (the default state); who completed what at S4 is preserved on the trace, not the
+ * row. WAIVED tasks are NOT reset — a waive says "this doesn't apply to this booking", a
+ * decision that carries, and its reason is already recorded.
+ *
+ * One exception, re-applied immediately: PAYMENT_RECONCILIATION auto-completes again when the
+ * advance is already paid in full — the 2026-08-07 rule (the money tick never sits PENDING
+ * once the money story is closed) still holds, and the folio's reconciliation flag does not
+ * reset, so leaving the task open would contradict the green "Advance reconciled" line
+ * standing right next to it.
+ */
+export async function resetTasksForArrivalVerification(prisma: PrismaClient, entryId: string, actorId: string) {
+  const completed = await prisma.preArrivalTask.findMany({
+    where: { entryId, status: TaskStatus.COMPLETE },
+    select: { id: true, taskType: true, completedAt: true, completedBy: true },
+  });
+  if (completed.length === 0) return { reset: 0 } as const;
+
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: { inquiryId: true, folio: { select: { id: true } } },
+  });
+  const paidInFull = entry?.folio
+    ? (await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio.id })).paidInFull === true
+    : false;
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.preArrivalTask.updateMany({
+      where: { id: { in: completed.map((t) => t.id) } },
+      data: { status: TaskStatus.PENDING, completedAt: null, completedBy: null },
+    });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "PRE_ARRIVAL_TASK.RESET_FOR_ARRIVAL_VERIFICATION",
+        actorId,
+        actorLevel: "SYSTEM",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: Stage.S5,
+        inquiryId: entry?.inquiryId ?? null,
+        entryId,
+        payload: {
+          reason: "S4 prep does not pre-tick the Arrival checklist",
+          reset: completed.map((t) => ({
+            taskType: t.taskType,
+            completedAt: t.completedAt?.toISOString() ?? null,
+            completedBy: t.completedBy,
+          })),
+        },
+        createdBy: actorId,
+      },
+    });
+    if (paidInFull) {
+      await autoCompletePaymentReconciliationTaskTx(tx, entryId, { actorId, actorLevel: "L1" }, "ADVANCE_PAID_IN_FULL");
+    }
+  });
+
+  return { reset: completed.length, paymentTaskReclosed: paidInFull } as const;
 }
 
 /**

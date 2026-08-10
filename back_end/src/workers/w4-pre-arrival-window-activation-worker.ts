@@ -177,8 +177,13 @@ export async function runPreArrivalWindowActivationWorker(
     if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
   }
 
-  // Seed pre-arrival task checklist (idempotent).
+  // Seed pre-arrival task checklist (idempotent), then reset any task completed during S4
+  // prep back to PENDING (2026-08-10 operator ruling): the S4 "Handoff to front desk" section
+  // is prep, not arrival verification — the Arrival checklist starts in its default state.
+  // Runs once per activation (the ALREADY_FIRED guard above), so tasks completed AT S5 are
+  // never touched. The S4 completions live on in the reset trace.
   await preArrivalService.initialiseTasks(prisma, entryId, "SYSTEM");
+  await preArrivalService.resetTasksForArrivalVerification(prisma, entryId, "SYSTEM");
 
   await scheduleS5StageDwellWarningMonitor(prisma, entryId, "SYSTEM");
 
