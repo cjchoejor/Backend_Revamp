@@ -147,6 +147,8 @@ export const createRoomRequestSchema = z.object({
   roomTypeId: z.string().min(1),
   floorNumber: z.coerce.number().int().optional().nullable(),
   capacity: z.coerce.number().int().positive().optional(),
+  bedType: z.string().max(24).optional().nullable(),
+  bedCount: z.coerce.number().int().positive().optional().nullable(),
   isShadowInventory: z.boolean().optional(),
 });
 
@@ -155,6 +157,8 @@ export const updateRoomRequestSchema = z.object({
   roomTypeId: z.string().min(1).optional(),
   floorNumber: z.coerce.number().int().optional().nullable(),
   capacity: z.coerce.number().int().positive().optional(),
+  bedType: z.string().max(24).optional().nullable(),
+  bedCount: z.coerce.number().int().positive().optional().nullable(),
   isShadowInventory: z.boolean().optional(),
   isBlocked: z.boolean().optional(),
   blockedReason: z.string().optional().nullable(),

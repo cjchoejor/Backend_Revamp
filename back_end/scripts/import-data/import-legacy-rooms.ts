@@ -61,6 +61,22 @@ const int = (v: string | undefined) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * Physical bed setup from the legacy columns (`bed_size` + `no_of_beds`): two singles is a
+ * TWIN room; one King/Queen/Single keeps its size name. Duplicated in
+ * backfill-room-bed-types.ts (importing from here would execute this script's main) — keep
+ * the two in step.
+ */
+function bedFromLegacyRow(r: Row): { bedType: string | null; bedCount: number | null } {
+  const size = (r.bed_size ?? "").trim().toUpperCase();
+  const count = int(r.no_of_beds) || null;
+  let bedType: string | null = null;
+  if (size.startsWith("KING")) bedType = "KING";
+  else if (size.startsWith("QUEEN")) bedType = "QUEEN";
+  else if (size.startsWith("SINGLE")) bedType = (count ?? 1) >= 2 ? "TWIN" : "SINGLE";
+  return { bedType, bedCount: count };
+}
+
 type TypeAgg = {
   name: string;
   code: string;
@@ -158,12 +174,15 @@ async function main() {
       let roomCount = 0;
       for (const r of rows) {
         const typeId = idByName.get(r.room_type)!;
+        const bed = bedFromLegacyRow(r);
         await tx.room.create({
           data: {
             roomNumber: r.room_no,
             roomTypeId: typeId,
             floorNumber: int(r.room_no[0]) || null,
             capacity: int(r.adult_capacity) || 2,
+            bedType: bed.bedType,
+            bedCount: bed.bedCount,
             currentClaimState: InventoryClaimState.FREE,
             physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
             isDeficient: false,

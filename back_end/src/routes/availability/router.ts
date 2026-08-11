@@ -9,6 +9,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
+import { ROOM_BED_TYPES, setRoomBedType } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
 
@@ -33,6 +34,27 @@ availabilityRouter.post("/rooms/:id/release-block", requireActorLevel("L3"), asy
   }
 });
 
+/**
+ * Change a room's physical bed setup from the desk (2026-08-10) — L1: a housekeeping fact,
+ * decided where the beds actually get moved. The full room editor stays L4 admin.
+ */
+availabilityRouter.post("/rooms/:id/bed-type", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const out = await setRoomBedType(
+      prisma,
+      req.params.id,
+      { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      {
+        bedType: String(req.body?.bedType ?? ""),
+        bedCount: req.body?.bedCount != null ? Number(req.body.bedCount) : null,
+      },
+    );
+    res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
 availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next) => {
   try {
     const items = await prisma.room.findMany({
@@ -43,6 +65,8 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
         physicalState: true,
         roomTypeId: true,
         floorNumber: true,
+        bedType: true,
+        bedCount: true,
         currentClaimState: true,
         isBlocked: true,
         blockedReason: true,
@@ -62,7 +86,9 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
         },
       },
     });
-    res.json({ items, count: items.length });
+    // `bedTypes` is the allowed bed vocabulary — the desk's edit dropdown reads it from here
+    // rather than hardcoding a list.
+    res.json({ items, count: items.length, bedTypes: ROOM_BED_TYPES });
   } catch (e) {
     next(e);
   }
