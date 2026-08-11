@@ -742,20 +742,56 @@ model GuestProfile {
 }
 
 model GuestIdentityDocument {
-  id                 String    @id @default(uuid())
-  guestProfileId     String
-  documentType       String
-  documentNumber     String
-  issuingCountry     String?
-  expiryDate         DateTime?
+  id             String  @id @default(uuid())
+  guestProfileId String
+  /// The booking the capture happened on. Nullable — typed captures at S6 verification
+  /// predate this column and never carried it.
+  entryId        String?
+  documentType   String
+  /// Was required — relaxed 2026-08-10: a photo-first capture at S5 stores the image before
+  /// anyone types the number (the number is ON the photo; typed entry stays the S6
+  /// verification's job).
+  documentNumber String?
+  issuingCountry String?
+  expiryDate     DateTime?
+
+  /// Photo/scan of the physical document (2026-08-10). The BYTES live in the write-once
+  /// document store under STORAGE_ROOT_DIR (same store as the bill PDFs — atomic writes,
+  /// SHA-256, S3-swappable); the row carries only the pointer + integrity data. All nullable:
+  /// typed-data rows have no file.
+  fileName     String?
+  mimeType     String?
+  sizeBytes    Int?
+  storageKey   String? @unique
+  checksum     String?
+  checksumAlgo String  @default("SHA-256")
+  note         String?
+
+  /// WHICH PERSON in the booking's party this document belongs to (2026-08-10 — "store ID
+  /// proof of every guest"). Companions have no GuestProfile rows (the party is counts +
+  /// ages on the Entry), so the subject is recorded on the proof itself: `subjectKey` is the
+  /// party slot (the guest board's stable keys — "A0".."An" adults, "K0".."Km" children;
+  /// null = unassigned/legacy), `subjectLabel` the human name/label the operator recorded
+  /// (e.g. "Dorji Wangmo" typed off the document, or "Adult 2" if unnamed).
+  subjectKey   String?
+  subjectLabel String?
+
+  /// Per-guest typed details for the Arrival guest-detail table (2026-08-10): DOB + gender as
+  /// read off the document. Live on the per-(entry, subjectKey) DETAIL row (storageKey null);
+  /// the passport/permit number reuses `documentNumber` above.
+  dateOfBirth DateTime?
+  gender      String?
+
   capturedAt         DateTime
   capturedBy         String
   retentionPeriod    Int
   retentionExpiresAt DateTime
-  createdAt          DateTime  @default(now())
+  createdAt          DateTime @default(now())
 
   guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
+  entry        Entry?       @relation(fields: [entryId], references: [id], onUpdate: Cascade)
 
+  @@index([entryId])
   @@map("guest_identity_documents")
 }
 
@@ -954,6 +990,7 @@ model Entry {
   speculativeHolds        SpeculativeHold[]
   cancellationDisclosure  CancellationDisclosureRecord?
   vipArrivalNotifications VIPArrivalNotificationEvent[]
+  identityDocuments       GuestIdentityDocument[]
   disputes                DisputeRecord[]
   amendmentEventRecords   AmendmentEventRecord[]
   roomInspectionRecords   RoomInspectionRecord[]

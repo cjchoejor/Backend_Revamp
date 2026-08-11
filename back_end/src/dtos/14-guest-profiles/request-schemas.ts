@@ -25,6 +25,22 @@ export const searchGuestProfilesQuerySchema = z.object({
 });
 export type SearchGuestProfilesQueryDto = z.infer<typeof searchGuestProfilesQuerySchema>;
 
+/** Arrival guest-detail table (2026-08-10): typed details for ONE party member. Everything
+ *  but the slot key is optional — the operator fills what the document shows. */
+export const saveGuestIdentityDetailRequestSchema = z.object({
+  subjectKey: z.string().trim().min(1).max(16),
+  subjectLabel: z.string().trim().max(160).optional().nullable(),
+  documentNumber: z.string().trim().max(64).optional().nullable(),
+  dateOfBirth: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "dateOfBirth must be yyyy-mm-dd")
+    .optional()
+    .nullable(),
+  gender: z.enum(["MALE", "FEMALE", "OTHER"]).optional().nullable(),
+});
+export type SaveGuestIdentityDetailRequestDto = z.infer<typeof saveGuestIdentityDetailRequestSchema>;
+
 export const verifyGuestIdentityRequestSchema = z.object({
   entryId: z.string().min(1),
   verificationPath: z.enum(["FIRST_TIME", "RETURNING_VALID", "RETURNING_EXPIRED", "VIP"]),
