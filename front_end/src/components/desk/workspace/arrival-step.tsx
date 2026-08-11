@@ -26,6 +26,7 @@ import { StepAction } from "./step-action";
 import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
+import { IdentityProofBlock } from "./identity-proof";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -496,6 +497,11 @@ export function ArrivalStep({
           ))
         )}
       </div>
+
+      {/* Guest ID proof (2026-08-10) — one row per person in the party; photograph/upload each
+          guest's document while readying the arrival. Evidence only; the identity VERIFICATION
+          is recorded at Check-in. */}
+      <IdentityProofBlock entry={entry} />
 
       {/* Guest's answer on the pre-arrival reminder. The reminder opens a W22 window when it goes
           out; this closes it. Evidence only — check-in is not held up by it. */}

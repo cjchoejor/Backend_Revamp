@@ -11,7 +11,7 @@ import type { Session } from "@/types/session";
  * so these work even before an email dispatch has persisted the file.
  */
 
-function authHeaders(session: Session): Record<string, string> {
+export function authHeaders(session: Session): Record<string, string> {
   if (session.jwtToken) return { Authorization: `Bearer ${session.jwtToken}` };
   // Legacy header-auth fallback (matches apiRequest) for sessions predating the JWT switch.
   return { "X-Actor-Id": session.userId, "X-Actor-Level": session.actorLevel };
