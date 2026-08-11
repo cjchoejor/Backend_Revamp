@@ -19,7 +19,12 @@ import {
 import { roomsFromResultSet } from "@/lib/api/availability";
 import { cancelEntryAtS5, getPaymentStatus } from "@/lib/api/reservation-setup";
 import { AdvanceSettlementBlock } from "./advance-settlement";
-import { listRooms } from "@/lib/api/rooms";
+import { listRooms, setRoomBedType } from "@/lib/api/rooms";
+import { getChildPolicy } from "@/lib/api/child-policy";
+import { listIdentityProofs } from "@/lib/api/identity-proofs";
+import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, seatPartyByComposition } from "@/lib/desk/party-rooms";
+import { deriveRoomStatus, ROOM_STATUS } from "@/lib/desk/rooms";
+import { money } from "@/lib/desk/workspace";
 import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { StepAction } from "./step-action";
@@ -88,6 +93,12 @@ export function ArrivalStep({
 
   const [roomId, setRoomId] = useState(defaultRoomId);
   const [assignNotes, setAssignNotes] = useState("");
+  // Collapsed-first room assignment (2026-08-10, operator request): the block used to jump
+  // between "sealed plan" and a bare dropdown depending on booking shape. Now the sealed/
+  // suggested selection shows as a summary line and the picker (with its bed-type filter,
+  // fed from the room registry) only appears on "Change room".
+  const [roomEditOpen, setRoomEditOpen] = useState(false);
+  const [bedFilter, setBedFilter] = useState("");
   const [h1Completion, setH1Completion] = useState<Record<string, boolean>>({});
   const [waiveReasons, setWaiveReasons] = useState<Record<string, string>>({});
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -133,7 +144,9 @@ export function ArrivalStep({
   const roomsCatalogQuery = useQuery({
     queryKey: ["rooms-catalog"],
     queryFn: () => listRooms(session!),
-    enabled: !!session && !latestAssignment,
+    // Always on (app-cache shared): the collapsed summary and sealed-plan lines show each
+    // room's bed type even after an assignment exists.
+    enabled: !!session,
   });
 
   const preferredRooms = useMemo(() => {
@@ -143,15 +156,239 @@ export function ArrivalStep({
   }, [sealedPreferred]);
 
   const roomOptions = useMemo(() => {
-    const byId = new Map<string, { id: string; roomNumber: string; physicalState?: string; currentClaimState?: string; isBlocked?: boolean }>();
+    const byId = new Map<
+      string,
+      { id: string; roomNumber: string; physicalState?: string; currentClaimState?: string; isBlocked?: boolean; bedType?: string | null; roomTypeName?: string | null }
+    >();
     for (const r of preferredRooms) {
       if (r.roomId) byId.set(r.roomId, { id: r.roomId, roomNumber: r.roomNumber ?? r.roomId, currentClaimState: r.claimState });
     }
     for (const r of roomsCatalogQuery.data?.items ?? []) {
-      byId.set(r.id, { id: r.id, roomNumber: r.roomNumber, physicalState: r.physicalState, currentClaimState: r.currentClaimState, isBlocked: r.isBlocked });
+      byId.set(r.id, {
+        id: r.id,
+        roomNumber: r.roomNumber,
+        physicalState: r.physicalState,
+        currentClaimState: r.currentClaimState,
+        isBlocked: r.isBlocked,
+        bedType: r.bedType ?? null,
+        roomTypeName: r.roomType?.name ?? null,
+      });
     }
     return [...byId.values()].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
   }, [preferredRooms, roomsCatalogQuery.data]);
+
+  // Bed setup per room, straight from the room registry (backend) — drives the Twin/King
+  // filter and the bed tags on the summary lines. Display form: "KING" → "King".
+  const bedLabel = (t?: string | null) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : null);
+  const bedTypeByRoomId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of roomsCatalogQuery.data?.items ?? []) if (r.bedType) m.set(r.id, r.bedType);
+    return m;
+  }, [roomsCatalogQuery.data]);
+  const bedTypes = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of roomsCatalogQuery.data?.items ?? []) {
+      if (!r.bedType || r.isBlocked) continue;
+      counts.set(r.bedType, (counts.get(r.bedType) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([type, count]) => ({ type, count }));
+  }, [roomsCatalogQuery.data]);
+  // The already-picked room stays visible even when the filter would exclude it — a select
+  // whose value has no matching option renders blank while silently keeping the value.
+  const visibleRoomOptions = useMemo(
+    () => (bedFilter ? roomOptions.filter((r) => r.bedType === bedFilter || r.id === roomId) : roomOptions),
+    [roomOptions, bedFilter, roomId],
+  );
+  // Per-room night coverage from the sealed per-night plan — feeds the multi-room review
+  // list (2026-08-10 report: the branch only said "sealed plan ready" with nothing to
+  // inspect, so the operator couldn't check which rooms/beds the plan holds).
+  const sealedNightsByRoom = useMemo(() => {
+    const m = new Map<string, number>();
+    const opt = sealedPreferred?.optionSelected as
+      | { perNight?: Array<{ date: string; roomIds: Array<{ roomId: string }> }> }
+      | null
+      | undefined;
+    if (opt && Array.isArray(opt.perNight)) {
+      for (const night of opt.perNight) for (const r of night.roomIds ?? []) m.set(r.roomId, (m.get(r.roomId) ?? 0) + 1);
+    }
+    return m;
+  }, [sealedPreferred]);
+
+  // Bed type is EDITABLE in place (2026-08-10, operator request): beds get physically
+  // reconfigured at the desk's initiative (two singles → a King and back), so each bed tag is
+  // a dropdown writing to the room registry (L1 endpoint, traced with the prior value). The
+  // vocabulary comes from the backend's rooms payload — nothing hardcoded here.
+  const bedVocabulary = roomsCatalogQuery.data?.bedTypes ?? bedTypes.map((b) => b.type);
+  const bedTypeM = useMutation({
+    mutationFn: (args: { roomId: string; bedType: string }) => setRoomBedType(session!, args.roomId, args.bedType),
+    onSuccess: (r) => {
+      toast.success(`Room ${r.roomNumber} set to ${r.bedType === "TWIN" ? "Twin beds" : `${bedLabel(r.bedType)} bed`}`);
+      void queryClient.invalidateQueries({ queryKey: ["rooms-catalog"] });
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Could not change the bed type"),
+  });
+  const bedSelect = (rId: string) => (
+    <select
+      value={bedTypeByRoomId.get(rId) ?? ""}
+      disabled={bedTypeM.isPending}
+      onChange={(e) => {
+        if (e.target.value) bedTypeM.mutate({ roomId: rId, bedType: e.target.value });
+      }}
+      title="Physical bed setup of this room — changing it updates the room registry (recorded)"
+      // Fixed width: "King bed" / "Twin beds" / "Set beds…" would otherwise render each
+      // select a different length and the column of rooms looks ragged.
+      style={{ width: 108, fontSize: 11.5, padding: "3px 6px" }}
+    >
+      {!bedTypeByRoomId.get(rId) && <option value="">Set beds…</option>}
+      {bedVocabulary.map((t) => (
+        <option key={t} value={t}>
+          {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
+        </option>
+      ))}
+    </select>
+  );
+
+  // Per-room detail expansion (2026-08-11, operator request): each room opens INDIVIDUALLY to
+  // show its S2 composition — who sleeps there (named from the guest-detail table above), the
+  // meal plan, occupants, extra beds, negotiated rates and FOC/tax flags — and "All details"
+  // opens every room at once.
+  const [openRooms, setOpenRooms] = useState<Set<string>>(new Set());
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+    staleTime: 10 * 60_000,
+  });
+  // Same query key as the guest-detail block — shared cache, no extra fetch.
+  const proofsQuery = useQuery({
+    queryKey: ["identity-proofs", entry.id],
+    queryFn: () => listIdentityProofs(session!, entry.id),
+    enabled: !!session,
+  });
+  const compByRoom = useMemo(
+    () => new Map((operativeRoomCompositions(entry) ?? []).map((c) => [c.roomId, c])),
+    [entry],
+  );
+  const guestsByRoom = useMemo(() => {
+    const seat = seatPartyByComposition(
+      entry,
+      childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5,
+      childPolicyQuery.data?.ageBands.childMaxAge ?? 10,
+    );
+    const labels = partySlotLabels(entry);
+    // Names typed off the documents in the guest-detail table replace the generic labels.
+    const named = new Map<string, string>();
+    for (const p of proofsQuery.data?.items ?? []) {
+      if (p.entryId === entry.id && !p.hasFile && p.subjectKey && p.subjectLabel?.trim()) {
+        named.set(p.subjectKey, p.subjectLabel.trim());
+      }
+    }
+    const m = new Map<string, string[]>();
+    for (const [slot, rId] of seat) {
+      m.set(rId, [...(m.get(rId) ?? []), named.get(slot) ?? labels.get(slot) ?? slot]);
+    }
+    return m;
+  }, [entry, childPolicyQuery.data, proofsQuery.data]);
+  const toggleRoom = (id: string) =>
+    setOpenRooms((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  // Head-count on every row — from the S2 composition (occupants per room), with the band
+  // breakdown on hover. Null (hidden) when the booking has no composition to read from.
+  const peopleOnRow = (rId: string) => {
+    const c = compByRoom.get(rId);
+    if (!c) return null;
+    const adults = c.adultCount ?? 0;
+    const cnb6 = c.cnb6To10Count ?? 0;
+    const cnb0 = c.cnbUnder6Count ?? 0;
+    const total = c.occupantCount ?? adults + cnb6 + cnb0;
+    if (total <= 0) return null;
+    const parts = [
+      adults > 0 ? `${adults} adult${adults === 1 ? "" : "s"}` : null,
+      cnb6 > 0 ? `${cnb6} child${cnb6 === 1 ? "" : "ren"} 6–10` : null,
+      cnb0 > 0 ? `${cnb0} under-6` : null,
+    ].filter(Boolean);
+    return (
+      <span style={{ color: "var(--ink-3)" }} title={parts.join(", ") || undefined}>
+        {" "}· {total} guest{total === 1 ? "" : "s"}
+      </span>
+    );
+  };
+
+  // Live room status on every row — the same collapse (claim + housekeeping + flags) and
+  // vocabulary the Rooms page uses, so "Needs cleaning" here means what it means there.
+  const statusTag = (rId: string) => {
+    const r = roomsCatalogQuery.data?.items.find((x) => x.id === rId);
+    if (!r) return null;
+    const meta = ROOM_STATUS[deriveRoomStatus(r)];
+    return (
+      <span className="tag" style={{ color: meta.color }} title="Live room status — claim, housekeeping and service flags">
+        {meta.label}
+      </span>
+    );
+  };
+  const detailButton = (id: string) => (
+    <button type="button" className="btn btn-ghost btn-sm" onClick={() => toggleRoom(id)}>
+      {openRooms.has(id) ? "Hide" : "Details"}
+    </button>
+  );
+  const roomDetail = (id: string) => {
+    if (!openRooms.has(id)) return null;
+    const c = compByRoom.get(id);
+    const guests = guestsByRoom.get(id) ?? [];
+    if (!c && guests.length === 0) {
+      return (
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "4px 0 0" }}>
+          No composition recorded for this room at Negotiation — occupants and meals are set on the
+          Quote step&rsquo;s guest board.
+        </p>
+      );
+    }
+    const adults = c?.adultCount ?? 0;
+    const cnb6 = c?.cnb6To10Count ?? 0;
+    const cnb0 = c?.cnbUnder6Count ?? 0;
+    const beds = c?.extraBedCount ?? 0;
+    const flags = [
+      c?.isFoc ? "FOC — fully waived" : null,
+      c?.serviceChargeApplies === false ? "service charge waived" : null,
+      c?.gstApplies === false ? "GST waived" : null,
+    ].filter(Boolean);
+    return (
+      <div style={{ margin: "4px 0 0", padding: "8px 10px", borderRadius: "var(--r-sm)", background: "var(--cream)", display: "grid", gap: 4, fontSize: 11.5 }}>
+        <div>
+          <span style={{ color: "var(--ink-3)" }}>Guests: </span>
+          {guests.length > 0 ? guests.join(" · ") : "—"}
+        </div>
+        {c && (
+          <>
+            <div>
+              <span style={{ color: "var(--ink-3)" }}>Occupants: </span>
+              {adults} adult{adults === 1 ? "" : "s"}
+              {cnb6 > 0 && `, ${cnb6} child${cnb6 === 1 ? "" : "ren"} 6–10`}
+              {cnb0 > 0 && `, ${cnb0} under-6`}
+              {beds > 0 && ` · ${beds} extra bed${beds === 1 ? "" : "s"}`}
+            </div>
+            <div>
+              <span style={{ color: "var(--ink-3)" }}>Meals: </span>
+              {mealPlanSummary(c)}
+            </div>
+            {(c.negotiatedRoomRate != null || c.negotiatedExtraBedRate != null) && (
+              <div style={{ color: "var(--ink-3)" }}>
+                Negotiated:{" "}
+                {c.negotiatedRoomRate != null && `room ${money(c.negotiatedRoomRate, "BTN")}/night`}
+                {c.negotiatedRoomRate != null && c.negotiatedExtraBedRate != null && " · "}
+                {c.negotiatedExtraBedRate != null && `extra bed ${money(c.negotiatedExtraBedRate, "BTN")}/night`}
+              </div>
+            )}
+            {flags.length > 0 && <div style={{ color: "var(--warn)" }}>{flags.join(" · ")}</div>}
+          </>
+        )}
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (roomId || !defaultRoomId) return;
@@ -373,6 +610,12 @@ export function ArrivalStep({
         )}
       </AdvanceSettlementBlock>
 
+      {/* Guest details & ID proof (2026-08-10; moved ABOVE room assignment 2026-08-11, operator
+          request) — who is arriving, their documents, and which room the S2 board placed them
+          in; then the rooms get assigned below. Evidence only; the identity VERIFICATION is
+          recorded at Check-in. */}
+      <IdentityProofBlock entry={entry} />
+
       {/* Room assignment */}
       <div className="block">
         <BlockH>
@@ -385,30 +628,92 @@ export function ArrivalStep({
               <span>
                 {numberOfRooms} rooms needed · {assignments.length} assigned
               </span>
-              <span className={`tag${sealedPreferred ? "" : " warn"}`}>{sealedPreferred ? "sealed plan ready" : "no sealed plan"}</span>
+              <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                {(() => {
+                  // "As a whole": one click opens/closes every room's composition detail.
+                  const shownIds = assignments.length > 0 ? [...new Set(assignments.map((a) => a.roomId))] : sealedRoomIds;
+                  const allOpen = shownIds.length > 0 && shownIds.every((id) => openRooms.has(id));
+                  return shownIds.length > 0 ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setOpenRooms(allOpen ? new Set() : new Set(shownIds))}
+                    >
+                      {allOpen ? "Hide all details" : "View all details"}
+                    </button>
+                  ) : null;
+                })()}
+                <span className={`tag${sealedPreferred ? "" : " warn"}`}>{sealedPreferred ? "sealed plan ready" : "no sealed plan"}</span>
+              </span>
             </div>
             {assignments.length > 0 ? (
-              <div style={{ display: "grid", gap: 6, marginBottom: 11 }}>
+              // Full-width rows (uniform boxes — .fact is inline-flex and would hug content);
+              // the list itself scrolls past ~8 rows so a 10–25 room group stays one screen.
+              <div style={{ display: "grid", gap: 6, marginBottom: 11, maxHeight: "46vh", overflowY: "auto", paddingRight: 2 }}>
                 {assignments.map((a) => (
-                  <div key={a.id} className="fact" style={{ justifyContent: "space-between", fontSize: 12, padding: "6px 10px" }}>
-                    <span>
-                      Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
-                      {a.startDate && (
-                        <span style={{ color: "var(--ink-3)" }}>
-                          {" "}· {a.startDate.slice(0, 10)} → {a.endDate?.slice(0, 10) ?? ""}
-                        </span>
-                      )}
-                    </span>
-                    <span className={`tag${roomReady(a) ? "" : " warn"}`}>{roomReady(a) ? "ready" : "not ready"}</span>
+                  <div key={a.id}>
+                    <div className="fact" style={{ width: "100%", justifyContent: "space-between", fontSize: 12, padding: "6px 10px" }}>
+                      <span>
+                        Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                        {a.startDate && (
+                          <span style={{ color: "var(--ink-3)" }}>
+                            {" "}· {a.startDate.slice(0, 10)} → {a.endDate?.slice(0, 10) ?? ""}
+                          </span>
+                        )}
+                        {peopleOnRow(a.roomId)}
+                      </span>
+                      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        {statusTag(a.roomId)}
+                        {bedSelect(a.roomId)}
+                        {detailButton(a.roomId)}
+                        <span className={`tag${roomReady(a) ? "" : " warn"}`}>{roomReady(a) ? "ready" : "not ready"}</span>
+                      </span>
+                    </div>
+                    {roomDetail(a.roomId)}
                   </div>
                 ))}
               </div>
             ) : (
               sealedRoomIds.length > 0 && (
-                <p style={{ fontSize: 12, color: "var(--ink-2)", margin: "0 0 11px" }}>
-                  Sealed plan: {sealedRoomIds.map((id) => roomNumberById.get(id) ?? id.slice(0, 6)).join(", ")}
-                  {" — assigned in one step below."}
-                </p>
+                // The review list — one row per sealed room with its type, bed setup and night
+                // coverage, so the plan can be CHECKED before the one-step assignment instead
+                // of trusting a bare "sealed plan ready" tag. Rows are full-width (uniform
+                // boxes) and the list scrolls past ~8 rows so a 10–25 room group stays one
+                // screen; the hint stays pinned below the scroller.
+                <div style={{ marginBottom: 11 }}>
+                  <div style={{ display: "grid", gap: 6, maxHeight: "46vh", overflowY: "auto", paddingRight: 2 }}>
+                  {sealedRoomIds.map((id) => {
+                    const info = roomOptions.find((r) => r.id === id);
+                    const nights = sealedNightsByRoom.get(id);
+                    return (
+                      <div key={id}>
+                        <div className="fact" style={{ width: "100%", justifyContent: "space-between", fontSize: 12, padding: "6px 10px" }}>
+                          <span>
+                            Room {roomNumberById.get(id) ?? info?.roomNumber ?? id.slice(0, 6)}
+                            {info?.roomTypeName && <span style={{ color: "var(--ink-3)" }}> · {info.roomTypeName}</span>}
+                            {nights != null && nights > 0 && (
+                              <span style={{ color: "var(--ink-3)" }}>
+                                {" "}· {nights} night{nights === 1 ? "" : "s"}
+                              </span>
+                            )}
+                            {peopleOnRow(id)}
+                          </span>
+                          <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                            {statusTag(id)}
+                            {bedSelect(id)}
+                            {detailButton(id)}
+                          </span>
+                        </div>
+                        {roomDetail(id)}
+                      </div>
+                    );
+                  })}
+                  </div>
+                  <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "8px 0 0" }}>
+                    These are the rooms selected at Inquiry — assigned in one step below. Need a
+                    different room or bed type? Change the selection on the Inquiry step first.
+                  </p>
+                </div>
               )
             )}
             <StepAction
@@ -430,22 +735,69 @@ export function ArrivalStep({
           <>
             {!latestAssignment && (
               <>
-                <div className="field">
-                  <label>Select room</label>
-                  <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-                    <option value="">Choose a room…</option>
-                    {roomOptions.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {formatRoomPickerLabel({ roomNumber: r.roomNumber, currentClaimState: r.currentClaimState, physicalState: r.physicalState, isBlocked: r.isBlocked })}
-                      </option>
-                    ))}
-                  </select>
-                  {defaultRoomId && <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>Suggested from the committed hold / preferred option.</p>}
-                </div>
-                <div className="field">
-                  <label>Notes (optional)</label>
-                  <input value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)} />
-                </div>
+                {/* Collapsed first (2026-08-10): lead with what Inquiry/Quote already picked —
+                    the committed hold's / sealed selection's room — instead of a bare dropdown.
+                    The picker (with its bed-type filter) appears only on "Change room". */}
+                {(() => {
+                  const sel = roomOptions.find((r) => r.id === roomId);
+                  if (!sel || roomEditOpen) return null;
+                  return (
+                    <div style={{ marginBottom: 11 }}>
+                      <div className="fact b-transit" style={{ padding: "6px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
+                        <span>
+                          Selected earlier: <b>Room {sel.roomNumber}</b>
+                          {sel.roomTypeName && <span style={{ color: "var(--ink-3)" }}> · {sel.roomTypeName}</span>}
+                          {peopleOnRow(sel.id)}
+                        </span>
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          {statusTag(sel.id)}
+                          {bedSelect(sel.id)}
+                          {detailButton(sel.id)}
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setRoomEditOpen(true)}>
+                            Change room
+                          </button>
+                        </span>
+                      </div>
+                      {roomDetail(sel.id)}
+                    </div>
+                  );
+                })()}
+                {(roomEditOpen || !roomOptions.some((r) => r.id === roomId)) && (
+                  <>
+                    <div className="frow">
+                      {bedTypes.length > 0 && (
+                        <div className="field" style={{ flex: "0 0 auto" }}>
+                          <label>Bed type</label>
+                          <select value={bedFilter} onChange={(e) => setBedFilter(e.target.value)}>
+                            <option value="">Any bed type</option>
+                            {bedTypes.map((b) => (
+                              <option key={b.type} value={b.type}>
+                                {bedLabel(b.type)} ({b.count} room{b.count === 1 ? "" : "s"})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="field">
+                        <label>Select room</label>
+                        <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                          <option value="">Choose a room…</option>
+                          {visibleRoomOptions.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {formatRoomPickerLabel({ roomNumber: r.roomNumber, currentClaimState: r.currentClaimState, physicalState: r.physicalState, isBlocked: r.isBlocked })}
+                              {bedLabel(r.bedType) ? ` · ${bedLabel(r.bedType)}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {defaultRoomId && <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "5px 0 0" }}>Suggested from the committed hold / preferred option.</p>}
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>Notes (optional)</label>
+                      <input value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)} />
+                    </div>
+                  </>
+                )}
               </>
             )}
             <StepAction
@@ -497,11 +849,6 @@ export function ArrivalStep({
           ))
         )}
       </div>
-
-      {/* Guest ID proof (2026-08-10) — one row per person in the party; photograph/upload each
-          guest's document while readying the arrival. Evidence only; the identity VERIFICATION
-          is recorded at Check-in. */}
-      <IdentityProofBlock entry={entry} />
 
       {/* Guest's answer on the pre-arrival reminder. The reminder opens a W22 window when it goes
           out; this closes it. Evidence only — check-in is not held up by it. */}

@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Camera, Check, FileText, Fingerprint, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { fetchPdfObjectUrl } from "@/lib/api/documents";
+import { getChildPolicy } from "@/lib/api/child-policy";
+import { listRooms } from "@/lib/api/rooms";
 import {
   identityProofFileUrl,
   listIdentityProofs,
@@ -13,6 +15,7 @@ import {
   uploadIdentityProof,
   type IdentityProofSummary,
 } from "@/lib/api/identity-proofs";
+import { seatPartyByComposition } from "@/lib/desk/party-rooms";
 import type { EntryDetail } from "@/types/api";
 
 /**
@@ -34,7 +37,7 @@ import type { EntryDetail } from "@/types/api";
  * that vouches a human compared the documents to the guests.
  */
 
-type PartySlot = { key: string; label: string; placeholder: string };
+type PartySlot = { key: string; label: string; placeholder: string; sub?: string };
 
 /** One slot per person in the party — guest-board key scheme so the two surfaces agree.
  *  Entries without a party breakdown fall back to `guestCount` anonymous slots. */
@@ -53,7 +56,7 @@ function partySlots(entry: EntryDetail): PartySlot[] {
       });
     }
     childAges.forEach((age, i) => {
-      slots.push({ key: `K${i}`, label: `Child ${i + 1} · ${age}y`, placeholder: "Name as on the document" });
+      slots.push({ key: `K${i}`, label: `Child ${i + 1} · ${age}y`, sub: `${age}y`, placeholder: "Name as on the document" });
     });
   } else {
     const n = Math.max(1, entry.guestCount ?? 1);
@@ -192,6 +195,38 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
   });
   const items = listQuery.data?.items ?? [];
 
+  // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
+  // room (never who), so this re-derives the seating with the SAME deterministic algorithm
+  // the S2 guest board uses to rebuild chips from counts (`deriveFromSeed`): band pools in
+  // party order, rooms in sealed order, adults → 6–10s → under-6s per room's counts. Exact
+  // when the board did the placing; same-band guests are interchangeable either way.
+  const policyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+    staleTime: 10 * 60_000,
+  });
+  const roomsQuery = useQuery({
+    queryKey: ["rooms-catalog"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+    staleTime: 5 * 60_000,
+  });
+  const roomInfoById = useMemo(() => {
+    const m = new Map<string, { roomNumber: string; bedType?: string | null }>();
+    for (const r of roomsQuery.data?.items ?? []) m.set(r.id, { roomNumber: r.roomNumber, bedType: r.bedType });
+    return m;
+  }, [roomsQuery.data]);
+  const roomBySlot = useMemo(
+    () =>
+      seatPartyByComposition(
+        entry,
+        policyQuery.data?.ageBands.youngChildMaxAge ?? 5,
+        policyQuery.data?.ageBands.childMaxAge ?? 10,
+      ),
+    [entry, policyQuery.data],
+  );
+
   const detailRow = (key: string) => items.find((p) => p.entryId === entryId && p.subjectKey === key && !p.hasFile);
   const photosFor = (key: string) => items.filter((p) => p.entryId === entryId && p.subjectKey === key && p.hasFile);
   // Uploaded before the per-guest split (or by a caller that named no one) — shown, never lost.
@@ -327,6 +362,12 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
               const draft = drafts[slot.key] ?? EMPTY_DRAFT;
               const photos = photosFor(slot.key);
               const covered = photos.length > 0;
+              // A typed name replaces the generic "Adult 2" label live (the age stays as a
+              // muted suffix on child rows so the band is never hidden by a name).
+              const typedName = draft.name.trim();
+              const displayName = typedName || slot.label;
+              const room = roomBySlot.get(slot.key);
+              const roomInfo = room ? roomInfoById.get(room) : undefined;
               return (
                 <tr key={slot.key}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -336,10 +377,17 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
                       ) : (
                         <span style={{ width: 12, height: 12, borderRadius: 999, border: "1.5px solid var(--line-3)", display: "inline-block" }} />
                       )}
-                      {slot.label}
+                      {displayName}
+                      {typedName && slot.sub && <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> · {slot.sub}</span>}
                     </span>
                     {savedFlash === slot.key && (
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ok)", fontWeight: 600 }}>saved</span>
+                    )}
+                    {roomInfo && (
+                      <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginLeft: 19, marginTop: 1 }} title="From the room placement on the Quote step's guest board">
+                        Room {roomInfo.roomNumber}
+                        {roomInfo.bedType ? ` · ${roomInfo.bedType.charAt(0)}${roomInfo.bedType.slice(1).toLowerCase()}` : ""}
+                      </div>
                     )}
                   </td>
                   <td style={{ ...td, minWidth: 130 }}>

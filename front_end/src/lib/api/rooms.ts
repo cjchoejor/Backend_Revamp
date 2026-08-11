@@ -7,6 +7,9 @@ export type RoomListItem = {
   physicalState?: string;
   roomTypeId?: string;
   floorNumber?: number | null;
+  /** Physical bed setup — "KING" / "TWIN" / "QUEEN" / "SINGLE" (from the room registry). */
+  bedType?: string | null;
+  bedCount?: number | null;
   currentClaimState?: string;
   isBlocked?: boolean;
   blockedReason?: string | null;
@@ -37,5 +40,15 @@ export async function releaseRoomBlock(session: Session, roomId: string, body: {
 }
 
 export async function listRooms(session: Session) {
-  return apiRequest<{ items: RoomListItem[]; count: number }>("/api/rooms", { session });
+  // `bedTypes` = the backend's allowed bed vocabulary (KING/QUEEN/TWIN/SINGLE) — the source
+  // for any bed-type dropdown, never hardcoded client-side.
+  return apiRequest<{ items: RoomListItem[]; count: number; bedTypes?: string[] }>("/api/rooms", { session });
+}
+
+/** Change a room's physical bed setup (L1 — a housekeeping fact; traced with the prior value). */
+export async function setRoomBedType(session: Session, roomId: string, bedType: string) {
+  return apiRequest<{ id: string; roomNumber: string; bedType: string | null; bedCount: number | null }>(
+    `/api/rooms/${roomId}/bed-type`,
+    { method: "POST", session, body: { bedType } },
+  );
 }
