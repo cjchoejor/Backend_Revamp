@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { hashSha256, readDocument, verifyChecksum, writeDocument } from "../../lib/document-storage.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
 
 /**
  * Guest identity PROOF files (2026-08-10, operator request): a photo or scan of the guest's
@@ -27,6 +28,40 @@ import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availab
  */
 
 const MAX_BYTES = 10 * 1024 * 1024;
+
+type DocTypeConfig = { documentTypeCode: string; documentTypeName?: string; isActive?: boolean };
+
+/**
+ * Placeholder docType a detail row carries when no type has been picked (the column is
+ * non-nullable). Photo rows use "PHOTO_PROOF" the same way. The desk renders both as
+ * "unselected" in the document-type dropdown.
+ */
+export const UNTYPED_DOC_TYPE = "PASSPORT_OR_PERMIT";
+
+/** The admin-configured identity document types (`identity.documentTypes`), active only. */
+async function configuredDocumentTypes(prisma: PrismaClient): Promise<{ code: string; name: string }[]> {
+  const raw =
+    (await requireActiveConfigValue<DocTypeConfig[] | undefined>(prisma, "identity.documentTypes")) ?? [];
+  return raw
+    .filter((d) => d?.documentTypeCode && d.isActive !== false)
+    .map((d) => ({ code: d.documentTypeCode, name: d.documentTypeName?.trim() || d.documentTypeCode }));
+}
+
+/**
+ * Vocabulary for the desk's document-type dropdowns — the guest-detail table (S5 + S6) and the
+ * S6 verification select read THIS list, so an admin edit to `identity.documentTypes` moves
+ * both and the desk never hardcodes codes the p16 allowlist would reject. Falls back to the
+ * canonical seeded pair when the config is silent so the dropdown is never empty (p16 is
+ * permissive in that case, so the fallback codes always pass verification too).
+ */
+export async function listIdentityDocumentTypeOptions(prisma: PrismaClient) {
+  const configured = await configuredDocumentTypes(prisma);
+  if (configured.length > 0) return configured;
+  return [
+    { code: "PASSPORT", name: "Passport" },
+    { code: "CID", name: "National ID" },
+  ];
+}
 
 /** Accepted upload types → storage extension. Keep in step with the desk's file inputs. */
 const EXT_BY_MIME: Record<string, string> = {
@@ -168,6 +203,10 @@ export async function saveGuestIdentityDetail(
   input: {
     subjectKey: string;
     subjectLabel?: string | null;
+    /** One of the configured `identity.documentTypes` codes (2026-08-11 — the guest-detail
+     *  table now records WHICH document the number came from, same vocabulary as the S6
+     *  verification). Null/absent = not picked. */
+    documentType?: string | null;
     documentNumber?: string | null;
     /** ISO calendar date (yyyy-mm-dd). */
     dateOfBirth?: string | null;
@@ -191,8 +230,21 @@ export async function saveGuestIdentityDetail(
     throw new ValidationError("dateOfBirth must be a calendar date (yyyy-mm-dd)");
   }
 
+  // Same acceptance rule as the S6 verification (p16): permissive when the allowlist is
+  // unconfigured, else the type must be an active configured code.
+  const documentType = input.documentType?.trim() || null;
+  if (documentType) {
+    const configured = await configuredDocumentTypes(prisma);
+    enforceAcceptedIdentityDocumentType({
+      documentType,
+      acceptedDocumentTypeCodes: new Set(configured.map((d) => d.code)),
+    });
+  }
+
   const fields = {
     subjectLabel: input.subjectLabel?.trim() || null,
+    // The column is non-nullable — an unpicked (or cleared) type keeps the legacy placeholder.
+    documentType: documentType ?? UNTYPED_DOC_TYPE,
     documentNumber: input.documentNumber?.trim() || null,
     dateOfBirth,
     gender: input.gender?.trim() || null,
@@ -211,14 +263,13 @@ export async function saveGuestIdentityDetail(
     } else {
       const retentionMap =
         (await requireActiveConfigValue<Record<string, number> | undefined>(tx as any, "identity.retentionPeriodDays")) ?? {};
-      const retentionDays = retentionMap.DEFAULT ?? 2555;
+      const retentionDays = (documentType ? retentionMap[documentType] : undefined) ?? retentionMap.DEFAULT ?? 2555;
       const retentionExpiresAt = new Date(now);
       retentionExpiresAt.setUTCDate(retentionExpiresAt.getUTCDate() + retentionDays);
       row = await tx.guestIdentityDocument.create({
         data: {
           guestProfileId: entry.guestProfileId!,
           entryId: entry.id,
-          documentType: "PASSPORT_OR_PERMIT",
           subjectKey,
           ...fields,
           capturedAt: now,
@@ -244,6 +295,7 @@ export async function saveGuestIdentityDetail(
           entryId: entry.id,
           subjectKey,
           subjectLabel: fields.subjectLabel,
+          documentType: documentType,
           documentNumber: fields.documentNumber,
           dateOfBirth: dateOfBirth?.toISOString().slice(0, 10) ?? null,
           gender: fields.gender,
@@ -256,11 +308,87 @@ export async function saveGuestIdentityDetail(
 }
 
 /**
+ * Guest-detail coverage for the S6 check-in gate (2026-08-11, operator ruling): every guest in
+ * the party must have their details on file before check-in — a typed document number OR a
+ * stored ID photo counts; details captured at S5 carry forward automatically (the rows are
+ * per-entry). VIP bookings are exempt — the caller skips the gate when `vipExempt` is true.
+ *
+ * Slots mirror the desk table's derivation exactly (adults + per-child ages off the intake
+ * breakdown, `guestCount` anonymous fallback, guest-board keys A0…/K0…) so the gate and the
+ * table can never disagree about who is missing.
+ */
+export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId: string) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      guestProfileId: true,
+      adultCount: true,
+      childAges: true,
+      guestCount: true,
+      guestProfile: { select: { firstName: true, lastName: true, vipTier: true } },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+
+  const vipExempt = !!entry.guestProfile?.vipTier?.trim();
+  const primaryName = [entry.guestProfile?.firstName, entry.guestProfile?.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const slots: { key: string; label: string }[] = [];
+  const adults = Math.max(0, entry.adultCount ?? 0);
+  const childAges = entry.childAges ?? [];
+  if (adults > 0 || childAges.length > 0) {
+    for (let i = 0; i < adults; i++) {
+      slots.push({ key: `A${i}`, label: i === 0 && primaryName ? primaryName : `Adult ${i + 1}` });
+    }
+    childAges.forEach((age, i) => slots.push({ key: `K${i}`, label: `Child ${i + 1} (${age}y)` }));
+  } else {
+    const n = Math.max(1, entry.guestCount ?? 1);
+    for (let i = 0; i < n; i++) {
+      slots.push({ key: `A${i}`, label: i === 0 && primaryName ? primaryName : `Guest ${i + 1}` });
+    }
+  }
+
+  const rows = entry.guestProfileId
+    ? await prisma.guestIdentityDocument.findMany({
+        where: { entryId: entry.id, subjectKey: { not: null } },
+        select: { subjectKey: true, subjectLabel: true, documentNumber: true, storageKey: true },
+      })
+    : [];
+  const filled = new Set<string>();
+  for (const r of rows) {
+    if (!r.subjectKey) continue;
+    if (r.storageKey || r.documentNumber?.trim()) filled.add(r.subjectKey);
+  }
+  const missing = slots
+    .filter((s) => !filled.has(s.key))
+    .map((s) => ({
+      key: s.key,
+      // Prefer the name the operator already typed for the slot over the generic label.
+      label: rows.find((r) => r.subjectKey === s.key && r.subjectLabel?.trim())?.subjectLabel?.trim() || s.label,
+    }));
+
+  return {
+    vipExempt,
+    totalSlots: slots.length,
+    filledSlots: slots.length - missing.length,
+    missing,
+    satisfied: missing.length === 0,
+  };
+}
+
+/**
  * Everything the Arrival guest-detail table needs, newest first: stored proof FILES for this
  * booking's guest — including files captured on the guest's earlier stays (a returning
  * guest's ID is already on file; the desk tags which rows came from this booking via
  * `entryId`) — plus THIS booking's per-guest DETAIL rows (no file, subject-keyed). The S6
  * typed verification's rows (no file, no subjectKey) stay off this surface.
+ *
+ * Also carries `documentTypes` (the config-driven dropdown vocabulary) and `coverage` (the
+ * S6 check-in gate's own verdict) so the desk never re-derives either.
  */
 export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
@@ -268,7 +396,11 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     select: { id: true, guestProfileId: true },
   });
   if (!entry) throw new NotFoundError("Entry");
-  if (!entry.guestProfileId) return { items: [] as const };
+  const [documentTypes, coverage] = await Promise.all([
+    listIdentityDocumentTypeOptions(prisma),
+    guestDetailsCoverageForEntry(prisma, entryId),
+  ]);
+  if (!entry.guestProfileId) return { items: [], documentTypes, coverage };
 
   const items = await prisma.guestIdentityDocument.findMany({
     where: {
@@ -296,7 +428,7 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     },
   });
   // The storage key itself is server-internal — expose only whether a file exists.
-  return { items: items.map(({ storageKey, ...rest }) => ({ ...rest, hasFile: !!storageKey })) };
+  return { items: items.map(({ storageKey, ...rest }) => ({ ...rest, hasFile: !!storageKey })), documentTypes, coverage };
 }
 
 /** Stream-ready bytes for one stored proof, integrity-checked against the recorded SHA-256. */

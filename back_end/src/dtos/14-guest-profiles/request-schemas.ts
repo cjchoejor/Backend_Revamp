@@ -30,6 +30,8 @@ export type SearchGuestProfilesQueryDto = z.infer<typeof searchGuestProfilesQuer
 export const saveGuestIdentityDetailRequestSchema = z.object({
   subjectKey: z.string().trim().min(1).max(16),
   subjectLabel: z.string().trim().max(160).optional().nullable(),
+  /** One of the configured `identity.documentTypes` codes (service validates via p16). */
+  documentType: z.string().trim().max(40).optional().nullable(),
   documentNumber: z.string().trim().max(64).optional().nullable(),
   dateOfBirth: z
     .string()

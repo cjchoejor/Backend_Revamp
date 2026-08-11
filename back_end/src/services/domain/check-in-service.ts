@@ -14,6 +14,8 @@ import * as preArrivalService from "./pre-arrival-service.js";
 import { enforceRoomAssignmentPresentForCheckInCompletion, enforceRoomPhysicalReadyForS6CheckInCompletion } from "../../policies/01-availability/p01-room-assignment-and-physical-ready-s6-checkin.js";
 import { enforceH1EligibleForS6CheckInCompletion } from "../../policies/02-ownership-custodian-assignment/p05-h1-eligible-for-s6-checkin-completion.js";
 import { enforceIdentityVerifiedBeforeCheckInCompletion } from "../../policies/06-guest-identity/p16-identity-verified-before-checkin-completion.js";
+import { enforceGuestDetailsCapturedForCheckIn } from "../../policies/06-guest-identity/p15-guest-identity-capture.js";
+import { guestDetailsCoverageForEntry } from "./guest-identity-proof-service.js";
 import { enforceKeyCountIssuedForCheckInCompletion, enforceRegistrationConfirmedForCheckInCompletion } from "../../policies/06-guest-identity/p16-checkin-completion-ceremony-gates.js";
 import { enforceAdvancePaymentReconciledBeforeCheckInCompletion } from "../../policies/12-advance-payment/p29-advance-payment-reconciled-before-checkin-completion.js";
 import { enforceFolioProvisionalBeforeCheckInCompletion } from "../../policies/13-billing-model/p31-folio-provisional-before-checkin-completion.js";
@@ -64,6 +66,14 @@ export async function completeCheckInToS7(
   }
 
   enforceIdentityVerifiedBeforeCheckInCompletion({ identityVerifiedAt: entry.guestProfile?.identityVerifiedAt });
+
+  // Guest-detail coverage (2026-08-11, operator ruling — wires p15): every party member's
+  // details — a typed document number or a stored ID photo — must be on file before check-in.
+  // Details captured at S5 carry forward (the rows are per-entry); VIP bookings are exempt.
+  const detailsCoverage = await guestDetailsCoverageForEntry(prisma, entryId);
+  if (!detailsCoverage.vipExempt) {
+    enforceGuestDetailsCapturedForCheckIn({ missing: detailsCoverage.missing });
+  }
 
   enforceFolioProvisionalBeforeCheckInCompletion({ folio: entry.folio });
   enforceAdvancePaymentReconciledBeforeCheckInCompletion({
