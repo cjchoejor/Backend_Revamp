@@ -358,8 +358,18 @@ export function canProgressS5(entry: EntryDetail, guestPresent: boolean): boolea
   return entry.currentStage === "S5" && guestPresent && s5Readiness(entry).every((c) => c.met);
 }
 
-/** S6 exit readiness (SIG-S6) — derivable gates before check-in completes (folio goes live → S7). */
-export function s6Readiness(entry: EntryDetail): Precondition[] {
+/** S6 exit readiness (SIG-S6) — derivable gates before check-in completes (folio goes live → S7).
+ *
+ * `opts.guestDetails` is the server-computed coverage from the identity-proofs feed (2026-08-11,
+ * operator ruling): every guest needs a document number or ID photo on file before check-in,
+ * VIP bookings exempt. Callers without that feed omit it — the line is skipped and the backend
+ * gate still enforces. */
+export function s6Readiness(
+  entry: EntryDetail,
+  opts?: {
+    guestDetails?: { satisfied: boolean; vipExempt: boolean; filledSlots: number; totalSlots: number } | null;
+  },
+): Precondition[] {
   const g = entry.guestProfile;
   // EVERY assigned room must be ready, not just the first. `completeCheckInToS7` fails fast on the
   // first room that isn't physically ready, so checking only [0] let the desk show a green gate
@@ -375,8 +385,12 @@ export function s6Readiness(entry: EntryDetail): Precondition[] {
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
   const h1Ok = entry.walkInCompressed === true || !h1 || h1.state === "FULFILLED" || h1.state === "CLOSED";
   const isVip = !!g?.vipTier?.trim();
+  const gd = opts?.guestDetails;
   return [
     { label: "Identity verified", met: !!g?.identityVerifiedAt },
+    ...(gd && !gd.vipExempt
+      ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied }]
+      : []),
     {
       label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",
       met: roomReady,

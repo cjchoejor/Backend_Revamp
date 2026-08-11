@@ -34,13 +34,36 @@ export type IdentityProofSummary = {
   hasFile: boolean;
 };
 
-/** Upsert one party member's typed details (passport/permit no, name, DOB, gender). */
+/** Config-driven document-type vocabulary (`identity.documentTypes`) — the guest-detail
+ *  table's dropdown AND the S6 verification select read this, never a hardcoded list. */
+export type IdentityDocumentTypeOption = { code: string; name: string };
+
+/** The S6 check-in gate's verdict (2026-08-11): every party slot needs a typed document
+ *  number OR a stored ID photo; VIP bookings are exempt. Server-computed — the desk mirrors,
+ *  never re-derives. */
+export type GuestDetailsCoverage = {
+  vipExempt: boolean;
+  totalSlots: number;
+  filledSlots: number;
+  missing: { key: string; label: string }[];
+  satisfied: boolean;
+};
+
+export type IdentityProofsResponse = {
+  items: IdentityProofSummary[];
+  documentTypes: IdentityDocumentTypeOption[];
+  coverage: GuestDetailsCoverage;
+};
+
+/** Upsert one party member's typed details (document type + number, name, DOB, gender). */
 export async function saveGuestIdentityDetail(
   session: Session,
   entryId: string,
   body: {
     subjectKey: string;
     subjectLabel?: string | null;
+    /** One of the configured document-type codes from `documentTypes` on the list response. */
+    documentType?: string | null;
     documentNumber?: string | null;
     /** yyyy-mm-dd */
     dateOfBirth?: string | null;
@@ -55,9 +78,10 @@ export async function saveGuestIdentityDetail(
 }
 
 /** Every stored proof for this booking's guest — including ones captured on earlier stays
- *  (`entryId` says which booking each was taken on). */
+ *  (`entryId` says which booking each was taken on) — plus the document-type vocabulary and
+ *  the check-in coverage verdict. */
 export async function listIdentityProofs(session: Session, entryId: string) {
-  return apiRequest<{ items: IdentityProofSummary[] }>(`/api/entries/${entryId}/identity-proofs`, { session });
+  return apiRequest<IdentityProofsResponse>(`/api/entries/${entryId}/identity-proofs`, { session });
 }
 
 export async function uploadIdentityProof(

@@ -71,12 +71,18 @@ function partySlots(entry: EntryDetail): PartySlot[] {
   return slots;
 }
 
-type DetailDraft = { num: string; name: string; dob: string; gender: string };
+type DetailDraft = { docType: string; num: string; name: string; dob: string; gender: string };
 
-const EMPTY_DRAFT: DetailDraft = { num: "", name: "", dob: "", gender: "" };
+const EMPTY_DRAFT: DetailDraft = { docType: "", num: "", name: "", dob: "", gender: "" };
+
+/** Backend placeholders a row carries when no document type was picked (the DB column is
+ *  non-nullable) — rendered as "unselected" in the dropdown, never as a real choice. */
+const UNTYPED_DOC_TYPES = new Set(["PASSPORT_OR_PERMIT", "PHOTO_PROOF"]);
 
 function draftFromRow(row: IdentityProofSummary | undefined): DetailDraft {
+  const docType = row?.documentType && !UNTYPED_DOC_TYPES.has(row.documentType) ? row.documentType : "";
   return {
+    docType,
     num: row?.documentNumber ?? "",
     name: row?.subjectLabel ?? "",
     dob: row?.dateOfBirth ? row.dateOfBirth.slice(0, 10) : "",
@@ -85,7 +91,7 @@ function draftFromRow(row: IdentityProofSummary | undefined): DetailDraft {
 }
 
 function sameDraft(a: DetailDraft, b: DetailDraft): boolean {
-  return a.num === b.num && a.name === b.name && a.dob === b.dob && a.gender === b.gender;
+  return a.docType === b.docType && a.num === b.num && a.name === b.name && a.dob === b.dob && a.gender === b.gender;
 }
 
 /** Thumbnail that fetches the image through the authenticated endpoint (blob object-URL). */
@@ -173,7 +179,15 @@ const th: React.CSSProperties = {
 };
 const td: React.CSSProperties = { padding: "6px 6px", borderBottom: "1px dashed var(--line)", verticalAlign: "middle" };
 
-export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
+export function IdentityProofBlock({
+  entry,
+  checkInGate = false,
+}: {
+  entry: EntryDetail;
+  /** S6 rendering (2026-08-11): shows the check-in gate strip — details are REQUIRED for every
+   *  guest before "Check in & go live" (VIP bookings exempt). S5 leaves this off. */
+  checkInGate?: boolean;
+}) {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Record<string, DetailDraft>>({});
@@ -194,6 +208,10 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
     enabled: !!session,
   });
   const items = listQuery.data?.items ?? [];
+  // Config-driven (`identity.documentTypes`) — same vocabulary the S6 verification validates
+  // against, so nothing offered here can be rejected there.
+  const docTypes = listQuery.data?.documentTypes ?? [];
+  const coverage = listQuery.data?.coverage;
 
   // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
   // room (never who), so this re-derives the seating with the SAME deterministic algorithm
@@ -255,6 +273,7 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
       saveGuestIdentityDetail(session!, entryId, {
         subjectKey: args.slot.key,
         subjectLabel: args.draft.name.trim() || null,
+        documentType: args.draft.docType || null,
         documentNumber: args.draft.num.trim() || null,
         dateOfBirth: args.draft.dob || null,
         gender: (args.draft.gender || null) as "MALE" | "FEMALE" | "OTHER" | null,
@@ -345,12 +364,43 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFiles(e.target.files)} />
       <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => void onFiles(e.target.files)} />
 
+      {/* S6 gate strip (2026-08-11, operator ruling): details are required for every guest
+          before check-in — VIP exempt. Server-computed verdict; the desk only words it. */}
+      {checkInGate && coverage && (
+        coverage.vipExempt ? (
+          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "0 0 8px" }}>
+            VIP booking — guest details are <b>not required</b> for check-in. Anything recorded here is kept as evidence.
+          </p>
+        ) : coverage.satisfied ? (
+          <div className="fact b-bound" style={{ padding: "6px 11px", fontSize: 12, marginBottom: 8, width: "100%" }}>
+            <Check style={{ width: 13, height: 13, color: "var(--ok)" }} />
+            All {coverage.totalSlots} guest{coverage.totalSlots === 1 ? "" : "s"} recorded — the check-in gate is satisfied.
+          </div>
+        ) : (
+          <div
+            style={{
+              border: "1px solid var(--warn)",
+              background: "var(--warn-t)",
+              borderRadius: "var(--r-sm)",
+              padding: "7px 11px",
+              fontSize: 12,
+              marginBottom: 8,
+              lineHeight: 1.5,
+            }}
+          >
+            <b>Required before check-in:</b> {coverage.filledSlots} of {coverage.totalSlots} guests recorded — missing{" "}
+            {coverage.missing.map((m) => m.label).join(", ")}. A typed document number or an ID photo counts.
+          </div>
+        )
+      )}
+
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
               <th style={th}>Guest</th>
-              <th style={th}>Passport / permit no</th>
+              <th style={th}>Document type</th>
+              <th style={th}>Document no</th>
               <th style={th}>Name</th>
               <th style={th}>DOB</th>
               <th style={th}>Gender</th>
@@ -389,6 +439,26 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
                         {roomInfo.bedType ? ` · ${roomInfo.bedType.charAt(0)}${roomInfo.bedType.slice(1).toLowerCase()}` : ""}
                       </div>
                     )}
+                  </td>
+                  <td style={{ ...td, minWidth: 118 }}>
+                    <select
+                      style={cellInput}
+                      value={draft.docType}
+                      onChange={(e) => setDraft(slot.key, { docType: e.target.value })}
+                      onBlur={() => saveIfChanged(slot)}
+                    >
+                      <option value="">—</option>
+                      {docTypes.map((t) => (
+                        <option key={t.code} value={t.code}>
+                          {t.name}
+                        </option>
+                      ))}
+                      {/* A saved type an admin later deactivated stays visible — a select whose
+                          value has no option renders blank while keeping the value. */}
+                      {draft.docType && !docTypes.some((t) => t.code === draft.docType) && (
+                        <option value={draft.docType}>{draft.docType.replace(/_/g, " ")}</option>
+                      )}
+                    </select>
                   </td>
                   <td style={{ ...td, minWidth: 130 }}>
                     <input
@@ -489,8 +559,19 @@ export function IdentityProofBlock({ entry }: { entry: EntryDetail }) {
       <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "8px 0 0", lineHeight: 1.5 }}>
         Details save as you leave each field. Photos are stored privately on the hotel server
         (never in a public link) and kept per the ID retention policy — the camera button opens the
-        device camera on a phone or tablet. This table is the evidence; the identity{" "}
-        <i>verification</i> itself is recorded at Check-in.
+        device camera on a phone or tablet.{" "}
+        {checkInGate ? (
+          <>
+            This table is the evidence; the identity <i>verification</i> itself is recorded in the
+            Guest identity block below.
+          </>
+        ) : (
+          <>
+            Everything recorded here carries to Check-in, where each guest needs a document number
+            or an ID photo on file before &ldquo;Check in &amp; go live&rdquo; (VIP bookings
+            exempt); the identity <i>verification</i> itself is recorded there.
+          </>
+        )}
       </p>
     </div>
   );

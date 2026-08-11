@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
+import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { s6RoomChangeReEnterS1 } from "@/lib/api/pre-arrival";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
@@ -17,12 +18,11 @@ import { PdfButton } from "./pdf-button";
 import { StepAction } from "./step-action";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { AdvanceSettlementBlock } from "./advance-settlement";
+import { IdentityProofBlock } from "./identity-proof";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
 const BK = STAGE_ACTIONS.S6;
-
-const DOCUMENT_TYPES = ["PASSPORT", "NATIONAL_ID", "DRIVERS_LICENSE", "VOTER_ID"];
 
 function BlockH({ children }: { children: React.ReactNode }) {
   return (
@@ -77,6 +77,24 @@ export function CheckInStep({
   useEffect(() => {
     setVerificationPath(isVip ? "VIP" : "RETURNING_VALID");
   }, [isVip, guest?.id]);
+
+  // Same query the guest-detail table below uses (shared key → shared cache). Carries the
+  // config-driven document-type vocabulary (`identity.documentTypes`) — the verification
+  // select reads it too, so it can never offer a code the backend's p16 allowlist rejects
+  // (the old hardcoded list did exactly that: NATIONAL_ID / DRIVERS_LICENSE / VOTER_ID
+  // against a seeded PASSPORT / CID allowlist).
+  const proofsQuery = useQuery({
+    queryKey: ["identity-proofs", entry.id],
+    queryFn: () => listIdentityProofs(session!, entry.id),
+    enabled: !!session,
+  });
+  const documentTypes = proofsQuery.data?.documentTypes ?? [];
+  useEffect(() => {
+    if (documentTypes.length > 0 && !documentTypes.some((t) => t.code === documentType)) {
+      setDocumentType(documentTypes[0].code);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sync only when the vocabulary arrives
+  }, [documentTypes.map((t) => t.code).join("|")]);
 
   const elevated = isElevated(session?.actorLevel);
 
@@ -168,6 +186,12 @@ export function CheckInStep({
         </div>
       )}
 
+      {/* Guest details & ID proof (2026-08-11, operator ruling) — the same table as Arrival
+          (same per-entry rows, so anything filled at S5 shows here already). At S6 it is a
+          GATE: every guest needs a document number or an ID photo before "Check in & go live"
+          — except VIP bookings, which are exempt. The strip inside states the verdict. */}
+      <IdentityProofBlock entry={entry} checkInGate />
+
       {/* Identity verification */}
       <div className="block">
         <BlockH>
@@ -190,11 +214,12 @@ export function CheckInStep({
                 <div className="field">
                   <label>Document type</label>
                   <select value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
-                    {DOCUMENT_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t.replace(/_/g, " ")}
+                    {documentTypes.map((t) => (
+                      <option key={t.code} value={t.code}>
+                        {t.name}
                       </option>
                     ))}
+                    {documentTypes.length === 0 && <option value={documentType}>{documentType.replace(/_/g, " ")}</option>}
                   </select>
                 </div>
                 {verificationPath === "FIRST_TIME" && (

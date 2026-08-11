@@ -23,6 +23,7 @@ import { usePageTitle } from "@/hooks/use-page-title";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
+import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { ApiError } from "@/lib/api/client";
 import {
   avatarColor,
@@ -583,6 +584,17 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   });
   const communications = commsQuery.data?.items ?? null;
 
+  // Guest-detail coverage for the S6 check-in gate (2026-08-11, operator ruling): every guest
+  // needs a document number or an ID photo on file before "Check in & go live" — VIP bookings
+  // exempt. Mirrors the backend's completeCheckInToS7 gate client-side; shares the guest-detail
+  // table's query key, so a save there flips this checklist in the same beat.
+  const identityProofsQuery = useQuery({
+    queryKey: ["identity-proofs", entryId],
+    queryFn: () => listIdentityProofs(session!, entryId),
+    enabled: !!session && !sessionLoading && entryQuery.data?.currentStage === "S6",
+  });
+  const guestDetailsCoverage = identityProofsQuery.data?.coverage ?? null;
+
   // Park expiry — parking cancels the short stage-expiry timer and arms a long PARKING_FOLLOW_UP
   // one in its place (SIG-S1 §3.4: a parked booking still expires, just on a 30-day window). The
   // backend already runs that clock; the operator should be able to see it rather than assume a
@@ -917,7 +929,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const closedStepActive =
     step.key === "closed" && entry.currentStage === "S9" && entry.status !== "CLOSED" && viewing === currentOrder;
   const keysValid = (parseInt(keyCount, 10) || 0) > 0;
-  const canCheckIn = s6Readiness(entry).every((c) => c.met) && registrationConfirmed && keysValid;
+  const canCheckIn =
+    s6Readiness(entry, { guestDetails: guestDetailsCoverage }).every((c) => c.met) &&
+    registrationConfirmed &&
+    keysValid;
   // After the freeze, the Confirm step (still S4 until W4 fires) offers to open pre-arrival.
   const confirmedS4Active = viewing === 4 && fin.frozen && entry.currentStage === "S4";
   // S4→S5 gate (2026-08-07, operator ruling): the guest's answer to the confirmation voucher
@@ -965,7 +980,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             ? s5Readiness(entry)
             : checkInStepActive
               ? [
-                  ...s6Readiness(entry),
+                  ...s6Readiness(entry, { guestDetails: guestDetailsCoverage }),
                   { label: "Registration confirmed", met: registrationConfirmed },
                   { label: "Keys recorded", met: keysValid },
                 ]
