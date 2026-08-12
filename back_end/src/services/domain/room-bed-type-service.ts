@@ -12,9 +12,30 @@ import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 
-/** The bed vocabulary the desk offers — backend-owned so no UI hardcodes it. */
+/** The bed vocabulary the WRITE endpoint accepts — backend-owned so no UI hardcodes it. */
 export const ROOM_BED_TYPES = ["KING", "QUEEN", "TWIN", "SINGLE"] as const;
 export type RoomBedType = (typeof ROOM_BED_TYPES)[number];
+
+/**
+ * Which setups one room's PHYSICAL BED STOCK can be arranged into (2026-08-12, operator
+ * ruling — "show all the bed types available for that room", but never a Queen on a room
+ * that has no queen bed): KING and TWIN are the same stock arranged differently — two
+ * singles pushed together make a King, a King splits back to a Twin (the exact
+ * reconfiguration this service exists to record). QUEEN and SINGLE frames convert into
+ * nothing else, so they stand alone — 301's Queen is offered only on 301.
+ *
+ * This is the one place the convertibility fact lives; `GET /api/rooms` derives each room's
+ * `allowedBedTypes` from it, so a newly added room or a changed bed moves every desk
+ * dropdown automatically — nothing hardcoded UI-side, no config key.
+ */
+const CONVERTIBLE_BED_GROUPS: readonly (readonly RoomBedType[])[] = [["KING", "TWIN"]];
+
+/** All setups reachable from a room's current bed type (always includes itself). */
+export function bedTypeConversionGroup(bedType: string | null | undefined): string[] {
+  if (!bedType) return [];
+  const group = CONVERTIBLE_BED_GROUPS.find((g) => (g as readonly string[]).includes(bedType));
+  return group ? [...group] : [bedType];
+}
 
 export async function setRoomBedType(
   prisma: PrismaClient,
