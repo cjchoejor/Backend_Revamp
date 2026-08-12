@@ -32,6 +32,7 @@ import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
 import { IdentityProofBlock } from "./identity-proof";
+import { RoomChangeControl } from "./room-change-control";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -697,6 +698,18 @@ export function ArrivalStep({
                         <span className={`tag${roomReady(a) ? "" : " warn"}`}>{roomReady(a) ? "ready" : "not ready"}</span>
                       </span>
                     </div>
+                    {/* In-place per-room change (2026-08-12): swaps ONLY this room — the backend
+                        re-runs the journey (new segment, availability re-checked, silent
+                        re-price) and lands the booking back here. */}
+                    <div style={{ marginTop: 4 }}>
+                      <RoomChangeControl
+                        entry={entry}
+                        fromRoomId={a.roomId}
+                        fromRoomNumber={a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                        onChanged={invalidate}
+                        compact
+                      />
+                    </div>
                     {roomDetail(a.roomId)}
                   </div>
                 ))}
@@ -732,6 +745,17 @@ export function ArrivalStep({
                             {detailButton(id)}
                           </span>
                         </div>
+                        {/* In-place per-room change (2026-08-12): swaps ONLY this room from
+                            right here — no trip back to the Inquiry step. */}
+                        <div style={{ marginTop: 4 }}>
+                          <RoomChangeControl
+                            entry={entry}
+                            fromRoomId={id}
+                            fromRoomNumber={roomNumberById.get(id) ?? info?.roomNumber ?? id.slice(0, 6)}
+                            onChanged={invalidate}
+                            compact
+                          />
+                        </div>
                         {roomDetail(id)}
                       </div>
                     );
@@ -739,7 +763,7 @@ export function ArrivalStep({
                   </div>
                   <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "8px 0 0" }}>
                     These are the rooms selected at Inquiry — assigned in one step below. Need a
-                    different room or bed type? Change the selection on the Inquiry step first.
+                    different room? Each row&rsquo;s &ldquo;Change room&rdquo; swaps just that room, right here.
                   </p>
                 </div>
               )
@@ -781,8 +805,10 @@ export function ArrivalStep({
                           {statusTag(sel.id)}
                           {bedSelect(sel.id)}
                           {detailButton(sel.id)}
+                          {/* Assignment-time pick within the held type (light — no re-walk).
+                              The governed "Change room" below swaps across types too. */}
                           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setRoomEditOpen(true)}>
-                            Change room
+                            Pick another of this type
                           </button>
                         </span>
                       </div>
@@ -844,6 +870,28 @@ export function ArrivalStep({
               disabled={!roomId.trim()}
               onClick={() => assignM.mutate()}
             />
+            {/* In-place governed room change (2026-08-12): swaps the room — any type — without
+                leaving this page; the backend re-runs the journey and returns here. Works both
+                before and after assignment. */}
+            {(() => {
+              const fromId = latestAssignment?.roomId ?? sealedRoomIds[0] ?? roomId;
+              if (!fromId) return null;
+              const fromNumber =
+                latestAssignment?.room?.roomNumber ??
+                roomNumberById.get(fromId) ??
+                roomOptions.find((r) => r.id === fromId)?.roomNumber ??
+                fromId.slice(0, 6);
+              return (
+                <div style={{ marginTop: 8 }}>
+                  <RoomChangeControl
+                    entry={entry}
+                    fromRoomId={fromId}
+                    fromRoomNumber={fromNumber}
+                    onChanged={invalidate}
+                  />
+                </div>
+              );
+            })()}
           </>
         )}
       </div>

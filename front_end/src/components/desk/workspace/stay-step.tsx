@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, FileEdit, Handshake, Lock, Moon, Receipt, Scale } from "lucide-react";
+import { AlertTriangle, BedDouble, FileEdit, Handshake, Lock, Moon, Receipt, Scale } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -20,10 +20,8 @@ import {
   postCreditNote,
   postFolioCharge,
   progressDispute,
-  roomChangeReEnterS1,
   runNightAudit,
 } from "@/lib/api/in-stay";
-import { listRooms } from "@/lib/api/rooms";
 import { cancelEntryEarlyDeparture } from "@/lib/api/reservation-setup";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money, moneyOrDash } from "@/lib/desk/workspace";
@@ -32,6 +30,7 @@ import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { RoomCompositionSummary } from "./room-composition-summary";
+import { BedTypeEditor, RoomChangeControl } from "./room-change-control";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -84,6 +83,17 @@ export function StayStep({
   const h3 = handoffs.find((h) => h.handoffType === "H3" && h.stageContext === "S6");
   const h4 = handoffs.find((h) => h.handoffType === "H4");
   const assignment = (entry.roomAssignments ?? [])[0];
+  // A multi-room booking has one RoomAssignment per (room, date-range) — dedupe by roomId,
+  // keeping only rooms whose assignment is still current (an S7 room change end-dates the old
+  // room's row at tonight, so it drops off this list while its slept nights stay billed).
+  const distinctRooms = useMemo(() => {
+    const todayYmdLocal = new Date().toISOString().slice(0, 10);
+    const rows = (entry.roomAssignments ?? []).filter((a) => {
+      if (!a.endDate) return true;
+      return String(a.endDate).slice(0, 10) > todayYmdLocal;
+    });
+    return Array.from(new Map(rows.map((a) => [a.roomId, a])).values());
+  }, [entry.roomAssignments]);
   const deficientRecords = assignment?.room?.deficientConditionRecords ?? [];
   const disputes = entry.disputes ?? [];
   const currency = folioLines[0]?.currency;
@@ -108,8 +118,6 @@ export function StayStep({
   const [amendType, setAmendType] = useState("INCLUSION_CHANGE");
   const [amendReason, setAmendReason] = useState("");
   const [amendTerms, setAmendTerms] = useState("");
-  const [roomChangeId, setRoomChangeId] = useState("");
-  const [roomChangeReason, setRoomChangeReason] = useState("");
 
   useEffect(() => {
     const t = new Date().toISOString().slice(0, 10);
@@ -148,12 +156,6 @@ export function StayStep({
     enabled: !!session && !!h4 && h4.state === "CREATED",
   });
   const h4Items = (h4ChecklistQuery.data?.items ?? []) as HandoffChecklistItem[];
-
-  const roomsCatalogQuery = useQuery({
-    queryKey: ["rooms-catalog"],
-    queryFn: () => listRooms(session!),
-    enabled: !!session && elevated,
-  });
 
   const postChargeM = useMutation(
     wrap(() => {
@@ -249,16 +251,6 @@ export function StayStep({
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Early departure failed"),
   });
-  const roomChangeM = useMutation({
-    mutationFn: () => roomChangeReEnterS1(session!, entry.id, { newRoomId: roomChangeId.trim(), reason: roomChangeReason.trim() }),
-    onSuccess: () => {
-      toast.success("Room change — re-opened at Inquiry for a new segment");
-      invalidate();
-      setSelected(1);
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Room change failed"),
-  });
-
   const openDisputes = disputes.filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   const correctable = useMemo(
     () => folioLines.filter((l) => !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for")),
@@ -319,6 +311,40 @@ export function StayStep({
         <div className="block">
           <BlockH>Per-room composition</BlockH>
           <RoomCompositionSummary assignments={entry.roomAssignments} currency={currency} />
+        </div>
+      )}
+
+      {/* Rooms in use (2026-08-12, operator ruling): each room carries its live bed-setup
+          dropdown AND an in-place "Change room" — the swap runs the whole governed journey
+          server-side (new segment, availability re-checked, silent re-price, back to Stay)
+          and takes effect from tonight; slept nights stay billed on the old room. L2+ (the
+          change control hides itself below that). */}
+      {distinctRooms.length > 0 && (
+        <div className="block">
+          <BlockH>
+            <BedDouble style={{ width: 13, height: 13 }} />
+            Rooms in use
+          </BlockH>
+          <div style={{ display: "grid", gap: 8 }}>
+            {distinctRooms.map((a) => (
+              <div key={a.roomId} style={{ display: "grid", gap: 6 }}>
+                <div
+                  className="fact b-bound"
+                  style={{ padding: "8px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
+                >
+                  <span>Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}</span>
+                  <BedTypeEditor roomId={a.roomId} />
+                </div>
+                <RoomChangeControl
+                  entry={entry}
+                  fromRoomId={a.roomId}
+                  fromRoomNumber={a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                  onChanged={invalidate}
+                  compact
+                />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -667,32 +693,13 @@ export function StayStep({
             <label>New terms summary</label>
             <input value={amendTerms} onChange={(e) => setAmendTerms(e.target.value)} />
           </div>
-          <button className="btn btn-ghost btn-sm" disabled={amendM.isPending || !amendReason.trim() || !amendTerms.trim()} onClick={() => amendM.mutate()} style={{ marginBottom: 12 }}>
+          <button className="btn btn-ghost btn-sm" disabled={amendM.isPending || !amendReason.trim() || !amendTerms.trim()} onClick={() => amendM.mutate()}>
             Record amendment
           </button>
-          <div style={{ borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 7 }}>Room change (re-opens Inquiry, new segment)</div>
-            <div className="frow">
-              <div className="field">
-                <label>New room</label>
-                <select value={roomChangeId} onChange={(e) => setRoomChangeId(e.target.value)}>
-                  <option value="">Choose…</option>
-                  {(roomsCatalogQuery.data?.items ?? []).map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.roomNumber}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Reason</label>
-                <input value={roomChangeReason} onChange={(e) => setRoomChangeReason(e.target.value)} />
-              </div>
-            </div>
-            <button className="btn btn-ghost btn-sm" disabled={roomChangeM.isPending || !roomChangeId || !roomChangeReason.trim()} onClick={() => roomChangeM.mutate()}>
-              Change room → Inquiry
-            </button>
-          </div>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "10px 0 0" }}>
+            Need a different room? Each room in the <b>Rooms in use</b> block above carries its own
+            &ldquo;Change room&rdquo; — the swap happens right here, from tonight onward.
+          </p>
         </div>
       )}
 

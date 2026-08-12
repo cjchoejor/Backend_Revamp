@@ -662,3 +662,66 @@ export type CompetingClaims = {
 export async function getCompetingClaims(session: Session, entryId: string) {
   return apiRequest<CompetingClaims>(`/api/entries/${entryId}/competing-claims`, { session });
 }
+
+/**
+ * In-place room change (2026-08-12) — swap ONE room of the plan from S5/S6/S7 without leaving
+ * the page. The backend runs the full governed journey: new segment, substituted basis
+ * revalidated with the S1 availability predicates, silent re-quote (nothing sent to the guest;
+ * the PI is not re-issued; the advance already paid stands), then the walk back to the origin
+ * stage server-side.
+ */
+export type RoomChangeCandidate = {
+  roomId: string;
+  roomNumber: string;
+  roomTypeId: string;
+  roomTypeName: string | null;
+  bedType: string | null;
+  sameType: boolean;
+  physicalState: string;
+  isDeficient: boolean;
+  nights: number;
+};
+
+export type RoomChangeCandidates = {
+  entryId: string;
+  originStage: string;
+  fromRoom: { roomId: string; roomNumber: string; roomTypeId: string; roomTypeName: string | null };
+  substitutionNights: string[];
+  candidates: RoomChangeCandidate[];
+};
+
+export type RoomChangeOutcome = {
+  entryId: string;
+  originStage: string;
+  newSegmentNumber: number;
+  fromRoom: { roomId: string; roomNumber: string; roomTypeName: string | null };
+  toRoom: { roomId: string; roomNumber: string; roomTypeName: string | null };
+  sameType: boolean;
+  substitutionNights: string[];
+  pricing: { priorTotal: number | null; newTotal: number | null; delta: number | null; currency: string | null };
+  quotationId: string | null;
+  walk: {
+    returnedToOrigin: boolean;
+    reachedStage: string;
+    blocked: { atStep: string; code: string | null; message: string } | null;
+  };
+};
+
+export async function listRoomChangeCandidates(session: Session, entryId: string, fromRoomId: string) {
+  return apiRequest<RoomChangeCandidates>(
+    `/api/entries/${entryId}/room-change/candidates?fromRoomId=${encodeURIComponent(fromRoomId)}`,
+    { session },
+  );
+}
+
+export async function changeBookingRoom(
+  session: Session,
+  entryId: string,
+  input: { fromRoomId: string; toRoomId: string; reason: string },
+) {
+  return apiRequest<RoomChangeOutcome>(`/api/entries/${entryId}/room-change`, {
+    method: "POST",
+    session,
+    body: input,
+  });
+}

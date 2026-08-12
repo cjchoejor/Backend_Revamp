@@ -1061,7 +1061,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             toggleKeyRoom={NOOP}
             registrationConfirmed={registrationConfirmed}
             setRegistrationConfirmed={NOOP}
-            setSelected={NOOP}
           />
         );
       case "stay":
@@ -1468,7 +1467,6 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 toggleKeyRoom={toggleKeyRoom}
                 registrationConfirmed={registrationConfirmed}
                 setRegistrationConfirmed={setRegistrationConfirmed}
-                setSelected={setSelected}
               />
             ) : stayStepActive ? (
               <StayStep entry={entry} setNightAuditOk={setNightAuditOk} setSelected={setSelected} />

@@ -1,12 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BedDouble, Check, Crown, KeyRound, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
-import { ApiError } from "@/lib/api/client";
-import { s6RoomChangeReEnterS1 } from "@/lib/api/pre-arrival";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
 import { guestName } from "@/lib/desk/model";
@@ -16,6 +13,7 @@ import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { AdvanceSettlementBlock } from "./advance-settlement";
 import { IdentityProofBlock } from "./identity-proof";
+import { BedTypeEditor, RoomChangeControl } from "./room-change-control";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -29,17 +27,12 @@ function BlockH({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-function isElevated(level?: string) {
-  return level === "L2" || level === "L3" || level === "L4";
-}
-
 export function CheckInStep({
   entry,
   issuedKeyRooms,
   toggleKeyRoom,
   registrationConfirmed,
   setRegistrationConfirmed,
-  setSelected,
 }: {
   entry: EntryDetail;
   /** Per-room key issuance (2026-08-11, operator request): roomId → key handed over. One
@@ -48,7 +41,6 @@ export function CheckInStep({
   toggleKeyRoom: (roomId: string) => void;
   registrationConfirmed: boolean;
   setRegistrationConfirmed: (v: boolean) => void;
-  setSelected: (n: number) => void;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -69,10 +61,6 @@ export function CheckInStep({
   const isVip = !!guest?.vipTier?.trim();
   const identityVerified = !!guest?.identityVerifiedAt;
 
-  const [roomChangeReason, setRoomChangeReason] = useState("");
-
-  const elevated = isElevated(session?.actorLevel);
-
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
@@ -87,17 +75,6 @@ export function CheckInStep({
   });
   const paymentReconciled =
     !!folio?.advancePaymentReconciliationComplete || paymentStatusQuery.data?.satisfied === true;
-
-  const roomChangeM = useMutation({
-    mutationFn: () => s6RoomChangeReEnterS1(session!, entry.id, roomChangeReason.trim()),
-    onSuccess: () => {
-      setRoomChangeReason("");
-      toast.success("Room change requested — pick the new room at Inquiry");
-      invalidate();
-      setSelected(1);
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Room change failed"),
-  });
 
   const currency = folio?.lines?.[0]?.currency;
 
@@ -205,74 +182,48 @@ export function CheckInStep({
                     {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
                     {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
                   </span>
-                  {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
-                      as it is handed over — the radio toggles on click, so a mis-click undoes. */}
-                  <label
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
-                    title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
-                  >
-                    <input
-                      type="radio"
-                      checked={!!issuedKeyRooms[a.roomId]}
-                      onClick={() => toggleKeyRoom(a.roomId)}
-                      readOnly
-                      style={{ cursor: "pointer" }}
-                    />
-                    Key issued
-                  </label>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                    {/* Bed setup is editable S5–S7 (2026-08-12, operator request). */}
+                    <BedTypeEditor roomId={a.roomId} />
+                    {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
+                        as it is handed over — the radio toggles on click, so a mis-click undoes. */}
+                    <label
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                      title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
+                    >
+                      <input
+                        type="radio"
+                        checked={!!issuedKeyRooms[a.roomId]}
+                        onClick={() => toggleKeyRoom(a.roomId)}
+                        readOnly
+                        style={{ cursor: "pointer" }}
+                      />
+                      Key issued
+                    </label>
+                  </span>
                 </div>
+              ))}
+            </div>
+            {/* In-place room change (2026-08-12, operator ruling — replaces the old
+                "release everything and reopen at Inquiry" affordance): swap ONE room without
+                leaving this page. The backend opens a new segment, re-checks availability the
+                way S1 does, re-prices silently, and walks the booking straight back to
+                Check-in. L2+ (the control hides itself below that). */}
+            <div style={{ marginTop: 11, borderTop: "1px dashed var(--line-2)", paddingTop: 11, display: "grid", gap: 8 }}>
+              {distinctAssignments.map((a) => (
+                <RoomChangeControl
+                  key={`chg-${a.roomId}`}
+                  entry={entry}
+                  fromRoomId={a.roomId}
+                  fromRoomNumber={a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                  onChanged={invalidate}
+                  compact={distinctAssignments.length > 1}
+                />
               ))}
             </div>
           </>
         ) : (
           <p style={{ fontSize: 12, color: "var(--stop)", margin: 0 }}>No room assigned — go back to Arrival.</p>
-        )}
-        {/* There is deliberately no "pick the new room" control here: the S6 endpoint
-            (POST /entries/:id/s6-room-change/re-enter-s1) accepts only { reason }. It doesn't
-            swap a room — it releases the room claim, erases the committed hold, unseals every
-            availability config and sends the whole booking back to Inquiry, where the new room
-            is chosen. The copy below spells that out so nobody clicks it expecting a swap. */}
-        {elevated && distinctAssignments.length > 0 && (
-          <div style={{ marginTop: 11, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 6 }}>
-              Change room (L2+) — sends this booking back to Inquiry
-            </div>
-            <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginBottom: 8, display: "block", lineHeight: 1.55 }}>
-              This doesn&rsquo;t swap one room. It releases{" "}
-              <b>
-                {distinctAssignments.length === 1
-                  ? `room ${distinctAssignments[0].room?.roomNumber ?? distinctAssignments[0].roomId.slice(0, 8)}`
-                  : `all ${distinctAssignments.length} rooms`}
-              </b>
-              , cancels the committed hold and unseals the room plan — then reopens the booking at{" "}
-              <b>Inquiry</b> so you re-select {distinctAssignments.length === 1 ? "a room" : "the rooms"} from
-              availability and walk forward again.
-              {distinctAssignments.length > 1 && (
-                <>
-                  {" "}
-                  <span style={{ color: "var(--warn)" }}>
-                    There is no way to change just one of the {distinctAssignments.length} rooms — the backend
-                    reopens the whole booking.
-                  </span>
-                </>
-              )}
-            </div>
-            <div className="frow">
-              <div className="field">
-                <label>Reason (recorded on the audit trail)</label>
-                <input
-                  value={roomChangeReason}
-                  onChange={(e) => setRoomChangeReason(e.target.value)}
-                  placeholder="e.g. aircon fault in 302"
-                />
-              </div>
-              <div className="field" style={{ alignSelf: "end" }}>
-                <button className="btn btn-ghost" disabled={roomChangeM.isPending || roomChangeReason.trim().length < 3} onClick={() => roomChangeM.mutate()}>
-                  {roomChangeM.isPending ? "Reopening…" : "Release & reopen at Inquiry"}
-                </button>
-              </div>
-            </div>
-          </div>
         )}
       </div>
 
