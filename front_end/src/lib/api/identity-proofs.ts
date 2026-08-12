@@ -133,3 +133,93 @@ export async function uploadIdentityProof(
 export function identityProofFileUrl(proofId: string): string {
   return `/api/identity-proofs/${proofId}/file`;
 }
+
+/**
+ * Phone capture handoff (2026-08-12) — the desk mints a short-lived scoped token, encodes it
+ * into a QR code, and a phone (no staff session — the token is its whole credential) opens
+ * `/capture#<token>`, photographs the guest's ID and uploads through the token-gated route.
+ * The upload lands in the same write-once store via the same service as the desk's own
+ * capture, attributed to the operator who minted the token.
+ */
+
+export type PhoneCaptureToken = {
+  token: string;
+  /** ISO timestamp the token stops working (~15 min). */
+  expiresAt: string;
+  /** The backend machine's LAN IPv4 addresses — swapped in for localhost so the QR points
+   *  somewhere a phone on the hotel Wi-Fi can actually reach. */
+  lanIps: string[];
+};
+
+/** Mint the capture token — one party slot, or the WHOLE party with `allSlots: true`
+ *  (the phone page then lists every guest and files each photo under the picked slot,
+ *  server-validated). L1+ — desk side of the handoff. */
+export async function mintPhoneCaptureToken(
+  session: Session,
+  entryId: string,
+  body: { subjectKey?: string | null; subjectLabel?: string | null; allSlots?: boolean },
+) {
+  return apiRequest<PhoneCaptureToken>(`/api/entries/${entryId}/identity-proofs/phone-token`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
+/** The room a guest is seated in per the S2 composition — server-derived with the same
+ *  deterministic seating the desk table shows, so the two can't disagree. */
+export type PhoneCaptureRoom = { roomNumber: string; bedType: string | null; roomTypeName: string | null };
+
+/** One party member on the all-guests phone page: best label the desk holds (typed name or
+ *  "Adult 2"), how many photos this booking already stores for them, and their room. */
+export type PhoneCaptureRosterItem = { key: string; label: string; photoCount: number; room: PhoneCaptureRoom | null };
+
+export type PhoneCaptureContext = {
+  entryId: string;
+  subjectKey: string | null;
+  subjectLabel: string | null;
+  sealed: boolean;
+  /** Photos already stored — for the token's slot, or party-wide in all-guests mode. */
+  uploadedCount: number;
+  /** Present only on all-guests tokens: the whole party, one row per slot. */
+  roster: PhoneCaptureRosterItem[] | null;
+  /** The pinned guest's room on single-slot tokens (all-guests rows carry their own). */
+  room: PhoneCaptureRoom | null;
+};
+
+/** What the phone page shows before the camera opens. Token-authenticated, no session. */
+export async function fetchPhoneCaptureContext(token: string): Promise<PhoneCaptureContext> {
+  const res = await fetch(`/api/identity-capture/context?token=${encodeURIComponent(token)}`);
+  const data = (await res.json().catch(() => null)) as (PhoneCaptureContext & { message?: string }) | null;
+  if (!res.ok) throw new Error(data?.message ?? `This link could not be checked (HTTP ${res.status})`);
+  return data as PhoneCaptureContext;
+}
+
+/** Upload one photo from the phone — raw bytes body, token in the query. No session.
+ *  `subjectKey` names the guest on all-guests tokens (single-slot tokens carry their own). */
+export async function uploadPhoneCapture(
+  token: string,
+  file: File | Blob,
+  fileName?: string,
+  subjectKey?: string,
+): Promise<{ id: string; subjectLabel: string | null; capturedAt: string }> {
+  const params = new URLSearchParams({ token });
+  if (fileName?.trim()) params.set("fileName", fileName.trim());
+  if (subjectKey?.trim()) params.set("subjectKey", subjectKey.trim());
+  const res = await fetch(`/api/identity-capture/upload?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) {
+    let message = `Upload failed (HTTP ${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // non-JSON error body — keep the generic message
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as { id: string; subjectLabel: string | null; capturedAt: string };
+}

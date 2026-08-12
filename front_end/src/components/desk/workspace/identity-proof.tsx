@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Check, FileText, Fingerprint, ShieldCheck, Upload } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Fingerprint, Smartphone, Upload, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
@@ -12,6 +13,7 @@ import { listRooms } from "@/lib/api/rooms";
 import {
   identityProofFileUrl,
   listIdentityProofs,
+  mintPhoneCaptureToken,
   saveGuestIdentityDetail,
   uploadIdentityProof,
   type IdentityProofSummary,
@@ -177,6 +179,7 @@ const td: React.CSSProperties = { padding: "6px 6px", borderBottom: "1px dashed 
 export function IdentityProofBlock({
   entry,
   checkInGate = false,
+  collapsible = false,
 }: {
   entry: EntryDetail;
   /** S6 rendering (2026-08-11): hosts the identity VERIFICATION panel at the top (the act
@@ -185,17 +188,26 @@ export function IdentityProofBlock({
    *  are REQUIRED for every guest before "Check in & go live" (VIP bookings exempt). S5
    *  leaves this off. */
   checkInGate?: boolean;
+  /** S5 rendering (2026-08-12, operator request): the block starts COLLAPSED — header click
+   *  toggles. The queries and the returning-guest auto-pull still run while collapsed, so
+   *  the header tag stays live and the pulled number lands either way. S6 stays always-open
+   *  (the table is a gate there). */
+  collapsible?: boolean;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
+  const [open, setOpen] = useState(!collapsible);
   const [drafts, setDrafts] = useState<Record<string, DetailDraft>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [busySlot, setBusySlot] = useState<string | null>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Which guest the open picker is capturing for — set at button-click time, read on change.
   const pendingSlotRef = useRef<PartySlot | null>(null);
+  // Phone capture handoff (2026-08-12): the open QR modal — one slot, or the WHOLE party
+  // (slot null → all-guests token; the phone lists every guest and names one per photo).
+  // `baseline` is the photo count at mint time so "received" counts only THIS handoff.
+  const [phoneCapture, setPhoneCapture] = useState<{ slot: PartySlot | null; url: string; expiresAt: string; baseline: number } | null>(null);
 
   const entryId = entry.id;
   const slots = partySlots(entry);
@@ -204,6 +216,9 @@ export function IdentityProofBlock({
     queryKey: ["identity-proofs", entryId],
     queryFn: () => listIdentityProofs(session!, entryId),
     enabled: !!session,
+    // While a QR modal waits on a phone, poll so the photo lands on screen the moment it
+    // uploads — the app-wide staleTime would otherwise sit on the cached list for 5 minutes.
+    refetchInterval: phoneCapture ? 3000 : false,
   });
   const items = listQuery.data?.items ?? [];
   // Config-driven (`identity.documentTypes`) — same vocabulary the S6 verification validates
@@ -217,20 +232,12 @@ export function IdentityProofBlock({
   const isVip = !!guest?.vipTier?.trim();
   const identityVerified = !!guest?.identityVerifiedAt;
   const [verificationPath, setVerificationPath] = useState<VerificationPath>(isVip ? "VIP" : "RETURNING_VALID");
-  const [verifyDocType, setVerifyDocType] = useState("");
-  const [verifyDocNumber, setVerifyDocNumber] = useState("");
   const [pulledFromFile, setPulledFromFile] = useState(false);
   const autoPullRef = useRef(false);
 
   useEffect(() => {
     setVerificationPath(isVip ? "VIP" : "RETURNING_VALID");
   }, [isVip, guest?.id]);
-  useEffect(() => {
-    if (docTypes.length > 0 && !docTypes.some((t) => t.code === verifyDocType)) {
-      setVerifyDocType(docTypes[0].code);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sync only when the vocabulary arrives
-  }, [docTypes.map((t) => t.code).join("|")]);
 
   // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
   // room (never who), so this re-derives the seating with the SAME deterministic algorithm
@@ -250,8 +257,9 @@ export function IdentityProofBlock({
     staleTime: 5 * 60_000,
   });
   const roomInfoById = useMemo(() => {
-    const m = new Map<string, { roomNumber: string; bedType?: string | null }>();
-    for (const r of roomsQuery.data?.items ?? []) m.set(r.id, { roomNumber: r.roomNumber, bedType: r.bedType });
+    const m = new Map<string, { roomNumber: string; bedType?: string | null; roomTypeName?: string | null }>();
+    for (const r of roomsQuery.data?.items ?? [])
+      m.set(r.id, { roomNumber: r.roomNumber, bedType: r.bedType, roomTypeName: r.roomType?.name ?? null });
     return m;
   }, [roomsQuery.data]);
   const roomBySlot = useMemo(
@@ -266,6 +274,24 @@ export function IdentityProofBlock({
 
   const detailRow = (key: string) => items.find((p) => p.entryId === entryId && p.subjectKey === key && !p.hasFile);
   const photosFor = (key: string) => items.filter((p) => p.entryId === entryId && p.subjectKey === key && p.hasFile);
+
+  // Table rows grouped BY ROOM (2026-08-12, operator request — mirrors the phone page): the
+  // room is a band row spanning the table and its guests sit under it, instead of "Room 205"
+  // repeating beneath every name. Party order within a room; unseated guests gather last;
+  // a booking with no seating at all keeps the flat table (no bands).
+  const slotGroups: { key: string; roomId: string | null; items: PartySlot[] }[] = [];
+  for (const slot of slots) {
+    const roomId = roomBySlot.get(slot.key) ?? null;
+    const key = roomId ?? "unassigned";
+    let g = slotGroups.find((x) => x.key === key);
+    if (!g) {
+      g = { key, roomId, items: [] };
+      slotGroups.push(g);
+    }
+    g.items.push(slot);
+  }
+  slotGroups.sort((a, b) => (a.roomId ? 0 : 1) - (b.roomId ? 0 : 1));
+  const showRoomBands = slotGroups.some((g) => g.roomId);
   // Uploaded before the per-guest split (or by a caller that named no one) — shown, never lost.
   const unassigned = items.filter((p) => p.entryId === entryId && p.hasFile && (!p.subjectKey || !slots.some((s) => s.key === p.subjectKey)));
   const earlierStays = items.filter((p) => p.entryId !== entryId && p.hasFile);
@@ -341,13 +367,29 @@ export function IdentityProofBlock({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot, keyed on the fetched snapshot
   }, [listQuery.data, session]);
 
+  // The verification panel carries NO document fields of its own (2026-08-12, operator
+  // ruling — the guest-detail table below is the ONLY place document type/number are typed).
+  // Paths that need a document read it off the MAIN GUEST's row (A0); the button stays
+  // locked until that row holds what the chosen path requires.
+  const primaryDraft = drafts["A0"] ?? EMPTY_DRAFT;
+  const primaryLabel = primaryDraft.name.trim() || slots.find((s) => s.key === "A0")?.label || "the main guest";
+  const verifyNeedsDocument = verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED";
+  const verifyMissing =
+    verifyNeedsDocument && (!primaryDraft.docType || (verificationPath === "FIRST_TIME" && !primaryDraft.num.trim()));
+  // The vouching act sits BELOW the table (2026-08-12, operator request) and only unlocks
+  // once every guest's details are in — the same server-computed coverage the check-in gate
+  // uses (VIP bookings exempt there, exempt here too). Choosing the VIP PATH also skips the
+  // table requirement outright (same-day ruling): record directly, no guest details needed.
+  const detailsIncomplete =
+    verificationPath === "VIP" ? false : !coverage || (!coverage.vipExempt && !coverage.satisfied);
+
   const verifyM = useMutation({
     mutationFn: () => {
       if (!session || !guest?.id) throw new Error("Guest profile required");
       const body: Parameters<typeof verifyGuestIdentity>[2] = { entryId, verificationPath };
-      if (verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED") {
-        body.documentType = verifyDocType;
-        if (verificationPath === "FIRST_TIME") body.documentNumber = verifyDocNumber.trim();
+      if (verifyNeedsDocument) {
+        body.documentType = primaryDraft.docType;
+        if (verificationPath === "FIRST_TIME") body.documentNumber = primaryDraft.num.trim();
       }
       return verifyGuestIdentity(session, guest.id, body);
     },
@@ -360,28 +402,21 @@ export function IdentityProofBlock({
     onError: (e) => toast.error(e instanceof Error ? e.message : "Verification failed"),
   });
 
-  // A first-time verification types the same number the table's primary row holds — seed it.
-  useEffect(() => {
-    if (verificationPath === "FIRST_TIME" && !verifyDocNumber.trim()) {
-      const a0 = drafts["A0"];
-      if (a0?.num.trim()) setVerifyDocNumber(a0.num.trim());
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- convenience seed on path switch only
-  }, [verificationPath]);
-
   const onFiles = async (files: FileList | null) => {
     const slot = pendingSlotRef.current;
-    if (!files || files.length === 0 || !session || !slot) return;
+    const file = files?.[0];
+    if (!file || !session || !slot) return;
+    const replacing = photosFor(slot.key).length > 0;
     setBusySlot(slot.key);
     try {
       const name = (drafts[slot.key]?.name ?? "").trim();
-      for (const file of Array.from(files)) {
-        await uploadIdentityProof(session, entryId, file, {
-          subjectKey: slot.key,
-          subjectLabel: name || slot.label,
-        });
-      }
-      toast.success(`ID proof stored for ${name || slot.label}`);
+      await uploadIdentityProof(session, entryId, file, {
+        subjectKey: slot.key,
+        subjectLabel: name || slot.label,
+      });
+      toast.success(
+        replacing ? `ID replaced for ${name || slot.label}` : `ID proof stored for ${name || slot.label}`,
+      );
       void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
     } catch (e) {
@@ -390,7 +425,6 @@ export function IdentityProofBlock({
       setBusySlot(null);
       pendingSlotRef.current = null;
       // Allow re-selecting the same file (e.g. retake after a failure).
-      if (cameraRef.current) cameraRef.current.value = "";
       if (fileRef.current) fileRef.current.value = "";
     }
   };
@@ -399,6 +433,55 @@ export function IdentityProofBlock({
     pendingSlotRef.current = slot;
     input?.click();
   };
+
+  // Photos across the whole party — the all-guests handoff's receipt counter.
+  const totalSlotPhotos = slots.reduce((n, s) => n + photosFor(s.key).length, 0);
+
+  // Phone handoff: mint the scoped token (one slot, or `allSlots` for the whole party), build
+  // a URL a phone on the hotel Wi-Fi can reach (swapping localhost for the backend's LAN IP
+  // when the desk itself browses via loopback), and open the QR modal. The token rides in the
+  // URL HASH so it never hits server logs.
+  const phoneM = useMutation({
+    mutationFn: async (slot: PartySlot | null) => {
+      const name = slot ? (drafts[slot.key]?.name ?? "").trim() : "";
+      const minted = await mintPhoneCaptureToken(
+        session!,
+        entryId,
+        slot ? { subjectKey: slot.key, subjectLabel: name || slot.label } : { allSlots: true },
+      );
+      const host = window.location.hostname;
+      const loopback = host === "localhost" || host === "127.0.0.1";
+      const origin =
+        loopback && minted.lanIps.length > 0
+          ? `${window.location.protocol}//${minted.lanIps[0]}${window.location.port ? `:${window.location.port}` : ""}`
+          : window.location.origin;
+      return { slot, url: `${origin}/capture#${minted.token}`, expiresAt: minted.expiresAt };
+    },
+    onSuccess: ({ slot, url, expiresAt }) => {
+      setPhoneCapture({ slot, url, expiresAt, baseline: slot ? photosFor(slot.key).length : totalSlotPhotos });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not create the phone capture code"),
+  });
+
+  // Announce arrivals while the QR modal waits — the polling list query is the signal.
+  const phoneReceived = phoneCapture
+    ? (phoneCapture.slot ? photosFor(phoneCapture.slot.key).length : totalSlotPhotos) - phoneCapture.baseline
+    : 0;
+  const phoneReceivedRef = useRef(0);
+  useEffect(() => {
+    if (!phoneCapture) {
+      phoneReceivedRef.current = 0;
+      return;
+    }
+    if (phoneReceived > phoneReceivedRef.current) {
+      toast.success(
+        phoneCapture.slot
+          ? `Photo received from the phone for ${phoneCapture.slot.label}`
+          : "Photo received from the phone",
+      );
+    }
+    phoneReceivedRef.current = phoneReceived;
+  }, [phoneReceived, phoneCapture]);
 
   const photoChips = (proofs: IdentityProofSummary[], showSubject = false) => (
     <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
@@ -417,7 +500,18 @@ export function IdentityProofBlock({
 
   return (
     <div className="block">
-      <div className="block-h">
+      <div
+        className="block-h"
+        onClick={collapsible ? () => setOpen((o) => !o) : undefined}
+        style={collapsible ? { cursor: "pointer", userSelect: "none" } : undefined}
+        title={collapsible ? (open ? "Click to collapse" : "Click to open") : undefined}
+      >
+        {collapsible &&
+          (open ? (
+            <ChevronDown style={{ width: 13, height: 13 }} />
+          ) : (
+            <ChevronRight style={{ width: 13, height: 13 }} />
+          ))}
         <Fingerprint style={{ width: 13, height: 13 }} />
         Guest details &amp; ID proof
         <span className="ln" />
@@ -428,88 +522,22 @@ export function IdentityProofBlock({
         )}
       </div>
 
-      {/* Identity verification (2026-08-11, operator request — moved from its own "Guest
-          identity" block to the top of this table): the act that sets `identityVerifiedAt`,
-          vouching a human checked the documents against the guests. S6 only. */}
-      {checkInGate && (
-        <div
-          style={{
-            border: "1px solid var(--line-2)",
-            borderRadius: "var(--r-sm)",
-            background: "var(--cream)",
-            padding: "9px 12px",
-            marginBottom: 10,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 10.5,
-              fontWeight: 700,
-              letterSpacing: 0.4,
-              textTransform: "uppercase",
-              color: "var(--ink-3)",
-              marginBottom: 8,
-            }}
-          >
-            <ShieldCheck style={{ width: 12, height: 12 }} />
-            Identity verification
-          </div>
-          {!identityVerified && (
-            <div className="frow">
-              <div className="field">
-                <label>Verification path</label>
-                {/* Defaults to the VIP path for VIP profiles but is never locked (operator
-                    ruling 2026-08-11 — the dropdown stays freely selectable). */}
-                <select
-                  value={verificationPath}
-                  onChange={(e) => setVerificationPath(e.target.value as VerificationPath)}
-                >
-                  <option value="FIRST_TIME">First-time guest</option>
-                  <option value="RETURNING_VALID">Returning — ID valid</option>
-                  <option value="RETURNING_EXPIRED">Returning — ID expired</option>
-                  <option value="VIP">VIP path</option>
-                </select>
-              </div>
-              {(verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED") && (
-                <div className="field">
-                  <label>Document type</label>
-                  <select value={verifyDocType} onChange={(e) => setVerifyDocType(e.target.value)}>
-                    {docTypes.map((t) => (
-                      <option key={t.code} value={t.code}>
-                        {t.name}
-                      </option>
-                    ))}
-                    {docTypes.length === 0 && <option value="">—</option>}
-                  </select>
-                </div>
-              )}
-              {verificationPath === "FIRST_TIME" && (
-                <div className="field">
-                  <label>Document number</label>
-                  <input value={verifyDocNumber} onChange={(e) => setVerifyDocNumber(e.target.value)} placeholder="As shown" />
-                </div>
-              )}
-            </div>
-          )}
-          <StepAction
-            className="btn btn-primary"
-            label="Record verification"
-            doneLabel={`Verified${guest?.identityVerificationPath ? ` · ${guest.identityVerificationPath}` : ""}`}
-            done={identityVerified}
-            pending={verifyM.isPending}
-            disabled={!guest?.id}
-            onClick={() => verifyM.mutate()}
-          />
-        </div>
+      {!open && (
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+          {coverage
+            ? `${coverage.filledSlots} of ${coverage.totalSlots} guest${coverage.totalSlots === 1 ? "" : "s"} recorded`
+            : "Guest documents & details"}{" "}
+          — click the header to open. Everything here carries to Check-in.
+        </p>
       )}
 
-      {/* Shared pickers — camera-first input opens the camera on phones/tablets; desktops fall
-          back to the file dialog. Which guest they capture for is set at button-click time. */}
-      <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFiles(e.target.files)} />
-      <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => void onFiles(e.target.files)} />
+      {open && (
+        <>
+      {/* Shared upload picker (2026-08-12, operator ruling: ONE ID per guest, desk capture is
+          upload-or-phone only — the desk camera button was removed; photographing happens on
+          the QR-handoff phone). Single file: a new upload REPLACES the shown ID. Which guest
+          it captures for is set at button-click time. */}
+      <input ref={fileRef} type="file" accept="image/*,application/pdf" hidden onChange={(e) => void onFiles(e.target.files)} />
 
       {/* S6 gate strip (2026-08-11, operator ruling): details are required for every guest
           before check-in — VIP exempt. Server-computed verdict; the desk only words it. */}
@@ -549,6 +577,44 @@ export function IdentityProofBlock({
         </p>
       )}
 
+      {/* Toolbar above the table (2026-08-12, operator ruling — the boxed "Identity
+          verification" section is gone; the TABLE is the verification form): S6 puts the
+          verification-path select here, the whole-party phone QR sits right. "Record
+          verification" waits at the table's bottom. */}
+      {(slots.length > 1 || (checkInGate && !identityVerified)) && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10, marginBottom: 6 }}>
+          {checkInGate && !identityVerified ? (
+            <div className="field" style={{ width: "min(240px, 100%)" }}>
+              <label>Verification path</label>
+              {/* Defaults to the VIP path for VIP profiles but is never locked (operator
+                  ruling 2026-08-11 — the dropdown stays freely selectable). */}
+              <select value={verificationPath} onChange={(e) => setVerificationPath(e.target.value as VerificationPath)}>
+                <option value="FIRST_TIME">First-time guest</option>
+                <option value="RETURNING_VALID">Returning — ID valid</option>
+                <option value="RETURNING_EXPIRED">Returning — ID expired</option>
+                <option value="VIP">VIP path</option>
+              </select>
+            </div>
+          ) : (
+            <span />
+          )}
+          {/* One QR for the WHOLE party — the phone lists every guest and files each photo
+              under the guest picked there, so nobody scans per-row codes for a big group. */}
+          {slots.length > 1 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={phoneM.isPending}
+              onClick={() => phoneM.mutate(null)}
+              title="One QR code for the whole party — the phone shows the guest list and each photo files under the guest picked there"
+            >
+              <Smartphone style={{ width: 13, height: 13 }} />
+              Use a phone for all guests
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -563,7 +629,48 @@ export function IdentityProofBlock({
             </tr>
           </thead>
           <tbody>
-            {slots.map((slot) => {
+            {(showRoomBands ? slotGroups : [{ key: "flat", roomId: null, items: slots }]).flatMap((group) => {
+              const info = group.roomId ? roomInfoById.get(group.roomId) : undefined;
+              const coveredInRoom = group.items.filter((s) => photosFor(s.key).length > 0).length;
+              const bandRow = showRoomBands ? (
+                <tr key={`band-${group.key}`}>
+                  <td colSpan={7} style={{ padding: 0, borderBottom: "1px solid var(--line-2)" }}>
+                    {/* `width: max-content` keeps the band's text visible at the LEFT of the
+                        scrollable table instead of stretching across its full (off-screen)
+                        width — the count sits with the room name, not past the last column. */}
+                    <div
+                      style={{ display: "flex", alignItems: "baseline", gap: 8, background: "var(--cream)", padding: "7px 8px", width: "100%" }}
+                      title="From the room placement on the Quote step's guest board"
+                    >
+                      <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+                        {info ? `Room ${info.roomNumber}` : "No room assigned yet"}
+                      </span>
+                      {info && (
+                        <span style={{ fontSize: 11, color: "var(--ink-3)", whiteSpace: "nowrap" }}>
+                          {[
+                            info.bedType ? `${info.bedType.charAt(0)}${info.bedType.slice(1).toLowerCase()}` : null,
+                            info.roomTypeName,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          whiteSpace: "nowrap",
+                          color: coveredInRoom === group.items.length ? "var(--ok)" : "var(--ink-3)",
+                        }}
+                        title={`${coveredInRoom} of ${group.items.length} guests in this room have an ID photo`}
+                      >
+                        · {coveredInRoom}/{group.items.length} IDs
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : null;
+              const guestRows = group.items.map((slot) => {
               const draft = drafts[slot.key] ?? EMPTY_DRAFT;
               const photos = photosFor(slot.key);
               const covered = photos.length > 0;
@@ -571,8 +678,6 @@ export function IdentityProofBlock({
               // muted suffix on child rows so the band is never hidden by a name).
               const typedName = draft.name.trim();
               const displayName = typedName || slot.label;
-              const room = roomBySlot.get(slot.key);
-              const roomInfo = room ? roomInfoById.get(room) : undefined;
               return (
                 <tr key={slot.key}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -587,12 +692,6 @@ export function IdentityProofBlock({
                     </span>
                     {savedFlash === slot.key && (
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ok)", fontWeight: 600 }}>saved</span>
-                    )}
-                    {roomInfo && (
-                      <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginLeft: 19, marginTop: 1 }} title="From the room placement on the Quote step's guest board">
-                        Room {roomInfo.roomNumber}
-                        {roomInfo.bedType ? ` · ${roomInfo.bedType.charAt(0)}${roomInfo.bedType.slice(1).toLowerCase()}` : ""}
-                      </div>
                     )}
                   </td>
                   <td style={{ ...td, minWidth: 118 }}>
@@ -661,35 +760,96 @@ export function IdentityProofBlock({
                     </select>
                   </td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      {photos.length > 0 && photoChips(photos)}
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busySlot !== null}
-                        onClick={() => pickFor(slot, cameraRef.current)}
-                        title={`Photograph ${slot.label}'s document — opens the camera on a phone or tablet`}
-                      >
-                        <Camera style={{ width: 13, height: 13 }} />
-                        {busySlot === slot.key ? "…" : ""}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busySlot !== null}
-                        onClick={() => pickFor(slot, fileRef.current)}
-                        title={`Upload ${slot.label}'s document — image or PDF scan, front and back together is fine`}
-                      >
-                        <Upload style={{ width: 13, height: 13 }} />
-                      </button>
+                    {/* ONE ID per guest (2026-08-12 ruling): only the NEWEST photo renders —
+                        a retake/re-upload replaces it on screen (the write-once store keeps
+                        the earlier bytes as evidence, but they're no longer "the ID").
+                        Thumb above; the two buttons stay one horizontal row. */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {photos.length > 0 && photoChips(photos.slice(0, 1))}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={busySlot !== null}
+                          onClick={() => pickFor(slot, fileRef.current)}
+                          title={
+                            covered
+                              ? `Replace ${slot.label}'s ID — upload a new image or PDF scan; the current one is superseded`
+                              : `Upload ${slot.label}'s ID — image or PDF scan`
+                          }
+                        >
+                          <Upload style={{ width: 13, height: 13 }} />
+                          {busySlot === slot.key ? "…" : ""}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={phoneM.isPending}
+                          onClick={() => phoneM.mutate(slot)}
+                          title={`Hand capture to a phone — a QR code opens the camera page for ${slot.label}; the photo appears here the moment it's sent`}
+                        >
+                          <Smartphone style={{ width: 13, height: 13 }} />
+                        </button>
+                      </div>
                     </div>
                   </td>
                 </tr>
               );
+              });
+              return bandRow ? [bandRow, ...guestRows] : guestRows;
             })}
           </tbody>
         </table>
       </div>
+
+      {/* Record verification — the table's bottom action (2026-08-12, operator ruling: no
+          boxed section; the path select sits above the table and THIS is the sign-off). It
+          stamps `identityVerifiedAt` — the vouching act that a human checked the documents
+          against the guests — and unlocks only once every guest's details are in the table
+          (same coverage as the check-in gate; VIP exempt). Document-needing paths record the
+          MAIN guest's row. S6 only. */}
+      {checkInGate && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {!identityVerified &&
+            (verificationPath === "VIP" ? (
+              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
+                VIP path — no guest details needed to record the verification.
+              </p>
+            ) : detailsIncomplete ? (
+              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: 0, lineHeight: 1.5 }}>
+                Every guest&rsquo;s details go in the table above first
+                {coverage ? ` — ${coverage.filledSlots} of ${coverage.totalSlots} recorded` : ""}. The
+                verification unlocks when the table is complete.
+              </p>
+            ) : verifyNeedsDocument ? (
+              <p
+                style={{
+                  fontSize: 11.5,
+                  color: verifyMissing ? "var(--warn)" : "var(--ink-3)",
+                  margin: 0,
+                  lineHeight: 1.5,
+                }}
+              >
+                {verifyMissing
+                  ? `Fill ${primaryLabel}'s document ${
+                      verificationPath === "FIRST_TIME" ? "type and number" : "type"
+                    } in the table above first — the verification records what's on that row.`
+                  : `Records ${primaryLabel}'s document from the table above (${
+                      docTypes.find((t) => t.code === primaryDraft.docType)?.name ?? primaryDraft.docType
+                    }${verificationPath === "FIRST_TIME" && primaryDraft.num.trim() ? ` · ${primaryDraft.num.trim()}` : ""}).`}
+              </p>
+            ) : null)}
+          <StepAction
+            className="btn btn-primary"
+            label="Record verification"
+            doneLabel={`Verified${guest?.identityVerificationPath ? ` · ${guest.identityVerificationPath}` : ""}`}
+            done={identityVerified}
+            pending={verifyM.isPending}
+            disabled={!guest?.id || verifyMissing || detailsIncomplete}
+            onClick={() => verifyM.mutate()}
+          />
+        </div>
+      )}
 
       {unassigned.length > 0 && (
         <div style={{ marginTop: 8 }}>
@@ -712,9 +872,10 @@ export function IdentityProofBlock({
       {listQuery.isLoading && <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "8px 0 0" }}>Loading stored details…</p>}
 
       <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "8px 0 0", lineHeight: 1.5 }}>
-        Details save as you leave each field. Photos are stored privately on the hotel server
-        (never in a public link) and kept per the ID retention policy — the camera button opens the
-        device camera on a phone or tablet.{" "}
+        Details save as you leave each field. One ID per guest — upload a scan or hand capture to a
+        phone with the QR button; taking or uploading a new one replaces the current ID. Photos are
+        stored privately on the hotel server (never in a public link) and kept per the ID retention
+        policy.{" "}
         {checkInGate ? (
           <>
             This table is the evidence; the identity <i>verification</i> panel at the top is the
@@ -728,6 +889,102 @@ export function IdentityProofBlock({
           </>
         )}
       </p>
+        </>
+      )}
+
+      {/* Phone-capture QR modal (2026-08-12): scanning opens /capture#<token> on the phone —
+          no staff login there, the scoped 15-min token is the whole credential. The proofs
+          query polls while this is open, so arrivals show below the QR (and in the table)
+          the moment the phone sends them. */}
+      {phoneCapture && (
+        <div
+          onClick={() => setPhoneCapture(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(44, 42, 37, 0.45)",
+            zIndex: 90,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "var(--panel, #fff)",
+              borderRadius: "var(--r-lg, 14px)",
+              border: "1px solid var(--line-2)",
+              boxShadow: "0 18px 50px rgba(0,0,0,0.25)",
+              width: "min(380px, 100%)",
+              padding: "18px 20px 20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Smartphone style={{ width: 15, height: 15, color: "var(--ink-3)" }} />
+              <span style={{ fontSize: 13.5, fontWeight: 700 }}>
+                {phoneCapture.slot
+                  ? `Photograph ${(drafts[phoneCapture.slot.key]?.name ?? "").trim() || phoneCapture.slot.label}’s ID on a phone`
+                  : `Photograph every guest's ID on a phone`}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setPhoneCapture(null)}
+                style={{ marginLeft: "auto" }}
+                title="Close"
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", padding: "6px 0" }}>
+              <div style={{ background: "#fff", padding: 10, borderRadius: 10, border: "1px solid var(--line-2)" }}>
+                <QRCodeSVG value={phoneCapture.url} size={196} marginSize={0} />
+              </div>
+            </div>
+            <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
+              {phoneCapture.slot
+                ? "Scan with the phone's camera (same Wi-Fi as the desk). The page that opens takes the photo, offers a retake, and sends it straight here — no login needed on the phone."
+                : "Scan with the phone's camera (same Wi-Fi as the desk). The page lists every guest on this booking — photograph each one and every photo lands on the right row here. No login needed on the phone."}
+            </p>
+            <div
+              style={{
+                fontSize: 10.5,
+                fontFamily: "var(--font-plex-mono), monospace",
+                color: "var(--ink-3)",
+                wordBreak: "break-all",
+                background: "var(--cream)",
+                border: "1px solid var(--line-2)",
+                borderRadius: "var(--r-sm)",
+                padding: "6px 8px",
+              }}
+              title="The same link the QR encodes — type it on the phone if scanning is awkward"
+            >
+              {phoneCapture.url}
+            </div>
+            {phoneReceived > 0 ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600, color: "var(--ok)" }}>
+                <Check style={{ width: 14, height: 14 }} />
+                {phoneReceived} photo{phoneReceived === 1 ? "" : "s"} received — showing in the table
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: "var(--ink-3)" }}>Waiting for photos from the phone…</div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                Code valid until {new Date(phoneCapture.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+              <button type="button" className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={() => setPhoneCapture(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
