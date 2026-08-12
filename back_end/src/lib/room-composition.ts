@@ -197,6 +197,43 @@ function mealCountsForNight(
  * Number of nights this room is stayed for. Prefers explicit `rateContext.nights`, falls
  * back to the assignment's own date range, then to 1 night as a defensive default.
  */
+/**
+ * Auto-add the mandatory extra bed (2026-08-12, operator ruling — "much better would be to
+ * put extra bed automatically wherever required"): a non-FOC room with 3+ adults (p78 —
+ * anyone 11+ counts as an adult) and no extra bed gets exactly ONE added, the p78 minimum,
+ * instead of the quotation being refused. Returns the corrected list plus the touched
+ * indexes so callers can surface/record the correction.
+ *
+ * Shared by the S2 draft pipeline (`prepareQuotationDraft`) and the live preview
+ * (`buildQuotationPreview`) so the two can never price differently. p78 stays wired after
+ * this as belt-and-braces for callers that skip normalization.
+ */
+export function autoAddRequiredExtraBeds<
+  T extends { adultCount?: number | null; extraBedCount?: number | null; isFoc?: boolean },
+>(
+  compositions: T[],
+  opts?: {
+    /** The room TYPE's `maxExtraBeds` for this composition's room, when the caller knows it.
+     *  A room that physically takes no extra bed is left untouched — p78 then refuses with
+     *  its "add a bed or reduce the adults" message, which is the honest answer there. Null/
+     *  undefined (caller can't resolve the type) is treated as permissive, matching p78's
+     *  own ignorance of bed limits. */
+    maxExtraBedsForRoom?: (c: T, index: number) => number | null | undefined;
+  },
+): { compositions: T[]; autoAddedIndexes: number[] } {
+  const autoAddedIndexes: number[] = [];
+  const out = compositions.map((c, i) => {
+    if (c.isFoc === true) return c;
+    if ((c.adultCount ?? 0) < 3) return c;
+    if ((c.extraBedCount ?? 0) > 0) return c;
+    const allowed = opts?.maxExtraBedsForRoom?.(c, i);
+    if (allowed != null && allowed < 1) return c;
+    autoAddedIndexes.push(i);
+    return { ...c, extraBedCount: 1 };
+  });
+  return { compositions: out, autoAddedIndexes };
+}
+
 export function resolveNights(input: RoomCompositionInput, ctx: RoomCompositionRateContext): number {
   if (typeof ctx.nights === "number" && Number.isFinite(ctx.nights) && ctx.nights > 0) {
     return Math.floor(ctx.nights);

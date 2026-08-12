@@ -19,6 +19,7 @@ import { NotFoundError } from "../../lib/errors.js";
 import { round2 } from "../../lib/money.js";
 import {
   applyBookingDiscountToTotals,
+  autoAddRequiredExtraBeds,
   computeQuotationCompositionTotals,
   type RoomCompositionInput,
   type RoomCompositionRateContext,
@@ -90,6 +91,10 @@ export type PreviewRoomLine = {
   lunchRate: number;
   dinnerRate: number;
   extraBedCount: number;
+  /** True when the mandatory extra bed (3+ adults, none supplied) was added automatically —
+   *  `extraBedCount` already includes it; the desk shows the correction instead of a 0 cell
+   *  silently pricing a bed. */
+  extraBedAutoAdded: boolean;
   /** Meal covers per night after the plan counts are expanded (what `rate × heads` multiplies). */
   breakfastPax: number;
   lunchPax: number;
@@ -224,11 +229,21 @@ export async function buildQuotationPreview(
   const rooms = roomIds.length
     ? await prisma.room.findMany({
         where: { id: { in: roomIds } },
-        select: { id: true, roomNumber: true, roomTypeId: true },
+        select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { maxExtraBeds: true } } },
       })
     : [];
   const roomById = new Map(rooms.map((r) => [r.id, r]));
   const refByType = new Map(reference.roomTypes.map((t) => [t.roomTypeId, t]));
+
+  // Same auto-add the draft applies (2026-08-12): a non-FOC room with 3+ adults and no extra
+  // bed prices WITH one — the preview's whole value is being the figure the quote will
+  // actually produce. Order/length are preserved, so the by-index reads below stay valid;
+  // the per-room `extraBedAutoAdded` flag tells the desk to show the correction.
+  const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
+    maxExtraBedsForRoom: (c) => roomById.get(c.roomId)?.roomType?.maxExtraBeds ?? null,
+  });
+  input = { ...input, roomCompositions: bedNorm.compositions };
+  const autoAddedIndexes = new Set(bedNorm.autoAddedIndexes);
 
   const stayNights =
     entry.checkInDate && entry.checkOutDate
@@ -308,6 +323,7 @@ export async function buildQuotationPreview(
       lunchRate: n2(r.lunchRate),
       dinnerRate: n2(r.dinnerRate),
       extraBedCount: input.roomCompositions[i]?.extraBedCount ?? 0,
+      extraBedAutoAdded: autoAddedIndexes.has(i),
       breakfastPax: r.effectiveBreakfastPax,
       lunchPax: r.effectiveLunchPax,
       dinnerPax: r.effectiveDinnerPax,

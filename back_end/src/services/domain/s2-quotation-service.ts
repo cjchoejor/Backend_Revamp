@@ -37,6 +37,7 @@ import { mulMoney, round2, sumMoney, toDecimal } from "../../lib/money.js";
 import { generateOrLoadQuotationPdf } from "./quotation-pdf-service.js";
 import {
   applyBookingDiscountToTotals,
+  autoAddRequiredExtraBeds,
   computeQuotationCompositionTotals,
   type RoomCompositionInput,
   type RoomCompositionRateContext,
@@ -395,15 +396,36 @@ async function prepareQuotationDraft(
     netReduction: number;
     basis: string;
   } | null = null;
+  /** Rooms whose mandatory extra bed was added automatically (3+ adults, none supplied). */
+  let extraBedsAutoAdded: { roomId: string; roomNumber: string | null; extraBedsAdded: number }[] | null = null;
   if (Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0) {
     // Fetch charge rates + hydrate room numbers for the perRoom breakdown.
     const { serviceChargeRate, gstRate } = await resolveChargeRates(prisma);
     const roomIds = input.roomCompositions.map((c) => c.roomId);
     const roomRows = await prisma.room.findMany({
       where: { id: { in: roomIds } },
-      select: { id: true, roomNumber: true, roomTypeId: true },
+      select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { maxExtraBeds: true } } },
     });
     const numberByRoomId = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
+    const maxExtraBedsByRoomId = new Map(roomRows.map((r) => [r.id, r.roomType?.maxExtraBeds ?? null]));
+
+    // Auto-add the mandatory extra bed (2026-08-12, operator ruling — add it instead of
+    // refusing the quotation): a non-FOC room with 3+ adults and no extra bed gets one. The
+    // corrected list REPLACES input.roomCompositions so validation (p78 below now passes —
+    // it stays as belt-and-braces), pricing and the stored commercialTerms all see the same
+    // counts, and a supersede carries the bed forward. The correction is recorded on
+    // `commercialTerms.extraBedsAutoAdded` so the desk and the document trail can say so.
+    const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
+      maxExtraBedsForRoom: (c) => maxExtraBedsByRoomId.get(c.roomId),
+    });
+    input.roomCompositions = bedNorm.compositions;
+    if (bedNorm.autoAddedIndexes.length > 0) {
+      extraBedsAutoAdded = bedNorm.autoAddedIndexes.map((i) => ({
+        roomId: bedNorm.compositions[i].roomId,
+        roomNumber: numberByRoomId.get(bedNorm.compositions[i].roomId) ?? null,
+        extraBedsAdded: 1,
+      }));
+    }
 
     // Default meal / extra-bed rates come from the agent rate card's add-ons when present;
     // otherwise 0. Operators can still enter per-room negotiatedBreakfast/Lunch/DinnerRate
@@ -751,6 +773,10 @@ async function prepareQuotationDraft(
     ...(input.roomCompositions && input.roomCompositions.length > 0
       ? {
           roomCompositions: input.roomCompositions,
+          // Which rooms had their mandatory extra bed added automatically this round
+          // (2026-08-12) — informational; the corrected count itself lives on the
+          // composition rows above.
+          ...(extraBedsAutoAdded ? { extraBedsAutoAdded } : {}),
           compositionTotals: compositionTotals
             ? {
                 subtotal: Number(compositionTotals.subtotal.toFixed(2)),
