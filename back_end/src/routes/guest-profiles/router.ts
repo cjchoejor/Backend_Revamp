@@ -1,14 +1,18 @@
 import express, { Router } from "express";
+import { networkInterfaces } from "node:os";
 import { prisma } from "../../db.js";
 import {
   createGuestProfileRequestSchema,
+  mintIdentityCapturePhoneTokenRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   searchGuestProfilesQuerySchema,
   verifyGuestIdentityRequestSchema,
 } from "../../dtos/14-guest-profiles/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
-import { ValidationError } from "../../lib/errors.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { signIdentityCaptureToken } from "../../lib/identity-capture-token.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import * as guestProfileService from "../../services/domain/guest-profile-service.js";
 import * as identityProofService from "../../services/domain/guest-identity-proof-service.js";
 
@@ -83,6 +87,52 @@ guestProfilesRouter.post(
         subjectLabel: typeof q.subjectLabel === "string" && q.subjectLabel.trim() ? q.subjectLabel : null,
       });
       res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Phone capture handoff (2026-08-12): mint the short-lived scoped token the desk encodes into
+ * a QR code so a phone — with no staff session — can photograph one guest's ID and upload it.
+ * L1: the operator handing the phone over is exactly who authorises the capture; every upload
+ * made with the token is attributed to them. Fails early on sealed/profile-less bookings so
+ * the QR never leads to a dead capture page. `lanIps` lets the desk build a phone-reachable
+ * URL when it is itself browsing via localhost.
+ */
+guestProfilesRouter.post(
+  "/entries/:id/identity-proofs/phone-token",
+  requireActorLevel("L1"),
+  validateBody(mintIdentityCapturePhoneTokenRequestSchema),
+  async (req, res, next) => {
+    try {
+      const entry = await prisma.entry.findUnique({
+        where: { id: req.params.id },
+        select: { id: true, status: true, guestProfileId: true },
+      });
+      if (!entry) throw new NotFoundError("Entry");
+      enforceEntryNotSealedForWorkingAction({ status: entry.status });
+      if (!entry.guestProfileId) {
+        throw new ValidationError("This booking has no guest profile to attach ID proofs to");
+      }
+      const allSlots = req.body.allSlots === true;
+      const { token, expiresAt } = signIdentityCaptureToken({
+        entryId: entry.id,
+        // All-guests mode carries no pinned slot — the phone names one per photo and the
+        // upload route validates it against the entry's derived party.
+        subjectKey: allSlots ? null : (req.body.subjectKey ?? null),
+        subjectLabel: allSlots ? null : (req.body.subjectLabel ?? null),
+        allSlots,
+        mintedBy: req.actor!.actorId,
+      });
+      // Non-internal IPv4 addresses of this machine — the desk swaps them in for
+      // localhost so the QR points somewhere a phone on the hotel Wi-Fi can reach.
+      const lanIps = Object.values(networkInterfaces())
+        .flatMap((addrs) => addrs ?? [])
+        .filter((a) => a.family === "IPv4" && !a.internal)
+        .map((a) => a.address);
+      res.status(201).json({ token, expiresAt, lanIps });
     } catch (e) {
       next(e);
     }

@@ -39,6 +39,13 @@ function secret(): string {
   return cachedSecret;
 }
 
+/** The resolved signing secret, for sibling token kinds (e.g. the phone identity-capture
+ *  token) so every JWT this backend mints is signed with the SAME key and secret rotation
+ *  stays a one-variable affair. Not for use outside `src/lib`. */
+export function jwtSigningSecret(): string {
+  return secret();
+}
+
 export function signSessionToken(payload: SessionTokenPayload, expiresIn: string = "12h"): string {
   return jwt.sign(payload, secret(), { expiresIn } as jwt.SignOptions);
 }

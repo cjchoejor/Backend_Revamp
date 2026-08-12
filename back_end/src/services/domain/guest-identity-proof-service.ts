@@ -3,8 +3,10 @@ import { randomBytes } from "node:crypto";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { hashSha256, readDocument, verifyChecksum, writeDocument } from "../../lib/document-storage.js";
+import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
+import { loadChildPolicyBundle } from "./child-policy-service.js";
 
 /**
  * Guest identity PROOF files (2026-08-10, operator request): a photo or scan of the guest's
@@ -308,14 +310,171 @@ export async function saveGuestIdentityDetail(
 }
 
 /**
+ * The party as capture slots — the ONE derivation the desk table, the S6 coverage gate and
+ * the phone roster all share (adults + per-child ages off the intake breakdown, `guestCount`
+ * anonymous fallback, guest-board keys A0…/K0…), so no two surfaces can disagree about who
+ * is in the party. Labels are GENERIC ("Adult 1"), never the profile's name: the booking's
+ * guest profile is the CONTACT PERSON, not necessarily anyone sleeping in the rooms
+ * (operator ruling 2026-08-11). Callers overlay typed subjectLabels where they have them.
+ */
+function derivePartySlots(entry: {
+  adultCount: number | null;
+  childAges: number[] | null;
+  guestCount: number | null;
+}): { key: string; label: string }[] {
+  const slots: { key: string; label: string }[] = [];
+  const adults = Math.max(0, entry.adultCount ?? 0);
+  const childAges = entry.childAges ?? [];
+  if (adults > 0 || childAges.length > 0) {
+    for (let i = 0; i < adults; i++) {
+      slots.push({ key: `A${i}`, label: `Adult ${i + 1}` });
+    }
+    childAges.forEach((age, i) => slots.push({ key: `K${i}`, label: `Child ${i + 1} (${age}y)` }));
+  } else {
+    const n = Math.max(1, entry.guestCount ?? 1);
+    for (let i = 0; i < n; i++) {
+      slots.push({ key: `A${i}`, label: `Guest ${i + 1}` });
+    }
+  }
+  return slots;
+}
+
+/** Room the phone page shows next to a guest ("Room 205 · Twin · Deluxe Double"). */
+export type PhoneCaptureRoom = { roomNumber: string; bedType: string | null; roomTypeName: string | null };
+
+/**
+ * slot key → roomId, per the S2 composition. MIRRORS the desk's `seatPartyByComposition`
+ * ([front_end/src/lib/desk/party-rooms.ts]) exactly — the composition stores COUNTS per room,
+ * never which same-band person, so seating is re-derived deterministically: band pools in
+ * party order, rooms in sealed order, adults → 6–10s → under-6s per room's counts. Keep the
+ * two in step or the phone and the desk table would disagree about who sleeps where.
+ */
+function seatPartyByCompositionServer(
+  entry: {
+    adultCount: number | null;
+    childAges: number[] | null;
+    quotations: { state: string; createdAt: Date; commercialTerms: unknown }[];
+    availabilityConfigs: { sealedAt: Date | null; optionSelected: unknown }[];
+  },
+  youngMax: number,
+  childMax: number,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  type Comp = { roomId?: string | null; adultCount?: number; cnb6To10Count?: number; cnbUnder6Count?: number };
+  const withComps = entry.quotations
+    .filter((q) => {
+      const comps = (q.commercialTerms as { roomCompositions?: unknown[] } | null)?.roomCompositions;
+      return Array.isArray(comps) && comps.length > 0;
+    })
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const operative =
+    withComps.find((q) => q.state === "ACCEPTED") ??
+    withComps.find((q) => q.state === "SENT" || q.state === "DRAFT") ??
+    withComps[0];
+  if (!operative) return out;
+  const comps = ((operative.commercialTerms as { roomCompositions?: unknown[] }).roomCompositions ?? []) as Comp[];
+
+  const pool: Record<"ADULT" | "C6TO10" | "UNDER6", string[]> = { ADULT: [], C6TO10: [], UNDER6: [] };
+  for (let i = 0; i < Math.max(0, entry.adultCount ?? 0); i++) pool.ADULT.push(`A${i}`);
+  (entry.childAges ?? []).forEach((age, i) => {
+    pool[age <= youngMax ? "UNDER6" : age <= childMax ? "C6TO10" : "ADULT"].push(`K${i}`);
+  });
+
+  const sealed = entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected);
+  const sealedOrder = sealed ? readOptionSelected(sealed.optionSelected).distinctRoomIds : [];
+  const order = sealedOrder.length > 0 ? sealedOrder : comps.map((c) => c.roomId).filter((id): id is string => !!id);
+  for (const id of order) {
+    const c = comps.find((x) => x.roomId === id);
+    if (!c) continue;
+    const take = (band: "ADULT" | "C6TO10" | "UNDER6", n: number) => {
+      for (let i = 0; i < n; i++) {
+        const key = pool[band].shift();
+        if (!key) return;
+        out.set(key, id);
+      }
+    };
+    take("ADULT", c.adultCount ?? 0);
+    take("C6TO10", c.cnb6To10Count ?? 0);
+    take("UNDER6", c.cnbUnder6Count ?? 0);
+  }
+  return out;
+}
+
+/**
+ * The party roster for the ALL-GUESTS phone capture page (2026-08-12): one row per slot with
+ * the best label we hold (the typed name from the guest-detail table when there is one, the
+ * generic slot label otherwise), how many photos are already stored for that slot on THIS
+ * booking, and — when the S2 composition places the party — which room that guest sleeps in.
+ * Also the upload route's validation source — a photo can only file under a slot this roster
+ * contains.
+ */
+export async function phoneCaptureRoster(prisma: PrismaClient, entryId: string) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      adultCount: true,
+      childAges: true,
+      guestCount: true,
+      guestProfileId: true,
+      quotations: { select: { state: true, createdAt: true, commercialTerms: true } },
+      availabilityConfigs: {
+        where: { sealedAt: { not: null } },
+        orderBy: { createdAt: "desc" },
+        select: { sealedAt: true, optionSelected: true },
+      },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  const slots = derivePartySlots(entry);
+  const rows = entry.guestProfileId
+    ? await prisma.guestIdentityDocument.findMany({
+        where: { entryId: entry.id, subjectKey: { not: null } },
+        select: { subjectKey: true, subjectLabel: true, storageKey: true },
+      })
+    : [];
+
+  // Who sleeps where, resolved to room number + bed + type name for display on the phone.
+  const bundle = await loadChildPolicyBundle(prisma).catch(() => null);
+  const seating = seatPartyByCompositionServer(
+    entry,
+    bundle?.ageBands.youngChildMaxAge ?? 5,
+    bundle?.ageBands.childMaxAge ?? 10,
+  );
+  const seatedRoomIds = Array.from(new Set(seating.values()));
+  const roomsById = new Map<string, PhoneCaptureRoom>();
+  if (seatedRoomIds.length > 0) {
+    const roomRows = await prisma.room.findMany({
+      where: { id: { in: seatedRoomIds } },
+      select: { id: true, roomNumber: true, bedType: true, roomType: { select: { name: true } } },
+    });
+    for (const r of roomRows) {
+      roomsById.set(r.id, { roomNumber: r.roomNumber, bedType: r.bedType ?? null, roomTypeName: r.roomType?.name ?? null });
+    }
+  }
+
+  return slots.map((s) => {
+    const typedName = rows
+      .find((r) => r.subjectKey === s.key && !r.storageKey && r.subjectLabel?.trim())
+      ?.subjectLabel?.trim();
+    const roomId = seating.get(s.key);
+    return {
+      key: s.key,
+      label: typedName || s.label,
+      photoCount: rows.filter((r) => r.subjectKey === s.key && r.storageKey).length,
+      room: (roomId ? roomsById.get(roomId) : null) ?? null,
+    };
+  });
+}
+
+/**
  * Guest-detail coverage for the S6 check-in gate (2026-08-11, operator ruling): every guest in
  * the party must have their details on file before check-in — a typed document number OR a
  * stored ID photo counts; details captured at S5 carry forward automatically (the rows are
  * per-entry). VIP bookings are exempt — the caller skips the gate when `vipExempt` is true.
  *
- * Slots mirror the desk table's derivation exactly (adults + per-child ages off the intake
- * breakdown, `guestCount` anonymous fallback, guest-board keys A0…/K0…) so the gate and the
- * table can never disagree about who is missing.
+ * Slots come from `derivePartySlots`, the same derivation as the desk table and the phone
+ * roster, so the gate can never disagree about who is missing.
  */
 export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
@@ -332,24 +491,7 @@ export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId
   if (!entry) throw new NotFoundError("Entry");
 
   const vipExempt = !!entry.guestProfile?.vipTier?.trim();
-
-  // Labels are GENERIC ("Adult 1"), never the profile's name: the booking's guest profile is
-  // the CONTACT PERSON, not necessarily anyone sleeping in the rooms (operator ruling
-  // 2026-08-11). A typed subjectLabel still overrides below.
-  const slots: { key: string; label: string }[] = [];
-  const adults = Math.max(0, entry.adultCount ?? 0);
-  const childAges = entry.childAges ?? [];
-  if (adults > 0 || childAges.length > 0) {
-    for (let i = 0; i < adults; i++) {
-      slots.push({ key: `A${i}`, label: `Adult ${i + 1}` });
-    }
-    childAges.forEach((age, i) => slots.push({ key: `K${i}`, label: `Child ${i + 1} (${age}y)` }));
-  } else {
-    const n = Math.max(1, entry.guestCount ?? 1);
-    for (let i = 0; i < n; i++) {
-      slots.push({ key: `A${i}`, label: `Guest ${i + 1}` });
-    }
-  }
+  const slots = derivePartySlots(entry);
 
   const rows = entry.guestProfileId
     ? await prisma.guestIdentityDocument.findMany({

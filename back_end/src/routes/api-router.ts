@@ -29,6 +29,7 @@ import { lookupsRouter } from "./lookups/router.js";
 import { backflowsRouter } from "./backflows/router.js";
 import { documentsRouter } from "./documents/router.js";
 import { communicationsRouter } from "./communications/router.js";
+import { identityCaptureRouter } from "./identity-capture/router.js";
 
 export const apiRouter = Router();
 
@@ -52,6 +53,10 @@ apiRouter.get("/health/s9-readiness", async (_req, res) => {
 
 // Cat 10 #1
 apiRouter.use("/auth", sessionAndAuthenticationRouter);
+
+// Phone identity-capture (2026-08-12): the QR-handoff phone has no staff session — its
+// short-lived scoped token is the credential, so these routes sit before actor attribution.
+apiRouter.use(identityCaptureRouter);
 
 // Actor attribution begins for operational routes
 apiRouter.use(parseActorHeaders());

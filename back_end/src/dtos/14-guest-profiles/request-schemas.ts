@@ -43,6 +43,16 @@ export const saveGuestIdentityDetailRequestSchema = z.object({
 });
 export type SaveGuestIdentityDetailRequestDto = z.infer<typeof saveGuestIdentityDetailRequestSchema>;
 
+/** Mint a phone identity-capture token (2026-08-12): one party slot, or the WHOLE party
+ *  (`allSlots` — the phone page lists every guest and files each photo under the slot the
+ *  phone user picks, server-validated). */
+export const mintIdentityCapturePhoneTokenRequestSchema = z.object({
+  subjectKey: z.string().trim().min(1).max(16).optional().nullable(),
+  subjectLabel: z.string().trim().max(160).optional().nullable(),
+  allSlots: z.boolean().optional(),
+});
+export type MintIdentityCapturePhoneTokenRequestDto = z.infer<typeof mintIdentityCapturePhoneTokenRequestSchema>;
+
 export const verifyGuestIdentityRequestSchema = z.object({
   entryId: z.string().min(1),
   verificationPath: z.enum(["FIRST_TIME", "RETURNING_VALID", "RETURNING_EXPIRED", "VIP"]),
