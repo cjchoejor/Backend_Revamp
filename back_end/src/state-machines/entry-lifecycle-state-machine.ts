@@ -297,8 +297,17 @@ export async function progressStageS6ToS7(
   clientVersion: number | undefined,
   keyCount: number | undefined,
   registrationConfirmed: boolean | undefined,
+  issuedKeyRoomIds?: string[],
 ) {
-  return checkInService.completeCheckInToS7(prisma, entryId, actorId, clientVersion, keyCount, registrationConfirmed);
+  return checkInService.completeCheckInToS7(
+    prisma,
+    entryId,
+    actorId,
+    clientVersion,
+    keyCount,
+    registrationConfirmed,
+    issuedKeyRoomIds,
+  );
 }
 
 /** SIG-S6 §5.2 / AC-S6-036 — S6→S1 re-entry (room change at check-in). A reason is recorded as an

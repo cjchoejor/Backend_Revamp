@@ -36,6 +36,10 @@ export async function completeCheckInToS7(
   clientVersion: number | undefined,
   keyCount: number | undefined,
   registrationConfirmed: boolean | undefined,
+  /** Per-room key issuance (2026-08-11, operator request): the rooms whose key was actually
+   *  handed over — stamped on the KEYS trace so the hotel can track each key, not just the
+   *  count. Optional; count-only callers behave exactly as before. */
+  issuedKeyRoomIds?: string[],
 ) {
   if (clientVersion == null) {
     throw new ValidationError("version is required for check-in completion");
@@ -432,7 +436,7 @@ export async function completeCheckInToS7(
         stageContext: Stage.S6,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, keyCount, afterIdentityVerified: true },
+        payload: { entryId, keyCount, issuedKeyRoomIds: issuedKeyRoomIds ?? null, afterIdentityVerified: true },
         createdBy: actorId,
       },
     });

@@ -249,6 +249,11 @@ reservationsRouter.post("/entries/:id/progress-stage", requireActorLevel("L1"), 
         typeof version === "number" ? version : undefined,
         typeof td.keyCount === "number" ? td.keyCount : undefined,
         td.registrationConfirmed === true,
+        // Per-room key issuance (2026-08-11): which rooms had their key handed over —
+        // recorded on the KEYS trace so the hotel can track each key, not just a count.
+        Array.isArray(td.issuedKeyRoomIds)
+          ? td.issuedKeyRoomIds.filter((x: unknown): x is string => typeof x === "string")
+          : undefined,
       );
       res.json(updated);
       return;

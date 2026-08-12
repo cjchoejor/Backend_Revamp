@@ -326,29 +326,28 @@ export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId
       adultCount: true,
       childAges: true,
       guestCount: true,
-      guestProfile: { select: { firstName: true, lastName: true, vipTier: true } },
+      guestProfile: { select: { vipTier: true } },
     },
   });
   if (!entry) throw new NotFoundError("Entry");
 
   const vipExempt = !!entry.guestProfile?.vipTier?.trim();
-  const primaryName = [entry.guestProfile?.firstName, entry.guestProfile?.lastName]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
 
+  // Labels are GENERIC ("Adult 1"), never the profile's name: the booking's guest profile is
+  // the CONTACT PERSON, not necessarily anyone sleeping in the rooms (operator ruling
+  // 2026-08-11). A typed subjectLabel still overrides below.
   const slots: { key: string; label: string }[] = [];
   const adults = Math.max(0, entry.adultCount ?? 0);
   const childAges = entry.childAges ?? [];
   if (adults > 0 || childAges.length > 0) {
     for (let i = 0; i < adults; i++) {
-      slots.push({ key: `A${i}`, label: i === 0 && primaryName ? primaryName : `Adult ${i + 1}` });
+      slots.push({ key: `A${i}`, label: `Adult ${i + 1}` });
     }
     childAges.forEach((age, i) => slots.push({ key: `K${i}`, label: `Child ${i + 1} (${age}y)` }));
   } else {
     const n = Math.max(1, entry.guestCount ?? 1);
     for (let i = 0; i < n; i++) {
-      slots.push({ key: `A${i}`, label: i === 0 && primaryName ? primaryName : `Guest ${i + 1}` });
+      slots.push({ key: `A${i}`, label: `Guest ${i + 1}` });
     }
   }
 
@@ -387,8 +386,9 @@ export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId
  * `entryId`) — plus THIS booking's per-guest DETAIL rows (no file, subject-keyed). The S6
  * typed verification's rows (no file, no subjectKey) stay off this surface.
  *
- * Also carries `documentTypes` (the config-driven dropdown vocabulary) and `coverage` (the
- * S6 check-in gate's own verdict) so the desk never re-derives either.
+ * Also carries `documentTypes` (the config-driven dropdown vocabulary), `coverage` (the
+ * S6 check-in gate's own verdict) and `returningGuest` (see below) so the desk never
+ * re-derives any of them.
  */
 export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
@@ -400,35 +400,71 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     listIdentityDocumentTypeOptions(prisma),
     guestDetailsCoverageForEntry(prisma, entryId),
   ]);
-  if (!entry.guestProfileId) return { items: [], documentTypes, coverage };
+  if (!entry.guestProfileId) return { items: [], documentTypes, coverage, returningGuest: null };
 
-  const items = await prisma.guestIdentityDocument.findMany({
-    where: {
-      guestProfileId: entry.guestProfileId,
-      OR: [{ storageKey: { not: null } }, { entryId: entry.id, subjectKey: { not: null } }],
-    },
-    orderBy: { capturedAt: "desc" },
-    select: {
-      id: true,
-      entryId: true,
-      documentType: true,
-      documentNumber: true,
-      fileName: true,
-      mimeType: true,
-      sizeBytes: true,
-      note: true,
-      subjectKey: true,
-      subjectLabel: true,
-      dateOfBirth: true,
-      gender: true,
-      capturedAt: true,
-      capturedBy: true,
-      retentionExpiresAt: true,
-      storageKey: true,
-    },
-  });
+  const [items, returningRow] = await Promise.all([
+    prisma.guestIdentityDocument.findMany({
+      where: {
+        guestProfileId: entry.guestProfileId,
+        OR: [{ storageKey: { not: null } }, { entryId: entry.id, subjectKey: { not: null } }],
+      },
+      orderBy: { capturedAt: "desc" },
+      select: {
+        id: true,
+        entryId: true,
+        documentType: true,
+        documentNumber: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        note: true,
+        subjectKey: true,
+        subjectLabel: true,
+        dateOfBirth: true,
+        gender: true,
+        capturedAt: true,
+        capturedBy: true,
+        retentionExpiresAt: true,
+        storageKey: true,
+      },
+    }),
+    // Returning guest (2026-08-11, operator request): the PROFILE-HOLDER's most recent
+    // document number on file from BEFORE this booking — a prior stay's primary-guest detail
+    // row or an S6 typed-verification record — so the desk pre-fills the primary row instead
+    // of re-asking a known number. Restricted to slot "A0" or slot-less rows: a companion's
+    // number from an earlier booking must never seed this booking's primary guest.
+    prisma.guestIdentityDocument.findFirst({
+      where: {
+        guestProfileId: entry.guestProfileId,
+        documentNumber: { not: null },
+        AND: [
+          { OR: [{ entryId: null }, { entryId: { not: entry.id } }] },
+          { OR: [{ subjectKey: null }, { subjectKey: "A0" }] },
+        ],
+      },
+      orderBy: { capturedAt: "desc" },
+      select: { documentType: true, documentNumber: true, dateOfBirth: true, gender: true, capturedAt: true },
+    }),
+  ]);
+  const returningGuest = returningRow
+    ? {
+        documentType:
+          returningRow.documentType && returningRow.documentType !== UNTYPED_DOC_TYPE && returningRow.documentType !== "PHOTO_PROOF"
+            ? returningRow.documentType
+            : null,
+        documentNumber: returningRow.documentNumber,
+        dateOfBirth: returningRow.dateOfBirth,
+        gender: returningRow.gender,
+        capturedAt: returningRow.capturedAt,
+      }
+    : null;
   // The storage key itself is server-internal — expose only whether a file exists.
-  return { items: items.map(({ storageKey, ...rest }) => ({ ...rest, hasFile: !!storageKey })), documentTypes, coverage };
+  return {
+    items: items.map(({ storageKey, ...rest }) => ({ ...rest, hasFile: !!storageKey })),
+    documentTypes,
+    coverage,
+    returningGuest,
+  };
 }
 
 /** Stream-ready bytes for one stored proof, integrity-checked against the recorded SHA-256. */
