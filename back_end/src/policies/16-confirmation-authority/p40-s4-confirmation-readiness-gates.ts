@@ -65,16 +65,22 @@ export function enforceProformaInvoicePresentForS4Confirmation(input: { hasProfo
  * needs documenting exactly as much as a demanded one does.
  *
  * A proforma counts as dispatched once `dispatchedAt` is set or its state has moved past
- * DRAFT. SUPERSEDED proformas are ignored: a replaced invoice is not the live one, so a
- * booking whose only dispatched proforma was later superseded must dispatch the replacement.
+ * DRAFT. A SUPERSEDED proforma that HAD been dispatched still counts (2026-08-12, room-change
+ * ruling): the gate exists so money changing hands is documented, and a bill that actually went
+ * out documented it — superseding it later (a re-entry supersedes every pending proforma, and
+ * the room-change walk deliberately re-issues nothing) does not undo the documentation. Only a
+ * superseded row that never went out (a replaced draft) stays ignored — it documented nothing.
  */
 export function enforceProformaDispatchedWhenAdvancePaid(input: {
   proformaInvoices: Array<{ state: InvoiceState; dispatchedAt: Date | null }>;
   totalAdvanceReceived: number;
 }) {
   if (!(input.totalAdvanceReceived > 0)) return; // nothing paid yet → dispatch optional
-  const live = input.proformaInvoices.filter((i) => i.state !== InvoiceState.SUPERSEDED);
-  const dispatched = live.some((i) => i.dispatchedAt != null || i.state !== InvoiceState.DRAFT);
+  const dispatched = input.proformaInvoices.some(
+    (i) =>
+      i.dispatchedAt != null ||
+      (i.state !== InvoiceState.DRAFT && i.state !== InvoiceState.SUPERSEDED),
+  );
   if (dispatched) return;
   throw new StageGateBlockedError(
     `An advance payment of ${input.totalAdvanceReceived.toFixed(2)} has been received — dispatch the proforma invoice to the guest before confirming.`,

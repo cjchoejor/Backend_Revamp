@@ -83,6 +83,16 @@ export const s6RoomChangeReEnterS1RequestSchema = z.object({
   reason: z.string().min(3, "A reason for the room change is required"),
 });
 
+// In-place room change (2026-08-12): swap ONE room of the plan from S5/S6/S7. The backend runs
+// the full governed journey (new segment, substituted basis revalidated, silent re-quote, walk
+// back to the origin stage); the desk never leaves the page.
+export const roomChangeRequestSchema = z.object({
+  fromRoomId: z.string().min(1, "fromRoomId is required"),
+  toRoomId: z.string().min(1, "toRoomId is required"),
+  reason: z.string().min(3, "A reason for the room change is required"),
+});
+export type RoomChangeRequestDto = z.infer<typeof roomChangeRequestSchema>;
+
 export const approveFocGmRequestSchema = z.object({
   note: z.string().optional(),
 });

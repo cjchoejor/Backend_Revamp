@@ -70,8 +70,13 @@ export async function placeCommittedHold(
      * arrival gates still demand the full advance (or an FOM credit extension). Every other
      * guard (S3 stage, folio, cancellation disclosure, date-overlap conflicts) applies
      * unchanged. Omitted = manual placement, all gates as before.
+     *
+     * "ROOM_CHANGE" = system placement inside the room-change re-walk (2026-08-12 operator
+     * ruling): the new segment re-places its hold on the substituted selection, and the money
+     * story was already settled in the prior segment (the advance carried on the folio), so the
+     * p42 satisfied-in-full gate is skipped the same way. Everything else applies unchanged.
      */
-    trigger?: "ADVANCE_PAYMENT";
+    trigger?: "ADVANCE_PAYMENT" | "ROOM_CHANGE";
     /** The payment whose recording fired the auto-placement — recorded on the trace. */
     triggerPaymentId?: string;
   },
@@ -114,9 +119,10 @@ export async function placeCommittedHold(
   enforceFolioPresentBeforeCommittedHoldS3({ folio: entry.folio });
 
   // The advance gate applies to MANUAL placement only — see the `trigger` doc above: the
-  // payment-fired placement carries its own money evidence, and demanding the requirement be
-  // satisfied IN FULL here would refuse exactly the partial-payment case the ruling covers.
-  if (input.trigger !== "ADVANCE_PAYMENT") {
+  // payment-fired placement carries its own money evidence (and the room-change re-walk's
+  // money story was settled in the prior segment), so demanding the requirement be satisfied
+  // IN FULL here would refuse exactly the cases those triggers cover.
+  if (input.trigger == null) {
     const payment = await paymentService.evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio!.id });
     enforceAdvancePaymentSatisfiedOrCreditExtensionPresent({ isAdvancePaymentSatisfied: payment.satisfied });
   }
@@ -537,6 +543,10 @@ export async function confirmCommittedHoldTx(
     if (!roomRow) throw new NotFoundError("Room");
     if (input.paymentPending) continue;
     if (roomRow.currentClaimState === InventoryClaimState.CONFIRMED) continue;
+    // An OCCUPIED room outranks "Reserved" — the in-house room-change re-walk re-confirms at
+    // S4 while the guest is already sleeping in the rooms (2026-08-12); flipping them to
+    // CONFIRMED would downgrade a live occupancy to a pre-arrival label.
+    if (roomRow.currentClaimState === InventoryClaimState.OCCUPIED) continue;
     await tx.room.update({
       where: { id: roomId },
       data: { currentClaimState: InventoryClaimState.CONFIRMED },

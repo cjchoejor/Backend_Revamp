@@ -29,8 +29,48 @@ import { listEntryCommunications } from "../../services/domain/communication-ack
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
+import { changeRoomToNewSegment, listRoomChangeCandidates } from "../../services/domain/room-change-service.js";
+import { roomChangeRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 
 export const entriesRouter = Router();
+
+/**
+ * In-place room change (2026-08-12, operator ruling) — candidates lookup. Rooms the given room
+ * could be swapped to over the nights it is claimed for (S7: from tonight), validated with the
+ * SAME availability predicates S1's search uses. L1+ to look; the change itself enforces
+ * per-stage authority (S5 L1+, S6/S7 L2+).
+ */
+entriesRouter.get("/:id/room-change/candidates", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const fromRoomId = typeof req.query.fromRoomId === "string" ? req.query.fromRoomId : "";
+    if (!fromRoomId) throw new ValidationError("fromRoomId query parameter is required");
+    res.json(await listRoomChangeCandidates(prisma, req.params.id, fromRoomId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * In-place room change — the composite. One call: governed ROOM_CHANGE re-entry (new segment),
+ * substituted basis revalidated against live availability, silent re-quote (nothing sent to the
+ * guest; PI not re-issued; the advance already received stands), then the walk back to the
+ * origin stage server-side. Partial-outcome contract: if a later step blocks, the response's
+ * `walk.blocked` names the step — the new segment is real and the desk finishes normally.
+ */
+entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roomChangeRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const outcome = await changeRoomToNewSegment(prisma, actor, {
+      entryId: req.params.id,
+      fromRoomId: req.body.fromRoomId,
+      toRoomId: req.body.toRoomId,
+      reason: req.body.reason,
+    });
+    res.json(outcome);
+  } catch (e) {
+    next(e);
+  }
+});
 
 /** Read-only trace/event feed for a single entry — visible to the staff working it (L1+). */
 entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) => {

@@ -82,6 +82,27 @@ export async function computeReEntryConsequences(
       "NEW_CHECKOUT_TIME_TIMER",
     );
   }
+  // Room change S5/S6 → S2 (2026-08-12): pre-occupancy in-place room change. The hold is
+  // released and re-placed on the substituted selection in the new segment; the folio, its
+  // invoices and the advance already received all carry (nothing is re-issued — operator
+  // ruling); the reservation re-freezes on the walk back.
+  if ((input.fromStage === Stage.S5 || input.fromStage === Stage.S6) && input.toStage === Stage.S2) {
+    consequences.push(
+      "RESERVATION_SUPERSEDED",
+      "HOLD_RELEASED_AND_REPLACED",
+      "FOLIO_CONTINUES",
+      "INVOICES_NOT_SUPERSEDED",
+      "ROOM_SUBSTITUTED",
+      "NEW_SEGMENT",
+    );
+  }
+  // Room change S7 → S2 (2026-08-12): in-house in-place room change. Physical swap happens at
+  // re-entry (old room DEPARTED_DIRTY, new OCCUPIED — SIG-S7 §264); folio stays LIVE; slept
+  // nights keep the old room in the dated assignment split; H2 withdrawn for the old room and
+  // re-created for the new (SIG-S7 §169).
+  if (input.fromStage === Stage.S7 && input.toStage === Stage.S2 && input.reason?.startsWith("ROOM_CHANGE")) {
+    consequences.push("ROOM_SUBSTITUTED_FROM_TONIGHT", "H2_WITHDRAWN_AND_RECREATED", "ASSIGNMENT_DATED_SPLIT");
+  }
   // Complaint / goodwill mode is any→S2; the from-stage is variable so we handle it as a
   // catch-all when the modeKey is COMPLAINT_RESOLUTION. Consequence set is stage-independent.
   if (input.reason?.startsWith("COMPLAINT_RESOLUTION") && input.toStage === Stage.S2) {

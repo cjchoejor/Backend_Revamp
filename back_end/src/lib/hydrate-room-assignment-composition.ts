@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { computeRoomComposition, type RoomCompositionInput, type RoomCompositionRateContext } from "./room-composition.js";
 import { toDecimal } from "./money.js";
+import { resolveOperativeQuotation } from "./operative-quotation.js";
 import { resolveChargeRates } from "../services/infrastructure/compute-stay-charges.js";
 import { loadChildPolicyBundle } from "../services/domain/child-policy-service.js";
 
@@ -27,13 +28,43 @@ export async function hydrateRoomAssignmentComposition(
   entryId: string,
   roomId: string,
 ): Promise<Partial<Prisma.RoomAssignmentUncheckedCreateInput> | null> {
-  const accepted = await db.quotation.findFirst({
-    where: { entryId, state: "ACCEPTED" },
-    orderBy: { versionNumber: "desc" },
-    select: { commercialTerms: true },
+  // Generate-vs-send (2026-08-12): the S4 freeze snapshots the OPERATIVE quotation (ACCEPTED
+  // when one exists, else the newest live SENT/DRAFT of the current segment), so hydration must
+  // read the same row — requiring ACCEPTED here meant most desk bookings (whose quotes are
+  // legitimately never sent) hydrated nothing and night audit fell back to the flat frozenRate.
+  // Legacy fallback: an ACCEPTED quote from any segment, matching the old behaviour for rows
+  // whose current segment carries no quotation (e.g. mid-re-entry).
+  const entryRow = await db.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+      quotations: {
+        orderBy: { createdAt: "desc" },
+        select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true, commercialTerms: true },
+      },
+    },
   });
-  const terms = (accepted?.commercialTerms ?? null) as
-    | { roomCompositions?: Array<{ roomId: string; [k: string]: unknown }> }
+  const currentSegmentId = entryRow?.segments[0]?.id;
+  const operative = currentSegmentId
+    ? resolveOperativeQuotation(entryRow?.quotations ?? [], currentSegmentId)
+    : null;
+  const basis =
+    operative ?? (entryRow?.quotations ?? []).find((q) => q.state === "ACCEPTED") ?? null;
+  const terms = (basis?.commercialTerms ?? null) as
+    | {
+        roomCompositions?: Array<{ roomId: string; [k: string]: unknown }>;
+        compositionTotals?: {
+          perRoom?: Array<{
+            roomId: string;
+            nights?: number;
+            roomRate?: number;
+            extraBedRate?: number;
+            breakfastRate?: number;
+            lunchRate?: number;
+            dinnerRate?: number;
+          }>;
+        } | null;
+      }
     | null;
   const rooms = Array.isArray(terms?.roomCompositions) ? terms.roomCompositions : [];
   const composition = rooms.find((r) => r.roomId === roomId);
@@ -110,23 +141,30 @@ export async function hydrateRoomAssignmentComposition(
     endDate: dateOrNull("endDate"),
   };
 
-  // Rate context defaults for the "frozen" computation: use whatever's in the composition's
-  // negotiated rates. If no negotiated rate, we can't reconstruct a rate context here — the
-  // caller should have persisted the resolved rates in commercialTerms.compositionTotals.perRoom.
-  // Fallback: pull the room-rate from the composition's own negotiated field or 0.
+  // Rate context for the "frozen" computation. The quotation's own priced figures — stored per
+  // room in `commercialTerms.compositionTotals.perRoom` (rates actually used + claimed nights) —
+  // are authoritative; falling back to the composition's negotiated fields, then 0. Before
+  // 2026-08-12 only the negotiated fields were read, so a room priced at its type's default rate
+  // froze `frozenSubtotal` from rate 0 (the documented "hydration freezing per-room totals from
+  // 0" wrong-pull) and night audit silently fell back to the flat frozenRate.
+  const priced = (terms?.compositionTotals?.perRoom ?? []).find((r) => r.roomId === roomId) ?? null;
+  const decFromPriced = (v: number | undefined): Prisma.Decimal | null =>
+    typeof v === "number" && Number.isFinite(v) ? toDecimal(v) : null;
   const { serviceChargeRate, gstRate } = await resolveChargeRates(db);
   // Age-band meal shares, so the frozen figure matches what the quotation priced rather than
   // charging a 6–10 child the adult rate at the moment of the freeze.
   const childPolicy = await loadChildPolicyBundle(db as never);
   const ctx: RoomCompositionRateContext = {
-    defaultRoomRate: decOrNull("negotiatedRoomRate") ?? toDecimal(0),
-    defaultExtraBedRate: decOrNull("negotiatedExtraBedRate") ?? toDecimal(0),
-    defaultBreakfastRate: decOrNull("negotiatedBreakfastRate") ?? toDecimal(0),
-    defaultLunchRate: decOrNull("negotiatedLunchRate") ?? toDecimal(0),
-    defaultDinnerRate: decOrNull("negotiatedDinnerRate") ?? toDecimal(0),
+    defaultRoomRate: decFromPriced(priced?.roomRate) ?? decOrNull("negotiatedRoomRate") ?? toDecimal(0),
+    defaultExtraBedRate: decFromPriced(priced?.extraBedRate) ?? decOrNull("negotiatedExtraBedRate") ?? toDecimal(0),
+    defaultBreakfastRate: decFromPriced(priced?.breakfastRate) ?? decOrNull("negotiatedBreakfastRate") ?? toDecimal(0),
+    defaultLunchRate: decFromPriced(priced?.lunchRate) ?? decOrNull("negotiatedLunchRate") ?? toDecimal(0),
+    defaultDinnerRate: decFromPriced(priced?.dinnerRate) ?? decOrNull("negotiatedDinnerRate") ?? toDecimal(0),
     serviceChargeRate,
     gstRate,
     childMealPricing: childPolicy.mealPricing,
+    // The nights the quotation actually priced this room for (per-room on a per-night seal).
+    ...(typeof priced?.nights === "number" && priced.nights > 0 ? { nights: priced.nights } : {}),
   };
 
   const computed = computeRoomComposition(compositionInput, ctx);

@@ -11,6 +11,16 @@ export async function runPreArrivalWindowActivationWorker(
   prisma: PrismaClient,
   engine: TimerEngine,
   input: { entryId?: string; timerRecordId?: string },
+  opts?: {
+    /**
+     * Room-change re-walk (2026-08-12): the guest's arrival was already verified this stay —
+     * the walk re-passes S4→S5 as paperwork, so the task statuses earned in the prior segment
+     * (COMPLETE / WAIVED) carry instead of being reset to PENDING for re-verification.
+     * Only the composite room-change service passes this; every other caller (manual route,
+     * W4 timer) keeps the 2026-08-10 reset ruling.
+     */
+    skipTaskReset?: boolean;
+  },
 ) {
   const now = new Date();
   const entryId = typeof input.entryId === "string" ? input.entryId : undefined;
@@ -183,7 +193,9 @@ export async function runPreArrivalWindowActivationWorker(
   // Runs once per activation (the ALREADY_FIRED guard above), so tasks completed AT S5 are
   // never touched. The S4 completions live on in the reset trace.
   await preArrivalService.initialiseTasks(prisma, entryId, "SYSTEM");
-  await preArrivalService.resetTasksForArrivalVerification(prisma, entryId, "SYSTEM");
+  if (!opts?.skipTaskReset) {
+    await preArrivalService.resetTasksForArrivalVerification(prisma, entryId, "SYSTEM");
+  }
 
   await scheduleS5StageDwellWarningMonitor(prisma, entryId, "SYSTEM");
 

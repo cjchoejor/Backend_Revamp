@@ -657,6 +657,47 @@ export async function backflowS7ToS4(
 }
 
 // ============================================================================
+// Room change · S5/S6/S7 → S2 (2026-08-12 operator ruling)
+// ============================================================================
+
+/**
+ * The re-entry leg of the in-place room change: every room change — same-type or cross-type —
+ * opens a NEW segment (operator ruling 2026-08-12, aligning with SIG-S7 §84 / AC-S7-20's
+ * "room change always creates a new segment"), landing at S2 so the substituted configuration
+ * can be recalled + revalidated and a fresh (silent) quotation minted as the priced basis.
+ *
+ * Authority is enforced by the CALLER (`enforceRoomChangeAuthorityForStage`, p58 — S5 is L1+,
+ * S6/S7 are L2+), because the origin-specific side effects (release-and-repin pre-occupancy vs
+ * the in-house physical swap) also live with the caller and arrive here as `hooks`.
+ */
+export async function backflowRoomChangeToS2(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: Actor,
+  input: {
+    reason: string;
+    fromStage: Stage;
+    hooks?: (tx: Tx, entry: { id: string; version: number; inquiryId: string | null; currentStage: Stage }) => Promise<void>;
+    cancelTimerCodes?: string[];
+  },
+) {
+  if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  if (input.fromStage !== Stage.S5 && input.fromStage !== Stage.S6 && input.fromStage !== Stage.S7) {
+    throw new ValidationError(`Room-change re-entry runs from S5, S6 or S7 — got ${input.fromStage}`);
+  }
+  return runBackflow(prisma, {
+    entryId,
+    fromStage: input.fromStage,
+    toStage: Stage.S2,
+    actor,
+    reason: input.reason.trim(),
+    modeKey: "ROOM_CHANGE",
+    cancelTimerCodes: input.cancelTimerCodes,
+    hooks: input.hooks,
+  });
+}
+
+// ============================================================================
 // 9. Any → S2 · complaint / goodwill commercial adjustment
 // ============================================================================
 

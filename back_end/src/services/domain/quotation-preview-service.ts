@@ -250,6 +250,18 @@ export async function buildQuotationPreview(
       ? Math.max(1, Math.round((entry.checkOutDate.getTime() - entry.checkInDate.getTime()) / 86_400_000))
       : 1;
 
+  // Per-room claimed nights on a per-night seal (2026-08-12) — mirrors prepareQuotationDraft:
+  // a room covering 3 of 4 nights previews ×3, not ×4. Whole-stay seals leave the map empty.
+  const perRoomNightCounts = new Map<string, number>();
+  const sealedSel = sealedCfg ? readOptionSelected(sealedCfg.optionSelected) : null;
+  if (sealedSel?.perNight) {
+    for (const night of sealedSel.perNight) {
+      for (const rid of night.roomIds) {
+        perRoomNightCounts.set(rid, (perRoomNightCounts.get(rid) ?? 0) + 1);
+      }
+    }
+  }
+
   const dec = (v: number | null | undefined): Prisma.Decimal => new Prisma.Decimal(v ?? 0);
 
   const fallbackRef = fallbackRateType ? refByType.get(fallbackRateType) : undefined;
@@ -292,7 +304,7 @@ export async function buildQuotationPreview(
       serviceChargeRate: reference.serviceChargeRate,
       gstRate: reference.gstRate,
       childMealPricing: childPolicy.mealPricing,
-      nights: reference.nights ?? stayNights,
+      nights: perRoomNightCounts.get(c.roomId) ?? reference.nights ?? stayNights,
     };
     return { input: compositionInput, ctx, roomId: c.roomId, roomNumber: room?.roomNumber ?? null };
   });

@@ -531,6 +531,26 @@ async function prepareQuotationDraft(
       return (tid ? ratesByType.get(tid) : undefined) ?? bookingTypeRates;
     };
 
+    /**
+     * Nights PER ROOM (fixed 2026-08-12).
+     *
+     * A per-night seal claims each room only on ITS nights — room 502 for four nights, 307 for
+     * the first three, 304 for the last. Every room used to be costed at the booking-wide
+     * `nightsForPricing`, so a room covering 3 of 4 nights priced ×4 — overcharging every
+     * partial-availability booking, and double-charging the mid-stay room-change split (old
+     * room's slept nights + new room's remaining nights would BOTH price the whole stay).
+     * Whole-stay and single-room seals have no per-night breakdown, so the map stays empty and
+     * every room keeps the booking-wide figure — nothing moves for uniform bookings.
+     */
+    const perRoomNightCounts = new Map<string, number>();
+    if (sealed.perNight) {
+      for (const night of sealed.perNight) {
+        for (const rid of night.roomIds) {
+          perRoomNightCounts.set(rid, (perRoomNightCounts.get(rid) ?? 0) + 1);
+        }
+      }
+    }
+
     // Validate each room's composition BEFORE pricing so we reject early with a friendly
     // error (rather than persisting bad data). Both policies are no-ops when key fields
     // are null so partially-filled draft submissions can still succeed.
@@ -609,7 +629,8 @@ async function prepareQuotationDraft(
         // Age-band meal shares (under-6 free, 6–10 at 70% of the adult rate) — the composition
         // path charged every cover the full adult rate until 2026-08-04.
         childMealPricing: childPolicyBundle.mealPricing,
-        nights: nightsForPricing,
+        // Per-room claimed nights on a per-night seal; booking-wide nights otherwise.
+        nights: perRoomNightCounts.get(c.roomId) ?? nightsForPricing,
       };
       return {
         input: compositionInput,
