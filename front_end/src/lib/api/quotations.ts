@@ -65,6 +65,10 @@ export type QuotationLivePreviewRoom = {
   lunchRate: number;
   dinnerRate: number;
   extraBedCount: number;
+  /** True when the mandatory extra bed (3+ adults, none supplied) was auto-added server-side
+   *  (2026-08-12) — `extraBedCount` already includes it. The table derives the same bed
+   *  client-side, so this mostly matters to other callers. */
+  extraBedAutoAdded?: boolean;
   /** Meal covers per night (what `heads × rate` multiplies). */
   breakfastPax: number;
   lunchPax: number;

@@ -456,18 +456,24 @@ export function RoomCompositionsTable({
     return rt?.maxCapacity ?? rt?.standardCapacity ?? null;
   };
   const bedMaxOf = (id: string): number => roomById.get(id)?.roomType?.maxExtraBeds ?? 0;
-  /** Extra beds a room NEEDS for its adults: everyone past base capacity gets one
-   *  (children under 11 share bedding — they never need a bed). */
-  const bedsNeeded = (id: string, adults: number): number => {
+  /** Extra beds a room NEEDS for its adults: everyone past base capacity gets one (children
+   *  under 11 share bedding — they never need a bed), AND — p78, mirrored from the backend —
+   *  a non-FOC room with 3+ adult-rate guests always needs at least one, even when its base
+   *  beds could sleep them (every real room type has maxCapacity 3, so the capacity rule
+   *  alone said 0 there and generation was refused). The backend now auto-adds that bed at
+   *  generation and in the live preview anyway (2026-08-12, operator ruling); deriving it
+   *  here keeps the cell honest about what will be priced. */
+  const bedsNeeded = (id: string, adults: number, foc = false): number => {
     const cap = capOf(id);
-    if (cap == null) return 0;
-    return Math.min(Math.max(0, adults - cap), bedMaxOf(id));
+    const capacityBeds = cap == null ? 0 : Math.max(0, adults - cap);
+    const p78Min = !foc && adults >= 3 ? 1 : 0;
+    return Math.min(Math.max(capacityBeds, p78Min), bedMaxOf(id));
   };
   /** Re-derive a row's bed cell from its adults — auto-add when adults exceed base
    *  capacity, auto-remove when they no longer do (2026-08-01 operator ruling). */
   const withAutoBed = (id: string, row: RowState): RowState => ({
     ...row,
-    bed: String(bedsNeeded(id, cnt(row.ad))),
+    bed: String(bedsNeeded(id, cnt(row.ad), row.foc)),
   });
 
   /**
@@ -523,7 +529,8 @@ export function RoomCompositionsTable({
    *  Manual raises (e.g. a separate bed for a child) stay until the adults change. */
   const clampBed = (roomId: string, v: string): string => {
     const max = bedMaxOf(roomId);
-    const needed = bedsNeeded(roomId, cnt(rows[roomId]?.ad ?? "0"));
+    const row = rows[roomId];
+    const needed = bedsNeeded(roomId, cnt(row?.ad ?? "0"), row?.foc ?? false);
     const n = cnt(v);
     if (n > max) {
       flashLimit(`Room ${roomNoOf(roomId)} allows at most ${max} extra bed${max === 1 ? "" : "s"} — capped.`);
@@ -531,7 +538,7 @@ export function RoomCompositionsTable({
     }
     if (n < needed) {
       flashLimit(
-        `Room ${roomNoOf(roomId)} needs ${needed} extra bed${needed === 1 ? "" : "s"} for its adults — it can't go lower while they're in the room.`,
+        `Room ${roomNoOf(roomId)} needs ${needed} extra bed${needed === 1 ? "" : "s"} for its adults (3+ adults always need one) — it can't go lower while they're in the room.`,
       );
       return String(needed);
     }
@@ -672,7 +679,7 @@ export function RoomCompositionsTable({
         // Bed bounds per target room: capped at its type's max, floored at what its own
         // adults need (the copy must not strip beds a fuller room depends on).
         const bedMax = bedMaxOf(id);
-        const needed = bedsNeeded(id, cnt(target.ad));
+        const needed = bedsNeeded(id, cnt(target.ad), merged.foc);
         merged.bed = String(Math.max(needed, Math.min(cnt(merged.bed), bedMax)));
         // Meal pax ≤ the TARGET row's occupancy (it keeps its own guest bands).
         const occ = cnt(target.ad) + cnt(target.c6) + cnt(target.u6);
@@ -914,7 +921,21 @@ export function RoomCompositionsTable({
           data-cell={`${rowIdx}:${col}`}
           checked={rows[roomId]?.[col] ?? EMPTY_ROW[col]}
           onKeyDown={onCellKeyDown(rowIdx, col)}
-          onChange={(e) => setCell(roomId, { [col]: e.target.checked })}
+          onChange={(e) => {
+            const v = e.target.checked;
+            if (col === "foc") {
+              // FOC exempts the room from the p78 bed mandate; turning it OFF re-imposes it,
+              // so the bed floor re-derives (raise only — a manual extra bed is never taken).
+              setRows((prev) => {
+                const r = { ...(prev[roomId] ?? EMPTY_ROW), foc: v };
+                const needed = bedsNeeded(roomId, cnt(r.ad), v);
+                if (cnt(r.bed) < needed) r.bed = String(needed);
+                return { ...prev, [roomId]: r };
+              });
+            } else {
+              setCell(roomId, { [col]: v });
+            }
+          }}
         />
       </td>
     );
