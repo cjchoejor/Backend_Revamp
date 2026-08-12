@@ -27,20 +27,20 @@ export function operativeRoomCompositions(entry: EntryDetail): RoomCompositionIn
   return ((operative.commercialTerms as { roomCompositions?: unknown[] }).roomCompositions ?? []) as RoomCompositionInput[];
 }
 
-/** Default display label per party slot — the primary guest's real profile name on A0,
- *  generic band labels for everyone else. */
+/** Default display label per party slot — GENERIC band labels only ("Adult 1"), never the
+ *  profile's name: the booking's guest profile is the CONTACT PERSON, not necessarily anyone
+ *  sleeping in the rooms (operator ruling 2026-08-11). Typed names from the guest-detail
+ *  table overlay these where recorded. */
 export function partySlotLabels(entry: EntryDetail): Map<string, string> {
   const m = new Map<string, string>();
-  const g = entry.guestProfile;
-  const primaryName = [g?.firstName, g?.lastName].filter(Boolean).join(" ").trim();
   const adults = Math.max(0, entry.adultCount ?? 0);
   const childAges = entry.childAges ?? [];
   if (adults > 0 || childAges.length > 0) {
-    for (let i = 0; i < adults; i++) m.set(`A${i}`, i === 0 && primaryName ? primaryName : `Adult ${i + 1}`);
+    for (let i = 0; i < adults; i++) m.set(`A${i}`, `Adult ${i + 1}`);
     childAges.forEach((age, i) => m.set(`K${i}`, `Child ${i + 1} · ${age}y`));
   } else {
     const n = Math.max(1, entry.guestCount ?? 1);
-    for (let i = 0; i < n; i++) m.set(`A${i}`, i === 0 && primaryName ? primaryName : `Guest ${i + 1}`);
+    for (let i = 0; i < n; i++) m.set(`A${i}`, `Guest ${i + 1}`);
   }
   return m;
 }

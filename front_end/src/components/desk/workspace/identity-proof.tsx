@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Check, FileText, Fingerprint, Upload } from "lucide-react";
+import { Camera, Check, FileText, Fingerprint, ShieldCheck, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
 import { fetchPdfObjectUrl } from "@/lib/api/documents";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listRooms } from "@/lib/api/rooms";
@@ -16,6 +17,7 @@ import {
   type IdentityProofSummary,
 } from "@/lib/api/identity-proofs";
 import { seatPartyByComposition } from "@/lib/desk/party-rooms";
+import { StepAction } from "./step-action";
 import type { EntryDetail } from "@/types/api";
 
 /**
@@ -40,20 +42,17 @@ import type { EntryDetail } from "@/types/api";
 type PartySlot = { key: string; label: string; placeholder: string; sub?: string };
 
 /** One slot per person in the party — guest-board key scheme so the two surfaces agree.
+ *  Labels are GENERIC ("Adult 1", never the profile's name): the booking's guest profile is
+ *  the CONTACT PERSON, not necessarily anyone sleeping in the rooms (operator ruling
+ *  2026-08-11), so no row is pre-named after them — typed names are the only names shown.
  *  Entries without a party breakdown fall back to `guestCount` anonymous slots. */
 function partySlots(entry: EntryDetail): PartySlot[] {
-  const g = entry.guestProfile;
-  const primaryName = [g?.firstName, g?.lastName].filter(Boolean).join(" ").trim();
   const adults = Math.max(0, entry.adultCount ?? 0);
   const childAges = entry.childAges ?? [];
   const slots: PartySlot[] = [];
   if (adults > 0 || childAges.length > 0) {
     for (let i = 0; i < adults; i++) {
-      slots.push({
-        key: `A${i}`,
-        label: i === 0 && primaryName ? primaryName : `Adult ${i + 1}`,
-        placeholder: i === 0 && primaryName ? primaryName : `Name as on the document`,
-      });
+      slots.push({ key: `A${i}`, label: `Adult ${i + 1}`, placeholder: "Name as on the document" });
     }
     childAges.forEach((age, i) => {
       slots.push({ key: `K${i}`, label: `Child ${i + 1} · ${age}y`, sub: `${age}y`, placeholder: "Name as on the document" });
@@ -61,11 +60,7 @@ function partySlots(entry: EntryDetail): PartySlot[] {
   } else {
     const n = Math.max(1, entry.guestCount ?? 1);
     for (let i = 0; i < n; i++) {
-      slots.push({
-        key: `A${i}`,
-        label: i === 0 && primaryName ? primaryName : `Guest ${i + 1}`,
-        placeholder: i === 0 && primaryName ? primaryName : `Name as on the document`,
-      });
+      slots.push({ key: `A${i}`, label: `Guest ${i + 1}`, placeholder: "Name as on the document" });
     }
   }
   return slots;
@@ -184,8 +179,11 @@ export function IdentityProofBlock({
   checkInGate = false,
 }: {
   entry: EntryDetail;
-  /** S6 rendering (2026-08-11): shows the check-in gate strip — details are REQUIRED for every
-   *  guest before "Check in & go live" (VIP bookings exempt). S5 leaves this off. */
+  /** S6 rendering (2026-08-11): hosts the identity VERIFICATION panel at the top (the act
+   *  that sets `identityVerifiedAt` — it lived in its own "Guest identity" block until the
+   *  operator asked for it inside this table) and shows the check-in gate strip — details
+   *  are REQUIRED for every guest before "Check in & go live" (VIP bookings exempt). S5
+   *  leaves this off. */
   checkInGate?: boolean;
 }) {
   const { session } = useSession();
@@ -212,6 +210,27 @@ export function IdentityProofBlock({
   // against, so nothing offered here can be rejected there.
   const docTypes = listQuery.data?.documentTypes ?? [];
   const coverage = listQuery.data?.coverage;
+  const returning = listQuery.data?.returningGuest ?? null;
+
+  // Identity VERIFICATION (S6 only — `checkInGate`): moved here from its own block.
+  const guest = entry.guestProfile;
+  const isVip = !!guest?.vipTier?.trim();
+  const identityVerified = !!guest?.identityVerifiedAt;
+  const [verificationPath, setVerificationPath] = useState<VerificationPath>(isVip ? "VIP" : "RETURNING_VALID");
+  const [verifyDocType, setVerifyDocType] = useState("");
+  const [verifyDocNumber, setVerifyDocNumber] = useState("");
+  const [pulledFromFile, setPulledFromFile] = useState(false);
+  const autoPullRef = useRef(false);
+
+  useEffect(() => {
+    setVerificationPath(isVip ? "VIP" : "RETURNING_VALID");
+  }, [isVip, guest?.id]);
+  useEffect(() => {
+    if (docTypes.length > 0 && !docTypes.some((t) => t.code === verifyDocType)) {
+      setVerifyDocType(docTypes[0].code);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sync only when the vocabulary arrives
+  }, [docTypes.map((t) => t.code).join("|")]);
 
   // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
   // room (never who), so this re-derives the seating with the SAME deterministic algorithm
@@ -300,6 +319,56 @@ export function IdentityProofBlock({
     setDrafts((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_DRAFT), ...patch } }));
   };
 
+  // Returning guest (2026-08-11, operator request): a document NUMBER is already on file for
+  // this guest profile from an earlier booking — pull it into the first adult row and PERSIST
+  // it (so the check-in coverage gate sees it) instead of re-asking a known number. ONLY the
+  // number (refined same day): the profile is the CONTACT PERSON, not necessarily a guest, so
+  // no name is written and the document-type dropdown is left for the operator to pick — never
+  // auto-locked to the record's type. One-shot; never fires once this stay has its own number.
+  useEffect(() => {
+    if (autoPullRef.current || !session || !listQuery.data) return;
+    if (!returning?.documentNumber) return;
+    const slot = slots.find((s) => s.key === "A0");
+    if (!slot) return;
+    const row = detailRow("A0");
+    if (row?.documentNumber) return;
+    autoPullRef.current = true;
+    const draft: DetailDraft = { ...draftFromRow(row), num: returning.documentNumber };
+    setDrafts((prev) => ({ ...prev, A0: draft }));
+    setPulledFromFile(true);
+    saveM.mutate({ slot, draft });
+    toast.info(`Document number on file (${returning.documentNumber}) pulled into ${slot.label} — confirm it belongs to this guest`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot, keyed on the fetched snapshot
+  }, [listQuery.data, session]);
+
+  const verifyM = useMutation({
+    mutationFn: () => {
+      if (!session || !guest?.id) throw new Error("Guest profile required");
+      const body: Parameters<typeof verifyGuestIdentity>[2] = { entryId, verificationPath };
+      if (verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED") {
+        body.documentType = verifyDocType;
+        if (verificationPath === "FIRST_TIME") body.documentNumber = verifyDocNumber.trim();
+      }
+      return verifyGuestIdentity(session, guest.id, body);
+    },
+    onSuccess: () => {
+      toast.success("Identity verified");
+      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Verification failed"),
+  });
+
+  // A first-time verification types the same number the table's primary row holds — seed it.
+  useEffect(() => {
+    if (verificationPath === "FIRST_TIME" && !verifyDocNumber.trim()) {
+      const a0 = drafts["A0"];
+      if (a0?.num.trim()) setVerifyDocNumber(a0.num.trim());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- convenience seed on path switch only
+  }, [verificationPath]);
+
   const onFiles = async (files: FileList | null) => {
     const slot = pendingSlotRef.current;
     if (!files || files.length === 0 || !session || !slot) return;
@@ -359,6 +428,84 @@ export function IdentityProofBlock({
         )}
       </div>
 
+      {/* Identity verification (2026-08-11, operator request — moved from its own "Guest
+          identity" block to the top of this table): the act that sets `identityVerifiedAt`,
+          vouching a human checked the documents against the guests. S6 only. */}
+      {checkInGate && (
+        <div
+          style={{
+            border: "1px solid var(--line-2)",
+            borderRadius: "var(--r-sm)",
+            background: "var(--cream)",
+            padding: "9px 12px",
+            marginBottom: 10,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 10.5,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              color: "var(--ink-3)",
+              marginBottom: 8,
+            }}
+          >
+            <ShieldCheck style={{ width: 12, height: 12 }} />
+            Identity verification
+          </div>
+          {!identityVerified && (
+            <div className="frow">
+              <div className="field">
+                <label>Verification path</label>
+                {/* Defaults to the VIP path for VIP profiles but is never locked (operator
+                    ruling 2026-08-11 — the dropdown stays freely selectable). */}
+                <select
+                  value={verificationPath}
+                  onChange={(e) => setVerificationPath(e.target.value as VerificationPath)}
+                >
+                  <option value="FIRST_TIME">First-time guest</option>
+                  <option value="RETURNING_VALID">Returning — ID valid</option>
+                  <option value="RETURNING_EXPIRED">Returning — ID expired</option>
+                  <option value="VIP">VIP path</option>
+                </select>
+              </div>
+              {(verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED") && (
+                <div className="field">
+                  <label>Document type</label>
+                  <select value={verifyDocType} onChange={(e) => setVerifyDocType(e.target.value)}>
+                    {docTypes.map((t) => (
+                      <option key={t.code} value={t.code}>
+                        {t.name}
+                      </option>
+                    ))}
+                    {docTypes.length === 0 && <option value="">—</option>}
+                  </select>
+                </div>
+              )}
+              {verificationPath === "FIRST_TIME" && (
+                <div className="field">
+                  <label>Document number</label>
+                  <input value={verifyDocNumber} onChange={(e) => setVerifyDocNumber(e.target.value)} placeholder="As shown" />
+                </div>
+              )}
+            </div>
+          )}
+          <StepAction
+            className="btn btn-primary"
+            label="Record verification"
+            doneLabel={`Verified${guest?.identityVerificationPath ? ` · ${guest.identityVerificationPath}` : ""}`}
+            done={identityVerified}
+            pending={verifyM.isPending}
+            disabled={!guest?.id}
+            onClick={() => verifyM.mutate()}
+          />
+        </div>
+      )}
+
       {/* Shared pickers — camera-first input opens the camera on phones/tablets; desktops fall
           back to the file dialog. Which guest they capture for is set at button-click time. */}
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFiles(e.target.files)} />
@@ -392,6 +539,14 @@ export function IdentityProofBlock({
             {coverage.missing.map((m) => m.label).join(", ")}. A typed document number or an ID photo counts.
           </div>
         )
+      )}
+
+      {pulledFromFile && returning?.documentNumber && (
+        <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 8px" }}>
+          A document number on file from an earlier booking ({returning.documentNumber}) was
+          pulled into the first adult row — confirm it belongs to this guest and pick the
+          document type.
+        </p>
       )}
 
       <div style={{ overflowX: "auto" }}>
@@ -562,8 +717,8 @@ export function IdentityProofBlock({
         device camera on a phone or tablet.{" "}
         {checkInGate ? (
           <>
-            This table is the evidence; the identity <i>verification</i> itself is recorded in the
-            Guest identity block below.
+            This table is the evidence; the identity <i>verification</i> panel at the top is the
+            act that vouches a human checked the documents against the guests.
           </>
         ) : (
           <>

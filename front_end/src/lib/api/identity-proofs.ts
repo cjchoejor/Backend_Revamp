@@ -49,10 +49,23 @@ export type GuestDetailsCoverage = {
   satisfied: boolean;
 };
 
+/** The profile-holder's most recent document on file from BEFORE this booking (prior stay's
+ *  primary-guest row or an S6 typed verification) — used to auto-fill the primary guest's
+ *  row for returning guests. Null for first-time guests. */
+export type ReturningGuestDocument = {
+  documentType: string | null;
+  documentNumber: string | null;
+  /** ISO timestamp at UTC midnight. */
+  dateOfBirth: string | null;
+  gender: string | null;
+  capturedAt: string;
+};
+
 export type IdentityProofsResponse = {
   items: IdentityProofSummary[];
   documentTypes: IdentityDocumentTypeOption[];
   coverage: GuestDetailsCoverage;
+  returningGuest: ReturningGuestDocument | null;
 };
 
 /** Upsert one party member's typed details (document type + number, name, DOB, gender). */

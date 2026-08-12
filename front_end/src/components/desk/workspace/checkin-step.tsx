@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BedDouble, Check, Crown, KeyRound, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
-import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
-import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { s6RoomChangeReEnterS1 } from "@/lib/api/pre-arrival";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
@@ -15,7 +13,6 @@ import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
 import { openConfirmationVoucherPdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
-import { StepAction } from "./step-action";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { AdvanceSettlementBlock } from "./advance-settlement";
 import { IdentityProofBlock } from "./identity-proof";
@@ -38,15 +35,17 @@ function isElevated(level?: string) {
 
 export function CheckInStep({
   entry,
-  keyCount,
-  setKeyCount,
+  issuedKeyRooms,
+  toggleKeyRoom,
   registrationConfirmed,
   setRegistrationConfirmed,
   setSelected,
 }: {
   entry: EntryDetail;
-  keyCount: string;
-  setKeyCount: (v: string) => void;
+  /** Per-room key issuance (2026-08-11, operator request): roomId → key handed over. One
+   *  radio per room in the Room block; check-in requires every room marked. */
+  issuedKeyRooms: Record<string, boolean>;
+  toggleKeyRoom: (roomId: string) => void;
   registrationConfirmed: boolean;
   setRegistrationConfirmed: (v: boolean) => void;
   setSelected: (n: number) => void;
@@ -65,36 +64,12 @@ export function CheckInStep({
     [allAssignments],
   );
   const assignment = distinctAssignments[0];
+  const issuedKeyCount = distinctAssignments.filter((a) => issuedKeyRooms[a.roomId]).length;
   const vipNotifications = entry.vipArrivalNotifications ?? [];
   const isVip = !!guest?.vipTier?.trim();
   const identityVerified = !!guest?.identityVerifiedAt;
 
-  const [verificationPath, setVerificationPath] = useState<VerificationPath>(isVip ? "VIP" : "RETURNING_VALID");
-  const [documentType, setDocumentType] = useState("PASSPORT");
-  const [documentNumber, setDocumentNumber] = useState("");
   const [roomChangeReason, setRoomChangeReason] = useState("");
-
-  useEffect(() => {
-    setVerificationPath(isVip ? "VIP" : "RETURNING_VALID");
-  }, [isVip, guest?.id]);
-
-  // Same query the guest-detail table below uses (shared key → shared cache). Carries the
-  // config-driven document-type vocabulary (`identity.documentTypes`) — the verification
-  // select reads it too, so it can never offer a code the backend's p16 allowlist rejects
-  // (the old hardcoded list did exactly that: NATIONAL_ID / DRIVERS_LICENSE / VOTER_ID
-  // against a seeded PASSPORT / CID allowlist).
-  const proofsQuery = useQuery({
-    queryKey: ["identity-proofs", entry.id],
-    queryFn: () => listIdentityProofs(session!, entry.id),
-    enabled: !!session,
-  });
-  const documentTypes = proofsQuery.data?.documentTypes ?? [];
-  useEffect(() => {
-    if (documentTypes.length > 0 && !documentTypes.some((t) => t.code === documentType)) {
-      setDocumentType(documentTypes[0].code);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sync only when the vocabulary arrives
-  }, [documentTypes.map((t) => t.code).join("|")]);
 
   const elevated = isElevated(session?.actorLevel);
 
@@ -112,23 +87,6 @@ export function CheckInStep({
   });
   const paymentReconciled =
     !!folio?.advancePaymentReconciliationComplete || paymentStatusQuery.data?.satisfied === true;
-
-  const verifyM = useMutation({
-    mutationFn: () => {
-      if (!session || !guest?.id) throw new Error("Guest profile required");
-      const body: Parameters<typeof verifyGuestIdentity>[2] = { entryId: entry.id, verificationPath };
-      if (verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED") {
-        body.documentType = documentType;
-        if (verificationPath === "FIRST_TIME") body.documentNumber = documentNumber.trim();
-      }
-      return verifyGuestIdentity(session, guest.id, body);
-    },
-    onSuccess: () => {
-      toast.success("Identity verified");
-      invalidate();
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Verification failed"),
-  });
 
   const roomChangeM = useMutation({
     mutationFn: () => s6RoomChangeReEnterS1(session!, entry.id, roomChangeReason.trim()),
@@ -150,7 +108,9 @@ export function CheckInStep({
     vipNotifications.length > 0 ? "vip" : null,
     entry.currentStage !== "S6" ? "commit" : null,
   ].filter(Boolean) as string[];
-  const firingKey = verifyM.isPending ? "verify" : null;
+  // Verification now fires inside IdentityProofBlock; the rail's persistent "verify"
+  // highlight still derives from identityVerifiedAt above.
+  const firingKey = null;
   const railGroups: RailGroup[] = [
     { key: "verify", label: "On recording verification", items: BK.verify },
     { key: "vip", label: "On VIP arrival", items: BK.vip },
@@ -187,61 +147,13 @@ export function CheckInStep({
       )}
 
       {/* Guest details & ID proof (2026-08-11, operator ruling) — the same table as Arrival
-          (same per-entry rows, so anything filled at S5 shows here already). At S6 it is a
-          GATE: every guest needs a document number or an ID photo before "Check in & go live"
-          — except VIP bookings, which are exempt. The strip inside states the verdict. */}
+          (same per-entry rows, so anything filled at S5 shows here already), with the identity
+          VERIFICATION panel at its top (moved from the old standalone "Guest identity" block,
+          operator request). At S6 the table is a GATE: every guest needs a document number or
+          an ID photo before "Check in & go live" — except VIP bookings, which are exempt. For
+          returning guests the primary guest's document is auto-pulled from the records on
+          file. The strip inside states the verdict. */}
       <IdentityProofBlock entry={entry} checkInGate />
-
-      {/* Identity verification */}
-      <div className="block">
-        <BlockH>
-          <ShieldCheck style={{ width: 13, height: 13 }} />
-          Guest identity
-        </BlockH>
-        {!identityVerified && (
-          <>
-            <div className="field">
-              <label>Verification path</label>
-              <select value={verificationPath} onChange={(e) => setVerificationPath(e.target.value as VerificationPath)} disabled={isVip}>
-                <option value="FIRST_TIME">First-time guest</option>
-                <option value="RETURNING_VALID">Returning — ID valid</option>
-                <option value="RETURNING_EXPIRED">Returning — ID expired</option>
-                <option value="VIP">VIP path</option>
-              </select>
-            </div>
-            {(verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED") && (
-              <div className="frow">
-                <div className="field">
-                  <label>Document type</label>
-                  <select value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
-                    {documentTypes.map((t) => (
-                      <option key={t.code} value={t.code}>
-                        {t.name}
-                      </option>
-                    ))}
-                    {documentTypes.length === 0 && <option value={documentType}>{documentType.replace(/_/g, " ")}</option>}
-                  </select>
-                </div>
-                {verificationPath === "FIRST_TIME" && (
-                  <div className="field">
-                    <label>Document number</label>
-                    <input value={documentNumber} onChange={(e) => setDocumentNumber(e.target.value)} placeholder="As shown" />
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-        <StepAction
-          className="btn btn-primary"
-          label="Record verification"
-          doneLabel={`Verified${guest?.identityVerificationPath ? ` · ${guest.identityVerificationPath}` : ""}`}
-          done={identityVerified}
-          pending={verifyM.isPending}
-          disabled={!guest?.id}
-          onClick={() => verifyM.mutate()}
-        />
-      </div>
 
       {isVip && (
         <div className="block">
@@ -282,11 +194,32 @@ export function CheckInStep({
             )}
             <div style={{ display: "grid", gap: 6 }}>
               {distinctAssignments.map((a) => (
-                <div key={a.id} className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5 }}>
-                  <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
-                  Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
-                  {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
-                  {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
+                <div
+                  key={a.id}
+                  className="fact b-bound"
+                  style={{ padding: "9px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
+                    Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                    {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
+                    {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
+                  </span>
+                  {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
+                      as it is handed over — the radio toggles on click, so a mis-click undoes. */}
+                  <label
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                    title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
+                  >
+                    <input
+                      type="radio"
+                      checked={!!issuedKeyRooms[a.roomId]}
+                      onClick={() => toggleKeyRoom(a.roomId)}
+                      readOnly
+                      style={{ cursor: "pointer" }}
+                    />
+                    Key issued
+                  </label>
                 </div>
               ))}
             </div>
@@ -372,10 +305,19 @@ export function CheckInStep({
           <KeyRound style={{ width: 13, height: 13 }} />
           Registration &amp; keys
         </BlockH>
-        <div className="field" style={{ maxWidth: 160 }}>
-          <label>Keys issued</label>
-          <input type="number" min={1} max={10} value={keyCount} onChange={(e) => setKeyCount(e.target.value)} />
+        <div
+          className="fact b-transit"
+          style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between", marginBottom: 8 }}
+        >
+          <span>Room keys handed over</span>
+          <span className={`tag${issuedKeyCount === distinctAssignments.length && distinctAssignments.length > 0 ? "" : " warn"}`}>
+            {issuedKeyCount} of {distinctAssignments.length} room{distinctAssignments.length === 1 ? "" : "s"}
+          </span>
         </div>
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px" }}>
+          Mark each key in the <b>Room</b> section above as you hand it over — every room needs its
+          key issued before check-in.
+        </p>
         <label className="checkline" style={{ cursor: "pointer" }}>
           <input type="checkbox" checked={registrationConfirmed} onChange={(e) => setRegistrationConfirmed(e.target.checked)} />
           <span>Registration complete — mandatory guest fields captured or confirmed for {guestName(guest)}</span>

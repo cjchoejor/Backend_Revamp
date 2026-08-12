@@ -654,7 +654,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       : maxReachableOrder(entry);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [guestPresent, setGuestPresent] = useState(false);
-  const [keyCount, setKeyCount] = useState("1");
+  // Per-room key issuance (2026-08-11, operator request): one radio per assigned room on the
+  // Check-in step — the hotel tracks EACH key handed over, not a bare count. keyCount sent to
+  // the backend = number of rooms marked issued.
+  const [issuedKeyRooms, setIssuedKeyRooms] = useState<Record<string, boolean>>({});
+  const toggleKeyRoom = (roomId: string) =>
+    setIssuedKeyRooms((prev) => ({ ...prev, [roomId]: !prev[roomId] }));
   const [registrationConfirmed, setRegistrationConfirmed] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [nightAuditOk, setNightAuditOk] = useState(false);
@@ -737,11 +742,16 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
 
   // S6 → S7: complete check-in (folio goes live). The second commitment boundary.
   const checkInMutation = useMutation({
-    mutationFn: () =>
-      completeCheckInToS7(session!, entry!.id, entry!.version, {
-        keyCount: Math.max(1, parseInt(keyCount, 10) || 1),
+    mutationFn: () => {
+      const issued = Array.from(new Set((entry!.roomAssignments ?? []).map((a) => a.roomId))).filter(
+        (id) => issuedKeyRooms[id],
+      );
+      return completeCheckInToS7(session!, entry!.id, entry!.version, {
+        keyCount: Math.max(1, issued.length),
         registrationConfirmed: true,
-      }),
+        issuedKeyRoomIds: issued,
+      });
+    },
     onSuccess: (updated) => {
       queryClient.setQueryData(["entry", entry!.id], updated);
       void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
@@ -928,7 +938,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // sealed canvas that shows once status === CLOSED).
   const closedStepActive =
     step.key === "closed" && entry.currentStage === "S9" && entry.status !== "CLOSED" && viewing === currentOrder;
-  const keysValid = (parseInt(keyCount, 10) || 0) > 0;
+  // Every assigned room's key must be marked issued before check-in can commit.
+  const checkInRoomIds = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.roomId)));
+  const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
+  const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
   const canCheckIn =
     s6Readiness(entry, { guestDetails: guestDetailsCoverage }).every((c) => c.met) &&
     registrationConfirmed &&
@@ -982,7 +995,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               ? [
                   ...s6Readiness(entry, { guestDetails: guestDetailsCoverage }),
                   { label: "Registration confirmed", met: registrationConfirmed },
-                  { label: "Keys recorded", met: keysValid },
+                  {
+                    label:
+                      checkInRoomIds.length > 1
+                        ? `Room keys issued (${issuedKeyCount}/${checkInRoomIds.length})`
+                        : "Room key issued",
+                    met: keysValid,
+                  },
                 ]
               : stayStepActive
                 ? [...s7Readiness(entry), { label: "Night audit complete", met: nightAuditOk }]
@@ -1038,8 +1057,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
         return (
           <CheckInStep
             entry={entry}
-            keyCount={keyCount}
-            setKeyCount={NOOP}
+            issuedKeyRooms={issuedKeyRooms}
+            toggleKeyRoom={NOOP}
             registrationConfirmed={registrationConfirmed}
             setRegistrationConfirmed={NOOP}
             setSelected={NOOP}
@@ -1445,8 +1464,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             ) : checkInStepActive ? (
               <CheckInStep
                 entry={entry}
-                keyCount={keyCount}
-                setKeyCount={setKeyCount}
+                issuedKeyRooms={issuedKeyRooms}
+                toggleKeyRoom={toggleKeyRoom}
                 registrationConfirmed={registrationConfirmed}
                 setRegistrationConfirmed={setRegistrationConfirmed}
                 setSelected={setSelected}

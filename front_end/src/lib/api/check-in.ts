@@ -29,7 +29,13 @@ export async function completeCheckInToS7(
   session: Session,
   entryId: string,
   version: number,
-  body: { keyCount: number; registrationConfirmed: boolean },
+  body: {
+    keyCount: number;
+    registrationConfirmed: boolean;
+    /** Per-room key tracking (2026-08-11): the rooms whose key was handed over — recorded on
+     *  the backend's KEYS trace alongside the count. */
+    issuedKeyRoomIds?: string[];
+  },
 ) {
   return progressStage(session, entryId, {
     targetStage: "S7",
@@ -37,6 +43,7 @@ export async function completeCheckInToS7(
     transitionData: {
       keyCount: body.keyCount,
       registrationConfirmed: body.registrationConfirmed,
+      ...(body.issuedKeyRoomIds ? { issuedKeyRoomIds: body.issuedKeyRoomIds } : {}),
     },
   }) as Promise<EntryDetail>;
 }
