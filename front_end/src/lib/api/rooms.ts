@@ -10,6 +10,10 @@ export type RoomListItem = {
   /** Physical bed setup — "KING" / "TWIN" / "QUEEN" / "SINGLE" (from the room registry). */
   bedType?: string | null;
   bedCount?: number | null;
+  /** Bed setups THIS room may take — the types present among rooms of its own room type,
+   *  server-derived live from the registry (2026-08-12: a Standard Double never offers
+   *  Queen; only 301's type carries one). The edit dropdowns read this, never a fixed list. */
+  allowedBedTypes?: string[];
   currentClaimState?: string;
   isBlocked?: boolean;
   blockedReason?: string | null;

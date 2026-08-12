@@ -186,12 +186,20 @@ export function ArrivalStep({
     return m;
   }, [roomsCatalogQuery.data]);
   const bedTypes = useMemo(() => {
-    const counts = new Map<string, number>();
+    // Room numbers per type ride along so the filter options can NAME the rooms
+    // ("King (13 rooms) — 201, 304, 501…"), not just count them (2026-08-12, operator request).
+    const byType = new Map<string, string[]>();
     for (const r of roomsCatalogQuery.data?.items ?? []) {
       if (!r.bedType || r.isBlocked) continue;
-      counts.set(r.bedType, (counts.get(r.bedType) ?? 0) + 1);
+      byType.set(r.bedType, [...(byType.get(r.bedType) ?? []), r.roomNumber]);
     }
-    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([type, count]) => ({ type, count }));
+    return [...byType.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([type, roomNumbers]) => ({
+        type,
+        count: roomNumbers.length,
+        roomNumbers: roomNumbers.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+      }));
   }, [roomsCatalogQuery.data]);
   // The already-picked room stays visible even when the filter would exclude it — a select
   // whose value has no matching option renders blank while silently keeping the value.
@@ -215,10 +223,21 @@ export function ArrivalStep({
   }, [sealedPreferred]);
 
   // Bed type is EDITABLE in place (2026-08-10, operator request): beds get physically
-  // reconfigured at the desk's initiative (two singles → a King and back), so each bed tag is
-  // a dropdown writing to the room registry (L1 endpoint, traced with the prior value). The
-  // vocabulary comes from the backend's rooms payload — nothing hardcoded here.
-  const bedVocabulary = roomsCatalogQuery.data?.bedTypes ?? bedTypes.map((b) => b.type);
+  // reconfigured at the desk's initiative, so each bed tag is a dropdown writing to the room
+  // registry (L1 endpoint, traced with the prior value). Each room offers ONLY the bed
+  // setups its own ROOM TYPE carries (2026-08-12, operator ruling — a Standard Double never
+  // offers Queen; only 301's type has one): the per-room `allowedBedTypes` is SERVER-derived
+  // live from the registry, so adding a room or changing a bed type moves every dropdown
+  // automatically — nothing hardcoded on either side.
+  const allowedBedsByRoomId = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const r of roomsCatalogQuery.data?.items ?? []) {
+      if (r.allowedBedTypes?.length) m.set(r.id, r.allowedBedTypes);
+    }
+    return m;
+  }, [roomsCatalogQuery.data]);
+  // Last-resort fallback (payload predates allowedBedTypes): the types in use anywhere.
+  const bedVocabulary = useMemo(() => [...new Set(bedTypeByRoomId.values())].sort(), [bedTypeByRoomId]);
   const bedTypeM = useMutation({
     mutationFn: (args: { roomId: string; bedType: string }) => setRoomBedType(session!, args.roomId, args.bedType),
     onSuccess: (r) => {
@@ -227,26 +246,34 @@ export function ArrivalStep({
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Could not change the bed type"),
   });
-  const bedSelect = (rId: string) => (
-    <select
-      value={bedTypeByRoomId.get(rId) ?? ""}
-      disabled={bedTypeM.isPending}
-      onChange={(e) => {
-        if (e.target.value) bedTypeM.mutate({ roomId: rId, bedType: e.target.value });
-      }}
-      title="Physical bed setup of this room — changing it updates the room registry (recorded)"
-      // Fixed width: "King bed" / "Twin beds" / "Set beds…" would otherwise render each
-      // select a different length and the column of rooms looks ragged.
-      style={{ width: 108, fontSize: 11.5, padding: "3px 6px" }}
-    >
-      {!bedTypeByRoomId.get(rId) && <option value="">Set beds…</option>}
-      {bedVocabulary.map((t) => (
-        <option key={t} value={t}>
-          {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
-        </option>
-      ))}
-    </select>
-  );
+  const bedSelect = (rId: string) => {
+    const current = bedTypeByRoomId.get(rId) ?? "";
+    const options = allowedBedsByRoomId.get(rId) ?? bedVocabulary;
+    return (
+      <select
+        value={current}
+        disabled={bedTypeM.isPending}
+        onChange={(e) => {
+          if (e.target.value) bedTypeM.mutate({ roomId: rId, bedType: e.target.value });
+        }}
+        title="Physical bed setup of this room — the options are the setups this room's type carries; changing it updates the room registry (recorded)"
+        // Fixed width: "King bed" / "Twin beds" / "Set beds…" would otherwise render each
+        // select a different length and the column of rooms looks ragged.
+        style={{ width: 108, fontSize: 11.5, padding: "3px 6px" }}
+      >
+        {!current && <option value="">Set beds…</option>}
+        {options.map((t) => (
+          <option key={t} value={t}>
+            {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
+          </option>
+        ))}
+        {/* The room's own value stays visible even if its type's set were to exclude it. */}
+        {current && !options.includes(current) && (
+          <option value={current}>{current === "TWIN" ? "Twin beds" : `${bedLabel(current)} bed`}</option>
+        )}
+      </select>
+    );
+  };
 
   // Per-room detail expansion (2026-08-11, operator request): each room opens INDIVIDUALLY to
   // show its S2 composition — who sleeps there (named from the guest-detail table above), the
@@ -613,8 +640,9 @@ export function ArrivalStep({
       {/* Guest details & ID proof (2026-08-10; moved ABOVE room assignment 2026-08-11, operator
           request) — who is arriving, their documents, and which room the S2 board placed them
           in; then the rooms get assigned below. Evidence only; the identity VERIFICATION is
-          recorded at Check-in. */}
-      <IdentityProofBlock entry={entry} />
+          recorded at Check-in. Collapsed by default (2026-08-12, operator request) — the
+          header tag stays live and the returning-guest pull still runs while collapsed. */}
+      <IdentityProofBlock entry={entry} collapsible />
 
       {/* Room assignment */}
       <div className="block">
@@ -768,11 +796,18 @@ export function ArrivalStep({
                       {bedTypes.length > 0 && (
                         <div className="field" style={{ flex: "0 0 auto" }}>
                           <label>Bed type</label>
-                          <select value={bedFilter} onChange={(e) => setBedFilter(e.target.value)}>
+                          {/* Options NAME the rooms, not just count them (2026-08-12, operator
+                              request). maxWidth keeps the closed control from stretching to the
+                              longest option once one is picked. */}
+                          <select
+                            value={bedFilter}
+                            onChange={(e) => setBedFilter(e.target.value)}
+                            style={{ maxWidth: 360 }}
+                          >
                             <option value="">Any bed type</option>
                             {bedTypes.map((b) => (
                               <option key={b.type} value={b.type}>
-                                {bedLabel(b.type)} ({b.count} room{b.count === 1 ? "" : "s"})
+                                {bedLabel(b.type)} ({b.count} room{b.count === 1 ? "" : "s"}) — {b.roomNumbers.join(", ")}
                               </option>
                             ))}
                           </select>
