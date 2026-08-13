@@ -16,6 +16,12 @@ export const createEntryRequestSchema = z.object({
   childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
   /** Number of rooms requested — service enforces the chargeable-occupants envelope. */
   numberOfRooms: z.coerce.number().int().min(1).max(50).optional(),
+  /**
+   * Bed-setup breakdown of the room request ("5 King + 2 Twin"), map bedType → count.
+   * Keys are validated service-side against the ROOM_BED_TYPES vocabulary and the
+   * registry's achievable bed stock — shape-level we only require whole counts.
+   */
+  bedTypeRequest: z.record(z.string(), z.coerce.number().int().min(0).max(50)).nullish(),
   otaSource: z.boolean().optional(),
   walkInCompressed: z.boolean().optional(),
   // Contact person — the on-site individual travelling or leading the group. Distinct from
@@ -42,6 +48,8 @@ export const updateEntryRequestSchema = z.object({
   // service. See createEntryRequestSchema for the rationale.
   childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
   numberOfRooms: z.coerce.number().int().min(1).max(50).optional(),
+  /** Bed-setup breakdown ("5 King + 2 Twin"). Explicit null clears the stored request. */
+  bedTypeRequest: z.record(z.string(), z.coerce.number().int().min(0).max(50)).nullish(),
   useType: z.string().optional(),
   contactPersonName: z.string().trim().max(200).optional(),
   contactPersonPhone: z.string().trim().max(50).optional(),

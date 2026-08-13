@@ -1,5 +1,5 @@
-import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
-import { EntryStatus, Stage, StageDwellMode } from "@prisma/client";
+import type { ActorLevel, PrismaClient } from "@prisma/client";
+import { EntryStatus, Prisma, Stage, StageDwellMode } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
@@ -24,6 +24,90 @@ import {
 } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
+import { ROOM_BED_TYPES, bedTypeConversionGroup } from "./room-bed-type-service.js";
+
+/** "5 King + 2 Twin" — the human wording every bed-request error uses. */
+function describeBedTypeRequest(req: Record<string, number>): string {
+  const label = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
+  return Object.entries(req)
+    .map(([t, n]) => `${n} ${label(t)}`)
+    .join(" + ");
+}
+
+/**
+ * Normalize + validate the S1 bed-setup request (2026-08-13, operator request — "sometimes
+ * the guest asks for 5 King rooms and 2 Twin"). Stored on `Entry.bedTypeRequest` as a flat
+ * map bedType → count; returns the clean map, or null when no preference is stated.
+ *
+ * Rules, all live against the registry (nothing hardcoded):
+ *  - setups must be in the ROOM_BED_TYPES vocabulary, counts whole numbers;
+ *  - the breakdown must not ask for more rooms than `numberOfRooms` (fewer is fine — a
+ *    partial preference like "at least 2 King" is legal);
+ *  - each bed CONVERSION GROUP's total must fit the rooms whose own stock can be arranged
+ *    into it — King⇄Twin share convertible stock (two singles join into a King), so
+ *    "5 King + 9 Twin" is judged against the King/Twin pool together, while Queen and
+ *    Single stand alone. A request the hotel physically cannot set up is refused at intake
+ *    rather than discovered at arrival.
+ */
+async function normalizeAndValidateBedTypeRequest(
+  prisma: PrismaClient,
+  raw: Record<string, number> | null | undefined,
+  numberOfRooms: number | null | undefined,
+): Promise<Record<string, number> | null> {
+  if (raw == null) return null;
+  const clean: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const type = key.trim().toUpperCase();
+    if (!(ROOM_BED_TYPES as readonly string[]).includes(type)) {
+      throw new ValidationError(`Unknown bed setup "${key}" — the hotel's setups are: ${ROOM_BED_TYPES.join(", ")}`);
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 50) {
+      throw new ValidationError(`The count for ${type} rooms must be a whole number between 0 and 50`);
+    }
+    if (value > 0) clean[type] = (clean[type] ?? 0) + value;
+  }
+  if (Object.keys(clean).length === 0) return null;
+
+  const requestedTotal = Object.values(clean).reduce((a, b) => a + b, 0);
+  if (typeof numberOfRooms === "number" && numberOfRooms > 0 && requestedTotal > numberOfRooms) {
+    throw new ValidationError(
+      `The bed setup asks for ${requestedTotal} rooms (${describeBedTypeRequest(clean)}) but the booking requests ${numberOfRooms} room${numberOfRooms === 1 ? "" : "s"} — raise the room count or trim the bed setup`,
+    );
+  }
+
+  // Achievability, pooled by conversion group against the live Room registry.
+  const rooms = await prisma.room.findMany({ where: { isShadowInventory: false }, select: { bedType: true } });
+  const groupOf = (t: string) => {
+    const group = bedTypeConversionGroup(t);
+    return (group.length > 0 ? group : [t]).slice().sort().join("/");
+  };
+  const stockByGroup = new Map<string, number>();
+  for (const r of rooms) {
+    const bedType = (r as { bedType?: string | null }).bedType;
+    if (!bedType) continue;
+    const g = groupOf(bedType);
+    stockByGroup.set(g, (stockByGroup.get(g) ?? 0) + 1);
+  }
+  const askByGroup = new Map<string, { count: number; types: string[] }>();
+  for (const [type, count] of Object.entries(clean)) {
+    const g = groupOf(type);
+    const cur = askByGroup.get(g) ?? { count: 0, types: [] };
+    cur.count += count;
+    cur.types.push(type);
+    askByGroup.set(g, cur);
+  }
+  for (const [g, ask] of askByGroup) {
+    const stock = stockByGroup.get(g) ?? 0;
+    if (ask.count > stock) {
+      const label = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
+      const pooledNote = g.includes("/") ? ` (${g.split("/").map(label).join(" and ")} rooms share the same convertible bed stock)` : "";
+      throw new ValidationError(
+        `The hotel cannot set up ${ask.count} ${ask.types.map(label).join(" + ")} room${ask.count === 1 ? "" : "s"} — its bed stock supports at most ${stock}${pooledNote}`,
+      );
+    }
+  }
+  return clean;
+}
 
 export async function createEntry(
   prisma: PrismaClient,
@@ -40,6 +124,7 @@ export async function createEntry(
     childCount?: number;
     childAges?: number[];
     numberOfRooms?: number;
+    bedTypeRequest?: Record<string, number> | null;
     otaSource?: boolean;
     walkInCompressed?: boolean;
     contactPersonName?: string;
@@ -104,6 +189,10 @@ export async function createEntry(
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : null;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
 
+  // Bed-setup breakdown ("5 King + 2 Twin", 2026-08-13) — normalized + checked against the
+  // room count and the registry's achievable bed stock before anything is written.
+  const bedTypeRequest = await normalizeAndValidateBedTypeRequest(prisma, input.bedTypeRequest, input.numberOfRooms ?? null);
+
   // Child / capacity policy enforcement. Run BLOCK-severity issues as a hard reject at S1
   // intake — e.g. unaccompanied-minor, ratio violation, over-capacity vs a chosen room type,
   // number-of-rooms outside the chargeable-occupants envelope. When no roomTypeId is known
@@ -149,6 +238,7 @@ export async function createEntry(
         childCount: input.childCount ?? null,
         childAges: input.childAges ?? [],
         numberOfRooms: input.numberOfRooms ?? null,
+        ...(bedTypeRequest ? { bedTypeRequest } : {}),
         contactPersonName: input.contactPersonName?.trim() || null,
         contactPersonPhone: input.contactPersonPhone?.trim() || null,
         otaSource: input.otaSource === true,
@@ -479,6 +569,8 @@ export async function updateEntryIntakeFields(
     childCount?: number;
     childAges?: number[];
     numberOfRooms?: number;
+    /** Bed-setup breakdown ("5 King + 2 Twin"). Explicit null clears the stored request. */
+    bedTypeRequest?: Record<string, number> | null;
     useType?: string;
     contactPersonName?: string;
     contactPersonPhone?: string;
@@ -519,6 +611,19 @@ export async function updateEntryIntakeFields(
   }
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : undefined;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : undefined;
+
+  // Bed-setup request: validate the incoming breakdown against the EFFECTIVE room count —
+  // and when only the room count moves, re-check the STORED breakdown against it, so
+  // shrinking a booking below its stated bed setup is refused instead of leaving the two
+  // silently contradicting each other.
+  const effectiveNumberOfRooms =
+    input.numberOfRooms !== undefined ? (input.numberOfRooms > 0 ? input.numberOfRooms : null) : (entry.numberOfRooms ?? null);
+  let nextBedTypeRequest: Record<string, number> | null | undefined = undefined;
+  if (input.bedTypeRequest !== undefined) {
+    nextBedTypeRequest = await normalizeAndValidateBedTypeRequest(prisma, input.bedTypeRequest, effectiveNumberOfRooms);
+  } else if (input.numberOfRooms !== undefined && entry.bedTypeRequest && typeof entry.bedTypeRequest === "object") {
+    await normalizeAndValidateBedTypeRequest(prisma, entry.bedTypeRequest as Record<string, number>, effectiveNumberOfRooms);
+  }
 
   // Loophole 1 fix: re-run Policy 64 against the updated composition. When guest count
   // moves across the threshold in either direction, groupBillingMode must follow — otherwise
@@ -584,6 +689,7 @@ export async function updateEntryIntakeFields(
         ...(input.childCount != null ? { childCount: input.childCount } : {}),
         ...(input.childAges ? { childAges: input.childAges } : {}),
         ...(input.numberOfRooms !== undefined ? { numberOfRooms: input.numberOfRooms > 0 ? input.numberOfRooms : null } : {}),
+        ...(nextBedTypeRequest !== undefined ? { bedTypeRequest: nextBedTypeRequest ?? Prisma.DbNull } : {}),
         ...(input.useType ? { useType: input.useType as any } : {}),
         ...(input.contactPersonName !== undefined ? { contactPersonName: input.contactPersonName.trim() || null } : {}),
         ...(input.contactPersonPhone !== undefined ? { contactPersonPhone: input.contactPersonPhone.trim() || null } : {}),

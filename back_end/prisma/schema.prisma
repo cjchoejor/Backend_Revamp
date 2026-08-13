@@ -912,6 +912,11 @@ model Entry {
   /// ceil(chargeableOccupants / RoomType.maxCapacity) .. chargeableOccupants where
   /// chargeableOccupants = adultCount + count(childAges where age >= legal minor age).
   numberOfRooms                  Int?
+  /// Bed-setup breakdown of the room request, asked for at S1 intake (2026-08-13 —
+  /// "5 King and 2 Twin"). Flat JSON map bedType → count, e.g. {"KING": 5, "TWIN": 2};
+  /// keys validated against ROOM_BED_TYPES, counts against the registry's achievable
+  /// stock (bed conversion groups) and numberOfRooms. Null = no bed preference stated.
+  bedTypeRequest                 Json?
   otaSource                      Boolean           @default(false)
   otaReference                   String?
   groupBillingMode               GroupBillingMode?
