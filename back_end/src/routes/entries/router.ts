@@ -23,6 +23,7 @@ import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
+import { buildEntryBillingSummary } from "../../services/domain/entry-billing-summary-service.js";
 import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
@@ -150,6 +151,22 @@ entriesRouter.get("/:id/journey-summary", requireActorLevel("L1"), async (req, r
   try {
     const summary = await buildBookingJourneySummary(prisma, req.params.id);
     res.json(summary);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Billing summary — the booking's money position in one read (2026-08-13). Drives the
+ * workspace header's live total + click-through breakdown: stay total on the CURRENT
+ * commercial basis (operative quotation of the current segment — re-priced by room changes
+ * and re-entries), plus the folio ledger (billed so far / payments / refunds / write-offs /
+ * outstanding). Pure aggregation, Decimal-safe server-side; nothing persisted. L1+.
+ */
+entriesRouter.get("/:id/billing-summary", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await buildEntryBillingSummary(prisma, req.params.id));
   } catch (e) {
     next(e);
   }
