@@ -12,6 +12,7 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderPreArrivalEmail } from "../infrastructure/stage-email-templates.js";
 import { toDecimal } from "../../lib/money.js";
 import { autoCompletePaymentReconciliationTaskTx, evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import { completeGuestDetailsTaskTx, guestDetailsCoverageForEntry } from "./guest-identity-proof-service.js";
 
 function categoryForTaskType(taskType: PreArrivalTaskType): TaskCategory {
   switch (taskType) {
@@ -106,6 +107,12 @@ export async function resetTasksForArrivalVerification(prisma: PrismaClient, ent
   const paidInFull = entry?.folio
     ? (await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio.id })).paidInFull === true
     : false;
+  // Same immediate re-apply as the money tick (2026-08-12): guest details are durable facts —
+  // documents captured at S4/prior segments don't un-capture at activation, so a covered party
+  // (or a VIP-exempt booking) re-closes GUEST_DETAILS_CAPTURED rather than contradicting the
+  // green coverage tag on the guest table right next to it.
+  const detailsCoverage = await guestDetailsCoverageForEntry(prisma, entryId).catch(() => null);
+  const detailsCovered = detailsCoverage != null && (detailsCoverage.satisfied || detailsCoverage.vipExempt);
 
   const now = new Date();
   await prisma.$transaction(async (tx) => {
@@ -139,9 +146,17 @@ export async function resetTasksForArrivalVerification(prisma: PrismaClient, ent
     if (paidInFull) {
       await autoCompletePaymentReconciliationTaskTx(tx, entryId, { actorId, actorLevel: "L1" }, "ADVANCE_PAID_IN_FULL");
     }
+    if (detailsCovered) {
+      await completeGuestDetailsTaskTx(
+        tx,
+        entryId,
+        { actorId, actorLevel: "L1" },
+        detailsCoverage!.satisfied ? "COVERAGE_SATISFIED" : "VIP_EXEMPT",
+      );
+    }
   });
 
-  return { reset: completed.length, paymentTaskReclosed: paidInFull } as const;
+  return { reset: completed.length, paymentTaskReclosed: paidInFull, guestDetailsTaskReclosed: detailsCovered } as const;
 }
 
 /**

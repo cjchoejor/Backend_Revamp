@@ -1,4 +1,5 @@
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { PreArrivalTaskType, TaskStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -75,6 +76,71 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/pdf": "pdf",
 };
 
+/**
+ * The Arrival checklist's "guest details captured" tick (2026-08-12, operator request).
+ *
+ * Completes a PENDING GUEST_DETAILS_CAPTURED pre-arrival task. Runs inside the caller's
+ * transaction; the caller decides the cause (coverage satisfied / VIP exempt). Idempotent —
+ * no pending task (not seeded yet, already complete, or waived) is a no-op.
+ */
+export async function completeGuestDetailsTaskTx(
+  tx: Prisma.TransactionClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  cause: "COVERAGE_SATISFIED" | "VIP_EXEMPT",
+) {
+  const pending = await tx.preArrivalTask.findFirst({
+    where: { entryId, taskType: PreArrivalTaskType.GUEST_DETAILS_CAPTURED, status: TaskStatus.PENDING },
+    select: { id: true },
+  });
+  if (!pending) return { completed: false } as const;
+  const now = new Date();
+  await tx.preArrivalTask.update({
+    where: { id: pending.id },
+    data: { status: TaskStatus.COMPLETE, completedAt: now, completedBy: actor.actorId },
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "PRE_ARRIVAL_TASK.COMPLETED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "PreArrivalTask",
+      entityId: pending.id,
+      operation: "UPDATE",
+      timestamp: now,
+      entryId,
+      payload: { entryId, taskType: "GUEST_DETAILS_CAPTURED", auto: true, cause },
+      createdBy: actor.actorId,
+    },
+  });
+  return { completed: true } as const;
+}
+
+/**
+ * Best-effort follow-through after any capture write (typed detail save, desk upload, phone
+ * upload — they all funnel through this service): the moment every party slot has a typed
+ * document number or a stored ID photo, the Arrival checklist's GUEST_DETAILS_CAPTURED task
+ * ticks itself — the operator never closes a checklist item the table above already proves.
+ * VIP bookings tick as exempt, mirroring the S6 check-in gate. Never throws: the capture
+ * itself has already committed, and a task hiccup must not fail it.
+ */
+export async function autoCompleteGuestDetailsTaskIfCovered(prisma: PrismaClient, entryId: string, actorId: string) {
+  try {
+    const pending = await prisma.preArrivalTask.findFirst({
+      where: { entryId, taskType: PreArrivalTaskType.GUEST_DETAILS_CAPTURED, status: TaskStatus.PENDING },
+      select: { id: true },
+    });
+    if (!pending) return { completed: false } as const;
+    const coverage = await guestDetailsCoverageForEntry(prisma, entryId);
+    if (!coverage.satisfied && !coverage.vipExempt) return { completed: false } as const;
+    return await prisma.$transaction((tx) =>
+      completeGuestDetailsTaskTx(tx, entryId, { actorId, actorLevel: "L1" }, coverage.satisfied ? "COVERAGE_SATISFIED" : "VIP_EXEMPT"),
+    );
+  } catch {
+    return { completed: false } as const;
+  }
+}
+
 export async function storeIdentityProof(
   prisma: PrismaClient,
   entryId: string,
@@ -140,7 +206,7 @@ export async function storeIdentityProof(
   await writeDocument(storageKey, input.bytes);
   const checksum = hashSha256(input.bytes);
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const created = await tx.guestIdentityDocument.create({
       data: {
         guestProfileId: entry.guestProfileId!,
@@ -188,6 +254,10 @@ export async function storeIdentityProof(
     });
     return created;
   });
+
+  // A photo may have been the last missing piece — tick the Arrival checklist if so.
+  await autoCompleteGuestDetailsTaskIfCovered(prisma, entryId, actorId);
+  return created;
 }
 
 /**
@@ -258,7 +328,7 @@ export async function saveGuestIdentityDetail(
     select: { id: true },
   });
 
-  return prisma.$transaction(async (tx) => {
+  const saved = await prisma.$transaction(async (tx) => {
     let row;
     if (existing) {
       row = await tx.guestIdentityDocument.update({ where: { id: existing.id }, data: fields });
@@ -307,6 +377,10 @@ export async function saveGuestIdentityDetail(
     });
     return row;
   });
+
+  // A typed document number may have been the last missing piece — tick the Arrival checklist.
+  await autoCompleteGuestDetailsTaskIfCovered(prisma, entryId, actorId);
+  return saved;
 }
 
 /**

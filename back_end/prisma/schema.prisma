@@ -222,6 +222,11 @@ enum PreArrivalTaskType {
   LATE_ARRIVAL_MEAL_COORDINATION
   SITE_VISIT
   UNIT_READINESS_VERIFICATION
+  /// 2026-08-12 (operator request): "guest details got or not" as an Arrival checklist item.
+  /// Auto-completes when the guest-detail coverage (same derivation as the S6 check-in gate)
+  /// is satisfied — every party slot has a typed document number or a stored ID photo — or
+  /// the booking is VIP-tiered (exempt, mirroring the gate). Manual Complete/Waive stays.
+  GUEST_DETAILS_CAPTURED
 }
 
 enum TaskCategory {
