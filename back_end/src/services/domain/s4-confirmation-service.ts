@@ -54,7 +54,23 @@ function getNightlyRate(terms: any): number {
   return 0;
 }
 
-export async function confirmReservation(prisma: PrismaClient, entryId: string, actorId: string, input?: { version?: number }) {
+export async function confirmReservation(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input?: {
+    version?: number;
+    /**
+     * Internal-only (never exposed on the HTTP route): the in-place SAME-TYPE room change
+     * re-freezes commercial terms IDENTICAL to a reservation an authorized actor already
+     * confirmed — re-testing the swapping operator's band against the unchanged value would
+     * let the high-value gate strand an L1's sanctioned swap mid-walk (2026-08-13 ruling:
+     * same-type is L1+). Mirrors the discount-authority carry in the same composite. A
+     * cross-type change never sets this — its value DID change, so the gate re-tests.
+     */
+    carryHighValueAuthority?: boolean;
+  },
+) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
@@ -82,9 +98,11 @@ export async function confirmReservation(prisma: PrismaClient, entryId: string, 
   enforceQuotationPresentForS4Confirmation({ hasQuotation: !!acceptedCfg });
   const accepted = acceptedCfg!;
 
-  const thresholds = await requireActiveConfigValue<any>(prisma, "confirmation.authorityThresholds").catch(() => ({}) as any);
-  const rate = getNightlyRate(accepted.commercialTerms as any);
-  await enforceHighValueConfirmationAuthority(prisma, { actorId, nightlyRate: rate, thresholds });
+  if (!input?.carryHighValueAuthority) {
+    const thresholds = await requireActiveConfigValue<any>(prisma, "confirmation.authorityThresholds").catch(() => ({}) as any);
+    const rate = getNightlyRate(accepted.commercialTerms as any);
+    await enforceHighValueConfirmationAuthority(prisma, { actorId, nightlyRate: rate, thresholds });
+  }
 
   enforceProvisionalFolioPresentForS4Confirmation({ folio: entry.folio });
   const folio = entry.folio!;

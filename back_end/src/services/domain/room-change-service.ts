@@ -3,7 +3,7 @@ import { HandoffState, HandoffType, InventoryClaimState, Prisma, Stage } from "@
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
-import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
+import { findRoomBookingConflicts, type RoomBookingConflict } from "../../lib/room-booking-conflicts.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
@@ -104,6 +104,27 @@ export type RoomChangeCandidate = {
   isDeficient: boolean;
   /** Nights the change would claim this room for (the from-room's nights; S7 → from tonight). */
   nights: number;
+  /**
+   * The room's standing over the substitution nights, in the S1 availability vocabulary
+   * (2026-08-13, operator request — "show the status of the room like in S1"): FREE rooms are
+   * pickable; the rest are shown with WHY they are not, so the operator sees the same picture
+   * the S1 table would paint instead of unavailable rooms silently missing from the list.
+   */
+  availability: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
+  /** Only FREE rooms can be picked — the others are display-only context. */
+  selectable: boolean;
+  /** Authority the pick needs (p58): same-type L1, cross-type (upgrade/downgrade) L2. */
+  requiredLevel: "L1" | "L2";
+  /** Who claims the room, when RESERVED/HELD — same context S1's cell tooltips carry. */
+  claimedBy: {
+    guestName: string | null;
+    bookingRef: string | null;
+    startDate: string;
+    endDate: string;
+    holdKind: "COMMITTED" | "SPECULATIVE" | null;
+  } | null;
+  /** The recorded reason, when BLOCKED. */
+  blockedReason: string | null;
 };
 
 export type RoomChangeCandidatesResult = {
@@ -199,9 +220,12 @@ function s3HoldServiceHeldRooms(hold: { roomId: string | null; perNightBreakdown
 }
 
 /**
- * Rooms the operator can move `fromRoomId` to: every registered non-shadow room, minus the
- * booking's own rooms, that is physically usable and free of booking conflicts over the
- * substitution nights — validated with the SAME predicates S1's search and Policy 26 use.
+ * Rooms the operator could move `fromRoomId` to: every registered non-shadow room outside the
+ * booking, each carrying its S1-style standing over the substitution nights (2026-08-13 —
+ * previously unavailable rooms were silently dropped; now they are listed with WHY, exactly
+ * like the S1 availability table: reserved / held / blocked / maintenance). Only FREE rooms
+ * are selectable; availability is judged with the SAME predicates S1's search and Policy 26
+ * use, so what this list calls FREE the change itself will accept.
  */
 export async function listRoomChangeCandidates(
   prisma: PrismaClient,
@@ -219,9 +243,10 @@ export async function listRoomChangeCandidates(
 
   const pool = rooms.filter((r) => r.id !== fromRoomId && !ctx.claimedRoomIds.has(r.id));
 
-  // Physical usability first (cheap, in-memory), then one conflict query per folded range for
-  // the whole surviving pool.
-  const physicallyUsable = pool.filter((r) => {
+  // Physical usability (cheap, in-memory — the same predicate the change enforces), classified
+  // rather than filtered: a blocked room stays visible AS blocked.
+  const physicalStatusById = new Map<string, "BLOCKED" | "MAINTENANCE">();
+  for (const r of pool) {
     try {
       for (const range of ranges) {
         enforceCommittedHoldRoomPhysicallyUsable({
@@ -234,38 +259,68 @@ export async function listRoomChangeCandidates(
           checkOut: range.endDate,
         });
       }
-      return true;
     } catch {
-      return false;
+      physicalStatusById.set(r.id, r.isBlocked ? "BLOCKED" : "MAINTENANCE");
     }
-  });
+  }
 
-  const conflictedRoomIds = new Set<string>();
+  // One conflict query per folded range for the whole pool; keep the STRONGEST claim per room
+  // (a reservation outranks a hold, mirroring the S1 engine's occupied-over-held collapse).
+  const claimByRoom = new Map<string, RoomBookingConflict>();
   for (const range of ranges) {
     const conflicts = await findRoomBookingConflicts(prisma, {
-      roomIds: physicallyUsable.map((r) => r.id),
+      roomIds: pool.map((r) => r.id),
       checkIn: range.startDate,
       checkOut: range.endDate,
       excludeEntryId: entryId,
     });
-    for (const c of conflicts) conflictedRoomIds.add(c.roomId);
+    for (const c of conflicts) {
+      const prior = claimByRoom.get(c.roomId);
+      if (!prior || (prior.source === "HOLD" && c.source === "RESERVED")) claimByRoom.set(c.roomId, c);
+    }
   }
 
-  const candidates: RoomChangeCandidate[] = physicallyUsable
-    .filter((r) => !conflictedRoomIds.has(r.id))
-    .map((r) => ({
-      roomId: r.id,
-      roomNumber: r.roomNumber,
-      roomTypeId: r.roomTypeId,
-      roomTypeName: r.roomType?.name ?? null,
-      bedType: (r as { bedType?: string | null }).bedType ?? null,
-      sameType: r.roomTypeId === ctx.fromRoom.roomTypeId,
-      physicalState: String(r.physicalState),
-      isDeficient: r.isDeficient === true,
-      nights: ctx.substitutionNights.length,
-    }))
-    // Same-type first (the common case: equivalent room, price unchanged), then by room number.
-    .sort((a, b) => Number(b.sameType) - Number(a.sameType) || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+  const candidates: RoomChangeCandidate[] = pool
+    .map((r) => {
+      const physical = physicalStatusById.get(r.id) ?? null;
+      const claim = claimByRoom.get(r.id) ?? null;
+      const availability: RoomChangeCandidate["availability"] =
+        physical ?? (claim ? (claim.source === "RESERVED" ? "RESERVED" : "HELD") : "FREE");
+      const sameType = r.roomTypeId === ctx.fromRoom.roomTypeId;
+      return {
+        roomId: r.id,
+        roomNumber: r.roomNumber,
+        roomTypeId: r.roomTypeId,
+        roomTypeName: r.roomType?.name ?? null,
+        bedType: (r as { bedType?: string | null }).bedType ?? null,
+        sameType,
+        physicalState: String(r.physicalState),
+        isDeficient: r.isDeficient === true,
+        nights: ctx.substitutionNights.length,
+        availability,
+        selectable: availability === "FREE",
+        requiredLevel: (sameType ? "L1" : "L2") as "L1" | "L2",
+        claimedBy:
+          availability === "RESERVED" || availability === "HELD"
+            ? {
+                guestName: claim?.guestName ?? null,
+                bookingRef: claim?.entryReferenceNumber ?? null,
+                startDate: claim!.startDate.toISOString(),
+                endDate: claim!.endDate.toISOString(),
+                holdKind: claim?.holdKind ?? null,
+              }
+            : null,
+        blockedReason: availability === "BLOCKED" ? (r.blockedReason ?? null) : null,
+      };
+    })
+    // Same-type first (the common case: equivalent room, price unchanged), then free rooms
+    // before the merely-informative ones, then by room number.
+    .sort(
+      (a, b) =>
+        Number(b.sameType) - Number(a.sameType) ||
+        Number(b.selectable) - Number(a.selectable) ||
+        a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }),
+    );
 
   return {
     entryId,
@@ -278,6 +333,178 @@ export async function listRoomChangeCandidates(
     },
     substitutionNights: ctx.substitutionNights,
     candidates,
+  };
+}
+
+export type RoomPlanHistoryItem = {
+  /** A room in the booking's CURRENT plan (latest sealed selection + hold + assignments). */
+  currentRoomId: string;
+  currentRoomNumber: string | null;
+  currentRoomTypeName: string | null;
+  currentBedType: string | null;
+  /**
+   * The room this slot of the plan STARTED as — the first sealed selection, followed through
+   * the room-change chain. Null when the origin cannot be established (legacy bookings whose
+   * plan was re-built without the in-place change's from→to markers).
+   */
+  initialRoomId: string | null;
+  initialRoomNumber: string | null;
+  initialRoomTypeName: string | null;
+  /** The initial room's bed setup AT SELECTION TIME (trace-reconstructed — the registry moves). */
+  initialBedType: string | null;
+  roomChanged: boolean;
+  /** Same room, different bed setup than when it was selected. */
+  bedTypeChanged: boolean;
+  /** The from→to steps that led here, oldest first. */
+  changes: Array<{ fromRoomNumber: string | null; toRoomNumber: string | null; at: string; reason: string | null }>;
+};
+
+export type RoomPlanHistoryResult = {
+  entryId: string;
+  /** When the initial selection was sealed (first sealed config; earliest assignment as fallback). */
+  initialSelectedAt: string | null;
+  rooms: RoomPlanHistoryItem[];
+};
+
+/**
+ * WHAT WAS INITIALLY SELECTED — the durable answer behind the S5–S7 room tables' "Initially"
+ * column (2026-08-13, operator request: after a room change or a bed-type change, the table
+ * must keep stating what the FIRST selection was).
+ *
+ * Pure read, nothing persisted. Sources are all immutable history:
+ *  - the FIRST sealed AvailabilityConfiguration = the initial room selection;
+ *  - every later sealed config written by the in-place room change carries a
+ *    `roomChange {fromRoomId, toRoomId}` marker — folding those forward maps each CURRENT
+ *    room back to the room it started as;
+ *  - `ROOM.BED_TYPE_CHANGED` traces (which record the PRIOR value) reconstruct each initial
+ *    room's bed setup as it stood at selection time — the registry row itself only knows the
+ *    present.
+ */
+export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string): Promise<RoomPlanHistoryResult> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: {
+      committedHold: true,
+      roomAssignments: { orderBy: { createdAt: "asc" } },
+      availabilityConfigs: {
+        where: { sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
+        orderBy: { sealedAt: "asc" },
+      },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+
+  const configs = entry.availabilityConfigs;
+  const firstConfig = configs[0] ?? null;
+  const latestConfig = configs.length > 0 ? configs[configs.length - 1] : null;
+
+  // Current plan = latest sealed picture, plus hold + assignment rooms (covers bookings whose
+  // plan never went through a sealed config, and the S7 split where both rooms have rows).
+  const latestSel = readOptionSelected(latestConfig?.optionSelected ?? null);
+  const currentRoomIds = Array.from(
+    new Set<string>([
+      ...latestSel.distinctRoomIds,
+      ...s3HoldServiceHeldRooms(entry.committedHold),
+      ...entry.roomAssignments.map((a) => a.roomId),
+    ]),
+  );
+
+  // Initial selection: first sealed config; earliest assignments as the legacy fallback.
+  const firstSel = readOptionSelected(firstConfig?.optionSelected ?? null);
+  let initialRoomIds = [...firstSel.distinctRoomIds];
+  let initialSelectedAt: Date | null = firstConfig?.sealedAt ?? null;
+  if (initialRoomIds.length === 0 && entry.roomAssignments.length > 0) {
+    initialRoomIds = Array.from(new Set(entry.roomAssignments.map((a) => a.roomId)));
+    initialSelectedAt = entry.roomAssignments[0].createdAt;
+  }
+
+  // Fold the change chain forward: originOf[current] = the initial room it descends from.
+  const originOf = new Map<string, string>();
+  for (const id of initialRoomIds) originOf.set(id, id);
+  const chain: Array<{ fromRoomId: string; toRoomId: string; at: Date; reason: string | null }> = [];
+  for (const cfg of configs) {
+    const marker = (cfg.optionSelected as { roomChange?: { fromRoomId?: unknown; toRoomId?: unknown } } | null)?.roomChange;
+    const fromRoomId = typeof marker?.fromRoomId === "string" ? marker.fromRoomId : null;
+    const toRoomId = typeof marker?.toRoomId === "string" ? marker.toRoomId : null;
+    if (!fromRoomId || !toRoomId) continue;
+    const criteria = cfg.searchCriteria as { roomChange?: { reason?: unknown } } | null;
+    const reason = typeof criteria?.roomChange?.reason === "string" ? criteria.roomChange.reason : null;
+    chain.push({ fromRoomId, toRoomId, at: cfg.sealedAt ?? cfg.createdAt, reason });
+    originOf.set(toRoomId, originOf.get(fromRoomId) ?? fromRoomId);
+  }
+
+  // Single-room fallback: one room in, one room out — the origin is the one initial room even
+  // when the swap happened outside the marker-writing path (e.g. S5 "pick another of this type").
+  if (currentRoomIds.length === 1 && initialRoomIds.length === 1 && !originOf.has(currentRoomIds[0])) {
+    originOf.set(currentRoomIds[0], initialRoomIds[0]);
+  }
+
+  const involvedIds = Array.from(new Set([...currentRoomIds, ...initialRoomIds, ...chain.flatMap((c) => [c.fromRoomId, c.toRoomId])]));
+  const roomRows = await prisma.room.findMany({
+    where: { id: { in: involvedIds } },
+    include: { roomType: true },
+  });
+  const roomById = new Map(roomRows.map((r) => [r.id, r]));
+  const bedTypeOf = (id: string | null) =>
+    id ? ((roomById.get(id) as { bedType?: string | null } | undefined)?.bedType ?? null) : null;
+
+  // Bed setup AT SELECTION TIME: the earliest ROOM.BED_TYPE_CHANGED trace after the selection
+  // records the value it moved FROM; no trace since then means the registry still holds it.
+  const bedCutoff = initialSelectedAt ?? entry.createdAt;
+  const bedTraces = initialRoomIds.length
+    ? await prisma.traceEvent.findMany({
+        where: {
+          eventType: "ROOM.BED_TYPE_CHANGED",
+          entityType: "Room",
+          entityId: { in: initialRoomIds },
+          timestamp: { gte: bedCutoff },
+        },
+        orderBy: { timestamp: "asc" },
+        select: { entityId: true, payload: true },
+      })
+    : [];
+  const initialBedByRoom = new Map<string, string | null>();
+  for (const t of bedTraces) {
+    if (initialBedByRoom.has(t.entityId)) continue;
+    const from = (t.payload as { from?: unknown } | null)?.from;
+    initialBedByRoom.set(t.entityId, typeof from === "string" ? from : null);
+  }
+
+  const rooms: RoomPlanHistoryItem[] = currentRoomIds.map((currentRoomId) => {
+    const current = roomById.get(currentRoomId);
+    const initialRoomId = originOf.get(currentRoomId) ?? null;
+    const initial = initialRoomId ? roomById.get(initialRoomId) : undefined;
+    const initialBedType = initialRoomId
+      ? (initialBedByRoom.get(initialRoomId) ?? bedTypeOf(initialRoomId))
+      : null;
+    const currentBedType = bedTypeOf(currentRoomId);
+    const roomChanged = initialRoomId != null && initialRoomId !== currentRoomId;
+    return {
+      currentRoomId,
+      currentRoomNumber: current?.roomNumber ?? null,
+      currentRoomTypeName: current?.roomType?.name ?? null,
+      currentBedType,
+      initialRoomId,
+      initialRoomNumber: initial?.roomNumber ?? null,
+      initialRoomTypeName: initial?.roomType?.name ?? null,
+      initialBedType,
+      roomChanged,
+      bedTypeChanged: !roomChanged && initialBedType != null && currentBedType != null && initialBedType !== currentBedType,
+      changes: chain
+        .filter((c) => (originOf.get(c.toRoomId) ?? c.fromRoomId) === (initialRoomId ?? currentRoomId))
+        .map((c) => ({
+          fromRoomNumber: roomById.get(c.fromRoomId)?.roomNumber ?? null,
+          toRoomNumber: roomById.get(c.toRoomId)?.roomNumber ?? null,
+          at: c.at.toISOString(),
+          reason: c.reason,
+        })),
+    };
+  });
+
+  return {
+    entryId,
+    initialSelectedAt: initialSelectedAt ? initialSelectedAt.toISOString() : null,
+    rooms,
   };
 }
 
@@ -317,15 +544,29 @@ export async function changeRoomToNewSegment(
   const ctx = await loadRoomChangeContext(prisma, input.entryId, input.fromRoomId);
   const { entry, stage } = ctx;
 
-  enforceRoomChangeAuthorityForStage({ currentStage: String(stage), actorLevel: actor.actorLevel });
-
-  if (ctx.claimedRoomIds.has(input.toRoomId)) {
-    throw new ValidationError("That room is already part of this booking — pick a room outside the current plan");
-  }
-
   const toRoom = await prisma.room.findUnique({ where: { id: input.toRoomId }, include: { roomType: true } });
   if (!toRoom) throw new NotFoundError("Room");
   if (toRoom.isShadowInventory) throw new ValidationError("That room is shadow inventory and cannot be booked");
+
+  if (ctx.claimedRoomIds.has(input.toRoomId)) {
+    // At S7 a moved-out room keeps its slept-night claim (the split end-dates its assignment,
+    // it never leaves the plan), so "already part of this booking" would be misleading — name
+    // the real limit: returning to a room this stay already slept in would give the room two
+    // composition rows and double-price its nights, so it is not supported mid-stay.
+    const toRoomNights = ctx.picture.filter((n) => n.roomIds.includes(input.toRoomId)).map((n) => n.date);
+    const onlyPastNights = toRoomNights.length > 0 && toRoomNights.every((d) => d < ctx.todayIso);
+    throw new ValidationError(
+      stage === Stage.S7 && onlyPastNights
+        ? `Room ${toRoom.roomNumber} already held this booking's earlier nights this stay — moving back into a moved-out room isn't supported mid-stay; pick a different room`
+        : "That room is already part of this booking — pick a room outside the current plan",
+    );
+  }
+
+  // Authority follows WHAT the change does, not the stage (2026-08-13 ruling): a same-type
+  // swap is desk logistics (L1+); a cross-type move is an upgrade/downgrade that re-prices
+  // the stay, so it needs FOM+ (L2+).
+  const sameType = toRoom.roomTypeId === ctx.fromRoom.roomTypeId;
+  enforceRoomChangeAuthorityForStage({ currentStage: String(stage), actorLevel: actor.actorLevel, sameType });
 
   // ── Availability, validated the way S1 validates it (recall-plus-revalidate doctrine) ──────
   const ranges = foldIsoNightsToRanges(ctx.substitutionNights);
@@ -373,7 +614,6 @@ export async function changeRoomToNewSegment(
     ? (priorTerms!.roomCompositions as RoomCompositionServiceInput[])
     : null;
   const priorTotal = operative?.totalAmount != null ? Number(operative.totalAmount) : null;
-  const sameType = toRoom.roomTypeId === ctx.fromRoom.roomTypeId;
 
   // Capacity: the party moving rooms must fit the new room's type.
   const movingComposition = priorCompositions?.find((c) => c.roomId === input.fromRoomId) ?? null;
@@ -785,7 +1025,13 @@ export async function changeRoomToNewSegment(
 
   // ── 6. Re-freeze (new Reservation row for the new segment) ─────────────────────────────────
   try {
-    await confirmReservation(prisma, input.entryId, actor.actorId, { version: await freshVersion() });
+    // Same-type: the terms are identical to what an authorized actor already confirmed, so the
+    // prior confirmation's high-value authority carries (an L1's sanctioned swap must not
+    // strand mid-walk on an unchanged figure). Cross-type re-tests — its value changed.
+    await confirmReservation(prisma, input.entryId, actor.actorId, {
+      version: await freshVersion(),
+      carryHighValueAuthority: sameType,
+    });
   } catch (e) {
     return blockedOutcome("RECONFIRMATION", e);
   }

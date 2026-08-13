@@ -29,16 +29,16 @@ import { listEntryCommunications } from "../../services/domain/communication-ack
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
-import { changeRoomToNewSegment, listRoomChangeCandidates } from "../../services/domain/room-change-service.js";
+import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
 import { roomChangeRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 
 export const entriesRouter = Router();
 
 /**
- * In-place room change (2026-08-12, operator ruling) — candidates lookup. Rooms the given room
- * could be swapped to over the nights it is claimed for (S7: from tonight), validated with the
- * SAME availability predicates S1's search uses. L1+ to look; the change itself enforces
- * per-stage authority (S5 L1+, S6/S7 L2+).
+ * In-place room change (2026-08-12, operator ruling) — candidates lookup. EVERY registered
+ * room outside the booking, each with its S1-style standing over the claimed nights (free /
+ * reserved / held / blocked / maintenance — 2026-08-13); only FREE rooms are selectable. L1+
+ * to look; the change itself enforces authority by kind (same-type L1+, cross-type L2+).
  */
 entriesRouter.get("/:id/room-change/candidates", requireActorLevel("L1"), async (req, res, next) => {
   try {
@@ -67,6 +67,20 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
       reason: req.body.reason,
     });
     res.json(outcome);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Room-plan history (2026-08-13, operator request) — what was INITIALLY selected, per room of
+ * the current plan: the first sealed selection followed through the room-change chain, plus
+ * each initial room's bed setup as it stood at selection time. Pure read; drives the
+ * "Initially" column on the S5–S7 room tables.
+ */
+entriesRouter.get("/:id/room-plan-history", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await buildRoomPlanHistory(prisma, req.params.id));
   } catch (e) {
     next(e);
   }
