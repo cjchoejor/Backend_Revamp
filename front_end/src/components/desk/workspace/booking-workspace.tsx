@@ -10,6 +10,7 @@ import { SegmentHistoryPanel } from "./segment-history";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import {
+  getBillingSummary,
   getEntry,
   getEntryTimers,
   listEntryCommunications,
@@ -569,6 +570,20 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // 0 hides the vacuous "Advance settled" checklist line — nothing is being asked for.
   const requiredAmount = paymentStatusQuery.data?.requiredAmount ?? null;
 
+  // Live money position for the header total + breakdown (2026-08-13, operator request): the
+  // header shows THE total — server-computed on the current commercial basis, so a room change
+  // or re-entry re-prices it automatically — and clicking it opens the full breakdown (billed
+  // so far / payments / balance). Keyed on entry.updatedAt so entry mutations refresh it, plus
+  // a 30s cadence for folio movement that never touches the entry row (night-audit posts,
+  // another terminal's charges).
+  const billingQuery = useQuery({
+    queryKey: ["billing-summary", entryId, entryQuery.data?.updatedAt ?? ""],
+    queryFn: () => getBillingSummary(session!, entryId),
+    enabled: !!session && !sessionLoading && !!entryQuery.data,
+    refetchInterval: 30_000,
+  });
+  const billing = billingQuery.data ?? null;
+
   // Guest answers to the governed communications (2026-07-31). The S3 checklist's "Guest's answer
   // to the proforma recorded" item mirrors the backend gate
   // `enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation`, which reads
@@ -622,6 +637,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Readiness popover on the journey-row gate cluster (replaces the bottom gate bar's list).
   const [needsOpen, setNeedsOpen] = useState(false);
+  // Money-breakdown popover on the header total.
+  const [totalOpen, setTotalOpen] = useState(false);
   // Local tick so the countdown moves between refetches.
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
@@ -1123,14 +1140,161 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               {fin.frozen ? <Check /> : null}
               {fin.frozen ? "Confirmed" : "Indicative"}
             </span>
-            {/* Confirmed bookings show the frozen PER-NIGHT rate, which is the only figure the
-                reservation carries — there is no stay total on the server (no frozenTotalAmount),
-                and multiplying by nights here silently dropped roomCount on multi-room bookings. */}
-            <div className="jsum-i">
-              <span className="k">{fin.frozen ? "Frozen / night" : "Indicative total"}</span>
-              <span className="v mono">
-                {moneyOrDash(fin.frozen ? fin.frozenRate : fin.indicativeTotal, fin.currency)}
-              </span>
+            {/* The header shows THE total (2026-08-13, operator request — replaced the frozen
+                per-night rate): the stay total on the CURRENT commercial basis, computed by
+                GET /entries/:id/billing-summary, so a room upgrade / re-entry re-prices it with
+                no desk arithmetic. Click opens the full money breakdown, which tracks the folio
+                live as bills post. */}
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="jsum-i"
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left", font: "inherit" }}
+                onClick={() => {
+                  setTotalOpen((o) => !o);
+                  void billingQuery.refetch();
+                }}
+                title="See the full money position — stay total, billed so far, payments, balance"
+              >
+                <span className="k">
+                  {billing?.headline.kind === "BILLED_SO_FAR"
+                    ? "Billed so far"
+                    : billing?.headline.frozen
+                      ? "Total · frozen"
+                      : "Total · indicative"}
+                  {" ▾"}
+                </span>
+                <span className="v mono">
+                  {moneyOrDash(
+                    billing ? billing.headline.amount : fin.frozen ? null : fin.indicativeTotal,
+                    billing?.currency ?? fin.currency,
+                  )}
+                </span>
+              </button>
+              {totalOpen && (
+                <div className="jgate-pop" style={{ width: 360 }} onMouseLeave={() => setTotalOpen(false)}>
+                  {(() => {
+                    const cur = billing?.currency ?? fin.currency;
+                    const row = (label: ReactNode, value: number | null, opts?: { bold?: boolean; muted?: boolean }) => (
+                      <div
+                        style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12,
+                          fontSize: 12, fontWeight: opts?.bold ? 700 : 500,
+                          color: opts?.muted ? "var(--ink-3)" : "var(--ink)",
+                        }}
+                      >
+                        <span>{label}</span>
+                        <span className="mono" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {moneyOrDash(value, cur)}
+                        </span>
+                      </div>
+                    );
+                    const st = billing?.stayTotal;
+                    const fo = billing?.folio ?? null;
+                    return (
+                      <div style={{ display: "grid", gap: 7 }}>
+                        <div style={{ fontSize: 8.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-3)", fontWeight: 700 }}>
+                          Money on this booking
+                        </div>
+                        {row(
+                          <>Stay total {st?.frozen ? "· frozen" : "· indicative"}</>,
+                          st?.amount ?? null,
+                          { bold: true },
+                        )}
+                        {st?.basis === "PER_NIGHT_TIMES_NIGHTS" && st.perNightAmount != null && (
+                          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: -4 }}>
+                            {money(st.perNightAmount, cur)} / night
+                            {st.nights != null ? ` × ${st.nights} night${st.nights === 1 ? "" : "s"}` : ""}
+                          </div>
+                        )}
+                        {st?.segmentNumber != null && (entry.segmentNumber ?? 1) > 1 && (
+                          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: -4 }}>
+                            Basis: segment {st.segmentNumber} quote — re-priced on every room change / re-entry.
+                          </div>
+                        )}
+                        {/* Per-room price breakdown (2026-08-13, operator request): what each room
+                            costs — room, meal plan, extra bed — from the quote's own stored pricing. */}
+                        {billing?.rooms && billing.rooms.length > 0 && (
+                          <>
+                            <div style={{ borderTop: "1px solid var(--line-2)", margin: "2px 0" }} />
+                            <div style={{ fontSize: 8.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-3)", fontWeight: 700 }}>
+                              Per room
+                            </div>
+                            <div style={{ display: "grid", gap: 6, maxHeight: 280, overflowY: "auto" }}>
+                              {billing.rooms.map((r, i) => {
+                                const m = r.mealCounts;
+                                const mealParts: string[] = [];
+                                if (m?.cp) mealParts.push(`${m.cp} CP`);
+                                if (m?.mapl) mealParts.push(`${m.mapl} MAPL`);
+                                if (m?.mapd) mealParts.push(`${m.mapd} MAPD`);
+                                if (m?.ap) mealParts.push(`${m.ap} AP`);
+                                if (m?.others) mealParts.push(`${m.others} Others`);
+                                const bits: string[] = [];
+                                if (r.roomSubtotal != null) bits.push(`room ${money(r.roomSubtotal, cur)}`);
+                                if ((r.mealsSubtotal ?? 0) > 0 || mealParts.length > 0) {
+                                  bits.push(
+                                    `meals ${moneyOrDash(r.mealsSubtotal, cur)}${mealParts.length ? ` (${mealParts.join(" · ")}${r.mealsVaryByNight ? " · varies by night" : ""})` : ""}`,
+                                  );
+                                }
+                                if (r.extraBedCount > 0) {
+                                  bits.push(
+                                    `${r.extraBedCount} extra bed${r.extraBedCount === 1 ? "" : "s"} ${moneyOrDash(r.extraBedSubtotal, cur)}`,
+                                  );
+                                }
+                                return (
+                                  <div key={r.roomId ?? i} style={{ display: "grid", gap: 1 }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontSize: 12 }}>
+                                      <span style={{ fontWeight: 600 }}>
+                                        Room {r.roomNumber ?? "—"}
+                                        {r.roomTypeName ? <span style={{ fontWeight: 500, color: "var(--ink-3)" }}> · {r.roomTypeName}</span> : null}
+                                        {r.nights != null ? <span style={{ fontWeight: 500, color: "var(--ink-3)" }}> · {r.nights} night{r.nights === 1 ? "" : "s"}</span> : null}
+                                        {r.isFoc ? <span style={{ fontWeight: 700, color: "var(--warn, #7a5a20)" }}> · FOC</span> : null}
+                                      </span>
+                                      <span className="mono" style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                                        {moneyOrDash(r.total, cur)}
+                                      </span>
+                                    </div>
+                                    {r.isFoc ? (
+                                      <div style={{ fontSize: 11, color: "var(--ink-3)" }}>Complimentary — no charge.</div>
+                                    ) : bits.length > 0 ? (
+                                      <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{bits.join(" · ")}</div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ fontSize: 10.5, color: "var(--ink-3)" }}>
+                              Room / meals / bed figures are net; each room&rsquo;s total adds service charge &amp; GST.
+                              {billing.rooms.some((r) => r.componentsPreDiscount)
+                                ? " Components shown before the booking discount — the totals are after it."
+                                : ""}
+                            </div>
+                          </>
+                        )}
+                        <div style={{ borderTop: "1px solid var(--line-2)", margin: "2px 0" }} />
+                        {fo ? (
+                          <>
+                            {row(
+                              <>Billed so far{fo.lineCount > 0 ? ` · ${fo.lineCount} line${fo.lineCount === 1 ? "" : "s"}` : ""}</>,
+                              fo.billedSoFar,
+                            )}
+                            {row("Payments received", fo.paymentsReceived)}
+                            {fo.refunded != null && row("Refunded", fo.refunded)}
+                            {fo.writtenOff != null && row("Written off", fo.writtenOff)}
+                            {row("Balance", fo.outstandingBalance, { bold: true })}
+                          </>
+                        ) : (
+                          <div style={{ fontSize: 11, color: "var(--ink-3)" }}>No folio yet — nothing billed.</div>
+                        )}
+                        <div style={{ fontSize: 10.5, color: "var(--ink-3)", borderTop: "1px solid var(--line-2)", paddingTop: 6 }}>
+                          All figures computed by the backend. Updates live as bills post — a room upgrade or
+                          re-entry re-prices the stay total automatically.
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
             <div className="jsum-i">
               <span className="k">Folio</span>

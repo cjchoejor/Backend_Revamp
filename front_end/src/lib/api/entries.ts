@@ -397,6 +397,61 @@ export async function getJourneySummary(session: Session, entryId: string) {
   return apiRequest<BookingJourneySummary>(`/api/entries/${entryId}/journey-summary`, { session });
 }
 
+// --- Billing summary (2026-08-13) -----------------------------------------------------------
+// The booking's money position in one read — drives the workspace header's live total and its
+// click-through breakdown. All figures are computed server-side (Decimal); the desk only renders.
+
+export type EntryBillingSummary = {
+  entryId: string;
+  generatedAt: string;
+  currency: string | null;
+  headline: { amount: number | null; kind: "STAY_TOTAL" | "BILLED_SO_FAR" | null; frozen: boolean };
+  stayTotal: {
+    amount: number | null;
+    basis: "COMPOSITION_STAY_TOTAL" | "PER_NIGHT_TIMES_NIGHTS" | null;
+    frozen: boolean;
+    quotationId: string | null;
+    quotationState: string | null;
+    segmentNumber: number | null;
+    nights: number | null;
+    perNightAmount: number | null;
+  };
+  /** Per-room price breakdown from the stored composition (null on flat-path quotes). */
+  rooms: Array<{
+    roomId: string | null;
+    roomNumber: string | null;
+    roomTypeName: string | null;
+    nights: number | null;
+    isFoc: boolean;
+    occupants: { adults: number; children6To10: number; childrenUnder6: number } | null;
+    extraBedCount: number;
+    mealCounts: { cp: number; mapl: number; mapd: number; ap: number; others: number } | null;
+    mealsVaryByNight: boolean;
+    /** NET components: roomRate × nights / bedRate × beds × nights / stored child-banded meals. */
+    roomSubtotal: number | null;
+    extraBedSubtotal: number | null;
+    mealsSubtotal: number | null;
+    serviceCharge: number | null;
+    gst: number | null;
+    /** Tax-inclusive room total (post-discount when a booking discount applies). */
+    total: number | null;
+    componentsPreDiscount: boolean;
+  }> | null;
+  folio: {
+    state: string;
+    billedSoFar: number | null;
+    lineCount: number;
+    paymentsReceived: number | null;
+    refunded: number | null;
+    writtenOff: number | null;
+    outstandingBalance: number | null;
+  } | null;
+};
+
+export async function getBillingSummary(session: Session, entryId: string) {
+  return apiRequest<EntryBillingSummary>(`/api/entries/${entryId}/billing-summary`, { session });
+}
+
 // --- Segment history (per-pass record, Implementation Reference §1.2 / §6.2) ----------------
 // One Segment per pass through the stages; re-entry seals the current one and opens the next.
 // Shape mirrors the backend `SegmentHistory` in segment-history-service.ts.

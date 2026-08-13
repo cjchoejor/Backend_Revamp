@@ -1,51 +1,98 @@
 "use client";
 
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { RoomAssignmentSummary } from "@/types/api";
 import { money } from "@/lib/desk/workspace";
 
 /**
- * Per-room composition summary display (Phase F of per-room track, 2026-07-27).
+ * Per-room composition summary display (Phase F of per-room track, 2026-07-27;
+ * compacted 2026-08-13 — operator report: the card-per-room layout ate the S7 page).
  *
- * Renders a compact card per room showing what the operator captured at S2:
- *   - Occupants breakdown (adults / CNB age bands)
- *   - Meal-plan distribution
- *   - Extra beds
- *   - Negotiated rates (only when they differ from defaults)
- *   - SC / GST / FOC toggles
- *   - Frozen total
+ * Collapsed by default: a single header line with party tallies. Expanded: one dense
+ * row per room — occupants · extra beds · meal distribution · negotiated/waiver notes ·
+ * frozen total. Same data as before, no card stack.
  *
  * Hidden when no room has composition (legacy bookings) — the caller shows the old
- * summary instead.
+ * summary instead. Tallies are head-counts only; every money figure is read from the
+ * assignment rows (no client-side money arithmetic).
  */
+/** Whether any assignment carries composition data — callers use it to skip the block heading. */
+export function hasRoomComposition(assignments: RoomAssignmentSummary[] | undefined | null): boolean {
+  return (assignments ?? []).some(
+    (a) => a.occupantCount != null || a.adultCount != null || (a.mealPlanCpCount ?? 0) > 0 || (a.mealPlanMaplCount ?? 0) > 0,
+  );
+}
+
 export function RoomCompositionSummary({
   assignments,
   currency,
+  defaultOpen = false,
 }: {
   assignments: RoomAssignmentSummary[];
   currency?: string;
+  defaultOpen?: boolean;
 }) {
-  // Only render if at least one assignment has composition data.
-  const hasComposition = assignments.some(
-    (a) => a.occupantCount != null || a.adultCount != null || (a.mealPlanCpCount ?? 0) > 0 || (a.mealPlanMaplCount ?? 0) > 0,
+  const [open, setOpen] = useState(defaultOpen);
+
+  const withComposition = assignments.filter(
+    (a) =>
+      !(
+        a.occupantCount == null && a.adultCount == null && !a.mealPlanCpCount && !a.mealPlanMaplCount &&
+        !a.mealPlanMapdCount && !a.mealPlanApCount && !a.mealPlanOthersCount
+      ),
   );
-  if (!hasComposition) return null;
+  if (withComposition.length === 0) return null;
+
+  // Head-count tallies for the collapsed header (counts, never money).
+  let adults = 0;
+  let children = 0;
+  let extraBeds = 0;
+  for (const a of withComposition) {
+    adults += a.adultCount ?? 0;
+    children += (a.cnb6To10Count ?? 0) + (a.cnbUnder6Count ?? 0);
+    extraBeds += a.extraBedCount ?? 0;
+  }
+  const tallyParts = [
+    `${withComposition.length} room${withComposition.length === 1 ? "" : "s"}`,
+    `${adults} adult${adults === 1 ? "" : "s"}`,
+  ];
+  if (children > 0) tallyParts.push(`${children} child${children === 1 ? "" : "ren"}`);
+  if (extraBeds > 0) tallyParts.push(`${extraBeds} extra bed${extraBeds === 1 ? "" : "s"}`);
+
+  const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <div style={{ display: "grid", gap: 8 }}>
-      {assignments.map((a) => {
-        const isEmpty =
-          a.occupantCount == null && a.adultCount == null && !a.mealPlanCpCount && !a.mealPlanMaplCount &&
-          !a.mealPlanMapdCount && !a.mealPlanApCount && !a.mealPlanOthersCount;
-        if (isEmpty) return null;
-        return (
-          <RoomCompositionCard key={a.id} assignment={a} currency={currency} />
-        );
-      })}
+    <div style={{ display: "grid", gap: 6 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: "flex", alignItems: "center", gap: 8, width: "100%",
+          border: "1px solid var(--line, #e6e0d4)", borderRadius: 6, padding: "7px 10px",
+          background: "var(--surface, #fff)", cursor: "pointer", textAlign: "left",
+          font: "inherit", fontSize: 12,
+        }}
+      >
+        <Chevron style={{ width: 13, height: 13, flexShrink: 0, color: "var(--ink-3, #7a6a52)" }} />
+        <span style={{ color: "var(--ink-2, #333)" }}>{tallyParts.join(" · ")}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-3, #7a6a52)" }}>
+          {open ? "Hide" : "Show per room"}
+        </span>
+      </button>
+      {open && (
+        <div style={{ display: "grid", gap: 4 }}>
+          {withComposition.map((a) => (
+            <RoomCompositionRow key={a.id} assignment={a} currency={currency} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function RoomCompositionCard({ assignment, currency }: { assignment: RoomAssignmentSummary; currency?: string }) {
+function RoomCompositionRow({ assignment, currency }: { assignment: RoomAssignmentSummary; currency?: string }) {
   const a = assignment;
   const rn = a.room?.roomNumber ?? a.roomId.slice(0, 6);
   const adults = a.adultCount ?? 0;
@@ -53,66 +100,55 @@ function RoomCompositionCard({ assignment, currency }: { assignment: RoomAssignm
   const cnb0 = a.cnbUnder6Count ?? 0;
   const extraBeds = a.extraBedCount ?? 0;
 
+  const occParts: string[] = [`${adults}A`];
+  if (cnb6 > 0) occParts.push(`${cnb6}×6-10`);
+  if (cnb0 > 0) occParts.push(`${cnb0}×<6`);
+
   const mealParts: string[] = [];
   if (a.mealPlanCpCount) mealParts.push(`${a.mealPlanCpCount} CP`);
   if (a.mealPlanMaplCount) mealParts.push(`${a.mealPlanMaplCount} MAPL`);
   if (a.mealPlanMapdCount) mealParts.push(`${a.mealPlanMapdCount} MAPD`);
   if (a.mealPlanApCount) mealParts.push(`${a.mealPlanApCount} AP`);
   if (a.mealPlanOthersCount) mealParts.push(`${a.mealPlanOthersCount} Others`);
-  const mealPlanStr = mealParts.length > 0 ? mealParts.join(" · ") : "None";
+
+  const noteParts: string[] = [];
+  if (a.negotiatedRoomRate != null) noteParts.push(`Room @ ${money(a.negotiatedRoomRate, currency ?? "BTN")}`);
+  if (a.negotiatedExtraBedRate != null) noteParts.push(`Bed @ ${money(a.negotiatedExtraBedRate, currency ?? "BTN")}`);
+  if (a.serviceChargeApplies === false) noteParts.push("SC waived");
+  if (a.gstApplies === false) noteParts.push("GST waived");
 
   return (
     <div
       style={{
-        border: "1px solid var(--line, #e6e0d4)", borderRadius: 6, padding: 10,
+        display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 8, rowGap: 2,
+        border: "1px solid var(--line, #e6e0d4)", borderRadius: 6, padding: "5px 10px",
         background: a.isFoc ? "rgba(200,200,200,0.1)" : "var(--surface, #fff)",
-        opacity: a.isFoc ? 0.8 : 1,
+        opacity: a.isFoc ? 0.85 : 1,
         fontSize: 12,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-        <div style={{ fontWeight: 600 }}>
-          Room {rn}
-          {a.isFoc && (
-            <span style={{
-              marginLeft: 6, fontSize: 10, padding: "1px 5px", borderRadius: 3,
-              background: "#fff4e5", color: "#7a5a20",
-            }}>FOC</span>
-          )}
-        </div>
-        {a.frozenTotal != null && (
-          <div style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-            {money(a.frozenTotal, currency ?? "BTN")}
-          </div>
-        )}
-      </div>
-      <div style={{ display: "grid", gap: 3, color: "var(--ink-2, #333)" }}>
-        <div>
-          <span style={{ color: "var(--ink-3, #7a6a52)" }}>Occupants: </span>
-          {adults} adult{adults === 1 ? "" : "s"}
-          {cnb6 > 0 && `, ${cnb6} CNB 6-10`}
-          {cnb0 > 0 && `, ${cnb0} CNB <6`}
-          {extraBeds > 0 && ` · ${extraBeds} extra bed${extraBeds === 1 ? "" : "s"}`}
-        </div>
-        <div>
-          <span style={{ color: "var(--ink-3, #7a6a52)" }}>Meals: </span>
-          {mealPlanStr}
-        </div>
-        {(a.negotiatedRoomRate != null || a.negotiatedExtraBedRate != null) && (
-          <div style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)" }}>
-            Negotiated:{" "}
-            {a.negotiatedRoomRate != null && `Room ${money(a.negotiatedRoomRate, currency ?? "BTN")}`}
-            {a.negotiatedExtraBedRate != null && ` · Extra bed ${money(a.negotiatedExtraBedRate, currency ?? "BTN")}`}
-          </div>
-        )}
-        {(a.serviceChargeApplies === false || a.gstApplies === false) && (
-          <div style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)" }}>
-            {a.serviceChargeApplies === false && "Service charge waived"}
-            {a.serviceChargeApplies === false && a.gstApplies === false && " · "}
-            {a.gstApplies === false && "GST waived"}
-          </div>
-        )}
-      </div>
+      <span style={{ fontWeight: 600 }}>Room {rn}</span>
+      {a.isFoc && (
+        <span style={{
+          fontSize: 10, padding: "1px 5px", borderRadius: 3,
+          background: "#fff4e5", color: "#7a5a20", alignSelf: "center",
+        }}>FOC</span>
+      )}
+      <span style={{ color: "var(--ink-2, #333)" }}>
+        {occParts.join(" + ")}
+        {extraBeds > 0 && ` · ${extraBeds} bed${extraBeds === 1 ? "" : "s"}`}
+      </span>
+      <span style={{ color: "var(--ink-3, #7a6a52)" }}>
+        {mealParts.length > 0 ? mealParts.join(" · ") : "EP (room only)"}
+      </span>
+      {noteParts.length > 0 && (
+        <span style={{ fontSize: 11, color: "var(--ink-3, #7a6a52)" }}>{noteParts.join(" · ")}</span>
+      )}
+      {a.frozenTotal != null && (
+        <span style={{ marginLeft: "auto", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+          {money(a.frozenTotal, currency ?? "BTN")}
+        </span>
+      )}
     </div>
   );
 }

@@ -68,9 +68,11 @@ export function folioView(entry: EntryDetail): FolioView {
  * carries only values the API actually returns; a field is `null` when the backend has no field for
  * it, and callers must render "—" rather than filling the gap with a local sum or multiplication.
  *
- * Deliberately absent, because no endpoint supplies them today:
- *  - a reservation stay total (only the frozen per-night `frozenRate` exists — no `frozenTotalAmount`)
- *  - a folio charges total (only `outstandingBalance` exists — there is no sum-of-lines field)
+ * Deliberately absent here — supplied since 2026-08-13 by `GET /api/entries/:id/billing-summary`
+ * (`getBillingSummary` in lib/api/entries.ts), which the workspace header consumes directly:
+ *  - the stay total on the current commercial basis (server-resolved; there is still no
+ *    `frozenTotalAmount` column — the endpoint reads the operative/frozen quotation)
+ *  - the folio charges total (server-summed; only `outstandingBalance` is stored)
  */
 export type DeskFinancials = {
   currency: string;
