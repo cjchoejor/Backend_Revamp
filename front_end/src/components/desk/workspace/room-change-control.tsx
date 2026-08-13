@@ -6,7 +6,12 @@ import { ArrowLeftRight } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
-import { changeBookingRoom, listRoomChangeCandidates } from "@/lib/api/entries";
+import {
+  changeBookingRoom,
+  getRoomPlanHistory,
+  listRoomChangeCandidates,
+  type RoomChangeCandidate,
+} from "@/lib/api/entries";
 import { listRooms, setRoomBedType } from "@/lib/api/rooms";
 import { money } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
@@ -18,8 +23,13 @@ import type { EntryDetail } from "@/types/api";
  * re-quote, walk back to this stage) in one call — the desk never navigates away, and nothing
  * is sent to the guest unless the operator sends it.
  *
- * Authority mirrors the backend gate (p58): S5 is L1+, S6/S7 are L2+ — below that the button
- * doesn't render (the endpoint enforces it regardless).
+ * Authority (2026-08-13 ruling, mirrors p58): a SAME-TYPE swap is desk logistics — anyone
+ * (L1+) does it, at any of S5–S7. A CROSS-TYPE move is an upgrade/downgrade that re-prices the
+ * stay, so it needs FOM+ (L2+) — below that the different-type options are shown but locked.
+ *
+ * The candidate list shows EVERY room with its S1-style standing over the change's nights
+ * (2026-08-13, operator request): free rooms are pickable; reserved / held / blocked /
+ * maintenance rooms stay visible with who holds them, exactly like the S1 availability table.
  */
 
 function bedLabel(t?: string | null) {
@@ -29,6 +39,31 @@ function bedLabel(t?: string | null) {
 
 function levelRank(level?: string) {
   return level === "L4" ? 4 : level === "L3" ? 3 : level === "L2" ? 2 : level === "L1" ? 1 : 0;
+}
+
+function shortDate(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** "reserved — Dorji Wangmo (14 Aug – 16 Aug)" — the S1 cell tooltip's vocabulary, inline. */
+function statusText(c: RoomChangeCandidate): string {
+  switch (c.availability) {
+    case "FREE":
+      return "";
+    case "RESERVED":
+      return `reserved${c.claimedBy?.guestName ? ` — ${c.claimedBy.guestName}` : ""}${
+        c.claimedBy ? ` (${shortDate(c.claimedBy.startDate)} – ${shortDate(c.claimedBy.endDate)})` : ""
+      }`;
+    case "HELD":
+      return `${c.claimedBy?.holdKind === "SPECULATIVE" ? "held (quote hold)" : "held"}${
+        c.claimedBy?.guestName ? ` — ${c.claimedBy.guestName}` : ""
+      }${c.claimedBy ? ` (${shortDate(c.claimedBy.startDate)} – ${shortDate(c.claimedBy.endDate)})` : ""}`;
+    case "BLOCKED":
+      return `blocked${c.blockedReason ? ` — ${c.blockedReason}` : ""}`;
+    case "MAINTENANCE":
+      return "under maintenance";
+  }
 }
 
 export function RoomChangeControl({
@@ -53,8 +88,8 @@ export function RoomChangeControl({
   const [reason, setReason] = useState("");
 
   const stage = entry.currentStage;
-  const needRank = stage === "S5" ? 1 : 2;
-  const allowed = levelRank(session?.actorLevel) >= needRank;
+  // Same-type swaps are open to the whole desk (L1+); cross-type (upgrade/downgrade) is FOM+.
+  const canCrossType = levelRank(session?.actorLevel) >= 2;
 
   const candidatesQuery = useQuery({
     queryKey: ["room-change-candidates", entry.id, fromRoomId],
@@ -87,6 +122,7 @@ export function RoomChangeControl({
       setReason("");
       void queryClient.invalidateQueries({ queryKey: ["rooms-catalog"] });
       void queryClient.invalidateQueries({ queryKey: ["room-change-candidates", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["room-plan-history", entry.id] });
       onChanged();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "The room change was refused"),
@@ -95,10 +131,19 @@ export function RoomChangeControl({
   const candidates = candidatesQuery.data?.candidates ?? [];
   const sameTypeCandidates = candidates.filter((c) => c.sameType);
   const otherTypeCandidates = candidates.filter((c) => !c.sameType);
+  const selectableCount = candidates.filter((c) => c.selectable && (c.sameType || canCrossType)).length;
   const picked = candidates.find((c) => c.roomId === toRoomId) ?? null;
   const nights = candidatesQuery.data?.substitutionNights.length ?? 0;
 
-  if (!allowed) return null;
+  const optionLabel = (c: RoomChangeCandidate, withType: boolean) => {
+    const bits = [c.roomNumber];
+    if (withType) bits.push(c.roomTypeName ?? "—");
+    if (c.bedType) bits.push(`${bedLabel(c.bedType)}${c.bedType === "TWIN" ? " beds" : " bed"}`);
+    const status = statusText(c);
+    if (status) bits.push(status);
+    else if (!c.sameType && !canCrossType) bits.push("needs FOM");
+    return bits.join(" · ");
+  };
 
   return (
     <div style={compact ? { display: "inline-block" } : undefined}>
@@ -133,6 +178,7 @@ export function RoomChangeControl({
             stay exactly as if it were being set up fresh, and the booking comes straight back to this step. Nothing is
             sent to the guest unless you send it.
             {stage === "S7" ? " Nights already slept stay billed on the current room." : ""}
+            {" "}A same-type swap needs no approval; a different type (upgrade or downgrade) needs FOM (L2+).
           </p>
 
           {candidatesQuery.isLoading && <p style={{ fontSize: 12, color: "var(--ink-3)" }}>Checking availability…</p>}
@@ -141,32 +187,40 @@ export function RoomChangeControl({
               {candidatesQuery.error instanceof ApiError ? candidatesQuery.error.message : "Could not load the available rooms"}
             </p>
           )}
-          {candidatesQuery.data && candidates.length === 0 && (
-            <p style={{ fontSize: 12, color: "var(--stop)" }}>No other room is free for those nights.</p>
+          {candidatesQuery.data && selectableCount === 0 && (
+            <p style={{ fontSize: 12, color: "var(--stop)" }}>
+              {candidates.some((c) => c.selectable)
+                ? "The only free rooms are a different type — an FOM (L2+) has to make that change."
+                : "No other room is free for those nights — the list shows who holds each one."}
+            </p>
           )}
 
           {candidates.length > 0 && (
             <div className="frow" style={{ alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
               <div className="field">
-                <label>New room</label>
+                <label>New room (status over these nights, as the S1 search sees it)</label>
                 <select value={toRoomId} onChange={(e) => setToRoomId(e.target.value)}>
                   <option value="">Choose…</option>
                   {sameTypeCandidates.length > 0 && (
-                    <optgroup label={`Same type — ${candidatesQuery.data?.fromRoom.roomTypeName ?? "same rate"}`}>
+                    <optgroup label={`Same type — ${candidatesQuery.data?.fromRoom.roomTypeName ?? "same rate"} · anyone can swap`}>
                       {sameTypeCandidates.map((c) => (
-                        <option key={c.roomId} value={c.roomId}>
-                          {c.roomNumber}
-                          {c.bedType ? ` · ${bedLabel(c.bedType)}${c.bedType === "TWIN" ? " beds" : " bed"}` : ""}
+                        <option key={c.roomId} value={c.roomId} disabled={!c.selectable}>
+                          {optionLabel(c, false)}
                         </option>
                       ))}
                     </optgroup>
                   )}
                   {otherTypeCandidates.length > 0 && (
-                    <optgroup label="Different type — price will change">
+                    <optgroup
+                      label={
+                        canCrossType
+                          ? "Different type — upgrade/downgrade, price will change"
+                          : "Different type — upgrade/downgrade · needs FOM (L2+)"
+                      }
+                    >
                       {otherTypeCandidates.map((c) => (
-                        <option key={c.roomId} value={c.roomId}>
-                          {c.roomNumber} · {c.roomTypeName ?? "—"}
-                          {c.bedType ? ` · ${bedLabel(c.bedType)}${c.bedType === "TWIN" ? " beds" : " bed"}` : ""}
+                        <option key={c.roomId} value={c.roomId} disabled={!c.selectable || !canCrossType}>
+                          {optionLabel(c, true)}
                         </option>
                       ))}
                     </optgroup>
@@ -180,7 +234,13 @@ export function RoomChangeControl({
               <div className="field">
                 <button
                   className="btn btn-primary btn-sm"
-                  disabled={changeM.isPending || !toRoomId || reason.trim().length < 3}
+                  disabled={
+                    changeM.isPending ||
+                    !toRoomId ||
+                    reason.trim().length < 3 ||
+                    !picked?.selectable ||
+                    (!!picked && !picked.sameType && !canCrossType)
+                  }
                   onClick={() => changeM.mutate()}
                 >
                   {changeM.isPending ? "Changing…" : "Swap room"}
@@ -189,7 +249,7 @@ export function RoomChangeControl({
             </div>
           )}
 
-          {picked && !picked.sameType && (
+          {picked && !picked.sameType && canCrossType && (
             <div
               className="fact b-transit"
               style={{ marginTop: 8, padding: "6px 10px", fontSize: 11.5, display: "block", lineHeight: 1.5 }}
@@ -207,6 +267,60 @@ export function RoomChangeControl({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * "Initially selected" cell (2026-08-13, operator request): every S5–S7 room row keeps stating
+ * what the FIRST selection was — room and bed setup as sealed at Inquiry — permanently, so a
+ * room change or a bed-type change never erases where the booking started. Reads the
+ * backend-derived room-plan history (first sealed config + room-change chain + bed-type
+ * traces); nothing is computed client-side. Amber when the room or the bed has moved since.
+ */
+export function InitialSelectionCell({ entryId, roomId }: { entryId: string; roomId: string }) {
+  const { session } = useSession();
+  const historyQuery = useQuery({
+    queryKey: ["room-plan-history", entryId],
+    queryFn: () => getRoomPlanHistory(session!, entryId),
+    enabled: !!session,
+    staleTime: 60_000,
+  });
+
+  const item = historyQuery.data?.rooms.find((r) => r.currentRoomId === roomId) ?? null;
+  if (!item) return null;
+
+  const changed = item.roomChanged || item.bedTypeChanged;
+  const label = item.initialRoomNumber
+    ? `Room ${item.initialRoomNumber}${item.initialBedType ? ` · ${bedLabel(item.initialBedType)}${item.initialBedType === "TWIN" ? " beds" : " bed"}` : ""}`
+    : "not recorded";
+
+  const titleBits: string[] = [];
+  if (item.initialRoomNumber) {
+    titleBits.push(
+      `First selection: Room ${item.initialRoomNumber}${item.initialRoomTypeName ? ` (${item.initialRoomTypeName})` : ""}${
+        item.initialBedType ? `, ${bedLabel(item.initialBedType)} bed setup` : ""
+      }`,
+    );
+  } else {
+    titleBits.push("The first selection predates the room-change record — origin unknown");
+  }
+  for (const c of item.changes) {
+    titleBits.push(
+      `Changed ${shortDate(c.at)}: Room ${c.fromRoomNumber ?? "?"} → ${c.toRoomNumber ?? "?"}${c.reason ? ` (${c.reason})` : ""}`,
+    );
+  }
+  if (item.bedTypeChanged) {
+    titleBits.push(`Bed setup was ${bedLabel(item.initialBedType)} at selection — now ${bedLabel(item.currentBedType)}`);
+  }
+
+  return (
+    <span
+      className={`tag${changed ? " warn" : ""}`}
+      title={titleBits.join("\n")}
+      style={{ whiteSpace: "nowrap" }}
+    >
+      Initially: {label}
+    </span>
   );
 }
 
@@ -241,6 +355,8 @@ export function BedTypeEditor({ roomId }: { roomId: string }) {
     onSuccess: (r) => {
       toast.success(`Room ${r.roomNumber} set to ${r.bedType === "TWIN" ? "Twin beds" : `${bedLabel(r.bedType)} bed`}`);
       void queryClient.invalidateQueries({ queryKey: ["rooms-catalog"] });
+      // The "Initially" cells compare against the live registry — keep them honest.
+      void queryClient.invalidateQueries({ queryKey: ["room-plan-history"] });
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Could not change the bed type"),
   });

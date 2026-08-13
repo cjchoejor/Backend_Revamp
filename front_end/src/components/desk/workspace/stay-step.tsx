@@ -30,7 +30,7 @@ import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { RoomCompositionSummary } from "./room-composition-summary";
-import { BedTypeEditor, RoomChangeControl } from "./room-change-control";
+import { BedTypeEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -317,8 +317,9 @@ export function StayStep({
       {/* Rooms in use (2026-08-12, operator ruling): each room carries its live bed-setup
           dropdown AND an in-place "Change room" — the swap runs the whole governed journey
           server-side (new segment, availability re-checked, silent re-price, back to Stay)
-          and takes effect from tonight; slept nights stay billed on the old room. L2+ (the
-          change control hides itself below that). */}
+          and takes effect from tonight; slept nights stay billed on the old room. Same-type
+          swaps are L1+; cross-type upgrades/downgrades need FOM (L2+) — the picker locks
+          those options below that (2026-08-13 ruling). */}
       {distinctRooms.length > 0 && (
         <div className="block">
           <BlockH>
@@ -333,7 +334,11 @@ export function StayStep({
                   style={{ padding: "8px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
                 >
                   <span>Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}</span>
-                  <BedTypeEditor roomId={a.roomId} />
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                    {/* What this slot STARTED as (2026-08-13) — survives every room/bed change. */}
+                    <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
+                    <BedTypeEditor roomId={a.roomId} />
+                  </span>
                 </div>
                 <RoomChangeControl
                   entry={entry}

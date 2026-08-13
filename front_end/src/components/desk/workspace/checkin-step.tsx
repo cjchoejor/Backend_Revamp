@@ -1,10 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BedDouble, Check, Crown, KeyRound, ShieldCheck } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
+import { getChildPolicy } from "@/lib/api/child-policy";
+import { listIdentityProofs } from "@/lib/api/identity-proofs";
+import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, seatPartyByComposition } from "@/lib/desk/party-rooms";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
 import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
@@ -13,7 +16,7 @@ import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { AdvanceSettlementBlock } from "./advance-settlement";
 import { IdentityProofBlock } from "./identity-proof";
-import { BedTypeEditor, RoomChangeControl } from "./room-change-control";
+import { BedTypeEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -75,6 +78,124 @@ export function CheckInStep({
   });
   const paymentReconciled =
     !!folio?.advancePaymentReconciliationComplete || paymentStatusQuery.data?.satisfied === true;
+
+  // ── Per-room detail + guests, mirroring the S5 Room-assignment block (2026-08-13, operator
+  // request: "same UI as S5 on S6"). Who sleeps where is the shared deterministic derivation
+  // in party-rooms.ts; names typed into the guest-detail table above replace the generic
+  // labels LIVE (same ["identity-proofs"] query the table writes through).
+  const [openRooms, setOpenRooms] = useState<Set<string>>(new Set());
+  const toggleRoom = (id: string) =>
+    setOpenRooms((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+  });
+  const proofsQuery = useQuery({
+    queryKey: ["identity-proofs", entry.id],
+    queryFn: () => listIdentityProofs(session!, entry.id),
+    enabled: !!session,
+  });
+  const compByRoom = useMemo(
+    () => new Map((operativeRoomCompositions(entry) ?? []).map((c) => [c.roomId, c])),
+    [entry],
+  );
+  const guestsByRoom = useMemo(() => {
+    const seat = seatPartyByComposition(
+      entry,
+      childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5,
+      childPolicyQuery.data?.ageBands.childMaxAge ?? 10,
+    );
+    const labels = partySlotLabels(entry);
+    const named = new Map<string, string>();
+    for (const p of proofsQuery.data?.items ?? []) {
+      if (p.entryId === entry.id && !p.hasFile && p.subjectKey && p.subjectLabel?.trim()) {
+        named.set(p.subjectKey, p.subjectLabel.trim());
+      }
+    }
+    const m = new Map<string, string[]>();
+    for (const [slot, rId] of seat) {
+      m.set(rId, [...(m.get(rId) ?? []), named.get(slot) ?? labels.get(slot) ?? slot]);
+    }
+    return m;
+  }, [entry, childPolicyQuery.data, proofsQuery.data]);
+  const detailButton = (id: string) => (
+    <button type="button" className="btn btn-ghost btn-sm" onClick={() => toggleRoom(id)}>
+      {openRooms.has(id) ? "Hide" : "Details"}
+    </button>
+  );
+  const roomDetail = (id: string) => {
+    if (!openRooms.has(id)) return null;
+    const c = compByRoom.get(id);
+    const guests = guestsByRoom.get(id) ?? [];
+    if (!c && guests.length === 0) {
+      return (
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "4px 0 0" }}>
+          No composition recorded for this room at Negotiation — occupants and meals were set on the
+          Quote step&rsquo;s guest board.
+        </p>
+      );
+    }
+    const adults = c?.adultCount ?? 0;
+    const cnb6 = c?.cnb6To10Count ?? 0;
+    const cnb0 = c?.cnbUnder6Count ?? 0;
+    const beds = c?.extraBedCount ?? 0;
+    const flags = [
+      c?.isFoc ? "FOC — fully waived" : null,
+      c?.serviceChargeApplies === false ? "service charge waived" : null,
+      c?.gstApplies === false ? "GST waived" : null,
+    ].filter(Boolean);
+    return (
+      <div style={{ margin: "4px 0 0", padding: "8px 10px", borderRadius: "var(--r-sm)", background: "var(--cream)", display: "grid", gap: 4, fontSize: 11.5 }}>
+        <div>
+          <span style={{ color: "var(--ink-3)" }}>Guests: </span>
+          {guests.length > 0 ? guests.join(" · ") : "—"}
+        </div>
+        {c && (
+          <>
+            <div>
+              <span style={{ color: "var(--ink-3)" }}>Occupants: </span>
+              {adults} adult{adults === 1 ? "" : "s"}
+              {cnb6 > 0 && `, ${cnb6} child${cnb6 === 1 ? "" : "ren"} 6–10`}
+              {cnb0 > 0 && `, ${cnb0} under-6`}
+              {beds > 0 && ` · ${beds} extra bed${beds === 1 ? "" : "s"}`}
+            </div>
+            <div>
+              <span style={{ color: "var(--ink-3)" }}>Meals: </span>
+              {mealPlanSummary(c)}
+            </div>
+            {(c.negotiatedRoomRate != null || c.negotiatedExtraBedRate != null) && (
+              <div style={{ color: "var(--ink-3)" }}>
+                Negotiated:{" "}
+                {c.negotiatedRoomRate != null && `room ${money(c.negotiatedRoomRate, "BTN")}/night`}
+                {c.negotiatedRoomRate != null && c.negotiatedExtraBedRate != null && " · "}
+                {c.negotiatedExtraBedRate != null && `extra bed ${money(c.negotiatedExtraBedRate, "BTN")}/night`}
+              </div>
+            )}
+            {flags.length > 0 && <div style={{ color: "var(--warn)" }}>{flags.join(" · ")}</div>}
+          </>
+        )}
+      </div>
+    );
+  };
+  // Guest names shown by default INSIDE the room box (2026-08-13 refinement — a floating chip
+  // strip below the box read as detached): a muted second line under the room title. Typing a
+  // name in the guest-detail table above replaces "Adult 2" here the moment it saves; the
+  // Details dropdown keeps the full breakdown.
+  const guestNamesInBox = (id: string) => {
+    const guests = guestsByRoom.get(id) ?? [];
+    if (guests.length === 0) return null;
+    return (
+      <span style={{ fontSize: 11.5, color: "var(--ink-3)", paddingLeft: 22, lineHeight: 1.4 }}>
+        {guests.join(" · ")}
+      </span>
+    );
+  };
 
   const currency = folio?.lines?.[0]?.currency;
 
@@ -169,56 +290,62 @@ export function CheckInStep({
                 <span className="tag">check-in covers all</span>
               </div>
             )}
-            <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "grid", gap: 8 }}>
               {distinctAssignments.map((a) => (
-                <div
-                  key={a.id}
-                  className="fact b-bound"
-                  style={{ padding: "9px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
-                >
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                    <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
-                    Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
-                    {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
-                    {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
-                  </span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-                    {/* Bed setup is editable S5–S7 (2026-08-12, operator request). */}
-                    <BedTypeEditor roomId={a.roomId} />
-                    {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
-                        as it is handed over — the radio toggles on click, so a mis-click undoes. */}
-                    <label
-                      style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
-                      title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
-                    >
-                      <input
-                        type="radio"
-                        checked={!!issuedKeyRooms[a.roomId]}
-                        onClick={() => toggleKeyRoom(a.roomId)}
-                        readOnly
-                        style={{ cursor: "pointer" }}
-                      />
-                      Key issued
-                    </label>
-                  </span>
+                <div key={a.id}>
+                  <div
+                    className="fact b-bound"
+                    style={{ padding: "9px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between", alignItems: "flex-start" }}
+                  >
+                    <span style={{ display: "grid", gap: 2 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
+                        Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                        {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
+                        {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
+                      </span>
+                      {/* Who sleeps here — inside the box, visible by default (2026-08-13). */}
+                      {guestNamesInBox(a.roomId)}
+                    </span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                      {/* What this slot STARTED as (2026-08-13, operator request) — survives every
+                          room/bed change; amber when it has moved since. */}
+                      <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
+                      {/* Bed setup is editable S5–S7 (2026-08-12, operator request). */}
+                      <BedTypeEditor roomId={a.roomId} />
+                      {/* Per-room composition details, same as the S5 block (2026-08-13). */}
+                      {detailButton(a.roomId)}
+                      {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
+                          as it is handed over — the radio toggles on click, so a mis-click undoes. */}
+                      <label
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                        title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
+                      >
+                        <input
+                          type="radio"
+                          checked={!!issuedKeyRooms[a.roomId]}
+                          onClick={() => toggleKeyRoom(a.roomId)}
+                          readOnly
+                          style={{ cursor: "pointer" }}
+                        />
+                        Key issued
+                      </label>
+                    </span>
+                  </div>
+                  {/* In-place room change, per row like S5 (2026-08-13 — was a separate section
+                      at the bottom): swap ONLY this room without leaving the page. Same-type
+                      swaps are L1+; a cross-type upgrade/downgrade needs FOM (L2+). */}
+                  <div style={{ marginTop: 4 }}>
+                    <RoomChangeControl
+                      entry={entry}
+                      fromRoomId={a.roomId}
+                      fromRoomNumber={a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                      onChanged={invalidate}
+                      compact
+                    />
+                  </div>
+                  {roomDetail(a.roomId)}
                 </div>
-              ))}
-            </div>
-            {/* In-place room change (2026-08-12, operator ruling — replaces the old
-                "release everything and reopen at Inquiry" affordance): swap ONE room without
-                leaving this page. The backend opens a new segment, re-checks availability the
-                way S1 does, re-prices silently, and walks the booking straight back to
-                Check-in. L2+ (the control hides itself below that). */}
-            <div style={{ marginTop: 11, borderTop: "1px dashed var(--line-2)", paddingTop: 11, display: "grid", gap: 8 }}>
-              {distinctAssignments.map((a) => (
-                <RoomChangeControl
-                  key={`chg-${a.roomId}`}
-                  entry={entry}
-                  fromRoomId={a.roomId}
-                  fromRoomNumber={a.room?.roomNumber ?? a.roomId.slice(0, 8)}
-                  onChanged={invalidate}
-                  compact={distinctAssignments.length > 1}
-                />
               ))}
             </div>
           </>

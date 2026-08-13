@@ -103,6 +103,8 @@ export async function createEntry(
     childCount?: number;
     childAges?: number[];
     numberOfRooms?: number;
+    /** Bed-setup breakdown ("5 King + 2 Twin"), map bedType → count (2026-08-13). */
+    bedTypeRequest?: Record<string, number>;
     contactPersonName?: string;
     contactPersonPhone?: string;
     otaSource?: boolean;
@@ -143,6 +145,8 @@ export async function updateEntryIntake(
     childCount?: number;
     childAges?: number[];
     numberOfRooms?: number;
+    /** Bed-setup breakdown ("5 King + 2 Twin"). Explicit null clears the stored request. */
+    bedTypeRequest?: Record<string, number> | null;
     contactPersonName?: string;
     contactPersonPhone?: string;
     useType?: string;
@@ -680,6 +684,19 @@ export type RoomChangeCandidate = {
   physicalState: string;
   isDeficient: boolean;
   nights: number;
+  /** S1-style standing over the substitution nights (2026-08-13) — only FREE is pickable. */
+  availability: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
+  selectable: boolean;
+  /** Authority the pick needs (p58): same-type L1, cross-type (upgrade/downgrade) L2. */
+  requiredLevel: "L1" | "L2";
+  claimedBy: {
+    guestName: string | null;
+    bookingRef: string | null;
+    startDate: string;
+    endDate: string;
+    holdKind: "COMMITTED" | "SPECULATIVE" | null;
+  } | null;
+  blockedReason: string | null;
 };
 
 export type RoomChangeCandidates = {
@@ -724,4 +741,34 @@ export async function changeBookingRoom(
     session,
     body: input,
   });
+}
+
+/**
+ * Room-plan history (2026-08-13) — what was INITIALLY selected, per room of the current plan:
+ * the first sealed selection followed through the room-change chain, plus each initial room's
+ * bed setup as it stood at selection time. Drives the "Initially" column on the S5–S7 room
+ * tables, which stays on screen after every room/bed change.
+ */
+export type RoomPlanHistoryItem = {
+  currentRoomId: string;
+  currentRoomNumber: string | null;
+  currentRoomTypeName: string | null;
+  currentBedType: string | null;
+  initialRoomId: string | null;
+  initialRoomNumber: string | null;
+  initialRoomTypeName: string | null;
+  initialBedType: string | null;
+  roomChanged: boolean;
+  bedTypeChanged: boolean;
+  changes: Array<{ fromRoomNumber: string | null; toRoomNumber: string | null; at: string; reason: string | null }>;
+};
+
+export type RoomPlanHistory = {
+  entryId: string;
+  initialSelectedAt: string | null;
+  rooms: RoomPlanHistoryItem[];
+};
+
+export async function getRoomPlanHistory(session: Session, entryId: string) {
+  return apiRequest<RoomPlanHistory>(`/api/entries/${entryId}/room-plan-history`, { session });
 }

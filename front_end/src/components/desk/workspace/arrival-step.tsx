@@ -32,7 +32,7 @@ import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
 import { IdentityProofBlock } from "./identity-proof";
-import { RoomChangeControl } from "./room-change-control";
+import { InitialSelectionCell, RoomChangeControl } from "./room-change-control";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";
@@ -342,6 +342,38 @@ export function ArrivalStep({
     return (
       <span style={{ color: "var(--ink-3)" }} title={parts.join(", ") || undefined}>
         {" "}· {total} guest{total === 1 ? "" : "s"}
+      </span>
+    );
+  };
+
+  // Extra-bed fact on every row (2026-08-13, operator request): whether this room's negotiated
+  // composition includes an extra bed — stated BOTH ways, so "no extra bed" is a recorded
+  // answer the operator can trust rather than an absence. Reads the same S2 composition as the
+  // Details expansion; hidden when the booking has no composition to read from.
+  const extraBedTag = (rId: string) => {
+    const c = compByRoom.get(rId);
+    if (!c) return null;
+    const beds = c.extraBedCount ?? 0;
+    if (beds > 0) {
+      return (
+        <span
+          className="tag"
+          style={{ whiteSpace: "nowrap" }}
+          title={`${beds} extra bed${beds === 1 ? "" : "s"} on this room's composition (set at Negotiation)${
+            c.negotiatedExtraBedRate != null ? ` · negotiated ${money(c.negotiatedExtraBedRate, "BTN")}/night` : ""
+          }`}
+        >
+          {beds === 1 ? "extra bed" : `${beds} extra beds`}
+        </span>
+      );
+    }
+    return (
+      <span
+        className="tag"
+        style={{ color: "var(--ink-3)", whiteSpace: "nowrap" }}
+        title="This room's composition includes no extra bed"
+      >
+        no extra bed
       </span>
     );
   };
@@ -692,6 +724,9 @@ export function ArrivalStep({
                         {peopleOnRow(a.roomId)}
                       </span>
                       <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        {/* What this slot STARTED as (2026-08-13) — survives room/bed changes. */}
+                        <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
+                        {extraBedTag(a.roomId)}
                         {statusTag(a.roomId)}
                         {bedSelect(a.roomId)}
                         {detailButton(a.roomId)}
@@ -740,6 +775,9 @@ export function ArrivalStep({
                             {peopleOnRow(id)}
                           </span>
                           <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                            {/* What this slot STARTED as (2026-08-13) — survives room/bed changes. */}
+                            <InitialSelectionCell entryId={entry.id} roomId={id} />
+                            {extraBedTag(id)}
                             {statusTag(id)}
                             {bedSelect(id)}
                             {detailButton(id)}
@@ -802,6 +840,9 @@ export function ArrivalStep({
                           {peopleOnRow(sel.id)}
                         </span>
                         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          {/* What this slot STARTED as (2026-08-13) — survives room/bed changes. */}
+                          <InitialSelectionCell entryId={entry.id} roomId={sel.id} />
+                          {extraBedTag(sel.id)}
                           {statusTag(sel.id)}
                           {bedSelect(sel.id)}
                           {detailButton(sel.id)}
@@ -882,13 +923,15 @@ export function ArrivalStep({
                 roomOptions.find((r) => r.id === fromId)?.roomNumber ??
                 fromId.slice(0, 6);
               return (
-                <div style={{ marginTop: 8 }}>
+                <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <RoomChangeControl
                     entry={entry}
                     fromRoomId={fromId}
                     fromRoomNumber={fromNumber}
                     onChanged={invalidate}
                   />
+                  {/* What this booking STARTED with (2026-08-13) — stays visible after changes. */}
+                  <InitialSelectionCell entryId={entry.id} roomId={fromId} />
                 </div>
               );
             })()}
