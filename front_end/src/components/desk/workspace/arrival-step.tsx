@@ -911,6 +911,17 @@ export function ArrivalStep({
                 <span style={{ fontSize: 13, fontWeight: 500 }}>{taskLabel(task.taskType)}</span>
                 <span className={`tag ${task.status === "PENDING" ? "warn" : ""}`}>{task.status}</span>
               </div>
+              {/* "Guest details got or not" (2026-08-12, operator request): the checklist item
+                  mirrors the guest-detail table's live coverage and ticks ITSELF the moment
+                  every guest has a document number or an ID photo (VIP bookings are exempt,
+                  same as the S6 gate). Complete/Waive stay for the operator's judgement call. */}
+              {task.taskType === "GUEST_DETAILS_CAPTURED" && proofsQuery.data?.coverage && (
+                <p style={{ fontSize: 11.5, color: task.status === "PENDING" ? "var(--warn)" : "var(--ink-3)", margin: "4px 0 0", lineHeight: 1.5 }}>
+                  {proofsQuery.data.coverage.vipExempt
+                    ? "VIP booking — guest details not required; this ticks itself."
+                    : `${proofsQuery.data.coverage.filledSlots} of ${proofsQuery.data.coverage.totalSlots} guests recorded in the guest table above — it ticks itself when everyone's in.`}
+                </p>
+              )}
               {task.status === "PENDING" && (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
                   <button className="btn btn-ghost btn-sm" disabled={taskM.isPending} onClick={() => taskM.mutate({ taskId: task.id, action: "COMPLETE" })}>
