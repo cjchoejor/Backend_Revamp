@@ -887,9 +887,16 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     }
     return m;
   }, [roomsCatalog.data]);
+  // Bed setup per room, for the row labels — the current setup, with the S1 nuance that
+  // King⇄Twin stock converts freely (the request tally below judges by what a room CAN be).
+  const bedTypeByRoomId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of roomsCatalog.data?.items ?? []) if (r.bedType) m.set(r.id, r.bedType);
+    return m;
+  }, [roomsCatalog.data]);
   const statusRows = useMemo(
-    () => roomStatusRows(availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId),
-    [availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId],
+    () => roomStatusRows(availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId, bedTypeByRoomId),
+    [availableRooms, deficientRooms, unavailableRooms, extBedsByRoomId, bedTypeByRoomId],
   );
   // Multi-room selection is driven purely by party size (Entry.numberOfRooms), never the source
   // channel. numberOfRooms > 1 swaps the single-select cards for the multi-room / per-night picker.
@@ -1038,6 +1045,41 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
     [displayNights, nightOverrides, baseSel],
   );
   const nightsDiffer = differingNights.length > 0;
+
+  // Bed-setup request tally (2026-08-13, operator request — "5 King and 2 Twin"): judge the
+  // picked rooms against Entry.bedTypeRequest the way the backend judges achievability — by
+  // CONVERSION GROUP (a King/Twin room can be set up either way, so the exact split is decided
+  // on Arrival's bed dropdowns; what S1 must secure is enough rooms of the right stock). One
+  // chip per group in the save row: green when the picked rooms cover the ask, amber while short.
+  const bedRequestTally = useMemo(() => {
+    const req = (entry.bedTypeRequest as Record<string, number> | null | undefined) ?? null;
+    if (!req || Object.keys(req).length === 0) return null;
+    const setupsOf = new Map<string, string[]>();
+    for (const r of roomsCatalog.data?.items ?? []) {
+      const setups = (r.allowedBedTypes?.length ? r.allowedBedTypes : r.bedType ? [r.bedType] : []).slice().sort();
+      if (setups.length > 0) setupsOf.set(r.id, setups);
+    }
+    const groupOfType = new Map<string, string>();
+    for (const setups of setupsOf.values()) for (const t of setups) groupOfType.set(t, setups.join("/"));
+    const pickedIds = new Set([...baseSel, ...Object.values(nightOverrides).flat()]);
+    const groups = new Map<string, { asked: number; parts: string[]; picked: number }>();
+    const label = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
+    for (const [t, n] of Object.entries(req)) {
+      if (!n) continue;
+      const g = groupOfType.get(t) ?? t;
+      const cur = groups.get(g) ?? { asked: 0, parts: [], picked: 0 };
+      cur.asked += n;
+      cur.parts.push(`${n} ${label(t)}`);
+      groups.set(g, cur);
+    }
+    for (const id of pickedIds) {
+      const g = (setupsOf.get(id) ?? []).join("/");
+      const grp = groups.get(g);
+      if (grp) grp.picked += 1;
+    }
+    return [...groups.values()].map((g) => ({ ...g, text: g.parts.join(" + "), ok: g.picked >= g.asked }));
+  }, [entry.bedTypeRequest, roomsCatalog.data, baseSel, nightOverrides]);
+
   /**
    * Row click = "use this room for the WHOLE stay", so it writes every night, not just the base.
    *
@@ -1351,6 +1393,24 @@ export function InquiryStep({ entry }: { entry: EntryDetail }) {
           ? `${nightsReady} of ${displayNights.length} nights ready`
           : `${baseSel.length} of ${numberOfRooms} selected`}
       </span>
+      {/* The guest's bed-setup ask ("5 King + 2 Twin"), tallied live against the picked rooms.
+          Judged by convertible stock — the exact King/Twin split is set on Arrival's bed
+          dropdowns; what this step must secure is enough rooms of the right kind. */}
+      {bedRequestTally?.map((g) => (
+        <span
+          key={g.text}
+          className={`tag${g.ok ? "" : " warn"}`}
+          style={{ whiteSpace: "nowrap" }}
+          title={
+            g.ok
+              ? `The guest asked for ${g.text} — the ${g.picked} picked room${g.picked === 1 ? "" : "s"} of this stock cover it. The exact bed split is set at Arrival.`
+              : `The guest asked for ${g.text} — only ${g.picked} of the ${g.asked} rooms picked so far can be set up so. Pick ${g.asked - g.picked} more of this stock.`
+          }
+        >
+          Asked: {g.text} · {g.picked}/{g.asked}
+          {g.ok ? " ✓" : ""}
+        </span>
+      ))}
       {/* The selection has exactly one authority — this chip says what it currently holds, in
           BOTH views, so "which one is active" is never a guess. Differences are droppable in one
           click rather than by hunting each overridden cell. */}

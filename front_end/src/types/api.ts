@@ -34,6 +34,8 @@ export type EntryListItem = {
   childAges?: number[] | null;
   /** Number of rooms requested. May be null on legacy entries pre-Phase-D. */
   numberOfRooms?: number | null;
+  /** Bed-setup breakdown of the room request ("5 King + 2 Twin"), map bedType → count (2026-08-13). */
+  bedTypeRequest?: Record<string, number> | null;
   /** Set at S1 by Policy 64. GROUP_MASTER = auto-classified as group; NULL = individual. */
   groupBillingMode?: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
   useType?: string | null;

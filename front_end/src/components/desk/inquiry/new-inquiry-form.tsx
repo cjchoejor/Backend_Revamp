@@ -40,6 +40,7 @@ import {
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
 import { createEntry, getEntry, updateEntryIntake } from "@/lib/api/entries";
+import { listRooms } from "@/lib/api/rooms";
 import { getChildPolicy, getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { BackendRail, type RailGroup } from "@/components/desk/workspace/backend-inline";
 import { DateField, nextDayIso } from "@/components/desk/date-field";
@@ -719,6 +720,10 @@ export function DeskNewInquiryForm() {
   // by the source channel. A walk-in family of 5 gets the same multi-room option a travel
   // agent would. Kept in-range by the effect below.
   const [numberOfRooms, setNumberOfRooms] = useState("1");
+  // Bed-setup breakdown of the room request ("5 King + 2 Twin", 2026-08-13) — string drafts
+  // per setup, parsed on submit into Entry.bedTypeRequest. Optional and possibly partial
+  // ("at least 2 King" on a 5-room booking is legal).
+  const [bedTypeCounts, setBedTypeCounts] = useState<Record<string, string>>({});
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   // Number of nights — the primary stay-length input. Check-out derives from check-in + nights;
@@ -753,6 +758,14 @@ export function DeskNewInquiryForm() {
     setChildren(String(editEntry.childCount ?? 0));
     setChildAges((editEntry.childAges ?? []).map(String));
     setNumberOfRooms(String(editEntry.numberOfRooms ?? 1));
+    setBedTypeCounts(
+      Object.fromEntries(
+        Object.entries((editEntry.bedTypeRequest as Record<string, number> | null | undefined) ?? {}).map(([t, n]) => [
+          t,
+          String(n),
+        ]),
+      ),
+    );
     const ci = editEntry.checkInDate?.slice(0, 10) ?? "";
     const co = editEntry.checkOutDate?.slice(0, 10) ?? "";
     setCheckIn(ci);
@@ -956,6 +969,85 @@ export function DeskNewInquiryForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowedRoomCounts]);
 
+  // --- Bed-setup breakdown ("5 King + 2 Twin", 2026-08-13) -----------------------------------
+  // Vocabulary + achievable stock come from the live rooms registry (each room's
+  // `allowedBedTypes` — King⇄Twin are the same convertible stock), never hardcoded: add a room
+  // in admin and the options and ceilings move on the next fetch.
+  const roomsCatalogQuery = useQuery({
+    queryKey: ["rooms-catalog"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+  });
+  const BED_ORDER = ["KING", "QUEEN", "TWIN", "SINGLE"];
+  const bedLabelOf = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
+  const bedTypeOptions = useMemo(() => {
+    const achievable = new Map<string, number>();
+    for (const r of roomsCatalogQuery.data?.items ?? []) {
+      const setups = r.allowedBedTypes?.length ? r.allowedBedTypes : r.bedType ? [r.bedType] : [];
+      for (const t of setups) achievable.set(t, (achievable.get(t) ?? 0) + 1);
+    }
+    return [...achievable.entries()]
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => {
+        const ia = BED_ORDER.indexOf(a.type);
+        const ib = BED_ORDER.indexOf(b.type);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.type.localeCompare(b.type);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomsCatalogQuery.data]);
+  const parsedBedRequest = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const [t, v] of Object.entries(bedTypeCounts)) {
+      const n = parseInt(v || "", 10);
+      if (Number.isFinite(n) && n > 0) out[t] = n;
+    }
+    return out;
+  }, [bedTypeCounts]);
+  const bedRequestSum = Object.values(parsedBedRequest).reduce((a, b) => a + b, 0);
+  // Pooled stock check mirroring the backend rule: setups sharing convertible stock (identical
+  // `allowedBedTypes` signature — King/Twin) are judged together, Queen/Single stand alone.
+  const bedStockShortfall = useMemo(() => {
+    if (bedRequestSum === 0) return null;
+    const stockByGroup = new Map<string, number>();
+    const groupOfType = new Map<string, string>();
+    for (const r of roomsCatalogQuery.data?.items ?? []) {
+      const setups = (r.allowedBedTypes?.length ? r.allowedBedTypes : r.bedType ? [r.bedType] : []).slice().sort();
+      if (setups.length === 0) continue;
+      const g = setups.join("/");
+      stockByGroup.set(g, (stockByGroup.get(g) ?? 0) + 1);
+      for (const t of setups) groupOfType.set(t, g);
+    }
+    const askByGroup = new Map<string, { count: number; types: string[] }>();
+    for (const [t, n] of Object.entries(parsedBedRequest)) {
+      const g = groupOfType.get(t) ?? t;
+      const cur = askByGroup.get(g) ?? { count: 0, types: [] };
+      cur.count += n;
+      cur.types.push(t);
+      askByGroup.set(g, cur);
+    }
+    for (const [g, ask] of askByGroup) {
+      const stock = stockByGroup.get(g) ?? 0;
+      if (ask.count > stock) {
+        return { asked: ask.count, stock, types: ask.types.map(bedLabelOf).join(" + "), pooled: g.includes("/") };
+      }
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsedBedRequest, bedRequestSum, roomsCatalogQuery.data]);
+  const roomsNum = parseInt(numberOfRooms || "0", 10) || 0;
+  const bedSetupOverRooms = bedRequestSum > 0 && bedRequestSum > roomsNum;
+  const bedSetupOk = bedRequestSum === 0 || (!bedSetupOverRooms && !bedStockShortfall);
+  // The bed setup can only RAISE the room count — a smaller sum is a partial preference
+  // ("at least 2 King on a 5-room booking") and must never lower what the operator picked.
+  useEffect(() => {
+    if (bedRequestSum <= 0) return;
+    const current = parseInt(numberOfRooms || "0", 10) || 0;
+    if (bedRequestSum > current && allowedRoomCounts.includes(bedRequestSum)) {
+      setNumberOfRooms(String(bedRequestSum));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bedRequestSum, allowedRoomCounts]);
+
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
     return () => clearTimeout(t);
@@ -1035,8 +1127,12 @@ export function DeskNewInquiryForm() {
   const corporateContextComplete = !needsCorporateContext || (corpClientRef.trim() !== "" && corpCoordinator.trim() !== "");
   const canSubmit = isEdit
     ? // Editing an existing booking: guest + channel are fixed, so only the stay fields gate the save.
-      !!editEntry && agesComplete && !!checkIn && !!checkOut && !exceedsHotelCapacity
-    : (mode === "new" ? canSubmitNew : !!selectedGuest) && agesComplete && corporateContextComplete && !exceedsHotelCapacity;
+      !!editEntry && agesComplete && !!checkIn && !!checkOut && !exceedsHotelCapacity && bedSetupOk
+    : (mode === "new" ? canSubmitNew : !!selectedGuest) &&
+      agesComplete &&
+      corporateContextComplete &&
+      !exceedsHotelCapacity &&
+      bedSetupOk;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -1055,6 +1151,8 @@ export function DeskNewInquiryForm() {
           childAges: c > 0 ? (parsedAges.length === c ? parsedAges : undefined) : [],
           guestCount: a + c,
           numberOfRooms: Math.max(1, parseInt(numberOfRooms || "1", 10) || 1),
+          // Explicit null clears a previously-stored bed setup when the operator empties it.
+          bedTypeRequest: bedRequestSum > 0 ? parsedBedRequest : null,
           expectedVersion: editEntry?.version,
         });
       }
@@ -1120,6 +1218,7 @@ export function DeskNewInquiryForm() {
         childCount: c,
         childAges: c > 0 && parsedAges.length === c ? parsedAges : undefined,
         numberOfRooms: Math.max(1, parseInt(numberOfRooms || "1", 10) || 1),
+        bedTypeRequest: bedRequestSum > 0 ? parsedBedRequest : undefined,
         otaSource: channel.channel === "OTA",
         contactPersonName: contactPersonName || undefined,
         contactPersonPhone: contactPersonPhone || undefined,
@@ -1673,6 +1772,56 @@ export function DeskNewInquiryForm() {
               </p>
             )}
           </div>
+
+          {/* Bed setup asked for (2026-08-13, operator request: "5 King and 2 Twin"). Options and
+              ceilings come from the live rooms registry — King⇄Twin share convertible stock, so
+              both show the same pool. Optional; a partial spec ("at least 2 King") is legal, and
+              typing counts raises the room count to match (never lowers it). */}
+          {bedTypeOptions.length > 0 && (
+            <div className="field">
+              <label>Bed setup asked for (optional)</label>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                {bedTypeOptions.map(({ type, count }) => (
+                  <div key={type} style={{ display: "grid", gap: 3 }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      {bedLabelOf(type)}
+                      <span title={`The hotel can set up at most ${count} ${bedLabelOf(type)} room${count === 1 ? "" : "s"}`}>
+                        {" "}(up to {count})
+                      </span>
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={count}
+                      placeholder="0"
+                      value={bedTypeCounts[type] ?? ""}
+                      onChange={(e) => setBedTypeCounts((prev) => ({ ...prev, [type]: e.target.value }))}
+                      style={{ width: 86 }}
+                    />
+                  </div>
+                ))}
+              </div>
+              {bedStockShortfall ? (
+                <p style={{ fontSize: 11.5, color: "var(--stop)", fontWeight: 600, margin: "6px 0 0", lineHeight: 1.5 }}>
+                  The hotel can’t set up {bedStockShortfall.asked} {bedStockShortfall.types} room
+                  {bedStockShortfall.asked === 1 ? "" : "s"} — its bed stock supports at most {bedStockShortfall.stock}
+                  {bedStockShortfall.pooled ? " (King and Twin rooms share the same convertible stock)" : ""}.
+                </p>
+              ) : bedSetupOverRooms ? (
+                <p style={{ fontSize: 11.5, color: "var(--stop)", fontWeight: 600, margin: "6px 0 0", lineHeight: 1.5 }}>
+                  The bed setup adds up to {bedRequestSum} rooms but the party size allows at most {roomRange.max} — trim
+                  the setup or grow the party.
+                </p>
+              ) : bedRequestSum > 0 ? (
+                <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                  {bedRequestSum === roomsNum
+                    ? `Adds up to ${bedRequestSum} room${bedRequestSum === 1 ? "" : "s"} — matches the room count.`
+                    : `${bedRequestSum} of the ${roomsNum} rooms have a stated bed setup — the rest are flexible.`}{" "}
+                  Recorded on the booking; the Inquiry step tallies picked rooms against it.
+                </p>
+              ) : null}
+            </div>
+          )}
 
           <div className="frow" style={{ gridTemplateColumns: "1fr 90px 1fr" }}>
             <div className="field">

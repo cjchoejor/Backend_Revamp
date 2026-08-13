@@ -28,6 +28,9 @@ export type RoomStatusRow = {
   roomTypeName: string;
   /** Max extra beds for the room's type (from the rooms catalog); null → "—". */
   extBeds: number | null;
+  /** Current bed setup (from the rooms catalog) — its own pinned "Beds" column, so a
+      "5 King + 2 Twin" request can be fulfilled by sight (2026-08-13). */
+  bedType?: string | null;
   /** Which availability bucket the room came from. */
   bucket: "available" | "deficient" | "unavailable";
   /** Engine reason when bucket === "unavailable". */
@@ -47,6 +50,7 @@ export function roomStatusRows(
   deficient: AvailabilityRoomResult[],
   unavailable: AvailabilityRoomResult[],
   extBedsByRoomId: Map<string, number>,
+  bedTypeByRoomId?: Map<string, string>,
 ): RoomStatusRow[] {
   const seen = new Set<string>();
   const out: RoomStatusRow[] = [];
@@ -58,6 +62,7 @@ export function roomStatusRows(
       roomNumber: r.roomNumber ?? r.roomId.slice(0, 6),
       roomTypeName: r.roomTypeName ?? "Room",
       extBeds: extBedsByRoomId.get(r.roomId) ?? null,
+      bedType: bedTypeByRoomId?.get(r.roomId) ?? null,
       bucket,
       unavailabilityReason: r.unavailabilityReason,
       occupiedBy: r.occupiedBy,
@@ -260,6 +265,10 @@ export function RoomStatusTable({
     row.bucket !== "unavailable" && nights.every((n) => !occupiedByNight.get(n)?.has(row.roomId));
 
   const anyExtBeds = rows.some((r) => r.extBeds != null);
+  // Bed setup gets its OWN pinned column (2026-08-13 — it started as a "· Twin" suffix inside
+  // the Type cell, but Type is a fixed-width sticky column, so anything longer than
+  // "Suite · King" was painted over by the next pinned column and simply invisible).
+  const anyBedTypes = rows.some((r) => !!r.bedType);
   // Replaced the old "Booked by" column (2026-08-04, operator ruling). That column named ONE
   // holder per row, but a room is booked night by night — one guest can hold the first week and
   // another the next, so a single row-level name was wrong as often as it was right. The exact
@@ -291,8 +300,13 @@ export function RoomStatusTable({
   // offset is just the sum of the ones before it. Ext. Beds is pinned too when present: it sits
   // between Type and Booked by, and leaving a gap in the middle would let it slide underneath.
   const pinWidths: number[] = [dense ? 54 : 64, dense ? 92 : 110];
+  if (anyBedTypes) pinWidths.push(dense ? 48 : 58);
   if (anyExtBeds) pinWidths.push(dense ? 48 : 58);
   if (showSelectAll) pinWidths.push(dense ? 84 : 96);
+  // Column indexes shift with the optional columns — computed once so header and body agree.
+  const colBed = anyBedTypes ? 2 : -1;
+  const colExt = anyExtBeds ? 2 + (anyBedTypes ? 1 : 0) : -1;
+  const colSel = showSelectAll ? 2 + (anyBedTypes ? 1 : 0) + (anyExtBeds ? 1 : 0) : -1;
   const pinLefts = pinWidths.map((_, i) => pinWidths.slice(0, i).reduce((a, b) => a + b, 0));
   const pin = (i: number, extra?: CSSProperties): CSSProperties => ({
     left: pinLefts[i],
@@ -315,15 +329,24 @@ export function RoomStatusTable({
             <th className={pinCls(1)} style={pin(1)}>
               Type
             </th>
+            {anyBedTypes && (
+              <th
+                className={pinCls(colBed)}
+                style={pin(colBed, { textAlign: "center" })}
+                title="Current bed setup — King⇄Twin rooms can be rearranged on Arrival"
+              >
+                Beds
+              </th>
+            )}
             {anyExtBeds && (
-              <th className={pinCls(2)} style={pin(2, { textAlign: "center" })}>
+              <th className={pinCls(colExt)} style={pin(colExt, { textAlign: "center" })}>
                 Ext. Beds
               </th>
             )}
             {showSelectAll && (
               <th
-                className={pinCls(anyExtBeds ? 3 : 2)}
-                style={pin(anyExtBeds ? 3 : 2, { textAlign: "center" })}
+                className={pinCls(colSel)}
+                style={pin(colSel, { textAlign: "center" })}
                 title="Take every night this room is free — nights someone else holds are reported, not silently skipped"
               >
                 Select all
@@ -473,13 +496,22 @@ export function RoomStatusTable({
                 <td className={`rst-type ${pinCls(1)}`} style={pin(1)}>
                   {row.roomTypeName}
                 </td>
+                {anyBedTypes && (
+                  <td
+                    className={`rst-beds ${pinCls(colBed)}`}
+                    style={pin(colBed)}
+                    title="Current bed setup — King⇄Twin rooms can be rearranged on Arrival"
+                  >
+                    {row.bedType ? row.bedType.charAt(0) + row.bedType.slice(1).toLowerCase() : "—"}
+                  </td>
+                )}
                 {anyExtBeds && (
-                  <td className={`rst-beds ${pinCls(2)}`} style={pin(2)}>
+                  <td className={`rst-beds ${pinCls(colExt)}`} style={pin(colExt)}>
                     {row.extBeds ?? "—"}
                   </td>
                 )}
                 {showSelectAll && (
-                  <td className={`rst-selall ${pinCls(anyExtBeds ? 3 : 2)}`} style={pin(anyExtBeds ? 3 : 2)}>
+                  <td className={`rst-selall ${pinCls(colSel)}`} style={pin(colSel)}>
                     <button
                       type="button"
                       className={`rst-selall-btn${takenAll ? " on" : ""}`}
