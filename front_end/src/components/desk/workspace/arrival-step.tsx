@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BedDouble, Handshake, ListChecks } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +22,7 @@ import { AdvanceSettlementBlock } from "./advance-settlement";
 import { listRooms, setRoomBedType } from "@/lib/api/rooms";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
-import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, seatPartyByComposition } from "@/lib/desk/party-rooms";
+import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, roomStayRangesByRoom, seatPartyRoomsByComposition } from "@/lib/desk/party-rooms";
 import { deriveRoomStatus, ROOM_STATUS } from "@/lib/desk/rooms";
 import { money } from "@/lib/desk/workspace";
 import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
@@ -297,8 +297,23 @@ export function ArrivalStep({
     () => new Map((operativeRoomCompositions(entry) ?? []).map((c) => [c.roomId, c])),
     [entry],
   );
+  // Which NIGHTS each room holds (2026-08-14, operator request): shown on the rows and in the
+  // Details expansion — one range for a whole-stay room, several after a mid-stay split.
+  const stayRangesByRoom = useMemo(() => roomStayRangesByRoom(entry), [entry]);
+  // Rows in CHRONOLOGICAL order (2026-08-14, operator request): first night first, longer
+  // stays before shorter on a tie — so a split's rooms sit adjacent, in the order slept.
+  const roomChrono = (aId: string, bId: string) => {
+    const A = stayRangesByRoom.get(aId);
+    const B = stayRangesByRoom.get(bId);
+    return (
+      (A?.firstNight ?? "9999").localeCompare(B?.firstNight ?? "9999") ||
+      (B?.nightCount ?? 0) - (A?.nightCount ?? 0)
+    );
+  };
   const guestsByRoom = useMemo(() => {
-    const seat = seatPartyByComposition(
+    // Night-aware, MULTI-room seating (2026-08-14): after a split the same guests sleep in
+    // sequential rooms — each room lists its sleepers, so the later room isn't guest-less.
+    const seat = seatPartyRoomsByComposition(
       entry,
       childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5,
       childPolicyQuery.data?.ageBands.childMaxAge ?? 10,
@@ -312,8 +327,8 @@ export function ArrivalStep({
       }
     }
     const m = new Map<string, string[]>();
-    for (const [slot, rId] of seat) {
-      m.set(rId, [...(m.get(rId) ?? []), named.get(slot) ?? labels.get(slot) ?? slot]);
+    for (const [slot, rooms] of seat) {
+      for (const rId of rooms) m.set(rId, [...(m.get(rId) ?? []), named.get(slot) ?? labels.get(slot) ?? slot]);
     }
     return m;
   }, [entry, childPolicyQuery.data, proofsQuery.data]);
@@ -399,12 +414,28 @@ export function ArrivalStep({
     if (!openRooms.has(id)) return null;
     const c = compByRoom.get(id);
     const guests = guestsByRoom.get(id) ?? [];
+    const stay = stayRangesByRoom.get(id);
+    // "Staying" — the exact nights the guest sleeps in THIS room (2026-08-14): one range for
+    // a whole-stay room; several after a mid-stay change (e.g. nights 1 & 3 here, night 2 in
+    // another room show as two spans).
+    const stayLine = stay ? (
+      <div>
+        <span style={{ color: "var(--ink-3)" }}>Staying: </span>
+        {stay.label}
+        <span style={{ color: "var(--ink-3)" }}>
+          {" "}({stay.nightCount} night{stay.nightCount === 1 ? "" : "s"})
+        </span>
+      </div>
+    ) : null;
     if (!c && guests.length === 0) {
       return (
-        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "4px 0 0" }}>
-          No composition recorded for this room at Negotiation — occupants and meals are set on the
-          Quote step&rsquo;s guest board.
-        </p>
+        <div style={{ margin: "4px 0 0", padding: "8px 10px", borderRadius: "var(--r-sm)", background: "var(--cream)", display: "grid", gap: 4, fontSize: 11.5 }}>
+          {stayLine}
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+            No composition recorded for this room at Negotiation — occupants and meals are set on the
+            Quote step&rsquo;s guest board.
+          </p>
+        </div>
       );
     }
     const adults = c?.adultCount ?? 0;
@@ -418,6 +449,7 @@ export function ArrivalStep({
     ].filter(Boolean);
     return (
       <div style={{ margin: "4px 0 0", padding: "8px 10px", borderRadius: "var(--r-sm)", background: "var(--cream)", display: "grid", gap: 4, fontSize: 11.5 }}>
+        {stayLine}
         <div>
           <span style={{ color: "var(--ink-3)" }}>Guests: </span>
           {guests.length > 0 ? guests.join(" · ") : "—"}
@@ -477,8 +509,17 @@ export function ArrivalStep({
   // (`registry.creditCeiling.advisoryThresholds`) and payment-status doesn't report whether one
   // has been crossed, so the desk asks on the backend booleans alone: it can prompt slightly
   // early, but it can never skip an acknowledgement the gate requires.
+  // 2026-08-14: ALSO prompt when the folio balance is near the frozen ceiling even though the
+  // extension itself has EXPIRED — the p44 gate keys on the reservation's frozen
+  // `creditCeilingIfExtended`, which outlives the extension, so without this the gate could
+  // demand an acknowledgement the desk no longer offered any way to record.
+  const ceilingNum = reservation?.creditCeilingIfExtended != null ? Number(reservation.creditCeilingIfExtended) : null;
+  const outstandingNum = folio?.outstandingBalance != null ? Number(folio.outstandingBalance) : 0;
+  const tier2Near = ceilingNum != null && Number.isFinite(ceilingNum) && ceilingNum > 0 && outstandingNum / ceilingNum >= 0.9;
   const creditNeedsAck =
-    hasCreditCeiling && paymentStatus?.creditExtensionActive && !entry.creditCeilingTier2AcknowledgedAt;
+    hasCreditCeiling &&
+    !entry.creditCeilingTier2AcknowledgedAt &&
+    (paymentStatus?.creditExtensionActive === true || tier2Near);
 
   const paymentReconciled = !!folio?.advancePaymentReconciliationComplete || paymentStatus?.satisfied === true;
   const tasksComplete = tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED");
@@ -515,6 +556,36 @@ export function ArrivalStep({
       "Handoff fulfilled",
     ),
   );
+  // H1 fulfilment RECORDS ITSELF the moment everything it needs is done (2026-08-14, operator
+  // ruling — option A): the evidence is built entirely from facts already recorded elsewhere
+  // (room assignment, readiness, advance, ceiling ack), so the manual press added no
+  // information — only a scroll back to the top of the step. The accept + checklist stay a
+  // deliberate act; fulfilment is bookkeeping of a state that already exists, same doctrine as
+  // the payment-reconciliation and guest-details tasks ticking themselves. ONE attempt per
+  // mount — if it fails, the manual "Record fulfilment" button remains the retry path.
+  const autoFulfilTried = useRef(false);
+  const autoFulfilM = useMutation(
+    wrap(
+      () =>
+        fulfilHandoff(session!, h1!.id, {
+          ...buildH1FulfilmentEvidence({
+            roomAssignmentId: latestAssignment!.id,
+            readinessConfirmed,
+            paymentStatusConfirmed: paymentReconciled,
+            ceilingProximityAddressed: !creditNeedsAck,
+          }),
+          autoRecorded: true,
+          autoRecordedNote: "Recorded automatically when the room, tasks and advance were all in order.",
+        }),
+      "Handoff fulfilled — recorded automatically now the room, tasks and advance are all in order",
+    ),
+  );
+  useEffect(() => {
+    if (!canFulfilH1 || autoFulfilTried.current || autoFulfilM.isPending || fulfilM.isPending) return;
+    autoFulfilTried.current = true;
+    autoFulfilM.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canFulfilH1]);
   const assignM = useMutation(
     wrap(() => assignRoom(session!, entry.id, { roomId: roomId.trim(), notes: assignNotes.trim() || undefined }), "Room assigned"),
   );
@@ -638,14 +709,15 @@ export function ArrivalStep({
                 label="Record fulfilment"
                 doneLabel="Fulfilled"
                 done={h1.state === "FULFILLED"}
-                pending={fulfilM.isPending}
+                pending={fulfilM.isPending || autoFulfilM.isPending}
                 disabled={!canFulfilH1}
                 onClick={() => fulfilM.mutate()}
               />
             </div>
             {h1.state === "ACCEPTED" && !canFulfilH1 && (
               <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "8px 0 0", lineHeight: 1.5 }}>
-                Before fulfilment: assign a ready room, complete pre-arrival tasks, and reconcile the advance.
+                Fulfilment records itself the moment the room is assigned and ready, the pre-arrival tasks are
+                complete and the advance is reconciled — work down the page, no need to come back up here.
               </p>
             )}
           </>
@@ -711,16 +783,25 @@ export function ArrivalStep({
               // Full-width rows (uniform boxes — .fact is inline-flex and would hug content);
               // the list itself scrolls past ~8 rows so a 10–25 room group stays one screen.
               <div style={{ display: "grid", gap: 6, marginBottom: 11, maxHeight: "46vh", overflowY: "auto", paddingRight: 2 }}>
-                {assignments.map((a) => (
+                {[...assignments].sort((a, b) => roomChrono(a.roomId, b.roomId)).map((a) => (
                   <div key={a.id}>
                     <div className="fact" style={{ width: "100%", justifyContent: "space-between", fontSize: 12, padding: "6px 10px" }}>
                       <span>
                         Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
-                        {a.startDate && (
-                          <span style={{ color: "var(--ink-3)" }}>
-                            {" "}· {a.startDate.slice(0, 10)} → {a.endDate?.slice(0, 10) ?? ""}
-                          </span>
-                        )}
+                        {(() => {
+                          const stay = stayRangesByRoom.get(a.roomId);
+                          if (stay)
+                            return (
+                              <span style={{ color: "var(--ink-3)" }} title={`${stay.nightCount} night${stay.nightCount === 1 ? "" : "s"} in this room`}>
+                                {" "}· {stay.label}
+                              </span>
+                            );
+                          return a.startDate ? (
+                            <span style={{ color: "var(--ink-3)" }}>
+                              {" "}· {a.startDate.slice(0, 10)} → {a.endDate?.slice(0, 10) ?? ""}
+                            </span>
+                          ) : null;
+                        })()}
                         {peopleOnRow(a.roomId)}
                       </span>
                       <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
@@ -758,7 +839,7 @@ export function ArrivalStep({
                 // screen; the hint stays pinned below the scroller.
                 <div style={{ marginBottom: 11 }}>
                   <div style={{ display: "grid", gap: 6, maxHeight: "46vh", overflowY: "auto", paddingRight: 2 }}>
-                  {sealedRoomIds.map((id) => {
+                  {[...sealedRoomIds].sort(roomChrono).map((id) => {
                     const info = roomOptions.find((r) => r.id === id);
                     const nights = sealedNightsByRoom.get(id);
                     return (
@@ -768,8 +849,12 @@ export function ArrivalStep({
                             Room {roomNumberById.get(id) ?? info?.roomNumber ?? id.slice(0, 6)}
                             {info?.roomTypeName && <span style={{ color: "var(--ink-3)" }}> · {info.roomTypeName}</span>}
                             {nights != null && nights > 0 && (
-                              <span style={{ color: "var(--ink-3)" }}>
+                              <span
+                                style={{ color: "var(--ink-3)" }}
+                                title={stayRangesByRoom.get(id)?.label || undefined}
+                              >
                                 {" "}· {nights} night{nights === 1 ? "" : "s"}
+                                {stayRangesByRoom.get(id)?.label ? ` · ${stayRangesByRoom.get(id)!.label}` : ""}
                               </span>
                             )}
                             {peopleOnRow(id)}

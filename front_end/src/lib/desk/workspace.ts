@@ -340,7 +340,17 @@ export function canProgressS2(entry: EntryDetail): boolean {
 export function s5Readiness(entry: EntryDetail): Precondition[] {
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
   const tasks = entry.preArrivalTasks ?? [];
-  const creditExtended = entry.reservation?.creditCeilingIfExtended != null;
+  // Mirrors p44 (2026-08-14): the FOM tier-2 acknowledgement is required only when the folio
+  // balance is NEAR the extended ceiling (registry `tier2Percent`, default 90%) — NOT merely
+  // because a ceiling exists. The frozen reservation carries `creditCeilingIfExtended`
+  // forever, so requiring an ack unconditionally deadlocked check-in once the credit
+  // extension expired (the ack button only renders while the extension is active). If an
+  // admin lowers the registry percent below 90 the backend gate still enforces — the desk
+  // can show green slightly early but the click returns p44's clear error.
+  const ceiling =
+    entry.reservation?.creditCeilingIfExtended != null ? Number(entry.reservation.creditCeilingIfExtended) : null;
+  const outstanding = entry.folio?.outstandingBalance != null ? Number(entry.folio.outstandingBalance) : 0;
+  const tier2AckNeeded = ceiling != null && Number.isFinite(ceiling) && ceiling > 0 && outstanding / ceiling >= 0.9;
   return [
     { label: "Handoff to front desk fulfilled", met: h1?.state === "FULFILLED" },
     { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0 },
@@ -351,7 +361,7 @@ export function s5Readiness(entry: EntryDetail): Precondition[] {
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true },
     {
       label: "Credit ceiling acknowledged",
-      met: !creditExtended || !!entry.creditCeilingTier2AcknowledgedAt,
+      met: !tier2AckNeeded || !!entry.creditCeilingTier2AcknowledgedAt,
     },
   ];
 }

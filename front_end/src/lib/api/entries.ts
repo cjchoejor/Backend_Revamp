@@ -752,6 +752,14 @@ export type RoomChangeCandidate = {
     holdKind: "COMMITTED" | "SPECULATIVE" | null;
   } | null;
   blockedReason: string | null;
+  /** Night-by-night standing over the substitution nights (2026-08-14) — every stay night with
+   *  its date, so a multi-night stay sees the whole picture, not just check-in night. */
+  perNight: Array<{
+    date: string;
+    status: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
+    claimedBy: { guestName: string | null; bookingRef: string | null; holdKind: "COMMITTED" | "SPECULATIVE" | null } | null;
+  }>;
+  freeNightCount: number;
 };
 
 export type RoomChangeCandidates = {
@@ -767,16 +775,34 @@ export type RoomChangeOutcome = {
   originStage: string;
   newSegmentNumber: number;
   fromRoom: { roomId: string; roomNumber: string; roomTypeName: string | null };
+  /** The primary replacement (the new room covering the most nights). */
   toRoom: { roomId: string; roomNumber: string; roomTypeName: string | null };
+  /** Every NEW room with the nights it covers (per-night form; simple swap = one entry). */
+  toRooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; nights: string[] }>;
+  /** Nights the guest keeps the from-room for (per-night form; empty on a full swap). */
+  keptNights: string[];
   sameType: boolean;
   substitutionNights: string[];
   pricing: { priorTotal: number | null; newTotal: number | null; delta: number | null; currency: string | null };
   quotationId: string | null;
+  /** The primary new room's bed setup after the change, when one was asked for (2026-08-14). */
+  appliedBedType?: string | null;
+  appliedBedTypes?: Array<{ roomId: string; roomNumber: string; bedType: string }>;
   walk: {
     returnedToOrigin: boolean;
     reachedStage: string;
     blocked: { atStep: string; code: string | null; message: string } | null;
   };
+};
+
+/** Optional setup for one NEW room, priced by the silent quote (2026-08-14). Omitted = carried. */
+export type RoomChangeAdjustments = {
+  bedType?: string;
+  extraBedCount?: number;
+  mealPlanCpCount?: number;
+  mealPlanMaplCount?: number;
+  mealPlanMapdCount?: number;
+  mealPlanApCount?: number;
 };
 
 export async function listRoomChangeCandidates(session: Session, entryId: string, fromRoomId: string) {
@@ -789,7 +815,16 @@ export async function listRoomChangeCandidates(session: Session, entryId: string
 export async function changeBookingRoom(
   session: Session,
   entryId: string,
-  input: { fromRoomId: string; toRoomId: string; reason: string },
+  input: {
+    fromRoomId: string;
+    /** One room for every night of the change… */
+    toRoomId?: string;
+    /** …or a room per night, S1-table style (may name the from-room on kept nights). */
+    perNight?: Array<{ date: string; roomId: string }>;
+    reason: string;
+    adjustments?: RoomChangeAdjustments;
+    roomSetups?: Array<RoomChangeAdjustments & { roomId: string }>;
+  },
 ) {
   return apiRequest<RoomChangeOutcome>(`/api/entries/${entryId}/room-change`, {
     method: "POST",

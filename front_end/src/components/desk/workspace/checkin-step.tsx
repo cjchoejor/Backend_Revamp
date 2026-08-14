@@ -7,7 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
-import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, seatPartyByComposition } from "@/lib/desk/party-rooms";
+import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, roomStayRangesByRoom, seatPartyRoomsByComposition } from "@/lib/desk/party-rooms";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
 import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
@@ -105,8 +105,23 @@ export function CheckInStep({
     () => new Map((operativeRoomCompositions(entry) ?? []).map((c) => [c.roomId, c])),
     [entry],
   );
+  // Which NIGHTS each room holds (2026-08-14) — shown in the Details expansion; one range for
+  // a whole-stay room, several after a mid-stay split.
+  const stayRangesByRoom = useMemo(() => roomStayRangesByRoom(entry), [entry]);
+  // Rows in CHRONOLOGICAL order (2026-08-14): first night first, longer stays before shorter
+  // on a tie — a split's rooms sit adjacent, in the order slept.
+  const roomChrono = (aId: string, bId: string) => {
+    const A = stayRangesByRoom.get(aId);
+    const B = stayRangesByRoom.get(bId);
+    return (
+      (A?.firstNight ?? "9999").localeCompare(B?.firstNight ?? "9999") ||
+      (B?.nightCount ?? 0) - (A?.nightCount ?? 0)
+    );
+  };
   const guestsByRoom = useMemo(() => {
-    const seat = seatPartyByComposition(
+    // Night-aware, MULTI-room seating (2026-08-14): after a split the same guests sleep in
+    // sequential rooms — each room lists its sleepers, so the later room isn't guest-less.
+    const seat = seatPartyRoomsByComposition(
       entry,
       childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5,
       childPolicyQuery.data?.ageBands.childMaxAge ?? 10,
@@ -119,8 +134,8 @@ export function CheckInStep({
       }
     }
     const m = new Map<string, string[]>();
-    for (const [slot, rId] of seat) {
-      m.set(rId, [...(m.get(rId) ?? []), named.get(slot) ?? labels.get(slot) ?? slot]);
+    for (const [slot, rooms] of seat) {
+      for (const rId of rooms) m.set(rId, [...(m.get(rId) ?? []), named.get(slot) ?? labels.get(slot) ?? slot]);
     }
     return m;
   }, [entry, childPolicyQuery.data, proofsQuery.data]);
@@ -133,12 +148,27 @@ export function CheckInStep({
     if (!openRooms.has(id)) return null;
     const c = compByRoom.get(id);
     const guests = guestsByRoom.get(id) ?? [];
+    const stay = stayRangesByRoom.get(id);
+    // "Staying" — the exact nights the guest sleeps in THIS room (2026-08-14): one range for
+    // a whole-stay room; several after a mid-stay change.
+    const stayLine = stay ? (
+      <div>
+        <span style={{ color: "var(--ink-3)" }}>Staying: </span>
+        {stay.label}
+        <span style={{ color: "var(--ink-3)" }}>
+          {" "}({stay.nightCount} night{stay.nightCount === 1 ? "" : "s"})
+        </span>
+      </div>
+    ) : null;
     if (!c && guests.length === 0) {
       return (
-        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "4px 0 0" }}>
-          No composition recorded for this room at Negotiation — occupants and meals were set on the
-          Quote step&rsquo;s guest board.
-        </p>
+        <div style={{ margin: "4px 0 0", padding: "8px 10px", borderRadius: "var(--r-sm)", background: "var(--cream)", display: "grid", gap: 4, fontSize: 11.5 }}>
+          {stayLine}
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+            No composition recorded for this room at Negotiation — occupants and meals were set on the
+            Quote step&rsquo;s guest board.
+          </p>
+        </div>
       );
     }
     const adults = c?.adultCount ?? 0;
@@ -152,6 +182,7 @@ export function CheckInStep({
     ].filter(Boolean);
     return (
       <div style={{ margin: "4px 0 0", padding: "8px 10px", borderRadius: "var(--r-sm)", background: "var(--cream)", display: "grid", gap: 4, fontSize: 11.5 }}>
+        {stayLine}
         <div>
           <span style={{ color: "var(--ink-3)" }}>Guests: </span>
           {guests.length > 0 ? guests.join(" · ") : "—"}
@@ -291,7 +322,7 @@ export function CheckInStep({
               </div>
             )}
             <div style={{ display: "grid", gap: 8 }}>
-              {distinctAssignments.map((a) => (
+              {[...distinctAssignments].sort((a, b) => roomChrono(a.roomId, b.roomId)).map((a) => (
                 <div key={a.id}>
                   <div
                     className="fact b-bound"
@@ -301,6 +332,19 @@ export function CheckInStep({
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                         <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
                         Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                        {/* The nights the guest sleeps in THIS room (2026-08-14) — one range,
+                            or several after a mid-stay split. */}
+                        {(() => {
+                          const stay = stayRangesByRoom.get(a.roomId);
+                          return stay ? (
+                            <span
+                              style={{ color: "var(--ink-3)", fontWeight: 400, fontSize: 11.5 }}
+                              title={`${stay.nightCount} night${stay.nightCount === 1 ? "" : "s"} in this room`}
+                            >
+                              · {stay.label}
+                            </span>
+                          ) : null;
+                        })()}
                         {a.room?.currentClaimState ? ` · ${formatClaimState(a.room.currentClaimState)}` : ""}
                         {a.room?.physicalState ? ` · ${formatPhysicalState(a.room.physicalState)}` : ""}
                       </span>

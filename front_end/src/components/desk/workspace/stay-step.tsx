@@ -25,6 +25,7 @@ import {
 import { cancelEntryEarlyDeparture } from "@/lib/api/reservation-setup";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money, moneyOrDash } from "@/lib/desk/workspace";
+import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { DeskConfirmModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
@@ -94,6 +95,18 @@ export function StayStep({
     });
     return Array.from(new Map(rows.map((a) => [a.roomId, a])).values());
   }, [entry.roomAssignments]);
+  // Which NIGHTS each room holds (2026-08-14, operator request) — shown beside each room.
+  const stayRangesByRoom = useMemo(() => roomStayRangesByRoom(entry), [entry]);
+  // Rows in CHRONOLOGICAL order (2026-08-14): first night first, longer stays before shorter
+  // on a tie — a split's rooms sit adjacent, in the order slept.
+  const distinctRoomsChrono = useMemo(() => {
+    const key = (id: string) => stayRangesByRoom.get(id);
+    return [...distinctRooms].sort(
+      (a, b) =>
+        (key(a.roomId)?.firstNight ?? "9999").localeCompare(key(b.roomId)?.firstNight ?? "9999") ||
+        (key(b.roomId)?.nightCount ?? 0) - (key(a.roomId)?.nightCount ?? 0),
+    );
+  }, [distinctRooms, stayRangesByRoom]);
   const deficientRecords = assignment?.room?.deficientConditionRecords ?? [];
   const disputes = entry.disputes ?? [];
   const currency = folioLines[0]?.currency;
@@ -327,13 +340,28 @@ export function StayStep({
             Rooms in use
           </BlockH>
           <div style={{ display: "grid", gap: 8 }}>
-            {distinctRooms.map((a) => (
+            {distinctRoomsChrono.map((a) => (
               <div key={a.roomId} style={{ display: "grid", gap: 6 }}>
                 <div
                   className="fact b-bound"
                   style={{ padding: "8px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
                 >
-                  <span>Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}</span>
+                  <span>
+                    Room {a.room?.roomNumber ?? a.roomId.slice(0, 8)}
+                    {/* The nights the guest sleeps in THIS room (2026-08-14) — one range, or
+                        several after a mid-stay change (old room keeps its slept span). */}
+                    {(() => {
+                      const stay = stayRangesByRoom.get(a.roomId);
+                      return stay ? (
+                        <span
+                          style={{ color: "var(--ink-3)", fontWeight: 400, fontSize: 11.5 }}
+                          title={`${stay.nightCount} night${stay.nightCount === 1 ? "" : "s"} in this room`}
+                        >
+                          {" "}· {stay.label}
+                        </span>
+                      ) : null;
+                    })()}
+                  </span>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
                     {/* What this slot STARTED as (2026-08-13) — survives every room/bed change. */}
                     <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
