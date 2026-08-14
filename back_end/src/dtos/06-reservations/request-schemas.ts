@@ -86,11 +86,42 @@ export const s6RoomChangeReEnterS1RequestSchema = z.object({
 // In-place room change (2026-08-12): swap ONE room of the plan from S5/S6/S7. The backend runs
 // the full governed journey (new segment, substituted basis revalidated, silent re-quote, walk
 // back to the origin stage); the desk never leaves the page.
-export const roomChangeRequestSchema = z.object({
-  fromRoomId: z.string().min(1, "fromRoomId is required"),
-  toRoomId: z.string().min(1, "toRoomId is required"),
-  reason: z.string().min(3, "A reason for the room change is required"),
-});
+// Setup for one new room (2026-08-14): meals/extra bed rewrite the carried composition row
+// before the silent quote prices it; bedType is applied to the room registry once the change
+// commits. Omitted fields carry unchanged.
+const roomChangeSetupShape = {
+  bedType: z.string().min(1).optional(),
+  extraBedCount: z.number().int().min(0).max(6).optional(),
+  mealPlanCpCount: z.number().int().min(0).max(50).optional(),
+  mealPlanMaplCount: z.number().int().min(0).max(50).optional(),
+  mealPlanMapdCount: z.number().int().min(0).max(50).optional(),
+  mealPlanApCount: z.number().int().min(0).max(50).optional(),
+};
+export const roomChangeRequestSchema = z
+  .object({
+    fromRoomId: z.string().min(1, "fromRoomId is required"),
+    // Either ONE room for every night…
+    toRoomId: z.string().min(1).optional(),
+    // …or a room per night, S1-table style (2026-08-14) — may name the from-room itself on
+    // nights the guest keeps. Must cover exactly the change's nights (service-enforced).
+    perNight: z
+      .array(z.object({ date: z.string().min(8), roomId: z.string().min(1) }))
+      .max(120)
+      .optional(),
+    // Any non-empty reason — one word is fine (2026-08-14: the old min-3 kept the desk's swap
+    // button dead on short reasons like "AC" with nothing explaining why).
+    reason: z.string().trim().min(1, "A reason for the room change is required"),
+    // Simple-swap sugar: setup for the single replacement room.
+    adjustments: z.object(roomChangeSetupShape).optional(),
+    // Per-room setups for the per-night form — one entry per distinct new room.
+    roomSetups: z
+      .array(z.object({ roomId: z.string().min(1), ...roomChangeSetupShape }))
+      .max(30)
+      .optional(),
+  })
+  .refine((v) => (v.toRoomId != null) !== (Array.isArray(v.perNight) && v.perNight.length > 0), {
+    message: "Provide either toRoomId or perNight — exactly one",
+  });
 export type RoomChangeRequestDto = z.infer<typeof roomChangeRequestSchema>;
 
 export const approveFocGmRequestSchema = z.object({

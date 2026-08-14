@@ -65,7 +65,10 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
       entryId: req.params.id,
       fromRoomId: req.body.fromRoomId,
       toRoomId: req.body.toRoomId,
+      perNight: req.body.perNight,
       reason: req.body.reason,
+      adjustments: req.body.adjustments,
+      roomSetups: req.body.roomSetups,
     });
     res.json(outcome);
   } catch (e) {
