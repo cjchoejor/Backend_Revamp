@@ -243,6 +243,8 @@ export type FolioLineSummary = {
   stage: string;
   postedAt: string;
   nightAuditRecordId?: string | null;
+  /** Which room this charge belongs to (2026-08-14, per-room folio breakdown). Null = booking-wide. */
+  roomId?: string | null;
 };
 
 export type FolioDetail = {
@@ -430,6 +432,12 @@ export type RoomAssignmentSummary = {
   deficientAtAssignment?: boolean;
   acknowledgementActorId?: string | null;
   acknowledgementAt?: string | null;
+  /** Per-room key lifecycle (2026-08-14): issued on the day the guest enters THIS room;
+   *  a mid-stay room change swaps keys (return old → issue new, backend hard gate). */
+  keyIssuedAt?: string | null;
+  keyIssuedBy?: string | null;
+  keyReturnedAt?: string | null;
+  keyReturnedBy?: string | null;
   room?: {
     id: string;
     roomNumber: string;

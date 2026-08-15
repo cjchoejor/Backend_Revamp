@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BedDouble, FileEdit, Handshake, Lock, Moon, Receipt, Scale } from "lucide-react";
+import { AlertTriangle, BedDouble, FileEdit, Handshake, KeyRound, Lock, Moon, Receipt, Scale } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -23,10 +23,11 @@ import {
   runNightAudit,
 } from "@/lib/api/in-stay";
 import { cancelEntryEarlyDeparture } from "@/lib/api/reservation-setup";
+import { getBillingSummary, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money, moneyOrDash } from "@/lib/desk/workspace";
 import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
-import { DeskConfirmModal } from "./confirm-modal";
+import { DeskConfirmModal, DeskSuccessModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -107,6 +108,86 @@ export function StayStep({
         (key(b.roomId)?.nightCount ?? 0) - (key(a.roomId)?.nightCount ?? 0),
     );
   }, [distinctRooms, stayRangesByRoom]);
+  // ── Key lifecycle (2026-08-14, operator ruling): a sequential room change is a key SWAP —
+  // the vacated room's key comes back FIRST, and only then does the new room's key go out
+  // (backend hard gate PRIOR_ROOM_KEY_OUTSTANDING; mirrored here so the button explains
+  // itself instead of 409ing). Covers ALL rooms of the plan, including vacated ones that
+  // have dropped off the Rooms-in-use list above but whose key is still with the guest.
+  const keyPlan = useMemo(() => {
+    const rows = entry.roomAssignments ?? [];
+    const byRoom = new Map<string, typeof rows>();
+    for (const a of rows) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
+      const stay = stayRangesByRoom.get(roomId);
+      const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt);
+      const keyReturned = !keyOut && rs.some((r) => r.keyReturnedAt);
+      // Vacated = every dated range of this room has ended (its move-out morning reached).
+      // ONLY then is "Return key" offered (2026-08-16, operator ruling — while the guest
+      // still has nights left in the room, the row just says "Key with guest"; the backend
+      // refuses a premature return too). A room kept to checkout returns its key at S8.
+      const vacated = rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= todayIso);
+      return {
+        roomId,
+        roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 8),
+        stay,
+        keyOut,
+        keyReturned,
+        vacated,
+        movesInToday: stay?.firstNight === todayIso,
+        movesInLater: !!stay?.firstNight && stay.firstNight > todayIso,
+      };
+    });
+    items.sort(
+      (x, y) =>
+        (x.stay?.firstNight ?? "9999").localeCompare(y.stay?.firstNight ?? "9999") ||
+        (y.stay?.nightCount ?? 0) - (x.stay?.nightCount ?? 0),
+    );
+    return items;
+  }, [entry.roomAssignments, entry.checkOutDate, stayRangesByRoom]);
+  // The Keys block earns its place on sequential plans and on any booking with key stamps;
+  // a legacy single-room stay with no stamps stays clean.
+  const showKeysBlock = keyPlan.length > 1 || keyPlan.some((k) => k.keyOut || k.keyReturned);
+  // Mirror of the backend gate: two rooms with DISJOINT night ranges are sequential — one
+  // party, one key set — so an outstanding key on any disjoint room blocks this room's
+  // issue, in BOTH directions. Parallel (overlapping) rooms never block each other.
+  const keyBlockersFor = (roomId: string) => {
+    const rows = entry.roomAssignments ?? [];
+    const checkInIso = entry.checkInDate ? String(entry.checkInDate).slice(0, 10) : null;
+    const checkOutIso = entry.checkOutDate ? String(entry.checkOutDate).slice(0, 10) : null;
+    const rangesFor = (id: string) =>
+      rows
+        .filter((a) => a.roomId === id)
+        .map((a) => ({
+          start: a.startDate ? String(a.startDate).slice(0, 10) : checkInIso,
+          end: a.endDate ? String(a.endDate).slice(0, 10) : checkOutIso,
+        }));
+    const overlap = (x: { start: string | null; end: string | null }, y: { start: string | null; end: string | null }) =>
+      !x.start || !x.end || !y.start || !y.end ? true : x.start < y.end && y.start < x.end;
+    const target = rangesFor(roomId);
+    return keyPlan.filter((k) => {
+      if (k.roomId === roomId || !k.keyOut) return false;
+      const other = rangesFor(k.roomId);
+      return !other.some((o) => target.some((t) => overlap(t, o)));
+    });
+  };
+
+  // roomId → room number, for the per-line room chips and the charge-form room select.
+  const roomNumberById = useMemo(
+    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
+    [entry.roomAssignments],
+  );
+  // Per-room charge subtotals are SERVER-summed (billing-summary folio block) — the desk
+  // shows, never adds. Same key shape as the workspace header's query so the caches share.
+  const billingQuery = useQuery({
+    queryKey: ["billing-summary", entry.id, entry.updatedAt],
+    queryFn: () => getBillingSummary(session!, entry.id),
+    enabled: !!session && !!entry.folio?.id,
+    refetchInterval: 30_000,
+  });
+  const perRoomCharges = billingQuery.data?.folio?.perRoomCharges ?? null;
+  const unassignedCharges = billingQuery.data?.folio?.unassignedCharges ?? null;
+
   const deficientRecords = assignment?.room?.deficientConditionRecords ?? [];
   const disputes = entry.disputes ?? [];
   const currency = folioLines[0]?.currency;
@@ -118,6 +199,20 @@ export function StayStep({
   const [desc, setDesc] = useState("");
   const [amount, setAmount] = useState("");
   const [chargeDate, setChargeDate] = useState("");
+  // Per-room folio attribution (2026-08-14): which room this charge belongs to. "" = the
+  // whole booking. Applies to both "Post a charge" and the credit note.
+  const [chargeRoomId, setChargeRoomId] = useState("");
+  // Posted-charge receipt (2026-08-17, operator request): a success dialog naming what was
+  // posted and for which room, the inputs cleared for the next charge, and the button flashing
+  // "Posted ✓" for ~2s while the dialog is up.
+  const [postedInfo, setPostedInfo] = useState<null | {
+    description: string;
+    amount: string | number;
+    currency?: string;
+    lineType: string;
+    roomNumber: string | null;
+  }>(null);
+  const [postedFlash, setPostedFlash] = useState(false);
   const [correctLineId, setCorrectLineId] = useState("");
   const [correctMode, setCorrectMode] = useState<"adjust" | "setNet">("adjust");
   const [correctDelta, setCorrectDelta] = useState("");
@@ -170,8 +265,27 @@ export function StayStep({
   });
   const h4Items = (h4ChecklistQuery.data?.items ?? []) as HandoffChecklistItem[];
 
-  const postChargeM = useMutation(
-    wrap(() => {
+  // Key swap (2026-08-14): issue / take back one room's key. The backend enforces the
+  // return-first hard gate; these just surface its answer.
+  const issueKeyM = useMutation({
+    mutationFn: (roomId: string) => issueRoomKey(session!, entry.id, roomId),
+    onSuccess: (r) => {
+      toast.success(`Key issued for Room ${r.roomNumber}`);
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't issue the key"),
+  });
+  const returnKeyM = useMutation({
+    mutationFn: (roomId: string) => returnRoomKey(session!, entry.id, roomId),
+    onSuccess: (r) => {
+      toast.success(`Key back from Room ${r.roomNumber}`);
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't record the key return"),
+  });
+
+  const postChargeM = useMutation({
+    mutationFn: () => {
       const amt = Number.parseFloat(amount);
       if (!folio?.id || !Number.isFinite(amt)) throw new Error("Valid amount required");
       return postFolioCharge(session!, folio.id, {
@@ -180,14 +294,38 @@ export function StayStep({
         description: desc.trim() || lineType,
         amount: amt,
         chargeDate: chargeDate ? `${chargeDate}T12:00:00.000Z` : undefined,
+        roomId: chargeRoomId || undefined,
       });
-    }, "Charge posted"),
-  );
+    },
+    // Posted-charge receipt (2026-08-17): dialog with the posted facts, inputs cleared for
+    // the next charge, button flashing "Posted ✓" while the dialog is up.
+    onSuccess: (line) => {
+      invalidate();
+      setPostedInfo({
+        description: line.description,
+        amount: line.amount,
+        currency: line.currency,
+        lineType: line.lineType,
+        roomNumber: line.roomId ? roomNumberById.get(line.roomId) ?? null : null,
+      });
+      setDesc("");
+      setAmount("");
+      setPostedFlash(true);
+      window.setTimeout(() => setPostedFlash(false), 1800);
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Couldn't post the charge"),
+  });
   const creditNoteM = useMutation(
     wrap(() => {
       const amt = Number.parseFloat(amount);
       if (!folio?.id || !Number.isFinite(amt) || amt <= 0) throw new Error("Valid amount required");
-      return postCreditNote(session!, folio.id, { entryId: entry.id, description: desc.trim() || "Credit note", amount: amt, creditDate: new Date().toISOString() });
+      return postCreditNote(session!, folio.id, {
+        entryId: entry.id,
+        description: desc.trim() || "Credit note",
+        amount: amt,
+        creditDate: new Date().toISOString(),
+        roomId: chargeRoomId || undefined,
+      });
     }, "Credit note posted"),
   );
   const correctM = useMutation(
@@ -381,6 +519,127 @@ export function StayStep({
         </div>
       )}
 
+      {/* Keys (2026-08-14, operator ruling): a sequential room change — 501 nights 1–2 then
+          302 night 3 — is a key SWAP on the move day. The vacated room's key comes back
+          FIRST; the new room's key is HARD-blocked until it does (backend
+          PRIOR_ROOM_KEY_OUTSTANDING, mirrored on the button). Vacated rooms drop off the
+          Rooms-in-use list above but keep a row HERE while their key is with the guest. */}
+      {showKeysBlock && (
+        <div className="block">
+          <BlockH>
+            <KeyRound style={{ width: 13, height: 13 }} />
+            Keys
+          </BlockH>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px" }}>
+            A room move is a key swap — take the old room&apos;s key back first; the new room&apos;s
+            key won&apos;t issue while the old one is still with the guest. The final key comes back
+            at Check-out.
+          </p>
+          <div style={{ display: "grid", gap: 6 }}>
+            {keyPlan.map((k) => {
+              const blockers = !k.keyOut ? keyBlockersFor(k.roomId) : [];
+              const moveIn =
+                k.stay?.firstNight != null
+                  ? new Date(`${k.stay.firstNight}T00:00:00`).toLocaleDateString(undefined, {
+                      day: "numeric",
+                      month: "short",
+                    })
+                  : null;
+              return (
+                <div
+                  key={k.roomId}
+                  className="fact b-bound"
+                  style={{ padding: "8px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
+                >
+                  <span style={{ display: "grid", gap: 2 }}>
+                    <span>
+                      Room {k.roomNumber}
+                      {k.stay ? (
+                        <span style={{ color: "var(--ink-3)", fontWeight: 400, fontSize: 11.5 }}> · {k.stay.label}</span>
+                      ) : null}
+                    </span>
+                    {k.keyOut && k.vacated ? (
+                      <span style={{ fontSize: 11.5, color: "var(--warn)", fontWeight: 600 }}>
+                        Guest has moved out of this room — collect its key
+                      </span>
+                    ) : blockers.length > 0 ? (
+                      // The receiving room says exactly what unlocks it, naming the room(s).
+                      <span style={{ fontSize: 11.5, color: "var(--warn)" }}>
+                        Get this key after Room {blockers.map((b) => b.roomNumber).join(", ")}&apos;s key is returned
+                      </span>
+                    ) : !k.keyOut && !k.keyReturned && k.movesInToday ? (
+                      <span style={{ fontSize: 11.5, color: "var(--warn)" }}>Guest moves in today — issue the key</span>
+                    ) : !k.keyOut && !k.keyReturned && k.movesInLater && moveIn ? (
+                      <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>Moves in {moveIn} — key on the move day</span>
+                    ) : null}
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    {k.keyOut ? (
+                      <>
+                        <span className="tag">Key with guest</span>
+                        {/* "Return key" only once the guest has actually MOVED OUT (2026-08-16,
+                            operator ruling) — the button rides with the amber collect-the-key
+                            subtext. While nights remain in the room, and on rooms kept to
+                            checkout (203 — S8 collects that key), the row just states the fact. */}
+                        {k.vacated && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={returnKeyM.isPending}
+                            title={`Take Room ${k.roomNumber}'s key back from the guest`}
+                            onClick={() => returnKeyM.mutate(k.roomId)}
+                          >
+                            Return key
+                          </button>
+                        )}
+                      </>
+                    ) : k.keyReturned ? (
+                      <>
+                        <span
+                          className="tag"
+                          style={{ color: "var(--green-d)", borderColor: "var(--green-d)", background: "var(--green-t, transparent)" }}
+                        >
+                          Key returned
+                        </span>
+                        {/* A returned key can go out again (guest re-enters, mistaken return,
+                            or the move day arrives) — same hard gate as a first issue. */}
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={issueKeyM.isPending || blockers.length > 0}
+                          title={
+                            blockers.length > 0
+                              ? `Get this key after Room ${blockers.map((b) => b.roomNumber).join(", ")}'s key is returned`
+                              : `Hand Room ${k.roomNumber}'s key to the guest again`
+                          }
+                          onClick={() => issueKeyM.mutate(k.roomId)}
+                        >
+                          Issue again
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={issueKeyM.isPending || blockers.length > 0}
+                        title={
+                          blockers.length > 0
+                            ? `Get this key after Room ${blockers.map((b) => b.roomNumber).join(", ")}'s key is returned`
+                            : `Hand Room ${k.roomNumber}'s key to the guest`
+                        }
+                        onClick={() => issueKeyM.mutate(k.roomId)}
+                      >
+                        Issue key
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Live folio */}
       <div className="block">
         <BlockH>
@@ -412,12 +671,41 @@ export function StayStep({
                     <small>
                       {l.lineType} · {l.chargeDate?.slice(0, 10)}
                       {sys ? " · audit" : ""}
+                      {/* Which room the charge belongs to (2026-08-14) — blank = whole booking. */}
+                      {l.roomId ? ` · Room ${roomNumberById.get(l.roomId) ?? "?"}` : ""}
                     </small>
                   </span>
                   <span className="fl-a">{money(l.amount, l.currency)}</span>
                 </div>
               );
             })
+          )}
+          {/* Per-room charge subtotals (2026-08-14, operator request) — SERVER-summed in the
+              billing-summary folio block, never added up here. Booking-wide lines get their
+              own row so every line is accounted for in exactly one bucket. */}
+          {perRoomCharges && perRoomCharges.length > 0 && (
+            <>
+              {perRoomCharges.map((r) => (
+                <div className="fline" key={r.roomId} style={{ background: "var(--cream)" }}>
+                  <span className="fl-mk mk sys">Σ</span>
+                  <span className="fl-d">
+                    Room {r.roomNumber ?? "?"} — charges so far
+                    <small>{r.lineCount} line{r.lineCount === 1 ? "" : "s"}</small>
+                  </span>
+                  <span className="fl-a">{money(r.charges, currency)}</span>
+                </div>
+              ))}
+              {unassignedCharges && (
+                <div className="fline" style={{ background: "var(--cream)" }}>
+                  <span className="fl-mk mk sys">Σ</span>
+                  <span className="fl-d">
+                    Whole booking (no room named)
+                    <small>{unassignedCharges.lineCount} line{unassignedCharges.lineCount === 1 ? "" : "s"}</small>
+                  </span>
+                  <span className="fl-a">{money(unassignedCharges.charges, currency)}</span>
+                </div>
+              )}
+            </>
           )}
           {/* The server owns the folio's balance; there is no sum-of-lines field, so the running
               total is the backend's outstandingBalance rather than a total added up here. */}
@@ -440,6 +728,19 @@ export function StayStep({
             </select>
           </div>
           <div className="field">
+            <label>For room</label>
+            {/* Per-room folio attribution (2026-08-14): the room this charge belongs to —
+                the room-service dinner goes on 501, not the whole party's bill. Optional. */}
+            <select value={chargeRoomId} onChange={(e) => setChargeRoomId(e.target.value)}>
+              <option value="">Whole booking</option>
+              {keyPlan.map((k) => (
+                <option key={k.roomId} value={k.roomId}>
+                  Room {k.roomNumber}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
             <label>Amount</label>
             <input type="number" min={0} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
           </div>
@@ -455,8 +756,12 @@ export function StayStep({
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn btn-primary" disabled={postChargeM.isPending || !folioLive} onClick={() => postChargeM.mutate()}>
-            Post a charge
+          <button
+            className={`btn btn-primary${postedFlash ? " is-done" : ""}`}
+            disabled={postChargeM.isPending || !folioLive || postedFlash}
+            onClick={() => postChargeM.mutate()}
+          >
+            {postedFlash ? "Posted ✓" : "Post a charge"}
           </button>
           {elevated && (
             <button className="btn btn-ghost" disabled={creditNoteM.isPending || !folioLive} onClick={() => creditNoteM.mutate()}>
@@ -478,6 +783,7 @@ export function StayStep({
                 <option value="">Choose a charge from the folio…</option>
                 {correctable.map((l) => (
                   <option key={l.id} value={l.id}>
+                    {l.roomId ? `[Room ${roomNumberById.get(l.roomId) ?? "?"}] ` : ""}
                     {l.lineType} — {l.description} ({String(l.amount)})
                   </option>
                 ))}
@@ -759,6 +1065,28 @@ export function StayStep({
       </div>
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
+
+      {/* Posted-charge receipt (2026-08-17): what just landed on the folio, and for whom. */}
+      <DeskSuccessModal
+        open={!!postedInfo}
+        title="Charge posted"
+        subtitle={entry.id}
+        lines={
+          postedInfo
+            ? [
+                <>
+                  <b>{money(postedInfo.amount, postedInfo.currency)}</b> — {postedInfo.description}
+                </>,
+                <>
+                  {postedInfo.lineType === "F_AND_B" ? "F & B" : postedInfo.lineType} ·{" "}
+                  {postedInfo.roomNumber ? `for Room ${postedInfo.roomNumber}` : "for the whole booking"}
+                </>,
+                "Service charge and GST companion lines post automatically alongside.",
+              ]
+            : []
+        }
+        onClose={() => setPostedInfo(null)}
+      />
 
       <DeskConfirmModal
         open={earlyDepartOpen}

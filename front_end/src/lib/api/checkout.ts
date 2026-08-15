@@ -12,7 +12,13 @@ export { postFolioCharge, correctFolioCharge } from "./in-stay";
 export async function recordKeyReturn(
   session: Session,
   entryId: string,
-  body: { keyCountReturned: number; reconciliationNote?: string },
+  body: {
+    keyCountReturned: number;
+    reconciliationNote?: string;
+    /** Room-wise return (2026-08-17): the rooms whose key actually came back — their
+     *  assignment rows are stamped returned with the ceremony. */
+    returnedRoomIds?: string[];
+  },
 ) {
   return apiRequest<KeyReturnSummary>(`/api/entries/${entryId}/key-return`, {
     method: "POST",

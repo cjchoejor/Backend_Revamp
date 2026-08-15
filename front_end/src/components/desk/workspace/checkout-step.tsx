@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Handshake, KeyRound, Receipt, Scale, Search, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -20,6 +20,7 @@ import {
 } from "@/lib/api/checkout";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { correctFolioCharge, postCreditNote, progressDispute } from "@/lib/api/in-stay";
+import { getBillingSummary } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -27,7 +28,7 @@ import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
-import { DeskConfirmModal } from "./confirm-modal";
+import { DeskConfirmModal, DeskSuccessModal } from "./confirm-modal";
 
 const BK = STAGE_ACTIONS.S8;
 
@@ -88,8 +89,45 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const checkoutChargeDate = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
   const checkoutChargeYmd = checkoutChargeDate ? checkoutChargeDate.slice(0, 10) : null;
 
+  // Per-room folio breakdown (2026-08-14): roomId → room number for the correction picker's
+  // labels, and the SERVER-summed per-room subtotals for the bill review — same billing-summary
+  // query the workspace header and the Stay step share; the desk never adds lines up itself.
+  const roomNumberById = useMemo(
+    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
+    [entry.roomAssignments],
+  );
+  const billingQuery = useQuery({
+    queryKey: ["billing-summary", entry.id, entry.updatedAt],
+    queryFn: () => getBillingSummary(session!, entry.id),
+    enabled: !!session && !!entry.folio?.id,
+    refetchInterval: 30_000,
+  });
+  const perRoomCharges = billingQuery.data?.folio?.perRoomCharges ?? null;
+  const unassignedCharges = billingQuery.data?.folio?.unassignedCharges ?? null;
+
   const [keysReturned, setKeysReturned] = useState(String(keysIssued || 1));
   const [keyReconcileNote, setKeyReconcileNote] = useState("");
+  // Room-wise key return (2026-08-17, operator request — mirrors the S6 per-room radios):
+  // one row per room whose key has a story, marked as each physical key lands on the desk.
+  const [returnedKeyRooms, setReturnedKeyRooms] = useState<Record<string, boolean>>({});
+  const keyRoomPlan = useMemo(() => {
+    const byRoom = new Map<string, NonNullable<EntryDetail["roomAssignments"]>>();
+    for (const a of entry.roomAssignments ?? []) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
+    return Array.from(byRoom.entries())
+      .map(([roomId, rs]) => ({
+        roomId,
+        roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 6),
+        outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt),
+        // Came back mid-stay (room-change key swap) — nothing left to collect here.
+        returnedEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt),
+      }))
+      .filter((k) => k.outstanding || k.returnedEarlier)
+      .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+  }, [entry.roomAssignments]);
+  // Room-wise mode whenever per-room stamps exist; legacy count-only input otherwise.
+  const keyRoomsOutstanding = keyRoomPlan.filter((k) => k.outstanding);
+  const keyRoomWise = keyRoomPlan.length > 0;
+  const markedKeyRooms = keyRoomsOutstanding.filter((k) => returnedKeyRooms[k.roomId]);
   const [inspectionDeferred, setInspectionDeferred] = useState(false);
   const [deficientFlagStatus, setDeficientFlagStatus] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE">(
     activeDeficient ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE",
@@ -100,9 +138,31 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const [settlementMethod, setSettlementMethod] = useState("CASH");
   const [paymentRef, setPaymentRef] = useState("");
   const [partialAmount, setPartialAmount] = useState("");
+  // Pre-fill the settlement amount with the FULL balance (2026-08-17, operator request) —
+  // the common case is paying everything, so the figure is ready; editing it down makes the
+  // settlement partial. Same touched-latch pattern as the S3 advance prefill: the ref flips
+  // on the first keystroke so a refetch never overwrites a deliberately different figure.
+  const partialTouched = useRef(false);
+  useEffect(() => {
+    if (partialTouched.current) return;
+    const n = Number(balance);
+    if (balance != null && Number.isFinite(n) && n > 0) setPartialAmount(String(balance));
+  }, [balance]);
   const [fomAckRef, setFomAckRef] = useState("");
   const [finalChargeDesc, setFinalChargeDesc] = useState("");
   const [finalChargeAmount, setFinalChargeAmount] = useState("");
+  // Per-room folio attribution (2026-08-14): which room the last-minute charge belongs to.
+  // "" = the whole booking. Applies to the charge and the credit note alike.
+  const [finalChargeRoomId, setFinalChargeRoomId] = useState("");
+  // Posted-charge receipt (2026-08-17): same dialog + "Posted ✓" flash as the Stay step.
+  const [postedInfo, setPostedInfo] = useState<null | {
+    description: string;
+    amount: string | number;
+    currency?: string;
+    lineType: string;
+    roomNumber: string | null;
+  }>(null);
+  const [postedFlash, setPostedFlash] = useState(false);
   // Same charge toolkit as the Stay step (2026-08-03, operator request): type select, credit
   // note, and corrections — the backend posts at S7 OR S8 pre-settlement (SIG-S8 §2.2).
   const [finalChargeType, setFinalChargeType] = useState("F_AND_B");
@@ -135,8 +195,8 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
   });
 
-  const finalChargeM = useMutation(
-    wrap(() => {
+  const finalChargeM = useMutation({
+    mutationFn: () => {
       const amt = Number.parseFloat(finalChargeAmount);
       if (!folio?.id || !Number.isFinite(amt)) throw new Error("Valid amount required");
       return postFolioCharge(session!, folio.id, {
@@ -145,9 +205,27 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         description: finalChargeDesc.trim() || "Final morning charge",
         amount: amt,
         chargeDate: checkoutChargeDate ?? new Date().toISOString(),
+        roomId: finalChargeRoomId || undefined,
       });
-    }, "Charge posted"),
-  );
+    },
+    // Posted-charge receipt (2026-08-17): dialog with the posted facts, inputs cleared for
+    // the next charge, button flashing "Posted ✓" while the dialog is up.
+    onSuccess: (line) => {
+      invalidate();
+      setPostedInfo({
+        description: line.description,
+        amount: line.amount,
+        currency: line.currency,
+        lineType: line.lineType,
+        roomNumber: line.roomId ? roomNumberById.get(line.roomId) ?? null : null,
+      });
+      setFinalChargeDesc("");
+      setFinalChargeAmount("");
+      setPostedFlash(true);
+      window.setTimeout(() => setPostedFlash(false), 1800);
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Couldn't post the charge"),
+  });
   const creditNoteM = useMutation(
     wrap(() => {
       const amt = Number.parseFloat(finalChargeAmount);
@@ -159,6 +237,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         description: finalChargeDesc.trim() || "Credit note",
         amount: amt,
         creditDate: checkoutChargeDate ?? new Date().toISOString(),
+        roomId: finalChargeRoomId || undefined,
       });
     }, "Credit note posted"),
   );
@@ -185,6 +264,17 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   );
   const keyReturnM = useMutation(
     wrap(() => {
+      if (keyRoomWise) {
+        // Room-wise ceremony: count = rooms marked; short of the outstanding set needs the
+        // reconciliation note (the backend enforces it against the same outstanding count).
+        const marked = markedKeyRooms.map((k) => k.roomId);
+        const body: { keyCountReturned: number; reconciliationNote?: string; returnedRoomIds?: string[] } = {
+          keyCountReturned: marked.length,
+          ...(marked.length > 0 ? { returnedRoomIds: marked } : {}),
+        };
+        if (marked.length !== keyRoomsOutstanding.length) body.reconciliationNote = keyReconcileNote.trim();
+        return recordKeyReturn(session!, entry.id, body);
+      }
       const n = Number.parseInt(keysReturned, 10);
       if (!Number.isInteger(n) || n < 0) throw new Error("Invalid key count");
       const body: { keyCountReturned: number; reconciliationNote?: string } = { keyCountReturned: n };
@@ -338,6 +428,37 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           <label>Advance / payments received</label>
           <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>
         </div>
+        {/* Per-room charge subtotals (2026-08-14) — SERVER-summed billing-summary buckets, so
+            the checkout review can answer "what did each room spend" before settlement. */}
+        {perRoomCharges && perRoomCharges.length > 0 && (
+          <div className="field">
+            <label>Charges by room</label>
+            <div style={{ display: "grid", gap: 4 }}>
+              {perRoomCharges.map((r) => (
+                <div key={r.roomId} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                  <span>
+                    Room {r.roomNumber ?? "?"}{" "}
+                    <span style={{ color: "var(--ink-3)" }}>
+                      · {r.lineCount} line{r.lineCount === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                  <span style={{ fontWeight: 600 }}>{money(r.charges, currency)}</span>
+                </div>
+              ))}
+              {unassignedCharges && (
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                  <span>
+                    Whole booking (no room named){" "}
+                    <span style={{ color: "var(--ink-3)" }}>
+                      · {unassignedCharges.lineCount} line{unassignedCharges.lineCount === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                  <span style={{ fontWeight: 600 }}>{money(unassignedCharges.charges, currency)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <div className="field">
           <label>Balance due</label>
           <div className="val">{moneyOrDash(balance, currency)}</div>
@@ -362,6 +483,18 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                 </select>
               </div>
               <div className="field">
+                <label>For room</label>
+                {/* Per-room folio attribution (2026-08-14) — same as the Stay step's form. */}
+                <select value={finalChargeRoomId} onChange={(e) => setFinalChargeRoomId(e.target.value)}>
+                  <option value="">Whole booking</option>
+                  {Array.from(new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values()).map((a) => (
+                    <option key={a.roomId} value={a.roomId}>
+                      Room {a.room?.roomNumber ?? a.roomId.slice(0, 6)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
                 <label>Amount</label>
                 <input type="number" min={0} step="0.01" value={finalChargeAmount} onChange={(e) => setFinalChargeAmount(e.target.value)} />
               </div>
@@ -371,8 +504,12 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
               <input value={finalChargeDesc} onChange={(e) => setFinalChargeDesc(e.target.value)} />
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn btn-primary btn-sm" disabled={finalChargeM.isPending} onClick={() => finalChargeM.mutate()}>
-                Post a charge
+              <button
+                className={`btn btn-primary btn-sm${postedFlash ? " is-done" : ""}`}
+                disabled={finalChargeM.isPending || postedFlash}
+                onClick={() => finalChargeM.mutate()}
+              >
+                {postedFlash ? "Posted ✓" : "Post a charge"}
               </button>
               {elevated && (
                 <button className="btn btn-ghost btn-sm" disabled={creditNoteM.isPending} onClick={() => creditNoteM.mutate()}>
@@ -394,6 +531,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                     <option value="">Choose a charge from the folio…</option>
                     {correctable.map((l) => (
                       <option key={l.id} value={l.id}>
+                        {l.roomId ? `[Room ${roomNumberById.get(l.roomId) ?? "?"}] ` : ""}
                         {l.lineType} — {l.description} ({String(l.amount)})
                       </option>
                     ))}
@@ -454,6 +592,57 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             Returned {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued}
             {keyReturn.countReconciled ? " · reconciled" : keyReturn.reconciliationNote ? ` · ${keyReturn.reconciliationNote}` : ""}
           </div>
+        ) : keyRoomWise ? (
+          <>
+            {/* Room-wise return (2026-08-17, operator request): mark each room's key as it
+                lands on the desk — same shape as the S6 issue radios. Keys already swapped
+                back mid-stay show as done; the ceremony records the rest. */}
+            <div style={{ display: "grid", gap: 6, marginBottom: 9 }}>
+              {keyRoomPlan.map((k) => (
+                <div
+                  key={k.roomId}
+                  className="fact b-bound"
+                  style={{ padding: "8px 12px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}
+                >
+                  <span>Room {k.roomNumber}</span>
+                  {k.outstanding ? (
+                    <label
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                      title={`Mark when room ${k.roomNumber}'s key is back on the desk`}
+                    >
+                      <input
+                        type="radio"
+                        checked={!!returnedKeyRooms[k.roomId]}
+                        onClick={() => setReturnedKeyRooms((prev) => ({ ...prev, [k.roomId]: !prev[k.roomId] }))}
+                        readOnly
+                        style={{ cursor: "pointer" }}
+                      />
+                      Key returned
+                    </label>
+                  ) : (
+                    <span
+                      className="tag"
+                      style={{ color: "var(--green-d)", borderColor: "var(--green-d)", background: "var(--green-t, transparent)" }}
+                    >
+                      Returned earlier
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0 }}>
+              {markedKeyRooms.length} of {keyRoomsOutstanding.length} key{keyRoomsOutstanding.length === 1 ? "" : "s"} back
+            </p>
+            {markedKeyRooms.length !== keyRoomsOutstanding.length && (
+              <div className="field">
+                <label>Reconciliation note (a key is missing)</label>
+                <input value={keyReconcileNote} onChange={(e) => setKeyReconcileNote(e.target.value)} />
+              </div>
+            )}
+            <button className="btn btn-ghost" disabled={keyReturnM.isPending} onClick={() => keyReturnM.mutate()}>
+              Record key return
+            </button>
+          </>
         ) : (
           <>
             <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0 }}>Keys issued at check-in: {keysIssued}</p>
@@ -571,6 +760,9 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                       .then(() => {
                         toast.success("Invoice dispatched");
                         invalidate();
+                        // Dispatch mints a FINAL_INVOICE communication (2026-08-17) — the S9
+                        // answer block reads its own feed (every-dispatch-invalidates rule).
+                        void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
                       })
                       .catch((e) => toast.error(e instanceof ApiError ? e.message : "Dispatch failed"))
                   }
@@ -607,8 +799,19 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             </div>
             <div className="frow">
               <div className="field">
-                <label>Partial amount (optional)</label>
-                <input type="number" value={partialAmount} onChange={(e) => setPartialAmount(e.target.value)} placeholder="Remainder → outstanding" />
+                {/* The figure is what the guest PAYS NOW (2026-08-17, operator asked which way
+                    it reads) — the backend caps it at the balance and the remainder stays
+                    outstanding for post-stay collection at S9. Empty = full balance. */}
+                <label>Amount paid now</label>
+                <input
+                  type="number"
+                  value={partialAmount}
+                  onChange={(e) => {
+                    partialTouched.current = true;
+                    setPartialAmount(e.target.value);
+                  }}
+                  placeholder="Empty = full balance · rest stays outstanding"
+                />
               </div>
               {elevated && (
                 <div className="field">
@@ -723,6 +926,28 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
 
+      {/* Posted-charge receipt (2026-08-17): what just landed on the bill, and for whom. */}
+      <DeskSuccessModal
+        open={!!postedInfo}
+        title="Charge posted"
+        subtitle={entry.id}
+        lines={
+          postedInfo
+            ? [
+                <>
+                  <b>{money(postedInfo.amount, postedInfo.currency)}</b> — {postedInfo.description}
+                </>,
+                <>
+                  {postedInfo.lineType === "F_AND_B" ? "F & B" : postedInfo.lineType} ·{" "}
+                  {postedInfo.roomNumber ? `for Room ${postedInfo.roomNumber}` : "for the whole booking"}
+                </>,
+                "Service charge and GST companion lines post automatically alongside.",
+              ]
+            : []
+        }
+        onClose={() => setPostedInfo(null)}
+      />
+
       <DeskConfirmModal
         open={settleOpen}
         title="Take payment & settle?"
@@ -730,7 +955,18 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         why="Taking payment commits a resource you can't reclaim:"
         consequences={[
           <>
-            The balance of <b>{money(balance, currency)}</b> is processed for payment{partialAmount ? " (partial — remainder stays outstanding)" : ""}.
+            {/* Partial wording only when the typed figure is genuinely SHORT of the balance —
+                a comparison against the server's figure, no derived money shown. */}
+            {partialAmount && Number.parseFloat(partialAmount) < Number(balance ?? 0) ? (
+              <>
+                The guest pays <b>{money(Number.parseFloat(partialAmount), currency)}</b> now — the rest of the{" "}
+                {money(balance, currency)} balance stays outstanding, collected post-stay.
+              </>
+            ) : (
+              <>
+                The balance of <b>{money(balance, currency)}</b> is processed for payment in full.
+              </>
+            )}
           </>,
           "The folio closes — no further charges can be posted.",
           "The room releases to housekeeping for turnover.",

@@ -83,3 +83,58 @@ export function DeskConfirmModal({
     </div>
   );
 }
+
+/**
+ * Lightweight success receipt (2026-08-17, operator request — born for "this charge posted,
+ * and for what"). Same scrim/modal shell as the confirm modal, green throughout, one Done
+ * button. Use for confirming WHAT just happened, never for asking permission.
+ */
+export function DeskSuccessModal({
+  open,
+  title,
+  subtitle,
+  lines,
+  doneLabel = "Done",
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  subtitle?: string;
+  /** The facts of what happened, one row each. */
+  lines: ReactNode[];
+  doneLabel?: string;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-top">
+          <div className="modal-ic" style={{ background: "var(--green)" }}>
+            <Check />
+          </div>
+          <div>
+            <h3>{title}</h3>
+            {subtitle && <p>{subtitle}</p>}
+          </div>
+        </div>
+        <div className="modal-body">
+          <div className="modal-consq">
+            {lines.map((l, i) => (
+              <div className="ci" key={i}>
+                <Check />
+                <span>{l}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-primary" style={{ background: "var(--green)" }} onClick={onClose}>
+            <Check />
+            {doneLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

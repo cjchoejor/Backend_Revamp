@@ -210,6 +210,25 @@ export function roomNightsByRoom(entry: EntryDetail): Map<string, string[]> {
   return out;
 }
 
+/**
+ * Rooms occupied on the ARRIVAL night (2026-08-14, key-swap ruling) — the only rooms whose
+ * keys are issued at S6 check-in. A room a per-night split moves the guest into later gets
+ * its key on the move day at S7, after the vacated room's key is returned. Mirrors the
+ * backend's `dayOneRoomIds` in room-key-service.ts — keep the two in step. Rooms with no
+ * derivable nights (and bookings with no stay dates) fall back to day-one, matching the
+ * backend's "no dates → no way to sequence keys" rule.
+ */
+export function arrivalNightRoomIds(entry: EntryDetail): Set<string> {
+  const out = new Set<string>();
+  const checkInIso = entry.checkInDate ? isoDay(entry.checkInDate) : null;
+  const nights = roomNightsByRoom(entry);
+  for (const roomId of new Set((entry.roomAssignments ?? []).map((a) => a.roomId))) {
+    const first = nights.get(roomId)?.[0] ?? null;
+    if (!checkInIso || !first || first <= checkInIso) out.add(roomId);
+  }
+  return out;
+}
+
 /** roomId → display-ready stay ranges (see `roomNightsByRoom` for the sourcing). */
 export function roomStayRangesByRoom(entry: EntryDetail): Map<string, RoomStayRanges> {
   const out = new Map<string, RoomStayRanges>();

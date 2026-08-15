@@ -43,7 +43,9 @@ export type EntryCommunicationType =
   | "QUOTATION"
   | "PROFORMA_INVOICE"
   | "CONFIRMATION_VOUCHER"
-  | "PRE_ARRIVAL_REMINDER";
+  | "PRE_ARRIVAL_REMINDER"
+  // Final bill (2026-08-17): guest's answer captured as evidence beside the OUTSTANDING follow-up.
+  | "FINAL_INVOICE";
 
 export type EntryCommunication = {
   id: string;
@@ -197,6 +199,26 @@ export function normalizeEntryResponse(data: unknown): EntryDetail {
  * cannot be progressed — resume it first. `reason` is REQUIRED (max 500 chars), recorded
  * on the trace.
  */
+/**
+ * Per-room key lifecycle (2026-08-14): issue THIS room's key (S6–S7). The backend hard-gates
+ * a sequential room change — the new room's key is refused (409 PRIOR_ROOM_KEY_OUTSTANDING)
+ * while the vacated room's key is still with the guest.
+ */
+export async function issueRoomKey(session: Session, entryId: string, roomId: string) {
+  return apiRequest<{ roomNumber: string; reissue: boolean }>(
+    `/api/entries/${entryId}/rooms/${roomId}/key-issued`,
+    { method: "POST", session },
+  );
+}
+
+/** Record THIS room's key back at the desk mid-stay — the vacated half of a key swap (S6–S8). */
+export async function returnRoomKey(session: Session, entryId: string, roomId: string) {
+  return apiRequest<{ roomNumber: string }>(
+    `/api/entries/${entryId}/rooms/${roomId}/key-returned`,
+    { method: "POST", session },
+  );
+}
+
 export async function parkEntry(session: Session, entryId: string, reason: string) {
   const data = await apiRequest<unknown>(`/api/entries/${entryId}/park`, {
     method: "POST",
@@ -445,6 +467,10 @@ export type EntryBillingSummary = {
     refunded: number | null;
     writtenOff: number | null;
     outstandingBalance: number | null;
+    /** Per-room charge subtotals (2026-08-14) — server-summed; null when no line carries a room. */
+    perRoomCharges: Array<{ roomId: string; roomNumber: string | null; charges: number; lineCount: number }> | null;
+    /** Net sum + count of booking-wide (roomless) lines. Null when none. */
+    unassignedCharges: { charges: number; lineCount: number } | null;
   } | null;
 };
 

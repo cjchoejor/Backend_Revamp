@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileText, Handshake, Receipt, Scale, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -18,6 +18,8 @@ import {
   writeOffOutstanding,
 } from "@/lib/api/post-stay";
 import { progressDispute } from "@/lib/api/in-stay";
+import { CommunicationAcceptanceBlock } from "./communication-acceptance";
+import { listEntryCommunications } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash, s9CloseReadiness } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -88,6 +90,11 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState("");
   const [paymentEventAmount, setPaymentEventAmount] = useState("");
   const [paymentEventRef, setPaymentEventRef] = useState("");
+  // Pre-fill the payment-event amount with the OUTSTANDING balance (2026-08-17, operator
+  // request) — collecting the remainder is the common case; edit down for a partial post-stay
+  // payment. Same touched-latch as the settlement prefill: the ref flips on the first
+  // keystroke so a refetch never overwrites a deliberately different figure.
+  const paymentEventTouched = useRef(false);
   const [h5Evidence, setH5Evidence] = useState("Residual obligations resolved");
   const [disputeCloseReason, setDisputeCloseReason] = useState("");
 
@@ -96,6 +103,27 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
   };
+
+  // Auto-pull the outstanding balance into the payment-event amount (see the ref above).
+  useEffect(() => {
+    if (paymentEventTouched.current) return;
+    const n = Number(fin.outstanding);
+    if (fin.outstanding != null && Number.isFinite(n) && n > 0) setPaymentEventAmount(String(fin.outstanding));
+  }, [fin.outstanding]);
+
+  // Answer-before-money at S9 (2026-08-17, operator ruling — the S3 proforma rule one stage
+  // later): while the FINAL invoice's dispatched answer loop is unanswered, the payment-event
+  // form stays locked. Mirrors the backend guard in recordInvoicePaymentEvent; bookings whose
+  // invoice predates the loop have no FINAL_INVOICE communication and are never locked.
+  const commsQuery = useQuery({
+    queryKey: ["entry-communications", entry.id],
+    queryFn: () => listEntryCommunications(session!, entry.id),
+    enabled: !!session,
+  });
+  const latestFinalComm = (commsQuery.data?.items ?? []).find(
+    (c) => c.commType === "FINAL_INVOICE" && c.direction === "OUTBOUND" && c.sendStatus === "DISPATCHED",
+  );
+  const finalAnswerPending = !!latestFinalComm && latestFinalComm.acknowledgementStatus !== "RECEIVED";
   const wrap = <T,>(fn: () => Promise<T>, msg: string) => ({
     mutationFn: fn,
     onSuccess: () => {
@@ -156,13 +184,21 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
       return issueFolioInvoice(session!, folio.id, { entryId: entry.id, templateKey: "final-v1" });
     }, "Final invoice created (draft — dispatch next)"),
   );
-  const dispatchM = useMutation(
-    wrap(() => {
+  const dispatchM = useMutation({
+    mutationFn: () => {
       const d = draftInvoices[0];
       if (!d) throw new Error("No draft invoice to dispatch");
       return dispatchInvoice(session!, d.id);
-    }, "Invoice dispatched"),
-  );
+    },
+    onSuccess: () => {
+      toast.success("Invoice dispatched");
+      invalidate();
+      // The dispatch mints a FINAL_INVOICE communication — the answer block reads its own
+      // feed (see the every-dispatch-invalidates rule in CLAUDE.md).
+      void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+  });
   const paymentEventM = useMutation(
     wrap(() => {
       const id = invId();
@@ -287,23 +323,56 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
               <PdfButton label="View invoice PDF" open={() => openInvoicePdf(session, invId()!)} />
             )}
           </div>
+          {/* Guest's answer to the final invoice (2026-08-17, operator ruling) — sits BETWEEN
+              the send and the money: invoice out → answer recorded → payment logged. The
+              answer records what the guest SAID ("paid", "will pay Friday"); until it's
+              captured, the payment-event form below stays locked (backend enforces too). */}
+          <div style={{ margin: "2px 0 10px" }}>
+            <CommunicationAcceptanceBlock
+              entryId={entry.id}
+              commType="FINAL_INVOICE"
+              title="Guest's answer to the final invoice"
+            />
+          </div>
           {elevated && invoices.length > 0 && (
             <>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", margin: "4px 0 7px" }}>
                 Record payment event (FOM+)
               </div>
+              {finalAnswerPending && (
+                <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 7px" }}>
+                  Note down the guest&apos;s answer to the final invoice above first — then log the money.
+                </p>
+              )}
               <div className="frow">
                 <div className="field">
-                  <label>Amount (optional)</label>
-                  <input type="number" value={paymentEventAmount} onChange={(e) => setPaymentEventAmount(e.target.value)} />
+                  <label>Amount received</label>
+                  <input
+                    type="number"
+                    value={paymentEventAmount}
+                    disabled={finalAnswerPending}
+                    onChange={(e) => {
+                      paymentEventTouched.current = true;
+                      setPaymentEventAmount(e.target.value);
+                    }}
+                  />
                 </div>
                 <div className="field">
                   <label>Reference</label>
-                  <input value={paymentEventRef} onChange={(e) => setPaymentEventRef(e.target.value)} />
+                  <input
+                    value={paymentEventRef}
+                    disabled={finalAnswerPending}
+                    onChange={(e) => setPaymentEventRef(e.target.value)}
+                  />
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="btn btn-ghost btn-sm" disabled={paymentEventM.isPending} onClick={() => paymentEventM.mutate()}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={paymentEventM.isPending || finalAnswerPending}
+                  title={finalAnswerPending ? "Record the guest's answer to the final invoice first" : undefined}
+                  onClick={() => paymentEventM.mutate()}
+                >
                   Mark payment tracked
                 </button>
                 <button className="btn btn-ghost btn-sm" disabled={reconcileM.isPending} onClick={() => reconcileM.mutate()}>

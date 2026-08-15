@@ -61,6 +61,12 @@ const COPY: Record<EntryCommunicationType, { title: string; nothingSent: string;
     nothingSent: "No pre-arrival reminder has been sent yet.",
     optionalHint: "Acknowledgement is recorded for the file — it doesn't hold up check-in.",
   },
+  FINAL_INVOICE: {
+    title: "Final invoice",
+    nothingSent: "The final invoice hasn't been dispatched yet — nothing to answer.",
+    optionalHint:
+      "The answer is evidence beside the outstanding-balance follow-up — \"paid\", \"will pay by Friday\", or a dispute. It never blocks closure.",
+  },
 };
 
 function fmt(ts: string | null | undefined) {

@@ -23,6 +23,8 @@ export async function postFolioCharge(
     amount: number;
     currency?: string;
     chargeDate?: string;
+    /** Per-room folio attribution (2026-08-14) — optional; must be a room of the booking. */
+    roomId?: string;
   },
 ) {
   return apiRequest<FolioLineSummary>(`/api/folios/${folioId}/charges`, {
@@ -60,6 +62,8 @@ export async function postCreditNote(
     amount: number;
     creditDate: string;
     currency?: string;
+    /** Per-room folio attribution (2026-08-14) — optional; must be a room of the booking. */
+    roomId?: string;
   },
 ) {
   return apiRequest<FolioLineSummary>(`/api/folios/${folioId}/credit-notes`, {

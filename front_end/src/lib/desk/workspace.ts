@@ -439,18 +439,33 @@ export function canProgressS7(entry: EntryDetail, nightAuditOk: boolean): boolea
 /** S8 exit readiness (SIG-S8) — gates before settlement & close (S9). H5 is auto-created on progress. */
 export function s8Readiness(entry: EntryDetail): Precondition[] {
   const folio = entry.folio;
-  const room = entry.roomAssignments?.[0]?.room;
   const keyReturn = (entry.keyReturnRecords ?? [])[0];
   const inspection = (entry.roomInspectionRecords ?? [])[0];
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
+  // EVERY distinct room must be released (2026-08-17 — the old check read only the first
+  // assignment's room, so a multi-room booking could show green with rooms still occupied).
+  // DEPARTED_CLEAN counts too: housekeeping may already have turned a room by the time the
+  // operator looks. Ticks itself when settlement fires the physical departure.
+  const distinctRooms = Array.from(
+    new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room])).values(),
+  );
+  const roomsReleased =
+    distinctRooms.length > 0 &&
+    distinctRooms.every(
+      (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
+    );
   return [
     { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" },
     {
       label: "Keys returned",
       met: !!keyReturn && (keyReturn.countReconciled || !!keyReturn.reconciliationNote),
     },
-    { label: "Room released to housekeeping", met: room?.currentClaimState === "DEPARTED_DIRTY" },
+    {
+      label:
+        distinctRooms.length > 1 ? "Rooms released to housekeeping" : "Room released to housekeeping",
+      met: roomsReleased,
+    },
     { label: "Room inspection recorded", met: !!inspection },
     { label: "Pre-checkout handoff fulfilled", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true) },
     { label: "No open disputes", met: openDisputes.length === 0 },

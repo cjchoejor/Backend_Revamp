@@ -62,6 +62,7 @@ import {
   canCloseS9,
   type DeskFinancials,
 } from "@/lib/desk/workspace";
+import { arrivalNightRoomIds } from "@/lib/desk/party-rooms";
 import { DeskConfirmModal } from "./confirm-modal";
 import { ReEnterMenu } from "./re-enter-menu";
 import { InquiryStep as InquiryStepBase } from "./inquiry-step";
@@ -760,8 +761,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // S6 → S7: complete check-in (folio goes live). The second commitment boundary.
   const checkInMutation = useMutation({
     mutationFn: () => {
+      // Only arrival-night rooms' keys go out at check-in (2026-08-14 key-swap ruling) —
+      // the backend refuses ids for rooms the guest moves into later.
+      const dayOne = arrivalNightRoomIds(entry!);
       const issued = Array.from(new Set((entry!.roomAssignments ?? []).map((a) => a.roomId))).filter(
-        (id) => issuedKeyRooms[id],
+        (id) => dayOne.has(id) && issuedKeyRooms[id],
       );
       return completeCheckInToS7(session!, entry!.id, entry!.version, {
         keyCount: Math.max(1, issued.length),
@@ -955,8 +959,13 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // sealed canvas that shows once status === CLOSED).
   const closedStepActive =
     step.key === "closed" && entry.currentStage === "S9" && entry.status !== "CLOSED" && viewing === currentOrder;
-  // Every assigned room's key must be marked issued before check-in can commit.
-  const checkInRoomIds = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.roomId)));
+  // Check-in issues keys only for rooms occupied on the ARRIVAL night (2026-08-14, key-swap
+  // ruling): a room a per-night split moves the guest into later gets its key at S7 on the
+  // move day, after the vacated room's key is returned. The backend refuses future-room ids.
+  const allAssignedRoomIds = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.roomId)));
+  const dayOneRooms = arrivalNightRoomIds(entry);
+  const checkInRoomIds = allAssignedRoomIds.filter((id) => dayOneRooms.has(id));
+  const moveDayRoomCount = allAssignedRoomIds.length - checkInRoomIds.length;
   const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
   const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
   const canCheckIn =
@@ -1014,8 +1023,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                   { label: "Registration confirmed", met: registrationConfirmed },
                   {
                     label:
-                      checkInRoomIds.length > 1
-                        ? `Room keys issued (${issuedKeyCount}/${checkInRoomIds.length})`
+                      checkInRoomIds.length > 1 || moveDayRoomCount > 0
+                        ? `Room keys issued (${issuedKeyCount}/${checkInRoomIds.length})${
+                            moveDayRoomCount > 0
+                              ? ` · ${moveDayRoomCount} on the move day`
+                              : ""
+                          }`
                         : "Room key issued",
                     met: keysValid,
                   },

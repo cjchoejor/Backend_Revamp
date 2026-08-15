@@ -7,7 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
-import { mealPlanSummary, operativeRoomCompositions, partySlotLabels, roomStayRangesByRoom, seatPartyRoomsByComposition } from "@/lib/desk/party-rooms";
+import { arrivalNightRoomIds, mealPlanSummary, operativeRoomCompositions, partySlotLabels, roomStayRangesByRoom, seatPartyRoomsByComposition } from "@/lib/desk/party-rooms";
 import { formatClaimState, formatPhysicalState } from "@/lib/room-inventory-status";
 import { guestName } from "@/lib/desk/model";
 import { money } from "@/lib/desk/workspace";
@@ -59,7 +59,11 @@ export function CheckInStep({
     [allAssignments],
   );
   const assignment = distinctAssignments[0];
-  const issuedKeyCount = distinctAssignments.filter((a) => issuedKeyRooms[a.roomId]).length;
+  // Keys at check-in cover only the rooms occupied on the ARRIVAL night (2026-08-14, key-swap
+  // ruling). A room the plan moves the guest into later gets its key on the move day (Stay
+  // step), after the vacated room's key is returned — its row says so instead of a radio.
+  const dayOneRooms = useMemo(() => arrivalNightRoomIds(entry), [entry]);
+  const issuedKeyCount = distinctAssignments.filter((a) => dayOneRooms.has(a.roomId) && issuedKeyRooms[a.roomId]).length;
   const vipNotifications = entry.vipArrivalNotifications ?? [];
   const isVip = !!guest?.vipTier?.trim();
   const identityVerified = !!guest?.identityVerifiedAt;
@@ -360,20 +364,41 @@ export function CheckInStep({
                       {/* Per-room composition details, same as the S5 block (2026-08-13). */}
                       {detailButton(a.roomId)}
                       {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
-                          as it is handed over — the radio toggles on click, so a mis-click undoes. */}
-                      <label
-                        style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
-                        title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
-                      >
-                        <input
-                          type="radio"
-                          checked={!!issuedKeyRooms[a.roomId]}
-                          onClick={() => toggleKeyRoom(a.roomId)}
-                          readOnly
-                          style={{ cursor: "pointer" }}
-                        />
-                        Key issued
-                      </label>
+                          as it is handed over — the radio toggles on click, so a mis-click undoes.
+                          Only for rooms occupied TONIGHT (2026-08-14, key-swap ruling): a room the
+                          plan moves the guest into later gets its key on the move day at S7, after
+                          the vacated room's key is returned. */}
+                      {dayOneRooms.has(a.roomId) ? (
+                        <label
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                          title={`Mark when room ${a.room?.roomNumber ?? ""}'s key is handed to the guest`}
+                        >
+                          <input
+                            type="radio"
+                            checked={!!issuedKeyRooms[a.roomId]}
+                            onClick={() => toggleKeyRoom(a.roomId)}
+                            readOnly
+                            style={{ cursor: "pointer" }}
+                          />
+                          Key issued
+                        </label>
+                      ) : (
+                        <span
+                          className="tag"
+                          style={{ fontSize: 11.5 }}
+                          title="The guest only moves into this room later — its key is issued on the move day (Stay step), after the previous room's key is returned"
+                        >
+                          Key on the move day
+                          {(() => {
+                            const first = stayRangesByRoom.get(a.roomId)?.firstNight;
+                            if (!first) return null;
+                            const d = new Date(`${first}T00:00:00`);
+                            return Number.isNaN(d.getTime())
+                              ? null
+                              : ` · ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+                          })()}
+                        </span>
+                      )}
                     </span>
                   </div>
                   {/* In-place room change, per row like S5 (2026-08-13 — was a separate section
@@ -432,13 +457,21 @@ export function CheckInStep({
           style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between", marginBottom: 8 }}
         >
           <span>Room keys handed over</span>
-          <span className={`tag${issuedKeyCount === distinctAssignments.length && distinctAssignments.length > 0 ? "" : " warn"}`}>
-            {issuedKeyCount} of {distinctAssignments.length} room{distinctAssignments.length === 1 ? "" : "s"}
-          </span>
+          {(() => {
+            const dayOneCount = distinctAssignments.filter((a) => dayOneRooms.has(a.roomId)).length;
+            const laterCount = distinctAssignments.length - dayOneCount;
+            return (
+              <span className={`tag${issuedKeyCount === dayOneCount && dayOneCount > 0 ? "" : " warn"}`}>
+                {issuedKeyCount} of {dayOneCount} room{dayOneCount === 1 ? "" : "s"}
+                {laterCount > 0 ? ` · ${laterCount} on the move day` : ""}
+              </span>
+            );
+          })()}
         </div>
         <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px" }}>
-          Mark each key in the <b>Room</b> section above as you hand it over — every room needs its
-          key issued before check-in.
+          Mark each key in the <b>Room</b> section above as you hand it over — every room the guest
+          enters <b>tonight</b> needs its key issued before check-in. A room the plan moves them
+          into later gets its key on the move day, once the previous room&apos;s key is back.
         </p>
         <label className="checkline" style={{ cursor: "pointer" }}>
           <input type="checkbox" checked={registrationConfirmed} onChange={(e) => setRegistrationConfirmed(e.target.checked)} />
