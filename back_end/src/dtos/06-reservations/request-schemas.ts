@@ -5,6 +5,11 @@ const transitionDataSchema = z
     guestPresentConfirmation: z.boolean().optional(),
     keyCount: z.coerce.number().optional(),
     registrationConfirmed: z.boolean().optional(),
+    // Which rooms' keys actually went over the desk at check-in (2026-08-11; DECLARED here
+    // 2026-08-14 — Zod strips undeclared keys, so the route had been receiving undefined and
+    // the per-room key trace recorded null since the feature landed). Arrival-night rooms
+    // only; the service refuses ids for rooms the guest moves into later.
+    issuedKeyRoomIds: z.array(z.string().min(1)).max(60).optional(),
     reEntryReason: z.string().optional(),
   })
   .optional();

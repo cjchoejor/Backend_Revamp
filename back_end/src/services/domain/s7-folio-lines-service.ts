@@ -14,6 +14,7 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
+import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -142,6 +143,10 @@ export async function postCharge(
     currency?: string;
     chargeDate: string;
     allowSoftGateBypass?: boolean;
+    /** Which room this charge belongs to (2026-08-14, per-room folio breakdown). Optional —
+     *  omitted = booking-wide. Must be a room assigned to this entry; the auto tax/service
+     *  companion lines inherit it. */
+    roomId?: string;
   },
 ) {
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
@@ -162,9 +167,33 @@ export async function postCharge(
   // Charges post at S7 (in-house) and at S8 as final-morning charges before settlement (SIG-S8 §2.2).
   enforceEntryAtS7OrS8ForChargePosting({ currentStage: entry.currentStage });
 
+  // Per-room attribution (2026-08-14): the named room must be one of this booking's rooms —
+  // any room the entry ever held qualifies (a vacated room's minibar charge is still real).
+  const chargeRoomId = input.roomId?.trim() || null;
+  if (chargeRoomId) {
+    const owned = await prisma.roomAssignment.findFirst({
+      where: { entryId: input.entryId, roomId: chargeRoomId },
+    });
+    if (!owned) throw new ValidationError("roomId is not a room of this booking");
+  }
+
   await ensureChargeDateNotSealed(prisma, chargeDate);
 
-  const ceiling = entry.reservation?.creditCeilingIfExtended;
+  // Ceiling discharge (2026-08-17, operator ruling): `creditCeilingIfExtended` was sanctioned
+  // at S3 to cover the unpaid ADVANCE — once the advance is fully PAID with real money, the
+  // FOM's credit has been replaced and the in-stay monitoring stands down (p45 gate, advisory
+  // events, W12). Mirrors the 2026-08-14 S5 p44 proportional fix one layer deeper: the frozen
+  // figure on the immutable reservation must not police charges forever. A failed evaluation
+  // keeps the ceiling — fail closed to the stricter behaviour.
+  let ceiling = entry.reservation?.creditCeilingIfExtended ?? null;
+  if (ceiling != null) {
+    try {
+      const adv = await evaluateAdvancePaymentCondition(prisma, { entryId: input.entryId, folioId });
+      if (adv.paidInFull) ceiling = null;
+    } catch {
+      // keep the ceiling when the advance evaluation can't run
+    }
+  }
   const isMandatory = isMandatoryNightAuditLine(input.lineType);
   await enforceCreditCeilingChargePostingGate(prisma, {
     ceiling: ceiling != null ? num(ceiling) : undefined,
@@ -219,6 +248,7 @@ export async function postCharge(
         stage: Stage.S7,
         postedBy: actorId,
         billingModel: primaryBillingModel,
+        roomId: chargeRoomId,
       },
     });
 
@@ -249,6 +279,7 @@ export async function postCharge(
             postedBy: actorId,
             // Service charge inherits the primary line's billing model — same guest event.
             billingModel: primaryBillingModel,
+            roomId: chargeRoomId,
           },
         });
       }
@@ -269,6 +300,7 @@ export async function postCharge(
             stage: Stage.S7,
             postedBy: actorId,
             billingModel: primaryBillingModel,
+            roomId: chargeRoomId,
           },
         });
       }
@@ -331,7 +363,7 @@ export async function postCreditNote(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; description: string; amount: number; currency?: string; creditDate: string },
+  input: { entryId: string; description: string; amount: number; currency?: string; creditDate: string; roomId?: string },
 ) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) throw new ValidationError("amount must be a positive number");
   const creditDate = new Date(input.creditDate);
@@ -344,6 +376,7 @@ export async function postCreditNote(
     amount: -Math.abs(input.amount),
     currency: input.currency,
     chargeDate: input.creditDate,
+    roomId: input.roomId,
   });
 }
 
@@ -432,6 +465,8 @@ export async function correctCharge(
         stage: Stage.S7,
         postedBy: actorId,
         billingModel: correctionBillingModel,
+        // A correction adjusts a charge already attributed to a room — the delta stays there.
+        roomId: original.roomId,
       },
     });
 
@@ -466,6 +501,7 @@ export async function correctCharge(
               stage: Stage.S7,
               postedBy: actorId,
               billingModel: correctionBillingModel,
+              roomId: original.roomId,
             },
           });
         }

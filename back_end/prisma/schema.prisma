@@ -172,6 +172,9 @@ enum CommunicationType {
   PRE_ARRIVAL_REMINDER
   /// SIG-S6 — staff VIP arrival notification (per recipient role); acknowledgement via W22.
   VIP_ARRIVAL_NOTIFICATION
+  /// Final/receipt invoice dispatch (2026-08-17) — carries the guest's answer loop like the
+  /// proforma, so an OUTSTANDING balance's "I'll pay by Friday" is recorded evidence.
+  FINAL_INVOICE
 }
 
 enum NightAuditRunStatus {
@@ -1327,6 +1330,7 @@ model Room {
   claimStateEvents          RoomClaimStateEvent[]
   roomInspectionRecords     RoomInspectionRecord[]
   keyReturnRecords          KeyReturnRecord[]
+  folioLines                FolioLine[]
 
   @@map("rooms")
 }
@@ -1773,11 +1777,18 @@ model FolioLine {
   /// `PATCH /api/folios/:id/lines/:lineId/billing-model`; every change writes a
   /// `BillingModelTransitionRecord` with `folioLineId` populated.
   billingModel       String?
+  /// Which room this charge belongs to (2026-08-14, operator request — per-room folio
+  /// breakdown). Stamped by the night audit's per-room ROOM_CHARGE posts and optionally by
+  /// the desk's manual charge posting (auto tax/service lines + corrections inherit it).
+  /// NULL = booking-wide (legacy lines, unattributed charges).
+  roomId             String?
 
   folio                   Folio                          @relation(fields: [folioId], references: [id])
   nightAuditRecord        NightAuditRecord?              @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
+  room                    Room?                          @relation(fields: [roomId], references: [id], onUpdate: Cascade)
   billingModelTransitions BillingModelTransitionRecord[]
 
+  @@index([roomId])
   @@map("folio_lines")
 }
 
@@ -1992,6 +2003,18 @@ model RoomAssignment {
   frozenSubtotal Decimal? @db.Decimal(15, 2)
   /// = frozenSubtotal + serviceCharge + gst (or 0 when isFoc).
   frozenTotal    Decimal? @db.Decimal(15, 2)
+
+  // === Key lifecycle (2026-08-14) ===
+  /// When THIS room's key was handed to the guest. Stamped at S6 check-in for rooms
+  /// occupied on the arrival night; stamped at S7 (key-issue endpoint) for rooms a
+  /// per-night split moves the guest into later. NULL = key never issued.
+  keyIssuedAt   DateTime?
+  keyIssuedBy   String?
+  /// Mid-stay return of THIS room's key (the vacated half of a room-change key swap).
+  /// The FINAL checkout key collection stays on KeyReturnRecord at S8 — this covers the
+  /// S7 swap so a new room's key can gate on the old one being back.
+  keyReturnedAt DateTime?
+  keyReturnedBy String?
 
   entry          Entry               @relation(fields: [entryId], references: [id])
   room           Room                @relation(fields: [roomId], references: [id])

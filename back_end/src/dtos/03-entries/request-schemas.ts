@@ -78,6 +78,10 @@ export type ReassignEntryCustodianRequestDto = z.infer<typeof reassignEntryCusto
 export const recordKeyReturnRequestSchema = z.object({
   keyCountReturned: z.coerce.number().int().min(0),
   reconciliationNote: z.string().optional(),
+  /** Room-wise return (2026-08-17, operator request — mirrors check-in's issuedKeyRoomIds):
+   *  the rooms whose key actually came back; their assignment rows are stamped returned in
+   *  the same transaction as the KeyReturnRecord. */
+  returnedRoomIds: z.array(z.string().min(1)).max(60).optional(),
 });
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;
 

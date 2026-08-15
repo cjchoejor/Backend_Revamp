@@ -104,6 +104,8 @@ export const postFolioChargesBodySchema = z
     chargeDate: z.string().optional(),
     postedAt: z.string().optional(),
     isPostStay: z.boolean().optional(),
+    /** Per-room folio attribution (2026-08-14) — optional; must be a room of this booking. */
+    roomId: z.string().optional(),
   })
   .passthrough();
 export type PostFolioChargesBodyDto = z.infer<typeof postFolioChargesBodySchema>;
@@ -146,6 +148,8 @@ export const postCreditNoteRequestSchema = z.object({
   amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),
   currency: z.string().optional(),
   creditDate: z.string().min(1),
+  /** Per-room folio attribution (2026-08-14) — optional; must be a room of this booking. */
+  roomId: z.string().optional(),
 });
 export type PostCreditNoteRequestDto = z.infer<typeof postCreditNoteRequestSchema>;
 

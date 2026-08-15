@@ -28,6 +28,7 @@ import {
 import { scheduleS7StageDwellWarningMonitor } from "../../lib/schedule-s7-dwell-warning-monitor.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { readHandoffChecklistContent } from "../../lib/handoff-checklist.js";
+import { dayOneRoomIds } from "./room-key-service.js";
 
 export async function completeCheckInToS7(
   prisma: PrismaClient,
@@ -103,6 +104,22 @@ export async function completeCheckInToS7(
     distinctAssignments.length > 1 ? distinctAssignments : entry.roomAssignments.slice(0, 1);
   const assignment = assignmentsToCheckIn[0];
   enforceRoomAssignmentPresentForCheckInCompletion({ assignment });
+
+  // Key issuance at check-in covers only rooms occupied on the ARRIVAL night (2026-08-14,
+  // operator ruling): a room a per-night split moves the guest into later gets its key at S7
+  // on the move day — after the vacated room's key is returned (room-key-service hard gate).
+  if (issuedKeyRoomIds && issuedKeyRoomIds.length > 0) {
+    const dayOne = dayOneRoomIds(entry.roomAssignments, entry.checkInDate);
+    const future = issuedKeyRoomIds.filter((id) => !dayOne.has(id));
+    if (future.length > 0) {
+      const names = future
+        .map((id) => entry.roomAssignments.find((a) => a.roomId === id)?.room.roomNumber ?? id)
+        .join(", ");
+      throw new ValidationError(
+        `Room ${names} isn't occupied on the arrival night — its key is issued on the move day (Stay step), after the previous room's key is returned`,
+      );
+    }
+  }
 
   const room = assignment.room;
   // Every room being checked in must be physically ready. Fail-fast if any room isn't —
@@ -404,6 +421,26 @@ export async function completeCheckInToS7(
         updatedAt: now,
       },
     });
+
+    // Durable per-room key stamps (2026-08-14): the rooms whose key actually went over the
+    // desk at check-in. Only the day-one rows — a future room's row stays unstamped so the
+    // S7 swap (return old → issue new) starts from the truth. Trace-only before this.
+    // Per-row updates — the db.ts guard forbids roomAssignment.updateMany wholesale.
+    if (issuedKeyRoomIds && issuedKeyRoomIds.length > 0) {
+      const issuedSet = new Set(issuedKeyRoomIds);
+      const rowsToStamp = entry.roomAssignments.filter(
+        (a) =>
+          issuedSet.has(a.roomId) &&
+          !a.keyIssuedAt &&
+          (!entry.checkInDate || !a.startDate || a.startDate <= entry.checkInDate),
+      );
+      for (const a of rowsToStamp) {
+        await tx.roomAssignment.update({
+          where: { id: a.id },
+          data: { keyIssuedAt: now, keyIssuedBy: actorId },
+        });
+      }
+    }
 
     if (!vipTier) {
       await tx.traceEvent.create({

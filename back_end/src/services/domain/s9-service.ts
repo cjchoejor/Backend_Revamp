@@ -269,6 +269,58 @@ export async function dispatchInvoice(
       }
     }
 
+    // FINAL/receipt invoice (2026-08-17, operator request): open the same guest-answer loop
+    // as the proforma — a CommunicationRecord + W22 acknowledgement window — so the response
+    // to the final bill (especially "I'll pay by X" on an OUTSTANDING balance) is recorded
+    // evidence the desk can capture. Evidence only, never a gate: W8 payment follow-up stays
+    // the enforcement mechanism for the money itself.
+    if (updated.invoiceType !== "PROFORMA") {
+      const entryRow = await tx.entry.findUnique({
+        where: { id: updated.entryId },
+        select: { currentStage: true },
+      });
+      const ackWindow = await requireActiveConfigValue<Record<string, number>>(tx as any, "acknowledgement.windowPerType");
+      const finalSeconds = Number((ackWindow as any)?.finalInvoice ?? (ackWindow as any)?.pi ?? 86400);
+      const ackFireAt = new Date(now.getTime() + finalSeconds * 1000);
+      const engine = await getTimerEngine();
+      const commId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
+      const comm = await tx.communicationRecord.create({
+        data: {
+          id: commId,
+          entryId: updated.entryId,
+          channel: "EMAIL",
+          commType: "FINAL_INVOICE",
+          stageContext: entryRow?.currentStage ?? Stage.S9,
+          direction: "OUTBOUND",
+          sendStatus: "DISPATCHED",
+          acknowledgementStatus: "PENDING",
+          acknowledgementTimeoutAt: ackFireAt,
+          acknowledgementReceivedAt: null,
+          actorId,
+          contentSummary: "Final invoice dispatched",
+          payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null },
+          createdBy: actorId,
+        },
+      });
+      const w22JobId = await engine.schedule("ACKNOWLEDGEMENT_WINDOW_W22", { communicationRecordId: comm.id }, { startAfter: ackFireAt });
+      await tx.timerRecord.create({
+        data: {
+          entryId: updated.entryId,
+          entityType: "CommunicationRecord",
+          entityId: comm.id,
+          timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
+          timerCode: "ACKNOWLEDGEMENT_WINDOW_W22",
+          stageContext: entryRow?.currentStage ?? Stage.S9,
+          dueAt: ackFireAt,
+          firesAt: ackFireAt,
+          status: "SCHEDULED",
+          createdBy: actorId,
+          pgBossJobId: w22JobId,
+          payload: { communicationRecordId: comm.id },
+        },
+      });
+    }
+
     return updated;
   });
 
@@ -428,6 +480,25 @@ export async function recordInvoicePaymentEvent(
 
   if (input.nextState === "PAYMENT_TRACKED") {
     enforceInvoiceStateForPaymentTracked({ currentState: invoice.state });
+    // Answer-before-money at S9 (2026-08-17, operator ruling — the S3 proforma rule one
+    // stage later): once the FINAL invoice's answer loop exists, the guest's response must
+    // be RECORDED before its payment is logged. Bookings whose invoice was dispatched
+    // before the loop existed have no FINAL_INVOICE communication and pass — a gate can't
+    // demand an answer to a question that was never opened.
+    const latestFinalComm = await prisma.communicationRecord.findFirst({
+      where: {
+        entryId: invoice.entryId,
+        commType: "FINAL_INVOICE" as any,
+        direction: "OUTBOUND",
+        sendStatus: "DISPATCHED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (latestFinalComm && latestFinalComm.acknowledgementStatus !== "RECEIVED") {
+      throw new ValidationError(
+        "Record the guest's answer to the final invoice before logging its payment",
+      );
+    }
   }
   if (input.nextState === "RECONCILED") {
     enforceInvoiceStateForReconciled({ currentState: invoice.state });

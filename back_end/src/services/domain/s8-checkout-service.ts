@@ -16,6 +16,7 @@ import {
   enforceEntryAtS8ForRoomInspection,
 } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
+import { countOutstandingKeys } from "./room-key-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -32,17 +33,56 @@ export async function getEntryWithRoom(db: DbClient, entryId: string) {
   return { entry, room, assignment };
 }
 
-export async function recordKeyReturn(prisma: PrismaClient, entryId: string, actorId: string, input: { keyCountReturned: number; reconciliationNote?: string }) {
+export async function recordKeyReturn(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: { keyCountReturned: number; reconciliationNote?: string; returnedRoomIds?: string[] },
+) {
   if (!Number.isInteger(input.keyCountReturned) || input.keyCountReturned < 0) throw new ValidationError("keyCountReturned must be a non-negative integer");
   const { entry, room } = await getEntryWithRoom(prisma, entryId);
   enforceEntryAtS8ForKeyReturn({ currentStage: entry.currentStage });
-  const issued = entry.keysIssuedCount ?? 0;
+  // Keys the guest still HOLDS at checkout (2026-08-14): per-room stamps on the assignment
+  // rows — a mid-stay room-change swap already took the vacated room's key back, so it must
+  // not be counted again here. Legacy bookings with no stamps fall back to the frozen
+  // check-in count (historically equal, since no mid-stay key machinery existed).
+  const issued = (await countOutstandingKeys(prisma, entryId)) ?? entry.keysIssuedCount ?? 0;
   const reconciled = input.keyCountReturned === issued;
   if (!reconciled && !input.reconciliationNote?.trim()) {
     throw new ValidationError("reconciliationNote is required when keyCountReturned differs from keysIssuedCount");
   }
+
+  // Room-wise return (2026-08-17, operator request — mirrors check-in's issuedKeyRoomIds):
+  // each named room must actually have its key out; its assignment rows are stamped returned
+  // in the SAME transaction as the KeyReturnRecord, so the ceremony and the per-room truth
+  // can never disagree. Count-only callers behave exactly as before.
+  const returnedRoomIds = [...new Set(input.returnedRoomIds ?? [])];
+  let rowsToStamp: Array<{ id: string }> = [];
+  if (returnedRoomIds.length > 0) {
+    const keyRows = await prisma.roomAssignment.findMany({
+      where: { entryId, roomId: { in: returnedRoomIds } },
+      include: { room: { select: { roomNumber: true } } },
+    });
+    for (const rid of returnedRoomIds) {
+      const rs = keyRows.filter((r) => r.roomId === rid);
+      if (rs.length === 0) throw new ValidationError(`returnedRoomIds contains a room that is not part of this booking`);
+      const outstanding = rs.filter((r) => r.keyIssuedAt && !r.keyReturnedAt);
+      if (outstanding.length === 0) {
+        throw new ValidationError(`Room ${rs[0].room.roomNumber} has no key out to return`);
+      }
+      rowsToStamp.push(...outstanding.map((r) => ({ id: r.id })));
+    }
+  }
+
   const now = new Date();
   return prisma.$transaction(async (tx) => {
+    // Per-row updates — the db.ts guard forbids roomAssignment.updateMany wholesale.
+    for (const r of rowsToStamp) {
+      await tx.roomAssignment.update({
+        where: { id: r.id },
+        data: { keyReturnedAt: now, keyReturnedBy: actorId },
+      });
+    }
     const keyReturnId = await allocateReadableId(tx, "KEY_RETURN" as const, now);
     const created = await tx.keyReturnRecord.create({
       data: {
@@ -69,7 +109,7 @@ export async function recordKeyReturn(prisma: PrismaClient, entryId: string, act
         stageContext: entry.currentStage,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, reconciled, reconciliationNote: reconciled ? null : input.reconciliationNote?.trim() ?? null },
+        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, reconciled, reconciliationNote: reconciled ? null : input.reconciliationNote?.trim() ?? null, returnedRoomIds: returnedRoomIds.length > 0 ? returnedRoomIds : null },
         createdBy: actorId,
       },
     });
@@ -190,11 +230,19 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
     }
     return list;
   })();
-  const assignmentsToCheckOut =
+  const allAssignments =
     distinctAssignments.length > 1 ? distinctAssignments : [entry.roomAssignments[0]];
 
-  // Every room must currently be OCCUPIED. Fail-fast if any isn't — the whole batch
-  // reverts and the operator sees which room is in the wrong state.
+  // Rooms the guest already left — a mid-stay room change end-dates the old room and marks
+  // it DEPARTED_DIRTY at the swap (2026-08-17: the old fail-fast demanded OCCUPIED on EVERY
+  // room, so any booking with an S7 in-place change could never physically check out). Also
+  // makes the call idempotent: a second whole-folio partial settlement finds nothing to do.
+  const alreadyDeparted = new Set(["DEPARTED_DIRTY", "DEPARTED_CLEAN"]);
+  const assignmentsToCheckOut = allAssignments.filter((a) => !alreadyDeparted.has(String(a.room.currentClaimState)));
+  if (assignmentsToCheckOut.length === 0) return { alreadyDeparted: true } as const;
+
+  // Every room still being checked out must be OCCUPIED. Fail-fast if any is in some OTHER
+  // state — the whole batch reverts and the operator sees which room is wrong.
   for (const a of assignmentsToCheckOut) {
     enforceRoomOccupiedForCheckoutCompletion({ currentClaimState: a.room.currentClaimState });
   }

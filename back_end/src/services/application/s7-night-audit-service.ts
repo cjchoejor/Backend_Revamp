@@ -52,6 +52,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
   const notProcessed: string[] = [];
   type PerRoomPost = {
     assignmentId: string;
+    roomId: string;
     roomNumber: string;
     amount: number;
     /** Description string used for both display and idempotency (per-room lookup). */
@@ -99,6 +100,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
         }
         perRoomPostCandidates.push({
           assignmentId: a.id,
+          roomId: a.roomId,
           roomNumber,
           amount,
           description: `Night audit room charge · Room ${roomNumber}`,
@@ -177,6 +179,8 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
               postedBy: actorId,
               nightAuditRecordId: recordId,
               billingModel,
+              // Per-room folio attribution (2026-08-14) — the room this night's charge is for.
+              roomId: post.roomId,
             },
           });
         }

@@ -218,8 +218,11 @@ foliosRouter.post("/folios/:id/charges", requireActorLevel("L1"), validateBody(p
       return;
     }
 
-    const { lineType, description, amount, currency, chargeDate } = req.body;
-    const allowSoftGateBypass = req.actor!.level === "L2" || req.actor!.level === "L3";
+    const { lineType, description, amount, currency, chargeDate, roomId } = req.body;
+    // Authority is hierarchical (L4 ≥ L3 ≥ L2) — the credit-ceiling soft-gate bypass belongs
+    // to every FOM-or-above actor. L4 was missing (2026-08-17, found live: admin blocked on
+    // the tier-2 gate an FOM would have passed).
+    const allowSoftGateBypass = ["L2", "L3", "L4"].includes(req.actor!.level);
     const created = await s7FolioLinesService.postCharge(prisma, req.params.id, req.actor!.actorId, {
       entryId,
       lineType,
@@ -228,6 +231,7 @@ foliosRouter.post("/folios/:id/charges", requireActorLevel("L1"), validateBody(p
       currency,
       chargeDate,
       allowSoftGateBypass,
+      roomId,
     } as any);
     res.json(created);
   } catch (e) {

@@ -49,7 +49,15 @@ export function sumRoomChargesInStayWindowUtc(
 
 /**
  * Policy 22 (narrow slice) — when **no** amendments exist on the entry, total posted **ROOM_CHARGE**
- * for stay nights must match `frozenRate × nightCount` within tolerance.
+ * for stay nights must match the frozen basis within tolerance.
+ *
+ * Two bases (2026-08-17 — found live: a 3-room composition booking failed settlement because
+ * the check compared 6 room-nights of room+meals against ONE room's room-only rate):
+ *   - **Composition** (`compositionExpectedTotal` non-null): Σ `RoomAssignment.frozenSubtotal`
+ *     — each room's frozen net stay total (room + meals), the exact figures the night audit
+ *     divides per night. Multi-room and per-night splits reconcile by construction.
+ *   - **Legacy flat** (null): `frozenRate × nightCount` — single-room bookings frozen before
+ *     the per-room composition track.
  * When **any** amendment exists, skip numeric reconciliation (schema does not carry machine-readable rate deltas).
  */
 export function enforceRoomChargeSumMatchesFrozenRateBasis(input: {
@@ -59,17 +67,29 @@ export function enforceRoomChargeSumMatchesFrozenRateBasis(input: {
   /** When true, skip numeric check (any amendment on record — deltas not structured in schema). */
   skipNumericReconciliation: boolean;
   relativeTolerance: number;
+  /** Σ RoomAssignment.frozenSubtotal when the booking has per-room composition; null = legacy. */
+  compositionExpectedTotal?: number | null;
 }) {
   if (input.skipNumericReconciliation) return;
-  if (input.stayNightCount <= 0) return;
-  if (!Number.isFinite(input.frozenRatePerNight) || input.frozenRatePerNight < 0) return;
+  const composition =
+    input.compositionExpectedTotal != null &&
+    Number.isFinite(input.compositionExpectedTotal) &&
+    input.compositionExpectedTotal > 0;
+  if (!composition) {
+    if (input.stayNightCount <= 0) return;
+    if (!Number.isFinite(input.frozenRatePerNight) || input.frozenRatePerNight < 0) return;
+  }
 
-  const expected = input.frozenRatePerNight * input.stayNightCount;
+  const expected = composition
+    ? (input.compositionExpectedTotal as number)
+    : input.frozenRatePerNight * input.stayNightCount;
   const tol = Math.max(0.01, Math.abs(expected) * input.relativeTolerance);
   if (Math.abs(input.totalRoomChargesInStayWindow - expected) <= tol) return;
 
   throw new PolicyGateBlockedError(
     "SETTLEMENT_RATE_BASIS_MISMATCH",
-    `Posted ROOM_CHARGE total for stay (${input.totalRoomChargesInStayWindow.toFixed(2)}) does not match frozen rate basis (${expected.toFixed(2)} = ${input.frozenRatePerNight.toFixed(2)} × ${input.stayNightCount} night(s))`,
+    composition
+      ? `Posted ROOM_CHARGE total for stay (${input.totalRoomChargesInStayWindow.toFixed(2)}) does not match the frozen per-room composition basis (${expected.toFixed(2)} = Σ room frozen subtotals)`
+      : `Posted ROOM_CHARGE total for stay (${input.totalRoomChargesInStayWindow.toFixed(2)}) does not match frozen rate basis (${expected.toFixed(2)} = ${input.frozenRatePerNight.toFixed(2)} × ${input.stayNightCount} night(s))`,
   );
 }

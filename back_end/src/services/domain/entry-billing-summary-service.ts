@@ -94,6 +94,17 @@ export interface EntryBillingSummary {
     writtenOff: number | null;
     /** The stored ledger balance (`Folio.outstandingBalance`). */
     outstandingBalance: number | null;
+    /** Per-room charge subtotals (2026-08-14, operator request) — net sum of the folio lines
+     *  stamped with each roomId, sealed-selection order preserved by roomNumber sort. Null
+     *  when no line carries a room (legacy folios). */
+    perRoomCharges: Array<{
+      roomId: string;
+      roomNumber: string | null;
+      charges: number;
+      lineCount: number;
+    }> | null;
+    /** Net sum + count of lines with NO room attribution (booking-wide). Null when none. */
+    unassignedCharges: { charges: number; lineCount: number } | null;
   } | null;
 }
 
@@ -297,13 +308,45 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
   let folioBlock: EntryBillingSummary["folio"] = null;
   if (entry.folio) {
     const [lines, inAgg, outAgg, writeOffAgg] = await Promise.all([
-      prisma.folioLine.findMany({ where: { folioId: entry.folio.id }, select: { amount: true } }),
+      prisma.folioLine.findMany({
+        where: { folioId: entry.folio.id },
+        select: { amount: true, roomId: true, room: { select: { roomNumber: true } } },
+      }),
       prisma.paymentRecord.aggregate({ where: { folioId: entry.folio.id, paymentDirection: "IN" }, _sum: { amount: true } }),
       prisma.paymentRecord.aggregate({ where: { folioId: entry.folio.id, paymentDirection: "OUT" }, _sum: { amount: true } }),
       prisma.writeOffRecord.aggregate({ where: { folioId: entry.folio.id }, _sum: { writtenOffAmount: true } }),
     ]);
     const refundedDec = toDecimal(outAgg._sum.amount);
     const writtenOffDec = toDecimal(writeOffAgg._sum.writtenOffAmount);
+
+    // Per-room charge subtotals (2026-08-14): Decimal-summed server-side — the desk shows,
+    // never sums. Lines with no roomId gather in the booking-wide bucket.
+    const byRoom = new Map<string, { roomNumber: string | null; sum: Prisma.Decimal; count: number }>();
+    let unassignedSum = toDecimal(0);
+    let unassignedCount = 0;
+    for (const l of lines) {
+      if (l.roomId) {
+        const cur = byRoom.get(l.roomId) ?? { roomNumber: l.room?.roomNumber ?? null, sum: toDecimal(0), count: 0 };
+        cur.sum = cur.sum.add(toDecimal(l.amount));
+        cur.count += 1;
+        byRoom.set(l.roomId, cur);
+      } else {
+        unassignedSum = unassignedSum.add(toDecimal(l.amount));
+        unassignedCount += 1;
+      }
+    }
+    const perRoomCharges =
+      byRoom.size > 0
+        ? Array.from(byRoom.entries())
+            .map(([roomId, v]) => ({
+              roomId,
+              roomNumber: v.roomNumber,
+              charges: money(v.sum) ?? 0,
+              lineCount: v.count,
+            }))
+            .sort((a, b) => (a.roomNumber ?? "").localeCompare(b.roomNumber ?? "", undefined, { numeric: true }))
+        : null;
+
     folioBlock = {
       state: entry.folio.state,
       billedSoFar: lines.length > 0 ? money(sumMoneyBy(lines, "amount")) : null,
@@ -312,6 +355,8 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       refunded: refundedDec.gt(0) ? money(refundedDec) : null,
       writtenOff: writtenOffDec.gt(0) ? money(writtenOffDec) : null,
       outstandingBalance: money(toDecimal(entry.folio.outstandingBalance)),
+      perRoomCharges,
+      unassignedCharges: unassignedCount > 0 ? { charges: money(unassignedSum) ?? 0, lineCount: unassignedCount } : null,
     };
   }
 

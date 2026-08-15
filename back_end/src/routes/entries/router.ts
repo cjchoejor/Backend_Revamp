@@ -31,6 +31,7 @@ import { buildEntryRateReference } from "../../services/domain/rate-reference-se
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
+import { issueRoomKey, returnRoomKey } from "../../services/domain/room-key-service.js";
 import { roomChangeRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 
 export const entriesRouter = Router();
@@ -85,6 +86,27 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
 entriesRouter.get("/:id/room-plan-history", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.json(await buildRoomPlanHistory(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Per-room key lifecycle (2026-08-14, operator ruling): a key is issued on the day the guest
+ * enters the room, and a sequential room change is a key SWAP — the new room's key is HARD
+ * blocked (PRIOR_ROOM_KEY_OUTSTANDING) while the vacated room's key is still out. L1 desk acts.
+ */
+entriesRouter.post("/:id/rooms/:roomId/key-issued", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await issueRoomKey(prisma, req.params.id, req.params.roomId, req.actor!.actorId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/rooms/:roomId/key-returned", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await returnRoomKey(prisma, req.params.id, req.params.roomId, req.actor!.actorId));
   } catch (e) {
     next(e);
   }

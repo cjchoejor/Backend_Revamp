@@ -21,6 +21,7 @@ import {
 } from "../../policies/08-pricing-rate-plan/p22-settlement-rate-basis.js";
 import { minMoney, toDecimal } from "../../lib/money.js";
 import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
+import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
@@ -232,9 +233,22 @@ export async function initiateSettlement(
     fomNightAuditAcknowledgementRef: input.nightAuditFomAcknowledgementRef,
   });
 
+  // Ceiling discharge (2026-08-17, operator ruling — same rule as charge posting): the
+  // ceiling was sanctioned to cover the unpaid ADVANCE; once the advance is fully PAID with
+  // real money the FOM's credit is discharged and the final-balance check stands down.
+  let settlementCeiling =
+    entry.reservation?.creditCeilingIfExtended != null ? num(entry.reservation.creditCeilingIfExtended) : null;
+  if (settlementCeiling != null) {
+    try {
+      const adv = await evaluateAdvancePaymentCondition(prisma, { entryId: folio.entryId, folioId });
+      if (adv.paidInFull) settlementCeiling = null;
+    } catch {
+      // keep the ceiling when the advance evaluation can't run — fail closed
+    }
+  }
   enforceCreditCeilingFinalBalanceForSettlement({
     outstanding,
-    ceilingAmount: entry.reservation?.creditCeilingIfExtended != null ? num(entry.reservation.creditCeilingIfExtended) : null,
+    ceilingAmount: settlementCeiling,
     fomAcknowledgementRef: input.fomAcknowledgementRef,
     creditCeilingTier2AcknowledgedAt: entry.creditCeilingTier2AcknowledgedAt,
   });
@@ -251,6 +265,18 @@ export async function initiateSettlement(
   });
   if (entry.reservation) {
     const stayNights = listStayNightOperatingDatesUtc(entry.reservation.frozenCheckInDate, entry.reservation.frozenCheckOutDate);
+    // Per-room composition basis (2026-08-17): when the assignments carry frozen composition
+    // subtotals, the audit posts room+meals per room per night from exactly these figures —
+    // so Σ frozenSubtotal is the correct expectation. `frozenRate × nights` (one room's
+    // room-only rate) stays as the legacy-flat fallback.
+    const compositionRows = await prisma.roomAssignment.findMany({
+      where: { entryId: folio.entryId, frozenSubtotal: { not: null } },
+      select: { frozenSubtotal: true },
+    });
+    const compositionExpectedTotal =
+      compositionRows.length > 0
+        ? compositionRows.reduce((s, r) => s + num(r.frozenSubtotal), 0)
+        : null;
     enforceRoomChargeSumMatchesFrozenRateBasis({
       frozenRatePerNight: num(entry.reservation.frozenRate),
       stayNightCount: stayNights.length,
@@ -261,6 +287,7 @@ export async function initiateSettlement(
       ),
       skipNumericReconciliation: amendments.length > 0,
       relativeTolerance: 0.02,
+      compositionExpectedTotal,
     });
   }
 
@@ -461,11 +488,13 @@ export async function initiateSettlement(
 
     // Physical checkout: room becomes DEPARTED_DIRTY + W24 timer (AC-S8-01/03).
     //
-    // Split-billing (Phase 3): only fire physical departure when the WHOLE folio has
-    // settled. A bucket-scoped settlement (e.g., just the agent side) leaves the guest
-    // still in-house; the room stays OCCUPIED until every bucket is done. Legacy
-    // whole-folio calls hit `wholeFolioBalanceClosed` the same as before.
-    if (wholeFolioBalanceClosed || isDirectBillPath) {
+    // Split-billing (Phase 3): a BUCKET-scoped settlement (e.g., just the agent side)
+    // leaves the guest still in-house; the room stays OCCUPIED until every bucket is done.
+    // A WHOLE-FOLIO settlement is the guest leaving — full OR partial (2026-08-17, found
+    // live: a partial cash settlement left every room OCCUPIED and S9 unreachable; SIG-S9
+    // §51 explicitly exits S8 with the folio OUTSTANDING and the rooms released — the
+    // remainder is S9's payment follow-up, not a reason to keep the rooms).
+    if (!isBucketScoped || wholeFolioBalanceClosed || isDirectBillPath) {
       await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
     }
 
