@@ -1,14 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Check, ImagePlus, RefreshCcw, ShieldCheck, Upload } from "lucide-react";
+import { Camera, Check, ImagePlus, RefreshCcw, ScanLine, ShieldCheck, Upload } from "lucide-react";
 import {
+  analyzePhoneCapture,
   fetchPhoneCaptureContext,
+  parsePhoneReading,
+  sendPhoneExtraction,
   uploadPhoneCapture,
+  type IdentitySuggestedFields,
   type PhoneCaptureContext,
   type PhoneCaptureRoom,
   type PhoneCaptureRosterItem,
+  type PhoneParsePreview,
 } from "@/lib/api/identity-proofs";
+import { readIdOnPhone, warmPhoneReader, type PhoneReading } from "@/lib/phone-id-reader";
 
 /**
  * Phone ID-capture page (2026-08-12) — what opens when a phone scans the QR code the desk
@@ -28,6 +34,14 @@ import {
  * retake loop for free; the page adds its own preview + Retake before anything uploads.
  *
  * Standalone surface — not under the desk shell, no session, self-contained styles.
+ *
+ * On-phone reading (2026-08-18): once a photo is taken the phone decodes any QR (Aadhaar's
+ * signed Secure QR = name/DOB/gender without OCR) or OCRs the passport MRZ locally, hands the
+ * RAW result to the server's parse route (the server interprets — check digits, document-type
+ * allowlist), and shows the fields for the person to confirm or correct BEFORE sending. The
+ * confirmed fields travel with the photo and land on the desk as a SUGGESTION the operator
+ * applies (never a direct write). Photos with no readable zone can still have the details
+ * typed here. If the phone can't read at all, the desk's server-side pass reads the bytes.
  */
 
 const palette = {
@@ -78,6 +92,52 @@ function roomText(room: PhoneCaptureRoom | null | undefined, compact = false): s
   return [`Room ${room.roomNumber}`, bed, compact ? null : room.roomTypeName].filter(Boolean).join(" · ");
 }
 
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: `1px solid ${palette.line}`,
+  fontSize: 15,
+  background: "#fff",
+  color: palette.ink,
+};
+
+/** Small rotating spinner for the analysing state (standalone page — no desk stylesheet). */
+function Spin({ size = 15 }: { size?: number }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        border: `2.5px solid ${palette.green}`,
+        borderTopColor: "transparent",
+        display: "inline-block",
+        animation: "capspin 0.7s linear infinite",
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+/** One row of the phone's detected-details form; a green tick marks a value the document itself proved. */
+function FieldRow({ label, verified, children }: { label: string; verified?: boolean; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "grid", gap: 4 }}>
+      <span style={{ fontSize: 12, color: palette.ink3, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+        {label}
+        {verified && (
+          <span style={{ color: palette.green, fontWeight: 700 }} title="Proven by the document's check digit">
+            ✓ verified
+          </span>
+        )}
+      </span>
+      {children}
+    </label>
+  );
+}
+
 export default function PhoneCapturePage() {
   const [token, setToken] = useState<string | null>(null);
   const [ctx, setCtx] = useState<PhoneCaptureContext | null>(null);
@@ -92,6 +152,17 @@ export default function PhoneCapturePage() {
   const [activeSlot, setActiveSlot] = useState<PhoneCaptureRosterItem | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+  // On-phone reading of the pending photo (2026-08-18): the raw sensor result, the server's
+  // interpretation of it, and the fields as the person confirmed/corrected them.
+  const [reading, setReading] = useState<PhoneReading | null>(null);
+  const [readStage, setReadStage] = useState<"idle" | "decoding" | "qr" | "mrz" | "parsing" | "server" | "done" | "failed">("idle");
+  const [parsed, setParsed] = useState<PhoneParsePreview | null>(null);
+  const [fields, setFields] = useState<IdentitySuggestedFields>({});
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // Whether the server's full reader (layout OCR) already looked at THIS photo and found
+  // nothing — changes the "couldn't read" copy from "the desk will read it" to honesty.
+  const [serverTried, setServerTried] = useState(false);
+  const readSeq = useRef(0);
 
   // The token travels in the hash so it never appears in server request logs.
   useEffect(() => {
@@ -111,6 +182,8 @@ export default function PhoneCapturePage() {
           setError("This booking has been closed — nothing more can be added to it.");
         } else {
           setPhase("ready");
+          // Load the OCR worker while the person is still framing the shot.
+          warmPhoneReader();
         }
       })
       .catch((e) => {
@@ -143,6 +216,58 @@ export default function PhoneCapturePage() {
     setError(null);
     setPendingFile(file);
     setPhase("preview");
+    // Read the document on the phone (QR → MRZ), then let the server interpret it. Sequence
+    // guard: a retake mid-read must not let the earlier photo's result land on the new one.
+    const seq = ++readSeq.current;
+    setReading(null);
+    setParsed(null);
+    setFields({});
+    setDetailsOpen(false);
+    setServerTried(false);
+    setReadStage("decoding");
+    void (async () => {
+      try {
+        const r = await readIdOnPhone(file, (st) => {
+          if (readSeq.current === seq) setReadStage(st);
+        });
+        if (readSeq.current !== seq) return;
+        setReading(r);
+        let gotFields = false;
+        if (r && (r.qrText || r.ocrText) && token) {
+          setReadStage("parsing");
+          const pv = await parsePhoneReading(token, { qrText: r.qrText, ocrText: r.ocrText });
+          if (readSeq.current !== seq) return;
+          setParsed(pv);
+          if (pv.engine) {
+            gotFields = true;
+            setFields({ ...pv.fields });
+            setDetailsOpen(true);
+          }
+        }
+        // The phone only reads QR + MRZ locally. Anything else — CID, work permit, birth
+        // certificate — is read by the SERVER's full pipeline on the previewed photo, so
+        // the fields fill in here BEFORE sending (operator ruling: the phone acts like an
+        // OCR machine). Nothing is stored by this call; W39 still covers the uploaded copy.
+        if (!gotFields && token) {
+          setReadStage("server");
+          try {
+            const az = await analyzePhoneCapture(token, r?.blob ?? file, allMode ? activeSlot?.key : (ctx?.subjectKey ?? undefined));
+            if (readSeq.current !== seq) return;
+            setServerTried(az.available);
+            if (az.engine && Object.keys(az.fields).length) {
+              setParsed({ engine: az.engine, fields: az.fields, fieldConfidence: az.fieldConfidence, raw: az.source ? { source: az.source } : null });
+              setFields({ ...az.fields });
+              setDetailsOpen(true);
+            }
+          } catch {
+            /* offline / OCR busy — the W39 pass reads the uploaded copy instead */
+          }
+        }
+        if (readSeq.current === seq) setReadStage("done");
+      } catch {
+        if (readSeq.current === seq) setReadStage("failed");
+      }
+    })();
     // Allow re-picking the same file (retake produces a same-named capture on some phones).
     if (cameraRef.current) cameraRef.current.value = "";
     if (galleryRef.current) galleryRef.current.value = "";
@@ -153,8 +278,37 @@ export default function PhoneCapturePage() {
     if (allMode && !activeSlot) return;
     setPhase("uploading");
     setError(null);
+    // A read still running for this photo must not repopulate the form after we send.
+    readSeq.current += 1;
     try {
-      await uploadPhoneCapture(token, pendingFile, pendingFile.name, allMode ? activeSlot!.key : undefined);
+      // What the person confirmed on the phone: the server's parse plus any edits here.
+      const typed = Object.fromEntries(
+        Object.entries(fields).filter(([, v]) => typeof v === "string" && v.trim()),
+      ) as IdentitySuggestedFields;
+      const hasReading = !!(reading?.qrText || parsed?.raw?.mrzLines?.length || Object.keys(typed).length);
+      // Upload the downscaled JPEG when the phone could decode the image (smaller, same content).
+      const fileToSend: Blob = reading?.blob ?? pendingFile;
+      const fileName = reading?.blob ? pendingFile.name.replace(/\.[^.]+$/, "") + ".jpg" : pendingFile.name;
+      const created = await uploadPhoneCapture(token, fileToSend, fileName, allMode ? activeSlot!.key : undefined, hasReading);
+      if (hasReading) {
+        // Best-effort: the photo is already stored; a failed details post just leaves the
+        // server-side pass to read the bytes.
+        try {
+          await sendPhoneExtraction(token, {
+            photoDocumentId: created.id,
+            mrzLines: parsed?.raw?.mrzLines ?? null,
+            qrText: reading?.qrText ?? null,
+            fields: typed,
+          });
+        } catch {
+          /* server pass covers it */
+        }
+      }
+      setReading(null);
+      setParsed(null);
+      setFields({});
+      setServerTried(false);
+      setReadStage("idle");
       setSentCount((n) => n + 1);
       setLastSentFor(allMode ? activeSlot!.label : null);
       setPendingFile(null);
@@ -210,6 +364,7 @@ export default function PhoneCapturePage() {
         fontFamily: "var(--font-hanken), system-ui, sans-serif",
       }}
     >
+      <style>{"@keyframes capspin{to{transform:rotate(360deg)}}"}</style>
       <div style={{ width: "100%", maxWidth: 440, display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: palette.green }}>
           <ShieldCheck style={{ width: 20, height: 20 }} />
@@ -262,6 +417,33 @@ export default function PhoneCapturePage() {
                 </>
               )}
             </div>
+
+            {/* The reader is invisible until it fires — say it exists BEFORE the first shot, or
+                nobody frames the QR code / passport strip on purpose. */}
+            {phase === "ready" && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "flex-start",
+                  background: palette.card,
+                  border: `1px solid ${palette.line}`,
+                  borderRadius: 14,
+                  padding: "12px 14px",
+                  fontSize: 13,
+                  color: palette.ink3,
+                  lineHeight: 1.5,
+                }}
+              >
+                <ScanLine style={{ width: 18, height: 18, color: palette.green, flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  <strong style={{ color: palette.ink }}>The details fill themselves in after the photo.</strong>{" "}
+                  QR codes and passports read instantly; other IDs (CID, work permit, birth certificate…) take
+                  a little longer while the printed text is read. Keep the whole document sharp in the shot —
+                  you&rsquo;ll check what was read before anything is sent.
+                </span>
+              </div>
+            )}
 
             <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => onPicked(e.target.files)} />
             <input ref={galleryRef} type="file" accept="image/*,application/pdf" hidden onChange={(e) => onPicked(e.target.files)} />
@@ -412,7 +594,7 @@ export default function PhoneCapturePage() {
                 {previewUrl && pendingFile?.type.startsWith("image/") ? (
                   <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${palette.line}`, background: "#000" }}>
                     {/* eslint-disable-next-line @next/next/no-img-element -- local object-URL preview */}
-                    <img src={previewUrl} alt="ID preview" style={{ width: "100%", maxHeight: "48dvh", objectFit: "contain", display: "block" }} />
+                    <img src={previewUrl} alt="ID preview" decoding="async" style={{ width: "100%", maxHeight: "48dvh", objectFit: "contain", display: "block" }} />
                   </div>
                 ) : (
                   <div style={{ background: palette.cream, border: `1px solid ${palette.line}`, borderRadius: 16, padding: 20, fontSize: 14.5, color: palette.ink3 }}>
@@ -422,6 +604,121 @@ export default function PhoneCapturePage() {
                 <p style={{ fontSize: 14, color: palette.ink3, textAlign: "center", margin: 0, lineHeight: 1.45 }}>
                   Readable and glare-free? Every detail on the document should be legible.
                 </p>
+
+                {/* Detected details (2026-08-18): read on this phone, interpreted by the server,
+                    confirmed here — sent with the photo as a suggestion the desk applies. */}
+                <div style={{ background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 16, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {(() => {
+                    const readBusy =
+                      readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server";
+                    const qrUnrecognised = !parsed?.engine && parsed?.raw?.source === "QR_UNRECOGNISED";
+                    return (
+                      <>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700 }}>
+                          {readBusy ? <Spin /> : <ScanLine style={{ width: 17, height: 17, color: palette.green }} />}
+                          {readBusy
+                            ? "Analysing the document…"
+                            : parsed?.engine
+                              ? parsed.engine === "PHONE_QR" || parsed.engine === "SERVER_QR"
+                                ? "Read from the card's QR code"
+                                : parsed.engine === "SERVER_LAYOUT"
+                                  ? "Read from the document's printed text"
+                                  : "Read from the passport strip"
+                              : qrUnrecognised && !serverTried
+                                ? "QR code found — no guest details inside it"
+                                : readStage === "failed"
+                                  ? "Couldn't read this on the phone"
+                                  : "Couldn't read this document automatically"}
+                          {readBusy && (
+                            <span style={{ marginLeft: "auto", fontSize: 12, color: palette.ink3, fontWeight: 500 }}>
+                              {readStage === "server"
+                                ? "reading the printed text — takes a moment"
+                                : readStage === "mrz"
+                                  ? "reading the passport strip"
+                                  : readStage === "parsing"
+                                    ? "checking what was read"
+                                    : "looking for a QR code"}
+                            </span>
+                          )}
+                        </div>
+                        {(readStage === "done" || readStage === "failed") && !parsed?.engine && (
+                          <div style={{ fontSize: 13, color: palette.ink3, lineHeight: 1.45 }}>
+                            {serverTried
+                              ? "The QR, passport strip and printed text were all tried. Type the details below so the desk doesn't have to — the photo still goes to the desk either way."
+                              : qrUnrecognised
+                                ? "The QR code was read, but it doesn't carry the guest's details in a form the system knows. Type the details below — or just send the photo: the desk's reader also studies the printed text."
+                                : "No QR code or passport strip could be read in this photo. If the ID has a QR code, retake with it sharp and flat. You can type the details below — or just send the photo: the desk's reader studies the printed text too."}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {(readStage === "done" || readStage === "failed" || parsed) && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setDetailsOpen((o) => !o)}
+                        style={{ ...btnBase, padding: "10px 12px", fontSize: 14, justifyContent: "space-between" }}
+                      >
+                        <span>{detailsOpen ? "Hide details" : parsed?.engine ? "Check the details" : "Type the details"}</span>
+                        <span style={{ fontSize: 12.5, color: palette.ink3, fontWeight: 500 }}>
+                          {Object.values(fields).filter((v) => v && String(v).trim()).length} filled
+                        </span>
+                      </button>
+                      {detailsOpen && (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {parsed?.fields.documentNumberLast4 && !fields.documentNumber && (
+                            <div style={{ fontSize: 12.5, color: palette.ink3, background: palette.cream, borderRadius: 10, padding: "8px 10px" }}>
+                              The card&rsquo;s QR carries only the last four digits (…{parsed.fields.documentNumberLast4}) — type the
+                              full number from the card if you can.
+                            </div>
+                          )}
+                          <FieldRow label="Document" verified={parsed?.fieldConfidence?.documentType === "VERIFIED"}>
+                            <select
+                              value={fields.documentType ?? ""}
+                              onChange={(e) => setFields((f) => ({ ...f, documentType: e.target.value || undefined }))}
+                              style={inputStyle}
+                            >
+                              <option value="">— pick —</option>
+                              {(ctx.documentTypes ?? []).map((d) => (
+                                <option key={d.code} value={d.code}>
+                                  {d.name}
+                                </option>
+                              ))}
+                            </select>
+                          </FieldRow>
+                          <FieldRow label="Number" verified={parsed?.fieldConfidence?.documentNumber === "VERIFIED" && fields.documentNumber === parsed?.fields.documentNumber}>
+                            <input
+                              value={fields.documentNumber ?? ""}
+                              onChange={(e) => setFields((f) => ({ ...f, documentNumber: e.target.value }))}
+                              placeholder="As printed on the document"
+                              autoCapitalize="characters"
+                              style={inputStyle}
+                            />
+                          </FieldRow>
+                          <FieldRow label="Name" verified={parsed?.fieldConfidence?.fullName === "VERIFIED" && fields.fullName === parsed?.fields.fullName}>
+                            <input value={fields.fullName ?? ""} onChange={(e) => setFields((f) => ({ ...f, fullName: e.target.value }))} placeholder="Full name" style={inputStyle} />
+                          </FieldRow>
+                          <FieldRow label="Date of birth" verified={parsed?.fieldConfidence?.dateOfBirth === "VERIFIED" && fields.dateOfBirth === parsed?.fields.dateOfBirth}>
+                            <input type="date" value={fields.dateOfBirth ?? ""} onChange={(e) => setFields((f) => ({ ...f, dateOfBirth: e.target.value }))} style={inputStyle} />
+                          </FieldRow>
+                          <FieldRow label="Gender" verified={parsed?.fieldConfidence?.gender === "VERIFIED" && fields.gender === parsed?.fields.gender}>
+                            <select value={fields.gender ?? ""} onChange={(e) => setFields((f) => ({ ...f, gender: e.target.value || undefined }))} style={inputStyle}>
+                              <option value="">—</option>
+                              <option value="M">Male</option>
+                              <option value="F">Female</option>
+                              <option value="X">Other</option>
+                            </select>
+                          </FieldRow>
+                          <div style={{ fontSize: 12, color: palette.ink3, lineHeight: 1.45 }}>
+                            <span style={{ color: palette.green, fontWeight: 700 }}>✓</span> = proven by the document itself (passport
+                            check digit). Everything here goes to the desk as a suggestion the receptionist confirms.
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
                 {error && (
                   <div style={{ background: palette.errBg, border: `1px solid ${palette.errLine}`, borderRadius: 12, padding: "10px 14px", fontSize: 13.5 }}>
                     {error}
@@ -429,7 +726,11 @@ export default function PhoneCapturePage() {
                 )}
                 <button type="button" style={{ ...btnPrimary, opacity: phase === "uploading" ? 0.7 : 1 }} disabled={phase === "uploading"} onClick={() => void upload()}>
                   <Upload style={{ width: 18, height: 18 }} />
-                  {phase === "uploading" ? "Sending…" : "Use this photo — send to the desk"}
+                  {phase === "uploading"
+                    ? "Sending…"
+                    : readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server"
+                      ? "Send to the desk (reading…)"
+                      : "Use this photo — send to the desk"}
                 </button>
                 <button type="button" style={btnBase} disabled={phase === "uploading"} onClick={() => openPicker(cameraRef.current, activeSlot)}>
                   <RefreshCcw style={{ width: 17, height: 17 }} />

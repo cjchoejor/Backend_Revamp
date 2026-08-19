@@ -75,7 +75,7 @@ export function DeskConfirmModal({
             onClick={onConfirm}
             disabled={pending}
           >
-            <Icon />
+            {pending ? <span className="btn-spin" aria-hidden /> : <Icon />}
             {pending ? "Working…" : confirmLabel}
           </button>
         </div>

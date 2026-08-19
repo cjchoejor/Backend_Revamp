@@ -1134,6 +1134,12 @@ export function DeskNewInquiryForm() {
       !exceedsHotelCapacity &&
       bedSetupOk;
 
+  // True from create-success until this page unmounts. router.push is not instant (dev-mode
+  // route compile, workspace chunk load) — without this the button reverts to an idle,
+  // clickable "Start inquiry & open booking" during the gap, which both reads as "nothing
+  // happened" and accepts a second click that would create a duplicate booking.
+  const [navigating, setNavigating] = useState(false);
+
   const mutation = useMutation({
     mutationFn: async () => {
       if (!session) throw new Error("Not signed in");
@@ -1235,6 +1241,16 @@ export function DeskNewInquiryForm() {
         void queryClient.invalidateQueries({ queryKey: ["entry-timers", editEntryId] });
         void queryClient.invalidateQueries({ queryKey: ["entries"] });
       }
+      // Warm the workspace's entry query while Next.js loads the route — the fetch and the
+      // route compile run in parallel, so the workspace usually mounts with the booking
+      // already in cache instead of showing its own "Opening the booking…" wait.
+      if (session) {
+        void queryClient.prefetchQuery({
+          queryKey: ["entry", entry.id],
+          queryFn: () => getEntry(session, entry.id),
+        });
+      }
+      setNavigating(true);
       router.push(`/desk/bookings/${entry.id}`);
     },
     onError: (e) =>
@@ -1246,7 +1262,7 @@ export function DeskNewInquiryForm() {
   // NEVER pre-lights on form validity — it only pulses while the create actually fires.
   const lookupsUsed = !!childPolicyQuery.data || phoneMatches.length > 0 || !!party;
   const railActiveKeys = [lookupsUsed ? "lookups" : null].filter(Boolean) as string[];
-  const railFiringKey = mutation.isPending
+  const railFiringKey = mutation.isPending || navigating
     ? "create"
     : phoneMatch.isFetching || returningSearch.isFetching || childPolicyQuery.isFetching
       ? "lookups"
@@ -1854,17 +1870,20 @@ export function DeskNewInquiryForm() {
 
         <button
           className="btn btn-primary"
-          style={{ width: "100%", justifyContent: "center", padding: "12px 16px" }}
-          disabled={!canSubmit || mutation.isPending}
+          style={{ width: "100%", justifyContent: "center", padding: "12px 16px", gap: 8 }}
+          disabled={!canSubmit || mutation.isPending || navigating}
           onClick={() => mutation.mutate()}
         >
-          {mutation.isPending
-            ? isEdit
-              ? "Saving…"
-              : "Starting…"
-            : isEdit
-              ? "Save changes"
-              : "Start inquiry & open booking"}
+          {(mutation.isPending || navigating) && <span className="btn-spin" aria-hidden />}
+          {navigating
+            ? "Opening the booking…"
+            : mutation.isPending
+              ? isEdit
+                ? "Saving…"
+                : "Starting…"
+              : isEdit
+                ? "Save changes"
+                : "Start inquiry & open booking"}
         </button>
         </div>
 

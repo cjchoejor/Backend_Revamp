@@ -188,6 +188,10 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const [reEntryReason, setReEntryReason] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
+  // True from cancel-success until this page unmounts — router.push is not instant, and
+  // closing the modal early would leave a re-clickable danger button (double-cancel 409s)
+  // over a workspace that reads as if nothing happened.
+  const [cancelNavigating, setCancelNavigating] = useState(false);
 
   const elevated = isElevated(session?.actorLevel);
   const gm = isGm(session?.actorLevel);
@@ -430,9 +434,11 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const cancelM = useMutation({
     mutationFn: () => cancelEntryAtS3(session!, entry.id, { reason: cancelReason.trim() || undefined }),
     onSuccess: () => {
-      setCancelOpen(false);
       toast.success("Booking cancelled — hold released, timers cancelled");
       invalidate();
+      // Keep the modal up and locked until the bookings list actually mounts — the modal's
+      // pending state is the navigation feedback.
+      setCancelNavigating(true);
       router.push("/desk/bookings");
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Cancellation failed"),
@@ -1224,7 +1230,7 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
         ]}
         confirmLabel="Cancel booking"
         cancelLabel="Keep booking"
-        pending={cancelM.isPending}
+        pending={cancelM.isPending || cancelNavigating}
         onConfirm={() => cancelM.mutate()}
         onClose={() => setCancelOpen(false)}
       />

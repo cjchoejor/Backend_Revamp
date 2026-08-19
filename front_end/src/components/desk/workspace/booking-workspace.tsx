@@ -686,6 +686,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // The same dialog serves two entry points: the S1/S2 exit prompt (where leaving is the point)
   // and the in-place Park button on later stages (where the operator wants to stay put).
   const [parkExitFlow, setParkExitFlow] = useState(false);
+  // Which exit is in flight ("park" = parked & leaving, "plain" = leaving without parking).
+  // router.push is not instant (route compile/load) — while set, the park dialog stays up
+  // and locked so the wait never reads as "nothing happened" or accepts a second click.
+  const [exitLeaving, setExitLeaving] = useState<"park" | "plain" | null>(null);
   // Where the operator was actually headed when the park prompt intercepted them —
   // a sidebar link's href or (for browser Back) the bookings list. Honoured on leave.
   const pendingExitRef = useRef<string | null>(null);
@@ -798,16 +802,20 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       // The park-expiry timer is armed inside the same transaction — pull it so the header shows
       // the new countdown immediately instead of on the next poll.
       void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry!.id] });
-      setParkOpen(false);
-      setParkReason("");
       toast.success("Booking parked — it's paused but keeps its place.");
       // Only leave when the park came from the exit prompt. Parking in place from a later stage
       // should keep the operator where they are, looking at the now-parked booking. Honour the
       // destination the operator was actually headed to (sidebar link / browser Back).
       if (parkExitFlow) {
+        // Keep the dialog up and locked until the destination actually mounts — its pending
+        // state is the navigation feedback.
+        setExitLeaving("park");
         const dest = pendingExitRef.current ?? "/desk/bookings";
         pendingExitRef.current = null;
         router.push(dest);
+      } else {
+        setParkOpen(false);
+        setParkReason("");
       }
     },
     onError: (e) => {
@@ -907,7 +915,10 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   if (sessionLoading || entryQuery.isLoading) {
     return (
       <div className="view">
-        <p className="lead">Opening the booking…</p>
+        <p className="lead" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="btn-spin" aria-hidden />
+          Opening the booking…
+        </p>
       </div>
     );
   }
@@ -1749,7 +1760,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
         <div
           className="scrim"
           onClick={(e) => {
-            if (e.target !== e.currentTarget || parkMutation.isPending) return;
+            if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
             // Dismissed = staying on the booking; forget the intercepted destination.
             pendingExitRef.current = null;
             setParkOpen(false);
@@ -1788,22 +1799,24 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               <button
                 className="btn btn-ghost"
                 onClick={() => {
+                  setExitLeaving("plain");
                   const dest = pendingExitRef.current ?? "/desk/bookings";
                   pendingExitRef.current = null;
                   router.push(dest);
                 }}
-                disabled={parkMutation.isPending}
+                disabled={parkMutation.isPending || !!exitLeaving}
               >
-                Leave without parking
+                {exitLeaving === "plain" && <span className="btn-spin" aria-hidden />}
+                {exitLeaving === "plain" ? "Leaving…" : "Leave without parking"}
               </button>
               <button
                 className="btn btn-primary"
                 style={{ background: "var(--warn)" }}
                 onClick={() => parkMutation.mutate()}
-                disabled={parkMutation.isPending || !parkReason.trim()}
+                disabled={parkMutation.isPending || !!exitLeaving || !parkReason.trim()}
               >
-                <Pause />
-                {parkMutation.isPending ? "Parking…" : "Park & leave"}
+                {parkMutation.isPending || exitLeaving === "park" ? <span className="btn-spin" aria-hidden /> : <Pause />}
+                {exitLeaving === "park" ? "Leaving…" : parkMutation.isPending ? "Parking…" : "Park & leave"}
               </button>
             </div>
           </div>

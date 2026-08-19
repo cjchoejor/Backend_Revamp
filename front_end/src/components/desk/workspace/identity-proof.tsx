@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, FileText, Fingerprint, Smartphone, Upload, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Fingerprint, ScanLine, Smartphone, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -11,12 +11,16 @@ import { fetchPdfObjectUrl } from "@/lib/api/documents";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listRooms } from "@/lib/api/rooms";
 import {
+  applyOcrSuggestion,
+  dismissOcrSuggestion,
   identityProofFileUrl,
   listIdentityProofs,
   mintPhoneCaptureToken,
+  rerunPhotoOcr,
   saveGuestIdentityDetail,
   uploadIdentityProof,
   type IdentityProofSummary,
+  type OcrSuggestion,
 } from "@/lib/api/identity-proofs";
 import { seatPartyByComposition } from "@/lib/desk/party-rooms";
 import { StepAction } from "./step-action";
@@ -176,6 +180,79 @@ const th: React.CSSProperties = {
 };
 const td: React.CSSProperties = { padding: "6px 6px", borderBottom: "1px dashed var(--line)", verticalAlign: "middle" };
 
+const GENDER_WORD: Record<string, string> = { M: "Male", F: "Female", X: "Other" };
+
+/** Amber "Detected from the ID photo" strip — the machine's read, never mistaken for verified data. */
+function SuggestionStrip({
+  suggestion,
+  docTypeName,
+  busy,
+  onApply,
+  onDismiss,
+}: {
+  suggestion: OcrSuggestion;
+  docTypeName: (code: string) => string;
+  busy: boolean;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
+  const f = suggestion.fields ?? {};
+  const c = suggestion.fieldConfidence ?? {};
+  const tick = (k: keyof typeof c) =>
+    c[k] === "VERIFIED" ? (
+      <span title="Proven by the document's own check digit" style={{ color: "var(--ok)", fontWeight: 700 }}>
+        {" "}✓
+      </span>
+    ) : null;
+  const parts: React.ReactNode[] = [];
+  if (f.documentType) parts.push(<span key="t">{docTypeName(f.documentType)}{tick("documentType")}</span>);
+  if (f.documentNumber) parts.push(<span key="n" style={{ fontFamily: "var(--font-plex-mono)" }}>{f.documentNumber}{tick("documentNumber")}</span>);
+  else if (f.documentNumberLast4) parts.push(<span key="n4" style={{ fontFamily: "var(--font-plex-mono)" }}>number ending {f.documentNumberLast4}</span>);
+  if (f.fullName) parts.push(<span key="nm">{f.fullName}{tick("fullName")}</span>);
+  if (f.dateOfBirth) parts.push(<span key="d">DOB {f.dateOfBirth}{tick("dateOfBirth")}</span>);
+  if (f.gender) parts.push(<span key="g">{GENDER_WORD[f.gender] ?? f.gender}{tick("gender")}</span>);
+  if (f.nationality) parts.push(<span key="na">{f.nationality}</span>);
+  const origin =
+    suggestion.engine === "PHONE_QR" || suggestion.engine === "SERVER_QR"
+      ? "from the card's QR"
+      : suggestion.engine === "PHONE_MRZ" || suggestion.engine === "SERVER_MRZ"
+        ? "from the passport strip"
+        : suggestion.engine === "SERVER_LAYOUT"
+          ? "by reading the card"
+          : "typed on the phone";
+  const onPhone = suggestion.engine.startsWith("PHONE_");
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        fontSize: 11.5,
+        background: "var(--warn-t)",
+        border: "1px solid var(--warn)",
+        borderRadius: 6,
+        padding: "4px 8px",
+      }}
+    >
+      <ScanLine style={{ width: 12, height: 12, color: "var(--warn)" }} />
+      <span style={{ fontWeight: 600 }}>Detected {origin}{onPhone ? " (read on the phone)" : ""}:</span>
+      {/* Actions sit right after the label so they never scroll out of the table's viewport. */}
+      <span style={{ display: "inline-flex", gap: 6 }}>
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={onApply} title="Write these into the row above (you can still edit them after)">
+          Apply
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onDismiss} title="Not this guest's details — hide the suggestion">
+          Dismiss
+        </button>
+      </span>
+      <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
+        {parts.length ? parts.map((p, i) => <span key={i}>{p}</span>) : <span style={{ color: "var(--ink-3)" }}>nothing usable</span>}
+      </span>
+    </div>
+  );
+}
+
 export function IdentityProofBlock({
   entry,
   checkInGate = false,
@@ -218,9 +295,17 @@ export function IdentityProofBlock({
     enabled: !!session,
     // While a QR modal waits on a phone, poll so the photo lands on screen the moment it
     // uploads — the app-wide staleTime would otherwise sit on the cached list for 5 minutes.
-    refetchInterval: phoneCapture ? 3000 : false,
+    // Also poll while a server-side OCR read is PENDING so the suggestion lands on screen.
+    refetchInterval: (q) => {
+      if (phoneCapture) return 3000;
+      const pending = (q.state.data?.suggestions ?? []).some((x) => x.status === "PENDING");
+      return pending ? 3000 : false;
+    },
   });
   const items = listQuery.data?.items ?? [];
+  // OCR / QR suggestions per photo (2026-08-18) — rendered under the guest's row while
+  // unapplied; Apply writes through the same detail save the row's inputs use.
+  const suggestions = listQuery.data?.suggestions ?? [];
   // Config-driven (`identity.documentTypes`) — same vocabulary the S6 verification validates
   // against, so nothing offered here can be rejected there.
   const docTypes = listQuery.data?.documentTypes ?? [];
@@ -274,6 +359,12 @@ export function IdentityProofBlock({
 
   const detailRow = (key: string) => items.find((p) => p.entryId === entryId && p.subjectKey === key && !p.hasFile);
   const photosFor = (key: string) => items.filter((p) => p.entryId === entryId && p.subjectKey === key && p.hasFile);
+  /** The suggestion for a slot's NEWEST photo (the one the row shows). */
+  const suggestionFor = (key: string): OcrSuggestion | null => {
+    const newest = photosFor(key)[0];
+    if (!newest) return null;
+    return suggestions.find((x) => x.photoDocumentId === newest.id) ?? null;
+  };
 
   // Table rows grouped BY ROOM (2026-08-12, operator request — mirrors the phone page): the
   // room is a band row spanning the table and its guests sit under it, instead of "Room 205"
@@ -329,6 +420,33 @@ export function IdentityProofBlock({
       void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not save the guest details"),
+  });
+
+  const applySuggestionM = useMutation({
+    mutationFn: (args: { slot: PartySlot; suggestion: OcrSuggestion }) => applyOcrSuggestion(session!, args.suggestion.id),
+    onSuccess: (_d, args) => {
+      // Let the refetched row repopulate this slot's inputs (the operator's untouched draft
+      // would otherwise mask the applied values).
+      setTouched((prev) => ({ ...prev, [args.slot.key]: false }));
+      setSavedFlash(args.slot.key);
+      setTimeout(() => setSavedFlash((cur) => (cur === args.slot.key ? null : cur)), 2000);
+      toast.success(`Details from the ID photo applied to ${args.slot.label}`);
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not apply the detected details"),
+  });
+  const dismissSuggestionM = useMutation({
+    mutationFn: (suggestion: OcrSuggestion) => dismissOcrSuggestion(session!, suggestion.id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] }),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not dismiss"),
+  });
+  const rerunOcrM = useMutation({
+    mutationFn: (photoId: string) => rerunPhotoOcr(session!, photoId),
+    onSuccess: () => {
+      toast.info("Reading the ID photo again…");
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not queue the read"),
   });
 
   /** Blur handler — persists the row when anything actually changed. */
@@ -670,15 +788,38 @@ export function IdentityProofBlock({
                   </td>
                 </tr>
               ) : null;
-              const guestRows = group.items.map((slot) => {
+              const guestRows = group.items.flatMap((slot) => {
               const draft = drafts[slot.key] ?? EMPTY_DRAFT;
               const photos = photosFor(slot.key);
               const covered = photos.length > 0;
+              const suggestion = suggestionFor(slot.key);
+              // Suggestion strip under the row (2026-08-18): READY → amber "Detected from the ID
+              // photo … Apply / Dismiss"; PENDING → muted "reading"; else nothing.
+              const suggestionRow =
+                suggestion && (suggestion.status === "READY" || suggestion.status === "PENDING") ? (
+                  <tr key={`${slot.key}-ocr`}>
+                    <td colSpan={7} style={{ padding: "0 6px 6px", borderBottom: "1px dashed var(--line)" }}>
+                      {suggestion.status === "PENDING" ? (
+                        <div style={{ fontSize: 11.5, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 6, padding: "2px 4px" }}>
+                          <ScanLine style={{ width: 12, height: 12 }} /> Reading the ID photo…
+                        </div>
+                      ) : (
+                        <SuggestionStrip
+                          suggestion={suggestion}
+                          docTypeName={(code) => docTypes.find((d) => d.code === code)?.name ?? code}
+                          busy={applySuggestionM.isPending || dismissSuggestionM.isPending}
+                          onApply={() => applySuggestionM.mutate({ slot, suggestion })}
+                          onDismiss={() => dismissSuggestionM.mutate(suggestion)}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ) : null;
               // A typed name replaces the generic "Adult 2" label live (the age stays as a
               // muted suffix on child rows so the band is never hidden by a name).
               const typedName = draft.name.trim();
               const displayName = typedName || slot.label;
-              return (
+              const row = (
                 <tr key={slot.key}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600 }}>
@@ -790,11 +931,25 @@ export function IdentityProofBlock({
                         >
                           <Smartphone style={{ width: 13, height: 13 }} />
                         </button>
+                        {covered && suggestion?.status !== "PENDING" && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={rerunOcrM.isPending}
+                            onClick={() => rerunOcrM.mutate(photos[0].id)}
+                            title="Read the ID photo (passport strip / Aadhaar QR) and suggest the details for this row"
+                          >
+                            <ScanLine style={{ width: 13, height: 13 }} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </td>
                 </tr>
               );
+              const rowsForSlot: React.ReactNode[] = [row];
+              if (suggestionRow) rowsForSlot.push(suggestionRow);
+              return rowsForSlot;
               });
               return bandRow ? [bandRow, ...guestRows] : guestRows;
             })}
@@ -949,7 +1104,9 @@ export function IdentityProofBlock({
             <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
               {phoneCapture.slot
                 ? "Scan with the phone's camera (same Wi-Fi as the desk). The page that opens takes the photo, offers a retake, and sends it straight here — no login needed on the phone."
-                : "Scan with the phone's camera (same Wi-Fi as the desk). The page lists every guest on this booking — photograph each one and every photo lands on the right row here. No login needed on the phone."}
+                : "Scan with the phone's camera (same Wi-Fi as the desk). The page lists every guest on this booking — photograph each one and every photo lands on the right row here. No login needed on the phone."}{" "}
+              If the ID carries a QR code (Aadhaar, work permit…) or a passport strip, the phone reads the
+              details off it automatically and they arrive here as a suggestion.
             </p>
             <div
               style={{

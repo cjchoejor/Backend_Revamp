@@ -4671,6 +4671,28 @@
   }
 }
 
+/* Inline busy spinner — sits inside a pending button (or a loading view) so a wait that
+   spans a navigation never reads as "nothing happened". currentColor keeps it legible on
+   both primary (light-on-green) and ghost buttons. */
+@keyframes deskspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.desk-root .btn-spin,
+.desk-root .lead .btn-spin {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.85;
+  animation: deskspin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+
 /* ════════════════════ RESPONSIVE ════════════════════ */
 @media (max-width: 920px) {
   .desk-root.app {

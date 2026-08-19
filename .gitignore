@@ -9,3 +9,9 @@ LEGPHEL_Implementation_Reference_v1_1.html
 # Generated PDF artifacts (guest-facing bills / vouchers). One-shot write-once files —
 # they should live on durable storage (S3 / GCS) in prod, and locally in dev.
 back_end/storage/
+
+# OCR-B tesseract model for on-phone MRZ reading (11 MB binary) — fetched per machine by
+# back_end/scripts/fetch-ocrb-traineddata.ts, never committed.
+front_end/public/tessdata/
+front_end/public/tesseract/
+front_end/public/tesseract-core/
