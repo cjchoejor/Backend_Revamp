@@ -1,8 +1,11 @@
-# Guest ID capture — uploads, phone handoff, and the OCR roadmap
+# Guest ID capture — uploads, phone handoff, and OCR / QR extraction
 
-**Status (2026-08-12):** everything in §1 is **built and verified live**. Everything in §2 (OCR)
-is a **discussed-and-agreed plan, not yet built** — it is written down here so a future session
-can implement it without re-deriving the decisions.
+**Status (2026-08-18):** everything in §1 is **built and verified live**. §2 Phase A —
+passport MRZ + Aadhaar QR extraction, on the phone AND server-side, suggestions the desk
+applies — is **built and verified live**; §2.3 Phase B (CID / voter card / birth certificate
+via Florence-2 layout OCR + label anchoring, in an isolated child process) is **built and
+verified on synthetic cards** — its ship-or-not for real CIDs waits on the spike over real
+photos (`scripts/ocr-spike.ts`).
 
 Related reading: the operating notes in `CLAUDE.md` (sections "Guest ID proof capture on
 Arrival", "Phone capture handoff", "Guest-detail table on S6") are the terse running record;
@@ -155,51 +158,215 @@ staff user (phone uploads attribute to the token's minting operator).
 
 ---
 
-## 2. OCR roadmap (agreed 2026-08-12 — NOT yet built)
+## 2. OCR / QR extraction — Phase A BUILT 2026-08-18 (passports + Aadhaar); Phase B open
 
 **Goal**: a stored ID photo auto-fills the guest-detail table (document type, number, name,
 DOB, gender) as **suggestions the operator confirms**.
 
-### 2.1 Hard rules (non-negotiable, agreed in discussion)
+### 2.1 Hard rules (non-negotiable, agreed in discussion — all enforced by the build)
 
-1. **OCR output is a suggestion, never a direct write.** The desk shows "Detected from photo:
-   … — Apply"; Apply writes through the existing `saveGuestIdentityDetail`, so the coverage
-   gate, p16 docType validation and traces work unchanged. Amber "detected — confirm" styling
-   so machine output can't be mistaken for verified data. Precedent: the returning-guest pull.
+1. **OCR output is a suggestion, never a direct write.** The desk shows an amber "Detected
+   from the passport strip / the card's QR … — Apply / Dismiss" strip under the guest's row;
+   Apply writes through the existing `saveGuestIdentityDetail`, so the coverage gate, p16
+   docType validation and traces work unchanged. Precedent: the returning-guest pull.
 2. **OCR never touches `identityVerifiedAt`** — evidence, not verification.
-3. **OCR runs in the backend** (business-logic-in-backend rule — the production frontend gets
-   it for free). Async/best-effort, never in the upload request path.
+3. **The server is the brain.** Every interpretation — MRZ parse + check digits, Aadhaar QR
+   unpack, document-type mapping — runs in the backend (business-logic-in-backend rule; the
+   production frontend gets it for free). The PHONE is a sensor: it may decode the QR / OCR
+   the MRZ on the device, but it sends the RAW payload and the server re-parses it. Server-side
+   reading of stored bytes is async (W39 worker), never in the upload request path.
 4. **Detected document types must map into the `identity.documentTypes` vocabulary** (p16
-   allowlist) — never invented codes.
+   allowlist) — an unmapped code is dropped, never invented. Enforced in `sanitiseFields`.
 5. **No guest ID leaves the hotel's server without an explicit privacy ruling** (see §2.4).
+   Traces carry field NAMES + confidence, never the values.
 
-### 2.2 Phase A — passports via MRZ (build first)
+### 2.2 Phase A — passports via MRZ + Aadhaar via QR (BUILT 2026-08-18)
 
-The MRZ (two OCR-B lines at the bottom of every passport) is machine-readable by design and
-carries **check digits**: `tesseract.js` (or native tesseract) + an MRZ parser yields document
-number, full name, DOB, sex, nationality, expiry with *verifiable* confidence — a passing
-check digit proves the field. Local, free, no cloud. Given the guest mix (Indian/foreign
-passports), this alone covers a lot. A transformer model adds nothing here — don't use one
-for MRZ.
+- **Schema**: `IdentityOcrSuggestion` (migration `20260818100000`) — one row per photo
+  (`photoDocumentId @unique`, cascades with the photo so the retention purge disposes of
+  both), `engine` (PHONE_QR · PHONE_MRZ · PHONE_MANUAL · SERVER_QR · SERVER_MRZ), `status`
+  (PENDING · READY · EMPTY · FAILED · APPLIED · DISMISSED), `fields` JSON, `fieldConfidence`
+  JSON per field (**VERIFIED** = proven by the document — an MRZ field whose check digit
+  passed; **READ** = decoded/recognised/typed, not provable), `raw` (the MRZ lines / QR text
+  the server parsed — reproducible), `error`, applied/dismissed stamps. Deliberately a
+  sibling of the write-once photo row, not a JSON column on it.
+- **Parsers** ([back_end/src/lib/identity-ocr/](../back_end/src/lib/identity-ocr/)):
+  `mrz.ts` — line cleaning (MRZ charset only), `extractMrzLines` (pulls the 2×44 / 2×36 /
+  3×30 zone out of free OCR text), `parseMrzLines` via the `mrz` package (ICAO 9303, per-field
+  check digits), 2-digit-year pivot, title-cased name; `aadhaar-qr.ts` — legacy XML
+  (`PrintLetterBarcodeData`, full number) and **Secure QR** (big-integer → bytes → gzip →
+  0xFF-separated fields; V1–V4 markers; carries only the LAST FOUR digits, surfaced as
+  `documentNumberLast4`); `server-extract.ts` — jsQR over sharp's raw pixels (two sizes),
+  then tesseract.js over a preprocessed lower-45% crop (grayscale/normalise/threshold, MRZ
+  whitelist, PSM single block), full-page fallback. **OCR-B model**: `ocrb.traineddata` in
+  `OCR_TESSDATA_DIR` (default `./storage/tessdata`) is used automatically (fetch it with
+  [fetch-ocrb-traineddata.ts](../back_end/scripts/fetch-ocrb-traineddata.ts) — the generic
+  `eng` model confuses the `<` filler with K/L and reads Z as 2; OCR-B reads the specimen
+  perfectly in ~1 s), else `eng` auto-downloads once. Local only — no cloud.
+- **Service** [identity-ocr-service.ts](../back_end/src/services/domain/identity-ocr-service.ts):
+  `previewPhoneExtraction` (parse-only, nothing stored — what the phone shows before send),
+  `ingestPhoneExtraction` (raw payload re-parsed server-side; the phone's own edits layered on
+  as READ — an edited MRZ field loses its VERIFIED mark), `runServerExtractionForPhoto` (W39;
+  skips photos that already carry a phone READY / APPLIED / DISMISSED suggestion unless forced;
+  `OCR_DISABLE=true` switches it off), `applyOcrSuggestion` (→ `saveGuestIdentityDetail`,
+  gender M/F/X → MALE/FEMALE/OTHER, optional operator overrides), `dismissOcrSuggestion`,
+  `listOcrSuggestionsForEntry`. Traces `GUEST.IDENTITY_OCR_SUGGESTED / _APPLIED / _DISMISSED`.
+- **Worker**: `IDENTITY_OCR_W39` queue ([w39-identity-ocr-worker.ts](../back_end/src/workers/w39-identity-ocr-worker.ts),
+  batchSize 1 — tesseract + sharp are heavy and this is background prefill). Enqueued by the
+  desk upload route immediately, by the phone upload route with a 45 s head start when the
+  phone says `extractionFollows=1` (so the colder server pass never overwrites the phone's
+  live-camera reading), and by the manual re-run route.
+- **Routes**: staff (L1) — `GET /api/entries/:id/identity-proofs` now carries `suggestions`;
+  `POST /api/identity-proofs/:id/ocr` (re-run, 202); `POST /api/identity-ocr-suggestions/:id/apply`
+  (`{overrides?}`) · `/dismiss`. Phone (capture token, no session) —
+  `POST /api/identity-capture/parse` (`{ocrText?, mrzLines?, qrText?}` → fields, no storage),
+  `POST /api/identity-capture/extraction` (`{photoDocumentId, mrzLines?, qrText?, fields?}`;
+  the photo must belong to the token's booking and, on a single-slot token, its slot);
+  the context response gained `documentTypes` for the phone's form.
+- **Phone page** ([capture/page.tsx](../front_end/src/app/capture/page.tsx) +
+  [lib/phone-id-reader.ts](../front_end/src/lib/phone-id-reader.ts)): after a photo is taken the
+  page decodes it to a canvas (≤1800 px; the downscaled JPEG is what uploads), runs jsQR, and if
+  no QR OCRs the lower part with tesseract.js **in the browser** (worker + SIMD-LSTM core served
+  from `/tesseract`, `/tesseract-core` — copied from node_modules by the `postinstall`
+  script [copy-tesseract-assets.mjs](../front_end/scripts/copy-tesseract-assets.mjs); OCR-B model
+  from `/tessdata` when present, else CDN `eng`), posts the raw text to `/parse`, and shows a
+  **"Read from the passport strip / the card's QR"** card with editable Document / Number /
+  Name / DOB / Gender and green **✓ verified** marks on check-digit-proven fields; nothing
+  readable → "Type the details" so the phone can still fill the row by hand. Send = upload
+  (`extractionFollows`) then `/extraction` with raw + confirmed fields. The tesseract worker is
+  warmed while the person frames the shot. All best-effort — a phone that can't read simply
+  sends the photo and the server pass reads it. (Auto-pick of the relaxed-SIMD core aborted in
+  headless Chromium — the plain SIMD-LSTM build is pinned.)
+- **Desk** ([identity-proof.tsx](../front_end/src/components/desk/workspace/identity-proof.tsx)):
+  the strip under a guest's row for the NEWEST photo's suggestion — amber, "Detected from the
+  passport strip (read on the phone): Passport ✓ · L898902C3 ✓ · Anna Maria Eriksson ✓ · DOB … ·
+  Female ✓ — Apply / Dismiss"; a muted "Reading the ID photo…" while PENDING (the list polls
+  every 3 s while anything is pending); a scan-line button on each covered row re-queues the
+  server read. Apply refreshes the row from the saved detail (touched-guard reset).
+- **Verified live 2026-08-18** (API + Puppeteer, ICAO specimen passport rendered to JPEG):
+  phone parse → upload → extraction → desk list READY PHONE_MRZ, all six fields VERIFIED →
+  Apply → detail row PASSPORT / L898902C3 / FEMALE / 1974-08-12; desk upload with no phone
+  reading → W39 → READY SERVER_MRZ within seconds; garbage token 403; another slot's photo
+  403; a bogus `documentType` from the phone is dropped; in-browser tesseract on the phone
+  page reads the specimen ("Read from the passport strip", 5 ✓ verified) and the desk strip
+  renders + applies.
 
-### 2.3 Phase B — non-MRZ documents (CID, Aadhaar, voter card…) via a local VLM
+### 2.3 Phase B — non-MRZ documents (CID, voter card, birth certificate) — BUILT 2026-08-18, spike PENDING real photos
 
-Bhutanese CID cards (and most of the newly-added types) have no MRZ; plain-layout tesseract
-is hit-or-miss. The agreed default is a **small vision-language model run locally** through
-**`@huggingface/transformers` (transformers.js)** — ONNX models in Node via
-`onnxruntime-node`, no Python sidecar. Candidates: Florence-2 (light), quantized Qwen2-VL
-2B, SmolVLM. Prompted zero-shot: "read this ID card, return name / ID number / DOB as JSON".
+The pipeline is built and runs behind the QR/MRZ passes; what is still open is the **spike
+verdict on real CID photos** (none are in `storage/` yet — the only phone capture on file is a
+BPC-bill test shot). Ship-or-not for CID auto-fill is decided by `scripts/ocr-spike.ts` the
+day 10–15 real cards are photographed at the desk (rule §2.3.3 below).
 
-- **Not TrOCR** (line recognizer only — needs a detector + layout logic and still returns
-  unmapped strings) and **not Donut** (needs fine-tuning on a labeled CID dataset).
-- **Runs as a pg-boss worker** (a "W39 OCR worker"): picks up new photo rows, extracts,
-  stores suggestions. CPU-only inference (5–30 s/image, 2–4 GB RAM, one-time model download)
-  is fine because it is background prefill, never blocking.
-- **Mandatory spike before committing**: run the candidate models over 10–15 real CID photos
-  (glare, skew, desk conditions) and count usable fields. If a small VLM only gets 4/10
-  right, ship MRZ-only and leave CID manual. CID cards carry Dzongkha + English; only the
-  English fields are expected to extract.
-- A VLM can hallucinate a plausible number — which is exactly why rule §2.1.1 exists.
+- **Engine: Florence-2** (`onnx-community/Florence-2-base-ft`, ~0.23 B, task
+  `<OCR_WITH_REGION>`) through `@huggingface/transformers` + onnxruntime-node —
+  [lib/identity-ocr/layout-ocr.ts](../back_end/src/lib/identity-ocr/layout-ocr.ts). Chosen over
+  a VLM per the 2026-08-18 review: the card prints English labels, so OCR-with-regions plus
+  anchoring is enough, and it is an order of magnitude lighter. Probe on the one real phone
+  photo we have (a 4032×3024 receipt, rotated 90°): every line read correctly in 4.3 s;
+  a photo-like synthetic CID (rotated, blurred): all six fields (ID No, name, DOB, sex,
+  dzongkhag, expiry) read and anchored, ~5–7 s end-to-end including the QR + MRZ passes.
+  dtype: fp32 vision encoder + embeddings (fp16 fails to initialise on CPU onnxruntime),
+  q4 text encoder/decoder. Model (~800 MB) downloads ONCE into `OCR_MODELS_DIR`
+  (default `./storage/models`, gitignored) — the first-ever run needs internet and minutes;
+  every later load is seconds. **sharp is pinned to 0.34.5** so transformers.js and the app
+  share ONE libvips — two sharp versions in one process clash ("colourspace: parameter space
+  not set"); the RawImage is built from our sharp's raw RGB rather than transformers' own
+  decoder for the same reason.
+- **Process isolation**: the model runs in a forked child
+  ([layout-ocr-child.ts](../back_end/src/lib/identity-ocr/layout-ocr-child.ts)) — lazily
+  started, killed after 10 min idle, restarted on the next photo, 180 s per-request timeout,
+  crash → FAILED suggestion, never a dead API. Verified: child ~1.46 GB resident, API process
+  ~290 MB. `OCR_LAYOUT_INPROCESS=true` runs inline (spike script / tests).
+- **Fallback**: `OCR_LAYOUT_ENGINE=tesseract` (or Florence unavailable) → tesseract `eng`
+  whole-page OCR into the same parser — noticeably worse on photographed cards.
+  `OCR_LAYOUT_ENGINE=off` disables the layout pass entirely.
+- **Parser** [lib/identity-ocr/layout-parse.ts](../back_end/src/lib/identity-ocr/layout-parse.ts):
+  document kind by weighted keyword vote (title phrases weigh 2 — "CITIZENSHIP IDENTITY CARD",
+  "ELECTOR'S PHOTO IDENTITY", "BIRTH CERTIFICATE", "AADHAAR", "PASSPORT"; issuer words 1;
+  "GOVERNMENT OF INDIA" 0.3; ties → unknown), then per-kind **label anchors** — the value is
+  the remainder of the label's line, else the next non-label line (Florence often returns
+  label and value as separate regions) — with **loose** patterns accepted without a label
+  where the shape is distinctive (11-digit CID number, EPIC `ABC1234567`). Dates tolerate
+  OCR spaces ("12/08 /2030"), day-month-year words, ISO; gender M/F/X; names title-cased and
+  label fragments ("of the Child") rejected. Every value is READ (never VERIFIED). A desk row
+  that already names the type is passed as `kindHint` (skips detection). Regions are sorted
+  into reading order (rows by centre-y within half a line height, then x).
+- **Wiring**: `extractIdentityFromImage` = QR → MRZ → layout; engine `SERVER_LAYOUT`,
+  `raw.source = "LAYOUT CID via FLORENCE2 (5466 ms)"`, `raw.ocrLines` (first 60) kept for
+  reproducibility; the desk strip reads "Detected by reading the card". Verified live: desk
+  upload of the synthetic CID → W39 → READY SERVER_LAYOUT (all fields) → Apply → detail row
+  CID / 11410001234 / Tenzin Dorji / MALE / 1990-08-12.
+- **Spike script** [scripts/ocr-spike.ts](../back_end/scripts/ocr-spike.ts):
+  `npx tsx scripts/ocr-spike.ts <folder-or-file> [--tesseract] [--json out.json]` — runs the
+  full pipeline over a folder, prints per file the engine, fields, confidence and the OCR
+  lines the parser saw, and a tally (files with ≥2 / all 3 of number+name+DOB). Nothing is
+  written to the DB. **Gate (rule §2.3.3): on 10–15 real CID photos, fewer than half with
+  ≥2 usable fields → keep CID manual (set `OCR_LAYOUT_ENGINE=off`)** — the desk still types.
+  Also compare `--tesseract` on the same photos.
+- **Not done / next**: (a) the real-photo spike itself; (b) Dzongkha text is ignored by design
+  (only the English fields are expected to extract); (c) if the spike fails on glare/skew,
+  the next lever is a perspective de-warp before OCR (find the card quadrilateral, warp to
+  a rectangle) — not a bigger model; (d) a VLM (Qwen2-VL 2B / SmolVLM) stays the last resort.
+
+**Widened 2026-08-17 (operator report: a Bhutanese work permit read "nothing"):**
+
+- **Work permit is a first-class layout kind.** `LayoutDocKind` gained `WORK_PERMIT`
+  (keywords "WORK PERMIT" 2 / Job Category / Employer / Dept. of Immigration 1 each —
+  "KINGDOM OF BHUTAN" weighs 1 on BOTH it and CID, the title phrase separates them; verified
+  the CID text still detects as CID). Anchors: Name / DoB / Nationality (new `cleanNationality`)
+  / Sex / "Valid Date" → expiryDate, and the **12-digit permit number printed without a label**
+  via a loose `\d{11,13}`. `WORK_PERMIT` was added to `identity.documentTypes` +
+  `identity.retentionPeriodDays` (seed + `set-identity-document-types.ts`, applied to the live
+  DB 2026-08-17), so the type survives `sanitiseFields`, appears in every dropdown, and passes
+  p16 on apply. Verified end-to-end: a synthetic work-permit photo → Florence-2 →
+  `WORK_PERMIT` + number + name + DOB + nationality.
+- **Any ID's QR code now yields what it can** (operator ruling: "shouldn't be limited to
+  Aadhaar and passports"). `aadhaar-qr.ts` gained `parseGenericQrText` — JSON payloads,
+  XML attributes, key:value text, verification-URL query params, or a bare identifier, mapped
+  through a key-alias table (name/dob/sex/permitNo/epic/…), all READ. `parseIdentityQrText` =
+  Aadhaar first, then generic. In `extractIdentityFromImage` an **Aadhaar QR still
+  early-returns** (it is the whole record) but a **generic QR is held and MERGED over the
+  layout pass** — QR values win on overlap (exact decode beats OCR) except `documentType`,
+  which the layout's keyword vote knows better; a generic QR alone (no readable layout) is
+  still suggested as `SERVER_QR`.
+- **The phone tells the truth about QRs it can't interpret**: `previewPhoneExtraction` returns
+  `raw.source = "QR_UNRECOGNISED"` when a QR was decoded but carried nothing recognisable, and
+  the capture page says "QR code found — no guest details inside it" instead of the flat
+  "nothing readable" (plus: an "Analysing the document…" spinner during the read, and a
+  standing tip card before the first shot explaining that QR codes and passport strips read
+  automatically — the reader was invisible until it fired).
+- **The phone auto-fills for EVERY document type — server analyze before send** (operator
+  ruling: "the phone should act like an OCR machine"). The phone's own pass covers only QR +
+  MRZ; when it yields nothing, the capture page now POSTs the previewed (downscaled) photo to
+  `POST /api/identity-capture/analyze` (token-scoped, raw bytes, **nothing stored**) →
+  `analyzeIdentityImage` in [identity-ocr-service.ts](../back_end/src/services/domain/identity-ocr-service.ts)
+  runs the full `extractIdentityFromImage` pipeline (QR → MRZ → Florence-2 layout, same kind
+  hint as W39) and returns sanitised fields — the phone form fills in (~8–20 s, spinner subtext
+  "reading the printed text — takes a moment") for the person to confirm BEFORE sending.
+  Fallbacks preserved: analyze fails/offline/`OCR_DISABLE` → the old type-or-send flow, and
+  the W39 pass still covers every uploaded photo (skipped only when the phone's confirmed
+  suggestion already landed). The concurrent-phone case is safe — the layout child queues
+  requests by id. After an analyze that found nothing, the page says so honestly ("The QR,
+  passport strip and printed text were all tried") instead of promising the desk will do
+  better. Verified live: token mint → analyze with a synthetic work permit → all six fields in
+  ~8 s; bogus token 403.
+- **Kind hint no longer overrides detection** (found live via the analyze test: a work permit
+  analysed under a CID-named desk row parsed as CID). `parseLayoutText` now runs
+  `detectLayoutDocKind` FIRST and uses `kindHint` only when detection fails — the document's
+  own title outranks what the desk row happens to say.
+- **Bilingual certificates anchor value-above-label** (operator report: a real Karnataka
+  Form-5 birth certificate read wrong). Form-5 prints the value beside the KANNADA label with
+  the English label alone BELOW it, so `anchorField` now scans candidates rest → next 2 lines
+  (stop at another label) → **previous 3 lines** (skip other labels' lines). Hardened
+  alongside: `cleanIdNumber` rejects digit-less words ("REGISTRATION") and date-shaped values;
+  `cleanName` cuts at a following label word (merged OCR rows) and rejects stray MALE/FEMALE;
+  the BC number anchor lost its bare "No." label (it matched "Flat **No** E-006" in the
+  parents' address) and gained a loose slash-separated shape
+  (`613357/V/B/2015/001334`-style); the generic Name anchor no longer fires on "Name of
+  Mother/Father". Verified: parse-level on both plausible Florence reading orders (all four
+  fields exact) + CID/WP/voter regressions, and image-level through Florence-2 on a synthetic
+  Form-5 (kind + DOB + gender right; name/number fidelity tracks OCR quality of the photo).
 
 ### 2.4 Cloud option — explicitly gated
 
@@ -209,19 +376,18 @@ system stores everything locally by design (photos never even enter Postgres), s
 is a deliberate hotel-level privacy decision, not a default. If it is ever approved, it slots
 in as an accuracy upgrade behind the same suggestions-only contract.
 
-### 2.5 Implementation sketch (when built)
+### 2.5 Operational notes
 
-- Suggestions storage: a JSON column or sibling row keyed to the photo's
-  `GuestIdentityDocument` id (`{fields, confidence, engine, extractedAt}`), exposed on the
-  list response per slot.
-- Trigger: post-upload hook enqueues the worker job; also a manual
-  `POST /api/identity-proofs/:id/ocr` for re-runs.
-- Desk UX: under a guest row with an unapplied suggestion, an amber strip "Detected: Passport
-  · E1234567 · TENZIN DORJI · 1990-01-01 — Apply / Dismiss". Apply = `saveGuestIdentityDetail`.
-- HEIC caveat: iPhones may store HEIC; tesseract/ONNX pipelines need JPEG/PNG — convert
-  server-side (libheif) or have the phone page request JPEG (Safari transcodes on file input).
-- MRZ fields that pass check digits can be marked high-confidence (green instead of amber);
-  VLM fields always amber.
+- **HEIC**: the phone page decodes via `createImageBitmap` and uploads a JPEG; iPhones hand
+  JPEG to a file input by default. A HEIC that reaches the server is stored (write-once) but
+  sharp without libheif can't read it — the suggestion lands FAILED and the desk types.
+- **Model files are gitignored** (11 MB OCR-B + the WASM cores): run
+  `npx tsx scripts/fetch-ocrb-traineddata.ts` from `back_end/` once per machine (writes both
+  `back_end/storage/tessdata/` and `front_end/public/tessdata/`); `npm install` in
+  `front_end/` copies the tesseract worker/cores into `public/`.
+- **Env**: `OCR_DISABLE`, `OCR_TESSDATA_DIR`, `OCR_MRZ_LANG` — see `.env.example`.
+- Aadhaar Secure QR signature verification (UIDAI certificate) is NOT performed — hence READ,
+  not VERIFIED, on QR fields.
 
 ---
 
