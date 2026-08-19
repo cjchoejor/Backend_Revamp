@@ -12,6 +12,7 @@ import { runSpeculativeHoldExpiryWorker } from "./w2-speculative-hold-expiry-wor
 import { runCommittedHoldExpiryWorker } from "./w3-committed-hold-expiry-worker.js";
 import { runAdvancePaymentFollowUpWorker } from "./w34-advance-payment-follow-up-worker.js";
 import { runAdvancePromiseDeadlineWorker } from "./w38-advance-promise-worker.js";
+import { runIdentityOcrWorker } from "./w39-identity-ocr-worker.js";
 import { runPreArrivalWindowActivationWorker } from "./w4-pre-arrival-window-activation-worker.js";
 import { runNoShowCutoffWorker } from "./w5-no-show-cutoff-worker.js";
 import { runRoomReadinessSlaWorker } from "./w23-room-readiness-sla-worker.js";
@@ -64,6 +65,8 @@ export async function startWorkers() {
   await (engine.boss as any).work("COMMITTED_HOLD_EXPIRY_W3", async (job: any) => runCommittedHoldExpiryWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("ADVANCE_PAYMENT_FOLLOW_UP_W34", async (job: any) => runAdvancePaymentFollowUpWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("ADVANCE_PROMISE_DEADLINE_W38", async (job: any) => runAdvancePromiseDeadlineWorker(prisma, unwrapJobData(job)));
+  // W39 identity OCR — one at a time: tesseract + sharp are CPU/RAM heavy and this is background prefill.
+  await (engine.boss as any).work("IDENTITY_OCR_W39", { batchSize: 1 }, async (job: any) => runIdentityOcrWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("PRE_ARRIVAL_COUNTDOWN_W4", async (job: any) => runPreArrivalWindowActivationWorker(prisma, engine, unwrapJobData(job)));
   await (engine.boss as any).work(
     "NO_SHOW_CUTOFF_W5",

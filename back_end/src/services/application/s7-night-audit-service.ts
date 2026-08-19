@@ -9,6 +9,9 @@ import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billi
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { maybeWriteCreditCeilingEvents } from "../domain/s7-folio-lines-service.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
+import { gstLineDescription, serviceChargeLineDescription } from "../../lib/folio-tax-lines.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -33,6 +36,14 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
 
   const expected = (await requireActiveConfigValue<{ amount?: number; currency?: string } | undefined>(prisma, "nightAudit.expectedDailyFAndBCharge")) ?? {};
   const expectedAmount = typeof expected.amount === "number" ? expected.amount : 0;
+  // Service charge + GST companion lines (2026-08-18): the per-room ROOM_CHARGE is the NET
+  // per-night figure (`frozenSubtotal` / nights, or the net `frozenRate`), so on its own the
+  // folio under-billed every stay by SC + GST on the rooms while the quotation, the S8 final
+  // invoice and every guest-facing email carried them — the S8/S9 figures could not agree.
+  // The audit now posts the same two companions `postCharge` posts for a manual charge, so
+  // the ledger's room bucket equals the room's frozen tax-inclusive total. Same rates, same
+  // compound rule (GST on net + service charge), same descriptions.
+  const { gstRate, serviceChargeRate } = await resolveChargeRates(prisma);
 
   const entries = await prisma.entry.findMany({
     where: { currentStage: Stage.S7, status: "ACTIVE" },
@@ -57,6 +68,9 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
     amount: number;
     /** Description string used for both display and idempotency (per-room lookup). */
     description: string;
+    /** The room's own tax toggles from its composition (S2 negotiation) — default apply. */
+    serviceChargeApplies: boolean;
+    gstApplies: boolean;
   };
   const plan: Array<{
     entryId: string;
@@ -104,6 +118,10 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
           roomNumber,
           amount,
           description: `Night audit room charge · Room ${roomNumber}`,
+          // An FOC room prices to 0 already; a room negotiated SC- or GST-exempt at S2 keeps
+          // that exemption on the ledger, exactly as its frozenTotal was computed.
+          serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
+          gstApplies: a.isFoc ? false : a.gstApplies !== false,
         });
       }
 
@@ -167,12 +185,16 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
         // per folio — every room line on this folio settles under the same model.
         const billingModel = await resolveBillingModelForNewLine(tx, p.folioId, FolioLineType.ROOM_CHARGE);
         for (const post of p.perRoomPosts) {
+          // Decimal-safe: the stored room amount and the base the tax is computed on are the
+          // same rounded figure (a float per-night split would otherwise be rounded by the
+          // column and taxed on the unrounded value).
+          const roomAmount = round2(toDecimal(post.amount));
           await tx.folioLine.create({
             data: {
               folioId: p.folioId,
               lineType: FolioLineType.ROOM_CHARGE,
               description: post.description,
-              amount: post.amount,
+              amount: roomAmount,
               currency: "BTN",
               chargeDate: operatingDate,
               stage: Stage.S7,
@@ -183,6 +205,51 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
               roomId: post.roomId,
             },
           });
+          if (roomAmount.gt(0)) {
+            // Same companion pair `postCharge` writes, stamped with the audit record so the
+            // invoice can pair them with their room line. Service charge first, then GST on
+            // (net + service charge) — the hotel-wide compound rule.
+            const serviceCharge =
+              post.serviceChargeApplies && serviceChargeRate > 0
+                ? round2(mulMoney(roomAmount, serviceChargeRate))
+                : ZERO;
+            if (serviceCharge.gt(0)) {
+              await tx.folioLine.create({
+                data: {
+                  folioId: p.folioId,
+                  lineType: FolioLineType.SERVICE,
+                  description: serviceChargeLineDescription(serviceChargeRate, post.description),
+                  amount: serviceCharge,
+                  currency: "BTN",
+                  chargeDate: operatingDate,
+                  stage: Stage.S7,
+                  postedBy: actorId,
+                  nightAuditRecordId: recordId,
+                  billingModel,
+                  roomId: post.roomId,
+                },
+              });
+            }
+            const gst =
+              post.gstApplies && gstRate > 0 ? round2(mulMoney(roomAmount.add(serviceCharge), gstRate)) : ZERO;
+            if (gst.gt(0)) {
+              await tx.folioLine.create({
+                data: {
+                  folioId: p.folioId,
+                  lineType: FolioLineType.OTHER,
+                  description: gstLineDescription(gstRate, post.description),
+                  amount: gst,
+                  currency: "BTN",
+                  chargeDate: operatingDate,
+                  stage: Stage.S7,
+                  postedBy: actorId,
+                  nightAuditRecordId: recordId,
+                  billingModel,
+                  roomId: post.roomId,
+                },
+              });
+            }
+          }
         }
         await recomputeFolioOutstandingBalance(tx, p.folioId);
         // SIG-S7 Policy 45 — the credit ceiling must be evaluated "per night audit cycle", not

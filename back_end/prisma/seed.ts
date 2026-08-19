@@ -277,6 +277,7 @@ async function main() {
         { documentTypeCode: "AADHAAR_CARD", documentTypeName: "Aadhaar card", isActive: true },
         { documentTypeCode: "VOTER_CARD", documentTypeName: "Voter card", isActive: true },
         { documentTypeCode: "BIRTH_CERTIFICATE", documentTypeName: "Birth certificate", isActive: true },
+        { documentTypeCode: "WORK_PERMIT", documentTypeName: "Work permit", isActive: true },
       ],
     },
     {
@@ -287,6 +288,7 @@ async function main() {
         AADHAAR_CARD: 2555,
         VOTER_CARD: 2555,
         BIRTH_CERTIFICATE: 2555,
+        WORK_PERMIT: 2555,
         DEFAULT: 2555,
       },
     },

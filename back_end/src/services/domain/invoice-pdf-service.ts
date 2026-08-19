@@ -28,7 +28,8 @@ import {
   getPreparedByName,
   loadHotelProfileForRender,
 } from "../../lib/pdf-render-context.js";
-import { toDecimal } from "../../lib/money.js";
+import { round2, sumMoney, toDecimal, ZERO } from "../../lib/money.js";
+import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
@@ -73,7 +74,7 @@ function filenameFor(invoiceType: InvoiceType, invoiceRef: string): string {
 
 type LoadedInvoice = Prisma.InvoiceGetPayload<{
   include: {
-    folio: { include: { lines: true; payments: true } };
+    folio: { include: { lines: { include: { room: { select: { roomNumber: true } } } }; payments: true } };
     entry: {
       include: {
         guestProfile: true;
@@ -86,11 +87,11 @@ type LoadedInvoice = Prisma.InvoiceGetPayload<{
   };
 }>;
 
-async function loadInvoiceForRender(prisma: PrismaClient, invoiceId: string): Promise<LoadedInvoice> {
+export async function loadInvoiceForRender(prisma: PrismaClient, invoiceId: string): Promise<LoadedInvoice> {
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: {
-      folio: { include: { lines: true, payments: true } },
+      folio: { include: { lines: { include: { room: { select: { roomNumber: true } } } }, payments: true } },
       entry: {
         include: {
           guestProfile: true,
@@ -451,6 +452,184 @@ export async function freezeUnrenderedProformasForEntry(
   }
 }
 
+/** The FINAL / ROOM invoice figures, all read from the ledger. */
+export type FinalInvoiceFigures = {
+  roomLines: Array<{
+    particular: string;
+    roomNo: string;
+    nights: number;
+    rate: number;
+    amount: number;
+    folioLineId: string | null;
+  }>;
+  /** Σ charge lines (net) — room, F&B, service, other, credit notes. */
+  subtotal: number;
+  discountAmount: number;
+  /** Σ service-charge companion lines on the ledger (+ render-time SC for legacy room lines). */
+  serviceCharge: number;
+  /** Σ GST companion lines on the ledger (+ render-time GST for legacy room lines). */
+  gstAmount: number;
+  /** = the folio's billed-so-far for the covered lines. */
+  totalBeforeAdvance: number;
+  /** Payments IN − OUT covered by this invoice (advance + settlement, net of refunds). */
+  advanceAmount: number;
+  focAmount: number;
+  /** = totalBeforeAdvance − advanceAmount, i.e. the folio's outstanding balance for the covered lines. */
+  totalPayable: number;
+};
+
+/**
+ * Compose the FINAL invoice's money figures from the loaded invoice + folio. PURE — no I/O,
+ * no rounding drift between callers: `generateOrLoadInvoicePdf` renders exactly these, and
+ * the S8/S9 final-invoice email (s9-service) prints exactly these.
+ */
+export function buildFinalInvoiceFigures(
+  inv: LoadedInvoice,
+  opts: { gstRate: number; svcRate: number; nights: number; nightlyRate: number },
+): FinalInvoiceFigures {
+  const { gstRate, svcRate, nights, nightlyRate } = opts;
+  // Which folio lines this invoice covers (2026-08-18 — the invoice is a VIEW OF THE LEDGER):
+  //   - Split-billing filter: only lines whose billingModel matches this invoice's bucket.
+  //     For legacy whole-folio invoices (invoice.billingModel = null) every line passes.
+  //     NULL-billingModel lines (pre-Phase-1 backfill data) roll up to the folio's primary
+  //     model, matching the ledger's rule in `computeOutstandingForBillingModel`.
+  //   - NO line-type filter any more. The whole-folio invoice used to keep ROOM_CHARGE lines
+  //     only and re-add service charge + GST on that subtotal at render, so it printed a
+  //     "total payable" that was neither the folio balance nor anything the guest could
+  //     reconcile: F&B / service / other charges vanished from the bill, and their SC/GST
+  //     (already on the ledger) were dropped with them. Every charge line now prints, the
+  //     tax rows are the ledger's own SC/GST companion lines, and the invoice total equals
+  //     the folio's billed-so-far to the paisa — the same figure the desk's bill shows.
+  const invoiceBucket = inv.billingModel ?? null;
+  const primaryModel = inv.folio?.billingModel?.trim() ?? null;
+  const isBucketScoped = !!invoiceBucket;
+  const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
+  const bucketMatches = (lineModel: string | null | undefined) => {
+    if (!isBucketScoped) return true;
+    const trimmed = lineModel?.trim() ?? null;
+    if (trimmed === invoiceBucket) return true;
+    // Legacy NULL-model lines belong to the folio's primary model bucket.
+    if (trimmed == null && primaryModel === invoiceBucket) return true;
+    return false;
+  };
+  const filteredFolioLines = (inv.folio?.lines ?? []).filter((l) => bucketMatches(l.billingModel));
+
+  // Charges vs. their tax companions — the shared classifier (`lib/folio-tax-lines.ts`) is the
+  // one place the SERVICE/OTHER description convention lives.
+  const chargeLines = filteredFolioLines.filter((l) => classifyFolioLine(l) === "CHARGE");
+  const serviceChargeLines = filteredFolioLines.filter((l) => classifyFolioLine(l) === "SERVICE_CHARGE");
+  const gstLines = filteredFolioLines.filter((l) => classifyFolioLine(l) === "GST");
+
+  // Legacy room lines (posted before the night audit wrote SC/GST companions — 2026-08-18 —
+  // and the imported "Room charge (imported)" rows) carry a NET amount with no tax on the
+  // ledger. For THOSE lines only, the tax is still computed at render as before, so an old
+  // folio's invoice does not silently drop the room tax. A room line is "covered" when a
+  // companion exists for the same night-audit run — the structural pairing the audit writes.
+  const auditRunsWithCompanions = new Set(
+    [...serviceChargeLines, ...gstLines].map((l) => l.nightAuditRecordId).filter((id): id is string => !!id),
+  );
+  const roomLineHasLedgerTax = (l: (typeof filteredFolioLines)[number]) =>
+    !!l.nightAuditRecordId && auditRunsWithCompanions.has(l.nightAuditRecordId);
+
+  type RoomLineDisplay = {
+    particular: string;
+    roomNo: string;
+    nights: number;
+    rate: number;
+    amount: number;
+    folioLineId: string | null;
+  };
+  const roomLines: RoomLineDisplay[] = [];
+  let legacyRoomNet = ZERO;
+  if (chargeLines.length > 0) {
+    // Room nights first (by night, then room), then every other charge in posting order —
+    // the way a guest reads a hotel bill; the include carries no ordering guarantee.
+    const ordered = [...chargeLines].sort((a, b) => {
+      const ar = roomLineTypes.has(a.lineType) ? 0 : 1;
+      const br = roomLineTypes.has(b.lineType) ? 0 : 1;
+      if (ar !== br) return ar - br;
+      const ad = a.chargeDate.getTime() - b.chargeDate.getTime();
+      if (ad !== 0) return ad;
+      const an = a.room?.roomNumber ?? "";
+      const bn = b.room?.roomNumber ?? "";
+      if (an !== bn) return an.localeCompare(bn, undefined, { numeric: true });
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
+    for (const l of ordered) {
+      const isRoom = roomLineTypes.has(l.lineType);
+      // Particular label = "Room" for room lines (legacy visual), otherwise the folio line's
+      // description so F&B / SERVICE / OTHER lines self-identify. A correction line's
+      // description carries the corrected line's UUID ("Correction for <id>: reason") — print
+      // it as "Correction: reason"; the snapshot keeps the folioLineId for the trail.
+      const particular = isRoom
+        ? "Room"
+        : l.description.replace(/^Correction for \S+: /, "Correction: ");
+      // Room number from the line's own room attribution; older lines fall back to the
+      // "· Room 302" suffix of the audit description (the old /room\s+(\S+)/ regex matched
+      // "room charge" first and printed the word "charge" as the room number).
+      const roomNo =
+        l.room?.roomNumber ??
+        (l.description.match(/(?:^|[·\s])Room\s+([A-Za-z0-9-]+)\s*$/)?.[1] ?? "").trim();
+      const amount = Number(toDecimal(l.amount).toFixed(2));
+      roomLines.push({ particular, roomNo, nights: 1, rate: amount, amount, folioLineId: l.id });
+      if (isRoom && !roomLineHasLedgerTax(l)) legacyRoomNet = legacyRoomNet.add(toDecimal(l.amount));
+    }
+  } else if (!isBucketScoped) {
+    // Legacy synthesise-from-quote fallback (only for whole-folio invoices with no charges yet
+    // — a pre-checkout preview). Nothing on the ledger, so the room tax is computed at render.
+    for (let i = 0; i < nights; i++) {
+      roomLines.push({
+        particular: "Room",
+        roomNo: "",
+        nights: 1,
+        rate: nightlyRate,
+        amount: nightlyRate,
+        folioLineId: null,
+      });
+      legacyRoomNet = legacyRoomNet.add(toDecimal(nightlyRate));
+    }
+  }
+
+  const subtotal = Number(sumMoney(roomLines.map((l) => l.amount)).toFixed(2));
+  const discountAmount = 0;
+  // Ledger tax + the render-time tax for legacy room lines that have none on the ledger.
+  const legacyServiceCharge = svcRate > 0 ? round2(legacyRoomNet.mul(svcRate)) : ZERO;
+  const legacyGst = gstRate > 0 ? round2(legacyRoomNet.add(legacyServiceCharge).mul(gstRate)) : ZERO;
+  const serviceCharge = Number(sumMoney(serviceChargeLines.map((l) => l.amount)).add(legacyServiceCharge).toFixed(2));
+  const gstAmount = Number(sumMoney(gstLines.map((l) => l.amount)).add(legacyGst).toFixed(2));
+  const totalBeforeAdvance = Number((subtotal - discountAmount + serviceCharge + gstAmount).toFixed(2));
+
+  // Payment attribution — everything the guest has paid so far (advance + settlement), net of
+  // refunds, so "Total payable" is the folio's own outstanding balance:
+  //   - Legacy whole-folio invoice: all payments count.
+  //   - Split invoice: only payments whose `billingModel` matches this bucket count.
+  //     NULL-model payments (pre-Phase-3 records) roll up to the primary bucket, mirroring
+  //     the ledger. Prevents double-counting when two invoices are issued for one folio.
+  const bucketPayments = (inv.folio?.payments ?? []).filter((p) => {
+    if (!isBucketScoped) return true;
+    const pModel = p.billingModel?.trim() ?? null;
+    if (pModel === invoiceBucket) return true;
+    if (pModel == null && primaryModel === invoiceBucket) return true;
+    return false;
+  });
+  const paidIn = sumMoney(bucketPayments.filter((p) => p.paymentDirection === "IN").map((p) => p.amount));
+  const paidOut = sumMoney(bucketPayments.filter((p) => p.paymentDirection === "OUT").map((p) => p.amount));
+  const advanceAmount = Number(paidIn.sub(paidOut).toFixed(2));
+  const focAmount = 0;
+  const totalPayable = Number((totalBeforeAdvance - advanceAmount - focAmount).toFixed(2));
+  return {
+    roomLines,
+    subtotal,
+    discountAmount,
+    serviceCharge,
+    gstAmount,
+    totalBeforeAdvance,
+    advanceAmount,
+    focAmount,
+    totalPayable,
+  };
+}
+
 export async function generateOrLoadInvoicePdf(
   prisma: PrismaClient,
   invoiceId: string,
@@ -587,94 +766,11 @@ export async function generateOrLoadInvoicePdf(
   // overrode a configured 0, so invoices could print rates the folio never charged.
   const { gstRate, serviceChargeRate: svcRate } = await resolveChargeRates(prisma);
 
-  // Two independent filters:
-  //   1. Split-billing filter: only lines whose billingModel matches this invoice's bucket.
-  //      For legacy invoices (invoice.billingModel = null) all lines pass this filter.
-  //      NULL-billingModel lines (pre-Phase-1 backfill data) pass through to whichever
-  //      invoice bucket the folio's primary model resolves to — matching the ledger's
-  //      NULL→primary rollup rule in `computeOutstandingForBillingModel`.
-  //   2. Line-type filter: ROOM_CHARGE / STAY only, but ONLY for legacy invoices. Split
-  //      invoices show all their bucket's lines regardless of type.
-  const invoiceBucket = inv.billingModel ?? null;
-  const primaryModel = inv.folio?.billingModel?.trim() ?? null;
-  const isBucketScoped = !!invoiceBucket;
-  const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
-  const bucketMatches = (lineModel: string | null | undefined) => {
-    if (!isBucketScoped) return true;
-    const trimmed = lineModel?.trim() ?? null;
-    if (trimmed === invoiceBucket) return true;
-    // Legacy NULL-model lines belong to the folio's primary model bucket.
-    if (trimmed == null && primaryModel === invoiceBucket) return true;
-    return false;
-  };
-  const filteredFolioLines = (inv.folio?.lines ?? []).filter((l) => {
-    if (!bucketMatches(l.billingModel)) return false;
-    if (!isBucketScoped) return roomLineTypes.has(l.lineType);
-    return true;
-  });
-
-  // Synthesise from quotation ONLY for legacy whole-folio invoices where NO room charges
-  // exist yet (guest hasn't checked out; PDF is a preview). Split invoices never synthesise —
-  // if a bucket has zero lines, that's a real "nothing to bill this bucket" state.
-  type RoomLineDisplay = {
-    particular: string;
-    roomNo: string;
-    nights: number;
-    rate: number;
-    amount: number;
-    folioLineId: string | null;
-  };
-  const roomLines: RoomLineDisplay[] = [];
-  if (filteredFolioLines.length > 0) {
-    for (const l of filteredFolioLines) {
-      // Particular label = "Room" for room-lines (legacy visual), otherwise the folio line's
-      // description (so F&B / SERVICE / OTHER lines self-identify on split invoices).
-      const particular = roomLineTypes.has(l.lineType) ? "Room" : l.description;
-      roomLines.push({
-        particular,
-        roomNo: (l.description.match(/room\s+(\S+)/i)?.[1] ?? "").trim(),
-        nights: 1,
-        rate: Number(toDecimal(l.amount).toFixed(2)),
-        amount: Number(toDecimal(l.amount).toFixed(2)),
-        folioLineId: l.id,
-      });
-    }
-  } else if (!isBucketScoped) {
-    // Legacy synthesise-from-quote fallback (only for whole-folio invoices).
-    for (let i = 0; i < nights; i++) {
-      roomLines.push({
-        particular: "Room",
-        roomNo: "",
-        nights: 1,
-        rate: nightlyRate,
-        amount: nightlyRate,
-        folioLineId: null,
-      });
-    }
-  }
-
-  const subtotal = roomLines.reduce((s, l) => s + l.amount, 0);
-  const discountAmount = 0;
-  const serviceCharge = Number((subtotal * svcRate).toFixed(2));
-  const gstAmount = Number(((subtotal + serviceCharge) * gstRate).toFixed(2));
-  const totalBeforeAdvance = subtotal - discountAmount + serviceCharge + gstAmount;
-
-  // Advance-payment attribution:
-  //   - Legacy whole-folio invoice: all IN payments count toward this invoice's advance.
-  //   - Split invoice: only payments whose `billingModel` matches this bucket count.
-  //     NULL-model payments (pre-Phase-3 records) roll up to the primary bucket, mirroring
-  //     the ledger. Prevents double-counting when two invoices are issued for one folio.
-  const inPayments = (inv.folio?.payments ?? []).filter((p) => {
-    if (p.paymentDirection !== "IN") return false;
-    if (!isBucketScoped) return true;
-    const pModel = p.billingModel?.trim() ?? null;
-    if (pModel === invoiceBucket) return true;
-    if (pModel == null && primaryModel === invoiceBucket) return true;
-    return false;
-  });
-  const advanceAmount = inPayments.reduce((s, p) => s + Number(toDecimal(p.amount).toFixed(2)), 0);
-  const focAmount = 0;
-  const totalPayable = Number((totalBeforeAdvance - advanceAmount - focAmount).toFixed(2));
+  // Every money figure on the FINAL invoice comes from the ledger through the shared pure
+  // builder — the S8/S9 final-invoice EMAIL reads the same figures, so the PDF, the email and
+  // the desk's bill can never disagree.
+  const fig = buildFinalInvoiceFigures(inv, { gstRate, svcRate, nights, nightlyRate });
+  const { roomLines, subtotal, discountAmount, serviceCharge, gstAmount, totalBeforeAdvance, advanceAmount, focAmount, totalPayable } = fig;
 
   // Travel agent name (or "Walk-In" if none). Guest name = contact person on entry (per boss's
   // convention: "guest name reflects the contact person's name").

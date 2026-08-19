@@ -798,9 +798,44 @@ model GuestIdentityDocument {
 
   guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
   entry        Entry?       @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  ocrSuggestion IdentityOcrSuggestion?
 
   @@index([entryId])
   @@map("guest_identity_documents")
+}
+
+/// OCR / QR extraction from a stored ID photo (2026-08-18) — a SUGGESTION the desk operator
+/// applies, never a direct write. One row per photo (re-runs overwrite it in place). Kept as a
+/// sibling of the write-once photo row so evidence never mutates; purged with the photo under
+/// the same retention rule. `fields` = {documentType?, documentNumber?, fullName?,
+/// dateOfBirth?, gender?, nationality?, expiryDate?}; `fieldConfidence` = per-field
+/// "VERIFIED" (check digit / signed QR) | "READ" (plain OCR); `raw` = the machine-readable
+/// payload the server parsed (MRZ lines / QR text) so the parse is reproducible.
+model IdentityOcrSuggestion {
+  id              String   @id @default(uuid())
+  photoDocumentId String   @unique
+  entryId         String
+  subjectKey      String?
+  /// Where the extraction ran: PHONE_QR · PHONE_MRZ · SERVER_QR · SERVER_MRZ · PHONE_MANUAL.
+  engine          String
+  status          String   // PENDING | READY | EMPTY | FAILED | APPLIED | DISMISSED
+  fields          Json?
+  fieldConfidence Json?
+  raw             Json?
+  error           String?
+  extractedAt     DateTime?
+  appliedAt       DateTime?
+  appliedBy       String?
+  dismissedAt     DateTime?
+  dismissedBy     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  photo GuestIdentityDocument @relation(fields: [photoDocumentId], references: [id], onDelete: Cascade)
+  entry Entry                 @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("identity_ocr_suggestions")
 }
 
 model VIPArrivalNotificationEvent {
@@ -1003,6 +1038,7 @@ model Entry {
   speculativeHolds        SpeculativeHold[]
   cancellationDisclosure  CancellationDisclosureRecord?
   vipArrivalNotifications VIPArrivalNotificationEvent[]
+  identityOcrSuggestions  IdentityOcrSuggestion[]
   identityDocuments       GuestIdentityDocument[]
   disputes                DisputeRecord[]
   amendmentEventRecords   AmendmentEventRecord[]

@@ -62,3 +62,33 @@ export const verifyGuestIdentityRequestSchema = z.object({
   expiryDate: z.string().optional(),
 });
 export type VerifyGuestIdentityRequestDto = z.infer<typeof verifyGuestIdentityRequestSchema>;
+
+/** Phone-side identity extraction (2026-08-18): the RAW machine-readable payload the phone
+ *  decoded (server re-parses it) + the fields the person on the phone confirmed/corrected. */
+export const identityExtractionSuggestedFieldsSchema = z
+  .object({
+    documentType: z.string().trim().max(40).optional().nullable(),
+    documentNumber: z.string().trim().max(64).optional().nullable(),
+    documentNumberLast4: z.string().trim().max(4).optional().nullable(),
+    fullName: z.string().trim().max(160).optional().nullable(),
+    dateOfBirth: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/,"dateOfBirth must be yyyy-mm-dd").optional().nullable(),
+    gender: z.string().trim().max(8).optional().nullable(),
+    nationality: z.string().trim().max(8).optional().nullable(),
+    expiryDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/,"expiryDate must be yyyy-mm-dd").optional().nullable(),
+  })
+  .partial();
+export const phoneIdentityExtractionRequestSchema = z.object({
+  photoDocumentId: z.string().trim().min(1).max(64),
+  mrzLines: z.array(z.string().trim().max(60)).max(3).optional().nullable(),
+  qrText: z.string().max(20_000).optional().nullable(),
+  fields: identityExtractionSuggestedFieldsSchema.optional().nullable(),
+});
+export type PhoneIdentityExtractionRequestDto = z.infer<typeof phoneIdentityExtractionRequestSchema>;
+
+/** Desk: apply an OCR suggestion, optionally with the operator's corrections. */
+export const applyIdentityOcrSuggestionRequestSchema = z.object({
+  overrides: identityExtractionSuggestedFieldsSchema
+    .pick({ documentType: true, documentNumber: true, fullName: true, dateOfBirth: true, gender: true })
+    .optional()
+    .nullable(),
+});

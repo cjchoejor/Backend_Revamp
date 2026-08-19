@@ -26,8 +26,10 @@ const TARGETS: { key: string; value: unknown; notes: string }[] = [
       { documentTypeCode: "AADHAAR_CARD", documentTypeName: "Aadhaar card", isActive: true },
       { documentTypeCode: "VOTER_CARD", documentTypeName: "Voter card", isActive: true },
       { documentTypeCode: "BIRTH_CERTIFICATE", documentTypeName: "Birth certificate", isActive: true },
+      { documentTypeCode: "WORK_PERMIT", documentTypeName: "Work permit", isActive: true },
     ],
-    notes: "Accepted guest identity documents (2026-08-12 widening): Passport, CID, Aadhaar card, Voter card, Birth certificate.",
+    notes:
+      "Accepted guest identity documents (2026-08-12 widening + 2026-08-17 work permit): Passport, CID, Aadhaar card, Voter card, Birth certificate, Work permit.",
   },
   {
     key: "identity.retentionPeriodDays",
@@ -37,9 +39,10 @@ const TARGETS: { key: string; value: unknown; notes: string }[] = [
       AADHAAR_CARD: 2555,
       VOTER_CARD: 2555,
       BIRTH_CERTIFICATE: 2555,
+      WORK_PERMIT: 2555,
       DEFAULT: 2555,
     },
-    notes: "Per-docType ID retention (~7y); explicit entries for the 2026-08-12 document types.",
+    notes: "Per-docType ID retention (~7y); explicit entries for the accepted document types.",
   },
 ];
 

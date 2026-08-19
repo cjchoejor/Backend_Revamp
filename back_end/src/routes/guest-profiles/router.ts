@@ -5,6 +5,7 @@ import {
   createGuestProfileRequestSchema,
   mintIdentityCapturePhoneTokenRequestSchema,
   saveGuestIdentityDetailRequestSchema,
+  applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
   verifyGuestIdentityRequestSchema,
 } from "../../dtos/14-guest-profiles/request-schemas.js";
@@ -15,6 +16,7 @@ import { signIdentityCaptureToken } from "../../lib/identity-capture-token.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import * as guestProfileService from "../../services/domain/guest-profile-service.js";
 import * as identityProofService from "../../services/domain/guest-identity-proof-service.js";
+import * as identityOcrService from "../../services/domain/identity-ocr-service.js";
 
 export const guestProfilesRouter = Router();
 
@@ -86,6 +88,9 @@ guestProfilesRouter.post(
         subjectKey: typeof q.subjectKey === "string" && q.subjectKey.trim() ? q.subjectKey : null,
         subjectLabel: typeof q.subjectLabel === "string" && q.subjectLabel.trim() ? q.subjectLabel : null,
       });
+      // Server-side OCR/QR extraction (2026-08-18) — the desk has no phone-side reading, so
+      // the W39 worker suggests fields off the stored bytes; best-effort, never blocks the upload.
+      void identityOcrService.enqueueServerExtraction(created.id, req.actor!.actorId);
       res.status(201).json(created);
     } catch (e) {
       next(e);
@@ -156,7 +161,53 @@ guestProfilesRouter.put(
 
 guestProfilesRouter.get("/entries/:id/identity-proofs", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    res.json(await identityProofService.listIdentityProofsForEntry(prisma, req.params.id));
+    const [list, suggestions] = await Promise.all([
+      identityProofService.listIdentityProofsForEntry(prisma, req.params.id),
+      // OCR/QR suggestions per photo (2026-08-18) — the desk renders the unapplied ones under
+      // the guest's row; Apply goes through the same detail save as typing.
+      identityOcrService.listOcrSuggestionsForEntry(prisma, req.params.id),
+    ]);
+    res.json({ ...list, suggestions });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Re-run the server-side extraction for one photo (L1; queued on W39, answers 202). */
+guestProfilesRouter.post("/identity-proofs/:id/ocr", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    if (identityOcrService.serverOcrDisabled()) {
+      res.status(409).json({ error: "OCR_DISABLED", message: "Server-side OCR is switched off (OCR_DISABLE=true)" });
+      return;
+    }
+    const engine = await (await import("../../services/infrastructure/timer-management-service.js")).getTimerEngine();
+    await engine.schedule("IDENTITY_OCR_W39", { photoDocumentId: req.params.id, actorId: req.actor!.actorId, force: true }, { startAfter: new Date() });
+    res.status(202).json({ queued: true, photoDocumentId: req.params.id });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Apply an OCR/QR suggestion to the guest-detail row (with optional operator corrections). */
+guestProfilesRouter.post(
+  "/identity-ocr-suggestions/:id/apply",
+  requireActorLevel("L1"),
+  validateBody(applyIdentityOcrSuggestionRequestSchema),
+  async (req, res, next) => {
+    try {
+      const overrides = Object.fromEntries(
+        Object.entries(req.body?.overrides ?? {}).filter(([, v]) => typeof v === "string" && v.trim()),
+      ) as Record<string, string>;
+      res.json(await identityOcrService.applyOcrSuggestion(prisma, req.actor!.actorId, req.params.id, overrides));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+guestProfilesRouter.post("/identity-ocr-suggestions/:id/dismiss", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await identityOcrService.dismissOcrSuggestion(prisma, req.actor!.actorId, req.params.id));
   } catch (e) {
     next(e);
   }

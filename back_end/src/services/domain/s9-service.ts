@@ -11,11 +11,11 @@ import { schedulePaymentFollowUpW8IfOutstanding } from "../../lib/schedule-payme
 import { enforceWriteOffConstraints } from "../../policies/13-billing-model/write-off-policy-constraints.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
 import { formatDate as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
-import { generateOrLoadInvoicePdf } from "./invoice-pdf-service.js";
+import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
@@ -383,8 +383,26 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
   // fall back to entry.numberOfRooms, then to 1. S9 needs this so the final invoice /
   // reconciliation reflects the total for all rooms, not just one.
   const s9RoomCount = Math.max(1, Number((quotationTerms as any)?.roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, nightlyRate, nights, s9RoomCount);
   const isPI = inv.invoiceType === InvoiceType.PROFORMA;
+  // The FINAL invoice email prints the LEDGER figures — the same pure builder the PDF renders
+  // from (2026-08-18). It used to re-derive frozenRate × nights × rooms + tax, a third figure
+  // that matched neither the PDF nor the desk's bill.
+  let breakdown = isPI ? await computeStayCharges(prisma, nightlyRate, nights, s9RoomCount) : null;
+  let amountPaid = paid;
+  if (!isPI) {
+    const loaded = await loadInvoiceForRender(prisma, invoiceId);
+    const { gstRate, serviceChargeRate } = await resolveChargeRates(prisma);
+    const fig = buildFinalInvoiceFigures(loaded, { gstRate, svcRate: serviceChargeRate, nights, nightlyRate });
+    breakdown = {
+      subTotal: fig.subtotal,
+      serviceChargeRate,
+      serviceCharge: fig.serviceCharge,
+      gstRate,
+      gst: fig.gstAmount,
+      total: fig.totalBeforeAdvance,
+    };
+    amountPaid = fig.advanceAmount;
+  }
 
   const content = isPI
     ? renderProformaInvoiceEmail({
@@ -394,7 +412,7 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         checkOutDate: co,
         guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
         currency,
-        breakdown,
+        breakdown: breakdown!,
         amountPaid: paid,
         paymentCount: inv.folio?.payments?.length ?? 0,
         // Real columns only — `ci` is today-defaulted above, and the template must not print a
@@ -414,8 +432,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         checkInDate: ci,
         checkOutDate: co,
         currency,
-        breakdown,
-        amountPaid: paid,
+        breakdown: breakdown!,
+        amountPaid,
       });
 
   // Generate the invoice PDF and attach it. Idempotent — subsequent dispatches serve the

@@ -15,6 +15,11 @@ import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import {
+  gstLineDescription,
+  salesTaxCorrectionDescription,
+  serviceChargeLineDescription,
+} from "../../lib/folio-tax-lines.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -271,7 +276,7 @@ export async function postCharge(
           data: {
             folioId,
             lineType: FolioLineType.SERVICE,
-            description: `Service charge (${(serviceChargeRate * 100).toFixed(2)}%) on: ${input.description}`,
+            description: serviceChargeLineDescription(serviceChargeRate, input.description),
             amount: serviceCharge,
             currency: lineCurrency,
             chargeDate,
@@ -293,7 +298,7 @@ export async function postCharge(
           data: {
             folioId,
             lineType: FolioLineType.OTHER,
-            description: `GST (${(gstRate * 100).toFixed(2)}%) on: ${input.description}`,
+            description: gstLineDescription(gstRate, input.description),
             amount: gst,
             currency: lineCurrency,
             chargeDate,
@@ -494,7 +499,7 @@ export async function correctCharge(
             data: {
               folioId,
               lineType: FolioLineType.OTHER,
-              description: `Sales tax correction on: ${original.description}`,
+              description: salesTaxCorrectionDescription(original.description),
               amount: new Prisma.Decimal(taxDelta.toFixed(2)),
               currency: original.currency,
               chargeDate: correctionDate,
