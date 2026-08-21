@@ -37,11 +37,13 @@ this file is the narrative reference.
   Labels are generic ("Adult 1") because the booking's guest profile is the CONTACT PERSON,
   not necessarily anyone sleeping in the rooms; typed names overlay where recorded.
 
-### 1.2 The guest-detail table (desk, S5 + S6)
+### 1.2 The guest-detail table (desk, S5 + S6 + S7)
 
 [identity-proof.tsx](../front_end/src/components/desk/workspace/identity-proof.tsx)
-(`IdentityProofBlock`) renders on Arrival (collapsible, collapsed by default) and Check-in
-(always open, gate surface). Columns: Document type · Document no · Name · DOB · Gender ·
+(`IdentityProofBlock`) renders on Arrival (collapsible, collapsed by default), Check-in
+(always open, gate surface) and — since 2026-08-21 — the **Stay** step (collapsible; a
+correction surface for details captured earlier, per the operator's "sometimes guest detail
+can be put in S5 and later made changes in S7 or S6"). Columns: Document type · Document no · Name · DOB · Gender ·
 ID photo. Details save on field blur; a typed name replaces the generic label live.
 
 - **Grouped BY ROOM**: each room is a cream band row ("**Room 205** · Twin · Deluxe Double ·
@@ -58,6 +60,28 @@ ID photo. Details save on field blur; a typed name replaces the generic label li
 - **Returning-guest pull**: the profile-holder's most recent document number from an earlier
   booking auto-fills the first adult row (number only, persisted, "confirm it belongs to this
   guest" note).
+- **Confirm / Make changes (2026-08-21 ruling)**: a guest's row is CONFIRMED by the operator
+  and becomes read-only — every input disables (values stay readable: dashed, cream, full
+  contrast) and the backend refuses writes to it (`GUEST_DETAILS_CONFIRMED`, 409) — until it
+  is explicitly unlocked with **Make changes**. Durable on the detail row itself
+  (`GuestIdentityDocument.detailsConfirmedAt/By`), so a guest confirmed at Arrival is still
+  locked at Check-in and during the Stay, on any terminal. **One control for the whole table,
+  below it** (same-day second ruling — no per-row buttons): **Confirm guest details** locks
+  every row with something on file; once locked the same spot offers **Make changes**, which
+  unlocks them all. Locked rows carry a 🔒 glyph by the name. The S6 **Record identity
+  verification** button beneath it is a different act (stamps `identityVerifiedAt`, the p16
+  check-in gate) and locks nothing — but its **guest type (verification path) select is part
+  of the same edit mode**: visible whenever the table is unlocked, seeded from the recorded
+  path, and a different pick offers **Update identity verification** (re-stamps the path;
+  the backend has no already-verified guard).
+  Confirming FLUSHES the row's unsaved inputs first, so the last keystroke and the lock can't
+  race. A locked row also blocks the OCR strip's **Apply** (with the reason) and the
+  returning-guest pull. Photo capture stays available — a new photo is evidence, not a change
+  to the typed details. Endpoint `POST /api/entries/:id/identity-details/confirm` (L1+, body
+  `{subjectKeys[], confirmed}`) → `setGuestIdentityDetailConfirmation`; slots with nothing on
+  file are SKIPPED and named back (`NOTHING_RECORDED`) rather than confirmed empty, and a
+  photo-only slot gets a bare detail row minted to carry the confirmation. Traces
+  `GUEST.IDENTITY_DETAILS_CONFIRMED` / `_UNLOCKED`.
 
 ### 1.3 One ID per guest (2026-08-12 ruling)
 
