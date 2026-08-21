@@ -60,6 +60,18 @@ export const DUE_LABEL: Record<NonNullable<AdvancePaymentPlanSummary["balanceDue
   AT_CHECKOUT: "rest at check-out",
 };
 
+/** The same timing on a FULL plan is the WHOLE payment, not a remainder (2026-08-19). */
+const DUE_LABEL_FULL: Record<NonNullable<AdvancePaymentPlanSummary["balanceDueAt"]>, string> = {
+  BEFORE_CHECKIN: "paying before check-in",
+  AT_CHECKIN: "paying at the check-in desk",
+  AT_CHECKOUT: "paying at check-out",
+};
+
+export function dueLabel(plan: AdvancePaymentPlanSummary["plan"], due: AdvancePaymentPlanSummary["balanceDueAt"]) {
+  if (!due) return null;
+  return (plan === "FULL" ? DUE_LABEL_FULL : DUE_LABEL)[due];
+}
+
 /** Desk names for the stage a payment was taken at (installment history rows). */
 const STAGE_STEP_LABEL: Record<string, string> = {
   S3: "Set up",
@@ -94,8 +106,8 @@ export function AdvancePlanFacts({ status }: { status: PaymentStatusSummary | un
     <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start", margin: "0 0 11px" }}>
       <div className="fact b-transit" style={{ padding: "6px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
         <span>
-          Guest&rsquo;s plan: <b>{PLAN_LABEL[plan.plan]}</b>
-          {plan.balanceDueAt ? ` · ${DUE_LABEL[plan.balanceDueAt]}` : ""}
+          Guest&rsquo;s plan: <b>{plan.plan === "FULL" && plan.balanceDueAt ? "Full amount" : PLAN_LABEL[plan.plan]}</b>
+          {dueLabel(plan.plan, plan.balanceDueAt) ? ` · ${dueLabel(plan.plan, plan.balanceDueAt)}` : ""}
           {plan.balanceDueAt === "BEFORE_CHECKIN" && plan.promisedBy ? ` · by ${fmtDate(plan.promisedBy)}` : ""}
         </span>
         {settled ? <span className="tag">Kept — paid in full</span> : null}
@@ -108,7 +120,8 @@ export function AdvancePlanFacts({ status }: { status: PaymentStatusSummary | un
       )}
       {!settled && !plan.promiseOverdue && plan.balanceDueAt === "BEFORE_CHECKIN" && plan.promisedBy && (
         <span className={`timer ${countdown?.level || "warn"}`}>
-          Remainder promised {countdown?.text ?? "soon"} · by {fmtDate(plan.promisedBy)}
+          {plan.plan === "FULL" ? "Payment" : "Remainder"} promised {countdown?.text ?? "soon"} · by{" "}
+          {fmtDate(plan.promisedBy)}
         </span>
       )}
       {plan.note && (
@@ -243,7 +256,10 @@ export function AdvancePlanCapture({
   const [plan, setPlan] = useState<"FULL" | "PARTIAL" | "INSTALLMENTS">("FULL");
   // AT_CHECKOUT removed 2026-08-08 (the advance settles before or at check-in) — the backend
   // refuses it; legacy saved plans that carry it seed the form as AT_CHECKIN.
-  const [balanceDueAt, setBalanceDueAt] = useState<"BEFORE_CHECKIN" | "AT_CHECKIN">("BEFORE_CHECKIN");
+  // "" = no timing recorded — offered on FULL only (2026-08-19), and it means "paying now at the
+  // desk". A guest paying the WHOLE amount can still be paying it on Friday, and that promise
+  // needs somewhere to live (it arms the same W38 clock as a remainder promise).
+  const [balanceDueAt, setBalanceDueAt] = useState<"" | "BEFORE_CHECKIN" | "AT_CHECKIN">("");
   const [promisedBy, setPromisedBy] = useState("");
   const [note, setNote] = useState("");
 
@@ -268,16 +284,15 @@ export function AdvancePlanCapture({
 
   const saveM = useMutation({
     mutationFn: () => {
-      const needsTiming = plan !== "FULL";
+      if (balanceDueAt === "BEFORE_CHECKIN" && !promisedBy) {
+        throw new Error("Pick the date the guest promised");
+      }
       const body =
-        plan === "FULL"
-          ? ({ plan } as const)
+        balanceDueAt === ""
+          ? ({ plan } as const) // FULL, paying now — no timing to record
           : balanceDueAt === "BEFORE_CHECKIN"
             ? { plan, balanceDueAt, promisedBy: new Date(promisedBy).toISOString() }
             : { plan, balanceDueAt };
-      if (needsTiming && balanceDueAt === "BEFORE_CHECKIN" && !promisedBy) {
-        throw new Error("Pick the date the guest promised");
-      }
       return setAdvancePaymentPlan(session!, entry.id, { ...body, note: note.trim() || null });
     },
     onSuccess: (res) => {
@@ -315,7 +330,9 @@ export function AdvancePlanCapture({
                 // Seed the form from the saved plan so Change opens on what's in force. A legacy
                 // at-check-out plan seeds as at-check-in — the closest option still offered.
                 setPlan(saved.plan);
-                if (saved.balanceDueAt) setBalanceDueAt(saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt);
+                setBalanceDueAt(
+                  saved.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "",
+                );
                 setPromisedBy(saved.promisedBy ? saved.promisedBy.slice(0, 16) : "");
                 setNote(saved.note ?? "");
                 setEditing(true);
@@ -332,8 +349,9 @@ export function AdvancePlanCapture({
         <>
           <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0, lineHeight: 1.5 }}>
             How will the guest pay the advance: the whole amount at once, part now with the rest
-            later, or several installments — and <b>when</b> the rest is coming (before check-in
-            on a dated promise, or at the check-in desk). The proforma <b>prints this plan</b>, so
+            later, or several installments — and <b>when</b> that money is coming. Even a guest
+            paying the whole amount can be paying it on a date they named: record it and the
+            promise gets its own countdown. The proforma <b>prints this plan</b>, so
             record it before sending — and if the guest later says they can&rsquo;t pay that way,
             change it here and a corrected proforma is issued to send again.
           </p>
@@ -343,26 +361,37 @@ export function AdvancePlanCapture({
           <div className="frow">
             <div className="field">
               <label>What they said</label>
-              <select value={plan} onChange={(e) => setPlan(e.target.value as typeof plan)} disabled={disabled}>
+              <select
+                value={plan}
+                onChange={(e) => {
+                  const next = e.target.value as typeof plan;
+                  setPlan(next);
+                  // A remainder must have a due point; only FULL may say "paying now".
+                  if (next !== "FULL" && balanceDueAt === "") setBalanceDueAt("BEFORE_CHECKIN");
+                }}
+                disabled={disabled}
+              >
                 <option value="FULL">{PLAN_LABEL.FULL}</option>
                 <option value="PARTIAL">{PLAN_LABEL.PARTIAL}</option>
                 <option value="INSTALLMENTS">{PLAN_LABEL.INSTALLMENTS}</option>
               </select>
             </div>
-            {plan !== "FULL" && (
-              <div className="field">
-                <label>When is the rest coming?</label>
-                <select
-                  value={balanceDueAt}
-                  onChange={(e) => setBalanceDueAt(e.target.value as typeof balanceDueAt)}
-                  disabled={disabled}
-                >
-                  <option value="BEFORE_CHECKIN">Before check-in (dated promise)</option>
-                  <option value="AT_CHECKIN">At the check-in desk</option>
-                </select>
-              </div>
-            )}
-            {plan !== "FULL" && balanceDueAt === "BEFORE_CHECKIN" && (
+            {/* Timing (2026-08-19, operator request): FULL carries it too — "the whole amount, on
+                Friday" is a promise like any other, and a dated one arms the same countdown. On
+                FULL it may also be left as "paying now", which records no promise. */}
+            <div className="field">
+              <label>{plan === "FULL" ? "When will they pay?" : "When is the rest coming?"}</label>
+              <select
+                value={balanceDueAt}
+                onChange={(e) => setBalanceDueAt(e.target.value as typeof balanceDueAt)}
+                disabled={disabled}
+              >
+                {plan === "FULL" && <option value="">Now — paying at the desk</option>}
+                <option value="BEFORE_CHECKIN">Before check-in (dated promise)</option>
+                <option value="AT_CHECKIN">At the check-in desk</option>
+              </select>
+            </div>
+            {balanceDueAt === "BEFORE_CHECKIN" && (
               <div className="field">
                 <label>Promised by</label>
                 <input type="datetime-local" value={promisedBy} onChange={(e) => setPromisedBy(e.target.value)} disabled={disabled} />
@@ -376,7 +405,7 @@ export function AdvancePlanCapture({
           <div style={{ display: "flex", gap: 8 }}>
             <button
               className="btn btn-primary"
-              disabled={disabled || saveM.isPending || (plan !== "FULL" && balanceDueAt === "BEFORE_CHECKIN" && !promisedBy)}
+              disabled={disabled || saveM.isPending || (balanceDueAt === "BEFORE_CHECKIN" && !promisedBy)}
               onClick={() => saveM.mutate()}
             >
               {saveM.isPending ? "Saving…" : "Record the plan"}

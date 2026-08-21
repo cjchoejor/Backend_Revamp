@@ -889,10 +889,13 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
           !paymentStatus.paidInFull &&
           paymentStatus.totalReceived > 0 &&
           paymentStatus.paymentPlan &&
-          paymentStatus.paymentPlan.plan !== "FULL" &&
+          // A FULL plan counts here only once it carries TIMING (2026-08-19) — "paying now"
+          // promises nothing for later, so a shortfall under it is an oversight, not a plan.
+          (paymentStatus.paymentPlan.plan !== "FULL" || !!paymentStatus.paymentPlan.balanceDueAt) &&
           !paymentStatus.creditExtensionActive && (
             <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 11px", lineHeight: 1.5 }}>
-              The guest still owes {money(paymentStatus.shortfall)} and said the rest comes{" "}
+              The guest still owes {money(paymentStatus.shortfall)} and said{" "}
+              {paymentStatus.paymentPlan.plan === "FULL" ? "they'd pay" : "the rest comes"}{" "}
               {paymentStatus.paymentPlan.balanceDueAt === "BEFORE_CHECKIN"
                 ? "before check-in"
                 : paymentStatus.paymentPlan.balanceDueAt === "AT_CHECKIN"

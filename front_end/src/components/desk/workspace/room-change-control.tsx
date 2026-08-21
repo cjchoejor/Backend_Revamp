@@ -16,7 +16,11 @@ import {
 import { listRooms, setRoomBedType } from "@/lib/api/rooms";
 import { foldNightsToRangesLabel, mealPlanSummary, operativeRoomCompositions } from "@/lib/desk/party-rooms";
 import { money } from "@/lib/desk/workspace";
+import type { RoomCompositionInput } from "@/lib/api/quotations";
 import type { EntryDetail } from "@/types/api";
+import { DeskConfirmModal } from "./confirm-modal";
+import { RoomCompositionPlanner } from "./room-compositions-board";
+import { NegotiationDiscountBar, type DiscountUnit } from "./room-compositions-table";
 
 /**
  * In-place room change (2026-08-12, operator ruling): every room row on S5/S6/S7 carries a
@@ -102,24 +106,9 @@ function nightWord(status: RoomChangeCandidate["perNight"][number]["status"]) {
   }
 }
 
-/** Whole-number draft parser — empty/invalid reads as "not set". */
-function parseCount(s: string): number | null {
-  const t = s.trim();
-  if (!t) return null;
-  const n = Number(t);
-  return Number.isInteger(n) && n >= 0 ? n : null;
-}
-
-type SetupDraft = { bed: string; eb: string; cp: string; mapl: string; mapd: string; ap: string };
-type MealKey = "cp" | "mapl" | "mapd" | "ap";
-
-const MEAL_KEYS: MealKey[] = ["cp", "mapl", "mapd", "ap"];
-const MEAL_META: Record<MealKey, { chip: string; head: string; title: string }> = {
-  cp: { chip: "CP", head: "CP", title: "CP · breakfast" },
-  mapl: { chip: "MAP +L", head: "MAP +L", title: "MAP · breakfast + lunch" },
-  mapd: { chip: "MAP +D", head: "MAP +D", title: "MAP · breakfast + dinner" },
-  ap: { chip: "AP", head: "AP", title: "AP · all meals" },
-};
+/** The bed dropdown is all that is left of the old per-room setup draft — every other field
+ *  now lives in the S2 composition table (2026-08-19). */
+type SetupDraft = { bed: string };
 
 export function RoomChangeControl({
   entry,
@@ -147,8 +136,19 @@ export function RoomChangeControl({
   /** S1-style expanded layer + in-cell holder names. */
   const [expanded, setExpanded] = useState(false);
   const [showNames, setShowNames] = useState(false);
-  /** S2-style plan chips — a meal column shows while its chip is on or a row carries pax. */
-  const [activeMealPlans, setActiveMealPlans] = useState<Set<MealKey>>(new Set());
+  /**
+   * The setup section IS the S2 negotiation table (2026-08-19, operator request — "I need that
+   * negotiation table exactly [as] in S2"): the real `RoomCompositionPlanner`, so the rooms just
+   * selected are set up with the same grid, guest bands, meal columns, extra beds, per-room
+   * NEGOTIATED RATES, SC/FOC toggles, live backend pricing — and the booking discount beside it.
+   * Its emission is posted as `roomCompositions`, the full basis, instead of the old field-patch
+   * `roomSetups`. Bed setup stays a separate `roomSetups` entry: it is a room-registry fact, not
+   * a composition field, and the backend admits it alongside the table for exactly that reason.
+   */
+  const [repriceComps, setRepriceComps] = useState<RoomCompositionInput[]>([]);
+  const [discountValue, setDiscountValue] = useState("");
+  const [discountUnit, setDiscountUnit] = useState<DiscountUnit>("percent");
+  const [discountBasis, setDiscountBasis] = useState("");
 
   const stage = entry.currentStage;
   const atS7 = stage === "S7";
@@ -212,78 +212,71 @@ export function RoomChangeControl({
   const nothingChanges = allAssigned && selectedNewRooms.length === 0;
   const crossTypeLocked = selectedNewRooms.some((id) => !(candidateById.get(id)?.sameType ?? true)) && !canCrossType;
 
-  // Seed a setup draft the first time a room enters the selection; keep existing edits.
+  // ── The negotiation table's scope ──────────────────────────────────────────────────────────
+  const level = session?.actorLevel ?? "L1";
+  /**
+   * Rates / FOC / SC waivers / the discount are a RATE REVISION on a confirmed booking: FOM
+   * (L2+) before arrival, GM (L3+) in-house. Mirrors p58 `enforceRepriceAuthorityForStage` so
+   * the cells explain themselves instead of the walk refusing after the re-entry committed.
+   * In-house they lock outright — a per-night override cannot carry a rate, so nights already
+   * posted to the folio would silently re-price.
+   */
+  const lockCommercial = atS7 || levelRank(level) < 2;
+  /** What the carried row would look like on each newly selected room — the table's seed. */
+  const seedComps = useMemo(() => {
+    if (!fromComp) return [];
+    return selectedNewRooms.map((id) => {
+      const crossType = !(candidateById.get(id)?.sameType ?? true);
+      // A cross-type move prices at the NEW type's own rate: the negotiation was for the old
+      // type, and the backend's carry drops it — so the seed must not show it either.
+      const { negotiatedRoomRate, ...rest } = fromComp;
+      return { ...(crossType ? rest : fromComp), ...rest, roomId: id, ...(crossType ? {} : { negotiatedRoomRate }) };
+    });
+  }, [fromComp, selectedNewRooms, candidateById]);
+  /** Every OTHER room of the booking, carried untouched — the table only shows what's moving. */
+  const untouchedComps = useMemo(() => {
+    const comps = operativeRoomCompositions(entry) ?? [];
+    const moving = new Set([fromRoomId, ...selectedNewRooms]);
+    return comps.filter((c) => !moving.has(c.roomId));
+  }, [entry, fromRoomId, selectedNewRooms]);
+  const carriedDiscount = useMemo(() => {
+    const quotes = (entry.quotations ?? []).slice().sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+    for (const q of quotes) {
+      const d = (q.commercialTerms as { requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis?: string } } | null)
+        ?.requestedDiscount;
+      if (d) return d;
+    }
+    return null;
+  }, [entry.quotations]);
+  // Seed the discount fields from the booking's live concession, once the panel opens.
+  useEffect(() => {
+    if (!open) return;
+    setDiscountValue(
+      carriedDiscount?.discountPercent != null
+        ? String(carriedDiscount.discountPercent)
+        : carriedDiscount?.discountAmount != null
+          ? String(carriedDiscount.discountAmount)
+          : "",
+    );
+    setDiscountUnit(carriedDiscount?.discountAmount != null ? "amount" : "percent");
+    setDiscountBasis(carriedDiscount?.discountBasis ?? "");
+  }, [open, carriedDiscount]);
+
+  // Seed the bed dropdown the first time a room enters the selection; keep existing edits.
+  // (Everything else the operator sets up is seeded into the composition table itself.)
   useEffect(() => {
     setSetups((prev) => {
       const next = { ...prev };
       let touched = false;
       for (const id of selectedNewRooms) {
         if (next[id]) continue;
-        const cat = catalogById.get(id);
-        next[id] = {
-          bed: cat?.bedType ?? "",
-          eb: fromComp ? String(fromComp.extraBedCount ?? 0) : "",
-          cp: fromComp ? String(fromComp.mealPlanCpCount ?? 0) : "",
-          mapl: fromComp ? String(fromComp.mealPlanMaplCount ?? 0) : "",
-          mapd: fromComp ? String(fromComp.mealPlanMapdCount ?? 0) : "",
-          ap: fromComp ? String(fromComp.mealPlanApCount ?? 0) : "",
-        };
+        next[id] = { bed: catalogById.get(id)?.bedType ?? "" };
         touched = true;
       }
       return touched ? next : prev;
     });
-  }, [selectedNewRooms, catalogById, fromComp]);
+  }, [selectedNewRooms, catalogById]);
 
-  // ── S2-style meal columns: chip on OR pax present anywhere ────────────────────────────────
-  const visibleMeals = MEAL_KEYS.filter(
-    (k) => activeMealPlans.has(k) || selectedNewRooms.some((id) => (parseCount(setups[id]?.[k] ?? "") ?? 0) > 0),
-  );
-  /** Chip toggle — switching a visible plan OFF zeroes its column (a hidden column must not
-   *  keep feeding the change), matching the S2 grid exactly. */
-  const togglePlan = (k: MealKey) => {
-    if (visibleMeals.includes(k)) {
-      setActiveMealPlans((prev) => {
-        const n = new Set(prev);
-        n.delete(k);
-        return n;
-      });
-      setSetups((prev) => {
-        const next = { ...prev };
-        for (const id of selectedNewRooms) next[id] = { ...next[id], [k]: "0" };
-        return next;
-      });
-    } else {
-      setActiveMealPlans((prev) => new Set(prev).add(k));
-    }
-  };
-  /** "Everyone on…" — each new room's occupants onto one plan (zeroes the others). */
-  const everyoneOn = (k: MealKey | "none") => {
-    const occ = String(fromOccupants ?? 0);
-    if (k !== "none") setActiveMealPlans((prev) => new Set(prev).add(k));
-    setSetups((prev) => {
-      const next = { ...prev };
-      for (const id of selectedNewRooms) {
-        next[id] = { ...next[id], cp: "0", mapl: "0", mapd: "0", ap: "0", ...(k === "none" ? {} : { [k]: occ }) };
-      }
-      return next;
-    });
-  };
-
-  // Client-side mirror of the backend's meal ceiling (sum of plans ≤ occupants), per room.
-  const mealOverRooms = useMemo(() => {
-    if (!fromComp || fromOccupants == null || fromOccupants <= 0) return [];
-    return selectedNewRooms.filter((id) => {
-      const d = setups[id];
-      if (!d) return false;
-      const sum =
-        (parseCount(d.cp) ?? fromComp.mealPlanCpCount ?? 0) +
-        (parseCount(d.mapl) ?? fromComp.mealPlanMaplCount ?? 0) +
-        (parseCount(d.mapd) ?? fromComp.mealPlanMapdCount ?? 0) +
-        (parseCount(d.ap) ?? fromComp.mealPlanApCount ?? 0) +
-        (fromComp.mealPlanOthersCount ?? 0);
-      return sum > fromOccupants;
-    });
-  }, [selectedNewRooms, setups, fromComp, fromOccupants]);
 
   // ── Cell interactions ──────────────────────────────────────────────────────────────────────
   const freeOnNight = (c: RoomChangeCandidate, date: string) =>
@@ -322,34 +315,48 @@ export function RoomChangeControl({
 
   // ── Payload ────────────────────────────────────────────────────────────────────────────────
   const buildPayload = () => {
+    // Bed setup only — every other field now comes from the composition table below, and the
+    // backend admits a bedType-only setup alongside it (a registry fact, not a priced one).
     const roomSetups: Array<RoomChangeAdjustments & { roomId: string }> = [];
     for (const id of selectedNewRooms) {
-      const d = setups[id];
-      if (!d) continue;
+      const bed = setups[id]?.bed;
       const cat = catalogById.get(id);
-      const adj: RoomChangeAdjustments = {};
-      if (d.bed && d.bed !== (cat?.bedType ?? "")) adj.bedType = d.bed;
-      if (fromComp) {
-        const eb = parseCount(d.eb);
-        if (eb != null && eb !== (fromComp.extraBedCount ?? 0)) adj.extraBedCount = eb;
-        const cp = parseCount(d.cp) ?? fromComp.mealPlanCpCount ?? 0;
-        const mapl = parseCount(d.mapl) ?? fromComp.mealPlanMaplCount ?? 0;
-        const mapd = parseCount(d.mapd) ?? fromComp.mealPlanMapdCount ?? 0;
-        const ap = parseCount(d.ap) ?? fromComp.mealPlanApCount ?? 0;
-        const mealsChanged =
-          cp !== (fromComp.mealPlanCpCount ?? 0) ||
-          mapl !== (fromComp.mealPlanMaplCount ?? 0) ||
-          mapd !== (fromComp.mealPlanMapdCount ?? 0) ||
-          ap !== (fromComp.mealPlanApCount ?? 0);
-        if (mealsChanged) {
-          adj.mealPlanCpCount = cp;
-          adj.mealPlanMaplCount = mapl;
-          adj.mealPlanMapdCount = mapd;
-          adj.mealPlanApCount = ap;
-        }
-      }
-      if (Object.keys(adj).length > 0) roomSetups.push({ roomId: id, ...adj });
+      if (bed && bed !== (cat?.bedType ?? "")) roomSetups.push({ roomId: id, bedType: bed });
     }
+
+    /**
+     * `roomCompositions` must describe EXACTLY the rooms the plan holds after the change — the
+     * backend refuses a mismatch by name rather than silently dropping a room. That set is:
+     * every untouched room, plus the newly selected ones, plus the from-room when it survives
+     * (nights the guest keeps at S5/S6, or its already-slept nights in-house).
+     */
+    const fromSurvives = keptNights.length > 0 || atS7;
+    const table = new Map(repriceComps.map((c) => [c.roomId, c]));
+    const composed: RoomCompositionInput[] = [
+      ...untouchedComps,
+      ...selectedNewRooms.map((id) => table.get(id) ?? seedComps.find((s) => s.roomId === id)).filter(Boolean as unknown as (v: RoomCompositionInput | undefined) => v is RoomCompositionInput),
+      ...(fromSurvives && fromComp ? [fromComp] : []),
+    ];
+    // Only send a table when there is one to send (a booking with no composition to carry keeps
+    // the pre-2026-08-19 behaviour: the change carries whatever the backend resolves).
+    const sendComps = !!fromComp && composed.length > 0;
+
+    // The discount rides along ONLY when it actually moved and the operator may move it —
+    // resending an unchanged one would re-measure it against THIS operator's ceiling and could
+    // refuse a same-type swap on a booking carrying a GM-approved concession.
+    const dNum = Number(discountValue);
+    const dLive = Number.isFinite(dNum) && dNum > 0;
+    const next: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null = dLive
+      ? {
+          ...(discountUnit === "percent" ? { discountPercent: dNum } : { discountAmount: dNum }),
+          discountBasis: discountBasis.trim() || "Negotiated at the desk",
+        }
+      : null;
+    const discountMoved =
+      (next?.discountPercent ?? null) !== (carriedDiscount?.discountPercent ?? null) ||
+      (next?.discountAmount ?? null) !== (carriedDiscount?.discountAmount ?? null) ||
+      (!!next && !!carriedDiscount && (next.discountBasis ?? "") !== (carriedDiscount.discountBasis ?? ""));
+
     const uniform = selectedNewRooms.length === 1 && keptNights.length === 0;
     return {
       fromRoomId,
@@ -358,6 +365,8 @@ export function RoomChangeControl({
         : { perNight: nights.map((d) => ({ date: d, roomId: nightSel[d] })) }),
       reason: reason.trim(),
       ...(roomSetups.length > 0 ? { roomSetups } : {}),
+      ...(sendComps ? { roomCompositions: composed } : {}),
+      ...(sendComps && !lockCommercial && discountMoved ? { requestedDiscount: next } : {}),
     };
   };
 
@@ -392,7 +401,6 @@ export function RoomChangeControl({
       setExpanded(false);
       setNightSel({});
       setSetups({});
-      setActiveMealPlans(new Set());
       setReason("");
       void queryClient.invalidateQueries({ queryKey: ["rooms-catalog"] });
       void queryClient.invalidateQueries({ queryKey: ["room-change-candidates", entry.id] });
@@ -777,151 +785,95 @@ export function RoomChangeControl({
             </div>
           )}
 
-          {/* S2-style setup grid — plan chips drive the meal columns; one row per NEW room. */}
-          {selectedNewRooms.length > 0 && (
-            <div style={{ border: "1px dashed var(--line-2)", borderRadius: 8, padding: "8px 10px", marginBottom: 8, overflowX: "auto", flex: "0 0 auto" }}>
+          {/* THE S2 NEGOTIATION TABLE (2026-08-19, operator request — "I need that negotiation
+              table exactly [as] in S2"). Not a lookalike: this is `RoomCompositionPlanner`
+              itself — the same grid and guest board, the same guest bands and meal chips, the
+              same per-room negotiated-rate columns with their reference-rate anchors and live
+              backend pricing, the same Σ footer and LIVE TOTAL — scoped to the rooms just
+              selected and seeded from what Room {fromRoomNumber} carries today. The booking
+              discount sits above it, exactly as at S2.
+
+              Rates / FOC / SC waivers / the discount are a rate revision on a confirmed booking,
+              so they lock below FOM and in-house entirely (p58, mirrored here). Bed setup stays
+              its own dropdown per row below — a registry fact, not a priced one. */}
+          {selectedNewRooms.length > 0 && fromComp && (
+            <div style={{ border: "1px dashed var(--line-2)", borderRadius: 8, padding: "8px 10px", marginBottom: 8, flex: "0 0 auto" }}>
               <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 6 }}>
                 Set up the new room{selectedNewRooms.length === 1 ? "" : "s"} — carried from Room {fromRoomNumber}, change anything the guest wants
               </div>
-              {fromComp && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      if (e.target.value) everyoneOn(e.target.value as MealKey | "none");
-                    }}
-                    title="Set every new room's meal-plan pax to its occupants on one plan"
-                    style={{ fontSize: 11, padding: "3px 6px" }}
-                  >
-                    <option value="">Everyone on…</option>
-                    <option value="none">None (EP)</option>
-                    <option value="cp">CP · breakfast</option>
-                    <option value="mapl">MAP · +lunch</option>
-                    <option value="mapd">MAP · +dinner</option>
-                    <option value="ap">AP · all meals</option>
-                  </select>
-                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "var(--ink-3)" }}>
-                    Meals
-                  </span>
-                  {MEAL_KEYS.map((k) => {
-                    const on = visibleMeals.includes(k);
-                    return (
-                      <button
-                        key={k}
-                        type="button"
-                        className={`rct-chip${on ? " on" : ""}`}
-                        onClick={() => togglePlan(k)}
-                        title={
-                          on
-                            ? `${MEAL_META[k].title} — click to remove the column (zeroes its pax)`
-                            : `${MEAL_META[k].title} — click to add the column`
-                        }
+              {lockCommercial && (
+                <p style={{ fontSize: 11, color: "var(--warn)", margin: "0 0 8px", lineHeight: 1.5 }}>
+                  {atS7
+                    ? "Rates, FOC / service-charge waivers and the discount are locked while the guest is in-house — a mid-stay rate revision is the GM's call through re-entry. Guests, meals and extra beds are yours to change."
+                    : `Rates, FOC / service-charge waivers and the discount need FOM authority (L2+) on a confirmed booking — you are ${level}. Guests, meals and extra beds are yours to change.`}
+                </p>
+              )}
+              <NegotiationDiscountBar
+                discountValue={discountValue}
+                discountUnit={discountUnit}
+                discountBasis={discountBasis}
+                lockCommercial={lockCommercial}
+                onDiscountChange={(patch) => {
+                  if (patch.value !== undefined) setDiscountValue(patch.value);
+                  if (patch.unit !== undefined) setDiscountUnit(patch.unit);
+                  if (patch.basis !== undefined) setDiscountBasis(patch.basis);
+                }}
+              />
+              <RoomCompositionPlanner
+                sealedRoomIds={selectedNewRooms}
+                entryCheckIn={entry.checkInDate ?? null}
+                entryCheckOut={entry.checkOutDate ?? null}
+                entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+                entryChildAges={entry.childAges ?? null}
+                entryId={entry.id}
+                lockCommercial={lockCommercial}
+                initialCompositions={seedComps}
+                onChange={setRepriceComps}
+              />
+              {/* Bed setup per selected room — the one thing the composition table has no column
+                  for, because it describes the ROOM's beds rather than the booking's terms. */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                <span style={{ fontSize: 11, color: "var(--ink-3)" }}>Bed setup</span>
+                {selectedNewRooms.map((id) => {
+                  const c = candidateById.get(id);
+                  const cat = catalogById.get(id);
+                  const bedOptions = cat?.allowedBedTypes?.length ? cat.allowedBedTypes : (roomsCatalogQuery.data?.bedTypes ?? []);
+                  const d = setups[id];
+                  return (
+                    <label key={id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5 }}>
+                      <b>{c?.roomNumber ?? "?"}</b>
+                      <select
+                        value={d?.bed ?? ""}
+                        onChange={(e) => setSetups((prev) => ({ ...prev, [id]: { ...prev[id], bed: e.target.value } }))}
+                        title="Physical bed setup for this room — only the setups its own beds can be arranged into"
+                        style={{ width: 104, fontSize: 11.5, padding: "3px 6px" }}
                       >
-                        {MEAL_META[k].chip}
-                      </button>
-                    );
-                  })}
-                  {visibleMeals.length === 0 && (
-                    <span style={{ fontSize: 10.5, color: "var(--ink-3)" }}>EP (room only) — add a plan to put guests on meals</span>
-                  )}
-                </div>
-              )}
-              <table style={{ borderCollapse: "collapse", fontSize: 11.5, minWidth: 420 }}>
-                <thead>
-                  <tr>
-                    {setupHeadCell("Room")}
-                    {setupHeadCell("Nights")}
-                    {setupHeadCell("Guests")}
-                    {setupHeadCell("Bed setup")}
-                    {fromComp && setupHeadCell("Extra beds")}
-                    {fromComp && visibleMeals.map((k) => setupHeadCell(MEAL_META[k].head, MEAL_META[k].title))}
-                    {!fromComp && setupHeadCell("")}
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedNewRooms.map((id) => {
-                    const c = candidateById.get(id);
-                    const cat = catalogById.get(id);
-                    const bedOptions = cat?.allowedBedTypes?.length ? cat.allowedBedTypes : (roomsCatalogQuery.data?.bedTypes ?? []);
-                    const d = setups[id];
-                    const nightsHere = nightsOfRoom(id);
-                    return (
-                      <tr key={id}>
-                        <td style={{ padding: "4px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>
-                          {c?.roomNumber ?? "?"}
-                          <span style={{ color: "var(--ink-3)", fontWeight: 400 }}>{c?.roomTypeName ? ` · ${c.roomTypeName}` : ""}</span>
-                        </td>
-                        <td style={{ padding: "4px 8px", color: "var(--ink-3)", whiteSpace: "nowrap" }} title={`${nightsHere.length} night${nightsHere.length === 1 ? "" : "s"}`}>
-                          {nightsHere.length}
-                          {nightsHere.length > 0 && ` · ${foldNightsToRangesLabel(nightsHere)}`}
-                        </td>
-                        <td style={{ padding: "4px 8px", color: "var(--ink-3)" }}>{fromOccupants ?? "—"}</td>
-                        <td style={{ padding: "4px 8px" }}>
-                          <select
-                            value={d?.bed ?? ""}
-                            onChange={(e) => setSetups((prev) => ({ ...prev, [id]: { ...prev[id], bed: e.target.value } }))}
-                            title="Physical bed setup for this room — only the setups its own beds can be arranged into"
-                            style={{ width: 104, fontSize: 11.5, padding: "3px 6px" }}
-                          >
-                            {!d?.bed && <option value="">Keep as is</option>}
-                            {bedOptions.map((t) => (
-                              <option key={t} value={t}>
-                                {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
-                              </option>
-                            ))}
-                            {d?.bed && !bedOptions.includes(d.bed) && <option value={d.bed}>{bedPhrase(d.bed)}</option>}
-                          </select>
-                        </td>
-                        {fromComp ? (
-                          <>
-                            <td style={{ padding: "4px 8px" }}>{setupInput(id, "eb")}</td>
-                            {visibleMeals.map((k) => (
-                              <td key={k} style={{ padding: "4px 8px" }}>
-                                {setupInput(id, k)}
-                              </td>
-                            ))}
-                          </>
-                        ) : (
-                          <td style={{ padding: "4px 8px", fontSize: 11, color: "var(--ink-3)" }}>
-                            no per-room composition recorded — meals/extra beds can&apos;t be adjusted here
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                  {keptNights.length > 0 && (
-                    <tr>
-                      <td style={{ padding: "4px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>
-                        {fromRoomNumber}
-                        <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> · kept</span>
-                      </td>
-                      <td style={{ padding: "4px 8px", color: "var(--ink-3)", whiteSpace: "nowrap" }} title={`${keptNights.length} night${keptNights.length === 1 ? "" : "s"}`}>
-                        {keptNights.length}
-                        {keptNights.length > 0 && ` · ${foldNightsToRangesLabel(keptNights)}`}
-                      </td>
-                      <td colSpan={2 + (fromComp ? 1 + visibleMeals.length : 1)} style={{ padding: "4px 8px", fontSize: 11, color: "var(--ink-3)" }}>
-                        keeps its current setup for the nights the guest stays in it
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              {fromComp && (
-                <p style={{ fontSize: 10.5, color: "var(--ink-3)", margin: "6px 0 0", lineHeight: 1.5 }}>
-                  Meal counts are guests on each plan{fromOccupants != null && fromOccupants > 0 ? ` (of ${fromOccupants})` : ""} — like the S2
-                  grid: chips add or remove plan columns, switching one off zeroes it. Leave everything as-is to carry the current setup;
-                  whatever you change is priced into the new total by the backend the moment the swap completes. Changing a room&apos;s meal
-                  plan clears its night-by-night meal exceptions.
-                </p>
-              )}
-              {mealOverRooms.length > 0 && (
-                <p style={{ fontSize: 11.5, color: "var(--stop, #b3593a)", margin: "6px 0 0" }}>
-                  Meal plans cover more guests than sleep in{" "}
-                  {mealOverRooms.map((id) => `Room ${candidateById.get(id)?.roomNumber ?? "?"}`).join(", ")} (max {fromOccupants}) — reduce the
-                  counts.
-                </p>
-              )}
+                        {!d?.bed && <option value="">Keep as is</option>}
+                        {bedOptions.map((t) => (
+                          <option key={t} value={t}>
+                            {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
+                          </option>
+                        ))}
+                        {d?.bed && !bedOptions.includes(d.bed) && <option value={d.bed}>{bedPhrase(d.bed)}</option>}
+                      </select>
+                    </label>
+                  );
+                })}
+                {keptNights.length > 0 && (
+                  <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                    Room {fromRoomNumber} keeps its current setup for the {keptNights.length} night
+                    {keptNights.length === 1 ? "" : "s"} the guest stays in it ({foldNightsToRangesLabel(keptNights)}).
+                  </span>
+                )}
+              </div>
             </div>
+          )}
+          {/* A booking with no per-room composition has nothing to set up — the swap still runs. */}
+          {selectedNewRooms.length > 0 && !fromComp && (
+            <p className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginBottom: 8 }}>
+              This booking has no per-room composition recorded (a legacy or flat-priced quote), so there is
+              nothing to set up here — the room swap itself still runs and re-prices.
+            </p>
           )}
 
           {candidates.length > 0 && (
@@ -938,7 +890,6 @@ export function RoomChangeControl({
                     !allAssigned ||
                     nothingChanges ||
                     crossTypeLocked ||
-                    mealOverRooms.length > 0 ||
                     reason.trim().length === 0
                   }
                   onClick={() => changeM.mutate()}
@@ -1094,5 +1045,167 @@ export function BedTypeEditor({ roomId }: { roomId: string }) {
         <option value={current}>{current === "TWIN" ? "Twin beds" : `${bedLabel(current)} bed`}</option>
       )}
     </select>
+  );
+}
+
+/**
+ * Extra-bed selector on every S5–S7 room row (2026-08-19, operator request — "right now it only
+ * shows if it's selected or not"). The count lives on the room's composition row of the OPERATIVE
+ * quotation, and once the booking is frozen that row is commercial terms — so changing it is a
+ * SETUP-ONLY change through the same governed journey a room change takes (`POST /room-change`
+ * with `adjustments` and no target room): new segment, silent re-price at the current extra-bed
+ * rate, straight back to this step. In-house (S7) the new count applies from TONIGHT — slept
+ * nights keep the old count on the bill. The consequence modal says exactly that, with the
+ * reason prefilled and editable, before anything commits. No money is computed here: the toast
+ * prints the server's own prior / new total and delta.
+ *
+ * Renders nothing on bookings without a per-room composition (legacy imports) — same as the
+ * read-only tag it replaces, since "no extra bed" must be a recorded answer, not an absence.
+ */
+export function ExtraBedEditor({
+  entry,
+  roomId,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  roomId: string;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const queryClient = useQueryClient();
+  const roomsCatalogQuery = useQuery({
+    queryKey: ["rooms-catalog"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+  });
+  const room = useMemo(
+    () => (roomsCatalogQuery.data?.items ?? []).find((r) => r.id === roomId) ?? null,
+    [roomsCatalogQuery.data, roomId],
+  );
+  const comp = useMemo(
+    () => (operativeRoomCompositions(entry) ?? []).find((c) => c.roomId === roomId) ?? null,
+    [entry, roomId],
+  );
+  const [asked, setAsked] = useState<number | null>(null);
+  const [reason, setReason] = useState("");
+
+  const roomNumber = room?.roomNumber ?? comp?.roomId?.slice(0, 6) ?? roomId.slice(0, 6);
+  const current = comp?.extraBedCount ?? 0;
+  const inHouse = String(entry.currentStage) === "S7";
+  // The type's ceiling (registry) — an auto-added p78 bed above it stays visible as the current value.
+  const maxExtraBeds = room?.roomType?.maxExtraBeds ?? null;
+  const ceiling = Math.max(maxExtraBeds ?? 0, current);
+
+  const changeM = useMutation({
+    mutationFn: (n: number) =>
+      changeBookingRoom(session!, entry.id, {
+        fromRoomId: roomId,
+        reason: reason.trim() || `Extra beds on Room ${roomNumber}: ${current} → ${n}`,
+        adjustments: { extraBedCount: n },
+      }),
+    onSuccess: (out, n) => {
+      const what = `Room ${out.fromRoom.roomNumber} · ${n === 0 ? "no extra bed" : `${n} extra bed${n === 1 ? "" : "s"}`}${
+        inHouse ? " from tonight" : ""
+      }`;
+      if (out.walk.blocked) {
+        toast.warning(
+          `${what} — the booking is at ${out.walk.reachedStage}, not back at this step yet: ${out.walk.blocked.message}`,
+          { duration: 12000 },
+        );
+      } else if (out.pricing.delta != null && Math.abs(out.pricing.delta) >= 0.01) {
+        const dir = out.pricing.delta > 0 ? "+" : "−";
+        toast.success(
+          `${what} · new total ${money(out.pricing.newTotal)} (was ${money(out.pricing.priorTotal)}, ${dir}${money(Math.abs(out.pricing.delta))}). Nothing was sent to the guest.`,
+          { duration: 10000 },
+        );
+      } else {
+        toast.success(`${what} — recorded; the price did not move.`);
+      }
+      setAsked(null);
+      setReason("");
+      void queryClient.invalidateQueries({ queryKey: ["room-change-candidates", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["room-plan-history", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["billing-summary", entry.id] });
+      onChanged();
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "The extra-bed change was refused");
+      setAsked(null);
+    },
+  });
+
+  if (!comp) return null;
+
+  const label = (n: number) => (n === 0 ? "No extra bed" : `${n} extra bed${n === 1 ? "" : "s"}`);
+  const options = Array.from({ length: ceiling + 1 }, (_, i) => i);
+  const locked = ceiling === 0;
+
+  return (
+    <>
+      <select
+        value={current}
+        disabled={changeM.isPending || locked}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (!Number.isInteger(n) || n === current) return;
+          setAsked(n);
+          setReason(`Extra beds on Room ${roomNumber}: ${current} → ${n}`);
+        }}
+        title={
+          locked
+            ? `${room?.roomType?.name ?? "This room type"} takes no extra bed`
+            : `Extra beds on this room's composition${
+                comp.negotiatedExtraBedRate != null ? ` · negotiated ${money(comp.negotiatedExtraBedRate, "BTN")}/night` : ""
+              } — changing it re-prices the stay${inHouse ? " from tonight" : ""}${
+                maxExtraBeds != null ? ` (up to ${maxExtraBeds} for this type)` : ""
+              }`
+        }
+        style={{ width: 118, fontSize: 11.5, padding: "3px 6px", color: current === 0 ? "var(--ink-3)" : undefined }}
+      >
+        {options.map((n) => (
+          <option key={n} value={n}>
+            {label(n)}
+          </option>
+        ))}
+      </select>
+      <DeskConfirmModal
+        open={asked != null}
+        title={`Change extra beds on Room ${roomNumber}`}
+        subtitle={`${label(current)} → ${asked == null ? "" : label(asked).toLowerCase()}${inHouse ? " · from tonight" : " · for the stay"}`}
+        why={
+          <span style={{ display: "inline-flex", flexDirection: "column", gap: 6, width: "100%" }}>
+            <span>
+              The extra bed is part of the booking's priced terms, so this re-prices the stay at the current
+              extra-bed rate — the same governed walk a room change takes.
+            </span>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+              <span style={{ whiteSpace: "nowrap" }}>Reason</span>
+              <input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder={`Extra beds on Room ${roomNumber}: ${current} → ${asked ?? ""}`}
+                style={{ flex: 1, fontSize: 12, padding: "4px 8px" }}
+                autoFocus
+              />
+            </label>
+          </span>
+        }
+        consequences={[
+          "A new segment opens; the booking is re-priced silently and walks straight back to this step — nothing is sent to the guest unless you send it.",
+          inHouse
+            ? "Applies from tonight — the nights already slept keep the old count on the bill."
+            : "Applies to every night of the stay.",
+          "The header total and the per-room breakdown move to the new figure.",
+        ]}
+        confirmLabel="Apply"
+        pending={changeM.isPending}
+        onConfirm={() => {
+          if (asked != null) changeM.mutate(asked);
+        }}
+        onClose={() => {
+          if (!changeM.isPending) setAsked(null);
+        }}
+      />
+    </>
   );
 }

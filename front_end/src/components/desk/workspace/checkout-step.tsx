@@ -414,7 +414,14 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             and point at the settlement below. All figures from payment-status. */}
         {paymentStatus.data?.paymentPlan && paymentStatus.data.paidInFull === false && (
           <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", marginBottom: 9, display: "block", lineHeight: 1.55 }}>
-            The guest&rsquo;s advance plan was <b>{paymentStatus.data.paymentPlan.plan === "INSTALLMENTS" ? "installments" : "part now, rest later"}</b>
+            The guest&rsquo;s advance plan was{" "}
+            <b>
+              {paymentStatus.data.paymentPlan.plan === "INSTALLMENTS"
+                ? "installments"
+                : paymentStatus.data.paymentPlan.plan === "FULL"
+                  ? "the full amount" // FULL carries timing since 2026-08-19 — it can arrive here unpaid
+                  : "part now, rest later"}
+            </b>
             {paymentStatus.data.paymentPlan.balanceDueAt === "AT_CHECKOUT"
               ? " with the remainder due at check-out — this is where it gets collected. "
               : paymentStatus.data.paymentPlan.balanceDueAt === "AT_CHECKIN"

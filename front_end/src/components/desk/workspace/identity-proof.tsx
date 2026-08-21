@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, FileText, Fingerprint, ScanLine, Smartphone, Upload, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -17,6 +17,7 @@ import {
   listIdentityProofs,
   mintPhoneCaptureToken,
   rerunPhotoOcr,
+  confirmGuestIdentityDetails,
   saveGuestIdentityDetail,
   uploadIdentityProof,
   type IdentityProofSummary,
@@ -167,6 +168,15 @@ function ProofThumb({ proof, size = 40 }: { proof: IdentityProofSummary; size?: 
 }
 
 const cellInput: React.CSSProperties = { width: "100%", minWidth: 0, fontSize: 12, padding: "5px 7px" };
+/** A CONFIRMED row stays fully READABLE while it is locked (2026-08-21) — the operator has to
+ *  be able to check what was recorded; the browser's default disabled grey hides it. */
+const lockedCell: React.CSSProperties = {
+  opacity: 1,
+  color: "var(--ink)",
+  background: "var(--cream-2)",
+  borderStyle: "dashed",
+  cursor: "not-allowed",
+};
 const th: React.CSSProperties = {
   textAlign: "left",
   fontSize: 10.5,
@@ -189,12 +199,15 @@ function SuggestionStrip({
   busy,
   onApply,
   onDismiss,
+  lockedHint = null,
 }: {
   suggestion: OcrSuggestion;
   docTypeName: (code: string) => string;
   busy: boolean;
   onApply: () => void;
   onDismiss: () => void;
+  /** Set when the row is CONFIRMED — Apply would write into a locked row, so it says why. */
+  lockedHint?: string | null;
 }) {
   const f = suggestion.fields ?? {};
   const c = suggestion.fieldConfidence ?? {};
@@ -239,7 +252,13 @@ function SuggestionStrip({
       <span style={{ fontWeight: 600 }}>Detected {origin}{onPhone ? " (read on the phone)" : ""}:</span>
       {/* Actions sit right after the label so they never scroll out of the table's viewport. */}
       <span style={{ display: "inline-flex", gap: 6 }}>
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={onApply} title="Write these into the row above (you can still edit them after)">
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          disabled={busy || !!lockedHint}
+          onClick={onApply}
+          title={lockedHint ?? "Write these into the row above (you can still edit them after)"}
+        >
           Apply
         </button>
         <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onDismiss} title="Not this guest's details — hide the suggestion">
@@ -321,8 +340,10 @@ export function IdentityProofBlock({
   const autoPullRef = useRef(false);
 
   useEffect(() => {
-    setVerificationPath(isVip ? "VIP" : "RETURNING_VALID");
-  }, [isVip, guest?.id]);
+    // Seed from the RECORDED path when there is one (2026-08-21 — "Make changes" must show the
+    // guest type as it stands, not a default), else VIP for VIP profiles, else returning-valid.
+    setVerificationPath((guest?.identityVerificationPath as VerificationPath | null | undefined) ?? (isVip ? "VIP" : "RETURNING_VALID"));
+  }, [isVip, guest?.id, guest?.identityVerificationPath]);
 
   // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
   // room (never who), so this re-derives the seating with the SAME deterministic algorithm
@@ -359,6 +380,28 @@ export function IdentityProofBlock({
 
   const detailRow = (key: string) => items.find((p) => p.entryId === entryId && p.subjectKey === key && !p.hasFile);
   const photosFor = (key: string) => items.filter((p) => p.entryId === entryId && p.subjectKey === key && p.hasFile);
+  // Guest-detail CONFIRMATION (2026-08-21, operator ruling): a confirmed guest's row is
+  // read-only — the inputs disable and the backend refuses writes to it — until "Make
+  // changes" unlocks it. The flag lives on the row, so a guest confirmed at Arrival is still
+  // locked at Check-in and during the Stay, on this terminal and any other.
+  const lockedFor = (key: string) => !!detailRow(key)?.detailsConfirmedAt;
+  /** Something is on file for this guest — the floor for confirming (the backend re-checks). */
+  const hasSomethingFor = (key: string) => {
+    const row = detailRow(key);
+    return (
+      photosFor(key).length > 0 ||
+      !!row?.documentNumber?.trim() ||
+      !!row?.dateOfBirth ||
+      !!row?.gender?.trim() ||
+      !!row?.subjectLabel?.trim()
+    );
+  };
+  /** Unsaved input in the row still counts — confirming flushes it before locking. */
+  const draftHasContent = (key: string) => {
+    const d = drafts[key];
+    return !!(d && (d.num.trim() || d.name.trim() || d.dob || d.gender));
+  };
+  const canConfirmSlot = (key: string) => !lockedFor(key) && (hasSomethingFor(key) || draftHasContent(key));
   /** The suggestion for a slot's NEWEST photo (the one the row shows). */
   const suggestionFor = (key: string): OcrSuggestion | null => {
     const newest = photosFor(key)[0];
@@ -387,6 +430,19 @@ export function IdentityProofBlock({
   const unassigned = items.filter((p) => p.entryId === entryId && p.hasFile && (!p.subjectKey || !slots.some((s) => s.key === p.subjectKey)));
   const earlierStays = items.filter((p) => p.entryId !== entryId && p.hasFile);
   const coveredCount = slots.filter((s) => photosFor(s.key).length > 0).length;
+  // S7+ renders the same table as a CORRECTION surface (2026-08-21) — the check-in wording
+  // ("carries to Check-in") would be a lie once the guest is in-house.
+  const inHouse = ["S7", "S8", "S9"].includes(entry.currentStage);
+  const confirmedSlotCount = slots.filter((s) => lockedFor(s.key)).length;
+  const confirmableSlots = slots.filter((s) => canConfirmSlot(s.key));
+  // "Everything confirmable is confirmed" — rows with nothing on file don't count against it.
+  const allLocked = slots.length > 0 && confirmedSlotCount > 0 && confirmableSlots.length === 0;
+  // Edit mode = the table is NOT locked (never confirmed, or "Make changes" was pressed). The S6
+  // guest type (verification path) is part of the same edit mode (2026-08-21, operator request):
+  // it stays changeable while the table is open and a different pick re-records the verification.
+  const editMode = !allLocked;
+  const recordedPath = (guest?.identityVerificationPath as VerificationPath | null | undefined) ?? null;
+  const pathChanged = identityVerified && verificationPath !== recordedPath;
   const allCovered = slots.length > 0 && coveredCount === slots.length;
 
   // Seed drafts from the saved detail rows — but never clobber a slot the operator has
@@ -422,6 +478,56 @@ export function IdentityProofBlock({
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not save the guest details"),
   });
 
+  // Confirm / unlock. Any unsaved edit in the affected rows is FLUSHED first: the operator's
+  // last keystroke and the confirm click would otherwise race, and the save would come back
+  // refused by the very lock they had just set.
+  const confirmM = useMutation({
+    mutationFn: async (args: { slots: PartySlot[]; confirmed: boolean }) => {
+      if (args.confirmed) {
+        for (const slot of args.slots) {
+          const draft = drafts[slot.key] ?? EMPTY_DRAFT;
+          if (lockedFor(slot.key)) continue;
+          if (sameDraft(draft, draftFromRow(detailRow(slot.key)))) continue;
+          await saveGuestIdentityDetail(session!, entryId, {
+            subjectKey: slot.key,
+            subjectLabel: draft.name.trim() || null,
+            documentType: draft.docType || null,
+            documentNumber: draft.num.trim() || null,
+            dateOfBirth: draft.dob || null,
+            gender: (draft.gender || null) as "MALE" | "FEMALE" | "OTHER" | null,
+          });
+        }
+      }
+      return confirmGuestIdentityDetails(session!, entryId, {
+        subjectKeys: args.slots.map((x) => x.key),
+        confirmed: args.confirmed,
+      });
+    },
+    onSuccess: (outcome, args) => {
+      // Let the refetched rows repopulate the inputs — an untouched draft would otherwise
+      // mask what was actually stored, and an unlocked row must show the saved truth.
+      setTouched((prev) => {
+        const next = { ...prev };
+        for (const slot of args.slots) next[slot.key] = false;
+        return next;
+      });
+      const names = outcome.changed.map((c) => c.label).join(", ");
+      if (outcome.changed.length) {
+        toast.success(
+          outcome.confirmed
+            ? `Details confirmed for ${names} — the rows are locked until you choose "Make changes"`
+            : `${names} unlocked — the details can be edited again`,
+        );
+      }
+      // Never let a partial batch read as a whole one.
+      const worthSaying = outcome.skipped.filter((x) => x.reason !== "ALREADY_CONFIRMED" && x.reason !== "NOT_CONFIRMED");
+      if (worthSaying.length) toast.warning(worthSaying.map((x) => x.message).join(" · "));
+      if (!outcome.changed.length && !worthSaying.length) toast.info("Nothing to change");
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not update the confirmation"),
+  });
+
   const applySuggestionM = useMutation({
     mutationFn: (args: { slot: PartySlot; suggestion: OcrSuggestion }) => applyOcrSuggestion(session!, args.suggestion.id),
     onSuccess: (_d, args) => {
@@ -451,6 +557,7 @@ export function IdentityProofBlock({
 
   /** Blur handler — persists the row when anything actually changed. */
   const saveIfChanged = (slot: PartySlot) => {
+    if (lockedFor(slot.key)) return; // confirmed → read-only (the backend refuses it too)
     const draft = drafts[slot.key] ?? EMPTY_DRAFT;
     const saved = draftFromRow(detailRow(slot.key));
     if (sameDraft(draft, saved)) return;
@@ -476,6 +583,7 @@ export function IdentityProofBlock({
     if (!slot) return;
     const row = detailRow("A0");
     if (row?.documentNumber) return;
+    if (lockedFor("A0")) return; // confirmed row — nothing may write to it unasked
     autoPullRef.current = true;
     const draft: DetailDraft = { ...draftFromRow(row), num: returning.documentNumber };
     setDrafts((prev) => ({ ...prev, A0: draft }));
@@ -512,7 +620,7 @@ export function IdentityProofBlock({
       return verifyGuestIdentity(session, guest.id, body);
     },
     onSuccess: () => {
-      toast.success("Identity verified");
+      toast.success(identityVerified ? `Identity verification updated · ${verificationPath}` : "Identity verified");
       void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
@@ -645,7 +753,8 @@ export function IdentityProofBlock({
           {coverage
             ? `${coverage.filledSlots} of ${coverage.totalSlots} guest${coverage.totalSlots === 1 ? "" : "s"} recorded`
             : "Guest documents & details"}{" "}
-          — click the header to open. Everything here carries to Check-in.
+          — click the header to open.{" "}
+          {inHouse ? "Correct anything that was mis-recorded." : "Everything here carries to Check-in."}
         </p>
       )}
 
@@ -699,11 +808,18 @@ export function IdentityProofBlock({
           verification" section is gone; the TABLE is the verification form): S6 puts the
           verification-path select here, the whole-party phone QR sits right. "Record
           verification" waits at the table's bottom. */}
-      {(slots.length > 1 || (checkInGate && !identityVerified)) && (
+      {(slots.length > 1 || (checkInGate && (!identityVerified || editMode))) && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10, marginBottom: 6 }}>
-          {checkInGate && !identityVerified ? (
-            <div className="field" style={{ width: "min(240px, 100%)" }}>
-              <label>Verification path</label>
+          {checkInGate && (!identityVerified || editMode) ? (
+            <div className="field" style={{ width: "min(260px, 100%)" }}>
+              <label>
+                Guest type <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>(verification path)</span>
+                {identityVerified && (
+                  <span style={{ fontWeight: 400, color: pathChanged ? "var(--warn)" : "var(--ink-3)" }}>
+                    {pathChanged ? " — changed, update below" : " — as recorded"}
+                  </span>
+                )}
+              </label>
               {/* Defaults to the VIP path for VIP profiles but is never locked (operator
                   ruling 2026-08-11 — the dropdown stays freely selectable). */}
               <select value={verificationPath} onChange={(e) => setVerificationPath(e.target.value as VerificationPath)}>
@@ -716,20 +832,22 @@ export function IdentityProofBlock({
           ) : (
             <span />
           )}
-          {/* One QR for the WHOLE party — the phone lists every guest and files each photo
-              under the guest picked there, so nobody scans per-row codes for a big group. */}
-          {slots.length > 1 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={phoneM.isPending}
-              onClick={() => phoneM.mutate(null)}
-              title="One QR code for the whole party — the phone shows the guest list and each photo files under the guest picked there"
-            >
-              <Smartphone style={{ width: 13, height: 13 }} />
-              Use a phone for all guests
-            </button>
-          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {/* One QR for the WHOLE party — the phone lists every guest and files each photo
+                under the guest picked there, so nobody scans per-row codes for a big group. */}
+            {slots.length > 1 && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={phoneM.isPending}
+                onClick={() => phoneM.mutate(null)}
+                title="One QR code for the whole party — the phone shows the guest list and each photo files under the guest picked there"
+              >
+                <Smartphone style={{ width: 13, height: 13 }} />
+                Use a phone for all guests
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -792,6 +910,9 @@ export function IdentityProofBlock({
               const draft = drafts[slot.key] ?? EMPTY_DRAFT;
               const photos = photosFor(slot.key);
               const covered = photos.length > 0;
+              // Confirmed → every typed field on this row is read-only until it is unlocked.
+              const locked = lockedFor(slot.key);
+              const cell = locked ? { ...cellInput, ...lockedCell } : cellInput;
               const suggestion = suggestionFor(slot.key);
               // Suggestion strip under the row (2026-08-18): READY → amber "Detected from the ID
               // photo … Apply / Dismiss"; PENDING → muted "reading"; else nothing.
@@ -810,6 +931,11 @@ export function IdentityProofBlock({
                           busy={applySuggestionM.isPending || dismissSuggestionM.isPending}
                           onApply={() => applySuggestionM.mutate({ slot, suggestion })}
                           onDismiss={() => dismissSuggestionM.mutate(suggestion)}
+                          lockedHint={
+                            lockedFor(slot.key)
+                              ? 'These details are confirmed — choose "Make changes" on the row first'
+                              : null
+                          }
                         />
                       )}
                     </td>
@@ -834,10 +960,21 @@ export function IdentityProofBlock({
                     {savedFlash === slot.key && (
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ok)", fontWeight: 600 }}>saved</span>
                     )}
+                    {/* Locked rows carry only a glyph (2026-08-21, operator ruling: one overall
+                        Confirm / Make changes below the table, no per-row controls). */}
+                    {locked && (
+                      <span
+                        style={{ marginLeft: 6, display: "inline-flex", alignItems: "center", color: "var(--ok)" }}
+                        title={`Confirmed ${new Date(detailRow(slot.key)!.detailsConfirmedAt!).toLocaleString()} — read-only until "Make changes"`}
+                      >
+                        <Lock style={{ width: 11, height: 11 }} />
+                      </span>
+                    )}
                   </td>
                   <td style={{ ...td, minWidth: 118 }}>
                     <select
-                      style={cellInput}
+                      style={cell}
+                      disabled={locked}
                       value={draft.docType}
                       onChange={(e) => setDraft(slot.key, { docType: e.target.value })}
                       onBlur={() => saveIfChanged(slot)}
@@ -858,8 +995,9 @@ export function IdentityProofBlock({
                   <td style={{ ...td, minWidth: 130 }}>
                     <input
                       className="dinput"
-                      style={cellInput}
+                      style={cell}
                       placeholder="Number on the document"
+                      disabled={locked}
                       value={draft.num}
                       onChange={(e) => setDraft(slot.key, { num: e.target.value })}
                       onBlur={() => saveIfChanged(slot)}
@@ -868,8 +1006,9 @@ export function IdentityProofBlock({
                   <td style={{ ...td, minWidth: 140 }}>
                     <input
                       className="dinput"
-                      style={cellInput}
+                      style={cell}
                       placeholder={slot.placeholder}
+                      disabled={locked}
                       value={draft.name}
                       onChange={(e) => setDraft(slot.key, { name: e.target.value })}
                       onBlur={() => saveIfChanged(slot)}
@@ -878,8 +1017,9 @@ export function IdentityProofBlock({
                   <td style={{ ...td, minWidth: 128 }}>
                     <input
                       className="dinput"
-                      style={cellInput}
+                      style={cell}
                       type="date"
+                      disabled={locked}
                       value={draft.dob}
                       onChange={(e) => setDraft(slot.key, { dob: e.target.value })}
                       onBlur={() => saveIfChanged(slot)}
@@ -887,7 +1027,8 @@ export function IdentityProofBlock({
                   </td>
                   <td style={{ ...td, minWidth: 92 }}>
                     <select
-                      style={{ ...cellInput, width: "auto" }}
+                      style={{ ...cell, width: "auto" }}
+                      disabled={locked}
                       value={draft.gender}
                       onChange={(e) => {
                         setDraft(slot.key, { gender: e.target.value });
@@ -957,6 +1098,55 @@ export function IdentityProofBlock({
         </table>
       </div>
 
+      {/* Confirm guest details — ONE control for the whole table (2026-08-21, operator ruling:
+          no per-row Confirm, no per-row Make changes). Rows stay editable until this is pressed;
+          then every row with something on file locks, and the same spot offers "Make changes"
+          to unlock them all. Partial-and-vocal: guests with nothing recorded are skipped and
+          named in the toast, never confirmed empty. Distinct from the S6 identity VERIFICATION
+          below, which vouches the documents were checked and gates check-in — it locks nothing. */}
+      {slots.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {allLocked ? (
+            <>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, color: "var(--ok)" }}>
+                <Lock style={{ width: 12, height: 12 }} /> Guest details confirmed — the table is locked
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={confirmM.isPending}
+                onClick={() => confirmM.mutate({ slots, confirmed: false })}
+                title="Unlock every guest's details so a mistake can be corrected"
+              >
+                Make changes
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={confirmM.isPending || saveM.isPending || confirmableSlots.length === 0}
+                onClick={() => confirmM.mutate({ slots: confirmableSlots, confirmed: true })}
+                title={
+                  confirmableSlots.length
+                    ? `Lock the guest details as recorded — ${confirmableSlots.length} of ${slots.length} guests have something on file`
+                    : "Nothing is recorded for any guest yet"
+                }
+              >
+                <Lock style={{ width: 13, height: 13 }} />
+                Confirm guest details
+              </button>
+              <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
+                {confirmedSlotCount > 0
+                  ? `${confirmedSlotCount} of ${slots.length} confirmed — press to lock the rest`
+                  : "Locks every row as recorded; “Make changes” reopens them."}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Record verification — the table's bottom action (2026-08-12, operator ruling: no
           boxed section; the path select sits above the table and THIS is the sign-off). It
           stamps `identityVerifiedAt` — the vouching act that a human checked the documents
@@ -965,7 +1155,7 @@ export function IdentityProofBlock({
           MAIN guest's row. S6 only. */}
       {checkInGate && (
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-          {!identityVerified &&
+          {(!identityVerified || pathChanged) &&
             (verificationPath === "VIP" ? (
               <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
                 VIP path — no guest details needed to record the verification.
@@ -994,13 +1184,28 @@ export function IdentityProofBlock({
                     }${verificationPath === "FIRST_TIME" && primaryDraft.num.trim() ? ` · ${primaryDraft.num.trim()}` : ""}).`}
               </p>
             ) : null)}
+          {!identityVerified && (
+            <p style={{ fontSize: 11, color: "var(--ink-4)", margin: 0, lineHeight: 1.5 }}>
+              The verification vouches that a human checked the documents against the guests — it is
+              required for check-in and is not the same as confirming the details above.
+            </p>
+          )}
+          {identityVerified && editMode && !pathChanged && (
+            <p style={{ fontSize: 11, color: "var(--ink-4)", margin: 0, lineHeight: 1.5 }}>
+              To change the recorded guest type, pick a different one above — the verification is
+              then re-recorded under the new type.
+            </p>
+          )}
+          {/* Re-recording under a different guest type (2026-08-21): the backend simply re-stamps
+              the path, so "update" is the same call with the new pick. Only offered in edit mode
+              and only when the pick actually differs — a locked table shows the recorded fact. */}
           <StepAction
             className="btn btn-primary"
-            label="Record verification"
-            doneLabel={`Verified${guest?.identityVerificationPath ? ` · ${guest.identityVerificationPath}` : ""}`}
-            done={identityVerified}
+            label={identityVerified && pathChanged ? "Update identity verification" : "Record identity verification"}
+            doneLabel={`Identity verified${recordedPath ? ` · ${recordedPath}` : ""}`}
+            done={identityVerified && !pathChanged}
             pending={verifyM.isPending}
-            disabled={!guest?.id || verifyMissing || detailsIncomplete}
+            disabled={!guest?.id || verifyMissing || detailsIncomplete || (identityVerified && !pathChanged)}
             onClick={() => verifyM.mutate()}
           />
         </div>
@@ -1036,13 +1241,19 @@ export function IdentityProofBlock({
             This table is the evidence; the identity <i>verification</i> panel at the top is the
             act that vouches a human checked the documents against the guests.
           </>
+        ) : inHouse ? (
+          <>
+            The guest is already checked in — this is where details recorded earlier get corrected.
+          </>
         ) : (
           <>
             Everything recorded here carries to Check-in, where each guest needs a document number
             or an ID photo on file before &ldquo;Check in &amp; go live&rdquo; (VIP bookings
             exempt); the identity <i>verification</i> itself is recorded there.
           </>
-        )}
+        )}{" "}
+        <b>Confirm guest details</b> locks the table as recorded — it stays locked at every later
+        stage until someone chooses <b>Make changes</b>.
       </p>
         </>
       )}

@@ -1,6 +1,7 @@
 import type { EntryDetail, EntryListItem, ListResponse } from "@/types/api";
 import type { Session } from "@/types/session";
 import type { TraceEvent } from "@/lib/trace/humanize";
+import type { RoomCompositionInput } from "./quotations";
 import { apiRequest } from "./client";
 
 export type ListEntriesParams = {
@@ -209,6 +210,32 @@ export async function issueRoomKey(session: Session, entryId: string, roomId: st
     `/api/entries/${entryId}/rooms/${roomId}/key-issued`,
     { method: "POST", session },
   );
+}
+
+/**
+ * Every key the guest can hold right now, in one act (2026-08-19). The SET is decided server-side
+ * (rooms in use today; the sequential-swap gate holds inside the batch), so the desk shows the
+ * answer and never derives it — `skipped[]` names each room left out and why.
+ */
+export type BulkKeyIssueOutcome = {
+  entryId: string;
+  stage: string;
+  issued: Array<{ roomId: string; roomNumber: string; reissue: boolean }>;
+  skipped: Array<{
+    roomId: string;
+    roomNumber: string;
+    reason: "ALREADY_OUT" | "PRIOR_ROOM_KEY_OUTSTANDING" | "NOT_YET_OCCUPIED";
+    blockedBy: Array<{ roomId: string; roomNumber: string }>;
+    movesInOn: string | null;
+  }>;
+};
+
+export async function issueAllRoomKeys(session: Session, entryId: string, roomIds?: string[]) {
+  return apiRequest<BulkKeyIssueOutcome>(`/api/entries/${entryId}/rooms/keys/issue-all`, {
+    method: "POST",
+    session,
+    body: roomIds?.length ? { roomIds } : {},
+  });
 }
 
 /** Record THIS room's key back at the desk mid-stay — the vacated half of a key swap (S6–S8). */
@@ -467,10 +494,22 @@ export type EntryBillingSummary = {
     refunded: number | null;
     writtenOff: number | null;
     outstandingBalance: number | null;
-    /** Per-room charge subtotals (2026-08-14) — server-summed; null when no line carries a room. */
-    perRoomCharges: Array<{ roomId: string; roomNumber: string | null; charges: number; lineCount: number }> | null;
-    /** Net sum + count of booking-wide (roomless) lines. Null when none. */
-    unassignedCharges: { charges: number; lineCount: number } | null;
+    /** Per-room charge subtotals (2026-08-14) — server-summed; null when no line carries a room.
+     *  `base` / `serviceCharge` / `gst` (2026-08-21) split the bucket for the per-room tabs;
+     *  base + serviceCharge + gst = charges. */
+    perRoomCharges: Array<{
+      roomId: string;
+      roomNumber: string | null;
+      charges: number;
+      lineCount: number;
+      base: number;
+      serviceCharge: number;
+      gst: number;
+    }> | null;
+    /** Net sum + count of booking-wide (roomless) lines, with the same tax split. Null when none. */
+    unassignedCharges: { charges: number; lineCount: number; base: number; serviceCharge: number; gst: number } | null;
+    /** Whole-ledger tax split — base + serviceCharge + gst = billedSoFar. Null when no lines. */
+    chargeBreakdown: { base: number; serviceCharge: number; gst: number; total: number } | null;
   } | null;
 };
 
@@ -807,6 +846,13 @@ export type RoomChangeOutcome = {
   toRooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; nights: string[] }>;
   /** Nights the guest keeps the from-room for (per-night form; empty on a full swap). */
   keptNights: string[];
+  /** True when nothing moved — a SETUP-ONLY change (extra beds / meals / a full re-price) on
+   *  the from-room itself (2026-08-19): `toRoom` === `fromRoom`, `toRooms` empty. */
+  setupOnly: boolean;
+  /** True when a FULL composition table was the basis, not a field patch (2026-08-19). */
+  repriced: boolean;
+  /** True when the change moved a negotiated rate, an FOC / SC waiver, or the discount. */
+  commercialTermsChanged: boolean;
   sameType: boolean;
   substitutionNights: string[];
   pricing: { priorTotal: number | null; newTotal: number | null; delta: number | null; currency: string | null };
@@ -845,11 +891,21 @@ export async function changeBookingRoom(
     fromRoomId: string;
     /** One room for every night of the change… */
     toRoomId?: string;
-    /** …or a room per night, S1-table style (may name the from-room on kept nights). */
+    /** …or a room per night, S1-table style (may name the from-room on kept nights)… */
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;
+    /** …or NEITHER, with `adjustments` alone: a setup-only change on the from-room itself
+     *  (2026-08-19 — extra beds / meals re-priced on the same room, same governed journey). */
     adjustments?: RoomChangeAdjustments;
     roomSetups?: Array<RoomChangeAdjustments & { roomId: string }>;
+    /**
+     * FULL re-price basis (2026-08-19): the S2 negotiation table's own emission, one row per
+     * room of the resulting plan — replaces the carried compositions outright rather than
+     * patching them. Sent ALONE (never with adjustments / roomSetups).
+     */
+    roomCompositions?: RoomCompositionInput[];
+    /** Omitted carries the prior quote's discount; explicit null clears it. */
+    requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   },
 ) {
   return apiRequest<RoomChangeOutcome>(`/api/entries/${entryId}/room-change`, {

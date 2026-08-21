@@ -7,10 +7,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
 import { SegmentHistoryPanel } from "./segment-history";
+import { FolioLinesTable } from "./folio-lines";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import {
   getBillingSummary,
+  type EntryBillingSummary,
   getEntry,
   getEntryTimers,
   listEntryCommunications,
@@ -127,7 +129,19 @@ function ValRow({ label, value, epi = "cap" }: { label: string; value: ReactNode
 const DASH = <span style={{ color: "var(--ink-3)" }}>—</span>;
 
 const StepCanvas = memo(StepCanvasBase);
-function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDetail; fin: DeskFinancials }) {
+function StepCanvasBase({
+  step,
+  entry,
+  fin,
+  billing = null,
+}: {
+  step: DeskStep;
+  entry: EntryDetail;
+  fin: DeskFinancials;
+  /** The billing summary's folio block (server-summed per-room/whole buckets) — the read-only
+   *  step-7 folio's tabs print their SC/GST footers from it (2026-08-21). */
+  billing?: EntryBillingSummary["folio"] | null;
+}) {
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const name = guestName(g);
   const stay = formatStayRangeDMY(entry.checkInDate, entry.checkOutDate) || "Dates not set";
@@ -399,44 +413,19 @@ function StepCanvasBase({ step, entry, fin }: { step: DeskStep; entry: EntryDeta
             Every charge adds a line — nothing is ever edited in place. Room charges post themselves each night;
             you post the rest.
           </Speak>
-          <div className="folio">
-            <div className="folio-h">
-              Live folio
-              <span className="lk">
-                <Lock />
-                live · append-only
-              </span>
-            </div>
-            {lines.length === 0 ? (
-              <div className="fline">
-                <span className="fl-d" style={{ color: "var(--ink-3)" }}>
-                  No charges posted yet
-                </span>
-              </div>
-            ) : (
-              lines.map((l) => {
-                const sys = !!l.nightAuditRecordId;
-                return (
-                  <div className="fline" key={l.id}>
-                    <span className={`fl-mk mk ${sys ? "sys" : "cap"}`}>{sys ? "⚙" : "✎"}</span>
-                    <span className="fl-d">
-                      {l.description}
-                      <small>{new Date(l.chargeDate).toLocaleDateString()}</small>
-                    </span>
-                    <span className="fl-a">{money(l.amount, l.currency)}</span>
-                  </div>
-                );
-              })
-            )}
-            {/* No running total: the backend exposes no sum-of-lines field on the folio, and
-                totalling the rows here would be frontend-computed money. Balance due (below and on
-                the Check-out step) comes from the server's own outstandingBalance. */}
-            <div className="fline total">
-              <span className="fl-mk mk sys">⚙</span>
-              <span className="fl-d">Balance due (from folio)</span>
-              <span className="fl-a">{moneyOrDash(fin.outstanding, fin.currency)}</span>
-            </div>
-          </div>
+          {/* Same compact tabular folio as the live Stay step (2026-08-21) — this is the
+              read-only view of step 7 from a later stage, so it must not be longer than the
+              live one. Σ buckets aren't fetched here; lines + balance suffice. */}
+          <FolioLinesTable
+            lines={lines}
+            roomNumberById={new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)]))}
+            perRoomCharges={billing?.perRoomCharges ?? null}
+            unassignedCharges={billing?.unassignedCharges ?? null}
+            chargeBreakdown={billing?.chargeBreakdown ?? null}
+            balance={fin.outstanding ?? null}
+            currency={fin.currency}
+            emptyText="No charges posted yet"
+          />
           <div className="reentry">
             <div className="rh">Need to change something?</div>
             <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
@@ -678,6 +667,61 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   const [issuedKeyRooms, setIssuedKeyRooms] = useState<Record<string, boolean>>({});
   const toggleKeyRoom = (roomId: string) =>
     setIssuedKeyRooms((prev) => ({ ...prev, [roomId]: !prev[roomId] }));
+  /** Mark (or clear) several rooms at once — the "all keys at once" control (2026-08-19). A
+   *  SET, not a toggle: ticking all must not untick the ones already marked. */
+  const setKeyRooms = (roomIds: string[], issued: boolean) =>
+    setIssuedKeyRooms((prev) => {
+      const next = { ...prev };
+      for (const id of roomIds) next[id] = issued;
+      return next;
+    });
+  // A mark survives a refresh and leaving the page (2026-08-21, operator report: "when key is
+  // assigned but not saved, it clears the assigned mark"). The checklist is local state until the
+  // check-in commit stamps keyIssuedAt on the assignment rows, so without this the operator lost
+  // every tick the moment they navigated away. Same localStorage pattern as the S1 room picks.
+  const keyStoreKey = `desk:keys-issued:${entryId}`;
+  const keyHydratedRef = useRef(false);
+  useEffect(() => {
+    keyHydratedRef.current = false;
+  }, [keyStoreKey]);
+  useEffect(() => {
+    if (!entry || keyHydratedRef.current) return;
+    keyHydratedRef.current = true;
+    // Rooms that have left the plan (a room change) must not carry an old room's tick forward.
+    const planRooms = new Set((entry.roomAssignments ?? []).map((a) => a.roomId));
+    const stored: Record<string, boolean> = {};
+    try {
+      const raw = localStorage.getItem(keyStoreKey);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+      if (parsed && typeof parsed === "object") {
+        for (const [roomId, issued] of Object.entries(parsed as Record<string, unknown>)) {
+          if (issued === true && planRooms.has(roomId)) stored[roomId] = true;
+        }
+      }
+    } catch {
+      /* non-fatal — the marks just won't survive navigation */
+    }
+    // A key the BACKEND has already stamped is issued whatever the local checklist remembers.
+    for (const a of entry.roomAssignments ?? []) {
+      if (a.keyIssuedAt && !a.keyReturnedAt) stored[a.roomId] = true;
+    }
+    // Anything the operator touched in this session outranks the restore (they may have just
+    // un-ticked a mis-click); on a fresh mount `prev` is empty and the restore stands.
+    setIssuedKeyRooms((prev) => ({ ...stored, ...prev }));
+  }, [entry, keyStoreKey]);
+  useEffect(() => {
+    if (!keyHydratedRef.current) return;
+    try {
+      const marked = Object.keys(issuedKeyRooms).filter((id) => issuedKeyRooms[id]);
+      if (marked.length) {
+        localStorage.setItem(keyStoreKey, JSON.stringify(Object.fromEntries(marked.map((id) => [id, true]))));
+      } else {
+        localStorage.removeItem(keyStoreKey);
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }, [keyStoreKey, issuedKeyRooms]);
   const [registrationConfirmed, setRegistrationConfirmed] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [nightAuditOk, setNightAuditOk] = useState(false);
@@ -783,6 +827,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
       setCheckInOpen(false);
       setSelected(7);
+      // The keys are stamped on the assignment rows now — the local checklist has done its job.
+      try {
+        localStorage.removeItem(keyStoreKey);
+      } catch {
+        /* non-fatal */
+      }
       toast.success("Checked in — the folio is live.");
     },
     onError: (e) => {
@@ -1100,6 +1150,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             entry={entry}
             issuedKeyRooms={issuedKeyRooms}
             toggleKeyRoom={NOOP}
+            setKeyRooms={NOOP}
             registrationConfirmed={registrationConfirmed}
             setRegistrationConfirmed={NOOP}
           />
@@ -1111,7 +1162,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
       case "closed":
         return <PostStayStep entry={entry} />;
       default:
-        return <StepCanvas step={step} entry={entry} fin={fin} />;
+        return <StepCanvas step={step} entry={entry} fin={fin} billing={billingQuery.data?.folio ?? null} />;
     }
   };
 
@@ -1653,6 +1704,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 entry={entry}
                 issuedKeyRooms={issuedKeyRooms}
                 toggleKeyRoom={toggleKeyRoom}
+                setKeyRooms={setKeyRooms}
                 registrationConfirmed={registrationConfirmed}
                 setRegistrationConfirmed={setRegistrationConfirmed}
               />
@@ -1665,7 +1717,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
             ) : confirmStepActive || confirmedS4Active ? (
               <ConfirmStep entry={entry} />
             ) : (
-              <StepCanvas step={step} entry={entry} fin={fin} />
+              <StepCanvas step={step} entry={entry} fin={fin} billing={billingQuery.data?.folio ?? null} />
             )}
           </div>
         </div>

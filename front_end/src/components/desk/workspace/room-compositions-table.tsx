@@ -143,7 +143,13 @@ export type DiscountEdit = {
  * discounted or not, and meals / extra beds are never discounted (they come off the rate
  * card's add-ons). NO MONEY IS COMPUTED HERE — the backend prices on create/regenerate.
  */
-export function NegotiationDiscountBar({ discountValue, discountUnit, discountBasis, onDiscountChange }: DiscountEdit) {
+export function NegotiationDiscountBar({
+  discountValue,
+  discountUnit,
+  discountBasis,
+  onDiscountChange,
+  lockCommercial,
+}: DiscountEdit & { lockCommercial?: boolean }) {
   if (!onDiscountChange) return null;
   const unit: DiscountUnit = discountUnit ?? "percent";
   const n = Number(discountValue ?? "");
@@ -159,6 +165,7 @@ export function NegotiationDiscountBar({ discountValue, discountUnit, discountBa
           className="rct-neg-val"
           value={discountValue ?? ""}
           placeholder="0"
+          readOnly={lockCommercial}
           onChange={(e) => {
             const v = e.target.value;
             if (!/^\d*\.?\d*$/.test(v)) return;
@@ -181,6 +188,7 @@ export function NegotiationDiscountBar({ discountValue, discountUnit, discountBa
         <button
           type="button"
           className={unit === "percent" ? "on" : ""}
+          disabled={lockCommercial}
           title="Give the discount as a percentage of the grand total"
           onClick={() =>
             // A figure over 100 is legal as an amount but not as a percent — clear it on switch
@@ -193,6 +201,7 @@ export function NegotiationDiscountBar({ discountValue, discountUnit, discountBa
         <button
           type="button"
           className={unit === "amount" ? "on" : ""}
+          disabled={lockCommercial}
           title="Give the discount as a flat amount in Nu"
           onClick={() => onDiscountChange({ unit: "amount" })}
         >
@@ -204,6 +213,7 @@ export function NegotiationDiscountBar({ discountValue, discountUnit, discountBa
         <input
           type="text"
           value={discountBasis ?? ""}
+          readOnly={lockCommercial}
           placeholder="negotiation"
           onChange={(e) => onDiscountChange({ basis: e.target.value })}
           title="Why the discount is being given — recorded on the quote and audited"
@@ -286,7 +296,17 @@ export function RoomCompositionsTable({
   discountUnit,
   discountBasis,
   onDiscountChange,
+  lockCommercial,
 }: DiscountEdit & {
+  /**
+   * Post-freeze, in-house (2026-08-19): the negotiated rates and the FOC / service-charge
+   * waivers render read-only, because changing them mid-stay is a GM rate revision the backend
+   * gates separately (p58 `enforceRepriceAuthorityForStage`) — and a per-night override cannot
+   * express a changed RATE, so nights the folio has already posted would silently re-price.
+   * Occupancy, meals and extra beds stay editable. The figures still SHOW: the operator needs
+   * to read what the booking is priced at even where they may not change it.
+   */
+  lockCommercial?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
   /** Enables the reference-rate placeholders in the negotiated-rate cells. */
@@ -874,7 +894,16 @@ export function RoomCompositionsTable({
     rowIdx: number,
     roomId: string,
     col: NumCol,
-    opts?: { warn?: boolean; decimal?: boolean; wide?: boolean; placeholder?: string; title?: string; sub?: string | null },
+    opts?: {
+      warn?: boolean;
+      decimal?: boolean;
+      wide?: boolean;
+      placeholder?: string;
+      title?: string;
+      sub?: string | null;
+      /** Reads, never writes — the value and its sub-line still show. */
+      readOnly?: boolean;
+    },
   ) => {
     const raw = rows[roomId]?.[col] ?? "";
     return (
@@ -885,6 +914,8 @@ export function RoomCompositionsTable({
           className={opts?.wide ? "wide" : undefined}
           data-cell={`${rowIdx}:${col}`}
           placeholder={opts?.placeholder}
+          readOnly={opts?.readOnly}
+          style={opts?.readOnly ? { background: "var(--panel-2, transparent)", color: "var(--ink-3)", cursor: "default" } : undefined}
           value={raw}
           onKeyDown={onCellKeyDown(rowIdx, col)}
           onFocus={(e) => e.currentTarget.select()}
@@ -915,11 +946,20 @@ export function RoomCompositionsTable({
         <input type="checkbox" checked disabled />
       </td>
     ) : (
-      <td key={col} className="ck">
+      <td
+        key={col}
+        className="ck"
+        title={
+          lockCommercial
+            ? "The guest is in-house — waiving the service charge or making a room FOC mid-stay is a GM re-price, not a desk edit."
+            : undefined
+        }
+      >
         <input
           type="checkbox"
           data-cell={`${rowIdx}:${col}`}
           checked={rows[roomId]?.[col] ?? EMPTY_ROW[col]}
+          disabled={lockCommercial}
           onKeyDown={onCellKeyDown(rowIdx, col)}
           onChange={(e) => {
             const v = e.target.checked;
@@ -1231,10 +1271,12 @@ export function RoomCompositionsTable({
                       return numCell(rowIdx, id, col, {
                         decimal: true,
                         wide: true,
+                        readOnly: lockCommercial,
                         placeholder: ref != null ? String(ref) : "—",
                         sub,
-                        title:
-                          (ref != null
+                        title: lockCommercial
+                          ? "The guest is in-house — a rate change mid-stay is a GM re-price, not a desk edit. The figures here are what the booking is priced at."
+                          : (ref != null
                             ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
                             : "No rate on file for this room type — leave empty and it prices at zero") +
                           (RATE_META[col].meal

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BedDouble, FileEdit, Handshake, KeyRound, Lock, Moon, Receipt, Scale } from "lucide-react";
+import { AlertTriangle, BedDouble, FileEdit, Handshake, KeyRound, Moon, Receipt, Scale } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -23,7 +23,9 @@ import {
   runNightAudit,
 } from "@/lib/api/in-stay";
 import { cancelEntryEarlyDeparture } from "@/lib/api/reservation-setup";
-import { getBillingSummary, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
+import { getBillingSummary, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
+import { IdentityProofBlock } from "./identity-proof";
+import { FolioLinesTable, FolioTabStrip, filterLinesByTab, isTaxCompanion, roomTabsFor, type FolioTab } from "./folio-lines";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { money, moneyOrDash } from "@/lib/desk/workspace";
 import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
@@ -32,7 +34,7 @@ import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { RoomCompositionSummary, hasRoomComposition } from "./room-composition-summary";
-import { BedTypeEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
+import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -44,6 +46,12 @@ function BlockH({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+/** "16 Aug" — the move-in day a not-yet-occupied room's key waits for. */
+function shortDay(iso: string) {
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 function isElevated(level?: string) {
   return level === "L2" || level === "L3" || level === "L4";
 }
@@ -283,6 +291,33 @@ export function StayStep({
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't record the key return"),
   });
+  // All the keys the guest can hold right now, in one act (2026-08-19, operator request). The
+  // SET is the server's decision — the desk reports what it did and, in the S1 "Select all"
+  // manner, says out loud what it left out rather than letting a partial batch read as complete.
+  const issueAllKeysM = useMutation({
+    mutationFn: () => issueAllRoomKeys(session!, entry.id),
+    onSuccess: (out) => {
+      const n = out.issued.length;
+      const notes = out.skipped
+        .filter((s) => s.reason !== "ALREADY_OUT")
+        .map((s) =>
+          s.reason === "PRIOR_ROOM_KEY_OUTSTANDING"
+            ? `Room ${s.roomNumber} waits for Room ${s.blockedBy.map((b) => b.roomNumber).join(", ")}'s key to come back`
+            : `Room ${s.roomNumber}'s key comes on the move day${s.movesInOn ? ` · ${shortDay(s.movesInOn)}` : ""}`,
+        );
+      if (n === 0) {
+        toast.info(notes.length > 0 ? `No key issued — ${notes.join(" · ")}` : "Every key is already with the guest");
+      } else {
+        const what = `${n} key${n === 1 ? "" : "s"} issued · Room ${out.issued.map((i) => i.roomNumber).join(", ")}`;
+        if (notes.length > 0) toast.warning(`${what}. ${notes.join(" · ")}`, { duration: 10000 });
+        else toast.success(what);
+      }
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't issue the keys"),
+  });
+  /** Rooms a bulk issue would actually hand over now — mirrors the server's default set. */
+  const bulkIssuable = keyPlan.filter((k) => !k.keyOut && !k.movesInLater && keyBlockersFor(k.roomId).length === 0);
 
   const postChargeM = useMutation({
     mutationFn: () => {
@@ -403,10 +438,26 @@ export function StayStep({
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Early departure failed"),
   });
   const openDisputes = disputes.filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
+  // Only CHARGES are correctable: the SC/GST companions ride on their charge (the backend refuses
+  // to correct a tax line directly — a charge correction re-posts its own tax deltas), and an
+  // earlier correction line is never the thing to correct. The legacy "sales tax" prefix check
+  // predates today's companion descriptions, so it let every GST / service-charge line through
+  // to a dead-end pick (2026-08-21).
   const correctable = useMemo(
-    () => folioLines.filter((l) => !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for")),
+    () => folioLines.filter((l) => !isTaxCompanion(l) && !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for")),
     [folioLines],
   );
+  // The picker splits by room / whole booking exactly like the folio above (2026-08-21, operator
+  // request) — same tab strip, same slicing. Its tab is independent of the folio's so a pick in
+  // progress never jumps; a line hidden by a tab switch is dropped from the selection.
+  const [correctTab, setCorrectTab] = useState<FolioTab>("ALL");
+  const correctRoomTabs = useMemo(() => roomTabsFor(correctable, roomNumberById), [correctable, roomNumberById]);
+  const correctHasRoomless = correctable.some((l) => !l.roomId);
+  const correctableVisible = useMemo(() => filterLinesByTab(correctable, correctTab), [correctable, correctTab]);
+  const pickCorrectTab = (tab: FolioTab) => {
+    setCorrectTab(tab);
+    if (correctLineId && !filterLinesByTab(correctable, tab).some((l) => l.id === correctLineId)) setCorrectLineId("");
+  };
   const h4MandatoryComplete = h4Items.filter((i) => i.mandatory).every((i) => h4Checklist[i.code] === true);
 
   // Night audit runs only for a *completed* operating day. A future date is never valid; today is
@@ -453,6 +504,7 @@ export function StayStep({
           themselves each night in the audit; you post the rest.
         </p>
       </div>
+
 
       {/* Per-room composition summary (Phase F of per-room track, 2026-07-27; collapsed by
           default since 2026-08-13 — a tally header line, expandable to one dense row per room
@@ -504,6 +556,9 @@ export function StayStep({
                     {/* What this slot STARTED as (2026-08-13) — survives every room/bed change. */}
                     <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
                     <BedTypeEditor roomId={a.roomId} />
+                    {/* Extra beds, editable in-house (2026-08-19): applies from tonight, slept nights keep
+                        the old count — a setup-only change through the room-change journey. */}
+                    <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={invalidate} />
                   </span>
                 </div>
                 <RoomChangeControl
@@ -535,6 +590,39 @@ export function StayStep({
             key won&apos;t issue while the old one is still with the guest. The final key comes back
             at Check-out.
           </p>
+          {/* All at once (2026-08-19, operator request) — one click for a whole party instead of
+              one button per room. Deliberately partial: the server decides the set and the toast
+              names what it left out (a sequential room still waits for the key it swaps with). */}
+          {keyPlan.length > 1 && (
+            <div
+              className="fact b-transit"
+              style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between", marginBottom: 8 }}
+            >
+              <span>
+                {keyPlan.filter((k) => k.keyOut).length} of {keyPlan.length} keys with the guest
+                {bulkIssuable.length > 0 && (
+                  <span style={{ color: "var(--ink-3)", fontSize: 11.5 }}>
+                    {" "}
+                    · {bulkIssuable.length} ready to hand over
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={issueAllKeysM.isPending || bulkIssuable.length === 0}
+                title={
+                  bulkIssuable.length === 0
+                    ? "No key can go out right now — every key is either with the guest or waiting on a swap or a move day"
+                    : `Hand over Room ${bulkIssuable.map((k) => k.roomNumber).join(", ")}'s key${bulkIssuable.length === 1 ? "" : "s"} in one go`
+                }
+                onClick={() => issueAllKeysM.mutate()}
+              >
+                <KeyRound style={{ width: 12, height: 12 }} />
+                {issueAllKeysM.isPending ? "Issuing…" : "Issue all keys"}
+              </button>
+            </div>
+          )}
           <div style={{ display: "grid", gap: 6 }}>
             {keyPlan.map((k) => {
               const blockers = !k.keyOut ? keyBlockersFor(k.roomId) : [];
@@ -640,80 +728,34 @@ export function StayStep({
         </div>
       )}
 
+      {/* Guest details during the stay (2026-08-21, operator request: "sometimes guest detail
+          can be put in S5 and later made changes in S7 or S6"). Same table as Arrival and
+          Check-in — collapsed by default here, since in-house it is a correction surface, not
+          a capture one. A row confirmed earlier stays locked until "Make changes" unlocks it. */}
+      <IdentityProofBlock entry={entry} collapsible />
+
       {/* Live folio */}
       <div className="block">
         <BlockH>
           <Receipt style={{ width: 13, height: 13 }} />
           Live folio
         </BlockH>
-        <div className="folio" style={{ marginBottom: 12 }}>
-          <div className="folio-h">
-            Charges
-            <span className="lk">
-              <Lock />
-              live · append-only
-            </span>
-          </div>
-          {folioLines.length === 0 ? (
-            <div className="fline">
-              <span className="fl-d" style={{ color: "var(--ink-3)" }}>
-                No charges yet
-              </span>
-            </div>
-          ) : (
-            folioLines.map((l) => {
-              const sys = !!l.nightAuditRecordId;
-              return (
-                <div className="fline" key={l.id}>
-                  <span className={`fl-mk mk ${sys ? "sys" : "cap"}`}>{sys ? "⚙" : "✎"}</span>
-                  <span className="fl-d">
-                    {l.description}
-                    <small>
-                      {l.lineType} · {l.chargeDate?.slice(0, 10)}
-                      {sys ? " · audit" : ""}
-                      {/* Which room the charge belongs to (2026-08-14) — blank = whole booking. */}
-                      {l.roomId ? ` · Room ${roomNumberById.get(l.roomId) ?? "?"}` : ""}
-                    </small>
-                  </span>
-                  <span className="fl-a">{money(l.amount, l.currency)}</span>
-                </div>
-              );
-            })
-          )}
-          {/* Per-room charge subtotals (2026-08-14, operator request) — SERVER-summed in the
-              billing-summary folio block, never added up here. Booking-wide lines get their
-              own row so every line is accounted for in exactly one bucket. */}
-          {perRoomCharges && perRoomCharges.length > 0 && (
-            <>
-              {perRoomCharges.map((r) => (
-                <div className="fline" key={r.roomId} style={{ background: "var(--cream)" }}>
-                  <span className="fl-mk mk sys">Σ</span>
-                  <span className="fl-d">
-                    Room {r.roomNumber ?? "?"} — charges so far
-                    <small>{r.lineCount} line{r.lineCount === 1 ? "" : "s"}</small>
-                  </span>
-                  <span className="fl-a">{money(r.charges, currency)}</span>
-                </div>
-              ))}
-              {unassignedCharges && (
-                <div className="fline" style={{ background: "var(--cream)" }}>
-                  <span className="fl-mk mk sys">Σ</span>
-                  <span className="fl-d">
-                    Whole booking (no room named)
-                    <small>{unassignedCharges.lineCount} line{unassignedCharges.lineCount === 1 ? "" : "s"}</small>
-                  </span>
-                  <span className="fl-a">{money(unassignedCharges.charges, currency)}</span>
-                </div>
-              )}
-            </>
-          )}
-          {/* The server owns the folio's balance; there is no sum-of-lines field, so the running
-              total is the backend's outstandingBalance rather than a total added up here. */}
-          <div className="fline total">
-            <span className="fl-mk mk sys">⚙</span>
-            <span className="fl-d">Balance due (from folio)</span>
-            <span className="fl-a">{moneyOrDash(folio?.outstandingBalance, currency)}</span>
-          </div>
+        {/* Compact tabular folio (2026-08-21) — see FolioLinesTable for the two elongation
+            fixes: table rows behind a scroll cap, and SC/GST companions folded under their
+            charge. Σ per-room + balance stay pinned below the scroll. */}
+        <div style={{ marginBottom: 12 }}>
+          <FolioLinesTable
+            lines={folioLines}
+            roomNumberById={roomNumberById}
+            perRoomCharges={perRoomCharges}
+            unassignedCharges={unassignedCharges}
+            chargeBreakdown={billingQuery.data?.folio?.chargeBreakdown ?? null}
+            balance={folio?.outstandingBalance ?? null}
+            currency={currency}
+            // An open room tab becomes the default "For room" of the charge form below (2026-08-21,
+            // "keep tab of each room separately") — still freely changeable before posting.
+            onTabChange={(t) => setChargeRoomId(typeof t === "string" ? "" : t.roomId)}
+          />
         </div>
 
         {!folioLive && <p style={{ fontSize: 12, color: "var(--stop)", marginTop: 0 }}>Folio must be live (complete check-in first).</p>}
@@ -776,18 +818,119 @@ export function StayStep({
             <p style={{ fontSize: 11.5, color: "var(--ink-2)", margin: "0 0 9px", lineHeight: 1.55 }}>
               A live folio is append-only — nothing already posted can be edited or deleted. Correcting adds a
               second, offsetting line next to the original, so the bill shows both the mistake and the fix.
+              The charge&rsquo;s <b>service charge and GST move with it</b> — their corrections post
+              automatically, at the rates that charge was taxed at.
             </p>
+            {/* "Which posted charge is wrong?" is a TABLE, not a dropdown (2026-08-21, operator
+                request): an <option> crammed room, type, description and amount into one string,
+                which is exactly the moment an operator needs to compare charges side by side —
+                a wrong charge is spotted by scanning dates and amounts down a column. Clicking a
+                row picks it; everything below still works off `correctLineId`. */}
             <div className="field">
-              <label>Which posted charge is wrong?</label>
-              <select value={correctLineId} onChange={(e) => setCorrectLineId(e.target.value)}>
-                <option value="">Choose a charge from the folio…</option>
-                {correctable.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.roomId ? `[Room ${roomNumberById.get(l.roomId) ?? "?"}] ` : ""}
-                    {l.lineType} — {l.description} ({String(l.amount)})
-                  </option>
-                ))}
-              </select>
+              <label>
+                Which posted charge is wrong?{" "}
+                <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>
+                  — {correctableVisible.length} posted charge{correctableVisible.length === 1 ? "" : "s"}
+                  {correctTab === "ALL" ? "" : correctTab === "WHOLE" ? " on the whole booking" : ` on Room ${correctRoomTabs.find((r) => r.roomId === correctTab.roomId)?.roomNumber ?? "?"}`}
+                  {correctLineId ? "" : " · click the row to pick one"}
+                </span>
+              </label>
+              <div style={{ border: "1px solid var(--line-2)", borderRadius: "var(--r-sm)", overflow: "hidden" }}>
+                {(correctRoomTabs.length > 0 || correctHasRoomless) && (
+                  <FolioTabStrip
+                    roomTabs={correctRoomTabs}
+                    hasRoomless={correctHasRoomless}
+                    tab={correctTab}
+                    onChange={pickCorrectTab}
+                    roomTitle={(n) => `Only the charges posted against Room ${n}`}
+                  />
+                )}
+                <div style={{ maxHeight: 260, overflowY: "auto", overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        {(correctTab === "ALL" ? ["", "Date", "Room", "Charge", "Type", "Amount"] : ["", "Date", "Charge", "Type", "Amount"]).map((h, i, arr) => (
+                          <th
+                            key={h || `c${i}`}
+                            style={{
+                              position: "sticky",
+                              top: 0,
+                              zIndex: 1,
+                              background: "var(--cream)",
+                              textAlign: i === arr.length - 1 ? "right" : "left",
+                              fontSize: 10,
+                              fontWeight: 700,
+                              letterSpacing: "0.04em",
+                              textTransform: "uppercase",
+                              color: "var(--ink-3)",
+                              padding: "5px 7px",
+                              borderBottom: "1px solid var(--line-2)",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {correctableVisible.length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ padding: "10px 8px", color: "var(--ink-3)", fontSize: 12 }}>
+                            Nothing posted here yet
+                          </td>
+                        </tr>
+                      )}
+                      {correctableVisible.map((l) => {
+                        const picked = correctLineId === l.id;
+                        const sys = !!l.nightAuditRecordId;
+                        const cell: React.CSSProperties = {
+                          padding: "6px 7px",
+                          borderBottom: "1px dashed var(--line)",
+                          background: picked ? "var(--cream)" : undefined,
+                          whiteSpace: "nowrap",
+                        };
+                        return (
+                          <tr
+                            key={l.id}
+                            onClick={() => setCorrectLineId(l.id)}
+                            style={{ cursor: "pointer" }}
+                            title={`${l.description} — ${money(l.amount, l.currency)}${sys ? " · posted by the night audit" : ""}`}
+                          >
+                            <td style={{ ...cell, width: 26, textAlign: "center" }}>
+                              <input
+                                type="radio"
+                                name="correctLine"
+                                checked={picked}
+                                onChange={() => setCorrectLineId(l.id)}
+                                style={{ cursor: "pointer" }}
+                              />
+                            </td>
+                            <td style={{ ...cell, color: "var(--ink-2)" }}>{l.chargeDate?.slice(0, 10) ?? "—"}</td>
+                            {correctTab === "ALL" && (
+                              <td style={{ ...cell, color: l.roomId ? undefined : "var(--ink-3)" }}>
+                                {l.roomId ? `Room ${roomNumberById.get(l.roomId) ?? "?"}` : "Whole booking"}
+                              </td>
+                            )}
+                            {/* The description carries the detail, so it is the one column allowed
+                                to wrap rather than widen the table past the canvas. */}
+                            <td style={{ ...cell, whiteSpace: "normal", minWidth: 150, fontWeight: picked ? 600 : 400 }}>
+                              <span style={{ marginRight: 5, color: "var(--ink-3)" }} title={sys ? "Posted by the night audit" : "Posted at the desk"}>
+                                {sys ? "⚙" : "✎"}
+                              </span>
+                              {l.description}
+                            </td>
+                            <td style={{ ...cell, color: "var(--ink-3)", fontSize: 11 }}>{l.lineType}</td>
+                            <td style={{ ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                              {money(l.amount, l.currency)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
             <div className="field">
               <label>Mode</label>

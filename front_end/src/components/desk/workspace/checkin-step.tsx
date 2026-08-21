@@ -16,7 +16,7 @@ import { PdfButton } from "./pdf-button";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { AdvanceSettlementBlock } from "./advance-settlement";
 import { IdentityProofBlock } from "./identity-proof";
-import { BedTypeEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
+import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 
@@ -34,6 +34,7 @@ export function CheckInStep({
   entry,
   issuedKeyRooms,
   toggleKeyRoom,
+  setKeyRooms,
   registrationConfirmed,
   setRegistrationConfirmed,
 }: {
@@ -42,6 +43,8 @@ export function CheckInStep({
    *  radio per room in the Room block; check-in requires every room marked. */
   issuedKeyRooms: Record<string, boolean>;
   toggleKeyRoom: (roomId: string) => void;
+  /** Mark or clear several rooms at once — the "all keys" control above the room rows. */
+  setKeyRooms: (roomIds: string[], issued: boolean) => void;
   registrationConfirmed: boolean;
   setRegistrationConfirmed: (v: boolean) => void;
 }) {
@@ -325,6 +328,50 @@ export function CheckInStep({
                 <span className="tag">check-in covers all</span>
               </div>
             )}
+            {/* All the keys at once (2026-08-19, operator request): a six-room party was six
+                radios. Only the ARRIVAL-NIGHT rooms are touched — a room the plan moves the
+                guest into later gets its key on the move day (Stay step), so a bulk tick must
+                not claim it. The tick is still just a checklist: the keys are stamped by the
+                check-in transition itself, from these very rooms. */}
+            {(() => {
+              const dayOneIds = distinctAssignments.filter((a) => dayOneRooms.has(a.roomId)).map((a) => a.roomId);
+              if (dayOneIds.length < 2) return null;
+              const allMarked = dayOneIds.every((id) => issuedKeyRooms[id]);
+              const laterCount = distinctAssignments.length - dayOneIds.length;
+              return (
+                <div
+                  className="fact b-bound"
+                  style={{ padding: "6px 11px", fontSize: 12.5, marginBottom: 8, width: "100%", justifyContent: "space-between" }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                    <KeyRound style={{ width: 12, height: 12 }} />
+                    Keys handed over
+                    <span className={`tag${allMarked ? "" : " warn"}`}>
+                      {issuedKeyCount} of {dayOneIds.length}
+                    </span>
+                    {laterCount > 0 && (
+                      <span style={{ color: "var(--ink-3)", fontSize: 11.5 }}>
+                        · {laterCount} on the move day
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    title={
+                      allMarked
+                        ? "Untick every room's key"
+                        : `Mark all ${dayOneIds.length} of tonight's keys as handed over${
+                            laterCount > 0 ? " — the later room's key still waits for its move day" : ""
+                          }`
+                    }
+                    onClick={() => setKeyRooms(dayOneIds, !allMarked)}
+                  >
+                    {allMarked ? "Clear all" : "Mark all keys issued"}
+                  </button>
+                </div>
+              );
+            })()}
             <div style={{ display: "grid", gap: 8 }}>
               {[...distinctAssignments].sort((a, b) => roomChrono(a.roomId, b.roomId)).map((a) => (
                 <div key={a.id}>
@@ -361,6 +408,9 @@ export function CheckInStep({
                       <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
                       {/* Bed setup is editable S5–S7 (2026-08-12, operator request). */}
                       <BedTypeEditor roomId={a.roomId} />
+                      {/* Extra beds are editable S5–S7 too (2026-08-19, operator request) — a setup-only
+                          change re-priced through the room-change journey. */}
+                      <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={invalidate} />
                       {/* Per-room composition details, same as the S5 block (2026-08-13). */}
                       {detailButton(a.roomId)}
                       {/* Per-room key tracking (2026-08-11, operator request): mark each room's key
@@ -446,6 +496,7 @@ export function CheckInStep({
         intro="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs an FOM credit extension instead."
       />
 
+
       {/* Registration & keys */}
       <div className="block">
         <BlockH>
@@ -469,7 +520,8 @@ export function CheckInStep({
           })()}
         </div>
         <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px" }}>
-          Mark each key in the <b>Room</b> section above as you hand it over — every room the guest
+          Mark each key in the <b>Room</b> section above as you hand it over — or use{" "}
+          <b>Mark all keys issued</b> there to do the whole party at once. Every room the guest
           enters <b>tonight</b> needs its key issued before check-in. A room the plan moves them
           into later gets its key on the move day, once the previous room&apos;s key is back.
         </p>

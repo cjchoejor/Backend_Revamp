@@ -1107,6 +1107,12 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   /** When set, the reference-rate strip (per-type room/bed/meal rates from the backend)
    *  renders below the active editor as the anchor for the negotiated-rate cells. */
   entryId?: string;
+  /** The compositions the booking is priced on today — the seed for a post-freeze re-price
+   *  (2026-08-19). Without it the grid opens auto-distributed and saving would erase the
+   *  negotiated terms. Read once at mount, like the rest of the snapshot. */
+  initialCompositions?: RoomCompositionInput[];
+  /** In-house (S7): rates / waivers / discount render read-only — see RoomCompositionsTable. */
+  lockCommercial?: boolean;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
@@ -1126,7 +1132,11 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   const storeKey = props.persistKey ? `desk:rcomp:${props.persistKey}` : null;
   const snapshotRef = useRef<RoomCompositionInput[] | null>(null);
   if (snapshotRef.current === null) {
-    snapshotRef.current = [];
+    // `initialCompositions` is what the booking is priced on TODAY (2026-08-19) — the post-freeze
+    // re-price panel opens on the terms in force, not on an auto-distributed default that would
+    // quietly overwrite a negotiated rate the moment it was saved. A persisted in-progress edit
+    // still wins over it: that is the operator's own unfinished work.
+    snapshotRef.current = props.initialCompositions ?? [];
     if (storeKey && typeof window !== "undefined") {
       try {
         const raw = localStorage.getItem(storeKey);

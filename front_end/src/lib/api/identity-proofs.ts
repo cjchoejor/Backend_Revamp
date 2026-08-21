@@ -30,6 +30,11 @@ export type IdentityProofSummary = {
   capturedAt: string;
   capturedBy: string;
   retentionExpiresAt: string;
+  /** Set once the operator CONFIRMS this guest's details (2026-08-21) — the row then renders
+   *  read-only and the backend refuses writes to it until it is unlocked again. Detail rows
+   *  only; null = never confirmed. */
+  detailsConfirmedAt?: string | null;
+  detailsConfirmedBy?: string | null;
   /** True on photo/scan rows; false on the per-guest typed DETAIL rows. */
   hasFile: boolean;
 };
@@ -90,6 +95,20 @@ export async function saveGuestIdentityDetail(
     session,
     body,
   });
+}
+
+/** Confirm — or unlock ("Make changes") — guests' typed details. A confirmed row is
+ *  read-only until unlocked; slots with nothing on file are skipped and named back. */
+export async function confirmGuestIdentityDetails(
+  session: Session,
+  entryId: string,
+  body: { subjectKeys: string[]; confirmed: boolean },
+) {
+  return apiRequest<{
+    confirmed: boolean;
+    changed: { subjectKey: string; label: string }[];
+    skipped: { subjectKey: string; label: string; reason: string; message: string }[];
+  }>(`/api/entries/${entryId}/identity-details/confirm`, { method: "POST", session, body });
 }
 
 /** Every stored proof for this booking's guest — including ones captured on earlier stays
