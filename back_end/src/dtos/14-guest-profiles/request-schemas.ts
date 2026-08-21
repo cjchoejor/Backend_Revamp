@@ -43,6 +43,15 @@ export const saveGuestIdentityDetailRequestSchema = z.object({
 });
 export type SaveGuestIdentityDetailRequestDto = z.infer<typeof saveGuestIdentityDetailRequestSchema>;
 
+/** Confirm / unlock guests' typed details (2026-08-21): a confirmed row is read-only until
+ *  it is unlocked again ("Make changes"). Several slots at once — the desk's per-row buttons
+ *  send one key, its section-level control sends every filled row. */
+export const confirmGuestIdentityDetailsRequestSchema = z.object({
+  subjectKeys: z.array(z.string().trim().min(1).max(16)).min(1).max(64),
+  confirmed: z.boolean(),
+});
+export type ConfirmGuestIdentityDetailsRequestDto = z.infer<typeof confirmGuestIdentityDetailsRequestSchema>;
+
 /** Mint a phone identity-capture token (2026-08-12): one party slot, or the WHOLE party
  *  (`allSlots` — the phone page lists every guest and files each photo under the slot the
  *  phone user picks, server-validated). */

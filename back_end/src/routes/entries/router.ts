@@ -31,7 +31,7 @@ import { buildEntryRateReference } from "../../services/domain/rate-reference-se
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
-import { issueRoomKey, returnRoomKey } from "../../services/domain/room-key-service.js";
+import { issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
 import { roomChangeRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 
 export const entriesRouter = Router();
@@ -70,6 +70,8 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
       reason: req.body.reason,
       adjustments: req.body.adjustments,
       roomSetups: req.body.roomSetups,
+      roomCompositions: req.body.roomCompositions,
+      ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
     });
     res.json(outcome);
   } catch (e) {
@@ -103,6 +105,26 @@ entriesRouter.post("/:id/rooms/:roomId/key-issued", requireActorLevel("L1"), asy
     next(e);
   }
 });
+
+/**
+ * Hand over every key the guest can hold right now, in one act (2026-08-19, operator request).
+ * Body `{ roomIds? }` — omitted means "the rooms in use today", which the service decides (S6:
+ * arrival-night rooms; S7: rooms whose first night has arrived). Deliberately partial: the
+ * response's `skipped[]` names each room left out and why (already out / sequential key still
+ * with the guest / not occupied yet), so a six-room party is one click and an honest answer.
+ */
+entriesRouter.post(
+  "/:id/rooms/keys/issue-all",
+  requireActorLevel("L1"),
+  validateBody(z.object({ roomIds: z.array(z.string().min(1)).max(60).optional() })),
+  async (req, res, next) => {
+    try {
+      res.json(await issueRoomKeysBulk(prisma, req.params.id, req.actor!.actorId, { roomIds: req.body?.roomIds }));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 entriesRouter.post("/:id/rooms/:roomId/key-returned", requireActorLevel("L1"), async (req, res, next) => {
   try {

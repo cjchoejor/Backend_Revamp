@@ -790,6 +790,14 @@ model GuestIdentityDocument {
   dateOfBirth DateTime?
   gender      String?
 
+  /// Guest-detail CONFIRMATION (2026-08-21, operator request): the operator confirms a
+  /// guest's typed details and the row becomes read-only on the desk — further writes are
+  /// refused until it is explicitly unlocked ("Make changes"). Detail rows only (photo rows
+  /// are write-once evidence and never carry it). Durable so a row confirmed at S5 is still
+  /// locked at S6/S7 and on any terminal.
+  detailsConfirmedAt DateTime?
+  detailsConfirmedBy String?
+
   capturedAt         DateTime
   capturedBy         String
   retentionPeriod    Int

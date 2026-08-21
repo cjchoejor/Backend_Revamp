@@ -124,6 +124,8 @@ export type RoomCompositionServiceInput = {
     othersBreakfastPax?: number;
     othersLunchPax?: number;
     othersDinnerPax?: number;
+    /** Extra beds on this one night when they differ from the stay-wide count (2026-08-19). */
+    extraBedCount?: number;
   }>;
 };
 
@@ -155,6 +157,60 @@ export type QuotationDraftInput = {
    */
   actorLevel?: "L1" | "L2" | "L3" | "L4";
 };
+
+/**
+ * The three composition guards every priced quote must pass, in one place (extracted
+ * 2026-08-19). `prepareQuotationDraft` runs them just before pricing; the post-freeze re-price
+ * (room-change service) runs the SAME function as a pre-flight, BEFORE its irreversible
+ * re-entry — so a composition that would be refused inside the walk is refused while the
+ * booking is still untouched, and the two can never disagree about what is priceable.
+ *
+ * All three are no-ops when their key fields are null, so partially-filled drafts still pass.
+ */
+export function enforceRoomCompositionsPriceable(
+  compositions: RoomCompositionServiceInput[],
+  ctx: {
+    numberByRoomId: Map<string, string>;
+    stayCheckIn: Date | null;
+    stayCheckOut: Date | null;
+    nights: number;
+  },
+): void {
+  for (const c of compositions) {
+    const roomNumber = ctx.numberByRoomId.get(c.roomId) ?? null;
+    const nightOverrides = (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) }));
+    enforceExtraBedForThirdAdult({
+      roomNumber,
+      adultCount: c.adultCount,
+      extraBedCount: c.extraBedCount,
+      isFoc: c.isFoc,
+    });
+    enforceCompositionCountsConsistent({
+      roomNumber,
+      occupantCount: c.occupantCount,
+      adultCount: c.adultCount,
+      cnb6To10Count: c.cnb6To10Count,
+      cnbUnder6Count: c.cnbUnder6Count,
+      mealPlanCpCount: c.mealPlanCpCount,
+      mealPlanMaplCount: c.mealPlanMaplCount,
+      mealPlanMapdCount: c.mealPlanMapdCount,
+      mealPlanApCount: c.mealPlanApCount,
+      mealPlanOthersCount: c.mealPlanOthersCount,
+      // Each overridden night has to satisfy the occupancy ceiling on its own.
+      nightMealOverrides: nightOverrides,
+    });
+    // Reject a plan pinned to a night outside the stay — it would silently never price.
+    enforceNightOverridesWithinStay(
+      {
+        roomNumber,
+        nightMealOverrides: nightOverrides,
+        startDate: c.startDate ? new Date(c.startDate) : ctx.stayCheckIn,
+        endDate: c.endDate ? new Date(c.endDate) : ctx.stayCheckOut,
+      },
+      ctx.nights,
+    );
+  }
+}
 
 /**
  * Shared pricing pipeline for S2 quotation drafts (extracted 2026-07-28 so regeneration /
@@ -554,40 +610,12 @@ async function prepareQuotationDraft(
     // Validate each room's composition BEFORE pricing so we reject early with a friendly
     // error (rather than persisting bad data). Both policies are no-ops when key fields
     // are null so partially-filled draft submissions can still succeed.
-    for (const c of input.roomCompositions) {
-      const roomNumber = numberByRoomId.get(c.roomId) ?? null;
-      const nightOverrides = (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) }));
-      enforceExtraBedForThirdAdult({
-        roomNumber,
-        adultCount: c.adultCount,
-        extraBedCount: c.extraBedCount,
-        isFoc: c.isFoc,
-      });
-      enforceCompositionCountsConsistent({
-        roomNumber,
-        occupantCount: c.occupantCount,
-        adultCount: c.adultCount,
-        cnb6To10Count: c.cnb6To10Count,
-        cnbUnder6Count: c.cnbUnder6Count,
-        mealPlanCpCount: c.mealPlanCpCount,
-        mealPlanMaplCount: c.mealPlanMaplCount,
-        mealPlanMapdCount: c.mealPlanMapdCount,
-        mealPlanApCount: c.mealPlanApCount,
-        mealPlanOthersCount: c.mealPlanOthersCount,
-        // Each overridden night has to satisfy the occupancy ceiling on its own.
-        nightMealOverrides: nightOverrides,
-      });
-      // Reject a plan pinned to a night outside the stay — it would silently never price.
-      enforceNightOverridesWithinStay(
-        {
-          roomNumber,
-          nightMealOverrides: nightOverrides,
-          startDate: c.startDate ? new Date(c.startDate) : stay?.checkIn ?? null,
-          endDate: c.endDate ? new Date(c.endDate) : stay?.checkOut ?? null,
-        },
-        nightsForPricing,
-      );
-    }
+    enforceRoomCompositionsPriceable(input.roomCompositions, {
+      numberByRoomId,
+      stayCheckIn: stay?.checkIn ?? null,
+      stayCheckOut: stay?.checkOut ?? null,
+      nights: nightsForPricing,
+    });
 
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
@@ -826,10 +854,16 @@ async function prepareQuotationDraft(
                   // much, instead of just a total that doesn't reconcile to the nightly rate.
                   mealsSubtotal: Number(r.mealsSubtotal.toFixed(2)),
                   perNightMeals: Number(r.perNightMeals.toFixed(2)),
+                  // Extra beds across the stay (2026-08-19) — `extraBedRate × count × nights`
+                  // unless a night overrides the count (in-house setup change), in which case
+                  // this is the only honest figure and `extraBedsVaryByNight` says so.
+                  extraBedSubtotal: Number(r.extraBedSubtotal.toFixed(2)),
+                  extraBedsVaryByNight: r.extraBedsVaryByNight,
                   perNightMealBreakdown: r.perNightMealBreakdown.map((n) => ({
                     date: n.date,
                     meals: Number(n.meals.toFixed(2)),
                     overridden: n.overridden,
+                    extraBeds: n.extraBeds,
                   })),
                 })),
               }

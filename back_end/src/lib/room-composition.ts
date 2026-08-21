@@ -37,6 +37,13 @@ export type RoomNightMealOverride = {
   othersBreakfastPax?: number | null;
   othersLunchPax?: number | null;
   othersDinnerPax?: number | null;
+  /**
+   * Extra beds on this ONE night when it differs from the room's stay-wide `extraBedCount`
+   * (2026-08-19 — an in-house setup change: the bed is added from tonight, so the slept nights
+   * keep the old count while the row shows the new one). Null/absent = the room default. An
+   * override that carries ONLY this field leaves the night's meals at the room default.
+   */
+  extraBedCount?: number | null;
 };
 
 export type RoomCompositionInput = {
@@ -175,12 +182,26 @@ function indexOverrides(overrides: RoomNightMealOverride[] | null | undefined): 
   return map;
 }
 
+/** Whether an override says anything about MEALS (a bed-only override leaves meals alone). */
+function overrideCarriesMeals(o: RoomNightMealOverride): boolean {
+  return (
+    o.mealPlanCpCount != null ||
+    o.mealPlanMaplCount != null ||
+    o.mealPlanMapdCount != null ||
+    o.mealPlanApCount != null ||
+    o.mealPlanOthersCount != null ||
+    o.othersBreakfastPax != null ||
+    o.othersLunchPax != null ||
+    o.othersDinnerPax != null
+  );
+}
+
 /** The meal counts in force on a given night: the override if there is one, else the room default. */
 function mealCountsForNight(
   input: RoomCompositionInput,
   override: RoomNightMealOverride | undefined,
 ): RoomCompositionInput {
-  if (!override) return input;
+  if (!override || !overrideCarriesMeals(override)) return input;
   return {
     mealPlanCpCount: override.mealPlanCpCount ?? 0,
     mealPlanMaplCount: override.mealPlanMaplCount ?? 0,
@@ -282,8 +303,16 @@ export function computeRoomComposition(
   breakfastSubtotal: Prisma.Decimal;
   lunchSubtotal: Prisma.Decimal;
   dinnerSubtotal: Prisma.Decimal;
-  /** Populated only when overrides applied — one entry per stay-night, for display/audit. */
-  perNightMealBreakdown: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean }>;
+  /** Populated only when overrides applied — one entry per stay-night, for display/audit.
+   *  `extraBeds` is that night's count (2026-08-19) — equals the row's stay-wide count unless
+   *  the night carries a bed override. */
+  perNightMealBreakdown: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean; extraBeds: number }>;
+  /** Extra beds across the whole stay — `perNightExtraBed × nights` unless a night overrides
+   *  the bed count (2026-08-19). */
+  extraBedSubtotal: Prisma.Decimal;
+  /** True when at least one night carries its own extra-bed count — "count × nights" no longer
+   *  describes the room and consumers should print the subtotal as "varies by night". */
+  extraBedsVaryByNight: boolean;
   subtotal: Prisma.Decimal;
   serviceCharge: Prisma.Decimal;
   gst: Prisma.Decimal;
@@ -311,6 +340,8 @@ export function computeRoomComposition(
       lunchSubtotal: ZERO,
       dinnerSubtotal: ZERO,
       perNightMealBreakdown: [],
+      extraBedSubtotal: ZERO,
+      extraBedsVaryByNight: false,
       subtotal: ZERO,
       serviceCharge: ZERO,
       gst: ZERO,
@@ -380,15 +411,18 @@ export function computeRoomComposition(
   const perNightMeals = perNightByMeal.breakfast.add(perNightByMeal.lunch).add(perNightByMeal.dinner);
   const perNightSubtotal = perNightRoom.add(perNightExtraBed).add(perNightMeals);
 
-  // Room + extra bed are the same every night; only meals can vary. Summing meals night by
-  // night is what makes "AP on arrival, CP after" price correctly.
+  // The room rate is the same every night; meals — and, since 2026-08-19, the extra-bed count —
+  // can vary per night. Summing night by night is what makes "AP on arrival, CP after" (and
+  // "extra bed from tonight" on an in-house setup change) price correctly.
   const overrides = indexOverrides(input.nightMealOverrides);
   const keys = overrides.size > 0 ? nightKeys(input, nights) : [];
-  const perNight: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean }> = [];
+  const perNight: Array<{ date: string; meals: Prisma.Decimal; overridden: boolean; extraBeds: number }> = [];
   let mealsSubtotal: Prisma.Decimal;
   let breakfastSubtotal: Prisma.Decimal;
   let lunchSubtotal: Prisma.Decimal;
   let dinnerSubtotal: Prisma.Decimal;
+  let extraBedSubtotal: Prisma.Decimal;
+  let extraBedsVaryByNight = false;
   if (keys.length === 0) {
     // No overrides (or no start date to place them against) — identical to the pre-2026-07-28
     // behaviour, to the cent.
@@ -396,24 +430,29 @@ export function computeRoomComposition(
     breakfastSubtotal = perNightByMeal.breakfast.mul(nights);
     lunchSubtotal = perNightByMeal.lunch.mul(nights);
     dinnerSubtotal = perNightByMeal.dinner.mul(nights);
+    extraBedSubtotal = perNightExtraBed.mul(nights);
   } else {
     mealsSubtotal = ZERO;
     breakfastSubtotal = ZERO;
     lunchSubtotal = ZERO;
     dinnerSubtotal = ZERO;
+    extraBedSubtotal = ZERO;
     for (const key of keys) {
       const o = overrides.get(key);
       const m = o ? mealCostByMeal(mealCountsForNight(input, o)) : perNightByMeal;
       const meals = m.breakfast.add(m.lunch).add(m.dinner);
-      perNight.push({ date: key, meals, overridden: !!o });
+      const bedsTonight = o?.extraBedCount != null ? Math.max(0, Math.trunc(o.extraBedCount)) : extraBeds;
+      if (bedsTonight !== extraBeds) extraBedsVaryByNight = true;
+      perNight.push({ date: key, meals, overridden: !!o, extraBeds: bedsTonight });
       mealsSubtotal = mealsSubtotal.add(meals);
       breakfastSubtotal = breakfastSubtotal.add(m.breakfast);
       lunchSubtotal = lunchSubtotal.add(m.lunch);
       dinnerSubtotal = dinnerSubtotal.add(m.dinner);
+      extraBedSubtotal = extraBedSubtotal.add(toDecimal(extraBedRate).mul(bedsTonight));
     }
   }
 
-  const subtotal = perNightRoom.add(perNightExtraBed).mul(nights).add(mealsSubtotal);
+  const subtotal = perNightRoom.mul(nights).add(extraBedSubtotal).add(mealsSubtotal);
   const serviceCharge =
     input.serviceChargeApplies !== false && ctx.serviceChargeRate > 0
       ? subtotal.mul(ctx.serviceChargeRate)
@@ -445,6 +484,8 @@ export function computeRoomComposition(
     lunchSubtotal,
     dinnerSubtotal,
     perNightMealBreakdown: perNight,
+    extraBedSubtotal,
+    extraBedsVaryByNight,
     subtotal,
     serviceCharge,
     gst,

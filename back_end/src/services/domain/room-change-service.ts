@@ -14,7 +14,10 @@ import {
   enforceNoOverlappingBookingForCommittedHold,
   enforceCommittedHoldRoomPhysicallyUsable,
 } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
-import { enforceRoomChangeAuthorityForStage } from "../../policies/23-room-change/p58-room-change-mode-trigger.js";
+import {
+  enforceRepriceAuthorityForStage,
+  enforceRoomChangeAuthorityForStage,
+} from "../../policies/23-room-change/p58-room-change-mode-trigger.js";
 import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { enforceRoomPhysicallyAssignableForS5 } from "../../policies/01-availability/p01-s5-room-assignment-eligibility-gates.js";
 import { backflowRoomChangeToS2 } from "../../state-machines/backflows-state-machine.js";
@@ -22,7 +25,12 @@ import { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 import { progressStageS5ToS6 } from "../../state-machines/entry-lifecycle-state-machine.js";
 import * as s3HoldService from "./s3-hold-service.js";
 import { ROOM_BED_TYPES, bedTypeConversionGroup, setRoomBedType, type RoomBedType } from "./room-bed-type-service.js";
-import { createQuotation, type QuotationDraftInput, type RoomCompositionServiceInput } from "./s2-quotation-service.js";
+import {
+  createQuotation,
+  enforceRoomCompositionsPriceable,
+  type QuotationDraftInput,
+  type RoomCompositionServiceInput,
+} from "./s2-quotation-service.js";
 import { confirmReservation } from "./s4-confirmation-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 import { assignRoomsFromSealedPerNight } from "./room-assignment-service.js";
@@ -64,6 +72,78 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
 const DAY_MS = 86_400_000;
+
+/**
+ * In-house (S7) fidelity for an in-place change: the new setup applies from TONIGHT, so the
+ * nights the guest has ALREADY slept are pinned to what they were, as per-night overrides on
+ * the room's single composition row (every consumer keys compositions by roomId, so splitting
+ * the row is not an option). The quotation then prices slept nights as they were charged and
+ * remaining nights as asked, and the stay total still reconciles with the folio.
+ *
+ * Meals and the extra-bed count are the only things a per-night override can carry — a
+ * negotiated RATE cannot be expressed per night, which is exactly why a mid-stay rate change
+ * is a GM decision (p58 `enforceRepriceAuthorityForStage`) and why the desk warns that
+ * already-posted nights need a folio correction rather than being silently re-billed.
+ *
+ * Shared by the field-patch path (`adjustments`) and the full-table re-price so the two
+ * cannot disagree about what a slept night cost.
+ */
+function pinSleptNightsToPriorSetup(
+  row: RoomCompositionServiceInput,
+  prior: { composition: RoomCompositionServiceInput | null; mealsChanged: boolean; bedsChanged: boolean },
+  sleptNights: string[],
+): void {
+  if (sleptNights.length === 0 || (!prior.mealsChanged && !prior.bedsChanged)) return;
+  const priorOverrides = prior.composition?.nightMealOverrides ?? [];
+  const priorMeals = {
+    mealPlanCpCount: prior.composition?.mealPlanCpCount ?? 0,
+    mealPlanMaplCount: prior.composition?.mealPlanMaplCount ?? 0,
+    mealPlanMapdCount: prior.composition?.mealPlanMapdCount ?? 0,
+    mealPlanApCount: prior.composition?.mealPlanApCount ?? 0,
+    mealPlanOthersCount: prior.composition?.mealPlanOthersCount ?? 0,
+    othersBreakfastPax: prior.composition?.othersBreakfastPax ?? 0,
+    othersLunchPax: prior.composition?.othersLunchPax ?? 0,
+    othersDinnerPax: prior.composition?.othersDinnerPax ?? 0,
+  };
+  const priorBeds = prior.composition?.extraBedCount ?? 0;
+  const keep = [...(row.nightMealOverrides ?? [])].filter((o) => !sleptNights.includes(String(o.date).slice(0, 10)));
+  for (const date of sleptNights) {
+    const own = priorOverrides.find((o) => String(o.date).slice(0, 10) === date) ?? null;
+    // That night's own exception wins over the room default when one existed.
+    const meals = prior.mealsChanged
+      ? own
+        ? {
+            mealPlanCpCount: own.mealPlanCpCount ?? 0,
+            mealPlanMaplCount: own.mealPlanMaplCount ?? 0,
+            mealPlanMapdCount: own.mealPlanMapdCount ?? 0,
+            mealPlanApCount: own.mealPlanApCount ?? 0,
+            mealPlanOthersCount: own.mealPlanOthersCount ?? 0,
+            othersBreakfastPax: own.othersBreakfastPax ?? 0,
+            othersLunchPax: own.othersLunchPax ?? 0,
+            othersDinnerPax: own.othersDinnerPax ?? 0,
+          }
+        : priorMeals
+      : own
+        ? {
+            mealPlanCpCount: own.mealPlanCpCount,
+            mealPlanMaplCount: own.mealPlanMaplCount,
+            mealPlanMapdCount: own.mealPlanMapdCount,
+            mealPlanApCount: own.mealPlanApCount,
+            mealPlanOthersCount: own.mealPlanOthersCount,
+            othersBreakfastPax: own.othersBreakfastPax,
+            othersLunchPax: own.othersLunchPax,
+            othersDinnerPax: own.othersDinnerPax,
+          }
+        : {};
+    keep.push({
+      date: `${date}T00:00:00.000Z`,
+      ...meals,
+      ...(prior.bedsChanged ? { extraBedCount: priorBeds } : {}),
+    });
+  }
+  keep.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  row.nightMealOverrides = keep;
+}
 
 function isoNightsBetween(checkIn: Date, checkOut: Date): string[] {
   const out: string[] = [];
@@ -573,6 +653,16 @@ export type RoomChangeOutcome = {
    * simple swap reports exactly one). The from-room's kept nights are NOT listed here.
    */
   toRooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; nights: string[] }>;
+  /**
+   * True when the change moved nothing — a SETUP-ONLY change on the from-room (2026-08-19):
+   * extra beds / meals / rates re-priced on the same room (`toRoom` === `fromRoom`,
+   * `toRooms` empty).
+   */
+  setupOnly: boolean;
+  /** True when a FULL composition table was the basis (2026-08-19), not a field patch. */
+  repriced: boolean;
+  /** True when the re-price moved a negotiated rate, a waiver or the discount. */
+  commercialTermsChanged: boolean;
   /** Nights the guest KEEPS the from-room for (per-night form; empty on a full swap). */
   keptNights: string[];
   sameType: boolean;
@@ -632,28 +722,95 @@ export async function changeRoomToNewSegment(
      */
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;
-    /** Setup for the single replacement room (simple-swap sugar — applied to the primary). */
+    /**
+     * Setup for the single replacement room (simple-swap sugar — applied to the primary) — OR,
+     * with NO `toRoomId`/`perNight` at all (2026-08-19, operator request: "put the extra bed
+     * selection option on S5–S7"), a SETUP-ONLY change on the from-room itself: the guest keeps
+     * the room, only its extra beds / meals change, and the booking still walks the whole
+     * governed journey (new segment, silent re-price, back to this stage) because the frozen
+     * terms are what's changing. In-house (S7) the new setup applies from TONIGHT: the slept
+     * nights keep the old count on the same composition row via per-night overrides, and the
+     * assignment row splits exactly like a mid-stay room change, so the ledger and the stay
+     * total both read the change from the right night.
+     */
     adjustments?: RoomChangeAdjustments;
     /** Per-room setups for the per-night form — one entry per distinct NEW room. */
     roomSetups?: Array<RoomChangeAdjustments & { roomId: string }>;
+    /**
+     * FULL re-price basis (2026-08-19, operator request — "make the table exactly the one in
+     * S2, with rate negotiation and the discount"): the S2 negotiation table's own emission,
+     * one row per room of the plan, replacing the carried compositions outright instead of
+     * patching them field by field like `adjustments`. Combines with a room change (the rows
+     * then describe the plan AFTER the substitution) or stands alone as a pure re-price.
+     *
+     * Rooms must match the resulting plan exactly — adding or removing a room is a room
+     * change, which has its own form. Validated against the SAME guards the quote runs,
+     * before the irreversible re-entry.
+     */
+    roomCompositions?: RoomCompositionServiceInput[];
+    /**
+     * The booking-wide discount to price with. `undefined` carries the prior quote's forward
+     * (every existing caller); an explicit `null` clears it. When it changes, the ACTING
+     * operator's authority band is what the discount is measured against — carrying the prior
+     * approval would let a lower level raise a concession someone else sanctioned.
+     */
+    requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   },
 ): Promise<RoomChangeOutcome> {
   const reason = input.reason?.trim();
   if (!reason) throw new ValidationError("reason is required");
   if (!input.fromRoomId?.trim()) throw new ValidationError("fromRoomId is required");
-  const hasSingle = !!input.toRoomId?.trim();
   const hasPerNightForm = Array.isArray(input.perNight) && input.perNight.length > 0;
-  if (hasSingle === hasPerNightForm) {
-    throw new ValidationError("Provide either toRoomId (one room for every night) or perNight (a room per night) — exactly one");
+  const hasSetup =
+    !!input.adjustments && Object.values(input.adjustments).some((v) => v !== undefined && v !== null);
+  // Naming the from-room itself as the single target is the same ask as naming no target.
+  const hasSingle = !!input.toRoomId?.trim() && input.toRoomId!.trim() !== input.fromRoomId.trim();
+  if (hasSingle && hasPerNightForm) {
+    throw new ValidationError("Provide either toRoomId (one room for every night) or perNight (a room per night) — not both");
   }
-  if (hasSingle && input.toRoomId === input.fromRoomId) throw new ValidationError("The replacement room is the same room");
+  const setupOnly = !hasSingle && !hasPerNightForm;
+  // A full re-price basis counts as "something to do" on its own — it IS the change.
+  const hasReprice = Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0;
+  const hasDiscountEdit = input.requestedDiscount !== undefined;
+  if (setupOnly && !hasSetup && !hasReprice && !hasDiscountEdit) {
+    throw new ValidationError(
+      input.toRoomId?.trim()
+        ? "The replacement room is the same room — to change only its setup, send adjustments (extra beds / meals) or roomCompositions"
+        : "Provide toRoomId (one room for every night), perNight (a room per night), or roomCompositions / adjustments alone to re-price this booking in place",
+    );
+  }
+  if (setupOnly && input.roomSetups?.length) {
+    throw new ValidationError("roomSetups is for per-night room changes — a setup-only change takes `adjustments` or `roomCompositions`");
+  }
+  if (hasReprice) {
+    // Two ways to say the same thing, applied in sequence, would make the result depend on
+    // ordering — so a composition table admits no composition patches on top. `bedType` is the
+    // exception BY CONSTRUCTION: it is a room-registry fact (how the beds are physically
+    // arranged), not a composition field, so it cannot collide with anything in the table and
+    // still rides along with it.
+    const compositionPatch = (a?: RoomChangeAdjustments) =>
+      !!a && Object.entries(a).some(([k, v]) => k !== "bedType" && v != null);
+    if (compositionPatch(input.adjustments) || (input.roomSetups ?? []).some(compositionPatch)) {
+      throw new ValidationError(
+        "roomCompositions is the full basis — send it alone (bed setup aside), without adjustments / roomSetups, which patch the carried composition instead",
+      );
+    }
+  }
+  if (hasDiscountEdit && !hasReprice && input.requestedDiscount != null) {
+    // A discount edit rides with the table that produced it; the figures it applies to must be
+    // the ones on screen, not whatever the prior quote happened to hold.
+    throw new ValidationError("A discount change is sent with the composition table it was negotiated on (roomCompositions)");
+  }
 
   const ctx = await loadRoomChangeContext(prisma, input.entryId, input.fromRoomId);
   const { entry, stage } = ctx;
 
   // ── The night → room map the change asks for ───────────────────────────────────────────────
   const targetsByNight = new Map<string, string>();
-  if (hasSingle) {
+  if (setupOnly) {
+    // The guest keeps the room on every night — nothing moves, only the setup re-prices.
+    for (const d of ctx.substitutionNights) targetsByNight.set(d, input.fromRoomId);
+  } else if (hasSingle) {
     for (const d of ctx.substitutionNights) targetsByNight.set(d, input.toRoomId!.trim());
   } else {
     for (const n of input.perNight!) {
@@ -671,8 +828,10 @@ export async function changeRoomToNewSegment(
   // Distinct NEW rooms (the from-room may appear per-night: those nights the guest KEEPS).
   const distinctTargets = Array.from(new Set(targetsByNight.values())).filter((id) => id !== input.fromRoomId);
   const keptFromNights = [...targetsByNight.entries()].filter(([, id]) => id === input.fromRoomId).map(([d]) => d).sort();
-  if (distinctTargets.length === 0) throw new ValidationError("Every night keeps the current room — nothing changes");
-  if (stage === Stage.S7 && (distinctTargets.length > 1 || keptFromNights.length > 0)) {
+  if (!setupOnly && distinctTargets.length === 0) {
+    throw new ValidationError("Every night keeps the current room — nothing changes");
+  }
+  if (!setupOnly && stage === Stage.S7 && (distinctTargets.length > 1 || keptFromNights.length > 0)) {
     // In-house the guest physically moves ONCE — a per-night split of the remaining nights
     // would schedule future moves nothing executes. Change again on the day of the next move.
     throw new ValidationError(
@@ -682,6 +841,9 @@ export async function changeRoomToNewSegment(
 
   const targetRooms = await prisma.room.findMany({ where: { id: { in: distinctTargets } }, include: { roomType: true } });
   const targetById = new Map(targetRooms.map((r) => [r.id, r]));
+  // A setup-only change's "target" is the from-room itself — the setup validation below reads
+  // the room's type (max extra beds) and bed stock off this map.
+  if (setupOnly) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
   for (const id of distinctTargets) {
     const room = targetById.get(id);
     if (!room) throw new NotFoundError("Room");
@@ -715,11 +877,15 @@ export async function changeRoomToNewSegment(
   // The PRIMARY replacement — the new room covering the most nights. It anchors everything
   // that is single-valued downstream (S7 physical swap, traces, the sealed-config marker,
   // the outcome's headline toRoom).
-  const primaryEntry = [...nightsByTarget.entries()].sort((a, b) => b[1].length - a[1].length)[0]!;
-  const toRoomId = primaryEntry[0];
+  const primaryEntry = [...nightsByTarget.entries()].sort((a, b) => b[1].length - a[1].length)[0] ?? null;
+  // Setup-only: the "to" room IS the from-room — everything single-valued downstream (the S7
+  // assignment split, traces, the hold anchor, the outcome) points at the room being re-set-up.
+  const toRoomId = setupOnly ? input.fromRoomId : primaryEntry![0];
   const toRoom = targetById.get(toRoomId)!;
   /** "201" on a simple swap; "201 + 305" on a per-night split — for notes and traces. */
-  const targetsLabel = distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ");
+  const targetsLabel = setupOnly
+    ? `${ctx.fromRoom.roomNumber} (${hasReprice ? "re-price" : "setup change"})`
+    : distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ");
 
   // Authority follows WHAT the change does, not the stage (2026-08-13 ruling): a same-type
   // swap is desk logistics (L1+); a cross-type move is an upgrade/downgrade that re-prices
@@ -777,11 +943,29 @@ export async function changeRoomToNewSegment(
   const operative = resolveOperativeQuotation(entry.quotations, currentSegment.id)
     ?? entry.quotations.find((q) => q.state === "ACCEPTED")
     ?? null;
-  const priorTerms = (operative?.commercialTerms ?? null) as Record<string, unknown> | null;
+  // Post-freeze fallback (2026-08-19): W15 keeps the validity clock ticking after the freeze,
+  // so a confirmed booking's quote routinely reads EXPIRED and `resolveOperativeQuotation`
+  // rightly refuses it — but the booking is still PRICED, on the reservation's frozen terms.
+  // Without this the carried compositions came back null on any such booking: a room change
+  // silently dropped every room's composition (re-quoting the stay flat), and the re-price
+  // path could not tell what had changed. Same reasoning as the billing summary's fallback —
+  // an expired clock must not un-price committed money.
+  const frozenTerms = (entry.reservation?.frozenCommercialTerms ?? null) as Record<string, unknown> | null;
+  const operativeTerms = (operative?.commercialTerms ?? null) as Record<string, unknown> | null;
+  const priorTerms =
+    Array.isArray(operativeTerms?.roomCompositions) && operativeTerms!.roomCompositions.length > 0
+      ? operativeTerms
+      : Array.isArray(frozenTerms?.roomCompositions) && frozenTerms!.roomCompositions.length > 0
+        ? frozenTerms
+        : operativeTerms ?? frozenTerms;
   const priorCompositions = Array.isArray(priorTerms?.roomCompositions)
     ? (priorTerms!.roomCompositions as RoomCompositionServiceInput[])
     : null;
-  const priorTotal = operative?.totalAmount != null ? Number(operative.totalAmount) : null;
+  const frozenTotal = (() => {
+    const t = (frozenTerms?.compositionTotals ?? null) as { total?: unknown } | null;
+    return typeof t?.total === "number" && Number.isFinite(t.total) ? t.total : null;
+  })();
+  const priorTotal = operative?.totalAmount != null ? Number(operative.totalAmount) : frozenTotal;
 
   // Capacity: the party moving rooms must fit EVERY room it will sleep in. Chargeable
   // occupants only — under-11s share bedding and take no slot (mirrors
@@ -812,8 +996,10 @@ export async function changeRoomToNewSegment(
   // selection (several new rooms / kept nights can't be said in the whole-stay shape);
   // pre-occupancy single swaps keep the original shape family so downstream displays don't
   // change form.
-  const emitPerNight =
-    stage === Stage.S7 || !!priorSel.perNight || distinctTargets.length > 1 || keptFromNights.length > 0;
+  // A setup-only change moves nothing, so the plan keeps whatever shape it already had.
+  const emitPerNight = setupOnly
+    ? !!priorSel.perNight
+    : stage === Stage.S7 || !!priorSel.perNight || distinctTargets.length > 1 || keptFromNights.length > 0;
   const deficientById = new Map<string, boolean>();
   {
     const involved = await prisma.room.findMany({
@@ -825,7 +1011,10 @@ export async function changeRoomToNewSegment(
   const anyDeficient = substitutedDistinct.some((id) => deficientById.get(id) === true);
   // Marker: toRoomId stays the PRIMARY new room (the plan-history chain folds 1:1 markers);
   // toRoomIds carries the full per-night set for future consumers.
-  const roomChangeMarker = { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
+  // A setup-only change writes NO roomChange marker — the plan-history chain folds markers
+  // room → room, and a 205 → 205 link would print a spurious "Changed" on the Initially cell.
+  // The sealed config's searchCriteria carries a `setupChange` note instead.
+  const roomChangeMarker = setupOnly ? null : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
   const substitutedOption = emitPerNight
     ? {
         perNight: substitutedPicture.map((n) => ({
@@ -833,18 +1022,21 @@ export async function changeRoomToNewSegment(
           roomIds: n.roomIds.map((roomId) => ({ roomId, isDeficient: deficientById.get(roomId) === true })),
         })),
         isDeficient: anyDeficient,
-        roomChange: roomChangeMarker,
+        ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
       }
     : {
         roomIds: substitutedDistinct.map((roomId) => ({ roomId, isDeficient: deficientById.get(roomId) === true })),
         isDeficient: anyDeficient,
-        roomChange: roomChangeMarker,
+        ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
       };
 
   // ── The carried compositions, with the one room substituted ────────────────────────────────
   let newCompositions: RoomCompositionServiceInput[] | undefined;
   if (priorCompositions && priorCompositions.length > 0) {
-    if (stage === Stage.S7 && movingComposition) {
+    if (setupOnly) {
+      // Nothing moves — every row carries; the setup block below rewrites the one row.
+      newCompositions = priorCompositions.map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
+    } else if (stage === Stage.S7 && movingComposition) {
       // In-house split: the old room keeps its row (it now prices only its slept nights via the
       // per-room nights fix), and the new room gets a copy for the remaining nights. Per-night
       // meal overrides follow their dates.
@@ -905,6 +1097,143 @@ export async function changeRoomToNewSegment(
     newCompositions = newCompositions.filter((c) => planSet.has(c.roomId));
   }
 
+  // ── Full re-price basis (2026-08-19) ───────────────────────────────────────────────────────
+  // The S2 negotiation table's own emission REPLACES the carried compositions. Everything is
+  // checked here, before the irreversible re-entry: the rows must describe exactly the rooms
+  // the plan will hold, and they must pass the same guards the quote itself applies.
+  let commercialChanged = false;
+  if (hasReprice) {
+    const supplied = input.roomCompositions!;
+    const planSet = new Set(substitutedDistinct);
+    const suppliedIds = supplied.map((c) => c.roomId);
+    const dupes = suppliedIds.filter((id, i) => suppliedIds.indexOf(id) !== i);
+    if (dupes.length > 0) throw new ValidationError("roomCompositions lists the same room twice");
+    const roomRows = await prisma.room.findMany({
+      where: { id: { in: [...new Set([...suppliedIds, ...substitutedDistinct])] } },
+      select: { id: true, roomNumber: true },
+    });
+    const numberByRoomId = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
+    const label = (id: string) => `Room ${numberByRoomId.get(id) ?? id.slice(0, 6)}`;
+    const strays = suppliedIds.filter((id) => !planSet.has(id));
+    const missing = substitutedDistinct.filter((id) => !suppliedIds.includes(id));
+    if (strays.length > 0 || missing.length > 0) {
+      throw new ValidationError(
+        `roomCompositions must cover exactly the booking's rooms — ${
+          [
+            strays.length > 0 ? `${strays.map(label).join(", ")} ${strays.length === 1 ? "is" : "are"} not part of the plan` : null,
+            missing.length > 0 ? `${missing.map(label).join(", ")} ${missing.length === 1 ? "is" : "are"} missing` : null,
+          ].filter(Boolean).join("; ")
+        }. Adding or removing a room is a room change, not a re-price.`,
+      );
+    }
+
+    // Commercial vs operational (see p58's `enforceRepriceAuthorityForStage`): a negotiated
+    // rate, a waiver or the discount moving makes this a rate revision. Compared against the
+    // operative quotation this booking is priced on today, per room.
+    // The baseline is what the CARRY would have produced — `newCompositions` as the block above
+    // just computed it, not the pre-change plan. That is what makes the comparison correct for
+    // every form: a pure re-price (carry === prior), a room change (the from-room's row remapped
+    // onto the new room, with `negotiatedRoomRate` already dropped on a cross-type move because
+    // that rate was negotiated for the OLD type), and a per-night split (one carried row per
+    // carrying room). Comparing against the pre-change plan instead would read a new room's
+    // CARRIED rate as a fresh negotiation and demand FOM authority for an L1 same-type swap.
+    const priorByRoom = new Map((newCompositions ?? priorCompositions ?? []).map((c) => [c.roomId, c]));
+    const money = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Number(v.toFixed(2)) : null);
+    const COMMERCIAL_RATES = [
+      "negotiatedRoomRate",
+      "negotiatedExtraBedRate",
+      "negotiatedBreakfastRate",
+      "negotiatedLunchRate",
+      "negotiatedDinnerRate",
+    ] as const;
+    for (const c of supplied) {
+      const prior = priorByRoom.get(c.roomId) ?? null;
+      // A room that had no prior row (the target of a room change) is priced at its own type's
+      // published rate — carrying no negotiation. Only an explicit rate on it is commercial.
+      for (const k of COMMERCIAL_RATES) {
+        if (money(c[k]) !== money(prior?.[k])) commercialChanged = true;
+      }
+      if ((c.isFoc ?? false) !== (prior?.isFoc ?? false)) commercialChanged = true;
+      if ((c.serviceChargeApplies ?? true) !== (prior?.serviceChargeApplies ?? true)) commercialChanged = true;
+      if ((c.gstApplies ?? true) !== (prior?.gstApplies ?? true)) commercialChanged = true;
+    }
+    if (hasDiscountEdit) {
+      const before = (priorTerms?.requestedDiscount ?? null) as { discountPercent?: number; discountAmount?: number } | null;
+      const after = input.requestedDiscount ?? null;
+      if (money(before?.discountPercent) !== money(after?.discountPercent) || money(before?.discountAmount) !== money(after?.discountAmount)) {
+        commercialChanged = true;
+      }
+    }
+    enforceRepriceAuthorityForStage({
+      currentStage: String(stage),
+      actorLevel: actor.actorLevel,
+      touchesCommercialTerms: commercialChanged,
+    });
+
+    // The same three guards the quote runs — failing here leaves the booking untouched.
+    enforceRoomCompositionsPriceable(supplied, {
+      numberByRoomId,
+      stayCheckIn: ctx.checkIn,
+      stayCheckOut: ctx.checkOut,
+      nights: ctx.nightsIso.length,
+    });
+
+    // A pure re-price that changes nothing must not roll a segment (the operator opened the
+    // table, looked, and saved). Only checked when no room moved — a room change is itself
+    // the change. Compares every field the quote actually prices on.
+    if (setupOnly && !commercialChanged) {
+      const PRICED_FIELDS = [
+        "occupantCount", "adultCount", "cnb6To10Count", "cnbUnder6Count", "extraBedCount",
+        "mealPlanCpCount", "mealPlanMaplCount", "mealPlanMapdCount", "mealPlanApCount",
+        "mealPlanOthersCount", "othersBreakfastPax", "othersLunchPax", "othersDinnerPax",
+      ] as const;
+      const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+      const nightsKey = (c: RoomCompositionServiceInput) =>
+        JSON.stringify(
+          (c.nightMealOverrides ?? [])
+            .map((o) => ({ ...o, date: String(o.date).slice(0, 10) }))
+            .sort((a, b) => a.date.localeCompare(b.date)),
+        );
+      const identical = supplied.every((c) => {
+        const prior = priorByRoom.get(c.roomId);
+        if (!prior) return false;
+        return PRICED_FIELDS.every((k) => n(c[k]) === n(prior[k])) && nightsKey(c) === nightsKey(prior);
+      });
+      if (identical) {
+        throw new ValidationError("Nothing on the table changed — edit a figure before re-pricing, or close the panel");
+      }
+    }
+    newCompositions = supplied.map((c) => ({ ...c }));
+
+    // In-house: the table describes the stay FROM TONIGHT. Pin each room's slept nights to what
+    // they actually were, so re-pricing does not retroactively re-charge nights the folio has
+    // already posted. Only meals and extra beds can be expressed per night — a mid-stay RATE
+    // change cannot, which is why it is a GM decision and why the desk says the already-posted
+    // nights need a folio correction rather than being silently re-billed.
+    if (setupOnly && stage === Stage.S7) {
+      const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+      for (const row of newCompositions) {
+        const prior = priorByRoom.get(row.roomId) ?? null;
+        if (!prior) continue;
+        const mealsChanged =
+          n(row.mealPlanCpCount) !== n(prior.mealPlanCpCount) ||
+          n(row.mealPlanMaplCount) !== n(prior.mealPlanMaplCount) ||
+          n(row.mealPlanMapdCount) !== n(prior.mealPlanMapdCount) ||
+          n(row.mealPlanApCount) !== n(prior.mealPlanApCount) ||
+          n(row.mealPlanOthersCount) !== n(prior.mealPlanOthersCount) ||
+          n(row.othersBreakfastPax) !== n(prior.othersBreakfastPax) ||
+          n(row.othersLunchPax) !== n(prior.othersLunchPax) ||
+          n(row.othersDinnerPax) !== n(prior.othersDinnerPax);
+        const bedsChanged = n(row.extraBedCount) !== n(prior.extraBedCount);
+        pinSleptNightsToPriorSetup(
+          row,
+          { composition: prior, mealsChanged, bedsChanged },
+          ctx.picture.filter((x) => x.roomIds.includes(row.roomId) && x.date < ctx.todayIso).map((x) => x.date),
+        );
+      }
+    }
+  }
+
   // ── Operator setups per new room (2026-08-14) ──────────────────────────────────────────────
   // Meals / extra bed rewrite each carried composition row so the SILENT QUOTE prices what the
   // guest actually asked for; the bed setup is a registry fact applied once the change is real.
@@ -939,7 +1268,17 @@ export async function changeRoomToNewSegment(
       }
       requestedBedTypes.set(roomId, bedType);
     }
-    if (!wantsCompositionChange) continue;
+    if (!wantsCompositionChange) {
+      // A bed setup riding alongside a composition table is legitimate (see the guard above) —
+      // the table is the change; this just records how the beds are arranged.
+      if (setupOnly && !hasReprice) {
+        // A bed-type-only ask is a registry fact, not a commercial one — no segment to roll.
+        throw new ValidationError(
+          "Only the bed setup was asked for — change that with the bed-setup dropdown on the room row; a setup-only change re-prices extra beds / meals",
+        );
+      }
+      continue;
+    }
     for (const v of [adj.extraBedCount, ...mealFields]) {
       if (v != null && (!Number.isInteger(v) || v < 0)) {
         throw new ValidationError("Extra-bed and meal-plan counts must be whole numbers of 0 or more");
@@ -969,6 +1308,36 @@ export async function changeRoomToNewSegment(
         `Meal plans cover ${planSum} guests but only ${occ} sleep in Room ${room.roomNumber} — reduce the counts`,
       );
     }
+    // What the row said BEFORE the rewrite — a setup-only change compares against it (a no-op
+    // must not roll a segment) and, in-house, keeps it on the slept nights.
+    const priorBeds = row.extraBedCount ?? 0;
+    const priorMeals = {
+      mealPlanCpCount: row.mealPlanCpCount ?? 0,
+      mealPlanMaplCount: row.mealPlanMaplCount ?? 0,
+      mealPlanMapdCount: row.mealPlanMapdCount ?? 0,
+      mealPlanApCount: row.mealPlanApCount ?? 0,
+      mealPlanOthersCount: row.mealPlanOthersCount ?? 0,
+      othersBreakfastPax: row.othersBreakfastPax ?? 0,
+      othersLunchPax: row.othersLunchPax ?? 0,
+      othersDinnerPax: row.othersDinnerPax ?? 0,
+    };
+    const priorOverrides = [...(row.nightMealOverrides ?? [])];
+    const bedsChange = adj.extraBedCount != null && adj.extraBedCount !== priorBeds;
+    const mealsChange =
+      wantsMealChange &&
+      (nextCp !== priorMeals.mealPlanCpCount ||
+        nextMapl !== priorMeals.mealPlanMaplCount ||
+        nextMapd !== priorMeals.mealPlanMapdCount ||
+        nextAp !== priorMeals.mealPlanApCount);
+    if (setupOnly && !bedsChange && !mealsChange) {
+      const bedAsk = requestedBedTypes.get(roomId);
+      const bedNow = (room as { bedType?: string | null }).bedType ?? null;
+      throw new ValidationError(
+        bedAsk && bedAsk !== bedNow
+          ? `Only the bed setup differs — change that with the bed-setup dropdown on the room row; it is a housekeeping fact and needs no re-pricing`
+          : `Room ${room.roomNumber} already has ${priorBeds} extra bed${priorBeds === 1 ? "" : "s"} and the same meal plans — nothing changes`,
+      );
+    }
     Object.assign(row, {
       ...(adj.extraBedCount != null ? { extraBedCount: adj.extraBedCount } : {}),
       ...(wantsMealChange
@@ -983,6 +1352,27 @@ export async function changeRoomToNewSegment(
           }
         : {}),
     });
+    // In-house setup-only change (2026-08-19): the new setup applies from TONIGHT. The room keeps
+    // ONE composition row (every consumer keys by roomId), so the slept nights are pinned to the
+    // OLD setup with per-night overrides — old bed count and, when the meals moved, the old
+    // distribution (or that night's own prior exception). The quotation then prices slept nights
+    // as they were and remaining nights as asked, and the stay total reconciles to the ledger.
+    if (setupOnly && stage === Stage.S7) {
+      pinSleptNightsToPriorSetup(
+        row,
+        {
+          composition: {
+            roomId,
+            ...priorMeals,
+            extraBedCount: priorBeds,
+            nightMealOverrides: priorOverrides,
+          },
+          mealsChanged: mealsChange,
+          bedsChanged: bedsChange,
+        },
+        ctx.picture.filter((n) => n.roomIds.includes(roomId) && n.date < ctx.todayIso).map((n) => n.date),
+      );
+    }
     // p78's auto-add (3+ adults ⇒ ≥1 extra bed) still runs at quote time and is raise-only,
     // so a too-low extra-bed ask is corrected rather than refused — matching the S2 planner.
   }
@@ -990,14 +1380,21 @@ export async function changeRoomToNewSegment(
   // Carried discount: what the prior quote recorded, re-stamped under the authority that
   // already approved it (the approval carries WITH the concession — re-testing the acting
   // operator's band would let a room swap silently strip an FOM-approved discount).
-  const priorDiscount = (priorTerms?.requestedDiscount ?? null) as
+  const carriedDiscount = (priorTerms?.requestedDiscount ?? null) as
     | { discountPercent?: number; discountAmount?: number; discountBasis: string }
     | null;
+  // An explicit `requestedDiscount` REPLACES the carried one (null clears it); omitted carries.
+  const discountEdited = hasDiscountEdit;
+  const priorDiscount = discountEdited ? input.requestedDiscount ?? null : carriedDiscount;
   const priorApprovalLevel = ((priorTerms?.discountAuthority as { approvedLevel?: string } | undefined)?.approvedLevel ??
     null) as "L1" | "L2" | "L3" | "L4" | null;
   const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
+  // The carry exists so a room swap can't silently strip an FOM-approved concession. It must
+  // NOT apply to a discount the operator just changed — that one is theirs, and the
+  // `registry.discount.actorCeiling` band has to be measured against THEIR level (the draft
+  // refuses generation above it). Same rule the S2 create/supersede routes apply.
   const effectiveLevel: "L1" | "L2" | "L3" | "L4" =
-    priorDiscount && priorApprovalLevel && (RANK[priorApprovalLevel] ?? 0) > (RANK[actor.actorLevel] ?? 0)
+    !discountEdited && priorDiscount && priorApprovalLevel && (RANK[priorApprovalLevel] ?? 0) > (RANK[actor.actorLevel] ?? 0)
       ? priorApprovalLevel
       : actor.actorLevel;
 
@@ -1009,70 +1406,93 @@ export async function changeRoomToNewSegment(
   let newAssignmentIdForS7: string | null = null;
 
   // ── 1. The governed re-entry (new segment at S2) with origin-specific side effects ─────────
-  const reasonForTrace = `ROOM_CHANGE: ${reason}`;
+  const reasonForTrace = hasReprice
+    ? `BOOKING_REPRICE: ${reason}`
+    : setupOnly
+      ? `ROOM_SETUP_CHANGE: ${reason}`
+      : `ROOM_CHANGE: ${reason}`;
   if (stage === Stage.S7) {
     await backflowRoomChangeToS2(prisma, input.entryId, actor, {
       reason: reasonForTrace,
       fromStage: stage,
       hooks: async (tx) => {
         // Physical swap NOW — the guest moves tonight; the paperwork walk follows (SIG-S7 §264:
-        // old room OCCUPIED → DEPARTED_DIRTY, new room OCCUPIED).
-        await transitionRoomClaimState(tx, {
-          roomId: input.fromRoomId,
-          toState: InventoryClaimState.DEPARTED_DIRTY,
-          actorId: actor.actorId,
-          entryId: input.entryId,
-          reason: "S7 in-place room change",
-          now,
-        });
-        await transitionRoomClaimState(tx, {
-          roomId: toRoomId,
-          toState: InventoryClaimState.OCCUPIED,
-          actorId: actor.actorId,
-          entryId: input.entryId,
-          reason: "S7 in-place room change",
-          now,
-        });
+        // old room OCCUPIED → DEPARTED_DIRTY, new room OCCUPIED). A setup-only change moves
+        // nobody: the room stays OCCUPIED and its H2/H3 stand.
+        if (!setupOnly) {
+          await transitionRoomClaimState(tx, {
+            roomId: input.fromRoomId,
+            toState: InventoryClaimState.DEPARTED_DIRTY,
+            actorId: actor.actorId,
+            entryId: input.entryId,
+            reason: "S7 in-place room change",
+            now,
+          });
+          await transitionRoomClaimState(tx, {
+            roomId: toRoomId,
+            toState: InventoryClaimState.OCCUPIED,
+            actorId: actor.actorId,
+            entryId: input.entryId,
+            reason: "S7 in-place room change",
+            now,
+          });
+        }
 
         // Dated assignment split: the old room's row ends tonight (its frozen figures scaled to
         // the nights it actually covered, so `frozenSubtotal ÷ nights` stays the true per-night
         // rate), the new room's row runs tonight → checkout. Night audit already respects the
         // [startDate, endDate) window, so past nights stay billed on the old room and future
-        // audits post to the new one.
+        // audits post to the new one. A setup-only change splits the SAME room's row the same
+        // way — slept nights keep the old frozen figures, tonight onward is re-frozen from the
+        // silent quote below — except when the row already starts tonight (a second change the
+        // same day), where it is simply re-frozen in place.
+        let reuseRowInPlace = false;
         if (fromAssignment) {
           const aStart = fromAssignment.startDate ?? stayCheckIn;
           const aEnd = fromAssignment.endDate ?? stayCheckOut;
           const totalNights = Math.max(1, Math.round((aEnd.getTime() - aStart.getTime()) / DAY_MS));
           const sleptNights = Math.max(0, Math.min(totalNights, Math.round((ctx.today.getTime() - aStart.getTime()) / DAY_MS)));
-          const scale = new Prisma.Decimal(sleptNights).div(totalNights);
-          await tx.roomAssignment.update({
-            where: { id: fromAssignment.id },
+          if (setupOnly && sleptNights === 0) {
+            reuseRowInPlace = true;
+            newAssignmentIdForS7 = fromAssignment.id;
+          } else {
+            const scale = new Prisma.Decimal(sleptNights).div(totalNights);
+            await tx.roomAssignment.update({
+              where: { id: fromAssignment.id },
+              data: {
+                startDate: aStart,
+                endDate: ctx.today,
+                ...(fromAssignment.frozenSubtotal != null
+                  ? { frozenSubtotal: new Prisma.Decimal(fromAssignment.frozenSubtotal.toString()).mul(scale) }
+                  : {}),
+                ...(fromAssignment.frozenTotal != null
+                  ? { frozenTotal: new Prisma.Decimal(fromAssignment.frozenTotal.toString()).mul(scale) }
+                  : {}),
+              },
+            });
+          }
+        }
+        if (!reuseRowInPlace) {
+          const newAssignmentId = await allocateReadableId(tx, "ROOM_ASSIGNMENT" as const, now);
+          newAssignmentIdForS7 = newAssignmentId;
+          await tx.roomAssignment.create({
             data: {
-              startDate: aStart,
-              endDate: ctx.today,
-              ...(fromAssignment.frozenSubtotal != null
-                ? { frozenSubtotal: new Prisma.Decimal(fromAssignment.frozenSubtotal.toString()).mul(scale) }
-                : {}),
-              ...(fromAssignment.frozenTotal != null
-                ? { frozenTotal: new Prisma.Decimal(fromAssignment.frozenTotal.toString()).mul(scale) }
-                : {}),
+              id: newAssignmentId,
+              entryId: input.entryId,
+              roomId: toRoomId,
+              assignedBy: actor.actorId,
+              deficientAtAssignment: toRoom.isDeficient === true,
+              startDate: ctx.today,
+              endDate: stayCheckOut,
+              // (Key stamps stay on the slept-nights row — the key service reads per ROOM across
+              // every row, so the same-room split never reads as a second key.)
+              notes: setupOnly
+                ? `Setup change on Room ${ctx.fromRoom.roomNumber} from tonight: ${reason}`
+                : `Room change from ${ctx.fromRoom.roomNumber}: ${reason}`,
             },
           });
         }
-        const newAssignmentId = await allocateReadableId(tx, "ROOM_ASSIGNMENT" as const, now);
-        newAssignmentIdForS7 = newAssignmentId;
-        await tx.roomAssignment.create({
-          data: {
-            id: newAssignmentId,
-            entryId: input.entryId,
-            roomId: toRoomId,
-            assignedBy: actor.actorId,
-            deficientAtAssignment: toRoom.isDeficient === true,
-            startDate: ctx.today,
-            endDate: stayCheckOut,
-            notes: `Room change from ${ctx.fromRoom.roomNumber}: ${reason}`,
-          },
-        });
+        if (setupOnly) return;
 
         // Withdraw the OLD room's H2/H3 (SIG-S7 §169/§601) — fresh ones are minted for the new
         // room on the compressed return. Matched by assignment FK, falling back to the room
@@ -1166,6 +1586,9 @@ export async function changeRoomToNewSegment(
       return { roomId, roomNumber: room.roomNumber, roomTypeName: room.roomType?.name ?? null, nights };
     }),
     keptNights: keptFromNights,
+    setupOnly,
+    repriced: hasReprice,
+    commercialTermsChanged: commercialChanged,
     sameType,
     substitutionNights: ctx.substitutionNights,
     appliedBedType,
@@ -1211,7 +1634,9 @@ export async function changeRoomToNewSegment(
           ...priorCriteria,
           checkInDate: priorCriteria.checkInDate ?? stayCheckIn.toISOString(),
           checkOutDate: priorCriteria.checkOutDate ?? stayCheckOut.toISOString(),
-          roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason },
+          ...(setupOnly
+            ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason } }
+            : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason } }),
           recalledFromSegmentNumber: currentSegment.segmentNumber,
         } as Prisma.InputJsonValue,
         resultSet: (ctx.sealedConfig?.resultSet ?? {}) as Prisma.InputJsonValue,
@@ -1227,7 +1652,9 @@ export async function changeRoomToNewSegment(
   // ── 3. Silent quotation — the new segment's priced basis; nothing goes to the guest ────────
   try {
     const draft: QuotationDraftInput = {
-      notes: `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
+      notes: setupOnly
+        ? `Setup change on Room ${ctx.fromRoom.roomNumber} (${reason})`
+        : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
       ...(newCompositions ? { roomCompositions: newCompositions } : {}),
       ...(priorDiscount ? { requestedDiscount: priorDiscount } : {}),
       actorLevel: effectiveLevel,
@@ -1245,9 +1672,23 @@ export async function changeRoomToNewSegment(
   // NEW room's remaining nights at the figures the new segment actually priced.
   if (stage === Stage.S7 && newAssignmentIdForS7) {
     try {
-      const fields = await hydrateRoomAssignmentComposition(prisma, input.entryId, toRoomId);
+      // Setup-only: the quotation prices the room for the WHOLE stay (slept nights pinned to the
+      // old setup via overrides); this row covers tonight → checkout, so it freezes exactly that
+      // window — the night audit's `frozenSubtotal ÷ nights` then IS tonight's true rate.
+      const fields = await hydrateRoomAssignmentComposition(
+        prisma,
+        input.entryId,
+        toRoomId,
+        setupOnly ? { nights: ctx.substitutionNights.length, startDate: ctx.today } : undefined,
+      );
       if (fields) {
-        await prisma.roomAssignment.update({ where: { id: newAssignmentIdForS7 }, data: fields as Prisma.RoomAssignmentUpdateInput });
+        const rowId = newAssignmentIdForS7;
+        await prisma.$transaction(async (tx) => {
+          // A row re-frozen IN PLACE (setup-only, same-day second change) may already carry
+          // per-night rows; (assignment, date) is unique, so clear them before the nested create.
+          if (setupOnly) await tx.roomNightMealPlan.deleteMany({ where: { roomAssignmentId: rowId } });
+          await tx.roomAssignment.update({ where: { id: rowId }, data: fields as Prisma.RoomAssignmentUpdateInput });
+        });
       }
     } catch {
       // Non-fatal — night audit falls back to reservation.frozenRate for this room.
@@ -1365,7 +1806,9 @@ export async function changeRoomToNewSegment(
     if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED") {
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
-        verbatimNote: `Guest requested the room change (${ctx.fromRoom.roomNumber} → ${targetsLabel}): ${reason}. The change itself is the guest's answer to the re-issued voucher.`,
+        verbatimNote: setupOnly
+          ? `Guest asked for the setup change on Room ${ctx.fromRoom.roomNumber}: ${reason}. The change itself is the guest's answer to the re-issued voucher.`
+          : `Guest requested the room change (${ctx.fromRoom.roomNumber} → ${targetsLabel}): ${reason}. The change itself is the guest's answer to the re-issued voucher.`,
       });
     }
   } catch {
@@ -1465,7 +1908,9 @@ export async function changeRoomToNewSegment(
           where: { id: input.entryId },
           data: { currentStage: Stage.S7, version: { increment: 1 }, updatedAt: jumpNow },
         });
-
+        // Fresh H2 (housekeeping) + H3 (F&B) for the NEW room — same shape check-in mints. A
+        // setup-only change keeps the room and its standing H2/H3; nothing is re-minted.
+        if (!setupOnly) {
         // Fresh H2 (housekeeping) + H3 (F&B) for the NEW room — same shape check-in mints.
         const h2Id = await allocateReadableId(tx, "HANDOFF" as const, jumpNow);
         await tx.handoffRecord.create({
@@ -1509,6 +1954,7 @@ export async function changeRoomToNewSegment(
             stageContext: Stage.S7,
           },
         });
+        }
 
         await tx.traceEvent.create({
           data: {
@@ -1526,6 +1972,7 @@ export async function changeRoomToNewSegment(
               entryId: input.entryId,
               fromRoomId: input.fromRoomId,
               toRoomId,
+              setupOnly,
               reason,
               compressedPer: "SIG-S6 §102 / SIG-S7 §42",
             },

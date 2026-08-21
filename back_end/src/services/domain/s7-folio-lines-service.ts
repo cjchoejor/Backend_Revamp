@@ -2,7 +2,6 @@ import { FolioLineType, FolioState, Prisma, Stage, type PrismaClient } from "@pr
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
-import { calculateTax } from "../../engines/tax-engine.js";
 import { enforceCreditCeilingChargePostingGate } from "../../policies/18-credit-extension-ceiling/p45-credit-ceiling-charge-posting-gate.js";
 import { enforceChargeDateNotSealedByCompleteNightAudit } from "../../policies/24-night-audit/p61-charge-date-not-sealed-by-complete-night-audit.js";
 import {
@@ -16,8 +15,11 @@ import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 import {
+  classifyFolioLine,
+  companionRateFromDescription,
   gstLineDescription,
   salesTaxCorrectionDescription,
+  serviceChargeCorrectionDescription,
   serviceChargeLineDescription,
 } from "../../lib/folio-tax-lines.js";
 
@@ -418,8 +420,8 @@ export async function correctCharge(
   const original = await prisma.folioLine.findUnique({ where: { id: input.originalFolioLineId } });
   if (!original) throw new NotFoundError("FolioLine");
   if (original.folioId !== folioId) throw new ValidationError("originalFolioLineId does not belong to this folio");
-  if (isSalesTaxLine(original.description)) {
-    throw new ValidationError("Correct the underlying charge line, not the sales tax line");
+  if (isSalesTaxLine(original.description) || classifyFolioLine(original) !== "CHARGE") {
+    throw new ValidationError("Correct the underlying charge line, not its service-charge / GST line");
   }
   if (isCorrectionLine(original.description)) {
     throw new ValidationError("Select the original charge line, not an earlier correction line");
@@ -443,7 +445,17 @@ export async function correctCharge(
       'A negative "correct to" amount is not a valid net charge. To reduce this line, send correctionAmount (e.g. −50 to lower a 200 charge by 50).',
     );
   }
-  const delta = hasTarget ? input.correctToAmount! - originalAmount : input.correctionAmount!;
+  // "Set net to" measures against what the charge stands at NOW — the original plus every
+  // earlier correction of it (2026-08-21; it used to read the original alone, so a 200 charge
+  // corrected −50 and then "set to 100" posted −100 and landed on 50).
+  const priorCorrections = hasTarget
+    ? await prisma.folioLine.findMany({
+        where: { folioId, description: { startsWith: `Correction for ${original.id}:` } },
+        select: { amount: true },
+      })
+    : [];
+  const currentNet = originalAmount + priorCorrections.reduce((acc, l) => acc + num(l.amount), 0);
+  const delta = hasTarget ? input.correctToAmount! - currentNet : input.correctionAmount!;
   if (!Number.isFinite(delta) || delta === 0) {
     throw new ValidationError("Correction would not change the charge amount");
   }
@@ -476,40 +488,81 @@ export async function correctCharge(
     });
 
     if (original.lineType !== FolioLineType.CREDIT_NOTE) {
-      const rate = await resolveSalesTaxRate(tx);
-      if (rate > 0) {
-        let taxDelta: number;
-        if (hasTarget) {
-          const { taxAmount: newTax } = calculateTax({ taxableAmount: input.correctToAmount!, rate });
-          const taxLines = await tx.folioLine.findMany({
-            where: {
-              folioId,
-              lineType: FolioLineType.OTHER,
-              description: { contains: taxLineSuffixForCharge(original.description) },
-            },
-          });
-          const oldTax = taxLines.reduce((sum, line) => sum + num(line.amount), 0);
-          taxDelta = newTax - oldTax;
-        } else {
-          taxDelta = calculateTax({ taxableAmount: delta, rate }).taxAmount;
-        }
+      // ── The charge's service charge and GST move WITH it (2026-08-21, operator: "I applied −50,
+      // what about service charge and GST — it should also change, no?") ─────────────────────
+      // Before: only a GST delta was posted, computed on the bare delta. Now the correction
+      // posts an SC correction and a GST correction exactly as the charge was taxed: SC on the
+      // delta, GST compound on (delta + SC delta) — the hotel-wide rule every posting uses.
+      // Which taxes apply, and at what rate, is read off the charge's OWN companion lines (a
+      // charge posted SC-exempt gets no SC correction; an old charge taxed at an older rate moves
+      // at THAT rate), falling back to today's config. A legacy line with no companions at all
+      // keeps the previous GST-only behaviour so imported folios don't gain tax lines they never had.
+      const suffix = taxLineSuffixForCharge(original.description);
+      const related = await tx.folioLine.findMany({
+        where: { folioId, description: { contains: suffix }, roomId: original.roomId ?? null },
+        select: { lineType: true, description: true, amount: true },
+      });
+      const scLines = related.filter((l) => classifyFolioLine(l) === "SERVICE_CHARGE");
+      const gstLines = related.filter((l) => classifyFolioLine(l) === "GST");
+      const rateFrom = (ls: typeof related) =>
+        ls.map((l) => companionRateFromDescription(l.description)).find((r): r is number => r != null && r > 0) ?? null;
+      const { gstRate: cfgGst, serviceChargeRate: cfgSc } = await resolveChargeRates(tx as unknown as PrismaClient);
+      const legacy = scLines.length === 0 && gstLines.length === 0;
+      const scApplies = scLines.length > 0;
+      const gstApplies = gstLines.length > 0 || legacy;
+      const scRate = scApplies ? rateFrom(scLines) ?? cfgSc : 0;
+      const gstRate = gstApplies ? rateFrom(gstLines) ?? (legacy ? await resolveSalesTaxRate(tx) : cfgGst) : 0;
 
-        if (Math.abs(taxDelta) >= 0.005) {
-          await tx.folioLine.create({
-            data: {
-              folioId,
-              lineType: FolioLineType.OTHER,
-              description: salesTaxCorrectionDescription(original.description),
-              amount: new Prisma.Decimal(taxDelta.toFixed(2)),
-              currency: original.currency,
-              chargeDate: correctionDate,
-              stage: Stage.S7,
-              postedBy: actorId,
-              billingModel: correctionBillingModel,
-              roomId: original.roomId,
-            },
-          });
-        }
+      const deltaDec = toDecimal(delta.toFixed(2));
+      let scDelta = ZERO;
+      let gstDelta = ZERO;
+      if (hasTarget) {
+        // "Set net to": the charge's taxes become what the TARGET net would carry; the deltas
+        // are measured against everything already on the ledger for this charge — its original
+        // companions and any earlier corrections' — so repeated corrections never double-count.
+        const targetDec = toDecimal(input.correctToAmount!.toFixed(2));
+        const newSc = scApplies && scRate > 0 ? round2(mulMoney(targetDec, scRate)) : ZERO;
+        const oldSc = scLines.reduce((acc, l) => acc.add(toDecimal(l.amount)), ZERO);
+        scDelta = scApplies ? newSc.sub(oldSc) : ZERO;
+        const newGst = gstApplies && gstRate > 0 ? round2(mulMoney(targetDec.add(newSc), gstRate)) : ZERO;
+        const oldGst = gstLines.reduce((acc, l) => acc.add(toDecimal(l.amount)), ZERO);
+        gstDelta = gstApplies ? newGst.sub(oldGst) : ZERO;
+      } else {
+        scDelta = scApplies && scRate > 0 ? round2(mulMoney(deltaDec, scRate)) : ZERO;
+        gstDelta = gstApplies && gstRate > 0 ? round2(mulMoney(deltaDec.add(scDelta), gstRate)) : ZERO;
+      }
+
+      if (scDelta.abs().gte(toDecimal("0.005"))) {
+        await tx.folioLine.create({
+          data: {
+            folioId,
+            lineType: FolioLineType.SERVICE,
+            description: serviceChargeCorrectionDescription(original.description),
+            amount: round2(scDelta),
+            currency: original.currency,
+            chargeDate: correctionDate,
+            stage: Stage.S7,
+            postedBy: actorId,
+            billingModel: correctionBillingModel,
+            roomId: original.roomId,
+          },
+        });
+      }
+      if (gstDelta.abs().gte(toDecimal("0.005"))) {
+        await tx.folioLine.create({
+          data: {
+            folioId,
+            lineType: FolioLineType.OTHER,
+            description: salesTaxCorrectionDescription(original.description),
+            amount: round2(gstDelta),
+            currency: original.currency,
+            chargeDate: correctionDate,
+            stage: Stage.S7,
+            postedBy: actorId,
+            billingModel: correctionBillingModel,
+            roomId: original.roomId,
+          },
+        });
       }
     }
 

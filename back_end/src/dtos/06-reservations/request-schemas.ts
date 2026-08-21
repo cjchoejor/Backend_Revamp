@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { discountShape, roomCompositionInputSchema } from "../05-quotations-and-holds/request-schemas.js";
 
 const transitionDataSchema = z
   .object({
@@ -116,17 +117,39 @@ export const roomChangeRequestSchema = z
     // Any non-empty reason — one word is fine (2026-08-14: the old min-3 kept the desk's swap
     // button dead on short reasons like "AC" with nothing explaining why).
     reason: z.string().trim().min(1, "A reason for the room change is required"),
-    // Simple-swap sugar: setup for the single replacement room.
+    // Simple-swap sugar: setup for the single replacement room — OR, with neither toRoomId nor
+    // perNight, a SETUP-ONLY change on the from-room itself (2026-08-19: extra beds / meals
+    // re-priced on the same room; the service walks the same governed journey).
     adjustments: z.object(roomChangeSetupShape).optional(),
     // Per-room setups for the per-night form — one entry per distinct new room.
     roomSetups: z
       .array(z.object({ roomId: z.string().min(1), ...roomChangeSetupShape }))
       .max(30)
       .optional(),
+    // FULL re-price basis (2026-08-19): the S2 negotiation table's own emission, one row per
+    // room of the resulting plan. Replaces the carried compositions outright — the service
+    // checks the room set matches and runs the quote's own composition guards before the
+    // irreversible re-entry. The SAME row + discount schemas the S2 create/supersede routes
+    // use, imported rather than restated so the two surfaces cannot drift.
+    roomCompositions: z.array(roomCompositionInputSchema).max(60).optional(),
+    /** Omitted carries the prior quote's discount; explicit null clears it. */
+    requestedDiscount: discountShape.nullable().optional(),
   })
-  .refine((v) => (v.toRoomId != null) !== (Array.isArray(v.perNight) && v.perNight.length > 0), {
-    message: "Provide either toRoomId or perNight — exactly one",
-  });
+  .refine(
+    (v) => {
+      const single = v.toRoomId != null;
+      const perNight = Array.isArray(v.perNight) && v.perNight.length > 0;
+      const setup = v.adjustments != null && Object.values(v.adjustments).some((x) => x != null);
+      // A full composition table (or an explicit discount edit) is a change in its own right.
+      const reprice = Array.isArray(v.roomCompositions) && v.roomCompositions.length > 0;
+      if (single && perNight) return false;
+      return single || perNight || setup || reprice;
+    },
+    {
+      message:
+        "Provide toRoomId, perNight, or — to re-price in place — roomCompositions / adjustments; toRoomId and perNight never together",
+    },
+  );
 export type RoomChangeRequestDto = z.infer<typeof roomChangeRequestSchema>;
 
 export const approveFocGmRequestSchema = z.object({

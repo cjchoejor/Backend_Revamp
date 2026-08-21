@@ -67,11 +67,17 @@ export const setAdvancePaymentPlanRequestSchema = z
     promisedBy: z.string().datetime({ offset: true }).optional().nullable(),
     note: z.string().max(500).optional().nullable(),
   })
+  // Only a plan with a REMAINDER must state its timing. FULL may state it too (2026-08-19: the
+  // guest paying the whole amount "on Friday" — the date arms the same W38 promise clock) or
+  // leave it empty, which means they are paying now.
   .refine((b) => (b.plan === "PARTIAL" || b.plan === "INSTALLMENTS" ? b.balanceDueAt != null : true), {
     message: "Say when the remainder is coming: before check-in, or at check-in",
   })
   .refine((b) => (b.balanceDueAt === "BEFORE_CHECKIN" ? b.promisedBy != null : true), {
     message: "A before-check-in promise needs the date the guest gave",
+  })
+  .refine((b) => (b.promisedBy != null ? b.balanceDueAt === "BEFORE_CHECKIN" : true), {
+    message: "A promised date belongs to a before-check-in plan — set balanceDueAt to BEFORE_CHECKIN or drop the date",
   });
 export type SetAdvancePaymentPlanRequestDto = z.infer<typeof setAdvancePaymentPlanRequestSchema>;
 

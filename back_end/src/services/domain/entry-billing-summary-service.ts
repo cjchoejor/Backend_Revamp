@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
+import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
 
 /**
  * ENTRY BILLING SUMMARY — the booking's money position in one read (2026-08-13, operator
@@ -72,6 +73,10 @@ export interface EntryBillingSummary {
     mealCounts: { cp: number; mapl: number; mapd: number; ap: number; others: number } | null;
     /** True when at least one night carries a per-date meal-plan override. */
     mealsVaryByNight: boolean;
+    /** True when the extra-bed count differs on some nights (2026-08-19 — an in-house setup
+     *  change adds the bed from tonight); `extraBedCount` is then the row's CURRENT count and
+     *  `extraBedSubtotal` the stored night-by-night figure, not count × rate × nights. */
+    extraBedsVaryByNight: boolean;
     roomSubtotal: number | null;
     extraBedSubtotal: number | null;
     mealsSubtotal: number | null;
@@ -100,11 +105,21 @@ export interface EntryBillingSummary {
     perRoomCharges: Array<{
       roomId: string;
       roomNumber: string | null;
+      /** Every line in the bucket, tax companions included — the bucket's all-in figure. */
       charges: number;
       lineCount: number;
+      /** Tax breakdown of the bucket (2026-08-21, per-room tabs on the desk): the CHARGE lines'
+       *  net, the service-charge companions, the GST companions. base + serviceCharge + gst =
+       *  charges. Companions are told apart by the one-home description convention
+       *  (lib/folio-tax-lines.ts), exactly as the FINAL invoice reads them. */
+      base: number;
+      serviceCharge: number;
+      gst: number;
     }> | null;
     /** Net sum + count of lines with NO room attribution (booking-wide). Null when none. */
-    unassignedCharges: { charges: number; lineCount: number } | null;
+    unassignedCharges: { charges: number; lineCount: number; base: number; serviceCharge: number; gst: number } | null;
+    /** The whole ledger's tax breakdown — base + serviceCharge + gst = billedSoFar. Null when no lines. */
+    chargeBreakdown: { base: number; serviceCharge: number; gst: number; total: number } | null;
   } | null;
 }
 
@@ -252,10 +267,17 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       const extraBedRate = num(r.extraBedRate);
       // FOC rooms store zero rates, so the component maths lands on 0 without a special case.
       const roomSubtotal = roomRate != null && roomNights != null ? money(mulMoney(roomRate, roomNights)) : null;
+      // The stored night-by-night figure wins when present (quotes priced since 2026-08-19 carry
+      // it, and it is the only honest number once a night overrides the bed count); older quotes
+      // fall back to the multiplication, which is exact for them.
+      const storedExtraBedSubtotal = num(r.extraBedSubtotal);
+      const extraBedsVaryByNight = r.extraBedsVaryByNight === true;
       const extraBedSubtotal =
-        extraBedRate != null && roomNights != null
-          ? money(mulMoney(mulMoney(extraBedRate, extraBedCount), roomNights))
-          : null;
+        storedExtraBedSubtotal != null
+          ? storedExtraBedSubtotal
+          : extraBedRate != null && roomNights != null
+            ? money(mulMoney(mulMoney(extraBedRate, extraBedCount), roomNights))
+            : null;
       const mealsSubtotal = num(r.mealsSubtotal);
       const storedSubtotal = num(r.subtotal);
       // On discounted quotes the stored subtotal/total are post-discount while the component
@@ -293,6 +315,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
             }
           : null,
         mealsVaryByNight: breakdown.some((n) => n.overridden === true),
+        extraBedsVaryByNight,
         roomSubtotal,
         extraBedSubtotal,
         mealsSubtotal,
@@ -310,7 +333,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     const [lines, inAgg, outAgg, writeOffAgg] = await Promise.all([
       prisma.folioLine.findMany({
         where: { folioId: entry.folio.id },
-        select: { amount: true, roomId: true, room: { select: { roomNumber: true } } },
+        select: { amount: true, roomId: true, lineType: true, description: true, room: { select: { roomNumber: true } } },
       }),
       prisma.paymentRecord.aggregate({ where: { folioId: entry.folio.id, paymentDirection: "IN" }, _sum: { amount: true } }),
       prisma.paymentRecord.aggregate({ where: { folioId: entry.folio.id, paymentDirection: "OUT" }, _sum: { amount: true } }),
@@ -321,20 +344,35 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
 
     // Per-room charge subtotals (2026-08-14): Decimal-summed server-side — the desk shows,
     // never sums. Lines with no roomId gather in the booking-wide bucket.
-    const byRoom = new Map<string, { roomNumber: string | null; sum: Prisma.Decimal; count: number }>();
-    let unassignedSum = toDecimal(0);
-    let unassignedCount = 0;
+    // Each bucket is split into base charges / SC companions / GST companions (2026-08-21) so
+    // the desk's per-room tabs can print "Charges · Service charge · GST · Total" for one room
+    // without adding anything up itself. `sum` stays the bucket's all-in figure.
+    type Bucket = { roomNumber: string | null; sum: Prisma.Decimal; base: Prisma.Decimal; sc: Prisma.Decimal; gst: Prisma.Decimal; count: number };
+    const newBucket = (roomNumber: string | null): Bucket => ({ roomNumber, sum: toDecimal(0), base: toDecimal(0), sc: toDecimal(0), gst: toDecimal(0), count: 0 });
+    const addTo = (b: Bucket, l: (typeof lines)[number]) => {
+      const amt = toDecimal(l.amount);
+      b.sum = b.sum.add(amt);
+      b.count += 1;
+      const kind = classifyFolioLine(l);
+      if (kind === "SERVICE_CHARGE") b.sc = b.sc.add(amt);
+      else if (kind === "GST") b.gst = b.gst.add(amt);
+      else b.base = b.base.add(amt);
+    };
+    const byRoom = new Map<string, Bucket>();
+    const unassigned = newBucket(null);
+    const whole = newBucket(null);
     for (const l of lines) {
+      addTo(whole, l);
       if (l.roomId) {
-        const cur = byRoom.get(l.roomId) ?? { roomNumber: l.room?.roomNumber ?? null, sum: toDecimal(0), count: 0 };
-        cur.sum = cur.sum.add(toDecimal(l.amount));
-        cur.count += 1;
+        const cur = byRoom.get(l.roomId) ?? newBucket(l.room?.roomNumber ?? null);
+        addTo(cur, l);
         byRoom.set(l.roomId, cur);
       } else {
-        unassignedSum = unassignedSum.add(toDecimal(l.amount));
-        unassignedCount += 1;
+        addTo(unassigned, l);
       }
     }
+    const unassignedSum = unassigned.sum;
+    const unassignedCount = unassigned.count;
     const perRoomCharges =
       byRoom.size > 0
         ? Array.from(byRoom.entries())
@@ -343,6 +381,9 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
               roomNumber: v.roomNumber,
               charges: money(v.sum) ?? 0,
               lineCount: v.count,
+              base: money(v.base) ?? 0,
+              serviceCharge: money(v.sc) ?? 0,
+              gst: money(v.gst) ?? 0,
             }))
             .sort((a, b) => (a.roomNumber ?? "").localeCompare(b.roomNumber ?? "", undefined, { numeric: true }))
         : null;
@@ -356,7 +397,20 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       writtenOff: writtenOffDec.gt(0) ? money(writtenOffDec) : null,
       outstandingBalance: money(toDecimal(entry.folio.outstandingBalance)),
       perRoomCharges,
-      unassignedCharges: unassignedCount > 0 ? { charges: money(unassignedSum) ?? 0, lineCount: unassignedCount } : null,
+      unassignedCharges:
+        unassignedCount > 0
+          ? {
+              charges: money(unassignedSum) ?? 0,
+              lineCount: unassignedCount,
+              base: money(unassigned.base) ?? 0,
+              serviceCharge: money(unassigned.sc) ?? 0,
+              gst: money(unassigned.gst) ?? 0,
+            }
+          : null,
+      chargeBreakdown:
+        lines.length > 0
+          ? { base: money(whole.base) ?? 0, serviceCharge: money(whole.sc) ?? 0, gst: money(whole.gst) ?? 0, total: money(whole.sum) ?? 0 }
+          : null,
     };
   }
 

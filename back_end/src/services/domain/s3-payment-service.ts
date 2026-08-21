@@ -71,8 +71,6 @@ export function describeAdvancePaymentPlan(
   formatDate: (d: Date) => string,
 ): string | null {
   if (!plan) return null;
-  if (plan.plan === "FULL") return "Full amount at once";
-  const head = plan.plan === "PARTIAL" ? "Part now" : "In installments";
   const promised = plan.promisedBy ? new Date(plan.promisedBy) : null;
   const due =
     plan.balanceDueAt === "BEFORE_CHECKIN" && promised && Number.isFinite(promised.getTime())
@@ -82,6 +80,10 @@ export function describeAdvancePaymentPlan(
         : plan.balanceDueAt === "AT_CHECKOUT"
           ? "at check-out"
           : null;
+  // FULL carries timing since 2026-08-19 — "the whole amount, but on Friday" is a real answer,
+  // and the guest must read the date they gave. Without timing it stays the pay-now sentence.
+  if (plan.plan === "FULL") return due ? `Full amount ${due}` : "Full amount at once";
+  const head = plan.plan === "PARTIAL" ? "Part now" : "In installments";
   return due ? `${head} — remainder ${due}` : head;
 }
 
@@ -668,39 +670,47 @@ export async function setAdvancePaymentPlan(
       );
     }
 
-    if (input.plan === "FULL") {
-      if (balanceDueAt || input.promisedBy) {
-        throw new ValidationError("A full-payment plan carries no remainder — leave the timing fields empty");
-      }
-    } else {
-      if (!balanceDueAt) {
+    // Timing is the SAME question for all three plans — "when is that money coming?" — and only
+    // its answer's subject differs (the whole amount on FULL, the remainder on the other two).
+    // FULL may leave it empty, meaning the guest is paying now; PARTIAL / INSTALLMENTS must say,
+    // because a remainder with no due point is not a plan (2026-08-19 operator request: "if the
+    // guest decides to pay at once, need a time for this also to note down when he promised to
+    // pay" — a full payer saying "I'll send the whole thing on Friday" had nowhere to be
+    // recorded, and no W38 clock; that promise now arms the same timer).
+    const subject = input.plan === "FULL" ? "the payment" : "the remainder";
+    if (!balanceDueAt) {
+      if (input.plan !== "FULL") {
         throw new ValidationError("Say when the remainder is coming: before check-in, or at check-in");
       }
-      if (balanceDueAt === "BEFORE_CHECKIN") {
-        if (!input.promisedBy) {
-          throw new ValidationError("A before-check-in promise needs the date the guest gave");
-        }
-        const promised = input.promisedBy instanceof Date ? input.promisedBy : new Date(input.promisedBy);
-        if (!Number.isFinite(promised.getTime())) throw new ValidationError("promisedBy is not a valid date");
-        if (promised.getTime() <= now.getTime()) {
-          throw new ValidationError("The promised date is already in the past — pick a future date");
-        }
-        // The advance window closes at check-in; a promise beyond it means "before check-in"
-        // in name only. Clamp rather than reject — the guest's words were "before check-in".
-        // A check-in already in the past makes the whole framing impossible (the clamp would
-        // land in the past and the timer would fire immediately) — refuse with the right
-        // alternatives instead.
-        const checkIn = entry.checkInDate ?? null;
-        if (checkIn && checkIn.getTime() <= now.getTime()) {
-          throw new ValidationError(
-            "Check-in has already arrived — record the remainder as due at the check-in desk instead",
-          );
-        }
-        const clamped = checkIn && promised.getTime() > checkIn.getTime() ? checkIn : promised;
-        promisedByIso = clamped.toISOString();
-      } else if (input.promisedBy) {
-        throw new ValidationError("An at-check-in plan doesn't take a date — the desk itself is the deadline");
+      if (input.promisedBy) {
+        throw new ValidationError(
+          "A promised date needs its timing too — record the plan as due before check-in, or drop the date if the guest is paying now",
+        );
       }
+    } else if (balanceDueAt === "BEFORE_CHECKIN") {
+      if (!input.promisedBy) {
+        throw new ValidationError(`A before-check-in promise needs the date the guest gave for ${subject}`);
+      }
+      const promised = input.promisedBy instanceof Date ? input.promisedBy : new Date(input.promisedBy);
+      if (!Number.isFinite(promised.getTime())) throw new ValidationError("promisedBy is not a valid date");
+      if (promised.getTime() <= now.getTime()) {
+        throw new ValidationError("The promised date is already in the past — pick a future date");
+      }
+      // The advance window closes at check-in; a promise beyond it means "before check-in"
+      // in name only. Clamp rather than reject — the guest's words were "before check-in".
+      // A check-in already in the past makes the whole framing impossible (the clamp would
+      // land in the past and the timer would fire immediately) — refuse with the right
+      // alternatives instead.
+      const checkIn = entry.checkInDate ?? null;
+      if (checkIn && checkIn.getTime() <= now.getTime()) {
+        throw new ValidationError(
+          `Check-in has already arrived — record ${subject} as due at the check-in desk instead`,
+        );
+      }
+      const clamped = checkIn && promised.getTime() > checkIn.getTime() ? checkIn : promised;
+      promisedByIso = clamped.toISOString();
+    } else if (input.promisedBy) {
+      throw new ValidationError("An at-check-in plan doesn't take a date — the desk itself is the deadline");
     }
 
     stored = {

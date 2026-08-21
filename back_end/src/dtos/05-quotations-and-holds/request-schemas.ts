@@ -17,7 +17,7 @@ const discountObject = z.object({
 const exactlyOneDiscountForm = (d: { discountPercent?: number; discountAmount?: number }) =>
   (d.discountPercent != null) !== (d.discountAmount != null);
 const oneFormMessage = { message: "Provide exactly one of discountPercent or discountAmount" };
-const discountShape = discountObject.refine(exactlyOneDiscountForm, oneFormMessage);
+export const discountShape = discountObject.refine(exactlyOneDiscountForm, oneFormMessage);
 
 const belowMsrGmWaiverSchema = z.object({
   acknowledged: z.literal(true),
@@ -88,6 +88,9 @@ export const roomCompositionInputSchema = z.object({
         othersBreakfastPax: z.coerce.number().int().min(0).optional(),
         othersLunchPax: z.coerce.number().int().min(0).optional(),
         othersDinnerPax: z.coerce.number().int().min(0).optional(),
+        // Extra beds on this one night when they differ from the row's stay-wide count
+        // (2026-08-19 — written by the in-house setup change; a bed-only entry leaves meals alone).
+        extraBedCount: z.coerce.number().int().min(0).max(6).optional(),
       }),
     )
     .max(370)

@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { PreArrivalTaskType, TaskStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
-import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { hashSha256, readDocument, verifyChecksum, writeDocument } from "../../lib/document-storage.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
@@ -287,7 +287,16 @@ export async function saveGuestIdentityDetail(
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    select: { id: true, status: true, currentStage: true, inquiryId: true, guestProfileId: true },
+    select: {
+      id: true,
+      status: true,
+      currentStage: true,
+      inquiryId: true,
+      guestProfileId: true,
+      adultCount: true,
+      childAges: true,
+      guestCount: true,
+    },
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryNotSealedForWorkingAction({ status: entry.status });
@@ -325,8 +334,23 @@ export async function saveGuestIdentityDetail(
   const now = new Date();
   const existing = await prisma.guestIdentityDocument.findFirst({
     where: { entryId: entry.id, subjectKey, storageKey: null },
-    select: { id: true },
+    select: { id: true, subjectLabel: true, detailsConfirmedAt: true },
   });
+  // Confirmed details are read-only (2026-08-21, operator ruling): the desk disables the row
+  // and the backend refuses the write, so no other client can slip a change past the lock.
+  // "Make changes" (unconfirm) is the one way back in — for THIS operator or a later stage's.
+  if (existing?.detailsConfirmedAt) {
+    // Name the guest the way the desk does — the slot key means nothing to an operator.
+    const who =
+      existing.subjectLabel?.trim() ||
+      derivePartySlots(entry).find((x) => x.key === subjectKey)?.label ||
+      subjectKey;
+    throw new PolicyGateBlockedError(
+      "GUEST_DETAILS_CONFIRMED",
+      `${who}'s details are confirmed — use "Make changes" to unlock them before editing`,
+      { subjectKey, confirmedAt: existing.detailsConfirmedAt },
+    );
+  }
 
   const saved = await prisma.$transaction(async (tx) => {
     let row;
@@ -381,6 +405,168 @@ export async function saveGuestIdentityDetail(
   // A typed document number may have been the last missing piece — tick the Arrival checklist.
   await autoCompleteGuestDetailsTaskIfCovered(prisma, entryId, actorId);
   return saved;
+}
+
+/**
+ * Confirm — or unlock — one or more guests' typed details (2026-08-21, operator request).
+ *
+ * A CONFIRMED row is read-only: `saveGuestIdentityDetail` refuses every write to it (typing,
+ * an applied OCR suggestion, the returning-guest pull) until the operator explicitly unlocks
+ * it with "Make changes". The flag lives on the row itself, so a guest confirmed at Arrival
+ * is still locked at Check-in and during the Stay, on this terminal and any other.
+ *
+ * A slot can only be confirmed once SOMETHING is on file for it — a saved detail row or a
+ * stored ID photo (a photo-only slot has no detail row yet, so a bare one is created to carry
+ * the confirmation). Slots with nothing recorded are SKIPPED and named back to the caller
+ * rather than silently confirmed empty; the same goes for no-op confirms/unlocks.
+ */
+export async function setGuestIdentityDetailConfirmation(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: { subjectKeys: string[]; confirmed: boolean },
+) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      status: true,
+      currentStage: true,
+      inquiryId: true,
+      guestProfileId: true,
+      adultCount: true,
+      childAges: true,
+      guestCount: true,
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  if (!entry.guestProfileId) {
+    throw new ValidationError("This booking has no guest profile to attach guest details to");
+  }
+
+  const slots = derivePartySlots(entry);
+  const labelByKey = new Map(slots.map((s) => [s.key, s.label]));
+  const keys = Array.from(new Set(input.subjectKeys.map((k) => k.trim()).filter(Boolean)));
+  if (!keys.length) throw new ValidationError("subjectKeys is required");
+  const stray = keys.filter((k) => !labelByKey.has(k));
+  if (stray.length) {
+    throw new ValidationError(`Not part of this booking's party: ${stray.join(", ")}`);
+  }
+
+  const rows = await prisma.guestIdentityDocument.findMany({
+    where: { entryId: entry.id, subjectKey: { in: keys } },
+    select: {
+      id: true,
+      subjectKey: true,
+      subjectLabel: true,
+      documentNumber: true,
+      dateOfBirth: true,
+      gender: true,
+      storageKey: true,
+      detailsConfirmedAt: true,
+    },
+  });
+
+  const now = new Date();
+  const changed: { subjectKey: string; label: string }[] = [];
+  const skipped: { subjectKey: string; label: string; reason: string; message: string }[] = [];
+
+  await prisma.$transaction(async (tx) => {
+    for (const key of keys) {
+      const detail = rows.find((r) => r.subjectKey === key && !r.storageKey);
+      const hasPhoto = rows.some((r) => r.subjectKey === key && r.storageKey);
+      const label = detail?.subjectLabel?.trim() || labelByKey.get(key)!;
+
+      if (!input.confirmed) {
+        if (!detail?.detailsConfirmedAt) {
+          skipped.push({ subjectKey: key, label, reason: "NOT_CONFIRMED", message: `${label} was not confirmed` });
+          continue;
+        }
+        await tx.guestIdentityDocument.update({
+          where: { id: detail.id },
+          data: { detailsConfirmedAt: null, detailsConfirmedBy: null },
+        });
+        changed.push({ subjectKey: key, label });
+      } else {
+        if (detail?.detailsConfirmedAt) {
+          skipped.push({ subjectKey: key, label, reason: "ALREADY_CONFIRMED", message: `${label} was already confirmed` });
+          continue;
+        }
+        const recorded =
+          !!detail?.documentNumber?.trim() ||
+          !!detail?.dateOfBirth ||
+          !!detail?.gender?.trim() ||
+          !!detail?.subjectLabel?.trim() ||
+          hasPhoto;
+        if (!recorded) {
+          skipped.push({
+            subjectKey: key,
+            label,
+            reason: "NOTHING_RECORDED",
+            message: `Nothing is recorded for ${label} yet`,
+          });
+          continue;
+        }
+        if (detail) {
+          await tx.guestIdentityDocument.update({
+            where: { id: detail.id },
+            data: { detailsConfirmedAt: now, detailsConfirmedBy: actorId },
+          });
+        } else {
+          // Photo-only slot: mint the detail row the confirmation lives on, carrying nothing
+          // but the label (the photo IS the record; the fields stay empty and locked).
+          const retentionMap =
+            (await requireActiveConfigValue<Record<string, number> | undefined>(tx as any, "identity.retentionPeriodDays")) ?? {};
+          const retentionDays = retentionMap.DEFAULT ?? 2555;
+          const retentionExpiresAt = new Date(now);
+          retentionExpiresAt.setUTCDate(retentionExpiresAt.getUTCDate() + retentionDays);
+          await tx.guestIdentityDocument.create({
+            data: {
+              guestProfileId: entry.guestProfileId!,
+              entryId: entry.id,
+              subjectKey: key,
+              subjectLabel: label,
+              documentType: UNTYPED_DOC_TYPE,
+              capturedAt: now,
+              capturedBy: actorId,
+              retentionPeriod: retentionDays,
+              retentionExpiresAt,
+              detailsConfirmedAt: now,
+              detailsConfirmedBy: actorId,
+            },
+          });
+        }
+        changed.push({ subjectKey: key, label });
+      }
+    }
+
+    if (changed.length) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: input.confirmed ? "GUEST.IDENTITY_DETAILS_CONFIRMED" : "GUEST.IDENTITY_DETAILS_UNLOCKED",
+          actorId,
+          actorLevel: "L1",
+          entityType: "Entry",
+          entityId: entry.id,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: entry.currentStage,
+          inquiryId: entry.inquiryId,
+          entryId: entry.id,
+          payload: {
+            entryId: entry.id,
+            confirmed: input.confirmed,
+            guests: changed,
+            skipped,
+          },
+          createdBy: actorId,
+        },
+      });
+    }
+  });
+
+  return { confirmed: input.confirmed, changed, skipped };
 }
 
 /**
@@ -641,6 +827,8 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
         capturedAt: true,
         capturedBy: true,
         retentionExpiresAt: true,
+        detailsConfirmedAt: true,
+        detailsConfirmedBy: true,
         storageKey: true,
       },
     }),

@@ -4,6 +4,7 @@ import { prisma } from "../../db.js";
 import {
   createGuestProfileRequestSchema,
   mintIdentityCapturePhoneTokenRequestSchema,
+  confirmGuestIdentityDetailsRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
@@ -153,6 +154,26 @@ guestProfilesRouter.put(
     try {
       const saved = await identityProofService.saveGuestIdentityDetail(prisma, req.params.id, req.actor!.actorId, req.body);
       res.json(saved);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Confirm (or unlock) guests' typed details — a confirmed row refuses further edits. */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/confirm",
+  requireActorLevel("L1"),
+  validateBody(confirmGuestIdentityDetailsRequestSchema),
+  async (req, res, next) => {
+    try {
+      const outcome = await identityProofService.setGuestIdentityDetailConfirmation(
+        prisma,
+        req.params.id,
+        req.actor!.actorId,
+        req.body,
+      );
+      res.json(outcome);
     } catch (e) {
       next(e);
     }

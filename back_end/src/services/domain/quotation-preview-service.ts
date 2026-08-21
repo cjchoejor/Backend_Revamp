@@ -66,6 +66,8 @@ export type PreviewRoomComposition = {
     othersBreakfastPax?: number;
     othersLunchPax?: number;
     othersDinnerPax?: number;
+    /** Extra beds on this one night when they differ from the stay-wide count (2026-08-19). */
+    extraBedCount?: number;
   }>;
 };
 
@@ -319,7 +321,8 @@ export async function buildQuotationPreview(
   let colDinner = ZERO;
   const roomsOut: PreviewRoomLine[] = totals.perRoom.map((r, i) => {
     const roomSubtotal = r.perNightRoom.mul(r.nights);
-    const extraBedSubtotal = r.perNightExtraBed.mul(r.nights);
+    // Night-by-night when a night overrides the bed count (2026-08-19); `rate × count × nights` otherwise.
+    const extraBedSubtotal = r.extraBedSubtotal;
     colRoom = colRoom.add(roomSubtotal);
     colExtraBed = colExtraBed.add(extraBedSubtotal);
     colBreakfast = colBreakfast.add(r.breakfastSubtotal);

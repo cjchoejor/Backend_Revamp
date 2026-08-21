@@ -216,7 +216,10 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
         subtotal?: number;
         mealsSubtotal?: number;
         perNightMeals?: number;
-        perNightMealBreakdown?: Array<{ date: string; meals: number; overridden: boolean }>;
+        perNightMealBreakdown?: Array<{ date: string; meals: number; overridden: boolean; extraBeds?: number }>;
+        /** Stored night-by-night extra-bed figure (2026-08-19); absent on older quotes. */
+        extraBedSubtotal?: number;
+        extraBedsVaryByNight?: boolean;
         total: number;
       }>;
       total?: number;
@@ -332,7 +335,16 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       // ── Extra beds ──────────────────────────────────────────────────────────────
       const bedCount = Number(raw?.extraBedCount ?? 0);
       const bedRate = Number(r.extraBedRate ?? 0);
-      if (bedCount > 0 && bedRate > 0) {
+      if (r.extraBedsVaryByNight === true && Number(r.extraBedSubtotal ?? 0) > 0) {
+        // The bed count changed part-way through the stay (in-house setup change, 2026-08-19) —
+        // one multiplication can't describe it, so print the stored night-by-night figure.
+        push({
+          description: `Extra bed · varies by night`,
+          qty: nightsWord(roomNights),
+          rate: null,
+          amount: Number(r.extraBedSubtotal),
+        });
+      } else if (bedCount > 0 && bedRate > 0) {
         push({
           description: `Extra bed`,
           qty: `${bedCount} × ${nightsWord(roomNights)}`,

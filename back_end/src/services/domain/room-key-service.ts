@@ -167,6 +167,181 @@ export async function issueRoomKey(prisma: PrismaClient, entryId: string, roomId
   });
 }
 
+/** Why a room was left out of a bulk issue — the desk prints these, it never derives them. */
+export type BulkKeyIssueSkipReason =
+  /** Its key is already with the guest. */
+  | "ALREADY_OUT"
+  /** A sequential room's key is still out (the same hard gate the single issue enforces). */
+  | "PRIOR_ROOM_KEY_OUTSTANDING"
+  /** The guest doesn't enter this room yet — its key is issued on the move day. */
+  | "NOT_YET_OCCUPIED";
+
+export type BulkKeyIssueOutcome = {
+  entryId: string;
+  stage: string;
+  issued: Array<{ roomId: string; roomNumber: string; reissue: boolean }>;
+  skipped: Array<{
+    roomId: string;
+    roomNumber: string;
+    reason: BulkKeyIssueSkipReason;
+    /** Rooms whose outstanding key blocks this one (PRIOR_ROOM_KEY_OUTSTANDING only). */
+    blockedBy: Array<{ roomId: string; roomNumber: string }>;
+    /** The night the guest moves in (NOT_YET_OCCUPIED only) — the day this key is issued. */
+    movesInOn: string | null;
+  }>;
+};
+
+/**
+ * Hand over EVERY key the guest can hold right now, in one act (2026-08-19, operator request —
+ * "put an option to assign key to all at once"). A party checking into six rooms was six radios
+ * and six clicks; this is one.
+ *
+ * Deliberately PARTIAL, and it says what it left out — the same doctrine as the S1 table's
+ * "Select all" (take every night the room is free, then name the nights it couldn't). The set is
+ * decided HERE, not on the desk, so the production frontend gets the identical rule:
+ *
+ *  - **Rooms in use now.** Default candidates are the rooms the guest occupies TODAY — at S6 the
+ *    arrival-night rooms (`dayOneRoomIds`, the same set check-in stamps), at S7 the rooms whose
+ *    first night has arrived. A room the plan moves them into later is skipped as
+ *    NOT_YET_OCCUPIED with its move-in date, matching the per-room key-lifecycle ruling. An
+ *    EXPLICIT `roomIds` list is honoured as given — naming a room is the same deliberate act as
+ *    calling the single-room endpoint, and that endpoint has never applied a day-one rule.
+ *  - **The swap gate holds inside the batch.** Two rooms with no night in common are sequential
+ *    (one party, one key set), so issuing the first makes the second wait — exactly what
+ *    `issueRoomKey` enforces one at a time. Candidates are considered in stay order, and a
+ *    later one disjoint from an already-issued room is skipped with the blocker named, rather
+ *    than the batch failing.
+ *
+ * All-or-nothing on the WRITE (one transaction), partial on the DECISION: skips are answers, not
+ * failures, so a batch never half-commits and never refuses wholesale.
+ */
+export async function issueRoomKeysBulk(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  opts?: { roomIds?: string[] },
+): Promise<BulkKeyIssueOutcome> {
+  const entry = await loadEntryForKeys(prisma, entryId);
+  if (entry.status !== "ACTIVE") throw new ValidationError(`Entry is ${entry.status} — keys can only move on an active booking`);
+  if (entry.currentStage !== "S6" && entry.currentStage !== "S7") {
+    throw new ValidationError(`Key issuance is an S6/S7 act (entry is at ${entry.currentStage})`);
+  }
+  const byRoom = groupByRoom(entry.roomAssignments);
+  if (byRoom.size === 0) throw new NotFoundError("RoomAssignment");
+
+  const explicit = opts?.roomIds?.length ? Array.from(new Set(opts.roomIds)) : null;
+  if (explicit) {
+    const unknown = explicit.filter((id) => !byRoom.has(id));
+    if (unknown.length > 0) throw new ValidationError("roomIds names a room that is not part of this booking");
+  }
+
+  const todayIso = isoDay(new Date());
+  const dayOne = dayOneRoomIds(entry.roomAssignments, entry.checkInDate);
+  /** First night of a room's claim — null when undatable (legacy rows). */
+  const firstNightOf = (rows: KeyAssignmentRow[]): string | null =>
+    rows.reduce<string | null>((acc, r) => {
+      const s = r.startDate ? isoDay(r.startDate) : entry.checkInDate ? isoDay(entry.checkInDate) : null;
+      return s && (!acc || s < acc) ? s : acc;
+    }, null);
+
+  const candidates = (explicit ?? [...byRoom.keys()])
+    .map((roomId) => {
+      const rows = byRoom.get(roomId)!;
+      return { roomId, rows, roomNumber: rows[0].room.roomNumber, firstNight: firstNightOf(rows) };
+    })
+    // Stay order, so a batch is deterministic and the earliest room wins a sequential pair.
+    .sort((a, b) => (a.firstNight ?? "9999").localeCompare(b.firstNight ?? "9999") || a.roomNumber.localeCompare(b.roomNumber));
+
+  const issued: BulkKeyIssueOutcome["issued"] = [];
+  const skipped: BulkKeyIssueOutcome["skipped"] = [];
+  /** Rooms holding an outstanding key — seeded from the DB, grown as the batch decides. */
+  const outstanding = new Map<string, { roomNumber: string; ranges: Array<{ start: string | null; end: string | null }> }>();
+  for (const [roomId, rows] of byRoom) {
+    if (rows.some((r) => r.keyIssuedAt && !r.keyReturnedAt)) {
+      outstanding.set(roomId, {
+        roomNumber: rows[0].room.roomNumber,
+        ranges: roomRangesIso(rows, entry.checkInDate, entry.checkOutDate),
+      });
+    }
+  }
+
+  const toWrite: Array<{ rowId: string; roomId: string; roomNumber: string; reissue: boolean }> = [];
+  for (const c of candidates) {
+    if (outstanding.has(c.roomId)) {
+      skipped.push({ roomId: c.roomId, roomNumber: c.roomNumber, reason: "ALREADY_OUT", blockedBy: [], movesInOn: null });
+      continue;
+    }
+    // Default set only: the guest must actually be in the room today.
+    if (!explicit) {
+      const inUse = entry.currentStage === "S6" ? dayOne.has(c.roomId) : c.firstNight == null || c.firstNight <= todayIso;
+      if (!inUse) {
+        skipped.push({
+          roomId: c.roomId,
+          roomNumber: c.roomNumber,
+          reason: "NOT_YET_OCCUPIED",
+          blockedBy: [],
+          movesInOn: c.firstNight,
+        });
+        continue;
+      }
+    }
+    const ranges = roomRangesIso(c.rows, entry.checkInDate, entry.checkOutDate);
+    const blockedBy = [...outstanding.entries()]
+      .filter(([, o]) => !o.ranges.some((or) => ranges.some((t) => rangesOverlap(t, or))))
+      .map(([roomId, o]) => ({ roomId, roomNumber: o.roomNumber }));
+    if (blockedBy.length > 0) {
+      skipped.push({ roomId: c.roomId, roomNumber: c.roomNumber, reason: "PRIOR_ROOM_KEY_OUTSTANDING", blockedBy, movesInOn: null });
+      continue;
+    }
+    const target = keyRowForRoom(c.rows)!;
+    toWrite.push({ rowId: target.id, roomId: c.roomId, roomNumber: c.roomNumber, reissue: !!target.keyIssuedAt });
+    issued.push({ roomId: c.roomId, roomNumber: c.roomNumber, reissue: !!target.keyIssuedAt });
+    // This key is now out — a sequential candidate later in the batch must wait for it.
+    outstanding.set(c.roomId, { roomNumber: c.roomNumber, ranges });
+  }
+
+  if (toWrite.length > 0) {
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      for (const w of toWrite) {
+        // Per-row update — the db.ts guard forbids roomAssignment.updateMany wholesale.
+        await tx.roomAssignment.update({
+          where: { id: w.rowId },
+          data: { keyIssuedAt: now, keyIssuedBy: actorId, keyReturnedAt: null, keyReturnedBy: null },
+        });
+        // One trace per key: each key is its own physical handover, and the single-room path
+        // writes the same event — a bulk-only shape would make the two unqueryable together.
+        await tx.traceEvent.create({
+          data: {
+            eventType: "ROOM_KEY.ISSUED",
+            actorId,
+            actorLevel: "L1",
+            entityType: "RoomAssignment",
+            entityId: w.rowId,
+            operation: "UPDATE",
+            timestamp: now,
+            stageContext: entry.currentStage,
+            inquiryId: entry.inquiryId,
+            entryId,
+            payload: {
+              entryId,
+              roomId: w.roomId,
+              roomNumber: w.roomNumber,
+              reissue: w.reissue,
+              stage: entry.currentStage,
+              bulk: true,
+              bulkSize: toWrite.length,
+            },
+            createdBy: actorId,
+          },
+        });
+      }
+    });
+  }
+
+  return { entryId, stage: String(entry.currentStage), issued, skipped };
+}
+
 /**
  * Record THIS room's key back at the desk mid-stay (the vacated half of a room-change swap).
  * S6–S8; the S8 KeyReturnRecord ceremony remains the final whole-booking reconciliation.
