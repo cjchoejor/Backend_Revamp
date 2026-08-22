@@ -44,6 +44,18 @@ export type EntryListItem = {
   updatedAt: string;
   guestProfile?: GuestProfileName | null;
   inquiry?: { guestProfile?: GuestProfileName | null } | null;
+  /** Open mid-stay bills (2026-08-22) — the Today list surfaces a due / overdue interim payment. */
+  interimPaymentRequests?: Array<{
+    id: string;
+    kind: "LONG_STAY" | "EXTENSION";
+    state: string;
+    dueBy: string | null;
+    dueNow: string | number | null;
+    remindersSent: number;
+    lastReminderAt: string | null;
+    promiseKind?: "NOW" | "BY_DATE" | null;
+    promisedBy?: string | null;
+  }> | null;
 };
 
 export type GuestProfileName = {

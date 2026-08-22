@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Clock, LogIn, LogOut, Pause } from "lucide-react";
+import { AlarmClock, ArrowRight, Clock, LogIn, LogOut, Pause } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { listEntries } from "@/lib/api/entries";
 import { isLiveStatus, toDeskBooking, type DeskBooking } from "@/lib/desk/model";
@@ -37,7 +37,10 @@ export default function DeskTodayPage() {
   }, [entriesQuery.data]);
 
   // A parked booking is deliberately paused — it shouldn't read as urgent.
-  const urgencyOf = (b: DeskBooking) => (b.status === "PARKED" ? 2 : URGENCY_RANK[b.timer.level]);
+  // A due / overdue mid-stay payment (2026-08-22) ranks like a stuck booking of the same level —
+  // and ahead of the merely idle ones within it (money waiting beats a booking nobody touched).
+  const urgencyOf = (b: DeskBooking) =>
+    b.status === "PARKED" ? 2 : Math.min(URGENCY_RANK[b.timer.level], b.alert ? URGENCY_RANK[b.alert.level] - 0.5 : URGENCY_RANK[""]);
 
   const attention = useMemo(
     () =>
@@ -164,6 +167,12 @@ export default function DeskTodayPage() {
                       <div className="attn-need">{b.need}</div>
                       <div className="attn-party">{b.party}</div>
                     </div>
+                    {b.alert && b.alert.level && b.status !== "PARKED" && (
+                      <span className={`timer ${b.alert.level}`} style={{ gap: 5 }} title={b.alert.need}>
+                        <AlarmClock />
+                        {b.alert.text}
+                      </span>
+                    )}
                     {b.status === "PARKED" ? (
                       <span className="timer warn" style={{ gap: 5 }}>
                         <Pause />

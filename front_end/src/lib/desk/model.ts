@@ -182,6 +182,43 @@ export function dwellTimer(updatedAt: string, now: number = Date.now()): DeskTim
   return { text, level };
 }
 
+/**
+ * Mid-stay payment reminder (2026-08-22): the earliest-due open interim bill on a booking, as
+ * the Today list and the booking cards read it. Date arithmetic only — every money figure stays
+ * on the API.
+ */
+export type DeskAlert = { text: string; level: DeskTimer["level"]; need: string };
+
+function spanText(ms: number): string {
+  const mins = Math.max(0, Math.floor(ms / 60_000));
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (mins < 60) return `${mins}m`;
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  return `${days}d ${hours % 24}h`;
+}
+
+export function interimPaymentAlert(entry: EntryListItem, now: number = Date.now()): DeskAlert | null {
+  const open = (entry.interimPaymentRequests ?? []).filter((r) => (r.state === "REQUESTED" || r.state === "BILLED") && !!r.dueBy);
+  if (open.length === 0) return null;
+  const r = open.slice().sort((a, b) => new Date(a.dueBy!).getTime() - new Date(b.dueBy!).getTime())[0];
+  const ms = new Date(r.dueBy!).getTime() - now;
+  const base = r.kind === "EXTENSION" ? "extension payment" : "mid-stay payment";
+  // A lapsed PROMISE is a stronger word than a default due-by — the guest named the time.
+  const what = r.promiseKind === "BY_DATE" ? `promised ${base}` : base;
+  const What = what.charAt(0).toUpperCase() + what.slice(1);
+  if (ms <= 0) {
+    const n = r.remindersSent ?? 0;
+    return {
+      text: `${what} overdue ${spanText(-ms)}`,
+      level: "crit",
+      need: `${What} overdue — collect it${n > 0 ? ` (${n} reminder${n === 1 ? "" : "s"} raised)` : ""}`,
+    };
+  }
+  if (ms < 24 * 3_600_000) return { text: `${what} due in ${spanText(ms)}`, level: "warn", need: `${What} due in ${spanText(ms)} — collect it` };
+  return { text: `${what} due in ${spanText(ms)}`, level: "", need: `${What} due in ${spanText(ms)}` };
+}
+
 /** A booking as the front desk sees it — derived once, consumed everywhere. */
 export type DeskBooking = {
   id: string;
@@ -194,6 +231,8 @@ export type DeskBooking = {
   status: EntryStatus;
   need: string;
   timer: DeskTimer;
+  /** A due / overdue mid-stay payment on the booking (null = none open). */
+  alert: DeskAlert | null;
   updatedAt: string;
   createdAt: string;
   checkInDate?: string | null;
@@ -203,6 +242,7 @@ export type DeskBooking = {
 export function toDeskBooking(entry: EntryListItem, now: number = Date.now()): DeskBooking {
   const name = guestName(entry.guestProfile ?? entry.inquiry?.guestProfile);
   const step = stepForStage(entry.currentStage);
+  const alert = interimPaymentAlert(entry, now);
   return {
     id: entry.id,
     inquiryId: entry.inquiryId,
@@ -212,8 +252,9 @@ export function toDeskBooking(entry: EntryListItem, now: number = Date.now()): D
     party: partyCaption(entry),
     step,
     status: entry.status,
-    need: step.need,
+    need: alert?.need ?? step.need,
     timer: dwellTimer(entry.updatedAt, now),
+    alert,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     checkInDate: entry.checkInDate,

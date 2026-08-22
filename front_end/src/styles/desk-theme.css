@@ -4826,3 +4826,128 @@
     display: none;
   }
 }
+
+/* ── Numbered step lists + mini ledgers — the Stay step's money blocks (2026-08-22) ──
+   A step list is a FORM with an order, not a wizard: every step with a body renders it;
+   the bubble says where the operator is (tick = done, terra number = needs you, dashed = later). */
+.desk-root {
+  & .xsteps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+  }
+  & .xstep {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 10px;
+    padding: 8px 0;
+  }
+  & .xstep + .xstep {
+    border-top: 1px dashed var(--line);
+  }
+  & .xstep .g {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1.5px solid var(--line-2);
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--deskmono);
+    color: var(--ink-3);
+    background: #fff;
+    margin-top: 1px;
+  }
+  & .xstep .g svg {
+    width: 12px;
+    height: 12px;
+  }
+  & .xstep.done .g {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+  & .xstep.cur .g {
+    background: var(--terra);
+    border-color: var(--terra);
+    color: #fff;
+    box-shadow: 0 0 0 3px rgba(192, 125, 95, 0.18);
+  }
+  & .xstep.todo .g {
+    border-style: dashed;
+  }
+  & .xstep .xmain {
+    min-width: 0;
+  }
+  & .xstep .xl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-height: 24px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  & .xstep.todo .xl {
+    color: var(--ink-3);
+    font-weight: 500;
+  }
+  & .xstep .xs {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  & .xstep.done .xs {
+    color: var(--ink-2);
+  }
+  & .xstep .xb {
+    margin-top: 6px;
+    display: grid;
+    gap: 8px;
+  }
+  & .xstep .xb > .block {
+    margin-bottom: 0;
+  }
+  & .xledger {
+    display: grid;
+    font-size: 12.5px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    padding: 2px 10px;
+    max-width: 620px;
+  }
+  & .xledger > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 5px 0;
+  }
+  & .xledger > div + div {
+    border-top: 1px dashed var(--line);
+  }
+  & .xledger .v {
+    font-family: var(--deskmono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-align: right;
+  }
+  & .xledger .total {
+    font-weight: 700;
+  }
+  & .xledger .total .v {
+    font-size: 13.5px;
+  }
+  & .xledger .muted {
+    color: var(--ink-3);
+  }
+  & .xledger .ask {
+    background: var(--cream);
+    margin: 0 -10px;
+    padding: 6px 10px;
+  }
+}
