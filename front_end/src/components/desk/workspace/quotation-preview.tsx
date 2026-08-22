@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
-import { fetchInvoicePreviewHtml, fetchPdfObjectUrl, fetchQuotationPreviewHtml } from "@/lib/api/documents";
+import {
+  fetchFolioDocumentPreviewHtml,
+  fetchInvoicePreviewHtml,
+  fetchPdfObjectUrl,
+  fetchQuotationPreviewHtml,
+  type FolioDocumentKind,
+} from "@/lib/api/documents";
 
 /**
  * Inline document views (2026-08-01, operator request): the A1 quotation / A2 proforma in
@@ -202,4 +208,35 @@ export function ProformaPreview({ invoiceId, frozenPdf, notice, title }: { invoi
       notice={notice}
     />
   );
+}
+
+/**
+ * S7/S8 — a folio document (tentative invoice · master bill · tax-invoice draft) composed live
+ * from the ledger (2026-08-22). `refreshKey` changes whenever the folio moves, so an open
+ * preview re-composes after a charge is posted or money is taken.
+ */
+export function FolioDocumentPreview({
+  entryId,
+  kind,
+  title,
+  refreshKey,
+}: {
+  entryId: string;
+  kind: FolioDocumentKind;
+  title: string;
+  refreshKey: string;
+}) {
+  const { session } = useSession();
+  return (
+    <DocumentPreviewFrame
+      queryKey={["folio-document-preview", entryId, kind, refreshKey] as const}
+      fetchHtml={() => fetchFolioDocumentPreviewHtml(session!, entryId, kind)}
+      title={title}
+    />
+  );
+}
+
+/** The ISSUED tax invoice — served only from its write-once PDF (a fiscal document is never recomposed). */
+export function IssuedInvoicePreview({ invoiceId }: { invoiceId: string }) {
+  return <FrozenPdfFrame path={`/api/invoices/${invoiceId}/pdf`} title="Tax invoice (as issued)" />;
 }

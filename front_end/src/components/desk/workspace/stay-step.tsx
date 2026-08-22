@@ -36,6 +36,7 @@ import type { EntryDetail } from "@/types/api";
 import { RoomCompositionSummary, hasRoomComposition } from "./room-composition-summary";
 import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
 import { InterimPaymentBlock, StayExtensionBlock } from "./stay-money";
+import { FolioDocumentsBlock } from "./folio-documents";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -973,6 +974,11 @@ export function StayStep({
           </div>
         )}
       </div>
+
+      {/* Bills & statements (2026-08-22): the tentative invoice (interim folio statement), the
+          master bill and the tax-invoice DRAFT — all views of the live folio above, so they sit
+          right under it. Indicative here; the seal and the fiscal issue happen at Check-out. */}
+      <FolioDocumentsBlock entry={entry} stage="S7" />
 
       {/* Mid-stay money (2026-08-21): interim payment on long stays + payment-before-commit extension */}
       <InterimPaymentBlock entry={entry} onChanged={() => void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] })} />

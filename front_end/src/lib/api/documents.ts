@@ -1,4 +1,5 @@
 import type { Session } from "@/types/session";
+import { apiRequest } from "./client";
 
 /**
  * PDF document downloads (quotation / proforma+final invoice / confirmation voucher).
@@ -120,4 +121,58 @@ export function openConfirmationVoucherPdf(session: Session, reservationId: stri
 /** A5 — cancellation confirmation PDF. `GET /api/entries/:id/cancellation-confirmation-pdf`. */
 export function openCancellationConfirmationPdf(session: Session, entryId: string): Promise<void> {
   return openPdf(session, `/api/entries/${entryId}/cancellation-confirmation-pdf`);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Folio documents (2026-08-22) — the bills that are VIEWS of the one folio: the in-stay
+// "tentative invoice" (interim folio statement), the master bill (the rollup) and the tax
+// invoice (a DRAFT until settlement issues it). The backend decides what exists, in which
+// state, and why — the desk only renders the index.
+// ---------------------------------------------------------------------------------------------
+
+export type FolioDocumentKind = "interim-statement" | "master-bill" | "tax-invoice";
+
+export type FolioDocumentEntry = {
+  kind: FolioDocumentKind;
+  title: string;
+  subtitle: string;
+  purpose: string;
+  available: boolean;
+  unavailableReason: string | null;
+  state: "SNAPSHOT" | "INDICATIVE" | "FROZEN" | "DRAFT" | "ISSUED" | "NONE";
+  reprintCount: number | null;
+  frozenAt: string | null;
+  invoice: {
+    id: string;
+    invoiceNumber: string | null;
+    state: string;
+    pdfReady: boolean;
+    issuedAt: string | null;
+    dispatchedAt: string | null;
+  } | null;
+};
+
+export type FolioDocumentsIndex = {
+  entryId: string;
+  stage: string;
+  folioId: string | null;
+  folioState: string | null;
+  sealedAt: string | null;
+  asAt: string;
+  documents: FolioDocumentEntry[];
+};
+
+/** `GET /api/entries/:id/folio-documents` — which folio documents exist right now and in what state. */
+export function getFolioDocuments(session: Session, entryId: string): Promise<FolioDocumentsIndex> {
+  return apiRequest<FolioDocumentsIndex>(`/api/entries/${entryId}/folio-documents`, { session });
+}
+
+/** The document as inline HTML — composed fresh from the ledger, no side effects. */
+export function fetchFolioDocumentPreviewHtml(session: Session, entryId: string, kind: FolioDocumentKind): Promise<string> {
+  return fetchPreviewHtml(session, `/api/entries/${entryId}/folio-documents/${kind}/preview-html`, kind.replace("-", " "));
+}
+
+/** The document as a PDF, rendered fresh (never stored). A sealed master bill print counts as a reprint. */
+export function openFolioDocumentPdf(session: Session, entryId: string, kind: FolioDocumentKind): Promise<void> {
+  return openPdf(session, `/api/entries/${entryId}/folio-documents/${kind}/pdf`);
 }

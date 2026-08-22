@@ -11,20 +11,17 @@ import {
   closeDispute,
   fulfilHandoff,
   initiateSettlement,
-  issueFinalInvoice,
   postFolioCharge,
   recordKeyReturn,
   recordRoomInspection,
   reEnterS8ToS7,
   reEnterS8ToS2,
 } from "@/lib/api/checkout";
-import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { correctFolioCharge, postCreditNote, progressDispute } from "@/lib/api/in-stay";
 import { getBillingSummary } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
-import { openInvoicePdf } from "@/lib/api/documents";
-import { PdfButton } from "./pdf-button";
+import { FolioDocumentsBlock } from "./folio-documents";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -65,9 +62,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const correctable = folioLines.filter(
     (l) => !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for"),
   );
-  const folioInvoices = folio?.invoices ?? [];
-  const hasFinalInvoice = folioInvoices.some((i) => i.invoiceType === "FINAL");
-  const draftFinalInvoice = folioInvoices.find((i) => i.invoiceType === "FINAL" && i.state === "DRAFT");
   const folioLive = folio?.state === "LIVE";
   const folioSettled = folioTerminal(folio?.state);
   const handoffs = entry.handoffs ?? [];
@@ -587,6 +581,11 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         )}
       </div>
 
+      {/* Bills for check-out (2026-08-22): the master bill (signed here; frozen at the seal)
+          and the tax invoice (a draft until settlement issues the one original). The issue /
+          dispatch controls live on the tax-invoice row, not under Settlement. */}
+      <FolioDocumentsBlock entry={entry} stage="S8" />
+
       {/* Key return */}
       <div className="block">
         <BlockH>
@@ -743,48 +742,10 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
               Folio {folio?.state}
               {folio?.closedAt ? ` · closed ${new Date(folio.closedAt).toLocaleString()}` : ""}
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {!hasFinalInvoice && folio?.id && (
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() =>
-                    issueFinalInvoice(session!, folio.id, entry.id)
-                      .then(() => {
-                        toast.success("Final invoice created");
-                        invalidate();
-                      })
-                      .catch((e) => toast.error(e instanceof ApiError ? e.message : "Issue failed"))
-                  }
-                >
-                  Issue final invoice
-                </button>
-              )}
-              {draftFinalInvoice && (
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() =>
-                    dispatchInvoice(session!, draftFinalInvoice.id)
-                      .then(() => {
-                        toast.success("Invoice dispatched");
-                        invalidate();
-                        // Dispatch mints a FINAL_INVOICE communication (2026-08-17) — the S9
-                        // answer block reads its own feed (every-dispatch-invalidates rule).
-                        void queryClient.invalidateQueries({ queryKey: ["entry-communications", entry.id] });
-                      })
-                      .catch((e) => toast.error(e instanceof ApiError ? e.message : "Dispatch failed"))
-                  }
-                >
-                  Dispatch final invoice
-                </button>
-              )}
-              {session &&
-                (() => {
-                  const finalInvoice = folioInvoices.find((i) => i.invoiceType === "FINAL");
-                  return finalInvoice ? (
-                    <PdfButton label="View final invoice PDF" open={() => openInvoicePdf(session, finalInvoice.id)} />
-                  ) : null;
-                })()}
-            </div>
+            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, lineHeight: 1.55 }}>
+              The folio is sealed. Issue and send the <b>tax invoice</b>, and print the frozen <b>master bill</b>, under
+              Bills for check-out above.
+            </p>
           </>
         ) : (
           <>

@@ -24,6 +24,7 @@ import { deriveFinancials, money, moneyOrDash, s9CloseReadiness } from "@/lib/de
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
+import { FolioDocumentsBlock } from "./folio-documents";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -290,6 +291,11 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
             <div className="val">{moneyOrDash(fin.outstanding, currency)}</div>
           </div>
         </div>
+
+        {/* Bills & statements (2026-08-22): the master bill frozen at the folio seal (reprints
+            carry an ordinal) and the issued tax invoice, served from its stored original —
+            read-only here; the post-stay invoice controls stay in the block below. */}
+        <FolioDocumentsBlock entry={entry} stage="S9" />
 
         {/* Invoices & payment tracking (government submission) */}
         <div className="block">
