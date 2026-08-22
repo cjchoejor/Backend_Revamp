@@ -940,6 +940,12 @@ export async function listEntries(
       version: true,
       createdAt: true,
       updatedAt: true,
+      // Open mid-stay bills (2026-08-22): the Today list surfaces a due / overdue interim payment.
+      interimPaymentRequests: {
+        where: { state: { in: ["REQUESTED", "BILLED"] } },
+        select: { id: true, kind: true, state: true, dueBy: true, dueNow: true, remindersSent: true, lastReminderAt: true, promiseKind: true, promisedBy: true },
+        take: 3,
+      },
       guestProfile: {
         select: { id: true, firstName: true, lastName: true, email: true, phone: true },
       },

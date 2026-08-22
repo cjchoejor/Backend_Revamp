@@ -93,6 +93,7 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // Interim payments (2026-08-21): the night audit's schedule rule for long stays —
   // { enabled, everyNights, minimumOutstanding }. Manual requests never consult it.
   "interimPayment.schedule": { validate: isObject, owner: "ConfigurationService" },
+  "interimPayment.reminder": { validate: isObject, owner: "ConfigurationService" },
   // How long a requested stay extension keeps its extra nights claimed while unpaid (W40).
   "stayExtension.holdTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "ownership.assignmentRules": { validate: isArray, owner: "ConfigurationService" },

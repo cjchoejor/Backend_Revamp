@@ -28,6 +28,9 @@ export type TimerJobName =
   /// Stay-extension hold expiry (2026-08-21): the extra nights a requested extension claims
   /// are released when the clock runs out before the interim payment arrived.
   | "STAY_EXTENSION_HOLD_EXPIRY_W40"
+  /// Mid-stay payment reminder (2026-08-22): fires at an interim bill's due-by while unpaid,
+  /// raises a reminder and re-arms every N hours up to a cap.
+  | "INTERIM_PAYMENT_REMINDER_W41"
   | "PRE_ARRIVAL_COUNTDOWN_W4"
   | "NO_SHOW_CUTOFF_W5"
   | "AWAITING_WRITTEN_CONFIRMATION_W5"
@@ -103,6 +106,7 @@ export function createTimerEngine(connectionString: string): TimerEngine {
         "ADVANCE_PROMISE_DEADLINE_W38",
         "IDENTITY_OCR_W39",
         "STAY_EXTENSION_HOLD_EXPIRY_W40",
+        "INTERIM_PAYMENT_REMINDER_W41",
         "PRE_ARRIVAL_COUNTDOWN_W4",
         "NO_SHOW_CUTOFF_W5",
         "AWAITING_WRITTEN_CONFIRMATION_W5",

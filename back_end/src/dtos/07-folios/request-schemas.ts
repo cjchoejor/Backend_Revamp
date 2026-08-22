@@ -183,9 +183,27 @@ export const createInterimPaymentRequestSchema = z
     askMode: z.enum(["PERCENT", "AMOUNT"]),
     askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive"),
     note: z.string().trim().max(500).optional(),
+    /** When the money is expected (ISO datetime, ahead of now). Omitted = the `interimPayment.reminder` default. */
+    dueBy: z.string().trim().min(10).max(40).optional(),
   })
   .refine((v) => v.askMode !== "PERCENT" || v.askValue <= 100, { message: "A percentage ask is at most 100" });
 export type CreateInterimPaymentRequestDto = z.infer<typeof createInterimPaymentRequestSchema>;
+
+/** Move an interim bill's due-by (2026-08-22) — re-arms the W41 reminder clock. */
+export const setInterimDueByRequestSchema = z.object({
+  dueBy: z.string().trim().min(10).max(40),
+});
+export type SetInterimDueByRequestDto = z.infer<typeof setInterimDueByRequestSchema>;
+
+/** The guest's promise on an interim bill (2026-08-22): paying at the desk, or by a dated time. */
+export const interimPaymentPromiseRequestSchema = z
+  .object({
+    kind: z.enum(["NOW", "BY_DATE"]),
+    promisedBy: z.string().trim().min(10).max(40).optional(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => v.kind !== "BY_DATE" || !!v.promisedBy, { message: "A promised date & time is required" });
+export type InterimPaymentPromiseRequestDto = z.infer<typeof interimPaymentPromiseRequestSchema>;
 
 export const recordInterimPaymentRequestSchema = z.object({
   amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),

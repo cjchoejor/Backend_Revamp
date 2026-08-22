@@ -240,6 +240,10 @@ export type InterimInvoiceEmailData = {
   balanceAtCheckout: number;
   /** When the extension's nights are released if unpaid (extension kind only). */
   holdExpiresAt?: Date | null;
+  /** When the payment is expected (2026-08-22). */
+  dueBy?: Date | null;
+  /** The guest's promise, already worded ("by 25 Aug 2026 — “…”" / "at the desk"). */
+  paymentPromise?: string | null;
 };
 
 export function renderInterimInvoiceEmail(d: InterimInvoiceEmailData): StageEmailContent {
@@ -268,6 +272,10 @@ export function renderInterimInvoiceEmail(d: InterimInvoiceEmailData): StageEmai
     `Asked now (${d.askLabel}):    ${formatMoney(d.dueNow, d.currency)}`,
     `Balance at checkout:          ${formatMoney(d.balanceAtCheckout, d.currency)}`,
     "",
+    d.paymentPromise ? `Payment promised ${d.paymentPromise}.` : null,
+    d.paymentPromise ? "" : null,
+    d.dueBy ? `Please settle this by ${formatDate(d.dueBy)}.` : null,
+    d.dueBy ? "" : null,
     d.holdExpiresAt ? `The extra nights are held for you until ${formatDate(d.holdExpiresAt)}.` : null,
     d.holdExpiresAt ? "" : null,
     "Reply to this email if you need bank details or have any questions.",
@@ -291,7 +299,10 @@ ${detailsTable([
   tableRow("Already received", formatMoney(d.receivedSoFar, d.currency)),
   tableRow(`Asked now (${d.askLabel})`, formatMoney(d.dueNow, d.currency), true, true),
   tableRow("Balance at checkout", formatMoney(d.balanceAtCheckout, d.currency)),
+  d.dueBy ? tableRow("Payment due by", formatDate(d.dueBy), true) : "",
+  d.paymentPromise ? tableRow("Payment promised", d.paymentPromise, true) : "",
 ])}
+${d.dueBy ? `<p style="font-size:13px;color:#555">Please settle this by <strong>${escapeHtml(formatDate(d.dueBy))}</strong>.</p>` : ""}
 ${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are held for you until <strong>${escapeHtml(formatDate(d.holdExpiresAt))}</strong>.</p>` : ""}
 <p>Reply to this email if you need bank details or have any questions.</p>
 <p style="margin-top:24px">&mdash; The Legphel Hotel team</p>

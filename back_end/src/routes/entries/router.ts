@@ -108,6 +108,7 @@ entriesRouter.post("/:id/stay-extension/preview", requireActorLevel("L1"), valid
       await previewStayExtension(prisma, req.params.id, {
         newCheckOutDate: req.body.newCheckOutDate,
         perNight: req.body.perNight,
+        replaceRoomId: req.body.replaceRoomId,
         roomCompositions: req.body.roomCompositions,
         ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
         ask,
@@ -125,10 +126,12 @@ entriesRouter.post("/:id/stay-extension", requireActorLevel("L2"), validateBody(
       await requestStayExtension(prisma, actor, req.params.id, {
         newCheckOutDate: req.body.newCheckOutDate,
         perNight: req.body.perNight,
+        replaceRoomId: req.body.replaceRoomId,
         roomCompositions: req.body.roomCompositions,
         ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
         reason: req.body.reason,
         ask: { mode: req.body.askMode, value: Number(req.body.askValue) },
+        dueBy: req.body.dueBy ?? null,
         note: req.body.note,
       }),
     );

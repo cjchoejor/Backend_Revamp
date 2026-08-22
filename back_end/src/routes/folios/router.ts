@@ -33,8 +33,10 @@ import {
   listInterimPayments,
   recordInterimPayment,
   withdrawInterimPaymentRequest,
+  recordInterimPaymentPromise,
+  setInterimPaymentDueBy,
 } from "../../services/domain/interim-payment-service.js";
-import { createInterimPaymentRequestSchema, recordInterimPaymentRequestSchema } from "../../dtos/07-folios/request-schemas.js";
+import { createInterimPaymentRequestSchema, interimPaymentPromiseRequestSchema, recordInterimPaymentRequestSchema, setInterimDueByRequestSchema } from "../../dtos/07-folios/request-schemas.js";
 import { Stage } from "@prisma/client";
 
 export const foliosRouter = Router();
@@ -333,6 +335,7 @@ foliosRouter.post("/entries/:id/interim-payments", requireActorLevel("L1"), vali
       await createInterimPaymentRequest(prisma, actor, req.params.id, {
         ask: { mode: req.body.askMode, value: Number(req.body.askValue) },
         note: req.body.note,
+        dueBy: req.body.dueBy ?? null,
       }),
     );
   } catch (e) {
@@ -353,6 +356,26 @@ foliosRouter.post("/interim-payments/:id/withdraw", requireActorLevel("L1"), asy
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
     res.json(await withdrawInterimPaymentRequest(prisma, actor, req.params.id, req.body?.reason ?? null));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Move an interim bill's due-by (2026-08-22) — re-arms the W41 mid-stay payment reminder clock. */
+foliosRouter.post("/interim-payments/:id/due-by", requireActorLevel("L1"), validateBody(setInterimDueByRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await setInterimPaymentDueBy(prisma, actor, req.params.id, req.body.dueBy));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The guest's promise on an interim bill (2026-08-22) — a dated one moves the reminder clock. */
+foliosRouter.post("/interim-payments/:id/promise", requireActorLevel("L1"), validateBody(interimPaymentPromiseRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await recordInterimPaymentPromise(prisma, actor, req.params.id, req.body));
   } catch (e) {
     next(e);
   }

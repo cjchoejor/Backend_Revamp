@@ -56,3 +56,39 @@ export async function dispatchStageDwell(
   return { ok: true, tier } as const;
 }
 
+
+/**
+ * Mid-stay payment reminder (2026-08-22): the W41 clock found an interim bill still unpaid at
+ * its due-by. Routed like the other desk alerts (config `notification.routing.interimPayment`,
+ * default OPERATOR); the trace is what the desk's feeds read.
+ */
+export async function dispatchInterimPaymentReminder(
+  prisma: PrismaClient,
+  input: {
+    entryId: string;
+    interimPaymentRequestId: string;
+    kind: "LONG_STAY" | "EXTENSION";
+    billed: boolean;
+    remaining: number;
+    remindersSent: number;
+    dueBy: Date | null;
+  },
+) {
+  const routing = await requireActiveConfigValue<Record<string, DispatchTier[]>>(prisma, "notification.routing.interimPayment").catch(
+    () => ({ DEFAULT: ["OPERATOR"] as DispatchTier[] }),
+  );
+  const targets = routing.DEFAULT ?? ["OPERATOR"];
+  const now = new Date();
+  await auditService.emit(prisma, auditService.systemActor(), {
+    eventType: "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED",
+    entityType: "InterimPaymentRequest",
+    entityId: input.interimPaymentRequestId,
+    operation: "NOTIFY",
+    timestamp: now,
+    stageContext: "S7",
+    entryId: input.entryId,
+    payload: { ...input, dueBy: input.dueBy?.toISOString() ?? null, targets, dispatchedAt: now.toISOString() },
+    createdBy: "SYSTEM",
+  });
+  return { ok: true, targets } as const;
+}

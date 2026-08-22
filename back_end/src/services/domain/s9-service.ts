@@ -11,7 +11,7 @@ import { schedulePaymentFollowUpW8IfOutstanding } from "../../lib/schedule-payme
 import { enforceWriteOffConstraints } from "../../policies/13-billing-model/write-off-policy-constraints.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderFinalInvoiceEmail, renderInterimInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
-import { markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
+import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
@@ -459,6 +459,7 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
     ? await prisma.interimPaymentRequest.findUnique({ where: { invoiceId: inv.id }, include: { stayExtensionRequest: { select: { holdExpiresAt: true, state: true } } } })
     : null;
   const interimFigures = (interimReq?.figures ?? null) as InterimFigures | null;
+  const interimPromise = interimReq ? describeInterimPromise(interimReq, formatEmailDate) : null;
   const content = isInterim
     ? renderInterimInvoiceEmail({
         guestDisplayName: displayName,
@@ -475,6 +476,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
         askLabel: interimFigures?.askLabel ?? "interim payment",
         dueNow: interimFigures?.dueNow ?? Number(toDecimal(inv.totalAmount).toFixed(2)),
         balanceAtCheckout: interimFigures?.balanceAtCheckout ?? 0,
+        dueBy: interimPromise ? null : (interimReq?.dueBy ?? null),
+        paymentPromise: interimPromise,
         holdExpiresAt:
           interimReq?.stayExtensionRequest && (interimReq.stayExtensionRequest.state === "REQUESTED" || interimReq.stayExtensionRequest.state === "BILLED")
             ? interimReq.stayExtensionRequest.holdExpiresAt

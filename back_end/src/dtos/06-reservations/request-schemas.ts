@@ -161,6 +161,12 @@ const stayExtensionShape = {
   newCheckOutDate: z.string().min(8),
   /** A room per extra night (default: the room the guest is in on the last night). */
   perNight: z.array(z.object({ date: z.string().min(8), roomId: z.string().min(1) })).max(120).optional(),
+  /**
+   * Which current room `perNight` replaces on a multi-room booking (2026-08-22). Without it
+   * the service picks the current room that is NOT free over the extra nights; the desk always
+   * names it so a pick can never be paired with the wrong room.
+   */
+  replaceRoomId: z.string().min(1).optional(),
   /** The S2 table for the rooms carrying the extension (full basis for those rooms). */
   roomCompositions: z.array(roomCompositionInputSchema).max(60).optional(),
   requestedDiscount: discountShape.nullable().optional(),
@@ -180,6 +186,8 @@ export const stayExtensionRequestSchema = z
     askMode: z.enum(["PERCENT", "AMOUNT"]),
     askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive"),
     note: z.string().trim().max(500).optional(),
+    /** When the extension's payment is expected (ISO datetime, ahead of now). Omitted = `interimPayment.reminder` default (before the held nights lapse). */
+    dueBy: z.string().trim().min(10).max(40).optional(),
   })
   .refine((v) => v.askMode !== "PERCENT" || v.askValue <= 100, { message: "A percentage ask is at most 100" });
 export type StayExtensionRequestDto = z.infer<typeof stayExtensionRequestSchema>;

@@ -8,7 +8,18 @@ import { enforceExtensionPaidBeforeCommit } from "../../policies/35-interim-paym
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import { registerNightAuditTimers } from "./pre-arrival-service.js";
-import { closeInterimForExtensionTx, computeInterimFigures, createInterimPaymentRequestTx, type InterimAsk, type InterimFigures } from "./interim-payment-service.js";
+import {
+  armInterimPaymentReminder,
+  cancelInterimReminderForExtension,
+  closeInterimForExtensionTx,
+  computeInterimFigures,
+  createInterimPaymentRequestTx,
+  loadInterimReminderPolicy,
+  resolveInterimDueBy,
+  type InterimAsk,
+  type InterimFigures,
+  type InterimReminderPolicy,
+} from "./interim-payment-service.js";
 import {
   changeRoomToNewSegment,
   listRoomStandingForNights,
@@ -62,6 +73,8 @@ export type StayExtensionPreview = {
   };
   figures: InterimFigures;
   holdTtlSeconds: number;
+  /** Mid-stay payment reminder (2026-08-22): the policy + the due-by the request would default to. */
+  reminder: { policy: InterimReminderPolicy; defaultDueBy: string | null };
   /** Why the extension cannot be requested as previewed (null = fine). */
   blockedReason: string | null;
 };
@@ -124,6 +137,8 @@ export async function previewStayExtension(
   input: {
     newCheckOutDate: string;
     perNight?: Array<{ date: string; roomId: string }>;
+    /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
+    replaceRoomId?: string | null;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     ask?: InterimAsk | null;
@@ -167,10 +182,20 @@ export async function previewStayExtension(
   const overrides = new Map<string, string>();
   for (const p of input.perNight ?? []) overrides.set(p.date.slice(0, 10), p.roomId);
   const overrideRooms = new Set(overrides.values());
-  // Which current room is being replaced by the override rooms (single-room bookings: the
-  // only room; multi-room: the first current room not present in the overrides).
+  // Which current room is being replaced by the override rooms: the one the caller names
+  // (`replaceRoomId`), else the current room that is NOT free over the extra nights, else the
+  // first one not named in the overrides (single-room bookings: the only room). Found live
+  // 2026-08-22 on a four-room booking: "the first current room not in the overrides" paired a
+  // pick meant for the taken Room 302 with Room 206, so 302 stayed blocked and the desk's
+  // move-to select could never unblock the extension.
+  if (input.replaceRoomId && !lastNightRoomIds.includes(input.replaceRoomId)) {
+    throw new ValidationError(`replaceRoomId must be one of the rooms the guest is in on the last night (${lastNightRoomIds.map((id) => byRoom.get(id)?.roomNumber ?? id.slice(0, 6)).join(", ")})`);
+  }
+  const takenCurrent = lastNightRoomIds.filter((id) => (byRoom.get(id)?.perNight ?? []).some((n) => n.status !== "FREE"));
   const replacedRoomId =
-    overrides.size > 0 ? lastNightRoomIds.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds[0] : null;
+    overrides.size > 0
+      ? (input.replaceRoomId ?? takenCurrent.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds[0])
+      : null;
   for (const date of extraNights) {
     for (const roomId of lastNightRoomIds) {
       const target = roomId === replacedRoomId ? overrides.get(date) ?? roomId : roomId;
@@ -194,6 +219,20 @@ export async function previewStayExtension(
       });
     }
   }
+
+  // The candidates' `sameType` / `requiredLevel` are judged against the room being REPLACED
+  // (the caller's `replaceRoomId`, else the taken room), not the booking's first room — on a
+  // multi-room booking those differ, and the desk's "same type — rate carries" label has to
+  // agree with how the move is priced (`crossType`). The standing helper was told the first
+  // room's type because the replaced room is only known after the standing comes back.
+  const refRoomId = input.replaceRoomId ?? takenCurrent[0] ?? replacedRoomId ?? lastNightRoomIds[0];
+  const refTypeId = byRoom.get(refRoomId)?.roomTypeId ?? null;
+  const candidates: RoomStanding[] = standing
+    .map((s) => {
+      const sameType = refTypeId == null || s.roomTypeId === refTypeId;
+      return { ...s, sameType, requiredLevel: (sameType ? "L1" : "L2") as "L1" | "L2" };
+    })
+    .sort((a, b) => Number(b.sameType) - Number(a.sameType) || Number(b.selectable) - Number(a.selectable) || String(a.roomNumber).localeCompare(String(b.roomNumber), undefined, { numeric: true }));
 
   // Availability of the plan, night by night.
   let blockedReason: string | null = null;
@@ -265,6 +304,14 @@ export async function previewStayExtension(
     ask: input.ask ?? null,
   });
 
+  const ttlForPreview = await holdTtlSeconds(prisma);
+  const reminderPolicy = await loadInterimReminderPolicy(prisma);
+  const previewNow = new Date();
+  const defaultDueBy = resolveInterimDueBy(reminderPolicy, {
+    kind: "EXTENSION",
+    now: previewNow,
+    holdExpiresAt: new Date(previewNow.getTime() + ttlForPreview * 1000),
+  });
   return {
     entryId,
     currentStage: String(entry.currentStage),
@@ -276,7 +323,7 @@ export async function previewStayExtension(
       .map((id) => byRoom.get(id))
       .filter((s): s is RoomStanding => !!s)
       .map((s) => ({ ...s, extendableInPlace: s.perNight.every((n) => n.status === "FREE") })),
-    candidates: standing,
+    candidates,
     plan,
     moves,
     compositions: rows,
@@ -287,7 +334,8 @@ export async function previewStayExtension(
       discount: projected && projected.amountOffTotal > 0 ? { effectivePercent: projected.effectivePercent, amountOffTotal: projected.amountOffTotal } : null,
     },
     figures,
-    holdTtlSeconds: await holdTtlSeconds(prisma),
+    holdTtlSeconds: ttlForPreview,
+    reminder: { policy: reminderPolicy, defaultDueBy: defaultDueBy?.toISOString() ?? null },
     blockedReason,
   };
 }
@@ -306,11 +354,15 @@ export async function requestStayExtension(
   input: {
     newCheckOutDate: string;
     perNight?: Array<{ date: string; roomId: string }>;
+    /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
+    replaceRoomId?: string | null;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     reason: string;
     ask: InterimAsk;
     note?: string | null;
+    /** When the extension's payment is expected (ISO). Omitted = before the held nights lapse (policy). */
+    dueBy?: string | null;
   },
 ) {
   requireFom(actor, "extend a stay");
@@ -333,6 +385,9 @@ export async function requestStayExtension(
   const ttl = preview.holdTtlSeconds;
   const now = new Date();
   const holdExpiresAt = new Date(now.getTime() + ttl * 1000);
+  // Mid-stay payment reminder: the extension's bill is due before its held nights lapse.
+  const reminderPolicy = await loadInterimReminderPolicy(prisma);
+  const dueBy = resolveInterimDueBy(reminderPolicy, { kind: "EXTENSION", now, holdExpiresAt, requested: input.dueBy ?? null });
   const entryRow = await prisma.entry.findUniqueOrThrow({
     where: { id: entryId },
     select: { inquiryId: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } } },
@@ -363,6 +418,7 @@ export async function requestStayExtension(
       figures: preview.figures,
       note: input.note ?? `Stay extension to ${preview.newCheckOut}: ${reason}`,
       stayExtensionRequestId: request.id,
+      dueBy,
     });
     await tx.traceEvent.create({
       data: {
@@ -423,6 +479,8 @@ export async function requestStayExtension(
   } catch {
     /* the claim still expires by `holdExpiresAt` (the claim predicate reads it) — only the lapse bookkeeping waits */
   }
+  // Reminder clock (W41): chase the extension's payment before the held nights lapse.
+  if (dueBy) await armInterimPaymentReminder(prisma, { requestId: created.interim.request.id, actorId: actor.actorId }).catch(() => {});
 
   return { request: created.request, interim: created.interim.request, invoice: created.interim.invoice, preview };
 }
@@ -468,6 +526,7 @@ export async function withdrawStayExtension(prisma: PrismaClient, actor: Actor, 
     return u;
   });
   await cancelHoldTimer(prisma, req.entryId, actor.actorId, "STAY_EXTENSION_WITHDRAWN");
+  await cancelInterimReminderForExtension(prisma, req.id, actor.actorId, "STAY_EXTENSION_WITHDRAWN").catch(() => {});
   return updated;
 }
 
@@ -477,7 +536,7 @@ export async function lapseStayExtensionRequest(prisma: PrismaClient, requestId:
   if (!req) return null;
   if (req.state !== "REQUESTED" && req.state !== "BILLED") return req;
   const now = new Date();
-  return prisma.$transaction(async (tx) => {
+  const out = await prisma.$transaction(async (tx) => {
     const u = await tx.stayExtensionRequest.update({
       where: { id: req.id },
       data: { state: "LAPSED", closedAt: now, closedReason: reason },
@@ -501,6 +560,8 @@ export async function lapseStayExtensionRequest(prisma: PrismaClient, requestId:
     });
     return u;
   });
+  await cancelInterimReminderForExtension(prisma, req.id, "SYSTEM", reason).catch(() => {});
+  return out;
 }
 
 /**

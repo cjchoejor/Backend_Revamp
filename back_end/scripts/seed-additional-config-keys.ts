@@ -20,6 +20,12 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
       "Interim payments on long stays (2026-08-21): the night audit raises an 'interim payment due' prompt every `everyNights` nights slept when the outstanding balance is at least `minimumOutstanding`; manual requests are always possible. enabled=false turns the prompt off.",
   },
   {
+    key: "interimPayment.reminder",
+    value: { enabled: true, dueAfterHours: 24, extensionLeadHours: 6, repeatEveryHours: 24, maxReminders: 5 },
+    notes:
+      "Mid-stay payment reminder (2026-08-22): every interim bill carries a due-by (long stay: `dueAfterHours` after the bill; extension: `extensionLeadHours` before the held nights lapse) and the W41 clock fires there while unpaid — a reminder on the booking, re-armed every `repeatEveryHours` up to `maxReminders`. enabled=false arms no clock.",
+  },
+  {
     key: "stayExtension.holdTtlSeconds",
     value: 86400,
     notes:

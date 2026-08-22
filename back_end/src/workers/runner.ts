@@ -13,6 +13,7 @@ import { runCommittedHoldExpiryWorker } from "./w3-committed-hold-expiry-worker.
 import { runAdvancePaymentFollowUpWorker } from "./w34-advance-payment-follow-up-worker.js";
 import { runAdvancePromiseDeadlineWorker } from "./w38-advance-promise-worker.js";
 import { runStayExtensionHoldExpiryWorker } from "./w40-stay-extension-hold-expiry-worker.js";
+import { runInterimPaymentReminderWorker } from "./w41-interim-payment-reminder-worker.js";
 import { runIdentityOcrWorker } from "./w39-identity-ocr-worker.js";
 import { runPreArrivalWindowActivationWorker } from "./w4-pre-arrival-window-activation-worker.js";
 import { runNoShowCutoffWorker } from "./w5-no-show-cutoff-worker.js";
@@ -67,6 +68,7 @@ export async function startWorkers() {
   await (engine.boss as any).work("ADVANCE_PAYMENT_FOLLOW_UP_W34", async (job: any) => runAdvancePaymentFollowUpWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("ADVANCE_PROMISE_DEADLINE_W38", async (job: any) => runAdvancePromiseDeadlineWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("STAY_EXTENSION_HOLD_EXPIRY_W40", async (job: any) => runStayExtensionHoldExpiryWorker(prisma, unwrapJobData(job)));
+  await (engine.boss as any).work("INTERIM_PAYMENT_REMINDER_W41", async (job: any) => runInterimPaymentReminderWorker(prisma, unwrapJobData(job)));
   // W39 identity OCR — one at a time: tesseract + sharp are CPU/RAM heavy and this is background prefill.
   await (engine.boss as any).work("IDENTITY_OCR_W39", { batchSize: 1 }, async (job: any) => runIdentityOcrWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("PRE_ARRIVAL_COUNTDOWN_W4", async (job: any) => runPreArrivalWindowActivationWorker(prisma, engine, unwrapJobData(job)));

@@ -12,6 +12,7 @@ import {
   enforceInterimPaymentStage,
 } from "../../policies/35-interim-payment/p80-interim-payment-gates.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
+import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient | Tx;
@@ -64,6 +65,256 @@ export type InterimFigures = {
   askLabel: string | null;
   projectionSource: "QUOTE" | "EXTENSION_PREVIEW" | "LEDGER_RUN_RATE";
 };
+
+
+// ── Mid-stay payment reminder (2026-08-22, operator request: "need a timer for a reminder to get
+// that mid-stay payment") ───────────────────────────────────────────────────────────────────
+// Every interim bill carries `dueBy` — when the money is expected — and the W41 clock fires
+// there while the bill is unpaid: a reminder on the booking (trace + notification), re-armed
+// every `repeatEveryHours` up to `maxReminders`. Cancelled the moment the bill is paid,
+// withdrawn or lapsed. It gates nothing — Policy 80 and W40 stay the teeth.
+
+export type InterimReminderPolicy = {
+  enabled: boolean;
+  /** A long-stay bill is due this many hours after it is generated. */
+  dueAfterHours: number;
+  /** An extension's bill is due this many hours BEFORE its held nights lapse. */
+  extensionLeadHours: number;
+  /** While unpaid past the due-by, remind again every N hours (0 = once). */
+  repeatEveryHours: number;
+  /** Cap on reminders raised per bill. */
+  maxReminders: number;
+};
+const REMINDER_DEFAULTS: InterimReminderPolicy = { enabled: true, dueAfterHours: 24, extensionLeadHours: 6, repeatEveryHours: 24, maxReminders: 5 };
+const REMINDER_TIMER_CODE = "INTERIM_PAYMENT_REMINDER_W41" as const;
+
+export async function loadInterimReminderPolicy(prisma: PrismaClient): Promise<InterimReminderPolicy> {
+  try {
+    const raw = await requireActiveConfigValue<Partial<InterimReminderPolicy>>(prisma, "interimPayment.reminder");
+    const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : d);
+    return {
+      enabled: raw?.enabled !== false,
+      dueAfterHours: num(raw?.dueAfterHours, REMINDER_DEFAULTS.dueAfterHours),
+      extensionLeadHours: num(raw?.extensionLeadHours, REMINDER_DEFAULTS.extensionLeadHours),
+      repeatEveryHours: num(raw?.repeatEveryHours, REMINDER_DEFAULTS.repeatEveryHours),
+      maxReminders: Math.max(1, Math.floor(num(raw?.maxReminders, REMINDER_DEFAULTS.maxReminders))),
+    };
+  } catch {
+    return { ...REMINDER_DEFAULTS };
+  }
+}
+
+/**
+ * When the money is expected. The operator's date wins (must be ahead of now); otherwise the
+ * policy's default — a long-stay bill `dueAfterHours` from now, an extension's bill
+ * `extensionLeadHours` before its held nights lapse (never less than an hour from now).
+ */
+export function resolveInterimDueBy(
+  policy: InterimReminderPolicy,
+  input: { kind: "LONG_STAY" | "EXTENSION"; now: Date; holdExpiresAt?: Date | null; requested?: string | Date | null },
+): Date | null {
+  if (input.requested) {
+    const d = input.requested instanceof Date ? input.requested : new Date(input.requested);
+    if (Number.isNaN(d.getTime())) throw new ValidationError("Payment due-by is not a valid date/time");
+    if (d.getTime() <= input.now.getTime() + 60_000) throw new ValidationError("Payment due-by must be ahead of now");
+    return d;
+  }
+  if (!policy.enabled) return null;
+  const H = 3_600_000;
+  if (input.kind === "EXTENSION" && input.holdExpiresAt) {
+    const lead = input.holdExpiresAt.getTime() - policy.extensionLeadHours * H;
+    return new Date(Math.max(lead, input.now.getTime() + H));
+  }
+  return new Date(input.now.getTime() + policy.dueAfterHours * H);
+}
+
+/** Cancel every SCHEDULED reminder clock owned by one interim bill (best-effort). */
+export async function cancelInterimPaymentReminder(prisma: PrismaClient, requestId: string, cancelledBy: string, reason: string) {
+  const timers = await prisma.timerRecord.findMany({
+    where: { entityType: "InterimPaymentRequest", entityId: requestId, timerCode: REMINDER_TIMER_CODE, status: "SCHEDULED" },
+  });
+  if (timers.length === 0) return 0;
+  const engine = await getTimerEngine();
+  const now = new Date();
+  await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId).catch(() => {}) : Promise.resolve())));
+  await prisma.timerRecord.updateMany({
+    where: { id: { in: timers.map((t) => t.id) } },
+    data: { status: "CANCELLED", cancelledAt: now, cancelledBy, cancelledReason: reason },
+  });
+  await prisma.interimPaymentRequest.updateMany({
+    where: { id: requestId, reminderTimerRecordId: { in: timers.map((t) => t.id) } },
+    data: { reminderTimerRecordId: null },
+  });
+  return timers.length;
+}
+
+/** The extension's bill — looked up by the extension id (lapse / withdrawal paths). */
+export async function cancelInterimReminderForExtension(prisma: PrismaClient, stayExtensionRequestId: string, cancelledBy: string, reason: string) {
+  const req = await prisma.interimPaymentRequest.findUnique({ where: { stayExtensionRequestId }, select: { id: true } });
+  if (!req) return 0;
+  return cancelInterimPaymentReminder(prisma, req.id, cancelledBy, reason);
+}
+
+/** A new ask replaces the older open ones (REPLACED_BY_NEW_ASK) — their clocks go with them. */
+async function cancelStaleInterimRemindersForEntry(prisma: PrismaClient, entryId: string, keepRequestId: string, cancelledBy: string) {
+  const stale = await prisma.timerRecord.findMany({
+    where: { entryId, timerCode: REMINDER_TIMER_CODE, status: "SCHEDULED", entityType: "InterimPaymentRequest", NOT: { entityId: keepRequestId } },
+    select: { entityId: true },
+  });
+  for (const id of new Set(stale.map((t) => t.entityId))) await cancelInterimPaymentReminder(prisma, id, cancelledBy, "REPLACED_BY_NEW_ASK").catch(() => {});
+}
+
+/**
+ * Arm (or re-arm) the W41 reminder clock for one bill. Post-transaction and best-effort, like
+ * the W40 hold clock: a pg-boss hiccup never rolls the bill back. `firesAt` defaults to the
+ * bill's `dueBy`; a repeat reminder passes its own moment.
+ */
+export async function armInterimPaymentReminder(prisma: PrismaClient, input: { requestId: string; actorId: string; firesAt?: Date | null }) {
+  const req = await prisma.interimPaymentRequest.findUnique({ where: { id: input.requestId }, select: { id: true, entryId: true, dueBy: true, state: true } });
+  if (!req) return null;
+  if (req.state !== "REQUESTED" && req.state !== "BILLED") return null;
+  const firesAt = input.firesAt ?? req.dueBy;
+  if (!firesAt) return null;
+  await cancelInterimPaymentReminder(prisma, req.id, input.actorId, "RE_ARMED");
+  const engine = await getTimerEngine();
+  const timer = await prisma.timerRecord.create({
+    data: {
+      entryId: req.entryId,
+      entityType: "InterimPaymentRequest",
+      entityId: req.id,
+      timerType: REMINDER_TIMER_CODE,
+      timerCode: REMINDER_TIMER_CODE,
+      stageContext: Stage.S7,
+      dueAt: firesAt,
+      firesAt,
+      status: "SCHEDULED",
+      createdBy: input.actorId,
+      payload: { interimPaymentRequestId: req.id, dueBy: req.dueBy?.toISOString() ?? null },
+    },
+  });
+  const jobId = await engine.schedule(REMINDER_TIMER_CODE, { interimPaymentRequestId: req.id, timerRecordId: timer.id }, { startAfter: firesAt });
+  await prisma.timerRecord.update({ where: { id: timer.id }, data: { pgBossJobId: jobId } });
+  await prisma.interimPaymentRequest.update({ where: { id: req.id }, data: { reminderTimerRecordId: timer.id } });
+  return timer;
+}
+
+export type InterimPaymentPromise = { kind: "NOW" | "BY_DATE"; promisedBy?: string | null; note?: string | null };
+
+/**
+ * "by 25 Aug 2026 — “will transfer after lunch”" / "at the desk" — the guest's promise in one
+ * line, shared by the interim document, its email and the desk so they cannot word it apart.
+ */
+export function describeInterimPromise(
+  req: { promiseKind: string | null; promisedBy: Date | null; promiseNote: string | null },
+  formatDate: (d: Date) => string,
+): string | null {
+  if (!req.promiseKind) return null;
+  const note = req.promiseNote?.trim() ? ` — “${req.promiseNote.trim()}”` : "";
+  if (req.promiseKind === "BY_DATE" && req.promisedBy) return `by ${formatDate(req.promisedBy)}${note}`;
+  return `at the desk${note}`;
+}
+
+/**
+ * The guest's promise (2026-08-22, operator request — "before sending the interim bill, put the
+ * option to put when they are going to pay, a promised time like S3's advance"). Recorded
+ * before the bill goes out (desk order, not a gate — the S3 plan is advisory too). A dated
+ * promise BECOMES the bill's due-by, so the W41 reminder fires at the guest's own time;
+ * "paying at the desk" leaves the default due-by standing in case it slips. An extension's
+ * promise cannot land after its held nights lapse (W40 would release them first).
+ */
+export async function recordInterimPaymentPromise(prisma: PrismaClient, actor: Actor, requestId: string, input: InterimPaymentPromise) {
+  const req = await prisma.interimPaymentRequest.findUnique({
+    where: { id: requestId },
+    include: { entry: { select: { inquiryId: true } }, stayExtensionRequest: { select: { state: true, holdExpiresAt: true } } },
+  });
+  if (!req) throw new NotFoundError("InterimPaymentRequest");
+  if (req.state !== "REQUESTED" && req.state !== "BILLED") {
+    throw new ValidationError(`This interim bill is ${req.state.toLowerCase()} — nothing is promised against it`);
+  }
+  const now = new Date();
+  let promisedBy: Date | null = null;
+  if (input.kind === "BY_DATE") {
+    if (!input.promisedBy) throw new ValidationError("Pick the date and time the guest promised");
+    promisedBy = new Date(input.promisedBy);
+    if (Number.isNaN(promisedBy.getTime())) throw new ValidationError("The promised time is not a valid date/time");
+    if (promisedBy.getTime() <= now.getTime() + 60_000) throw new ValidationError("The promised time must be ahead of now");
+    const ext = req.stayExtensionRequest;
+    if (ext && (ext.state === "REQUESTED" || ext.state === "BILLED") && promisedBy.getTime() > ext.holdExpiresAt.getTime()) {
+      throw new ValidationError(
+        `The extra nights are released at ${ext.holdExpiresAt.toISOString().slice(0, 16).replace("T", " ")} UTC if unpaid — the promise has to land before then, or withdraw the extension and request it nearer the time`,
+      );
+    }
+  }
+  const updated = await prisma.interimPaymentRequest.update({
+    where: { id: req.id },
+    data: {
+      promiseKind: input.kind,
+      promisedBy,
+      promiseNote: input.note?.trim() || null,
+      promiseRecordedAt: now,
+      promiseRecordedBy: actor.actorId,
+      ...(promisedBy ? { dueBy: promisedBy } : {}),
+    },
+  });
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "INTERIM_PAYMENT.PROMISE_RECORDED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "InterimPaymentRequest",
+      entityId: req.id,
+      operation: "UPDATE",
+      timestamp: now,
+      stageContext: Stage.S7,
+      inquiryId: req.entry.inquiryId,
+      entryId: req.entryId,
+      payload: {
+        entryId: req.entryId,
+        kind: input.kind,
+        promisedBy: promisedBy?.toISOString() ?? null,
+        note: input.note?.trim() || null,
+        priorPromiseKind: req.promiseKind,
+        priorPromisedBy: req.promisedBy?.toISOString() ?? null,
+        dueBy: updated.dueBy?.toISOString() ?? null,
+        billedAlready: req.state === "BILLED",
+      } as Prisma.InputJsonValue,
+      createdBy: actor.actorId,
+    },
+  });
+  if (promisedBy) await armInterimPaymentReminder(prisma, { requestId: req.id, actorId: actor.actorId }).catch(() => {});
+  return updated;
+}
+
+/** Move a bill's due-by (desk: "the guest says Friday") — re-arms the reminder clock. */
+export async function setInterimPaymentDueBy(prisma: PrismaClient, actor: Actor, requestId: string, dueBy: string) {
+  const req = await prisma.interimPaymentRequest.findUnique({ where: { id: requestId }, include: { entry: { select: { inquiryId: true } } } });
+  if (!req) throw new NotFoundError("InterimPaymentRequest");
+  if (req.state !== "REQUESTED" && req.state !== "BILLED") {
+    throw new ValidationError(`This interim bill is ${req.state.toLowerCase()} — its due-by no longer applies`);
+  }
+  const now = new Date();
+  const policy = await loadInterimReminderPolicy(prisma);
+  const next = resolveInterimDueBy(policy, { kind: req.kind, now, requested: dueBy });
+  const updated = await prisma.interimPaymentRequest.update({ where: { id: req.id }, data: { dueBy: next } });
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "INTERIM_PAYMENT.DUE_BY_SET",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "InterimPaymentRequest",
+      entityId: req.id,
+      operation: "UPDATE",
+      timestamp: now,
+      stageContext: Stage.S7,
+      inquiryId: req.entry.inquiryId,
+      entryId: req.entryId,
+      payload: { entryId: req.entryId, priorDueBy: req.dueBy?.toISOString() ?? null, dueBy: next?.toISOString() ?? null } as Prisma.InputJsonValue,
+      createdBy: actor.actorId,
+    },
+  });
+  if (next) await armInterimPaymentReminder(prisma, { requestId: req.id, actorId: actor.actorId }).catch(() => {});
+  return updated;
+}
 
 const DAY_MS = 86_400_000;
 const n2 = (d: Prisma.Decimal): number => Number(round2(d));
@@ -222,6 +473,8 @@ export async function createInterimPaymentRequestTx(
     note?: string | null;
     stayExtensionRequestId?: string | null;
     promptedBy?: "MANUAL" | "NIGHT_AUDIT";
+    /** When the money is expected — the W41 reminder clock fires here (null = no clock). */
+    dueBy?: Date | null;
   },
 ) {
   const entry = await loadEntryForInterim(tx, input.entryId);
@@ -278,6 +531,7 @@ export async function createInterimPaymentRequestTx(
     invoiceId,
     stayExtensionRequestId: input.stayExtensionRequestId ?? null,
     note: input.note?.trim() || null,
+    dueBy: input.dueBy ?? null,
     requestedBy: actor.actorId,
     requestedAt: now,
   };
@@ -335,10 +589,20 @@ export async function createInterimPaymentRequest(
   prisma: PrismaClient,
   actor: Actor,
   entryId: string,
-  input: { ask: InterimAsk; note?: string | null },
+  input: { ask: InterimAsk; note?: string | null; dueBy?: string | null },
 ) {
   const figures = await computeInterimFigures(prisma, entryId, { ask: input.ask });
-  return prisma.$transaction((tx) => createInterimPaymentRequestTx(tx, actor, { entryId, kind: "LONG_STAY", ask: input.ask, figures, note: input.note }));
+  const policy = await loadInterimReminderPolicy(prisma);
+  const dueBy = resolveInterimDueBy(policy, { kind: "LONG_STAY", now: new Date(), requested: input.dueBy ?? null });
+  const out = await prisma.$transaction((tx) =>
+    createInterimPaymentRequestTx(tx, actor, { entryId, kind: "LONG_STAY", ask: input.ask, figures, note: input.note, dueBy }),
+  );
+  // Reminder clock (W41) — post-tx and best-effort, like the extension's W40 hold clock.
+  await cancelStaleInterimRemindersForEntry(prisma, entryId, out.request.id, actor.actorId).catch(() => {});
+  if (dueBy) await armInterimPaymentReminder(prisma, { requestId: out.request.id, actorId: actor.actorId }).catch(() => {});
+  // The caller sees the row as armed (reminderTimerRecordId), not the pre-clock snapshot.
+  const request = (await prisma.interimPaymentRequest.findUnique({ where: { id: out.request.id } })) ?? out.request;
+  return { ...out, request };
 }
 
 /** Called by `dispatchInvoice` when an INTERIM invoice goes out: REQUESTED → BILLED. */
@@ -369,7 +633,7 @@ export async function recordInterimPayment(
   input: { amount: number; paymentMethod?: string | null; notes?: string | null },
 ) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) throw new ValidationError("Payment amount must be a positive number");
-  return prisma.$transaction(async (tx) => {
+  const out = await prisma.$transaction(async (tx) => {
     const req = await tx.interimPaymentRequest.findUnique({
       where: { id: requestId },
       include: { invoice: true, payments: true, entry: { select: { id: true, status: true, currentStage: true, inquiryId: true } }, folio: true },
@@ -467,10 +731,13 @@ export async function recordInterimPayment(
     });
     return { payment, request: updated, paidInFull, receivedAgainstAsk: n2(linked), remaining: n2(due.sub(linked).lt(ZERO) ? ZERO : due.sub(linked)) };
   });
+  // The reminder clock has done its job once the money is in.
+  if (out.paidInFull) await cancelInterimPaymentReminder(prisma, requestId, actor.actorId, "INTERIM_PAID").catch(() => {});
+  return out;
 }
 
 export async function withdrawInterimPaymentRequest(prisma: PrismaClient, actor: Actor, requestId: string, reason?: string | null) {
-  return prisma.$transaction(async (tx) => {
+  const out = await prisma.$transaction(async (tx) => {
     const req = await tx.interimPaymentRequest.findUnique({ where: { id: requestId }, include: { entry: { select: { inquiryId: true } } } });
     if (!req) throw new NotFoundError("InterimPaymentRequest");
     if (req.state === "PAID") throw new ValidationError("A paid interim request cannot be withdrawn — the money is on the folio");
@@ -510,6 +777,8 @@ export async function withdrawInterimPaymentRequest(prisma: PrismaClient, actor:
     });
     return updated;
   });
+  await cancelInterimPaymentReminder(prisma, requestId, actor.actorId, "INTERIM_WITHDRAWN").catch(() => {});
+  return out;
 }
 
 /** Inside a transaction (extension lapse / withdrawal): close the extension's bill. */
@@ -627,7 +896,7 @@ export async function maybePromptInterimPaymentTx(
 
 /** The Stay step's view: every request (newest first) + today's figures with no ask. */
 export async function listInterimPayments(prisma: PrismaClient, entryId: string) {
-  const [requests, figures] = await Promise.all([
+  const [requests, figures, scheduledReminders, reminderPolicy] = await Promise.all([
     prisma.interimPaymentRequest.findMany({
       where: { entryId },
       orderBy: { createdAt: "desc" },
@@ -637,12 +906,28 @@ export async function listInterimPayments(prisma: PrismaClient, entryId: string)
       },
     }),
     computeInterimFigures(prisma, entryId).catch(() => null),
+    prisma.timerRecord.findMany({
+      where: { entryId, timerCode: REMINDER_TIMER_CODE, status: "SCHEDULED" },
+      select: { entityId: true, firesAt: true },
+    }),
+    loadInterimReminderPolicy(prisma),
   ]);
+  const nextByRequest = new Map(scheduledReminders.map((t) => [t.entityId, t.firesAt]));
+  const nowMs = Date.now();
   return {
     entryId,
     figures,
+    reminderPolicy,
     requests: requests.map((r) => ({
       ...r,
+      // Mid-stay payment reminder (2026-08-22) — server-computed, the desk renders it.
+      reminder: {
+        dueBy: r.dueBy?.toISOString() ?? null,
+        nextReminderAt: nextByRequest.get(r.id)?.toISOString() ?? null,
+        remindersSent: r.remindersSent,
+        lastReminderAt: r.lastReminderAt?.toISOString() ?? null,
+        overdue: (r.state === "REQUESTED" || r.state === "BILLED") && !!r.dueBy && r.dueBy.getTime() < nowMs,
+      },
       askValue: r.askValue != null ? Number(r.askValue) : null,
       projectedTotal: r.projectedTotal != null ? Number(r.projectedTotal) : null,
       receivedAtRequest: r.receivedAtRequest != null ? Number(r.receivedAtRequest) : null,

@@ -170,6 +170,10 @@ export type LegphelInterimInput = {
   balanceAtCheckout: string;
   /** Extension: until when the extra nights are held for the guest. */
   holdUntil?: string | null;
+  /** When the payment is expected (2026-08-22) — the desk's reminder clock fires here. */
+  dueBy?: string | null;
+  /** The guest's promise ("by 25 Aug 2026 — “…”" / "at the desk") — printed instead of the due-by. */
+  paymentPromise?: string | null;
   bank: { bankName: string | null; accountName: string | null; accountsPhone: string | null };
   closingNote: string;
   tariffVersion: string;
@@ -193,6 +197,8 @@ export function renderLegphelInterimHtml(input: LegphelInterimInput): string {
     row("Interim No", input.invoiceNo, { boldValue: true }),
     row("Booking Ref", input.bookingRef, { redValue: true }),
     row("Date", input.date),
+    input.dueBy ? row("Payment due by", input.dueBy, { boldKey: true, redValue: true }) : "",
+    input.paymentPromise ? row("Payment promised", input.paymentPromise, { boldKey: true, redValue: true }) : "",
     input.holdUntil ? row("Extra nights held until", input.holdUntil, { boldKey: true, redValue: true }) : "",
     section,
     row("To", input.to, { boldValue: true }),

@@ -2763,6 +2763,21 @@ model InterimPaymentRequest {
   stayExtensionRequestId String?              @unique
   /// Nights slept when the night audit raised the prompt (SUGGESTED rows).
   nightsSleptAtPrompt    Int?
+  /// When the money is expected (2026-08-22): default from `interimPayment.reminder`
+  /// (long stay: N h after the bill; extension: M h before the held nights lapse), operator-
+  /// settable. The W41 reminder clock fires here while the bill is unpaid.
+  dueBy                  DateTime?
+  /// The SCHEDULED W41 TimerRecord that owns the next reminder (a re-arm replaces it).
+  reminderTimerRecordId  String?
+  remindersSent          Int                  @default(0)
+  lastReminderAt         DateTime?
+  /// The guest's word on when they'll pay (2026-08-22 — S3's promise at S7): NOW = paying at the
+  /// desk; BY_DATE = `promisedBy`, which becomes `dueBy` so the W41 reminder fires at their time.
+  promiseKind            String?
+  promisedBy             DateTime?
+  promiseNote            String?
+  promiseRecordedAt      DateTime?
+  promiseRecordedBy      String?
   note                   String?
   requestedBy            String?
   requestedAt            DateTime             @default(now())

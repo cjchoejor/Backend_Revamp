@@ -134,6 +134,12 @@ async function main() {
         "Interim payments on long stays (2026-08-21, operator ruling): the night audit raises an 'interim payment due' prompt on the Stay step every `everyNights` nights slept when the folio's outstanding balance is at least `minimumOutstanding`. The desk can always ask manually, earlier or later; this is the forgetting-proof default. enabled=false turns the automatic prompt off.",
     },
     {
+      configKey: "interimPayment.reminder",
+      configValue: { enabled: true, dueAfterHours: 24, extensionLeadHours: 6, repeatEveryHours: 24, maxReminders: 5 },
+      notes:
+        "Mid-stay payment reminder (2026-08-22, operator request): every interim bill carries a due-by — a long-stay bill `dueAfterHours` after it is generated, an extension's bill `extensionLeadHours` before its held nights lapse — and the W41 clock fires there while the bill is unpaid: a reminder is raised on the booking and the clock re-arms every `repeatEveryHours` up to `maxReminders` reminders. The desk can set any due-by on the bill. enabled=false arms no clock.",
+    },
+    {
       configKey: "stayExtension.holdTtlSeconds",
       configValue: 86400,
       notes:

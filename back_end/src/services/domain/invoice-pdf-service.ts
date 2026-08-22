@@ -32,7 +32,7 @@ import { round2, sumMoney, toDecimal, ZERO } from "../../lib/money.js";
 import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelInterimHtml, renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
-import type { InterimFigures } from "./interim-payment-service.js";
+import { describeInterimPromise, type InterimFigures } from "./interim-payment-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
@@ -422,6 +422,8 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
   const checkOut = f.checkOut ? new Date(`${f.checkOut}T00:00:00.000Z`) : p.checkOut;
   const inPayments = (inv.folio?.payments ?? []).filter((x) => x.paymentDirection === "IN");
   const ext = req.stayExtensionRequest;
+  // The guest's promise, when recorded, replaces the plain due-by on the document.
+  const promiseLine = describeInterimPromise(req, formatDocDate);
   const html = renderLegphelInterimHtml({
     masthead: mastheadFromHotelProfile(hotel),
     invoiceNo: invoiceRef,
@@ -440,6 +442,8 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
     askLabel: f.askLabel ?? "interim payment",
     dueNow: formatMoney(f.dueNow ?? 0),
     balanceAtCheckout: formatMoney(f.balanceAtCheckout ?? 0),
+    dueBy: promiseLine ? null : req.dueBy ? formatDocDate(req.dueBy) : null,
+    paymentPromise: promiseLine,
     holdUntil: ext && (ext.state === "REQUESTED" || ext.state === "BILLED") ? formatDocDate(ext.holdExpiresAt) : null,
     bank: {
       bankName: null,
