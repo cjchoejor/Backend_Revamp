@@ -87,8 +87,12 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
   const queryClient = useQueryClient();
   const folio = entry.folio;
   // Re-read whenever the ledger moves — a posted charge, a payment, the settlement or an issued
-  // invoice changes both the index and what an open preview should show.
+  // invoice changes both the index and what an open preview should show. The STAGE is part of
+  // the key too: the index's availability is stage-aware (the tentative invoice retires at S8),
+  // and a S7→S8 transition leaves the ledger itself unchanged — without the stage in the key the
+  // block kept serving the S7 answer from the cache after the move (found live 2026-08-22).
   const ledgerKey = [
+    entry.currentStage,
     folio?.state ?? "",
     folio?.lines?.length ?? 0,
     String(folio?.outstandingBalance ?? ""),
