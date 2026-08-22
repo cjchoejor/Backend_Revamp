@@ -105,6 +105,18 @@ exists: a fiscal document is never recomposed from a ledger that can still take 
   tax-invoice draft 409 naming INV-20260817-0001; the desk's S9 block shows "Frozen at settlement · 2 prints"
   + the issued invoice from its stored PDF.
 - Desk by Puppeteer as FOM: S7 block with the three rows and inline View; S9 block sealed/issued rows.
+- **The S8 walk, end to end through the desk** (ENT-20260813-0003, a 6-room test booking): Start pre-checkout
+  handoff → Continue to Check-out → "Bills for check-out" shows the master bill (signature row, "indicative"
+  footline) + the draft, the tentative invoice gone → Take payment & settle (CASH, reference typed) → the block
+  flips to "Frozen at settlement · 0 prints" + **Issue tax invoice** → `INV-20260822-0014` "Issued · ready to
+  send" → **Send to guest** → DISPATCHED, the B1 PDF rendered + stored under `documents/2026/08/tax-invoice/`,
+  snapshot `documentTitle: "TAX INVOICE"`, ladder Net 11,520 + SC 1,152 + GST 633.60 = 13,305.60 → View from
+  the stored original → **Print** the frozen master bill → new tab, `FOLIO.MASTER_BILL_PRINTED` ordinal 0, the
+  row reads "1 print". The email transport itself failed on the known bad SMTP credentials (535) — dispatch is
+  best-effort, the invoice is still DISPATCHED. Two things found on the way: the block's index query had to
+  carry the **stage** in its key (the S7 answer was served from cache after the move), and three of the
+  booking's rooms carried `CONFIRMED` claim flags left by earlier tests (flipped to OCCUPIED for the walk,
+  restored after — the flags are display-only; availability is date-based).
 - Backend + frontend `tsc` clean (the repo has no ESLint config, so no lint pass was possible).
 
 ## 6. Deliberately not built (say so before anyone assumes otherwise)
