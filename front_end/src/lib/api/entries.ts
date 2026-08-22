@@ -46,7 +46,9 @@ export type EntryCommunicationType =
   | "CONFIRMATION_VOUCHER"
   | "PRE_ARRIVAL_REMINDER"
   // Final bill (2026-08-17): guest's answer captured as evidence beside the OUTSTANDING follow-up.
-  | "FINAL_INVOICE";
+  | "FINAL_INVOICE"
+  // Interim bill mid-stay (2026-08-21): the answer GATES the interim payment (Policy 80).
+  | "INTERIM_INVOICE";
 
 export type EntryCommunication = {
   id: string;
@@ -860,12 +862,55 @@ export type RoomChangeOutcome = {
   /** The primary new room's bed setup after the change, when one was asked for (2026-08-14). */
   appliedBedType?: string | null;
   appliedBedTypes?: Array<{ roomId: string; roomNumber: string; bedType: string }>;
+  /**
+   * Party seating after the change (2026-08-21): the backend guarantees every guest has a room
+   * on every night and no plan room is empty. `repaired` = the compositions did NOT satisfy that
+   * on their own and were auto-seated; `lines` say exactly what moved (toast them); `unresolved`
+   * what could not be seated. Null on bookings with no composition at all.
+   */
+  seating?: { repaired: boolean; lines: string[]; actions: unknown[]; unresolved: string[] } | null;
+  /** Set when the walk was a stay extension (2026-08-21). */
+  extension?: { requestId: string; priorCheckOutDate: string; newCheckOutDate: string; extraNights: Array<{ date: string; roomId: string }> } | null;
   walk: {
     returnedToOrigin: boolean;
     reachedStage: string;
     blocked: { atStep: string; code: string | null; message: string } | null;
   };
 };
+
+/** Server-computed seating truth — `GET /api/entries/:id/party-seating` (2026-08-21). */
+export type PartySeatingStatus = {
+  entryId: string;
+  currentStage: string;
+  hasComposition: boolean;
+  source: string;
+  ok: boolean;
+  party: Array<{ key: string; label: string; band: string; rooms: Array<{ roomId: string; roomNumber: string | null }> }>;
+  unseated: Array<{ key: string; label: string }>;
+  emptyRooms: Array<{ roomId: string; roomNumber: string | null; hasRow: boolean }>;
+  strayRooms: Array<{ roomId: string; roomNumber: string | null }>;
+  perNight: Array<{ date: string; shortfall: Record<string, number>; overflow: Record<string, number> }>;
+  repairable: boolean;
+  repairBlockedReason: string | null;
+  suggestedFromRoomId: string | null;
+};
+
+export async function getPartySeating(session: Session, entryId: string) {
+  return apiRequest<PartySeatingStatus>(`/api/entries/${entryId}/party-seating`, { session });
+}
+
+/**
+ * Seat every guest and fill every empty room — the governed room-change journey in its
+ * setup-only form (new segment, silent re-quote with everyone seated, re-freeze, back to this
+ * stage; nobody moves rooms, nothing goes to the guest). Refused when there's nothing to repair.
+ */
+export async function repairPartySeating(session: Session, entryId: string, reason?: string) {
+  return apiRequest<RoomChangeOutcome>(`/api/entries/${entryId}/party-seating/repair`, {
+    method: "POST",
+    session,
+    body: reason ? { reason } : {},
+  });
+}
 
 /** Optional setup for one NEW room, priced by the silent quote (2026-08-14). Omitted = carried. */
 export type RoomChangeAdjustments = {

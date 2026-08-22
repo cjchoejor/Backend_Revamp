@@ -16,6 +16,8 @@ const ACK_MESSAGE_BY_STAGE: Record<string, string> = {
   S3: "Proforma invoice",
   S4: "Confirmation voucher",
   S5: "Pre-arrival reminder",
+  // Interim invoice (2026-08-21) — the mid-stay bill behind an interim payment / extension.
+  S7: "Interim invoice",
 };
 
 // Covers every code the backend timer engine can emit (lib/timer-engine.ts TimerCode union) —
@@ -33,6 +35,7 @@ const TIMER_LABELS: Record<string, string> = {
   ADVANCE_PAYMENT_FOLLOW_UP_W34: "Advance payment follow-up",
   // Armed when the guest promised the remaining advance BEFORE check-in by a given date.
   ADVANCE_PROMISE_DEADLINE_W38: "Advance payment promise",
+  STAY_EXTENSION_HOLD_EXPIRY_W40: "Extension hold (extra nights)",
   PRE_ARRIVAL_COUNTDOWN_W4: "Pre-arrival countdown",
   NO_SHOW_CUTOFF_W5: "No-show cutoff",
   AWAITING_WRITTEN_CONFIRMATION_W5: "Awaiting written confirmation",

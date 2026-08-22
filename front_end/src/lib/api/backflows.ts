@@ -61,7 +61,8 @@ export const BACKFLOWS_BY_STAGE: Record<string, BackflowDescriptor[]> = {
     { key: "s5ToS1", label: "Pre-arrival config error → re-search", toStage: "S1", minLevel: "L2", destructive: true },
   ],
   S7: [
-    { key: "s7ToS4", label: "Extend stay (date extension)", toStage: "S4", minLevel: "L2", needsNewCheckOutDate: true },
+    // "Extend stay" moved to the Stay step's own block (2026-08-21): payment-before-commit,
+    // availability-checked, run through the governed room-change journey — not this backflow.
     { key: "s7ToS3", label: "Change billing model", toStage: "S3", minLevel: "L2" },
     { key: "s7ToS2", label: "Renegotiate rate (GM only)", toStage: "S2", minLevel: "L3" },
   ],

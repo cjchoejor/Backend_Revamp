@@ -35,6 +35,7 @@ import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
 import { RoomCompositionSummary, hasRoomComposition } from "./room-composition-summary";
 import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "./room-change-control";
+import { InterimPaymentBlock, StayExtensionBlock } from "./stay-money";
 
 const BK = STAGE_ACTIONS.S7;
 
@@ -972,6 +973,10 @@ export function StayStep({
           </div>
         )}
       </div>
+
+      {/* Mid-stay money (2026-08-21): interim payment on long stays + payment-before-commit extension */}
+      <InterimPaymentBlock entry={entry} onChanged={() => void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] })} />
+      <StayExtensionBlock entry={entry} onChanged={() => void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] })} />
 
       {/* Night audit */}
       <div className="block">

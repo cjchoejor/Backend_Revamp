@@ -14,7 +14,7 @@ import {
   type RoomChangeCandidate,
 } from "@/lib/api/entries";
 import { listRooms, setRoomBedType } from "@/lib/api/rooms";
-import { foldNightsToRangesLabel, mealPlanSummary, operativeRoomCompositions } from "@/lib/desk/party-rooms";
+import { foldNightsToRangesLabel, mealPlanSummary, operativeRoomCompositions, roomNightsByRoom } from "@/lib/desk/party-rooms";
 import { money } from "@/lib/desk/workspace";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import type { EntryDetail } from "@/types/api";
@@ -239,6 +239,40 @@ export function RoomChangeControl({
     const moving = new Set([fromRoomId, ...selectedNewRooms]);
     return comps.filter((c) => !moving.has(c.roomId));
   }, [entry, fromRoomId, selectedNewRooms]);
+  /**
+   * Pre-flight seating check (2026-08-21, operator ruling): what the table would leave behind —
+   * a night on which not everyone has a room, a new room with nobody in it. The backend seats
+   * them automatically on save and says where; this says it BEFORE the click so an emptied row
+   * is never a surprise. Mirrors the payload assembly in `buildPayload`.
+   */
+  const seatingPreview = useMemo(() => {
+    if (!fromComp || selectedNewRooms.length === 0) return null;
+    const table = new Map(repriceComps.map((c) => [c.roomId, c]));
+    const rows: RoomCompositionInput[] = [
+      ...untouchedComps,
+      ...selectedNewRooms.map((id) => table.get(id) ?? seedComps.find((s) => s.roomId === id)).filter((c): c is RoomCompositionInput => !!c),
+      ...(keptNights.length > 0 || atS7 ? [fromComp] : []),
+    ];
+    const party = (entry.adultCount ?? 0) + (entry.childAges?.length ?? 0) || Math.max(1, entry.guestCount ?? 1);
+    const occ = (c?: RoomCompositionInput) => (c ? (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) : 0);
+    // The plan AFTER the change: every room's nights as today, the from-room's changed nights
+    // handed to the rooms picked per night (the from-room keeps only the nights picked for it).
+    const planned = new Map<string, Set<string>>();
+    for (const [id, ns] of roomNightsByRoom(entry)) {
+      planned.set(id, new Set(id === fromRoomId ? ns.filter((d) => !nights.includes(d)) : ns));
+    }
+    for (const d of nights) {
+      const id = nightSel[d];
+      if (!id) continue;
+      planned.set(id, new Set([...(planned.get(id) ?? []), d]));
+    }
+    const shortNights = nights.filter((d) => {
+      const sum = [...planned.entries()].filter(([, ns]) => ns.has(d)).reduce((acc, [id]) => acc + occ(rows.find((c) => c.roomId === id)), 0);
+      return sum < party;
+    });
+    const emptyRooms = selectedNewRooms.filter((id) => occ(rows.find((c) => c.roomId === id)) === 0);
+    return shortNights.length > 0 || emptyRooms.length > 0 ? { shortNights, emptyRooms } : null;
+  }, [fromComp, selectedNewRooms, repriceComps, untouchedComps, seedComps, keptNights, atS7, entry, fromRoomId, nights, nightSel]);
   const carriedDiscount = useMemo(() => {
     const quotes = (entry.quotations ?? []).slice().sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
     for (const q of quotes) {
@@ -383,6 +417,9 @@ export function RoomChangeControl({
         ? ` Beds: ${out.appliedBedTypes.map((b) => `${b.roomNumber} → ${bedPhrase(b.bedType)}`).join(", ")}.`
         : "";
       const moved = `Room ${out.fromRoom.roomNumber} → ${dest}`;
+      // The backend's seating repair, when the compositions did not seat everyone on their own.
+      const seated = out.seating?.repaired && out.seating.lines.length ? ` Seating: ${out.seating.lines.join("; ")}.` : "";
+      if (out.seating?.unresolved?.length) toast.warning(out.seating.unresolved.join(" · "), { duration: 12000 });
       if (out.walk.blocked) {
         toast.warning(
           `${moved} — the booking is at ${out.walk.reachedStage}, not back at this step yet: ${out.walk.blocked.message}`,
@@ -391,11 +428,11 @@ export function RoomChangeControl({
       } else if (out.pricing.delta != null && Math.abs(out.pricing.delta) >= 0.01) {
         const dir = out.pricing.delta > 0 ? "+" : "−";
         toast.success(
-          `${moved} · new total ${money(out.pricing.newTotal)} (was ${money(out.pricing.priorTotal)}, ${dir}${money(Math.abs(out.pricing.delta))}).${kept}${beds} Nothing was sent to the guest — send the new quote only if they ask.`,
+          `${moved} · new total ${money(out.pricing.newTotal)} (was ${money(out.pricing.priorTotal)}, ${dir}${money(Math.abs(out.pricing.delta))}).${kept}${beds}${seated} Nothing was sent to the guest — send the new quote only if they ask.`,
           { duration: 12000 },
         );
       } else {
-        toast.success(`${moved} — price unchanged.${kept}${beds} Everything else about the booking carried.`);
+        toast.success(`${moved} — price unchanged.${kept}${beds}${seated} Everything else about the booking carried.`, seated ? { duration: 12000 } : undefined);
       }
       setOpen(false);
       setExpanded(false);
@@ -867,6 +904,19 @@ export function RoomChangeControl({
                 )}
               </div>
             </div>
+          )}
+          {seatingPreview && (
+            <p
+              className="fact"
+              style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginBottom: 8, border: "1px solid var(--warn)", background: "var(--warn-t)" }}
+            >
+              {seatingPreview.emptyRooms.length > 0 &&
+                `Room ${seatingPreview.emptyRooms.map((id) => candidateById.get(id)?.roomNumber ?? "?").join(", ")} would have no guests. `}
+              {seatingPreview.shortNights.length > 0 &&
+                `Not everyone would have a room on ${foldNightsToRangesLabel(seatingPreview.shortNights)}. `}
+              On save the guests are seated automatically — into the emptiest room with space on every night — and the
+              confirmation says where.
+            </p>
           )}
           {/* A booking with no per-room composition has nothing to set up — the swap still runs. */}
           {selectedNewRooms.length > 0 && !fromComp && (

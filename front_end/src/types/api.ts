@@ -347,6 +347,9 @@ export type ReservationSummary = {
   frozenGuestCount: number;
   frozenInclusions?: unknown;
   frozenCancellationTerms?: unknown;
+  /** The S4 snapshot of the commercial terms — carries `roomCompositions` on composition
+   *  bookings; the desk's seating falls back to it when the current segment's quote has none. */
+  frozenCommercialTerms?: Record<string, unknown> | null;
   creditCeilingIfExtended?: string | number | null;
   confirmedAt: string;
   confirmedBy: string;

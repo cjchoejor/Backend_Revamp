@@ -12,19 +12,75 @@ import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
 
 export type PartyBand = "ADULT" | "C6TO10" | "UNDER6";
 
-/** The operative quotation's per-room compositions — newest live quote that carries any
- *  (ACCEPTED wins, else SENT/DRAFT, else newest of the rest). Null when none. */
+/**
+ * The per-room compositions the booking is seated (and priced) on TODAY. Layered, most
+ * authoritative first — MIRRORS the backend's `resolveCompositionBasis`
+ * (back_end/src/lib/party-seating.ts), keep the two in step:
+ *   1. the CURRENT segment's operative quotation (ACCEPTED > SENT > DRAFT, newest version);
+ *   2. the current segment's newest quotation in ANY state — W15 keeps the validity clock
+ *      ticking after the freeze, so a confirmed booking's own quote routinely reads EXPIRED;
+ *   3. the current reservation's frozen terms;
+ *   4. the newest composition-bearing quote of ANY segment — the last KNOWN seating, for a
+ *      booking whose current segment was re-quoted without compositions (the 2026-08-21 defect:
+ *      a room change that dropped them). Such rows may still name the REPLACED room — the
+ *      backend's seating repair re-points them; the desk shows the gap and offers the repair.
+ * Before 2026-08-21 this picked "any ACCEPTED quote with compositions across all segments",
+ * which after a room change could seat the party in a room the booking no longer held.
+ * Null when no composition exists anywhere.
+ */
 export function operativeRoomCompositions(entry: EntryDetail): RoomCompositionInput[] | null {
-  const quotes = (entry.quotations ?? [])
-    .filter((q) => {
-      const comps = (q.commercialTerms as { roomCompositions?: unknown[] } | null | undefined)?.roomCompositions;
-      return Array.isArray(comps) && comps.length > 0;
-    })
-    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
-  const operative =
-    quotes.find((q) => q.state === "ACCEPTED") ?? quotes.find((q) => q.state === "SENT" || q.state === "DRAFT") ?? quotes[0];
-  if (!operative) return null;
-  return ((operative.commercialTerms as { roomCompositions?: unknown[] }).roomCompositions ?? []) as RoomCompositionInput[];
+  const compsOf = (terms: unknown): RoomCompositionInput[] | null => {
+    const rows = (terms as { roomCompositions?: unknown[] } | null | undefined)?.roomCompositions;
+    return Array.isArray(rows) && rows.length > 0 ? (rows as RoomCompositionInput[]) : null;
+  };
+  const quotes = [...(entry.quotations ?? [])].filter((q) => compsOf(q.commercialTerms));
+  const byNewest = (a: { versionNumber?: number; createdAt?: string }, b: { versionNumber?: number; createdAt?: string }) =>
+    (b.versionNumber ?? 0) - (a.versionNumber ?? 0) || (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+  // `segments` arrive newest-first (segmentNumber desc) — [0] is the current one.
+  const currentSegmentId = entry.segments?.[0]?.id ?? null;
+  if (currentSegmentId) {
+    const current = quotes.filter((q) => q.segmentId === currentSegmentId);
+    const rank = (s: string) => (s === "ACCEPTED" ? 3 : s === "SENT" ? 2 : s === "DRAFT" ? 1 : 0);
+    const live = current.filter((q) => rank(q.state) > 0).sort((a, b) => rank(b.state) - rank(a.state) || byNewest(a, b));
+    if (live[0]) return compsOf(live[0].commercialTerms);
+    const any = current.sort(byNewest)[0];
+    if (any) return compsOf(any.commercialTerms);
+  }
+  const frozen = compsOf(entry.reservation?.frozenCommercialTerms);
+  if (frozen) return frozen;
+  const legacy = quotes.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
+  return legacy ? compsOf(legacy.commercialTerms) : null;
+}
+
+export type PartySeatingIssues = {
+  /** Slot keys with no room at all (labels via `partySlotLabels`). */
+  unseated: string[];
+  /** Plan rooms whose composition counts nobody — or that have no row at all. */
+  emptyRooms: string[];
+  /** Composition rows naming a room the current plan no longer holds. */
+  strayRooms: string[];
+  ok: boolean;
+};
+
+/**
+ * The two seating invariants, as the desk sees them (2026-08-21): everyone has a room, no plan
+ * room is empty. Display-side mirror of the backend's `assessPartySeating` — the authoritative
+ * answer is `GET /api/entries/:id/party-seating`, and the fix is its `/repair`. Vacuously OK
+ * when the booking carries no composition (nothing to seat).
+ */
+export function partySeatingIssues(entry: EntryDetail, youngMax = 5, childMax = 10): PartySeatingIssues {
+  const comps = operativeRoomCompositions(entry);
+  if (!comps) return { unseated: [], emptyRooms: [], strayRooms: [], ok: true };
+  const seated = seatPartyRoomsByComposition(entry, youngMax, childMax);
+  const unseated = [...partySlotLabels(entry).keys()].filter((k) => !(seated.get(k)?.length ?? 0));
+  const plan = [...roomNightsByRoom(entry).keys()];
+  const planSet = new Set(plan);
+  const emptyRooms = plan.filter((id) => {
+    const c = comps.find((x) => x.roomId === id);
+    return !c || (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) === 0;
+  });
+  const strayRooms = comps.map((c) => c.roomId).filter((id) => !!id && !planSet.has(id));
+  return { unseated, emptyRooms, strayRooms, ok: unseated.length === 0 && emptyRooms.length === 0 && strayRooms.length === 0 };
 }
 
 /** Default display label per party slot — GENERIC band labels only ("Adult 1"), never the

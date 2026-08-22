@@ -61,6 +61,11 @@ const COPY: Record<EntryCommunicationType, { title: string; nothingSent: string;
     nothingSent: "No pre-arrival reminder has been sent yet.",
     optionalHint: "Acknowledgement is recorded for the file — it doesn't hold up check-in.",
   },
+  INTERIM_INVOICE: {
+    title: "Interim invoice",
+    nothingSent: "The interim invoice hasn't been sent to the guest yet — nothing to answer.",
+    optionalHint: "The guest's answer is recorded before the interim payment is logged — the bill goes out, the answer comes back, then the money.",
+  },
   FINAL_INVOICE: {
     title: "Final invoice",
     nothingSent: "The final invoice hasn't been dispatched yet — nothing to answer.",

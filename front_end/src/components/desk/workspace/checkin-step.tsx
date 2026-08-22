@@ -227,7 +227,17 @@ export function CheckInStep({
   // Details dropdown keeps the full breakdown.
   const guestNamesInBox = (id: string) => {
     const guests = guestsByRoom.get(id) ?? [];
-    if (guests.length === 0) return null;
+    if (guests.length === 0) {
+      // A composition exists on the booking but seats nobody here (2026-08-21) — say so where
+      // the operator looks, and point at the fix on the guest table above. Composition-less
+      // legacy bookings keep their honest "no composition recorded" note instead.
+      if (compByRoom.size === 0) return null;
+      return (
+        <span style={{ fontSize: 11.5, color: "var(--warn)", paddingLeft: 22, lineHeight: 1.4 }}>
+          No guests assigned to this room — use &ldquo;Seat everyone in a room&rdquo; on the guest table above
+        </span>
+      );
+    }
     return (
       <span style={{ fontSize: 11.5, color: "var(--ink-3)", paddingLeft: 22, lineHeight: 1.4 }}>
         {guests.join(" · ")}

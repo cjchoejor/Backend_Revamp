@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -23,7 +23,9 @@ import {
   type IdentityProofSummary,
   type OcrSuggestion,
 } from "@/lib/api/identity-proofs";
-import { seatPartyByComposition } from "@/lib/desk/party-rooms";
+import { repairPartySeating } from "@/lib/api/entries";
+import { partySeatingIssues, seatPartyByComposition } from "@/lib/desk/party-rooms";
+import { DeskConfirmModal } from "./confirm-modal";
 import { StepAction } from "./step-action";
 import type { EntryDetail } from "@/types/api";
 
@@ -377,6 +379,43 @@ export function IdentityProofBlock({
       ),
     [entry, policyQuery.data],
   );
+
+  // Seating invariants (2026-08-21, operator ruling — "make sure no room is empty and everyone
+  // has a room"): a room change that dropped the composition left guests under "No room
+  // assigned yet" here with no way out. The strip names the gap; the button restores it
+  // through the backend's governed repair (the setup-only room-change journey — nobody moves,
+  // nothing goes to the guest), so the seating becomes the booking's frozen terms again.
+  const seatingIssues = useMemo(
+    () =>
+      partySeatingIssues(
+        entry,
+        policyQuery.data?.ageBands.youngChildMaxAge ?? 5,
+        policyQuery.data?.ageBands.childMaxAge ?? 10,
+      ),
+    [entry, policyQuery.data],
+  );
+  const [seatingOpen, setSeatingOpen] = useState(false);
+  const canRepairSeating = ["S5", "S6", "S7"].includes(entry.currentStage) && entry.status === "ACTIVE";
+  const repairSeatingM = useMutation({
+    mutationFn: () => repairPartySeating(session!, entryId),
+    onSuccess: (out) => {
+      setSeatingOpen(false);
+      const lines = out.seating?.lines ?? [];
+      if (out.walk.blocked) {
+        toast.warning(
+          `Seating recorded, but the booking is at ${out.walk.reachedStage}, not back at this step yet: ${out.walk.blocked.message}`,
+          { duration: 12000 },
+        );
+      } else {
+        toast.success(lines.length ? `Everyone has a room. ${lines.join(". ")}.` : "Everyone has a room.", { duration: 12000 });
+      }
+      if (out.seating?.unresolved.length) toast.warning(out.seating.unresolved.join(" · "), { duration: 12000 });
+      for (const key of ["entry", "identity-proofs", "entry-trace", "billing-summary", "room-plan-history", "room-change-candidates", "entry-timers"]) {
+        void queryClient.invalidateQueries({ queryKey: [key, entryId] });
+      }
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not seat the guests"),
+  });
 
   const detailRow = (key: string) => items.find((p) => p.entryId === entryId && p.subjectKey === key && !p.hasFile);
   const photosFor = (key: string) => items.filter((p) => p.entryId === entryId && p.subjectKey === key && p.hasFile);
@@ -746,6 +785,11 @@ export function IdentityProofBlock({
             {coveredCount} of {slots.length} ID{slots.length === 1 ? "" : "s"}
           </span>
         )}
+        {!seatingIssues.ok && (
+          <span className="tag warn" title="Not every guest has a room, or a room has no guests — open the table to seat them">
+            Seating needed
+          </span>
+        )}
       </div>
 
       {!open && (
@@ -803,6 +847,61 @@ export function IdentityProofBlock({
           document type.
         </p>
       )}
+
+      {!seatingIssues.ok && (() => {
+        const name = (k: string) => drafts[k]?.name.trim() || slots.find((s) => s.key === k)?.label || k;
+        const roomNo = (id: string) => roomInfoById.get(id)?.roomNumber ?? "?";
+        const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+        const sentence = [
+          seatingIssues.unseated.length > 0
+            ? `${seatingIssues.unseated.map(name).join(", ")} ${plural(seatingIssues.unseated.length, "has", "have")} no room`
+            : null,
+          seatingIssues.emptyRooms.length > 0
+            ? `Room ${seatingIssues.emptyRooms.map(roomNo).join(", ")} ${plural(seatingIssues.emptyRooms.length, "has", "have")} no guests`
+            : null,
+          seatingIssues.strayRooms.length > 0
+            ? `the recorded composition still names Room ${seatingIssues.strayRooms.map(roomNo).join(", ")}, which this booking no longer holds`
+            : null,
+        ]
+          .filter(Boolean)
+          .join("; ");
+        return (
+          <div
+            style={{
+              border: "1px solid var(--warn)",
+              background: "var(--warn-t)",
+              borderRadius: "var(--r-sm)",
+              padding: "8px 11px",
+              fontSize: 12,
+              marginBottom: 8,
+              lineHeight: 1.5,
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <AlertTriangle style={{ width: 14, height: 14, flex: "0 0 auto", color: "var(--warn)" }} />
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <b>{seatingIssues.unseated.length > 0 ? "Not everyone has a room." : "A room has no guests."}</b> {sentence}.
+              {canRepairSeating
+                ? " Seating them re-records the booking's current rooms with everyone in one (a new segment, re-priced silently — nothing goes to the guest)."
+                : " It is repaired from Arrival, Check-in or Stay."}
+            </div>
+            {canRepairSeating && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={repairSeatingM.isPending}
+                onClick={() => setSeatingOpen(true)}
+                title="Seat every guest in a room and fill every empty room — the backend decides where, and says so"
+              >
+                {repairSeatingM.isPending ? "Seating…" : "Seat everyone in a room"}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Toolbar above the table (2026-08-12, operator ruling — the boxed "Identity
           verification" section is gone; the TABLE is the verification form): S6 puts the
@@ -1257,6 +1356,22 @@ export function IdentityProofBlock({
       </p>
         </>
       )}
+
+      <DeskConfirmModal
+        open={seatingOpen}
+        title="Seat every guest in a room"
+        subtitle="Restores the room plan's occupants — nobody changes rooms"
+        why="The recorded composition leaves guests without a room, or a room without guests. Seating them re-records the booking's current rooms with everyone in one."
+        consequences={[
+          "A new segment opens and the stay is re-priced silently on the same rooms — nothing is sent to the guest.",
+          "Guests without a room are seated in the emptiest room with space on every night they stay; a room that had nobody recorded gets them on room-only (set meals through the room-change table if needed).",
+          "The audit trail records this as a system seating repair with exactly who went where.",
+        ]}
+        confirmLabel="Seat everyone"
+        pending={repairSeatingM.isPending}
+        onConfirm={() => repairSeatingM.mutate()}
+        onClose={() => setSeatingOpen(false)}
+      />
 
       {/* Phone-capture QR modal (2026-08-12): scanning opens /capture#<token> on the phone —
           no staff login there, the scoped 15-min token is the whole credential. The proofs

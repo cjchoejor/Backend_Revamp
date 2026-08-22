@@ -189,16 +189,16 @@ export function CancellationVoucherPreview({ entryId }: { entryId: string }) {
  * S3 — the proforma document. Live rows compose from folio payments + the desk's advance
  * requirement; pass `frozenPdf` on a superseded row to show the stored artifact instead.
  */
-export function ProformaPreview({ invoiceId, frozenPdf, notice }: { invoiceId: string; frozenPdf?: boolean; notice?: string }) {
+export function ProformaPreview({ invoiceId, frozenPdf, notice, title }: { invoiceId: string; frozenPdf?: boolean; notice?: string; title?: string }) {
   const { session } = useSession();
   if (frozenPdf) {
-    return <FrozenPdfFrame path={`/api/invoices/${invoiceId}/pdf`} title="Proforma invoice (as sent)" />;
+    return <FrozenPdfFrame path={`/api/invoices/${invoiceId}/pdf`} title={title ? `${title} (as sent)` : "Proforma invoice (as sent)"} />;
   }
   return (
     <DocumentPreviewFrame
       queryKey={["invoice-preview", invoiceId] as const}
       fetchHtml={() => fetchInvoicePreviewHtml(session!, invoiceId)}
-      title="Proforma invoice document"
+      title={title ?? "Proforma invoice document"}
       notice={notice}
     />
   );

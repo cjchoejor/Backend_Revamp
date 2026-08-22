@@ -215,6 +215,13 @@ export const DOMAIN_OWNED_TYPED_SCHEMAS: ConfigKeyMeta[] = [
  */
 export const OPERATIONAL_CONFIG_SCHEMAS: ConfigKeyMeta[] = [
   {
+    key: "stayExtension.holdTtlSeconds",
+    title: "Stay-extension hold",
+    description:
+      "How long a requested stay extension keeps its extra nights claimed for the guest while the interim invoice goes out and the payment comes in. W40 releases them and lapses the request when it runs out unpaid.",
+    schema: { kind: "seconds", label: "Hold (seconds)", help: "86400 = 24 hours." },
+  },
+  {
     key: "checkout.cutoffTime",
     title: "Checkout cutoff time",
     description: "Time of day (24-hour, hotel-local) after which the late-checkout escalation timer fires.",
@@ -258,6 +265,12 @@ export const OPERATIONAL_CONFIG_SCHEMAS: ConfigKeyMeta[] = [
  * the setting controls and where it's read at runtime. Sourced from SIG-S1..S9 + ACIG §9.
  */
 export const INFO_ONLY_CONFIG_DESCRIPTIONS: ConfigKeyMeta[] = [
+  {
+    key: "interimPayment.schedule",
+    title: "Interim payments on long stays",
+    description:
+      "The night audit raises an 'interim payment due' prompt on the Stay step every `everyNights` nights slept when the folio's outstanding balance is at least `minimumOutstanding` ({ enabled, everyNights, minimumOutstanding }). The desk can always ask manually, earlier or later.",
+  },
   // Commercial (CommercialThresholdService)
   {
     key: "discount.fom.maxPercentage",
