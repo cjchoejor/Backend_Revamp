@@ -28,6 +28,8 @@ export const ACKNOWLEDGEABLE_COMM_TYPES: readonly CommunicationType[] = [
   // Final bill (2026-08-17): the guest's answer — "paid", "will pay by X", a dispute — is
   // evidence next to the OUTSTANDING follow-up. Never a gate; W8 chases the money.
   CommunicationType.FINAL_INVOICE,
+  // Interim invoice (2026-08-21): the guest's answer gates the interim payment (Policy 80).
+  CommunicationType.INTERIM_INVOICE,
 ];
 
 export type AcknowledgementMethod = "WRITTEN" | "VERBAL";

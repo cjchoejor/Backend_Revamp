@@ -177,6 +177,23 @@ export const initiateSettlementRequestSchema = z.object({
 });
 export type InitiateSettlementRequestDto = z.infer<typeof initiateSettlementRequestSchema>;
 
+/** Interim payment request at S7 (2026-08-21): the ask as a % or a Nu amount of the projected total. */
+export const createInterimPaymentRequestSchema = z
+  .object({
+    askMode: z.enum(["PERCENT", "AMOUNT"]),
+    askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive"),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => v.askMode !== "PERCENT" || v.askValue <= 100, { message: "A percentage ask is at most 100" });
+export type CreateInterimPaymentRequestDto = z.infer<typeof createInterimPaymentRequestSchema>;
+
+export const recordInterimPaymentRequestSchema = z.object({
+  amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),
+  paymentMethod: z.string().trim().max(40).optional(),
+  notes: z.string().trim().max(500).optional(),
+});
+export type RecordInterimPaymentRequestDto = z.infer<typeof recordInterimPaymentRequestSchema>;
+
 export const dispatchInvoiceRequestSchema = z.object({
   dispatchedTo: z.string().optional(),
 });

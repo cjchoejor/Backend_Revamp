@@ -14,6 +14,18 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     notes: "W30 — days before a Lost & Found item's retention expiry that the approaching-expiry trace fires.",
   },
   {
+    key: "interimPayment.schedule",
+    value: { enabled: true, everyNights: 7, minimumOutstanding: 0 },
+    notes:
+      "Interim payments on long stays (2026-08-21): the night audit raises an 'interim payment due' prompt every `everyNights` nights slept when the outstanding balance is at least `minimumOutstanding`; manual requests are always possible. enabled=false turns the prompt off.",
+  },
+  {
+    key: "stayExtension.holdTtlSeconds",
+    value: 86400,
+    notes:
+      "Stay extension (2026-08-21): how long the extra nights stay claimed while the interim payment comes in; W40 releases them when it runs out unpaid.",
+  },
+  {
     key: "expiry.parking.followUpDays",
     value: 30,
     notes:

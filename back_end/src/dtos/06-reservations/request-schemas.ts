@@ -152,6 +152,49 @@ export const roomChangeRequestSchema = z
   );
 export type RoomChangeRequestDto = z.infer<typeof roomChangeRequestSchema>;
 
+/**
+ * Stay extension (2026-08-21, operator ruling): the guest wants to stay N more nights. The
+ * preview and the request share a shape — new checkout, which room holds each extra night
+ * (default: the current room), the negotiation table for the extension's rooms, the discount.
+ */
+const stayExtensionShape = {
+  newCheckOutDate: z.string().min(8),
+  /** A room per extra night (default: the room the guest is in on the last night). */
+  perNight: z.array(z.object({ date: z.string().min(8), roomId: z.string().min(1) })).max(120).optional(),
+  /** The S2 table for the rooms carrying the extension (full basis for those rooms). */
+  roomCompositions: z.array(roomCompositionInputSchema).max(60).optional(),
+  requestedDiscount: discountShape.nullable().optional(),
+};
+export const stayExtensionPreviewRequestSchema = z.object({
+  ...stayExtensionShape,
+  /** The interim ask to project (optional in the preview). */
+  askMode: z.enum(["PERCENT", "AMOUNT"]).optional(),
+  askValue: z.coerce.number().optional(),
+});
+export type StayExtensionPreviewRequestDto = z.infer<typeof stayExtensionPreviewRequestSchema>;
+
+export const stayExtensionRequestSchema = z
+  .object({
+    ...stayExtensionShape,
+    reason: z.string().trim().min(1, "A reason for the extension is required"),
+    askMode: z.enum(["PERCENT", "AMOUNT"]),
+    askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive"),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => v.askMode !== "PERCENT" || v.askValue <= 100, { message: "A percentage ask is at most 100" });
+export type StayExtensionRequestDto = z.infer<typeof stayExtensionRequestSchema>;
+
+export const stayExtensionCommitRequestSchema = z.object({
+  reason: z.string().trim().max(300).optional(),
+});
+export type StayExtensionCommitRequestDto = z.infer<typeof stayExtensionCommitRequestSchema>;
+
+/** Seat every guest / fill every empty room (2026-08-21) — an optional reason for the trail. */
+export const partySeatingRepairRequestSchema = z.object({
+  reason: z.string().trim().max(300).optional(),
+});
+export type PartySeatingRepairRequestDto = z.infer<typeof partySeatingRepairRequestSchema>;
+
 export const approveFocGmRequestSchema = z.object({
   note: z.string().optional(),
 });

@@ -18,7 +18,7 @@
  *  - **Finished bookings blocked forever.** With no status filter, every CLOSED / EXPIRED /
  *    CANCELLED entry kept blocking its rooms for its old dates.
  */
-import { EntryStatus, type Prisma } from "@prisma/client";
+import { EntryStatus, type Prisma, type PrismaClient } from "@prisma/client";
 
 /**
  * Statuses whose bookings have let go of their rooms.
@@ -167,4 +167,68 @@ export function roomsClaimedByReservedEntry(entry: ReservedEntryRooms | null | u
   const ids = new Set(roomIdsFromPerNight(hold.perNightBreakdown));
   if (hold.roomId) ids.add(hold.roomId);
   return [...ids];
+}
+
+/**
+ * Pending stay extensions CLAIM their extra nights (2026-08-21): a guest who asked for N more
+ * nights has those nights held while the interim invoice goes out and the payment comes in
+ * (`StayExtensionRequest` in REQUESTED / BILLED with a live `holdExpiresAt`, or PAID — money
+ * was taken, so the claim stands until the commit). Reported as committed-hold spans by both
+ * the S1 search and `findRoomBookingConflicts`, so another booking cannot take the room out
+ * from under a guest who is paying for it. The requesting entry itself is excluded — its own
+ * commit re-validates against everyone else.
+ */
+export async function pendingStayExtensionClaims(
+  db: PrismaClient | Prisma.TransactionClient,
+  input: { checkIn: Date; checkOut: Date; excludeEntryId?: string | null },
+): Promise<
+  Array<
+    ClaimSpan & {
+      entryId: string;
+      requestId: string;
+      holdExpiresAt: Date;
+      entry: { inquiryId: string | null; guestProfile: { firstName: string | null; lastName: string | null } | null };
+    }
+  >
+> {
+  const now = new Date();
+  const rows = await db.stayExtensionRequest.findMany({
+    where: {
+      ...(input.excludeEntryId ? { NOT: { entryId: input.excludeEntryId } } : {}),
+      OR: [{ state: { in: ["REQUESTED", "BILLED"] }, holdExpiresAt: { gt: now } }, { state: "PAID" }],
+      priorCheckOutDate: { lt: input.checkOut },
+      newCheckOutDate: { gt: input.checkIn },
+      entry: { ...stillHoldsInventory },
+    },
+    select: {
+      id: true,
+      entryId: true,
+      extraNights: true,
+      holdExpiresAt: true,
+      entry: { select: { inquiryId: true, guestProfile: { select: { firstName: true, lastName: true } } } },
+    },
+  });
+  const out: Array<
+    ClaimSpan & {
+      entryId: string;
+      requestId: string;
+      holdExpiresAt: Date;
+      entry: { inquiryId: string | null; guestProfile: { firstName: string | null; lastName: string | null } | null };
+    }
+  > = [];
+  for (const r of rows) {
+    const nights = Array.isArray(r.extraNights) ? (r.extraNights as Array<{ date?: unknown; roomId?: unknown }>) : [];
+    const byRoom = new Map<string, string[]>();
+    for (const n of nights) {
+      if (typeof n?.date !== "string" || typeof n?.roomId !== "string") continue;
+      byRoom.set(n.roomId, [...(byRoom.get(n.roomId) ?? []), n.date.slice(0, 10)]);
+    }
+    for (const [roomId, dates] of byRoom) {
+      for (const range of foldIsoNightsToRanges(dates)) {
+        if (range.startDate >= input.checkOut || range.endDate <= input.checkIn) continue;
+        out.push({ roomId, startDate: range.startDate, endDate: range.endDate, entryId: r.entryId, requestId: r.id, holdExpiresAt: r.holdExpiresAt, entry: r.entry });
+      }
+    }
+  }
+  return out;
 }

@@ -101,6 +101,51 @@ enum FolioState {
 enum InvoiceType {
   PROFORMA
   FINAL
+  /// Interim statement mid-stay (2026-08-21, operator ruling): the bill behind an interim
+  /// payment — a long-stay part payment or the payment a stay extension is conditioned on.
+  /// Carries the proforma's dispatch → answer → money order at S7.
+  INTERIM
+}
+
+/// Why an interim payment is being asked for (2026-08-21).
+enum InterimPaymentKind {
+  /// Part payment during a long stay — the checkout date does not change.
+  LONG_STAY
+  /// The payment a stay extension is conditioned on — taken BEFORE the extension commits.
+  EXTENSION
+}
+
+enum InterimPaymentState {
+  /// Raised by the night audit's schedule rule — no figure asked yet; the desk sets it.
+  SUGGESTED
+  /// Figure set, interim invoice minted (DRAFT).
+  REQUESTED
+  /// Interim invoice dispatched to the guest — money can be recorded once they answer.
+  BILLED
+  /// The asked figure is in.
+  PAID
+  WITHDRAWN
+  /// The extension it belonged to lapsed unpaid.
+  LAPSED
+}
+
+enum InterimPaymentPrompt {
+  MANUAL
+  NIGHT_AUDIT
+}
+
+enum StayExtensionState {
+  /// Extra nights held for the guest; interim invoice minted.
+  REQUESTED
+  /// Interim invoice dispatched.
+  BILLED
+  /// Payment in — the extension may commit.
+  PAID
+  /// The governed walk ran: new segment, re-freeze with the new checkout, back at S7.
+  COMMITTED
+  /// Hold TTL ran out before payment — the extra nights were released.
+  LAPSED
+  WITHDRAWN
 }
 
 enum InvoiceState {
@@ -175,6 +220,9 @@ enum CommunicationType {
   /// Final/receipt invoice dispatch (2026-08-17) — carries the guest's answer loop like the
   /// proforma, so an OUTSTANDING balance's "I'll pay by Friday" is recorded evidence.
   FINAL_INVOICE
+  /// Interim statement dispatch at S7 (2026-08-21) — same answer loop as the proforma; the
+  /// interim payment is recorded only after the guest's answer is on file.
+  INTERIM_INVOICE
 }
 
 enum NightAuditRunStatus {
@@ -1054,6 +1102,8 @@ model Entry {
   keyReturnRecords        KeyReturnRecord[]
   invoices                Invoice[]
   timers                  TimerRecord[]
+  interimPaymentRequests  InterimPaymentRequest[]
+  stayExtensionRequests   StayExtensionRequest[]
   writeOffRecords         WriteOffRecord[]
   followUpTasks           FollowUpTaskRecord[]
   communications          CommunicationRecord[]
@@ -1669,6 +1719,8 @@ model Folio {
   writeOffRecords         WriteOffRecord[]
   billingModelTransitions BillingModelTransitionRecord[]
 
+  interimPaymentRequests InterimPaymentRequest[]
+
   @@map("folios")
 }
 
@@ -1712,6 +1764,7 @@ model Invoice {
   folio Folio         @relation(fields: [folioId], references: [id])
   entry Entry         @relation(fields: [entryId], references: [id])
   lines InvoiceLine[]
+  interimPaymentRequest InterimPaymentRequest?
 
   @@map("invoices")
 }
@@ -1874,7 +1927,12 @@ model PaymentRecord {
   /// the payment applies to the folio's whole-folio outstanding (legacy behaviour).
   billingModel          String?
 
-  folio Folio @relation(fields: [folioId], references: [id])
+  /// The interim payment request this money settles (2026-08-21) — a long-stay part payment
+  /// or an extension's conditional payment. NULL for advances and settlements.
+  interimPaymentRequestId String?
+
+  folio                 Folio                  @relation(fields: [folioId], references: [id])
+  interimPaymentRequest InterimPaymentRequest? @relation(fields: [interimPaymentRequestId], references: [id])
 
   @@map("payment_records")
 }
@@ -2675,4 +2733,96 @@ model ReadableIdSequence {
 
   @@id([prefix, sequenceDate])
   @@map("readable_id_sequences")
+}
+
+/// An interim payment asked for mid-stay (2026-08-21, operator ruling): a long-stay part
+/// payment (the checkout date stays) or the payment a stay extension is conditioned on. The
+/// figure is the operator's — a % or a Nu amount of the PROJECTED total (nights slept + nights
+/// to come, extension included, + every other charge already on the folio) — net of money
+/// already received; the backend does the arithmetic and prints it on the INTERIM invoice.
+model InterimPaymentRequest {
+  id                     String               @id @default(uuid())
+  entryId                String
+  folioId                String
+  segmentId              String?
+  kind                   InterimPaymentKind
+  state                  InterimPaymentState  @default(REQUESTED)
+  promptedBy             InterimPaymentPrompt @default(MANUAL)
+  /// PERCENT | AMOUNT — how the ask was expressed.
+  askMode                String?
+  askValue               Decimal?             @db.Decimal(15, 2)
+  /// Projected total of the whole stay at request time (room nights slept + to come + extras).
+  projectedTotal         Decimal?             @db.Decimal(15, 2)
+  /// Money already received (IN − OUT) at request time.
+  receivedAtRequest      Decimal?             @db.Decimal(15, 2)
+  /// = max(0, ask − receivedAtRequest) — what the interim invoice asks for.
+  dueNow                 Decimal?             @db.Decimal(15, 2)
+  /// The full server-computed figure set the invoice printed (audit / desk display).
+  figures                Json?
+  invoiceId              String?              @unique
+  stayExtensionRequestId String?              @unique
+  /// Nights slept when the night audit raised the prompt (SUGGESTED rows).
+  nightsSleptAtPrompt    Int?
+  note                   String?
+  requestedBy            String?
+  requestedAt            DateTime             @default(now())
+  billedAt               DateTime?
+  paidAt                 DateTime?
+  closedAt               DateTime?
+  closedReason           String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  entry                Entry                 @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio                Folio                 @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+  invoice              Invoice?              @relation(fields: [invoiceId], references: [id])
+  stayExtensionRequest StayExtensionRequest? @relation(fields: [stayExtensionRequestId], references: [id])
+  payments             PaymentRecord[]
+
+  @@index([entryId, state])
+  @@map("interim_payment_requests")
+}
+
+/// A stay extension in flight (2026-08-21, operator ruling): the guest wants N more nights.
+/// Requested at S7 → the extra nights are CLAIMED (held) for the guest while the interim
+/// invoice goes out and the payment comes in → committed through the governed room-change
+/// journey (new segment, silent re-quote, re-freeze with the new checkout, back at S7). A
+/// request whose hold lapses unpaid releases the nights; nothing else about the booking moved.
+model StayExtensionRequest {
+  id                String             @id @default(uuid())
+  entryId           String
+  segmentId         String?
+  state             StayExtensionState @default(REQUESTED)
+  priorCheckOutDate DateTime
+  newCheckOutDate   DateTime
+  /// The extra nights and the room each one is held in: [{ date: "YYYY-MM-DD", roomId }].
+  /// The room may be the current room (extension in place) or another one from the old
+  /// checkout date (a scheduled move the desk executes on that day).
+  extraNights       Json
+  /// The negotiation table for the extension (full basis), when the desk sent one.
+  roomCompositions  Json?
+  requestedDiscount Json?
+  /// Server-computed projection at request time — the figures the interim invoice printed.
+  pricingPreview    Json?
+  reason            String
+  /// Until when the extra nights stay claimed while unpaid (config `stayExtension.holdTtlSeconds`).
+  holdExpiresAt     DateTime
+  timerRecordId     String?
+  requestedBy       String
+  requestedAt       DateTime           @default(now())
+  committedAt       DateTime?
+  committedBy       String?
+  /// The room-change outcome of the commit walk.
+  outcome           Json?
+  closedAt          DateTime?
+  closedReason      String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  entry          Entry                  @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  interimPayment InterimPaymentRequest?
+
+  @@index([entryId, state])
+  @@index([state, holdExpiresAt])
+  @@map("stay_extension_requests")
 }

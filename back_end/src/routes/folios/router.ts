@@ -28,6 +28,13 @@ import * as s3PaymentService from "../../services/domain/s3-payment-service.js";
 import * as s8SettlementService from "../../services/domain/s8-settlement-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import * as splitBillingService from "../../services/domain/split-billing-service.js";
+import {
+  createInterimPaymentRequest,
+  listInterimPayments,
+  recordInterimPayment,
+  withdrawInterimPaymentRequest,
+} from "../../services/domain/interim-payment-service.js";
+import { createInterimPaymentRequestSchema, recordInterimPaymentRequestSchema } from "../../dtos/07-folios/request-schemas.js";
 import { Stage } from "@prisma/client";
 
 export const foliosRouter = Router();
@@ -297,6 +304,55 @@ foliosRouter.post("/folios/:id/post-stay-charges", requireActorLevel("L2"), vali
   try {
     const created = await s9Service.postStayCharge(prisma, req.params.id, req.actor!.actorId, req.body);
     res.json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Interim payments mid-stay (2026-08-21, operator ruling): a part payment on a long stay, or
+ * the payment a stay extension is conditioned on. Figures are server-computed (a % or a Nu
+ * amount of the PROJECTED total, net of money received); the INTERIM invoice prints them and
+ * is dispatched through `POST /invoices/:id/dispatch`; the money is recorded only after the
+ * guest's answer is on file (Policy 80). Manual any time; the night audit raises SUGGESTED
+ * rows on the `interimPayment.schedule` rule.
+ */
+foliosRouter.get("/entries/:id/interim-payments", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await listInterimPayments(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+foliosRouter.post("/entries/:id/interim-payments", requireActorLevel("L1"), validateBody(createInterimPaymentRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await createInterimPaymentRequest(prisma, actor, req.params.id, {
+        ask: { mode: req.body.askMode, value: Number(req.body.askValue) },
+        note: req.body.note,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+foliosRouter.post("/interim-payments/:id/record-payment", requireActorLevel("L1"), validateBody(recordInterimPaymentRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await recordInterimPayment(prisma, actor, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+foliosRouter.post("/interim-payments/:id/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await withdrawInterimPaymentRequest(prisma, actor, req.params.id, req.body?.reason ?? null));
   } catch (e) {
     next(e);
   }

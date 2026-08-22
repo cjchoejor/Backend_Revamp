@@ -32,7 +32,21 @@ import { buildQuotationPreview } from "../../services/domain/quotation-preview-s
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
 import { issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
-import { roomChangeRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
+import {
+  partySeatingRepairRequestSchema,
+  roomChangeRequestSchema,
+  stayExtensionCommitRequestSchema,
+  stayExtensionPreviewRequestSchema,
+  stayExtensionRequestSchema,
+} from "../../dtos/06-reservations/request-schemas.js";
+import {
+  commitStayExtension,
+  listStayExtensions,
+  previewStayExtension,
+  requestStayExtension,
+  withdrawStayExtension,
+} from "../../services/domain/stay-extension-service.js";
+import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
 
 export const entriesRouter = Router();
 
@@ -78,6 +92,112 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
     next(e);
   }
 });
+
+/**
+ * Stay extension (2026-08-21, operator ruling). Preview (no writes): the current rooms'
+ * standing over the extra nights, alternatives, the projected price, the interim figures.
+ * Request (FOM): claims the extra nights, mints the interim invoice, arms the hold clock.
+ * Commit (FOM, only once the interim payment is in): the governed journey — new segment,
+ * silent re-quote over the extended stay, re-freeze with the new checkout, back at S7.
+ */
+entriesRouter.post("/:id/stay-extension/preview", requireActorLevel("L1"), validateBody(stayExtensionPreviewRequestSchema), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const ask = req.body.askMode && req.body.askValue != null ? { mode: req.body.askMode, value: Number(req.body.askValue) } : null;
+    res.json(
+      await previewStayExtension(prisma, req.params.id, {
+        newCheckOutDate: req.body.newCheckOutDate,
+        perNight: req.body.perNight,
+        roomCompositions: req.body.roomCompositions,
+        ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
+        ask,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/stay-extension", requireActorLevel("L2"), validateBody(stayExtensionRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await requestStayExtension(prisma, actor, req.params.id, {
+        newCheckOutDate: req.body.newCheckOutDate,
+        perNight: req.body.perNight,
+        roomCompositions: req.body.roomCompositions,
+        ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
+        reason: req.body.reason,
+        ask: { mode: req.body.askMode, value: Number(req.body.askValue) },
+        note: req.body.note,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.get("/:id/stay-extensions", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ entryId: req.params.id, requests: await listStayExtensions(prisma, req.params.id) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/stay-extensions/:requestId/commit", requireActorLevel("L2"), validateBody(stayExtensionCommitRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await commitStayExtension(prisma, actor, req.params.requestId, req.body?.reason ?? null));
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/stay-extensions/:requestId/withdraw", requireActorLevel("L2"), validateBody(stayExtensionCommitRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await withdrawStayExtension(prisma, actor, req.params.requestId, req.body?.reason ?? null));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Party seating (2026-08-21, operator ruling — "make sure no room is empty and everyone has a
+ * room"): who sleeps where on the booking's current composition, who has NO room, which plan
+ * rooms are empty, and whether a repair can run from here. Server-computed so both frontends
+ * show the same truth. Pure read.
+ */
+entriesRouter.get("/:id/party-seating", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await buildPartySeatingStatus(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Seat every guest and fill every empty room — the governed room-change journey in its
+ * setup-only form (nobody moves; new segment, silent re-quote with everyone seated, re-freeze,
+ * back to this stage). Refused, entry untouched, when there is nothing to repair. L1: seating
+ * is desk logistics, not a commercial change.
+ */
+entriesRouter.post(
+  "/:id/party-seating/repair",
+  requireActorLevel("L1"),
+  validateBody(partySeatingRepairRequestSchema),
+  async (req, res, next) => {
+    try {
+      const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+      res.json(await repairPartySeatingForEntry(prisma, actor, req.params.id, req.body?.reason ?? null));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /**
  * Room-plan history (2026-08-13, operator request) — what was INITIALLY selected, per room of

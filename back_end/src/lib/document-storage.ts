@@ -23,6 +23,8 @@ import { dirname, join, resolve } from "node:path";
 export type DocumentKind =
   | "quotation"
   | "proforma-invoice"
+  /// Interim statement mid-stay (2026-08-21) — the bill behind an interim payment / a stay extension.
+  | "interim-invoice"
   | "confirmation-voucher"
   | "room-invoice"
   /** A5 Cancellation Confirmation (docs/bills, series LH/CX/…). */

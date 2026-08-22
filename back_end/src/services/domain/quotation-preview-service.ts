@@ -191,6 +191,14 @@ export async function buildQuotationPreview(
   prisma: PrismaClient,
   entryId: string,
   input: { roomCompositions: PreviewRoomComposition[]; discount?: PreviewDiscount | null },
+  opts?: {
+    /**
+     * Price a DIFFERENT stay than the entry's (2026-08-21, stay extension): the projected
+     * checkout and the nights each room covers in the extended plan. Without it the preview
+     * prices the entry's own dates + sealed per-night counts, as every other caller expects.
+     */
+    stayOverride?: { checkIn: Date; checkOut: Date; perRoomNightCounts: Map<string, number> };
+  },
 ): Promise<QuotationPreview> {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -247,15 +255,18 @@ export async function buildQuotationPreview(
   input = { ...input, roomCompositions: bedNorm.compositions };
   const autoAddedIndexes = new Set(bedNorm.autoAddedIndexes);
 
+  const stayCheckIn = opts?.stayOverride?.checkIn ?? entry.checkInDate;
+  const stayCheckOut = opts?.stayOverride?.checkOut ?? entry.checkOutDate;
   const stayNights =
-    entry.checkInDate && entry.checkOutDate
-      ? Math.max(1, Math.round((entry.checkOutDate.getTime() - entry.checkInDate.getTime()) / 86_400_000))
+    stayCheckIn && stayCheckOut
+      ? Math.max(1, Math.round((stayCheckOut.getTime() - stayCheckIn.getTime()) / 86_400_000))
       : 1;
 
   // Per-room claimed nights on a per-night seal (2026-08-12) — mirrors prepareQuotationDraft:
   // a room covering 3 of 4 nights previews ×3, not ×4. Whole-stay seals leave the map empty.
-  const perRoomNightCounts = new Map<string, number>();
-  const sealedSel = sealedCfg ? readOptionSelected(sealedCfg.optionSelected) : null;
+  // A stay override (extension projection) supplies its own per-room counts.
+  const perRoomNightCounts = new Map<string, number>(opts?.stayOverride?.perRoomNightCounts ?? []);
+  const sealedSel = !opts?.stayOverride && sealedCfg ? readOptionSelected(sealedCfg.optionSelected) : null;
   if (sealedSel?.perNight) {
     for (const night of sealedSel.perNight) {
       for (const rid of night.roomIds) {
@@ -294,8 +305,8 @@ export async function buildQuotationPreview(
       serviceChargeApplies: c.serviceChargeApplies,
       gstApplies: c.gstApplies,
       isFoc: c.isFoc,
-      startDate: c.startDate ? new Date(c.startDate) : entry.checkInDate,
-      endDate: c.endDate ? new Date(c.endDate) : entry.checkOutDate,
+      startDate: c.startDate ? new Date(c.startDate) : stayCheckIn,
+      endDate: c.endDate ? new Date(c.endDate) : stayCheckOut,
     };
     const ctx: RoomCompositionRateContext = {
       defaultRoomRate: dec(ref?.roomRate),
@@ -306,7 +317,7 @@ export async function buildQuotationPreview(
       serviceChargeRate: reference.serviceChargeRate,
       gstRate: reference.gstRate,
       childMealPricing: childPolicy.mealPricing,
-      nights: perRoomNightCounts.get(c.roomId) ?? reference.nights ?? stayNights,
+      nights: perRoomNightCounts.get(c.roomId) ?? (opts?.stayOverride ? stayNights : reference.nights ?? stayNights),
     };
     return { input: compositionInput, ctx, roomId: c.roomId, roomNumber: room?.roomNumber ?? null };
   });
@@ -368,7 +379,7 @@ export async function buildQuotationPreview(
   return {
     entryId: entry.id,
     currency: reference.currency,
-    nights: reference.nights,
+    nights: opts?.stayOverride ? stayNights : reference.nights,
     gstRate: reference.gstRate,
     serviceChargeRate: reference.serviceChargeRate,
     rooms: roomsOut,

@@ -25,6 +25,9 @@ export type TimerJobName =
   | "ADVANCE_PROMISE_DEADLINE_W38"
   /// Identity OCR/QR extraction over a stored ID photo (2026-08-18) — best-effort suggestion job.
   | "IDENTITY_OCR_W39"
+  /// Stay-extension hold expiry (2026-08-21): the extra nights a requested extension claims
+  /// are released when the clock runs out before the interim payment arrived.
+  | "STAY_EXTENSION_HOLD_EXPIRY_W40"
   | "PRE_ARRIVAL_COUNTDOWN_W4"
   | "NO_SHOW_CUTOFF_W5"
   | "AWAITING_WRITTEN_CONFIRMATION_W5"
@@ -99,6 +102,7 @@ export function createTimerEngine(connectionString: string): TimerEngine {
         "ADVANCE_PAYMENT_FOLLOW_UP_W34",
         "ADVANCE_PROMISE_DEADLINE_W38",
         "IDENTITY_OCR_W39",
+        "STAY_EXTENSION_HOLD_EXPIRY_W40",
         "PRE_ARRIVAL_COUNTDOWN_W4",
         "NO_SHOW_CUTOFF_W5",
         "AWAITING_WRITTEN_CONFIRMATION_W5",

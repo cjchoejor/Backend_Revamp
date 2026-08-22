@@ -31,7 +31,8 @@ import {
 import { round2, sumMoney, toDecimal, ZERO } from "../../lib/money.js";
 import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
-import { renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
+import { renderLegphelInterimHtml, renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
+import type { InterimFigures } from "./interim-payment-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
@@ -62,13 +63,13 @@ export type InvoicePdfArtifact = {
 };
 
 /** Kind key used for storage-path segmentation. */
-function kindForInvoice(t: InvoiceType): "proforma-invoice" | "room-invoice" {
-  return t === InvoiceType.PROFORMA ? "proforma-invoice" : "room-invoice";
+function kindForInvoice(t: InvoiceType): "proforma-invoice" | "room-invoice" | "interim-invoice" {
+  return t === InvoiceType.PROFORMA ? "proforma-invoice" : t === InvoiceType.INTERIM ? "interim-invoice" : "room-invoice";
 }
 
 /** Nice filename for downloads / email attachments. */
 function filenameFor(invoiceType: InvoiceType, invoiceRef: string): string {
-  const label = invoiceType === InvoiceType.PROFORMA ? "proforma" : "room-invoice";
+  const label = invoiceType === InvoiceType.PROFORMA ? "proforma" : invoiceType === InvoiceType.INTERIM ? "interim-invoice" : "room-invoice";
   return `${invoiceRef}-${label}.pdf`;
 }
 
@@ -399,6 +400,62 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
 }
 
 /**
+ * INTERIM invoice document (2026-08-21) — printed from the FIGURES the interim request froze
+ * when the ask was made (the request row carries them), so the bill the guest answers is the
+ * bill the money is recorded against, whatever the ledger does meanwhile.
+ */
+export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInvoice) {
+  const hotel = await loadHotelProfileForRender(prisma);
+  const req = await prisma.interimPaymentRequest.findUnique({
+    where: { invoiceId: inv.id },
+    include: { stayExtensionRequest: { select: { holdExpiresAt: true, state: true } } },
+  });
+  if (!req) throw new ValidationError("This interim invoice has no interim payment request behind it");
+  const f = (req.figures ?? null) as InterimFigures | null;
+  if (!f) throw new ValidationError("This interim invoice carries no figures");
+  const p = invoicePrelude(inv);
+  const invoiceRef = inv.invoiceNumber ?? inv.id;
+  const docDate = inv.dispatchedAt ?? inv.issuedAt ?? new Date();
+  const billedParty =
+    inv.entry.inquiry?.travelAgent?.displayName ?? inv.entry.inquiry?.corporateAccount?.displayName ?? null;
+  const checkIn = f.checkIn ? new Date(`${f.checkIn}T00:00:00.000Z`) : p.checkIn;
+  const checkOut = f.checkOut ? new Date(`${f.checkOut}T00:00:00.000Z`) : p.checkOut;
+  const inPayments = (inv.folio?.payments ?? []).filter((x) => x.paymentDirection === "IN");
+  const ext = req.stayExtensionRequest;
+  const html = renderLegphelInterimHtml({
+    masthead: mastheadFromHotelProfile(hotel),
+    invoiceNo: invoiceRef,
+    bookingRef: inv.entryId,
+    date: formatDocDate(docDate),
+    kind: req.kind,
+    to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
+    forGuest: p.guestName,
+    stay: formatStayRange(checkIn, checkOut, f.nightsTotal),
+    nightsLine: `${f.nightsSlept} slept · ${f.nightsToCome} to come`,
+    projectedRoomTotal: formatMoney(f.projectedRoomTotal),
+    otherChargesSoFar: formatMoney(f.otherChargesSoFar),
+    projectedTotal: formatMoney(f.projectedTotal),
+    receivedSoFar: formatMoney(f.receivedSoFar),
+    receivedQualifier: inPayments.length > 1 ? `(${inPayments.length} payments)` : null,
+    askLabel: f.askLabel ?? "interim payment",
+    dueNow: formatMoney(f.dueNow ?? 0),
+    balanceAtCheckout: formatMoney(f.balanceAtCheckout ?? 0),
+    holdUntil: ext && (ext.state === "REQUESTED" || ext.state === "BILLED") ? formatDocDate(ext.holdExpiresAt) : null,
+    bank: {
+      bankName: null,
+      accountName: hotel.accountNumber ? `${hotel.hotelName} · ${hotel.accountNumber}` : null,
+      accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
+    },
+    closingNote:
+      req.kind === "EXTENSION"
+        ? "The extra nights are reserved for you once this payment is received; the extension is confirmed by a re-issued voucher. No surcharge applies on any payment mode. The final tax invoice is issued at checkout."
+        : "An interim statement for a continuing stay. No surcharge applies on any payment mode. The final tax invoice is issued at checkout and nets every payment received.",
+    tariffVersion: "T1.0",
+  });
+  return { html, invoiceRef, hotel, figures: f, kind: req.kind, prelude: p };
+}
+
+/**
  * Desk inline preview (2026-08-01): the proforma document as HTML, composed fresh from the
  * invoice's CURRENT data (folio payments, advance requirement, accepted quote terms). No PDF
  * render, no storage write, no InvoiceLine snapshot, no trace — a pure read. The stored PDF
@@ -409,8 +466,12 @@ export async function renderInvoicePreviewHtml(
   invoiceId: string,
 ): Promise<{ html: string; invoiceRef: string }> {
   const inv = await loadInvoiceForRender(prisma, invoiceId);
+  if (inv.invoiceType === InvoiceType.INTERIM) {
+    const m = await buildInterimDocRender(prisma, inv);
+    return { html: m.html, invoiceRef: m.invoiceRef };
+  }
   if (inv.invoiceType !== InvoiceType.PROFORMA) {
-    throw new ValidationError("Inline preview is available for proforma invoices only");
+    throw new ValidationError("Inline preview is available for proforma and interim invoices only");
   }
   const m = await buildProformaDocRender(prisma, inv);
   return { html: m.html, invoiceRef: m.invoiceRef };
@@ -650,6 +711,60 @@ export async function generateOrLoadInvoicePdf(
 
   const invoiceRef = inv.invoiceNumber ?? inv.id;
   const now = new Date();
+
+  // ================================================================
+  // INTERIM branch (2026-08-21) — the figures frozen on the request.
+  // ================================================================
+  if (inv.invoiceType === InvoiceType.INTERIM) {
+    const m = await buildInterimDocRender(prisma, inv);
+    const bytes = await renderHtmlToPdf(m.html, { fitToPage: true });
+    const checksum = hashSha256(bytes);
+    const storageKey = buildStorageKey("interim-invoice", `${invoiceRef}-v${inv.versionNumber}`, now);
+    await writeDocument(storageKey, bytes);
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id: inv.id },
+        data: {
+          pdfStorageKey: storageKey,
+          pdfChecksum: checksum,
+          pdfChecksumAlgo: "SHA-256",
+          pdfRenderedAt: now,
+          pdfRenderedBy: actorId,
+          renderInputSnapshot: {
+            documentTitle: m.kind === "EXTENSION" ? "INTERIM INVOICE — STAY EXTENSION" : "INTERIM INVOICE",
+            invoiceRef,
+            versionNumber: inv.versionNumber,
+            kind: m.kind,
+            figures: m.figures,
+            primaryGuestName: m.prelude.guestName,
+            hotel: {
+              hotelName: m.hotel.hotelName,
+              registeredAddress: m.hotel.registeredAddress,
+              primaryEmail: m.hotel.primaryEmail,
+              accountNumber: m.hotel.accountNumber,
+              tpnNumber: m.hotel.tpnNumber,
+              gstTpnNumber: m.hotel.gstTpnNumber,
+            },
+          } as any,
+        },
+      });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "INVOICE.PDF_GENERATED",
+          actorId,
+          actorLevel: "SYSTEM",
+          entityType: "Invoice",
+          entityId: inv.id,
+          operation: "CREATE",
+          timestamp: now,
+          entryId: inv.entryId,
+          payload: { invoiceId: inv.id, invoiceType: inv.invoiceType, invoiceRef, storageKey, checksum, checksumAlgo: "SHA-256", byteLength: bytes.byteLength },
+          createdBy: actorId,
+        } as any,
+      });
+    });
+    return { storageKey, checksum, bytes, filename: filenameFor(inv.invoiceType, invoiceRef) };
+  }
 
   // ================================================================
   // PROFORMA branch — same template as quotation.

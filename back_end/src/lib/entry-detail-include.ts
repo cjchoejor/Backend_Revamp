@@ -41,6 +41,17 @@ export const entryDetailInclude = {
   commissionDueRecords: { orderBy: { createdAt: "desc" as const }, take: 5 },
   followUpTasks: { orderBy: { createdAt: "desc" as const }, take: 5 },
   noShowDetermination: true,
+  // Mid-stay money (2026-08-21): open interim asks + extension requests ride on the entry so
+  // the Stay step can show the prompt and the extension's state without a second round-trip.
+  interimPaymentRequests: {
+    orderBy: { createdAt: "desc" as const },
+    take: 10,
+    include: {
+      invoice: { select: { id: true, state: true, dispatchedAt: true, totalAmount: true } },
+      payments: { select: { id: true, amount: true, receivedAt: true } },
+    },
+  },
+  stayExtensionRequests: { orderBy: { createdAt: "desc" as const }, take: 5 },
   inquiry: { include: { agentProfile: { select: { id: true, displayName: true, commissionRate: true, commissionBasis: true } } } },
 } satisfies Prisma.EntryInclude;
 

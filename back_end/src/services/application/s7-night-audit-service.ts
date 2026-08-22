@@ -5,6 +5,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { maybePromptInterimPaymentTx } from "../domain/interim-payment-service.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { maybeWriteCreditCeilingEvents } from "../domain/s7-folio-lines-service.js";
@@ -266,6 +267,11 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
           });
         }
       }
+      // Long stays (2026-08-21, operator ruling): every `interimPayment.schedule.everyNights`
+      // nights slept, raise an "interim payment due" prompt on the Stay step — the forgetting-
+      // proof default; the desk can always ask earlier by hand. Best-effort: a prompt that
+      // can't be written must not fail the audit.
+      await maybePromptInterimPaymentTx(tx, { entryId: p.entryId, folioId: p.folioId, operatingDate, actorId }).catch(() => {});
       if (p.shouldWriteFnbMissingAnomaly) {
         await tx.nightAuditAnomaly.create({
           data: {

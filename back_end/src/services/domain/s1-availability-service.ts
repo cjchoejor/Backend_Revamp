@@ -9,6 +9,7 @@ import { resolveIndicativePricingForS1Availability } from "../../policies/08-pri
 import { resolveAgentRate } from "../../lib/agent-rate-resolution.js";
 import {
   committedHoldSpans,
+  pendingStayExtensionClaims,
   reservedEntryRoomsSelect,
   roomsClaimedByReservedEntry,
   stillHoldsInventory,
@@ -309,9 +310,23 @@ export async function runAvailabilityEngineForEntry(
     );
   const strongerClaim = new Set(reservedRoomIds);
   for (const s of committedSpans) strongerClaim.add(`${s.entryId}:${s.roomId}`);
+  // Pending stay extensions (2026-08-21) — the nights after a checkout a guest is extending
+  // into, held while the interim payment comes in. Same standing as a committed hold; not
+  // deduped against the entry's reservation (different nights, both real).
+  const extensionSpans = (await pendingStayExtensionClaims(prisma, { checkIn, checkOut, excludeEntryId: entry.id })).map((x) => ({
+    roomId: x.roomId,
+    startDate: x.startDate,
+    endDate: x.endDate,
+    source: "HOLD" as const,
+    holdKind: "COMMITTED" as const,
+    entryId: x.entryId,
+    entryReferenceNumber: x.entry?.inquiryId ?? null,
+    ...contextFromEntry(x.entry as Parameters<typeof contextFromEntry>[0]),
+  }));
   const roomBlockages = [
     ...reservedBlockages,
     ...committedSpans,
+    ...extensionSpans,
     // Weakest claim, so it is added last and skipped wherever a stronger one already covers the
     // same room: a reservation or committed hold on the entry supersedes its speculative one.
     // Spans resolve like committed holds (2026-08-06): the per-night snapshot when present —

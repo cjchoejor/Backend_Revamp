@@ -4,7 +4,14 @@ import { randomBytes } from "node:crypto";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { hashSha256, readDocument, verifyChecksum, writeDocument } from "../../lib/document-storage.js";
-import { readOptionSelected } from "../../lib/option-selected-reader.js";
+import {
+  currentPerNightPicture,
+  derivePartySlots as derivePartySeatingSlots,
+  nightsByRoomFromPicture,
+  planRoomOrder,
+  resolveCompositionBasis,
+  seatPartyRooms,
+} from "../../lib/party-seating.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
@@ -603,60 +610,55 @@ function derivePartySlots(entry: {
 export type PhoneCaptureRoom = { roomNumber: string; bedType: string | null; roomTypeName: string | null };
 
 /**
- * slot key → roomId, per the S2 composition. MIRRORS the desk's `seatPartyByComposition`
- * ([front_end/src/lib/desk/party-rooms.ts]) exactly — the composition stores COUNTS per room,
- * never which same-band person, so seating is re-derived deterministically: band pools in
- * party order, rooms in sealed order, adults → 6–10s → under-6s per room's counts. Keep the
- * two in step or the phone and the desk table would disagree about who sleeps where.
+ * slot key → PRIMARY roomId, per the booking's composition. The derivation lives in ONE place
+ * since 2026-08-21 — `lib/party-seating.ts` (`resolveCompositionBasis` for WHICH composition,
+ * `seatPartyRooms` for who sits where; night-aware, sealed order, adults → 6–10s → under-6s) —
+ * mirrored by the desk's `seatPartyByComposition`, so the phone and the desk table can never
+ * disagree about who sleeps where. Before this the phone picked "any ACCEPTED quote with
+ * compositions, across all segments" and could name a room the booking no longer held.
  */
 function seatPartyByCompositionServer(
   entry: {
     adultCount: number | null;
     childAges: number[] | null;
-    quotations: { state: string; createdAt: Date; commercialTerms: unknown }[];
+    guestCount: number | null;
+    checkInDate: Date | null;
+    checkOutDate: Date | null;
+    segments: { id: string }[];
+    quotations: { id: string; segmentId: string | null; state: string; versionNumber: number | null; createdAt: Date; commercialTerms: unknown }[];
+    reservation: { frozenCheckInDate: Date | null; frozenCheckOutDate: Date | null; frozenCommercialTerms: unknown } | null;
+    reservations: { confirmedAt: Date | null; frozenCommercialTerms: unknown }[];
     availabilityConfigs: { sealedAt: Date | null; optionSelected: unknown }[];
+    roomAssignments: { roomId: string }[];
   },
   youngMax: number,
   childMax: number,
 ): Map<string, string> {
   const out = new Map<string, string>();
-  type Comp = { roomId?: string | null; adultCount?: number; cnb6To10Count?: number; cnbUnder6Count?: number };
-  const withComps = entry.quotations
-    .filter((q) => {
-      const comps = (q.commercialTerms as { roomCompositions?: unknown[] } | null)?.roomCompositions;
-      return Array.isArray(comps) && comps.length > 0;
-    })
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  const operative =
-    withComps.find((q) => q.state === "ACCEPTED") ??
-    withComps.find((q) => q.state === "SENT" || q.state === "DRAFT") ??
-    withComps[0];
-  if (!operative) return out;
-  const comps = ((operative.commercialTerms as { roomCompositions?: unknown[] }).roomCompositions ?? []) as Comp[];
-
-  const pool: Record<"ADULT" | "C6TO10" | "UNDER6", string[]> = { ADULT: [], C6TO10: [], UNDER6: [] };
-  for (let i = 0; i < Math.max(0, entry.adultCount ?? 0); i++) pool.ADULT.push(`A${i}`);
-  (entry.childAges ?? []).forEach((age, i) => {
-    pool[age <= youngMax ? "UNDER6" : age <= childMax ? "C6TO10" : "ADULT"].push(`K${i}`);
-  });
-
-  const sealed = entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected);
-  const sealedOrder = sealed ? readOptionSelected(sealed.optionSelected).distinctRoomIds : [];
-  const order = sealedOrder.length > 0 ? sealedOrder : comps.map((c) => c.roomId).filter((id): id is string => !!id);
-  for (const id of order) {
-    const c = comps.find((x) => x.roomId === id);
-    if (!c) continue;
-    const take = (band: "ADULT" | "C6TO10" | "UNDER6", n: number) => {
-      for (let i = 0; i < n; i++) {
-        const key = pool[band].shift();
-        if (!key) return;
-        out.set(key, id);
-      }
-    };
-    take("ADULT", c.adultCount ?? 0);
-    take("C6TO10", c.cnb6To10Count ?? 0);
-    take("UNDER6", c.cnbUnder6Count ?? 0);
+  const basis = resolveCompositionBasis(entry);
+  if (!basis.compositions) return out;
+  const slots = derivePartySeatingSlots(entry, { youngChildMaxAge: youngMax, childMaxAge: childMax });
+  const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
+  const checkOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+  const nightsIso: string[] = [];
+  if (checkIn && checkOut) {
+    const start = Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate());
+    const end = Date.UTC(checkOut.getUTCFullYear(), checkOut.getUTCMonth(), checkOut.getUTCDate());
+    for (let t = start; t < end; t += 86_400_000) nightsIso.push(new Date(t).toISOString().slice(0, 10));
   }
+  const sealed = entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected) ?? null;
+  const picture = currentPerNightPicture({
+    sealedOption: sealed?.optionSelected ?? null,
+    fallbackRoomIds: Array.from(new Set(entry.roomAssignments.map((a) => a.roomId))),
+    nightsIso: nightsIso.length > 0 ? nightsIso : ["stay"],
+  });
+  const seating = seatPartyRooms({
+    slots,
+    rows: basis.compositions,
+    order: planRoomOrder(picture),
+    nightsByRoom: nightsByRoomFromPicture(picture),
+  });
+  for (const [slot, rooms] of seating) if (rooms.length > 0) out.set(slot, rooms[0]);
   return out;
 }
 
@@ -677,7 +679,13 @@ export async function phoneCaptureRoster(prisma: PrismaClient, entryId: string) 
       childAges: true,
       guestCount: true,
       guestProfileId: true,
-      quotations: { select: { state: true, createdAt: true, commercialTerms: true } },
+      checkInDate: true,
+      checkOutDate: true,
+      segments: { orderBy: { segmentNumber: "desc" }, select: { id: true } },
+      quotations: { select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true, commercialTerms: true } },
+      reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true, frozenCommercialTerms: true } },
+      reservations: { orderBy: { confirmedAt: "desc" }, select: { confirmedAt: true, frozenCommercialTerms: true } },
+      roomAssignments: { select: { roomId: true } },
       availabilityConfigs: {
         where: { sealedAt: { not: null } },
         orderBy: { createdAt: "desc" },

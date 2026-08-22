@@ -140,3 +140,84 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
     body,
   });
 }
+
+// =============================================================================
+// Interim invoice (2026-08-21) — the bill behind a mid-stay interim payment: a long-stay part
+// payment, or the payment a stay extension is conditioned on. Same house format as the
+// proforma (A2); the hero is "Due now", and the guest can read the projection that produced it.
+// =============================================================================
+
+export type LegphelInterimInput = {
+  masthead: DocumentMasthead;
+  invoiceNo: string;
+  bookingRef: string;
+  date: string;
+  kind: "LONG_STAY" | "EXTENSION";
+  to: string;
+  forGuest?: string | null;
+  /** "08 Aug – 22 Aug 2026 · 14 nights" — the PROJECTED stay (new checkout on an extension). */
+  stay: string;
+  /** "7 slept · 7 to come" */
+  nightsLine: string;
+  projectedRoomTotal: string;
+  otherChargesSoFar: string;
+  projectedTotal: string;
+  receivedSoFar: string;
+  receivedQualifier?: string | null;
+  /** "50% of the projected total" / "Nu 20,000.00" — how the ask was expressed. */
+  askLabel: string;
+  dueNow: string;
+  balanceAtCheckout: string;
+  /** Extension: until when the extra nights are held for the guest. */
+  holdUntil?: string | null;
+  bank: { bankName: string | null; accountName: string | null; accountsPhone: string | null };
+  closingNote: string;
+  tariffVersion: string;
+  issuanceRef?: string | null;
+  currencyLabel?: string;
+  watermark?: DocumentWatermark;
+};
+
+export function renderLegphelInterimHtml(input: LegphelInterimInput): string {
+  const currency = input.currencyLabel ?? "Nu.";
+  const bankPairs: Array<{ label: string; value: string }> = [];
+  if (input.bank.bankName) bankPairs.push({ label: "Bank", value: input.bank.bankName });
+  if (input.bank.accountName) bankPairs.push({ label: "A/C", value: input.bank.accountName });
+  bankPairs.push({ label: "Ref", value: input.invoiceNo });
+  if (input.bank.accountsPhone) bankPairs.push({ label: "Accounts", value: input.bank.accountsPhone });
+
+  const title = input.kind === "EXTENSION" ? "Interim Invoice — Stay Extension" : "Interim Invoice";
+  const body = [
+    renderMasthead(input.masthead),
+    renderTitle(title, "This is not a tax invoice — the tax invoice is issued at checkout", false),
+    row("Interim No", input.invoiceNo, { boldValue: true }),
+    row("Booking Ref", input.bookingRef, { redValue: true }),
+    row("Date", input.date),
+    input.holdUntil ? row("Extra nights held until", input.holdUntil, { boldKey: true, redValue: true }) : "",
+    section,
+    row("To", input.to, { boldValue: true }),
+    input.forGuest ? row("For guest", input.forGuest) : "",
+    section,
+    row(input.kind === "EXTENSION" ? "Extended stay" : "Stay", input.stay),
+    row("Nights", input.nightsLine),
+    section,
+    row("Room nights (projected, incl. service & GST)", input.projectedRoomTotal),
+    row("Other charges so far", input.otherChargesSoFar),
+    row("Projected total for the stay", input.projectedTotal, { boldValue: true }),
+    row(`Already received${input.receivedQualifier ? ` ${input.receivedQualifier}` : ""}`, input.receivedSoFar),
+    row(`Due now (${input.askLabel}) · ${currency}`, input.dueNow, { total: true }),
+    row("Balance at checkout", input.balanceAtCheckout),
+    bankStrip(bankPairs),
+    note(input.closingNote, "quiet"),
+    footer([input.invoiceNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return renderDocumentPage({
+    documentTitle: `${title} ${input.invoiceNo}`,
+    family: "commercial",
+    watermark: input.watermark ?? null,
+    body,
+  });
+}

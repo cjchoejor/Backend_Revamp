@@ -128,6 +128,18 @@ async function main() {
       notes: "Seeded S1 entry expiry TTL seconds (W20 registration)",
     },
     {
+      configKey: "interimPayment.schedule",
+      configValue: { enabled: true, everyNights: 7, minimumOutstanding: 0 },
+      notes:
+        "Interim payments on long stays (2026-08-21, operator ruling): the night audit raises an 'interim payment due' prompt on the Stay step every `everyNights` nights slept when the folio's outstanding balance is at least `minimumOutstanding`. The desk can always ask manually, earlier or later; this is the forgetting-proof default. enabled=false turns the automatic prompt off.",
+    },
+    {
+      configKey: "stayExtension.holdTtlSeconds",
+      configValue: 86400,
+      notes:
+        "Stay extension (2026-08-21): how long the extra nights stay claimed for the guest while the interim invoice goes out and the payment comes in. W40 releases them and lapses the request when it runs out unpaid. 86400 = 24 hours.",
+    },
+    {
       configKey: "expiry.parking.followUpDays",
       configValue: 30,
       notes:

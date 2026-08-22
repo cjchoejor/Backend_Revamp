@@ -217,6 +217,90 @@ ${showDueBy ? `<p style="font-size:13px;color:#555">The advance is due by <stron
 }
 
 // =============================================================================
+// S7 — Interim invoice (2026-08-21): long-stay part payment / stay-extension payment
+// =============================================================================
+
+export type InterimInvoiceEmailData = {
+  guestDisplayName: string;
+  invoiceRef: string;
+  kind: "LONG_STAY" | "EXTENSION";
+  checkInDate: Date;
+  /** The projected checkout — the NEW date on an extension. */
+  checkOutDate: Date;
+  currency: string;
+  nightsSlept: number;
+  nightsToCome: number;
+  /** Projected total of the whole stay (room nights slept + to come + other charges so far). */
+  projectedTotal: number;
+  otherChargesSoFar: number;
+  receivedSoFar: number;
+  /** "50% of the projected total" / "Nu 20,000.00" — how the ask was expressed. */
+  askLabel: string;
+  dueNow: number;
+  balanceAtCheckout: number;
+  /** When the extension's nights are released if unpaid (extension kind only). */
+  holdExpiresAt?: Date | null;
+};
+
+export function renderInterimInvoiceEmail(d: InterimInvoiceEmailData): StageEmailContent {
+  const subject = COMMON_SUBJECT;
+  const heading = d.kind === "EXTENSION" ? "Interim invoice — stay extension" : "Interim invoice";
+  const intro =
+    d.kind === "EXTENSION"
+      ? `Thank you for extending your stay with us to ${formatDate(d.checkOutDate)}. Please find the interim invoice for the extension below — the extra nights are reserved for you once this payment is received.`
+      : `Thank you for staying with us. As your stay continues, please find an interim invoice for the nights so far and the nights to come.`;
+
+  const text = [
+    heading,
+    "",
+    `Dear ${d.guestDisplayName},`,
+    "",
+    intro,
+    "",
+    `Invoice: ${d.invoiceRef}`,
+    `Check-in: ${formatDate(d.checkInDate)}`,
+    `Check-out: ${formatDate(d.checkOutDate)}`,
+    `Nights: ${d.nightsSlept} slept · ${d.nightsToCome} to come`,
+    "",
+    `Projected total for the stay: ${formatMoney(d.projectedTotal, d.currency)}`,
+    d.otherChargesSoFar > 0 ? `  (includes other charges so far: ${formatMoney(d.otherChargesSoFar, d.currency)})` : null,
+    `Already received:             ${formatMoney(d.receivedSoFar, d.currency)}`,
+    `Asked now (${d.askLabel}):    ${formatMoney(d.dueNow, d.currency)}`,
+    `Balance at checkout:          ${formatMoney(d.balanceAtCheckout, d.currency)}`,
+    "",
+    d.holdExpiresAt ? `The extra nights are held for you until ${formatDate(d.holdExpiresAt)}.` : null,
+    d.holdExpiresAt ? "" : null,
+    "Reply to this email if you need bank details or have any questions.",
+    "",
+    "— The Legphel Hotel team",
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+
+  const html = htmlShell(`
+${emailHeading(heading)}
+<p>Dear ${escapeHtml(d.guestDisplayName)},</p>
+<p>${escapeHtml(intro)}</p>
+${detailsTable([
+  tableRow("Invoice", d.invoiceRef),
+  tableRow("Check-in", formatDate(d.checkInDate), true),
+  tableRow("Check-out", formatDate(d.checkOutDate)),
+  tableRow("Nights", `${d.nightsSlept} slept · ${d.nightsToCome} to come`, true),
+  tableRow("Projected total for the stay", formatMoney(d.projectedTotal, d.currency)),
+  d.otherChargesSoFar > 0 ? tableRow("— includes other charges so far", formatMoney(d.otherChargesSoFar, d.currency), true) : "",
+  tableRow("Already received", formatMoney(d.receivedSoFar, d.currency)),
+  tableRow(`Asked now (${d.askLabel})`, formatMoney(d.dueNow, d.currency), true, true),
+  tableRow("Balance at checkout", formatMoney(d.balanceAtCheckout, d.currency)),
+])}
+${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are held for you until <strong>${escapeHtml(formatDate(d.holdExpiresAt))}</strong>.</p>` : ""}
+<p>Reply to this email if you need bank details or have any questions.</p>
+<p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
+`);
+
+  return { subject, text, html };
+}
+
+// =============================================================================
 // S4 — Reservation confirmation
 // =============================================================================
 

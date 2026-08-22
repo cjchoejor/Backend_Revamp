@@ -3,6 +3,18 @@ import { HandoffState, HandoffType, InventoryClaimState, Prisma, Stage } from "@
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
+import {
+  currentPerNightPicture,
+  derivePartySlots,
+  describeSeatingRepair,
+  repairPartySeating,
+  repointStrayRows,
+  resolveCompositionBasis,
+  successorChainFromConfigs,
+  type RoomSeatingFacts,
+  type SeatingRepairAction,
+} from "../../lib/party-seating.js";
+import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { findRoomBookingConflicts, type RoomBookingConflict } from "../../lib/room-booking-conflicts.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -160,20 +172,6 @@ function todayUtcMidnight(): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-/** Per-night picture of the booking's CURRENT room basis, normalised across the three seal shapes. */
-function currentPerNightPicture(input: {
-  sealedOption: unknown;
-  fallbackRoomIds: string[];
-  nightsIso: string[];
-}): Array<{ date: string; roomIds: string[] }> {
-  const sel = readOptionSelected(input.sealedOption ?? null);
-  if (sel.perNight && sel.perNight.length > 0) {
-    return sel.perNight.map((n) => ({ date: String(n.date).slice(0, 10), roomIds: [...n.roomIds] }));
-  }
-  const rooms = sel.distinctRoomIds.length > 0 ? sel.distinctRoomIds : input.fallbackRoomIds;
-  return input.nightsIso.map((date) => ({ date, roomIds: [...rooms] }));
-}
-
 export type RoomChangeCandidate = {
   roomId: string;
   roomNumber: string;
@@ -231,7 +229,32 @@ export type RoomChangeCandidatesResult = {
 };
 
 /** Shared context both the candidates lookup and the change itself derive once. */
-async function loadRoomChangeContext(prisma: PrismaClient, entryId: string, fromRoomId: string) {
+/** The extension leg the composite runs in extension mode (stay-extension-service, 2026-08-21). */
+export type StayExtensionWalkInput = {
+  requestId: string;
+  priorCheckOutDate: Date;
+  newCheckOutDate: Date;
+  /** The extra nights and the room each is held in — every room of the plan that continues. */
+  extraNights: Array<{ date: string; roomId: string }>;
+};
+
+function extraNightsPicture(extraNights: Array<{ date: string; roomId: string }>): Array<{ date: string; roomIds: string[] }> {
+  const byDate = new Map<string, string[]>();
+  for (const n of extraNights) {
+    const date = String(n.date).slice(0, 10);
+    const list = byDate.get(date) ?? [];
+    if (!list.includes(n.roomId)) list.push(n.roomId);
+    byDate.set(date, list);
+  }
+  return [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, roomIds]) => ({ date, roomIds }));
+}
+
+async function loadRoomChangeContext(
+  prisma: PrismaClient,
+  entryId: string,
+  fromRoomId: string,
+  opts?: { extension?: StayExtensionWalkInput | null },
+) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
@@ -239,6 +262,9 @@ async function loadRoomChangeContext(prisma: PrismaClient, entryId: string, from
       quotations: { orderBy: { createdAt: "desc" } },
       committedHold: true,
       reservation: true,
+      // Every segment's frozen terms — the last KNOWN seating when the current segment carries
+      // none (resolveCompositionBasis, layer 5).
+      reservations: { orderBy: { confirmedAt: "desc" }, select: { segmentId: true, confirmedAt: true, frozenCommercialTerms: true } },
       roomAssignments: { orderBy: { createdAt: "desc" }, include: { room: true } },
       availabilityConfigs: {
         where: { sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
@@ -258,8 +284,16 @@ async function loadRoomChangeContext(prisma: PrismaClient, entryId: string, from
   enforceEntryActiveForStageTransition({ status: entry.status });
 
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
-  const checkOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+  const currentCheckOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+  // Extension mode (2026-08-21): the stay runs to the NEW checkout; the extra nights are in
+  // the plan from the start, so every downstream step (sealed config, silent quote, hold,
+  // re-freeze) sees the extended stay as the booking's basis.
+  const extension = opts?.extension ?? null;
+  const checkOut = extension ? extension.newCheckOutDate : currentCheckOut;
   if (!checkIn || !checkOut) throw new ValidationError("This booking has no stay dates — a room change cannot be validated");
+  if (extension && (!currentCheckOut || extension.priorCheckOutDate.getTime() !== currentCheckOut.getTime())) {
+    throw new ValidationError("The extension was requested against a different checkout date than the booking holds now — request it again");
+  }
   const nightsIso = isoNightsBetween(checkIn, checkOut);
   if (nightsIso.length === 0) throw new ValidationError("This booking has no stay nights left to change");
 
@@ -270,11 +304,14 @@ async function loadRoomChangeContext(prisma: PrismaClient, entryId: string, from
       ...entry.roomAssignments.map((a) => a.roomId),
     ]),
   );
-  const picture = currentPerNightPicture({
+  const basePicture = currentPerNightPicture({
     sealedOption: sealedConfig?.optionSelected ?? null,
     fallbackRoomIds,
-    nightsIso,
+    nightsIso: extension ? isoNightsBetween(checkIn, currentCheckOut!) : nightsIso,
   });
+  const picture = extension ? [...basePicture, ...extraNightsPicture(extension.extraNights)] : basePicture;
+  /** Rooms of the plan BEFORE the extension's extra nights (= every room on a per-night change). */
+  const currentPlanRoomIds = new Set(basePicture.flatMap((n) => n.roomIds));
 
   const claimedRoomIds = new Set(picture.flatMap((n) => n.roomIds));
   if (!claimedRoomIds.has(fromRoomId)) {
@@ -285,10 +322,12 @@ async function loadRoomChangeContext(prisma: PrismaClient, entryId: string, from
   // where slept nights stay with the old room and the change runs from tonight onward.
   const today = todayUtcMidnight();
   const todayIso = today.toISOString().slice(0, 10);
-  const substitutionNights = picture
-    .filter((n) => n.roomIds.includes(fromRoomId))
-    .map((n) => n.date)
-    .filter((date) => (stage === Stage.S7 ? date >= todayIso : true));
+  const substitutionNights = extension
+    ? Array.from(new Set(extension.extraNights.map((n) => String(n.date).slice(0, 10)))).sort()
+    : picture
+        .filter((n) => n.roomIds.includes(fromRoomId))
+        .map((n) => n.date)
+        .filter((date) => (stage === Stage.S7 ? date >= todayIso : true));
   if (substitutionNights.length === 0) {
     throw new ValidationError("There are no remaining nights on that room to change — the stay is past them");
   }
@@ -296,7 +335,7 @@ async function loadRoomChangeContext(prisma: PrismaClient, entryId: string, from
   const fromRoom = await prisma.room.findUnique({ where: { id: fromRoomId }, include: { roomType: true } });
   if (!fromRoom) throw new NotFoundError("Room");
 
-  return { entry, stage, checkIn, checkOut, nightsIso, sealedConfig, picture, claimedRoomIds, substitutionNights, today, todayIso, fromRoom };
+  return { entry, stage, checkIn, checkOut, currentCheckOut, nightsIso, sealedConfig, picture, currentPlanRoomIds, claimedRoomIds, substitutionNights, today, todayIso, fromRoom, extension };
 }
 
 /** Rooms the hold currently covers (perNightBreakdown + primary roomId), tolerant of null. */
@@ -327,18 +366,76 @@ export async function listRoomChangeCandidates(
   fromRoomId: string,
 ): Promise<RoomChangeCandidatesResult> {
   const ctx = await loadRoomChangeContext(prisma, entryId, fromRoomId);
-  const ranges = foldIsoNightsToRanges(ctx.substitutionNights);
-
   const rooms = await prisma.room.findMany({
     where: { isShadowInventory: false },
     include: { roomType: true },
     orderBy: { roomNumber: "asc" },
   });
-
   const pool = rooms.filter((r) => r.id !== fromRoomId && !ctx.claimedRoomIds.has(r.id));
+  const candidates = await standingForPool(prisma, {
+    pool,
+    nights: ctx.substitutionNights,
+    excludeEntryId: entryId,
+    fromRoomTypeId: ctx.fromRoom.roomTypeId,
+  });
+  return {
+    entryId,
+    originStage: String(ctx.stage),
+    fromRoom: {
+      roomId: ctx.fromRoom.id,
+      roomNumber: ctx.fromRoom.roomNumber,
+      roomTypeId: ctx.fromRoom.roomTypeId,
+      roomTypeName: ctx.fromRoom.roomType?.name ?? null,
+    },
+    substitutionNights: ctx.substitutionNights,
+    candidates,
+  };
+}
 
-  // Physical usability (cheap, in-memory — the same predicate the change enforces), classified
-  // rather than filtered: a blocked room stays visible AS blocked.
+/** A room's S1-style standing over a set of nights — the candidate shape, reused by the extension preview. */
+export type RoomStanding = RoomChangeCandidate;
+
+/**
+ * Every registered room's standing over arbitrary nights (2026-08-21, stay extension): the
+ * booking's OWN rooms included, its own claims excluded — "is my room free after my checkout"
+ * is the question, and the answer must not be the booking itself. `referenceRoomTypeIdFrom`
+ * names the room whose type decides `sameType`.
+ */
+export async function listRoomStandingForNights(
+  prisma: PrismaClient,
+  input: { entryId: string; nights: string[]; referenceRoomTypeIdFrom?: string | null },
+): Promise<RoomStanding[]> {
+  const rooms = await prisma.room.findMany({
+    where: { isShadowInventory: false },
+    include: { roomType: true },
+    orderBy: { roomNumber: "asc" },
+  });
+  const ref = input.referenceRoomTypeIdFrom ? rooms.find((r) => r.id === input.referenceRoomTypeIdFrom) : null;
+  return standingForPool(prisma, {
+    pool: rooms,
+    nights: [...input.nights].sort(),
+    excludeEntryId: input.entryId,
+    fromRoomTypeId: ref?.roomTypeId ?? null,
+  });
+}
+
+/**
+ * The shared computation behind both listers: physical usability (classified, not filtered),
+ * every conflict per room over the folded night ranges (the same predicates S1's search and
+ * Policy 26 use), a per-night strip in the S1 vocabulary, and the one-line summary = worst night.
+ */
+async function standingForPool(
+  prisma: PrismaClient,
+  input: {
+    pool: Array<Prisma.RoomGetPayload<{ include: { roomType: true } }>>;
+    nights: string[];
+    excludeEntryId: string;
+    fromRoomTypeId: string | null;
+  },
+): Promise<RoomChangeCandidate[]> {
+  const ranges = foldIsoNightsToRanges(input.nights);
+  const pool = input.pool;
+
   const physicalStatusById = new Map<string, "BLOCKED" | "MAINTENANCE">();
   for (const r of pool) {
     try {
@@ -367,7 +464,7 @@ export async function listRoomChangeCandidates(
       roomIds: pool.map((r) => r.id),
       checkIn: range.startDate,
       checkOut: range.endDate,
-      excludeEntryId: entryId,
+      excludeEntryId: input.excludeEntryId,
     });
     for (const c of conflicts) {
       const list = conflictsByRoom.get(c.roomId) ?? [];
@@ -381,14 +478,14 @@ export async function listRoomChangeCandidates(
   const claimCoversNight = (c: RoomBookingConflict, date: string) =>
     c.startDate.toISOString().slice(0, 10) <= date && date < c.endDate.toISOString().slice(0, 10);
 
-  const candidates: RoomChangeCandidate[] = pool
+  return pool
     .map((r) => {
       const physical = physicalStatusById.get(r.id) ?? null;
       const roomConflicts = conflictsByRoom.get(r.id) ?? [];
       // Strongest claim overall for the one-line summary (reservation outranks a hold,
       // mirroring the S1 engine's occupied-over-held collapse).
       const claim = roomConflicts.find((c) => c.source === "RESERVED") ?? roomConflicts[0] ?? null;
-      const perNight: RoomChangeCandidate["perNight"] = ctx.substitutionNights.map((date) => {
+      const perNight: RoomChangeCandidate["perNight"] = input.nights.map((date) => {
         if (physical) return { date, status: physical, claimedBy: null };
         const covering = roomConflicts.filter((c) => claimCoversNight(c, date));
         const strongest = covering.find((c) => c.source === "RESERVED") ?? covering[0] ?? null;
@@ -407,7 +504,7 @@ export async function listRoomChangeCandidates(
       const freeNightCount = perNight.filter((n) => n.status === "FREE").length;
       const availability: RoomChangeCandidate["availability"] =
         physical ?? (claim ? (claim.source === "RESERVED" ? "RESERVED" : "HELD") : "FREE");
-      const sameType = r.roomTypeId === ctx.fromRoom.roomTypeId;
+      const sameType = input.fromRoomTypeId == null || r.roomTypeId === input.fromRoomTypeId;
       return {
         roomId: r.id,
         roomNumber: r.roomNumber,
@@ -417,7 +514,7 @@ export async function listRoomChangeCandidates(
         sameType,
         physicalState: String(r.physicalState),
         isDeficient: r.isDeficient === true,
-        nights: ctx.substitutionNights.length,
+        nights: input.nights.length,
         availability,
         selectable: availability === "FREE",
         requiredLevel: (sameType ? "L1" : "L2") as "L1" | "L2",
@@ -444,19 +541,6 @@ export async function listRoomChangeCandidates(
         Number(b.selectable) - Number(a.selectable) ||
         a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }),
     );
-
-  return {
-    entryId,
-    originStage: String(ctx.stage),
-    fromRoom: {
-      roomId: ctx.fromRoom.id,
-      roomNumber: ctx.fromRoom.roomNumber,
-      roomTypeId: ctx.fromRoom.roomTypeId,
-      roomTypeName: ctx.fromRoom.roomType?.name ?? null,
-    },
-    substitutionNights: ctx.substitutionNights,
-    candidates,
-  };
 }
 
 export type RoomPlanHistoryItem = {
@@ -684,6 +768,17 @@ export type RoomChangeOutcome = {
   appliedBedType: string | null;
   /** Bed setups recorded per new room (per-night form; superset of appliedBedType). */
   appliedBedTypes: Array<{ roomId: string; roomNumber: string; bedType: string }>;
+  /**
+   * Party seating after the change (2026-08-21, operator ruling): the composite guarantees every
+   * guest has a room on every night and no plan room is empty. `repaired` means the carried /
+   * supplied compositions did NOT satisfy that on their own and were auto-seated — `lines` say
+   * exactly what moved (the desk toasts them), `unresolved` what could not be seated (named,
+   * never hidden). Null when the booking carries no composition at all (legacy / flat-priced —
+   * there is nothing to seat).
+   */
+  seating: { repaired: boolean; lines: string[]; actions: SeatingRepairAction[]; unresolved: string[] } | null;
+  /** Set when the walk was a stay extension (2026-08-21). */
+  extension: { requestId: string; priorCheckOutDate: string; newCheckOutDate: string; extraNights: Array<{ date: string; roomId: string }> } | null;
   walk: {
     returnedToOrigin: boolean;
     reachedStage: string;
@@ -755,6 +850,21 @@ export async function changeRoomToNewSegment(
      * approval would let a lower level raise a concession someone else sanctioned.
      */
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
+    /**
+     * A setup-only change whose ONE purpose is to restore the party seating (2026-08-21): every
+     * guest gets a room on every night and no plan room stays empty. The walk is the same
+     * governed journey; refused — entry untouched — when there is nothing to repair. Reached
+     * through `repairPartySeatingForEntry` (party-seating-service), not the HTTP room-change body.
+     */
+    repairSeating?: boolean;
+    /**
+     * Stay extension (2026-08-21): the stay runs to `newCheckOutDate`, every room of the plan
+     * continues through `extraNights` (a different room from the old checkout = a scheduled
+     * move the desk executes on that day). Nobody moves today, no H2/H3 churn; the from-room's
+     * assignment runs on (a new room gets a bare row from the old checkout). Reached only
+     * through `commitStayExtension` once the interim payment is in.
+     */
+    extension?: StayExtensionWalkInput | null;
   },
 ): Promise<RoomChangeOutcome> {
   const reason = input.reason?.trim();
@@ -768,11 +878,17 @@ export async function changeRoomToNewSegment(
   if (hasSingle && hasPerNightForm) {
     throw new ValidationError("Provide either toRoomId (one room for every night) or perNight (a room per night) — not both");
   }
-  const setupOnly = !hasSingle && !hasPerNightForm;
+  const isExtension = !!input.extension;
+  if (isExtension && hasPerNightForm) throw new ValidationError("An extension names its rooms per night on the request itself");
+  const setupOnly = !isExtension && !hasSingle && !hasPerNightForm;
   // A full re-price basis counts as "something to do" on its own — it IS the change.
   const hasReprice = Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0;
   const hasDiscountEdit = input.requestedDiscount !== undefined;
-  if (setupOnly && !hasSetup && !hasReprice && !hasDiscountEdit) {
+  const repairSeating = input.repairSeating === true;
+  if (repairSeating && (!setupOnly || hasSetup || hasReprice || hasDiscountEdit)) {
+    throw new ValidationError("A seating repair stands alone — no room move, setup, table or discount rides with it");
+  }
+  if (setupOnly && !hasSetup && !hasReprice && !hasDiscountEdit && !repairSeating) {
     throw new ValidationError(
       input.toRoomId?.trim()
         ? "The replacement room is the same room — to change only its setup, send adjustments (extra beds / meals) or roomCompositions"
@@ -802,12 +918,18 @@ export async function changeRoomToNewSegment(
     throw new ValidationError("A discount change is sent with the composition table it was negotiated on (roomCompositions)");
   }
 
-  const ctx = await loadRoomChangeContext(prisma, input.entryId, input.fromRoomId);
+  const ctx = await loadRoomChangeContext(prisma, input.entryId, input.fromRoomId, { extension: input.extension ?? null });
   const { entry, stage } = ctx;
+  if (isExtension && stage !== Stage.S7) throw new ValidationError("A stay is extended in-house (S7)");
 
   // ── The night → room map the change asks for ───────────────────────────────────────────────
   const targetsByNight = new Map<string, string>();
-  if (setupOnly) {
+  if (isExtension) {
+    // The extra nights go to the from-room (extension in place) or to the one replacement room
+    // (a move on the old checkout day); the other rooms of the plan continue by construction.
+    const target = hasSingle ? input.toRoomId!.trim() : input.fromRoomId;
+    for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
+  } else if (setupOnly) {
     // The guest keeps the room on every night — nothing moves, only the setup re-prices.
     for (const d of ctx.substitutionNights) targetsByNight.set(d, input.fromRoomId);
   } else if (hasSingle) {
@@ -828,10 +950,10 @@ export async function changeRoomToNewSegment(
   // Distinct NEW rooms (the from-room may appear per-night: those nights the guest KEEPS).
   const distinctTargets = Array.from(new Set(targetsByNight.values())).filter((id) => id !== input.fromRoomId);
   const keptFromNights = [...targetsByNight.entries()].filter(([, id]) => id === input.fromRoomId).map(([d]) => d).sort();
-  if (!setupOnly && distinctTargets.length === 0) {
+  if (!setupOnly && !isExtension && distinctTargets.length === 0) {
     throw new ValidationError("Every night keeps the current room — nothing changes");
   }
-  if (!setupOnly && stage === Stage.S7 && (distinctTargets.length > 1 || keptFromNights.length > 0)) {
+  if (!setupOnly && !isExtension && stage === Stage.S7 && (distinctTargets.length > 1 || keptFromNights.length > 0)) {
     // In-house the guest physically moves ONCE — a per-night split of the remaining nights
     // would schedule future moves nothing executes. Change again on the day of the next move.
     throw new ValidationError(
@@ -843,7 +965,7 @@ export async function changeRoomToNewSegment(
   const targetById = new Map(targetRooms.map((r) => [r.id, r]));
   // A setup-only change's "target" is the from-room itself — the setup validation below reads
   // the room's type (max extra beds) and bed stock off this map.
-  if (setupOnly) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
+  if (setupOnly || isExtension) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
   for (const id of distinctTargets) {
     const room = targetById.get(id);
     if (!room) throw new NotFoundError("Room");
@@ -859,7 +981,9 @@ export async function changeRoomToNewSegment(
   for (const nights of nightsByTarget.values()) nights.sort();
 
   for (const id of distinctTargets) {
-    if (!ctx.claimedRoomIds.has(id)) continue;
+    // Extension mode: the new room sits in the picture by construction (its extra nights) — the
+    // question is whether it was part of the plan BEFORE the extension.
+    if (!(isExtension ? ctx.currentPlanRoomIds : ctx.claimedRoomIds).has(id)) continue;
     const room = targetById.get(id)!;
     // At S7 a moved-out room keeps its slept-night claim (the split end-dates its assignment,
     // it never leaves the plan), so "already part of this booking" would be misleading — name
@@ -878,13 +1002,16 @@ export async function changeRoomToNewSegment(
   // that is single-valued downstream (S7 physical swap, traces, the sealed-config marker,
   // the outcome's headline toRoom).
   const primaryEntry = [...nightsByTarget.entries()].sort((a, b) => b[1].length - a[1].length)[0] ?? null;
-  // Setup-only: the "to" room IS the from-room — everything single-valued downstream (the S7
-  // assignment split, traces, the hold anchor, the outcome) points at the room being re-set-up.
-  const toRoomId = setupOnly ? input.fromRoomId : primaryEntry![0];
+  // Setup-only (and an extension in place): the "to" room IS the from-room — everything
+  // single-valued downstream (the S7 assignment split, traces, the hold anchor, the outcome)
+  // points at the room being re-set-up / extended.
+  const toRoomId = setupOnly || (isExtension && !primaryEntry) ? input.fromRoomId : primaryEntry![0];
   const toRoom = targetById.get(toRoomId)!;
   /** "201" on a simple swap; "201 + 305" on a per-night split — for notes and traces. */
-  const targetsLabel = setupOnly
-    ? `${ctx.fromRoom.roomNumber} (${hasReprice ? "re-price" : "setup change"})`
+  const targetsLabel = isExtension
+    ? `${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ") || ctx.fromRoom.roomNumber} (extension to ${ctx.checkOut.toISOString().slice(0, 10)})`
+    : setupOnly
+    ? `${ctx.fromRoom.roomNumber} (${repairSeating ? "guest seating" : hasReprice ? "re-price" : "setup change"})`
     : distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ");
 
   // Authority follows WHAT the change does, not the stage (2026-08-13 ruling): a same-type
@@ -920,9 +1047,41 @@ export async function changeRoomToNewSegment(
       });
     }
   }
+  // Extension: every room that CONTINUES past the old checkout must be free for those nights
+  // too (the booking's own claims — its reservation, its pending extension — are excluded by
+  // `findRoomBookingConflicts`, so "is my room free after my checkout" is answered honestly).
+  if (isExtension) {
+    const byRoom = new Map<string, string[]>();
+    for (const n of input.extension!.extraNights) {
+      if (nightsByTarget.has(n.roomId)) continue; // the new room was checked above
+      byRoom.set(n.roomId, [...(byRoom.get(n.roomId) ?? []), String(n.date).slice(0, 10)]);
+    }
+    for (const [roomId, nights] of byRoom) {
+      const room = await prisma.room.findUnique({ where: { id: roomId }, include: { roomType: true } });
+      if (!room) throw new NotFoundError("Room");
+      for (const range of foldIsoNightsToRanges(nights)) {
+        enforceCommittedHoldRoomPhysicallyUsable({
+          roomNumber: room.roomNumber,
+          isBlocked: room.isBlocked,
+          blockedReason: room.blockedReason,
+          isUnderMaintenance: room.isUnderMaintenance,
+          maintenanceDeadline: room.maintenanceDeadline,
+          checkIn: range.startDate,
+          checkOut: range.endDate,
+        });
+        const conflicts = await findRoomBookingConflicts(prisma, {
+          roomIds: [roomId],
+          checkIn: range.startDate,
+          checkOut: range.endDate,
+          excludeEntryId: input.entryId,
+        });
+        enforceNoOverlappingBookingForCommittedHold({ conflicts: conflicts.map((c) => ({ ...c, roomNumber: room.roomNumber })) });
+      }
+    }
+  }
   // The guest moves NOW at S6/S7 into the room covering the first night; a room that only
   // starts on a later night needs to be ready by that night, not this minute.
-  if (stage === Stage.S6 || stage === Stage.S7) {
+  if (!isExtension && (stage === Stage.S6 || stage === Stage.S7)) {
     const firstNight = ctx.substitutionNights[0];
     for (const [roomId, nights] of nightsByTarget) {
       const room = targetById.get(roomId)!;
@@ -952,15 +1111,20 @@ export async function changeRoomToNewSegment(
   // an expired clock must not un-price committed money.
   const frozenTerms = (entry.reservation?.frozenCommercialTerms ?? null) as Record<string, unknown> | null;
   const operativeTerms = (operative?.commercialTerms ?? null) as Record<string, unknown> | null;
-  const priorTerms =
-    Array.isArray(operativeTerms?.roomCompositions) && operativeTerms!.roomCompositions.length > 0
-      ? operativeTerms
-      : Array.isArray(frozenTerms?.roomCompositions) && frozenTerms!.roomCompositions.length > 0
-        ? frozenTerms
-        : operativeTerms ?? frozenTerms;
-  const priorCompositions = Array.isArray(priorTerms?.roomCompositions)
-    ? (priorTerms!.roomCompositions as RoomCompositionServiceInput[])
-    : null;
+  // WHICH compositions the booking is seated and priced on today — layered (operative quote →
+  // the current segment's newest quote in any state → frozen terms → the last KNOWN
+  // composition of any segment), see `resolveCompositionBasis`. The prior-segment layers exist
+  // for the reported defect (2026-08-21): a room change that dropped the compositions left the
+  // new segment flat-quoted, every later change carried nothing, and the guests sat "without a
+  // room" on the desk. Rows from a prior segment may still name the REPLACED room — the
+  // reconciliation below follows the room-change chain to the room it became.
+  const basis = resolveCompositionBasis<RoomCompositionServiceInput>(entry);
+  const basisIsCurrent =
+    basis.source === "OPERATIVE_QUOTATION" || basis.source === "CURRENT_SEGMENT_QUOTATION" || basis.source === "FROZEN_RESERVATION";
+  // Discount / currency / approval stamps ride with the CURRENT segment's terms when it has any;
+  // a prior segment's terms are only the basis when the current one carries nothing at all.
+  const priorTerms = basisIsCurrent ? basis.terms : (operativeTerms ?? frozenTerms ?? basis.terms);
+  const priorCompositions = basis.compositions;
   const frozenTotal = (() => {
     const t = (frozenTerms?.compositionTotals ?? null) as { total?: unknown } | null;
     return typeof t?.total === "number" && Number.isFinite(t.total) ? t.total : null;
@@ -1014,7 +1178,19 @@ export async function changeRoomToNewSegment(
   // A setup-only change writes NO roomChange marker — the plan-history chain folds markers
   // room → room, and a 205 → 205 link would print a spurious "Changed" on the Initially cell.
   // The sealed config's searchCriteria carries a `setupChange` note instead.
-  const roomChangeMarker = setupOnly ? null : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
+  const roomChangeMarker =
+    setupOnly || (isExtension && distinctTargets.length === 0) ? null : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
+  // Extension marker (2026-08-21): the sealed config says the stay was extended — and from where.
+  const extensionMarker = input.extension
+    ? {
+        stayExtension: {
+          requestId: input.extension.requestId,
+          priorCheckOutDate: input.extension.priorCheckOutDate.toISOString().slice(0, 10),
+          newCheckOutDate: input.extension.newCheckOutDate.toISOString().slice(0, 10),
+          extraNights: input.extension.extraNights.map((n) => ({ date: String(n.date).slice(0, 10), roomId: n.roomId })),
+        },
+      }
+    : {};
   const substitutedOption = emitPerNight
     ? {
         perNight: substitutedPicture.map((n) => ({
@@ -1023,17 +1199,44 @@ export async function changeRoomToNewSegment(
         })),
         isDeficient: anyDeficient,
         ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
+        ...extensionMarker,
       }
     : {
         roomIds: substitutedDistinct.map((roomId) => ({ roomId, isDeficient: deficientById.get(roomId) === true })),
         isDeficient: anyDeficient,
         ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
+        ...extensionMarker,
       };
+
+  // The room-change chain — every sealed config's from→to marker, plus THIS change's — so a
+  // composition row left on a replaced room can follow it to the room it became.
+  const successorOf = successorChainFromConfigs(
+    await prisma.availabilityConfiguration.findMany({
+      where: { entryId: input.entryId, sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
+      orderBy: { sealedAt: "asc" },
+      select: { optionSelected: true },
+    }),
+  );
+  if (roomChangeMarker) successorOf.set(input.fromRoomId, distinctTargets);
+  const seatingActions: SeatingRepairAction[] = [];
 
   // ── The carried compositions, with the one room substituted ────────────────────────────────
   let newCompositions: RoomCompositionServiceInput[] | undefined;
   if (priorCompositions && priorCompositions.length > 0) {
-    if (setupOnly) {
+    if (isExtension) {
+      // Every row carries — an extended room simply prices more nights through the per-night
+      // seal. A NEW room from the old checkout gets the moving party's row, at the new type's
+      // published rate when cross-type (operator ruling 2026-08-21: the current room keeps its
+      // negotiated rate; a different type starts at its own rate, negotiable by FOM).
+      newCompositions = priorCompositions.map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
+      for (const roomId of distinctTargets) {
+        if (newCompositions.some((c) => c.roomId === roomId)) continue;
+        const src = movingComposition ?? priorCompositions[0];
+        const room = targetById.get(roomId);
+        const crossType = room != null && room.roomTypeId !== ctx.fromRoom.roomTypeId;
+        newCompositions.push({ ...src, roomId, nightMealOverrides: [], ...(crossType ? { negotiatedRoomRate: undefined } : {}) });
+      }
+    } else if (setupOnly) {
       // Nothing moves — every row carries; the setup block below rewrites the one row.
       newCompositions = priorCompositions.map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
     } else if (stage === Stage.S7 && movingComposition) {
@@ -1084,18 +1287,54 @@ export async function changeRoomToNewSegment(
 
     // Reconcile against the substituted plan — the frozen terms must describe the rooms the
     // booking actually holds. A stray row (references a room not in the plan) is re-pointed at
-    // a plan room that lacks one (its guest data most likely belongs there — the stray is the
-    // pre-drift identity), and anything still stray after pairing is dropped. No-op when the
-    // compositions already match the plan, which is every normal case.
-    const planSet = new Set(substitutedDistinct);
-    const compRoomSet = new Set(newCompositions.map((c) => c.roomId));
-    const strayRows = newCompositions.filter((c) => !planSet.has(c.roomId));
-    const missingRooms = substitutedDistinct.filter((id) => !compRoomSet.has(id));
-    for (let i = 0; i < missingRooms.length && i < strayRows.length; i++) {
-      strayRows[i].roomId = missingRooms[i];
-    }
-    newCompositions = newCompositions.filter((c) => planSet.has(c.roomId));
+    // the room it BECAME through the room-change chain (exact — the sealed configs' markers),
+    // else paired positionally with a plan room that lacks one (its guest data most likely
+    // belongs there — the stray is the pre-drift identity); anything still stray is dropped.
+    // No-op when the compositions already match the plan, which is every normal case.
+    const repointed = repointStrayRows(newCompositions, substitutedDistinct, successorOf);
+    newCompositions = repointed.rows;
+    seatingActions.push(...repointed.actions);
   }
+
+  // ── Seating: everyone has a room, no room is empty (2026-08-21, operator ruling) ───────────
+  // Whatever the compositions came from — the carry, the operator's table, a repair request —
+  // they must leave both invariants standing before the irreversible re-entry: every guest
+  // seated on every night, no plan room empty. `repairPartySeating` restores them (minting the
+  // missing row, seating the shortfall into the emptiest room with space on every night it
+  // covers) and says exactly what it did; the outcome and a trace carry that, so a silent
+  // "the occupants vanished" can no longer happen.
+  const childBundle = await loadChildPolicyBundle(prisma).catch(() => null);
+  const partySlots = derivePartySlots(entry, {
+    youngChildMaxAge: childBundle?.ageBands.youngChildMaxAge ?? 5,
+    childMaxAge: childBundle?.ageBands.childMaxAge ?? 10,
+  });
+  const seatingFacts = new Map<string, RoomSeatingFacts>();
+  const seatingRoomNumbers = new Map<string, string>();
+  {
+    // Plan rooms for capacity facts, plus every room the carried rows name (a row left on a
+    // replaced room is reported by NUMBER, not id).
+    const planRooms = await prisma.room.findMany({
+      where: { id: { in: Array.from(new Set([...substitutedDistinct, ...(priorCompositions ?? []).map((c) => c.roomId), ...(input.roomCompositions ?? []).map((c) => c.roomId)])) } },
+      select: { id: true, roomNumber: true, roomType: { select: { maxCapacity: true, maxExtraBeds: true } } },
+    });
+    for (const r of planRooms) {
+      seatingFacts.set(r.id, { maxCapacity: r.roomType?.maxCapacity ?? null, maxExtraBeds: r.roomType?.maxExtraBeds ?? null });
+      seatingRoomNumbers.set(r.id, r.roomNumber);
+    }
+  }
+  // A holder, not a `let`: the closure below assigns it and TS would otherwise narrow the
+  // outer binding to `null` for good.
+  const seatingState: { report: { changed: boolean; actions: SeatingRepairAction[]; unresolved: string[]; lines: string[] } | null } = { report: null };
+  const seatEveryone = (rows: RoomCompositionServiceInput[]): RoomCompositionServiceInput[] => {
+    const repair = repairPartySeating({ slots: partySlots, rows, picture: substitutedPicture, facts: seatingFacts });
+    const actions = [...seatingActions, ...repair.actions];
+    const lines = describeSeatingRepair(
+      { actions, unresolved: repair.unresolved },
+      (id) => seatingRoomNumbers.get(id) ?? id.slice(0, 6),
+    );
+    seatingState.report = { changed: actions.length > 0, actions, unresolved: repair.unresolved, lines };
+    return repair.rows;
+  };
 
   // ── Full re-price basis (2026-08-19) ───────────────────────────────────────────────────────
   // The S2 negotiation table's own emission REPLACES the carried compositions. Everything is
@@ -1103,11 +1342,21 @@ export async function changeRoomToNewSegment(
   // the plan will hold, and they must pass the same guards the quote itself applies.
   let commercialChanged = false;
   if (hasReprice) {
-    const supplied = input.roomCompositions!;
+    const rawIds = input.roomCompositions!.map((c) => c.roomId);
+    const dupes = rawIds.filter((id, i) => rawIds.indexOf(id) !== i);
+    if (dupes.length > 0) throw new ValidationError("roomCompositions lists the same room twice");
+    // A row the table still names for a REPLACED room (the desk seeds from the booking's last
+    // known composition, which can predate an earlier change) is the same row — follow the
+    // room-change chain to the room it became before judging the cover. Rows that resolve to
+    // nothing stay as they are, so the cover check below names them.
+    const suppliedRepoint = repointStrayRows(input.roomCompositions!, substitutedDistinct, successorOf);
+    seatingActions.push(...suppliedRepoint.actions.filter((a) => a.type !== "ROW_DROPPED"));
+    let supplied: RoomCompositionServiceInput[] = [
+      ...suppliedRepoint.rows,
+      ...input.roomCompositions!.filter((c) => suppliedRepoint.actions.some((a) => a.type === "ROW_DROPPED" && a.roomId === c.roomId)),
+    ];
     const planSet = new Set(substitutedDistinct);
     const suppliedIds = supplied.map((c) => c.roomId);
-    const dupes = suppliedIds.filter((id, i) => suppliedIds.indexOf(id) !== i);
-    if (dupes.length > 0) throw new ValidationError("roomCompositions lists the same room twice");
     const roomRows = await prisma.room.findMany({
       where: { id: { in: [...new Set([...suppliedIds, ...substitutedDistinct])] } },
       select: { id: true, roomNumber: true },
@@ -1126,6 +1375,8 @@ export async function changeRoomToNewSegment(
         }. Adding or removing a room is a room change, not a re-price.`,
       );
     }
+    // The table must seat everyone and leave no room empty, like every other basis.
+    supplied = seatEveryone(supplied);
 
     // Commercial vs operational (see p58's `enforceRepriceAuthorityForStage`): a negotiated
     // rate, a waiver or the discount moving makes this a rate revision. Compared against the
@@ -1147,6 +1398,10 @@ export async function changeRoomToNewSegment(
       "negotiatedDinnerRate",
     ] as const;
     for (const c of supplied) {
+      // Extension: the rooms carrying the extra nights are FOM territory (the nights aren't
+      // posted yet — the service enforces L2); the in-house GM rule guards rows of rooms
+      // already in the plan, whose posted nights a changed rate would re-price.
+      if (isExtension && !ctx.currentPlanRoomIds.has(c.roomId)) continue;
       const prior = priorByRoom.get(c.roomId) ?? null;
       // A room that had no prior row (the target of a room change) is priced at its own type's
       // published rate — carrying no negotiation. Only an explicit rate on it is commercial.
@@ -1377,6 +1632,27 @@ export async function changeRoomToNewSegment(
     // so a too-low extra-bed ask is corrected rather than refused — matching the S2 planner.
   }
 
+  if (!hasReprice && newCompositions) newCompositions = seatEveryone(newCompositions);
+  if (repairSeating) {
+    if (!newCompositions) {
+      throw new ValidationError(
+        "This booking has no per-room composition to seat guests with — occupants and meals are set up through a fresh quote",
+      );
+    }
+    if (!seatingState.report?.changed) {
+      throw new ValidationError("Every guest already has a room and no room is empty — there is nothing to repair");
+    }
+  }
+  const seatingReport = seatingState.report;
+  const seatingOutcome = newCompositions
+    ? {
+        repaired: !!seatingReport?.changed,
+        lines: seatingReport?.lines ?? [],
+        actions: seatingReport?.actions ?? [],
+        unresolved: seatingReport?.unresolved ?? [],
+      }
+    : null;
+
   // Carried discount: what the prior quote recorded, re-stamped under the authority that
   // already approved it (the approval carries WITH the concession — re-testing the acting
   // operator's band would let a room swap silently strip an FOM-approved discount).
@@ -1386,9 +1662,27 @@ export async function changeRoomToNewSegment(
   // An explicit `requestedDiscount` REPLACES the carried one (null clears it); omitted carries.
   const discountEdited = hasDiscountEdit;
   const priorDiscount = discountEdited ? input.requestedDiscount ?? null : carriedDiscount;
-  const priorApprovalLevel = ((priorTerms?.discountAuthority as { approvedLevel?: string } | undefined)?.approvedLevel ??
-    null) as "L1" | "L2" | "L3" | "L4" | null;
   const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
+  let priorApprovalLevel = ((priorTerms?.discountAuthority as { approvedLevel?: string } | undefined)?.approvedLevel ??
+    null) as "L1" | "L2" | "L3" | "L4" | null;
+  // Quotes generated before the 2026-08-07 born-approved rule carry NO `discountAuthority`
+  // stamp — their concession was approved post-hoc ("Approve discount (FOM)"), which wrote only
+  // the S2.DISCOUNT.APPROVED trace. The S4 freeze gate (p23) guarantees that trace exists for
+  // any discounted booking that got confirmed, so the approving actor's level on it IS the
+  // sanction to carry (found live 2026-08-21: an L1's seating repair on such a booking was
+  // refused at the silent re-quote and stranded the booking at S2).
+  if (!priorApprovalLevel && !discountEdited && priorDiscount) {
+    const approvals = await prisma.traceEvent.findMany({
+      where: { entryId: input.entryId, eventType: "S2.DISCOUNT.APPROVED" },
+      orderBy: { timestamp: "desc" },
+      select: { actorLevel: true, payload: true },
+    });
+    const forBasis = basis.quotationId
+      ? approvals.find((t) => (t.payload as { quotationId?: unknown } | null)?.quotationId === basis.quotationId)
+      : null;
+    const lvl = (forBasis ?? approvals[0])?.actorLevel ?? null;
+    if (lvl && RANK[lvl]) priorApprovalLevel = lvl as "L1" | "L2" | "L3" | "L4";
+  }
   // The carry exists so a room swap can't silently strip an FOM-approved concession. It must
   // NOT apply to a discount the operator just changed — that one is theirs, and the
   // `registry.discount.actorCeiling` band has to be measured against THEIR level (the draft
@@ -1406,16 +1700,54 @@ export async function changeRoomToNewSegment(
   let newAssignmentIdForS7: string | null = null;
 
   // ── 1. The governed re-entry (new segment at S2) with origin-specific side effects ─────────
-  const reasonForTrace = hasReprice
-    ? `BOOKING_REPRICE: ${reason}`
-    : setupOnly
-      ? `ROOM_SETUP_CHANGE: ${reason}`
-      : `ROOM_CHANGE: ${reason}`;
+  const reasonForTrace = isExtension
+    ? `STAY_EXTENSION: ${reason}`
+    : repairSeating
+    ? `PARTY_SEATING_REPAIR: ${reason}`
+    : hasReprice
+      ? `BOOKING_REPRICE: ${reason}`
+      : setupOnly
+        ? `ROOM_SETUP_CHANGE: ${reason}`
+        : `ROOM_CHANGE: ${reason}`;
   if (stage === Stage.S7) {
     await backflowRoomChangeToS2(prisma, input.entryId, actor, {
       reason: reasonForTrace,
       fromStage: stage,
       hooks: async (tx) => {
+        if (isExtension) {
+          // Stay extension (2026-08-21): nobody moves today. The stay's checkout moves to the new
+          // date (the silent quote and the re-freeze read it from the entry); every assignment
+          // row that ended on the old checkout runs on when its room continues; a new room from
+          // the old checkout gets a bare row [old checkout → new checkout], hydrated from the
+          // silent quote below. H2/H3 for the current rooms stand; the move day mints the new
+          // room's when the desk executes it.
+          const ext = input.extension!;
+          await tx.entry.update({ where: { id: input.entryId }, data: { checkOutDate: ctx.checkOut } });
+          const continuing = new Set(ext.extraNights.map((n) => n.roomId));
+          for (const a of entry.roomAssignments) {
+            if (!continuing.has(a.roomId)) continue;
+            const aEnd = a.endDate ?? ext.priorCheckOutDate;
+            if (aEnd.getTime() !== ext.priorCheckOutDate.getTime()) continue;
+            await tx.roomAssignment.update({ where: { id: a.id }, data: { endDate: ctx.checkOut } });
+          }
+          if (toRoomId !== input.fromRoomId) {
+            const newAssignmentId = await allocateReadableId(tx, "ROOM_ASSIGNMENT" as const, now);
+            newAssignmentIdForS7 = newAssignmentId;
+            await tx.roomAssignment.create({
+              data: {
+                id: newAssignmentId,
+                entryId: input.entryId,
+                roomId: toRoomId,
+                assignedBy: actor.actorId,
+                deficientAtAssignment: toRoom.isDeficient === true,
+                startDate: ext.priorCheckOutDate,
+                endDate: ctx.checkOut,
+                notes: `Stay extension: moves from Room ${ctx.fromRoom.roomNumber} on ${ext.priorCheckOutDate.toISOString().slice(0, 10)}: ${reason}`,
+              },
+            });
+          }
+          return;
+        }
         // Physical swap NOW — the guest moves tonight; the paperwork walk follows (SIG-S7 §264:
         // old room OCCUPIED → DEPARTED_DIRTY, new room OCCUPIED). A setup-only change moves
         // nobody: the room stays OCCUPIED and its H2/H3 stand.
@@ -1593,6 +1925,15 @@ export async function changeRoomToNewSegment(
     substitutionNights: ctx.substitutionNights,
     appliedBedType,
     appliedBedTypes,
+    seating: seatingOutcome,
+    extension: input.extension
+      ? {
+          requestId: input.extension.requestId,
+          priorCheckOutDate: input.extension.priorCheckOutDate.toISOString().slice(0, 10),
+          newCheckOutDate: input.extension.newCheckOutDate.toISOString().slice(0, 10),
+          extraNights: input.extension.extraNights.map((n) => ({ date: String(n.date).slice(0, 10), roomId: n.roomId })),
+        }
+      : null,
   };
 
   let quotationId: string | null = null;
@@ -1634,9 +1975,11 @@ export async function changeRoomToNewSegment(
           ...priorCriteria,
           checkInDate: priorCriteria.checkInDate ?? stayCheckIn.toISOString(),
           checkOutDate: priorCriteria.checkOutDate ?? stayCheckOut.toISOString(),
-          ...(setupOnly
-            ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason } }
-            : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason } }),
+          ...(isExtension
+            ? { stayExtension: { requestId: input.extension!.requestId, newCheckOutDate: ctx.checkOut.toISOString(), reason }, ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}) }
+            : setupOnly
+              ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason, ...(repairSeating ? { seatingRepair: true } : {}) } }
+              : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason } }),
           recalledFromSegmentNumber: currentSegment.segmentNumber,
         } as Prisma.InputJsonValue,
         resultSet: (ctx.sealedConfig?.resultSet ?? {}) as Prisma.InputJsonValue,
@@ -1652,9 +1995,13 @@ export async function changeRoomToNewSegment(
   // ── 3. Silent quotation — the new segment's priced basis; nothing goes to the guest ────────
   try {
     const draft: QuotationDraftInput = {
-      notes: setupOnly
-        ? `Setup change on Room ${ctx.fromRoom.roomNumber} (${reason})`
-        : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
+      notes: isExtension
+        ? `Stay extended to ${ctx.checkOut.toISOString().slice(0, 10)} (${reason})`
+        : repairSeating
+        ? `Guest seating restored (${reason})`
+        : setupOnly
+          ? `Setup change on Room ${ctx.fromRoom.roomNumber} (${reason})`
+          : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
       ...(newCompositions ? { roomCompositions: newCompositions } : {}),
       ...(priorDiscount ? { requestedDiscount: priorDiscount } : {}),
       actorLevel: effectiveLevel,
@@ -1666,6 +2013,39 @@ export async function changeRoomToNewSegment(
   } catch (e) {
     return blockedOutcome("SILENT_QUOTE", e);
   }
+  // The seating repair is an audit fact: WHO ended up where was decided by the system, not
+  // typed by anyone — say so on the trail (best-effort, never blocks the walk).
+  if (seatingReport?.changed) {
+    await prisma.traceEvent
+      .create({
+        data: {
+          eventType: "ENTRY.ROOM_CHANGE_PARTY_SEATING_REPAIRED",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Entry",
+          entityId: input.entryId,
+          operation: "UPDATE",
+          timestamp: new Date(),
+          stageContext: Stage.S2,
+          inquiryId: entry.inquiryId,
+          entryId: input.entryId,
+          payload: {
+            entryId: input.entryId,
+            quotationId,
+            fromRoomId: input.fromRoomId,
+            toRoomIds: distinctTargets,
+            setupOnly,
+            repairRequested: repairSeating,
+            basisSource: basis.source,
+            actions: seatingReport.actions,
+            unresolved: seatingReport.unresolved,
+            lines: seatingReport.lines,
+          } as Prisma.InputJsonValue,
+          createdBy: actor.actorId,
+        },
+      })
+      .catch(() => {});
+  }
 
   // S7: the new room's assignment row was created bare inside the re-entry (the quote didn't
   // exist yet) — hydrate its composition from the silent quote now, so night audit posts the
@@ -1675,11 +2055,16 @@ export async function changeRoomToNewSegment(
       // Setup-only: the quotation prices the room for the WHOLE stay (slept nights pinned to the
       // old setup via overrides); this row covers tonight → checkout, so it freezes exactly that
       // window — the night audit's `frozenSubtotal ÷ nights` then IS tonight's true rate.
+      // Extension with a new room: that row covers the extra nights only.
       const fields = await hydrateRoomAssignmentComposition(
         prisma,
         input.entryId,
         toRoomId,
-        setupOnly ? { nights: ctx.substitutionNights.length, startDate: ctx.today } : undefined,
+        isExtension
+          ? { nights: ctx.substitutionNights.length, startDate: input.extension!.priorCheckOutDate }
+          : setupOnly
+            ? { nights: ctx.substitutionNights.length, startDate: ctx.today }
+            : undefined,
       );
       if (fields) {
         const rowId = newAssignmentIdForS7;
@@ -1692,6 +2077,32 @@ export async function changeRoomToNewSegment(
       }
     } catch {
       // Non-fatal — night audit falls back to reservation.frozenRate for this room.
+    }
+  }
+
+  // Extension: every room that CONTINUES had its assignment row run on to the new checkout — re-
+  // freeze each from the silent quote so `frozenSubtotal ÷ nights` stays the true per-night rate
+  // over the longer window (the rate is unchanged, so already-posted nights reconcile).
+  if (isExtension) {
+    const continuing = Array.from(new Set(input.extension!.extraNights.map((n) => n.roomId))).filter(
+      (id) => id === input.fromRoomId || !distinctTargets.includes(id),
+    );
+    for (const roomId of continuing) {
+      try {
+        const fields = await hydrateRoomAssignmentComposition(prisma, input.entryId, roomId);
+        if (!fields) continue;
+        const row = await prisma.roomAssignment.findFirst({
+          where: { entryId: input.entryId, roomId, endDate: ctx.checkOut },
+          orderBy: { createdAt: "desc" },
+        });
+        if (!row) continue;
+        await prisma.$transaction(async (tx) => {
+          await tx.roomNightMealPlan.deleteMany({ where: { roomAssignmentId: row.id } });
+          await tx.roomAssignment.update({ where: { id: row.id }, data: fields as Prisma.RoomAssignmentUpdateInput });
+        });
+      } catch {
+        // Non-fatal — night audit falls back to the row's prior figures / reservation.frozenRate.
+      }
     }
   }
 
@@ -1806,7 +2217,11 @@ export async function changeRoomToNewSegment(
     if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED") {
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
-        verbatimNote: setupOnly
+        verbatimNote: isExtension
+          ? `Guest asked to extend the stay to ${ctx.checkOut.toISOString().slice(0, 10)}: ${reason}. The paid interim invoice and the request itself are the guest's answer to the re-issued voucher.`
+          : repairSeating
+          ? `Guest seating restored on the booking (${reason}) — no commercial change asked by the guest; the re-issued voucher restates the same stay.`
+          : setupOnly
           ? `Guest asked for the setup change on Room ${ctx.fromRoom.roomNumber}: ${reason}. The change itself is the guest's answer to the re-issued voucher.`
           : `Guest requested the room change (${ctx.fromRoom.roomNumber} → ${targetsLabel}): ${reason}. The change itself is the guest's answer to the re-issued voucher.`,
       });
@@ -1909,8 +2324,9 @@ export async function changeRoomToNewSegment(
           data: { currentStage: Stage.S7, version: { increment: 1 }, updatedAt: jumpNow },
         });
         // Fresh H2 (housekeeping) + H3 (F&B) for the NEW room — same shape check-in mints. A
-        // setup-only change keeps the room and its standing H2/H3; nothing is re-minted.
-        if (!setupOnly) {
+        // setup-only change keeps the room and its standing H2/H3; nothing is re-minted. An
+        // extension keeps the rooms too — a new room's H2/H3 are minted on its move day.
+        if (!setupOnly && !isExtension) {
         // Fresh H2 (housekeeping) + H3 (F&B) for the NEW room — same shape check-in mints.
         const h2Id = await allocateReadableId(tx, "HANDOFF" as const, jumpNow);
         await tx.handoffRecord.create({

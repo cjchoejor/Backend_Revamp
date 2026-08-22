@@ -10,7 +10,8 @@ import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-fr
 import { schedulePaymentFollowUpW8IfOutstanding } from "../../lib/schedule-payment-followup-w8.js";
 import { enforceWriteOffConstraints } from "../../policies/13-billing-model/write-off-policy-constraints.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
-import { renderFinalInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
+import { renderFinalInvoiceEmail, renderInterimInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
+import { markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
@@ -269,12 +270,59 @@ export async function dispatchInvoice(
       }
     }
 
+    // INTERIM invoice (2026-08-21): the mid-stay bill opens the SAME answer loop as the
+    // proforma, and here the answer IS a gate — Policy 80 refuses the interim payment until the
+    // guest's response is on record. The request behind it flips REQUESTED → BILLED.
+    if (updated.invoiceType === "INTERIM") {
+      const ackWindow = await requireActiveConfigValue<Record<string, number>>(tx as any, "acknowledgement.windowPerType");
+      const seconds = Number((ackWindow as any)?.interimInvoice ?? (ackWindow as any)?.pi ?? 86400);
+      const ackFireAt = new Date(now.getTime() + seconds * 1000);
+      const engine = await getTimerEngine();
+      const commId = await allocateReadableId(tx, "COMMUNICATION" as const, now);
+      const comm = await tx.communicationRecord.create({
+        data: {
+          id: commId,
+          entryId: updated.entryId,
+          channel: "EMAIL",
+          commType: "INTERIM_INVOICE",
+          stageContext: Stage.S7,
+          direction: "OUTBOUND",
+          sendStatus: "DISPATCHED",
+          acknowledgementStatus: "PENDING",
+          acknowledgementTimeoutAt: ackFireAt,
+          acknowledgementReceivedAt: null,
+          actorId,
+          contentSummary: "Interim invoice dispatched",
+          payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null },
+          createdBy: actorId,
+        },
+      });
+      const w22JobId = await engine.schedule("ACKNOWLEDGEMENT_WINDOW_W22", { communicationRecordId: comm.id }, { startAfter: ackFireAt });
+      await tx.timerRecord.create({
+        data: {
+          entryId: updated.entryId,
+          entityType: "CommunicationRecord",
+          entityId: comm.id,
+          timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
+          timerCode: "ACKNOWLEDGEMENT_WINDOW_W22",
+          stageContext: Stage.S7,
+          dueAt: ackFireAt,
+          firesAt: ackFireAt,
+          status: "SCHEDULED",
+          createdBy: actorId,
+          pgBossJobId: w22JobId,
+          payload: { communicationRecordId: comm.id },
+        },
+      });
+      await markInterimInvoiceDispatchedTx(tx, updated.id, now);
+    }
+
     // FINAL/receipt invoice (2026-08-17, operator request): open the same guest-answer loop
     // as the proforma — a CommunicationRecord + W22 acknowledgement window — so the response
     // to the final bill (especially "I'll pay by X" on an OUTSTANDING balance) is recorded
     // evidence the desk can capture. Evidence only, never a gate: W8 payment follow-up stays
     // the enforcement mechanism for the money itself.
-    if (updated.invoiceType !== "PROFORMA") {
+    if (updated.invoiceType === "FINAL") {
       const entryRow = await tx.entry.findUnique({
         where: { id: updated.entryId },
         select: { currentStage: true },
@@ -384,12 +432,13 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
   // reconciliation reflects the total for all rooms, not just one.
   const s9RoomCount = Math.max(1, Number((quotationTerms as any)?.roomCount) || entry.numberOfRooms || 1);
   const isPI = inv.invoiceType === InvoiceType.PROFORMA;
+  const isInterim = inv.invoiceType === InvoiceType.INTERIM;
   // The FINAL invoice email prints the LEDGER figures — the same pure builder the PDF renders
   // from (2026-08-18). It used to re-derive frozenRate × nights × rooms + tax, a third figure
   // that matched neither the PDF nor the desk's bill.
   let breakdown = isPI ? await computeStayCharges(prisma, nightlyRate, nights, s9RoomCount) : null;
   let amountPaid = paid;
-  if (!isPI) {
+  if (!isPI && !isInterim) {
     const loaded = await loadInvoiceForRender(prisma, invoiceId);
     const { gstRate, serviceChargeRate } = await resolveChargeRates(prisma);
     const fig = buildFinalInvoiceFigures(loaded, { gstRate, svcRate: serviceChargeRate, nights, nightlyRate });
@@ -404,7 +453,34 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
     amountPaid = fig.advanceAmount;
   }
 
-  const content = isPI
+  // INTERIM (2026-08-21): the email prints the figures frozen on the interim request — the
+  // same ones the PDF prints — never a re-derivation.
+  const interimReq = isInterim
+    ? await prisma.interimPaymentRequest.findUnique({ where: { invoiceId: inv.id }, include: { stayExtensionRequest: { select: { holdExpiresAt: true, state: true } } } })
+    : null;
+  const interimFigures = (interimReq?.figures ?? null) as InterimFigures | null;
+  const content = isInterim
+    ? renderInterimInvoiceEmail({
+        guestDisplayName: displayName,
+        invoiceRef: inv.id,
+        kind: interimReq?.kind ?? "LONG_STAY",
+        checkInDate: interimFigures?.checkIn ? new Date(`${interimFigures.checkIn}T00:00:00.000Z`) : ci,
+        checkOutDate: interimFigures?.checkOut ? new Date(`${interimFigures.checkOut}T00:00:00.000Z`) : co,
+        currency,
+        nightsSlept: interimFigures?.nightsSlept ?? 0,
+        nightsToCome: interimFigures?.nightsToCome ?? 0,
+        projectedTotal: interimFigures?.projectedTotal ?? Number(toDecimal(inv.totalAmount).toFixed(2)),
+        otherChargesSoFar: interimFigures?.otherChargesSoFar ?? 0,
+        receivedSoFar: interimFigures?.receivedSoFar ?? paid,
+        askLabel: interimFigures?.askLabel ?? "interim payment",
+        dueNow: interimFigures?.dueNow ?? Number(toDecimal(inv.totalAmount).toFixed(2)),
+        balanceAtCheckout: interimFigures?.balanceAtCheckout ?? 0,
+        holdExpiresAt:
+          interimReq?.stayExtensionRequest && (interimReq.stayExtensionRequest.state === "REQUESTED" || interimReq.stayExtensionRequest.state === "BILLED")
+            ? interimReq.stayExtensionRequest.holdExpiresAt
+            : null,
+      })
+    : isPI
     ? renderProformaInvoiceEmail({
         guestDisplayName: displayName,
         invoiceRef: inv.id,
@@ -471,8 +547,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
       actorId,
       inquiryId: entry.inquiryId,
       guestEmail: entry.guestProfile?.email ?? null,
-      stage: isPI ? Stage.S3 : Stage.S9,
-      eventTypePrefix: isPI ? "PROFORMA_INVOICE_EMAIL" : "FINAL_INVOICE_EMAIL",
+      stage: isPI ? Stage.S3 : isInterim ? Stage.S7 : Stage.S9,
+      eventTypePrefix: isPI ? "PROFORMA_INVOICE_EMAIL" : isInterim ? "INTERIM_INVOICE_EMAIL" : "FINAL_INVOICE_EMAIL",
     },
     content,
   );

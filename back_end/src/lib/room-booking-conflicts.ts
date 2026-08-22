@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   committedHoldSpans,
+  pendingStayExtensionClaims,
   reservedEntryRoomsSelect,
   roomsClaimedByReservedEntry,
   stillHoldsInventory,
@@ -220,6 +221,24 @@ export async function findRoomBookingConflicts(
         endDate: span.endDate,
       });
     }
+  }
+
+  // Pending stay extensions (2026-08-21): the extra nights a guest is paying for are claimed
+  // until the commit or the hold lapses. NOT deduped per (entry, room) like the holds above —
+  // the same booking legitimately holds the room for its reserved nights AND claims the nights
+  // after its checkout; those are different spans, both real.
+  for (const x of await pendingStayExtensionClaims(db, { checkIn: input.checkIn, checkOut: input.checkOut, excludeEntryId: input.excludeEntryId })) {
+    if (!roomIdSet.has(x.roomId)) continue;
+    conflicts.push({
+      roomId: x.roomId,
+      source: "HOLD",
+      holdKind: "COMMITTED",
+      entryId: x.entryId,
+      entryReferenceNumber: x.entry.inquiryId ?? null,
+      guestName: guestNameOf(x.entry.guestProfile),
+      startDate: x.startDate,
+      endDate: x.endDate,
+    });
   }
 
   return conflicts;

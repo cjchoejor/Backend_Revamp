@@ -40,6 +40,8 @@ const TRACE_PREFIX: Record<string, string> = {
   [CommunicationType.PROFORMA_INVOICE]: "PROFORMA_INVOICE",
   [CommunicationType.CONFIRMATION_VOUCHER]: "CONFIRMATION_VOUCHER",
   [CommunicationType.PRE_ARRIVAL_REMINDER]: "PRE_ARRIVAL_REMINDER",
+  [CommunicationType.FINAL_INVOICE]: "FINAL_INVOICE",
+  [CommunicationType.INTERIM_INVOICE]: "INTERIM_INVOICE",
 };
 
 function resolveReceivedAt(raw: AcknowledgementInput["receivedAt"], now: Date): Date {
