@@ -783,11 +783,20 @@ export type TaxInvoiceRenderInput = {
   copy?: boolean;
 };
 
-/** "10" / "5" / "12.5" — the rate a ledger actually charged, read off its own figures. */
+/**
+ * "10" / "5" / "12.5" — the rate a ledger actually charged, read off its own figures so an old
+ * folio is labelled with the rate it was taxed at, never today's. Σ companions ÷ Σ net drifts a
+ * few hundredths from the true rate through per-line 2dp rounding ("10.02%"), so the derived
+ * figure snaps to the configured rate when it is within rounding of it; a genuinely different
+ * rate (a folio taxed while GST was 0, a rate change mid-history) prints as itself, 1dp.
+ */
 function ratePercentLabel(part: number, base: number, fallbackRate: number): string {
-  const pct = base > 0 ? (part / base) * 100 : fallbackRate * 100;
-  const rounded = Math.round(pct * 100) / 100;
-  return String(Number.isFinite(rounded) ? rounded : 0);
+  const configured = fallbackRate * 100;
+  if (!(base > 0)) return String(Math.round(configured * 100) / 100);
+  const pct = (part / base) * 100;
+  if (!Number.isFinite(pct)) return String(Math.round(configured * 100) / 100);
+  if (Math.abs(pct - configured) < 0.3) return String(Math.round(configured * 100) / 100);
+  return String(Math.round(pct * 10) / 10);
 }
 
 function describeComponent(c: FinalInvoiceComponent): string {
