@@ -46,6 +46,27 @@ export function companionRateFromDescription(description: string): number | null
   return Number.isFinite(pct) ? pct / 100 : null;
 }
 
+/** A charge correction's OWN line: `Correction for <lineId>: <reason>` (posted with the charge's lineType). */
+export const CORRECTION_LINE_PREFIX = "Correction for ";
+
+/**
+ * The base-charge description a companion names ("… on: <base>"), or null when it names none
+ * (legacy lines). The night audit, manual posting and corrections all write the parent's
+ * description after " on: ", so a reader can find the charge a companion rides on without
+ * relying on array position (the desk's folio fold uses the same rule — keep the two in step).
+ */
+export function companionBaseDescription(description: string): string | null {
+  const d = description ?? "";
+  const i = d.indexOf(" on: ");
+  return i >= 0 ? d.slice(i + 5).trim() : null;
+}
+
+/** A companion posted BY A CORRECTION (its SC / GST delta) rather than by the charge itself. */
+export function isCorrectionCompanionDescription(description: string): boolean {
+  const d = description ?? "";
+  return d.startsWith(SALES_TAX_CORRECTION_DESCRIPTION_PREFIX) || d.startsWith(SERVICE_CHARGE_CORRECTION_DESCRIPTION_PREFIX);
+}
+
 export type FolioLineKind = "CHARGE" | "SERVICE_CHARGE" | "GST";
 
 /**

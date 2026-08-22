@@ -18,6 +18,37 @@ export function formatDocDate(d: Date | null | undefined): string {
   return `${String(d.getUTCDate()).padStart(2, "0")} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
+/**
+ * The property's clock for "as at" stamps (2026-08-22). Every other formatter here is UTC-based
+ * because a stay DATE must never shift a day with the host's zone; a statement's as-at TIME is
+ * the opposite case — it must read as the wall clock at the desk. Bhutan has one zone;
+ * overridable for a host elsewhere via `HOTEL_TIMEZONE`.
+ */
+export const HOTEL_TIMEZONE = process.env.HOTEL_TIMEZONE?.trim() || "Asia/Thimphu";
+
+/** "22 Aug 2026 · 14:05" in the property's local time — the Interim Folio Statement's as-at. */
+export function formatDocDateTimeLocal(d: Date | null | undefined): string {
+  if (!d) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: HOTEL_TIMEZONE,
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("day")} ${get("month")} ${get("year")} · ${get("hour")}:${get("minute")}`;
+}
+
+/** The property's local calendar date ("2026-08-22") for a given instant. */
+export function localYmd(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: HOTEL_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
 /** "08 Sep 2026 · 14:00" — voucher check-in / check-out rows. */
 export function formatDocDateTime(d: Date | null | undefined, clockTime: string | null): string {
   if (!d) return "";

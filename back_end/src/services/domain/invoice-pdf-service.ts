@@ -1,13 +1,17 @@
 /**
- * Invoice PDF generation — S3 PROFORMA and S8 FINAL / ROOM invoice.
+ * Invoice PDF generation — S3 PROFORMA, S7 INTERIM and S8/S9 FINAL (the Tax Invoice).
  *
  * The PROFORMA uses the same visual template as S2 Quotation with the title swapped to
  * "PROFORMA INVOICE" (per boss's instruction "one template serves both").
  *
- * The FINAL / ROOM invoice uses a distinct template (`room-invoice-template.ts`, added
- * in Phase 5) because the layout is fundamentally different — centred hotel address block,
- * PARTICULAR / ROOM NO / NIGHT(S) / RATE / AMOUNT columns, subtotal + service + GST +
- * total breakdown, and "Prepared by:" pulls the actor's fullName.
+ * The FINAL invoice is the B1 Tax Invoice in the Legphel house format since 2026-08-22
+ * (`legphel-tax-invoice-template.ts`, from docs/bills) — crimson fiscal family, category-level
+ * rows, the downward ladder and the statutory GST sentence. Its figures come from the shared
+ * ledger view (`lib/folio-ledger-view.ts`) through `buildFinalInvoiceFigures`, and the SAME
+ * composition (`composeTaxInvoiceHtml`) renders the in-stay DRAFT the desk shows at S7/S8 before
+ * issue — so what the desk checks mid-stay is, line for line, what is issued at settlement.
+ * The pre-2026-08-22 "ROOM INVOICE" layout (`room-invoice-template.ts`) is retained only for
+ * the write-once PDFs already stored under it.
  *
  * Both share:
  *   - Idempotent write-once storage (rendered once, served forever).
@@ -23,19 +27,26 @@ import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import {
-  extractPrimaryPhone,
   formatMoney,
   getPreparedByName,
   loadHotelProfileForRender,
+  type HotelProfileForRender,
 } from "../../lib/pdf-render-context.js";
-import { round2, sumMoney, toDecimal, ZERO } from "../../lib/money.js";
-import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
+import { sumMoney, toDecimal, ZERO } from "../../lib/money.js";
+import {
+  LEDGER_COMPONENTS,
+  buildFolioLedgerView,
+  legacyTaxOn,
+  type LedgerComponentKey,
+  type LedgerLineLike,
+  type LedgerPaymentLike,
+} from "../../lib/folio-ledger-view.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelInterimHtml, renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
 import { describeInterimPromise, type InterimFigures } from "./interim-payment-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
-import { renderRoomInvoiceHtml } from "../infrastructure/pdf-templates/room-invoice-template.js";
+import { formatDocDate, formatDocDateTimeLocal, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { renderLegphelTaxInvoiceHtml } from "../infrastructure/pdf-templates/legphel-tax-invoice-template.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import {
   describeAdvancePaymentPlan,
@@ -62,14 +73,9 @@ export type InvoicePdfArtifact = {
   filename: string;
 };
 
-/** Kind key used for storage-path segmentation. */
-function kindForInvoice(t: InvoiceType): "proforma-invoice" | "room-invoice" | "interim-invoice" {
-  return t === InvoiceType.PROFORMA ? "proforma-invoice" : t === InvoiceType.INTERIM ? "interim-invoice" : "room-invoice";
-}
-
 /** Nice filename for downloads / email attachments. */
 function filenameFor(invoiceType: InvoiceType, invoiceRef: string): string {
-  const label = invoiceType === InvoiceType.PROFORMA ? "proforma" : invoiceType === InvoiceType.INTERIM ? "interim-invoice" : "room-invoice";
+  const label = invoiceType === InvoiceType.PROFORMA ? "proforma" : invoiceType === InvoiceType.INTERIM ? "interim-invoice" : "tax-invoice";
   return `${invoiceRef}-${label}.pdf`;
 }
 
@@ -517,7 +523,31 @@ export async function freezeUnrenderedProformasForEntry(
   }
 }
 
-/** The FINAL / ROOM invoice figures, all read from the ledger. */
+/**
+ * What `buildFinalInvoiceFigures` reads (2026-08-22): the invoice's bucket and its folio's lines +
+ * payments. Structural, so the in-stay DRAFT tax invoice — which has no Invoice row — can be
+ * built from the folio alone (`{ billingModel: null, folio }`).
+ */
+export type FinalInvoiceFiguresSource = {
+  billingModel: string | null;
+  folio: { billingModel: string | null; lines: LedgerLineLike[]; payments: LedgerPaymentLike[] } | null;
+};
+
+export type FinalInvoiceComponent = {
+  key: LedgerComponentKey;
+  label: string;
+  base: number;
+  serviceCharge: number;
+  gst: number;
+  /** All-in (base + SC + GST). */
+  total: number;
+  chargeCount: number;
+  roomNights: number;
+  roomNumbers: string[];
+  descriptions: string[];
+};
+
+/** The FINAL / Tax Invoice figures, all read from the ledger. */
 export type FinalInvoiceFigures = {
   roomLines: Array<{
     particular: string;
@@ -541,6 +571,13 @@ export type FinalInvoiceFigures = {
   focAmount: number;
   /** = totalBeforeAdvance − advanceAmount, i.e. the folio's outstanding balance for the covered lines. */
   totalPayable: number;
+  /** Per-component all-in buckets (2026-08-22) — the Master Bill's rollup rows and the tax
+   *  invoice's category-level lines. Only components with at least one charge line. */
+  components: FinalInvoiceComponent[];
+  /** The downward ladder, additive from the ledger: net → service → taxable → GST → total. */
+  ladder: { net: number; serviceCharge: number; taxable: number; gst: number; total: number };
+  /** The payment records the figures net (bucket-filtered), oldest first. */
+  payments: Array<{ id: string; amount: number; direction: string; method: string | null; receivedAt: Date | null }>;
 };
 
 /**
@@ -549,7 +586,7 @@ export type FinalInvoiceFigures = {
  * the S8/S9 final-invoice email (s9-service) prints exactly these.
  */
 export function buildFinalInvoiceFigures(
-  inv: LoadedInvoice,
+  inv: FinalInvoiceFiguresSource,
   opts: { gstRate: number; svcRate: number; nights: number; nightlyRate: number },
 ): FinalInvoiceFigures {
   const { gstRate, svcRate, nights, nightlyRate } = opts;
@@ -558,130 +595,101 @@ export function buildFinalInvoiceFigures(
   //     For legacy whole-folio invoices (invoice.billingModel = null) every line passes.
   //     NULL-billingModel lines (pre-Phase-1 backfill data) roll up to the folio's primary
   //     model, matching the ledger's rule in `computeOutstandingForBillingModel`.
-  //   - NO line-type filter any more. The whole-folio invoice used to keep ROOM_CHARGE lines
-  //     only and re-add service charge + GST on that subtotal at render, so it printed a
-  //     "total payable" that was neither the folio balance nor anything the guest could
-  //     reconcile: F&B / service / other charges vanished from the bill, and their SC/GST
-  //     (already on the ledger) were dropped with them. Every charge line now prints, the
-  //     tax rows are the ledger's own SC/GST companion lines, and the invoice total equals
-  //     the folio's billed-so-far to the paisa — the same figure the desk's bill shows.
-  const invoiceBucket = inv.billingModel ?? null;
-  const primaryModel = inv.folio?.billingModel?.trim() ?? null;
-  const isBucketScoped = !!invoiceBucket;
-  const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
-  const bucketMatches = (lineModel: string | null | undefined) => {
-    if (!isBucketScoped) return true;
-    const trimmed = lineModel?.trim() ?? null;
-    if (trimmed === invoiceBucket) return true;
-    // Legacy NULL-model lines belong to the folio's primary model bucket.
-    if (trimmed == null && primaryModel === invoiceBucket) return true;
-    return false;
-  };
-  const filteredFolioLines = (inv.folio?.lines ?? []).filter((l) => bucketMatches(l.billingModel));
+  //   - NO line-type filter. Every charge line prints, the tax rows are the ledger's own SC/GST
+  //     companion lines, and the invoice total equals the folio's billed-so-far to the paisa.
+  // Since 2026-08-22 that reading is the shared ledger view (lib/folio-ledger-view.ts) — the
+  // Master Bill and the Interim Folio Statement read the identical view, so the three documents
+  // cannot disagree about a single line.
+  const isBucketScoped = !!inv.billingModel;
+  const view = buildFolioLedgerView({
+    lines: inv.folio?.lines ?? [],
+    payments: inv.folio?.payments ?? [],
+    invoiceBucket: inv.billingModel ?? null,
+    primaryModel: inv.folio?.billingModel ?? null,
+    gstRate,
+    svcRate,
+  });
 
-  // Charges vs. their tax companions — the shared classifier (`lib/folio-tax-lines.ts`) is the
-  // one place the SERVICE/OTHER description convention lives.
-  const chargeLines = filteredFolioLines.filter((l) => classifyFolioLine(l) === "CHARGE");
-  const serviceChargeLines = filteredFolioLines.filter((l) => classifyFolioLine(l) === "SERVICE_CHARGE");
-  const gstLines = filteredFolioLines.filter((l) => classifyFolioLine(l) === "GST");
+  type RoomLineDisplay = FinalInvoiceFigures["roomLines"][number];
+  const roomLines: RoomLineDisplay[] = view.charges.map(({ line, isRoom }) => {
+    // Particular label = "Room" for room lines (legacy visual), otherwise the folio line's
+    // description so F&B / SERVICE / OTHER lines self-identify. A correction line's
+    // description carries the corrected line's UUID ("Correction for <id>: reason") — print
+    // it as "Correction: reason"; the snapshot keeps the folioLineId for the trail.
+    const particular = isRoom ? "Room" : line.description.replace(/^Correction for \S+: /, "Correction: ");
+    // Room number from the line's own room attribution; older lines fall back to the
+    // "· Room 302" suffix of the audit description.
+    const roomNo = line.room?.roomNumber ?? (line.description.match(/(?:^|[·\s])Room\s+([A-Za-z0-9-]+)\s*$/)?.[1] ?? "").trim();
+    const amount = Number(toDecimal(line.amount).toFixed(2));
+    return { particular, roomNo, nights: 1, rate: amount, amount, folioLineId: line.id };
+  });
 
-  // Legacy room lines (posted before the night audit wrote SC/GST companions — 2026-08-18 —
-  // and the imported "Room charge (imported)" rows) carry a NET amount with no tax on the
-  // ledger. For THOSE lines only, the tax is still computed at render as before, so an old
-  // folio's invoice does not silently drop the room tax. A room line is "covered" when a
-  // companion exists for the same night-audit run — the structural pairing the audit writes.
-  const auditRunsWithCompanions = new Set(
-    [...serviceChargeLines, ...gstLines].map((l) => l.nightAuditRecordId).filter((id): id is string => !!id),
-  );
-  const roomLineHasLedgerTax = (l: (typeof filteredFolioLines)[number]) =>
-    !!l.nightAuditRecordId && auditRunsWithCompanions.has(l.nightAuditRecordId);
-
-  type RoomLineDisplay = {
-    particular: string;
-    roomNo: string;
-    nights: number;
-    rate: number;
-    amount: number;
-    folioLineId: string | null;
-  };
-  const roomLines: RoomLineDisplay[] = [];
-  let legacyRoomNet = ZERO;
-  if (chargeLines.length > 0) {
-    // Room nights first (by night, then room), then every other charge in posting order —
-    // the way a guest reads a hotel bill; the include carries no ordering guarantee.
-    const ordered = [...chargeLines].sort((a, b) => {
-      const ar = roomLineTypes.has(a.lineType) ? 0 : 1;
-      const br = roomLineTypes.has(b.lineType) ? 0 : 1;
-      if (ar !== br) return ar - br;
-      const ad = a.chargeDate.getTime() - b.chargeDate.getTime();
-      if (ad !== 0) return ad;
-      const an = a.room?.roomNumber ?? "";
-      const bn = b.room?.roomNumber ?? "";
-      if (an !== bn) return an.localeCompare(bn, undefined, { numeric: true });
-      return a.createdAt.getTime() - b.createdAt.getTime();
-    });
-    for (const l of ordered) {
-      const isRoom = roomLineTypes.has(l.lineType);
-      // Particular label = "Room" for room lines (legacy visual), otherwise the folio line's
-      // description so F&B / SERVICE / OTHER lines self-identify. A correction line's
-      // description carries the corrected line's UUID ("Correction for <id>: reason") — print
-      // it as "Correction: reason"; the snapshot keeps the folioLineId for the trail.
-      const particular = isRoom
-        ? "Room"
-        : l.description.replace(/^Correction for \S+: /, "Correction: ");
-      // Room number from the line's own room attribution; older lines fall back to the
-      // "· Room 302" suffix of the audit description (the old /room\s+(\S+)/ regex matched
-      // "room charge" first and printed the word "charge" as the room number).
-      const roomNo =
-        l.room?.roomNumber ??
-        (l.description.match(/(?:^|[·\s])Room\s+([A-Za-z0-9-]+)\s*$/)?.[1] ?? "").trim();
-      const amount = Number(toDecimal(l.amount).toFixed(2));
-      roomLines.push({ particular, roomNo, nights: 1, rate: amount, amount, folioLineId: l.id });
-      if (isRoom && !roomLineHasLedgerTax(l)) legacyRoomNet = legacyRoomNet.add(toDecimal(l.amount));
-    }
-  } else if (!isBucketScoped) {
+  // Legacy room lines with no tax on the ledger (audited before 2026-08-18, imported rows) have
+  // their SC/GST computed at render — aggregated and rounded once (the view's rule).
+  let legacyServiceCharge = view.legacyServiceCharge;
+  let legacyGst = view.legacyGst;
+  let synthesised = false;
+  if (view.charges.length === 0 && !isBucketScoped) {
     // Legacy synthesise-from-quote fallback (only for whole-folio invoices with no charges yet
     // — a pre-checkout preview). Nothing on the ledger, so the room tax is computed at render.
+    synthesised = true;
+    let net = ZERO;
     for (let i = 0; i < nights; i++) {
-      roomLines.push({
-        particular: "Room",
-        roomNo: "",
-        nights: 1,
-        rate: nightlyRate,
-        amount: nightlyRate,
-        folioLineId: null,
-      });
-      legacyRoomNet = legacyRoomNet.add(toDecimal(nightlyRate));
+      roomLines.push({ particular: "Room", roomNo: "", nights: 1, rate: nightlyRate, amount: nightlyRate, folioLineId: null });
+      net = net.add(toDecimal(nightlyRate));
     }
+    const t = legacyTaxOn(net, svcRate, gstRate);
+    legacyServiceCharge = t.serviceCharge;
+    legacyGst = t.gst;
   }
 
   const subtotal = Number(sumMoney(roomLines.map((l) => l.amount)).toFixed(2));
   const discountAmount = 0;
-  // Ledger tax + the render-time tax for legacy room lines that have none on the ledger.
-  const legacyServiceCharge = svcRate > 0 ? round2(legacyRoomNet.mul(svcRate)) : ZERO;
-  const legacyGst = gstRate > 0 ? round2(legacyRoomNet.add(legacyServiceCharge).mul(gstRate)) : ZERO;
-  const serviceCharge = Number(sumMoney(serviceChargeLines.map((l) => l.amount)).add(legacyServiceCharge).toFixed(2));
-  const gstAmount = Number(sumMoney(gstLines.map((l) => l.amount)).add(legacyGst).toFixed(2));
+  const scLedger = sumMoney(view.companions.filter((c) => c.kind === "SERVICE_CHARGE").map((c) => c.line.amount));
+  const gstLedger = sumMoney(view.companions.filter((c) => c.kind === "GST").map((c) => c.line.amount));
+  const serviceCharge = Number(scLedger.add(legacyServiceCharge).toFixed(2));
+  const gstAmount = Number(gstLedger.add(legacyGst).toFixed(2));
   const totalBeforeAdvance = Number((subtotal - discountAmount + serviceCharge + gstAmount).toFixed(2));
 
   // Payment attribution — everything the guest has paid so far (advance + settlement), net of
-  // refunds, so "Total payable" is the folio's own outstanding balance:
-  //   - Legacy whole-folio invoice: all payments count.
-  //   - Split invoice: only payments whose `billingModel` matches this bucket count.
-  //     NULL-model payments (pre-Phase-3 records) roll up to the primary bucket, mirroring
-  //     the ledger. Prevents double-counting when two invoices are issued for one folio.
-  const bucketPayments = (inv.folio?.payments ?? []).filter((p) => {
-    if (!isBucketScoped) return true;
-    const pModel = p.billingModel?.trim() ?? null;
-    if (pModel === invoiceBucket) return true;
-    if (pModel == null && primaryModel === invoiceBucket) return true;
-    return false;
-  });
-  const paidIn = sumMoney(bucketPayments.filter((p) => p.paymentDirection === "IN").map((p) => p.amount));
-  const paidOut = sumMoney(bucketPayments.filter((p) => p.paymentDirection === "OUT").map((p) => p.amount));
-  const advanceAmount = Number(paidIn.sub(paidOut).toFixed(2));
+  // refunds, so "Total payable" is the folio's own outstanding balance. Bucket-filtered by the
+  // view (NULL-model payments roll up to the primary bucket, mirroring the ledger).
+  const advanceAmount = Number(view.payments.net.toFixed(2));
   const focAmount = 0;
   const totalPayable = Number((totalBeforeAdvance - advanceAmount - focAmount).toFixed(2));
+
+  const n2 = (d: { toFixed(n: number): string }) => Number(d.toFixed(2));
+  const components: FinalInvoiceComponent[] = synthesised
+    ? [
+        {
+          key: "ROOM",
+          label: "Room",
+          base: subtotal,
+          serviceCharge,
+          gst: gstAmount,
+          total: totalBeforeAdvance,
+          chargeCount: roomLines.length,
+          roomNights: nights,
+          roomNumbers: [],
+          descriptions: [],
+        },
+      ]
+    : LEDGER_COMPONENTS.map(({ key }) => {
+        const b = view.components[key];
+        return {
+          key,
+          label: b.label,
+          base: n2(b.base),
+          serviceCharge: n2(b.serviceCharge),
+          gst: n2(b.gst),
+          total: n2(b.total),
+          chargeCount: b.chargeCount,
+          roomNights: b.roomNights,
+          roomNumbers: b.roomNumbers,
+          descriptions: b.descriptions,
+        };
+      }).filter((c) => c.chargeCount > 0);
+
   return {
     roomLines,
     subtotal,
@@ -692,7 +700,180 @@ export function buildFinalInvoiceFigures(
     advanceAmount,
     focAmount,
     totalPayable,
+    components,
+    ladder: {
+      net: subtotal,
+      serviceCharge,
+      taxable: Number((subtotal + serviceCharge).toFixed(2)),
+      gst: gstAmount,
+      total: totalBeforeAdvance,
+    },
+    payments: [...view.payments.records]
+      .sort((a, b) => (a.receivedAt ?? a.createdAt).getTime() - (b.receivedAt ?? b.createdAt).getTime())
+      .map((p) => ({
+        id: p.id,
+        amount: Number(toDecimal(p.amount).toFixed(2)),
+        direction: p.paymentDirection,
+        method: p.paymentMethod ?? null,
+        receivedAt: p.receivedAt ?? null,
+      })),
   };
+}
+
+// =============================================================================================
+// B1 · Tax Invoice composition (2026-08-22) — shared by the issued FINAL invoice's PDF and the
+// in-stay DRAFT the desk previews at S7/S8. One composition, two states: DRAFT (no serial,
+// watermark, loud "not issued" strip) and ISSUED ("original" in the footline).
+// =============================================================================================
+
+export type TaxInvoiceParties = {
+  billedTo: string;
+  forGuest: string | null;
+  customerTpn: string | null;
+  yourRef: string | null;
+};
+
+/**
+ * Who the tax invoice is billed to — the corporate preset (D-13) when a corporate account books
+ * (its TPN + the client's own reference), the agency when an agent books (guest named beneath),
+ * else the guest. Shared by the issued document and the draft so the two name the same payer.
+ */
+export function taxInvoicePartiesFromEntry(entry: {
+  guestProfile: { firstName: string | null; lastName: string | null } | null;
+  contactPersonName: string | null;
+  inquiry: {
+    travelAgent: { displayName: string } | null;
+    corporateAccount: { displayName: string; gstNumber: string | null } | null;
+    corporateClientRef: string | null;
+  } | null;
+}): TaxInvoiceParties {
+  const guestName =
+    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    entry.contactPersonName?.trim() ||
+    "Guest";
+  const corporate = entry.inquiry?.corporateAccount ?? null;
+  const agent = entry.inquiry?.travelAgent ?? null;
+  if (corporate) {
+    return {
+      billedTo: corporate.displayName,
+      forGuest: guestName,
+      customerTpn: corporate.gstNumber?.trim() || null,
+      yourRef: entry.inquiry?.corporateClientRef?.trim() || null,
+    };
+  }
+  if (agent) return { billedTo: agent.displayName, forGuest: guestName, customerTpn: null, yourRef: null };
+  return { billedTo: guestName, forGuest: null, customerTpn: null, yourRef: null };
+}
+
+export type TaxInvoiceRenderInput = {
+  hotel: HotelProfileForRender;
+  figures: FinalInvoiceFigures;
+  parties: TaxInvoiceParties;
+  bookingRef: string;
+  stay: { checkIn: Date | null; checkOut: Date | null; nights: number | null };
+  /** Room numbers to print (falls back to the ledger's attribution when empty). */
+  roomNumbers?: string[];
+  /** The issued original's reference + date. Null renders the DRAFT. */
+  issued: { invoiceRef: string; issuedAt: Date } | null;
+  /** The instant the figures were read — the draft's "Position as at". */
+  asAt: Date;
+  /** Configured rates — used for the labels only when the ledger carries no tax to derive them from. */
+  gstRate: number;
+  svcRate: number;
+  copy?: boolean;
+};
+
+/** "10" / "5" / "12.5" — the rate a ledger actually charged, read off its own figures. */
+function ratePercentLabel(part: number, base: number, fallbackRate: number): string {
+  const pct = base > 0 ? (part / base) * 100 : fallbackRate * 100;
+  const rounded = Math.round(pct * 100) / 100;
+  return String(Number.isFinite(rounded) ? rounded : 0);
+}
+
+function describeComponent(c: FinalInvoiceComponent): string {
+  if (c.key === "ROOM") return `Accommodation · ${c.roomNights} room-night${c.roomNights === 1 ? "" : "s"}`;
+  const digest = c.descriptions
+    .slice(0, 3)
+    .map((d) => (d.length > 28 ? `${d.slice(0, 27)}…` : d))
+    .join(" · ");
+  const more = c.descriptions.length > 3 ? ` +${c.descriptions.length - 3} more` : "";
+  return digest ? `${c.label} · ${digest}${more}` : `${c.label} · ${c.chargeCount} item${c.chargeCount === 1 ? "" : "s"}`;
+}
+
+export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
+  const { figures: f, hotel } = input;
+  const draft = input.issued == null;
+  const roomNumbers =
+    input.roomNumbers && input.roomNumbers.length > 0
+      ? input.roomNumbers
+      : (f.components.find((c) => c.key === "ROOM")?.roomNumbers ?? []);
+  const scPct = ratePercentLabel(f.ladder.serviceCharge, f.ladder.net, input.svcRate);
+  const gstPct = ratePercentLabel(f.ladder.gst, f.ladder.taxable, input.gstRate);
+
+  const settlementLines: Array<{ label: string; value: string }> = [];
+  const ins = f.payments.filter((p) => p.direction === "IN");
+  const outs = f.payments.filter((p) => p.direction === "OUT");
+  if (ins.length > 4) {
+    settlementLines.push({
+      label: `Advance / payments applied (${ins.length} receipts)`,
+      value: `−${formatMoney(ins.reduce((s, p) => s + p.amount, 0))}`,
+    });
+  } else {
+    for (const p of ins) settlementLines.push({ label: `Advance / payment applied · ${p.id}`, value: `−${formatMoney(p.amount)}` });
+  }
+  for (const p of outs) settlementLines.push({ label: `Refunded · ${p.id}`, value: `+${formatMoney(p.amount)}` });
+
+  const balance = f.totalPayable;
+  // A negative figure on the ISSUED original is money to return; on an in-stay DRAFT it is the
+  // guest paid ahead of nights the audit has not posted yet (an interim or extension payment),
+  // which is not a refund and must not read as one.
+  const balanceLabel =
+    balance > 0 ? "Balance due" : balance < 0 ? (draft ? "Paid ahead of charges still to post" : "Refund due to guest") : "Paid in full";
+  const reference = input.issued?.invoiceRef ?? input.bookingRef;
+
+  return renderLegphelTaxInvoiceHtml({
+    masthead: mastheadFromHotelProfile(hotel),
+    invoiceNo: input.issued?.invoiceRef ?? null,
+    draft,
+    draftStrip: draft ? `Draft — not issued · indicative position as at ${formatDocDateTimeLocal(input.asAt)}` : null,
+    bookingRef: input.bookingRef,
+    issued: draft ? formatDocDateTimeLocal(input.asAt) : formatDocDate(input.issued!.issuedAt),
+    billedTo: input.parties.billedTo,
+    forGuest: input.parties.forGuest,
+    customerTpn: input.parties.customerTpn,
+    yourRef: input.parties.yourRef,
+    stay:
+      input.stay.checkIn && input.stay.checkOut ? formatStayRange(input.stay.checkIn, input.stay.checkOut, input.stay.nights) : null,
+    rooms: roomNumbers.length > 0 ? `Room${roomNumbers.length === 1 ? "" : "s"} ${roomNumbers.join(", ")}` : null,
+    lines: f.components.map((c) => ({ description: describeComponent(c), amount: formatMoney(c.total) })),
+    detailNote: "Itemised detail on the Master Bill.",
+    netValue: formatMoney(f.ladder.net),
+    serviceChargeLabel: `Service charge ${scPct}%`,
+    serviceCharge: formatMoney(f.ladder.serviceCharge),
+    taxableValue: formatMoney(f.ladder.taxable),
+    gstLabel: `GST @ ${gstPct}%`,
+    gst: formatMoney(f.ladder.gst),
+    total: formatMoney(f.ladder.total),
+    settlementLines,
+    balanceLabel,
+    balanceDue: formatMoney(Math.abs(balance)),
+    gstSentence: `GST of Nu. ${formatMoney(f.ladder.gst)} is included in the total consideration of Nu. ${formatMoney(f.ladder.total)}.`,
+    bank:
+      balance > 0
+        ? {
+            bankName: null,
+            accountName: hotel.accountNumber ? `${hotel.hotelName} · ${hotel.accountNumber}` : null,
+            reference,
+            accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
+          }
+        : null,
+    closingNote: draft
+      ? "Draft for checking the particulars before issue — the tax invoice is issued at checkout settlement and carries its serial from then. Not a demand for payment: the interim folio statement is the in-stay handout."
+      : "Please raise any discrepancy within 7 days. No surcharge applies on any payment mode; remitter bears transfer charges — the full invoice value must be received.",
+    tariffVersion: "T1.0",
+    pageLabel: draft ? "Page 1 of 1 · draft" : input.copy ? "Page 1 of 1 · COPY" : "Page 1 of 1 · original",
+    copy: input.copy,
+  });
 }
 
 export async function generateOrLoadInvoicePdf(
@@ -869,17 +1050,14 @@ export async function generateOrLoadInvoicePdf(
   }
 
   // ================================================================
-  // FINAL / ROOM INVOICE branch — layout matches `Commercial invoice.pdf` reference.
+  // FINAL branch — the B1 Tax Invoice (house format since 2026-08-22).
   //
   // Split-billing (Phase 3, 2026-07-25): when `inv.billingModel` is populated, the invoice
   // covers ONLY folio lines whose `billingModel` matches — so an agent-DIRECT_BILL invoice
   // shows just the agent's charges, a guest-GUEST_PAY invoice shows just guest charges.
-  // Additionally the lineType filter is DROPPED for split invoices so F&B / SERVICE /
-  // OTHER lines appear on the guest invoice (previously stripped as "room-only" filter).
-  // Legacy whole-folio invoices keep the room-only filter for backward compat.
   // ================================================================
   const hotel = await loadHotelProfileForRender(prisma);
-  const { nights, nightlyRate, guest, guestName, adultCount, childCount, checkIn, checkOut } = invoicePrelude(inv);
+  const { nights, nightlyRate, guest, guestName, checkIn, checkOut } = invoicePrelude(inv);
   // Same resolver as quotes and charge posting (2026-08-03) — the prior
   // `requireActiveConfigValue(...) || 0.05` threw when the key was unseeded and silently
   // overrode a configured 0, so invoices could print rates the folio never charged.
@@ -891,55 +1069,32 @@ export async function generateOrLoadInvoicePdf(
   const fig = buildFinalInvoiceFigures(inv, { gstRate, svcRate, nights, nightlyRate });
   const { roomLines, subtotal, discountAmount, serviceCharge, gstAmount, totalBeforeAdvance, advanceAmount, focAmount, totalPayable } = fig;
 
-  // Travel agent name (or "Walk-In" if none). Guest name = contact person on entry (per boss's
-  // convention: "guest name reflects the contact person's name").
+  // The payer (corporate preset with TPN + their reference / agency / guest) and the contact
+  // person are kept on the snapshot; the face prints the B1 zones only.
   const travelAgentName = inv.entry.inquiry?.travelAgent?.displayName
     ?? inv.entry.inquiry?.corporateAccount?.displayName
     ?? "Walk-In";
   const displayGuestName = inv.entry.contactPersonName?.trim() || guestName;
   const contactNo = inv.entry.contactPersonPhone?.trim() || guest?.phone || "";
   const guestEmail = guest?.email ?? inv.dispatchedTo ?? "";
-
   const preparedByName = await getPreparedByName(prisma, actorId);
-  const hotelPhone = extractPrimaryPhone(hotel.contactNumbers);
+  const parties = taxInvoicePartiesFromEntry(inv.entry);
 
-  const html = renderRoomInvoiceHtml({
+  const html = composeTaxInvoiceHtml({
     hotel,
-    hotelPhone,
-    invoiceNumber: invoiceRef,
-    documentDate: inv.dispatchedAt ?? inv.issuedAt ?? now,
-    travelAgentName,
-    guestName: displayGuestName,
-    contactNo,
-    guestEmail,
-    totalGuestsAdult: adultCount,
-    totalGuestsChildren: childCount,
-    checkIn,
-    checkOut,
-    lines: roomLines.map((l) => ({
-      particular: l.particular,
-      roomNo: l.roomNo,
-      nights: l.nights,
-      rate: l.rate,
-      amount: l.amount,
-    })),
-    subtotal,
-    discountAmount,
-    discountRatePercent: 0,
-    serviceChargeRatePercent: Math.round(svcRate * 100),
-    serviceChargeAmount: serviceCharge,
-    gstRatePercent: Math.round(gstRate * 100),
-    gstAmount,
-    totalBeforeAdvance,
-    advanceAmount,
-    focAmount,
-    totalPayable,
-    preparedByName,
+    figures: fig,
+    parties,
+    bookingRef: inv.entryId,
+    stay: { checkIn, checkOut, nights },
+    issued: { invoiceRef, issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now },
+    asAt: now,
+    gstRate,
+    svcRate,
   });
 
-  const bytes = await renderHtmlToPdf(html);
+  const bytes = await renderHtmlToPdf(html, { fitToPage: true });
   const checksum = hashSha256(bytes);
-  const storageKey = buildStorageKey("room-invoice", `${invoiceRef}-v${inv.versionNumber}`, now);
+  const storageKey = buildStorageKey("tax-invoice", `${invoiceRef}-v${inv.versionNumber}`, now);
   await writeDocument(storageKey, bytes);
 
   await prisma.$transaction(async (tx) => {
@@ -968,9 +1123,16 @@ export async function generateOrLoadInvoicePdf(
         pdfRenderedAt: now,
         pdfRenderedBy: actorId,
         renderInputSnapshot: {
-          documentTitle: "ROOM INVOICE",
+          documentTitle: "TAX INVOICE",
+          templateFamily: "legphel-house-B1",
           invoiceRef,
           versionNumber: inv.versionNumber,
+          billedTo: parties.billedTo,
+          customerTpn: parties.customerTpn,
+          yourRef: parties.yourRef,
+          components: fig.components,
+          ladder: fig.ladder,
+          payments: fig.payments,
           travelAgentName,
           guestName: displayGuestName,
           contactNo,

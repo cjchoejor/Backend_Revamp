@@ -31,8 +31,10 @@ const FAMILY_CLASS: Record<DocumentFamily, string> = {
   internal: "n",
 };
 
-/** Watermark overlays from the reference (`.doc.void` / `.doc.copyw`). */
-export type DocumentWatermark = "void" | "copy" | null;
+/** Watermark overlays — VOID / COPY from the reference (`.doc.void` / `.doc.copyw`), plus DRAFT
+ *  (2026-08-22): the handbook's document lifecycle says a DRAFT "renders a watermark and no
+ *  serial; the serial exists only from ISSUED" — the in-stay indicative tax invoice is that draft. */
+export type DocumentWatermark = "void" | "copy" | "draft" | null;
 
 export const LEGPHEL_DOCUMENT_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -95,6 +97,10 @@ export const LEGPHEL_DOCUMENT_CSS = `
   table.mini tr.sub td { border-bottom:0;color:var(--slate) }
   table.mini tr.sub td:first-child { padding-left:16px }
   table.mini tr.grp-end td { border-bottom:1px solid var(--hair) }
+  .dsub { font-size:7.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);
+    font-weight:600;margin:6px 0 3px }
+  .sig { display:flex;justify-content:space-between;gap:14px;margin-top:12px }
+  .sig .s { flex:1;border-top:1px solid var(--ink);padding-top:3px;font-size:7.5px;color:var(--slate);text-align:center }
   .dnote { margin-top:6px;padding:4px 8px;font-size:8px;line-height:1.55;color:var(--ink);
     border-left:2px solid var(--crimson) }
   .dnote.q { border-left-color:var(--rule);color:var(--slate) }
@@ -111,6 +117,10 @@ export const LEGPHEL_DOCUMENT_CSS = `
   .doc.copyw::after { content:"COPY";position:absolute;inset:0;display:flex;align-items:center;
     justify-content:center;font-family:var(--serif);font-size:46px;font-weight:700;
     color:rgba(63,74,87,.13);letter-spacing:.22em;pointer-events:none }
+  .doc.draftw { position:relative }
+  .doc.draftw::after { content:"DRAFT";position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;font-family:var(--serif);font-size:46px;font-weight:700;
+    color:rgba(138,101,50,.14);letter-spacing:.22em;pointer-events:none }
 
   /* ---- Print: the card fills the A4 page ------------------------------------------------
      In the reference gallery the card column is minmax(320px,430px), so the card lays out
@@ -239,6 +249,17 @@ export function note(text: string, tone: "loud" | "quiet" | "grey" = "quiet"): s
   return `<div class="${cls}">${htmlEscape(text)}</div>`;
 }
 
+/** `.dsub` — the small uppercase sub-heading ("Settlement position" on the Master Bill). */
+export function subheading(text: string): string {
+  return `<div class="dsub">${htmlEscape(text)}</div>`;
+}
+
+/** `.sig` — the signature row: one ruled slot per label ("Guest / account signature", "Front office"). */
+export function signatureRow(labels: string[]): string {
+  if (labels.length === 0) return "";
+  return `<div class="sig">${labels.map((l) => `<span class="s">${htmlEscape(l)}</span>`).join("")}</div>`;
+}
+
 /** `.dbank` — the payment-details strip on the proforma. */
 export function bankStrip(pairs: Array<{ label: string; value: string }>): string {
   if (pairs.length === 0) return "";
@@ -300,6 +321,7 @@ export function renderDocumentPage(input: {
     FAMILY_CLASS[input.family],
     input.watermark === "void" ? "void" : "",
     input.watermark === "copy" ? "copyw" : "",
+    input.watermark === "draft" ? "draftw" : "",
   ]
     .filter(Boolean)
     .join(" ");

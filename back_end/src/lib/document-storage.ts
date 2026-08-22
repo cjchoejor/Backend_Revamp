@@ -28,7 +28,8 @@ export type DocumentKind =
   | "confirmation-voucher"
   | "room-invoice"
   /** A5 Cancellation Confirmation (docs/bills, series LH/CX/…). */
-  | "cancellation-confirmation";
+  | "cancellation-confirmation"
+  | "tax-invoice";
 
 const STORAGE_ROOT = resolve(process.env.STORAGE_ROOT_DIR ?? "./storage");
 

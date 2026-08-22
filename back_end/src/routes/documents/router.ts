@@ -17,6 +17,12 @@ import { generateOrLoadInvoicePdf, renderInvoicePreviewHtml } from "../../servic
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
 import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
 import { readCancellationFiguresFromTrace } from "../../services/domain/cancellation-confirmation-figures.js";
+import {
+  isFolioDocumentKind,
+  listFolioDocuments,
+  printFolioDocumentPdf,
+  renderFolioDocumentHtml,
+} from "../../services/domain/folio-statement-service.js";
 
 export const documentsRouter = Router();
 
@@ -197,6 +203,59 @@ documentsRouter.get("/entries/:id/cancellation-confirmation-pdf", requireActorLe
     res.setHeader("Content-Disposition", `inline; filename="${artifact.filename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.send(artifact.bytes);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * FOLIO DOCUMENTS (2026-08-22) — the bills that are VIEWS of the one folio: the in-stay
+ * "tentative invoice" (C5 Interim Folio Statement), the Master Bill (C1 rollup) and the Tax
+ * Invoice DRAFT (B1 before issue). See folio-statement-service for when each exists and why.
+ *
+ *   GET /api/entries/:id/folio-documents                      — the index: each document's state + why
+ *   GET /api/entries/:id/folio-documents/:kind/preview-html   — inline HTML, pure read
+ *   GET /api/entries/:id/folio-documents/:kind/pdf            — rendered fresh, never stored (a sealed
+ *                                                               Master Bill print carries a reprint ordinal)
+ *
+ * The ISSUED tax invoice is deliberately NOT served here — it lives on its Invoice row and is
+ * served only from its write-once PDF (`GET /api/invoices/:id/pdf`); the draft route answers
+ * 409 TAX_INVOICE_ISSUED naming that invoice once it exists.
+ */
+documentsRouter.get("/entries/:id/folio-documents", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await listFolioDocuments(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+documentsRouter.get("/entries/:id/folio-documents/:kind/preview-html", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const kind = req.params.kind;
+    if (!isFolioDocumentKind(kind)) throw new NotFoundError("Folio document");
+    const { html } = await renderFolioDocumentHtml(prisma, req.params.id, kind);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(html);
+  } catch (e) {
+    next(e);
+  }
+});
+
+documentsRouter.get("/entries/:id/folio-documents/:kind/pdf", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const kind = req.params.kind;
+    if (!isFolioDocumentKind(kind)) throw new NotFoundError("Folio document");
+    const actorId = req.actor?.actorId ?? "SYSTEM";
+    const { bytes, filename } = await printFolioDocumentPdf(prisma, req.params.id, kind, actorId);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(bytes);
   } catch (e) {
     next(e);
   }
