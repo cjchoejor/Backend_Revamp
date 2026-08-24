@@ -169,7 +169,8 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
       { name: "W27 — dispute SLA", ref: "DISPUTE_SLA_W27 · w27", detail: "Tracks the SLA on an open dispute.", trace: "^DISPUTE_SLA\\.W27_CHECK$" },
     ],
     advance: [
-      { name: "Entry lifecycle state machine", ref: "state-machines/entry-lifecycle-state-machine.ts", detail: "Guards S7→S8; night audit must have run.", trace: "^ENTRY\\.STAGE_TRANSITION$" },
+      { name: "Entry lifecycle state machine", ref: "state-machines/entry-lifecycle-state-machine.ts", detail: "Guards S7→S8; night audit must have run; a departure before the booked checkout is refused (Policy 36).", trace: "^ENTRY\\.STAGE_TRANSITION$" },
+      { name: "Early departure (Policy 36)", ref: "services/domain/early-departure-service.ts", detail: "GM shortens the stay against the commitment snapshot, posts the configured fee, frees the unstayed nights and compresses into Check-out.", trace: "^ENTRY\.EARLY_DEPARTURE_RECORDED$" },
     ],
   },
 

@@ -266,6 +266,12 @@ export const OPERATIONAL_CONFIG_SCHEMAS: ConfigKeyMeta[] = [
  */
 export const INFO_ONLY_CONFIG_DESCRIPTIONS: ConfigKeyMeta[] = [
   {
+    key: "earlyDeparture.penalty",
+    title: "Early departure fee",
+    description:
+      "Policy 36 — what a guest leaving before the booked checkout is charged for the unstayed nights: basis NONE | FLAT_AMOUNT (amount, net) | UNSTAYED_NIGHTS (up to nights unstayed nights at the frozen per-night room figure × percent/100) | PERCENT_OF_UNSTAYED (percent of every unstayed night frozen room figure); perRatePlan overrides by rate plan id. Posted on the live folio as a SERVICE charge; the GM may waive it. The slept nights are never re-priced.",
+  },
+  {
     key: "interimPayment.schedule",
     title: "Interim payments on long stays",
     description:

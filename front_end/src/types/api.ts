@@ -580,6 +580,29 @@ export type EntryDetail = EntryListItem & {
   keysIssuedCount?: number | null;
   keysIssuedAt?: string | null;
   registrationCompletedAt?: string | null;
+  /** Early departure (2026-08-22, Policy 36): the day the guest actually left when the stay was shortened. */
+  actualCheckOutDate?: string | null;
+  earlyDeparture?: EarlyDepartureSummary | null;
+};
+
+/** The one record of a stay shortened at the desk (2026-08-22) — rides on the entry payload. */
+export type EarlyDepartureSummary = {
+  id: string;
+  entryId: string;
+  originalCheckOutDate: string;
+  departureDate: string;
+  bookedNights: number;
+  sleptNights: number;
+  unstayedNights: number;
+  forgoneRoomSubtotal: string | number;
+  forgoneRoomTotal: string | number;
+  feeAmount: string | number;
+  feeWaived: boolean;
+  feeFolioLineId?: string | null;
+  reason: string;
+  recordedAt: string;
+  recordedBy: string;
+  recordedByLevel: string;
 };
 
 export type ListResponse<T> = {

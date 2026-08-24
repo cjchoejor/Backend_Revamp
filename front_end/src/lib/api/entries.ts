@@ -466,6 +466,17 @@ export type EntryBillingSummary = {
     segmentNumber: number | null;
     nights: number | null;
     perNightAmount: number | null;
+    /** Early departure (2026-08-22): `amount` is already the shortened stay total; this says by how much. */
+    earlyDeparture?: {
+      departureDate: string;
+      originalCheckOutDate: string;
+      sleptNights: number;
+      unstayedNights: number;
+      forgoneRoomTotal: number;
+      bookedStayTotal: number | null;
+      feeAmount: number;
+      feeWaived: boolean;
+    } | null;
   };
   /** Per-room price breakdown from the stored composition (null on flat-path quotes). */
   rooms: Array<{
@@ -989,3 +1000,96 @@ export type RoomPlanHistory = {
 export async function getRoomPlanHistory(session: Session, entryId: string) {
   return apiRequest<RoomPlanHistory>(`/api/entries/${entryId}/room-plan-history`, { session });
 }
+
+/* ───────── Early departure (2026-08-22, SIG-S8 §1.2 / Policy 36) ───────── */
+
+export type EarlyDeparturePenaltyRule = {
+  basis: "NONE" | "FLAT_AMOUNT" | "UNSTAYED_NIGHTS" | "PERCENT_OF_UNSTAYED";
+  amount: number;
+  nights: number;
+  percent: number;
+  ratePlanId: string | null;
+  ratePlanOverride: boolean;
+};
+
+export type EarlyDepartureRoomFigure = {
+  assignmentId: string;
+  roomId: string;
+  roomNumber: string | null;
+  startDate: string;
+  endDate: string;
+  totalNights: number;
+  sleptNights: number;
+  unstayedNights: number;
+  perNightSubtotal: number;
+  forgoneSubtotal: number;
+  forgoneTotal: number;
+  newFrozenSubtotal: number | null;
+  newFrozenTotal: number | null;
+  legacyFlatRate: boolean;
+  shortened: boolean;
+};
+
+/** Server-computed figures of a departure ahead of the booked checkout — nothing on the desk adds money up. */
+export type EarlyDepartureFigures = {
+  entryId: string;
+  hotelToday: string;
+  checkIn: string | null;
+  bookedCheckOut: string | null;
+  departureDate: string;
+  bookedNights: number;
+  sleptNights: number;
+  unstayedNights: number;
+  rooms: EarlyDepartureRoomFigure[];
+  forgoneRoomSubtotal: number;
+  forgoneRoomTotal: number;
+  fee: {
+    rule: EarlyDeparturePenaltyRule;
+    amount: number;
+    gross: number;
+    serviceChargeRate: number;
+    gstRate: number;
+    description: string;
+    explanation: string;
+  };
+  sleptNightAudits: Array<{ date: string; status: string }>;
+  missingNightYmds: string[];
+  blockers: Array<{ code: string; message: string }>;
+  requiredLevel: "L3";
+  openStayExtensionRequestId: string | null;
+  alreadyRecorded: { id: string; departureDate: string; recordedAt: string } | null;
+};
+
+export type EarlyDepartureOutcome = {
+  record: {
+    id: string;
+    entryId: string;
+    departureDate: string;
+    originalCheckOutDate: string;
+    sleptNights: number;
+    unstayedNights: number;
+    feeAmount: number;
+    feeWaived: boolean;
+  };
+  figures: EarlyDepartureFigures;
+  feePosted: boolean;
+  feeLineId: string | null;
+  feeError: string | null;
+  movedToCheckout: boolean;
+  checkoutBlocked: { code: string; message: string } | null;
+  entry: EntryDetail;
+};
+
+export async function previewEarlyDeparture(session: Session, entryId: string, body?: { departureDate?: string }) {
+  return apiRequest<EarlyDepartureFigures>(`/api/entries/${entryId}/early-departure/preview`, { method: "POST", session, body: body ?? {} });
+}
+
+/** GM (L3+): shortens the stay, posts or waives the fee, frees the unstayed nights, moves to Check-out. */
+export async function recordEarlyDeparture(
+  session: Session,
+  entryId: string,
+  body: { departureDate?: string; reason: string; waiveFee?: boolean; waiveReason?: string },
+) {
+  return apiRequest<EarlyDepartureOutcome>(`/api/entries/${entryId}/early-departure`, { method: "POST", session, body });
+}
+

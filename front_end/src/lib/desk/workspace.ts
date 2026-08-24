@@ -414,8 +414,52 @@ export function s6Readiness(
 }
 
 /** S7 exit readiness (SIG-S7) — derivable gates before checkout prep (S8). Night audit is reported separately. */
+/** The browser-local calendar day (yyyy-mm-dd) — the desk sits in the hotel, so this is the hotel day. */
+export function localTodayYmd(d: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * The day the stay really ends (2026-08-22): the early-departure date when one is recorded (and
+ * earlier than booked), else the frozen checkout, else the intake one. Mirrors the backend
+ * `effectiveCheckOutDate()` — keep the two in step.
+ */
+export function effectiveCheckOutIso(entry: EntryDetail): string | null {
+  const booked = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
+  const actual = entry.actualCheckOutDate ?? null;
+  if (actual && (!booked || actual.slice(0, 10) < booked.slice(0, 10))) return actual;
+  return booked;
+}
+
+/** True while today is before the (effective) checkout day — leaving now would be an early departure. */
+export function departureWouldBeEarly(entry: EntryDetail): boolean {
+  const co = effectiveCheckOutIso(entry);
+  return !!co && localTodayYmd() < co.slice(0, 10);
+}
+
+function shortDayLabel(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 export function s7Readiness(entry: EntryDetail): Precondition[] {
   const folio = entry.folio;
+  // Policy 36 (2026-08-22): the standard checkout is for a guest who slept every booked night. Before
+  // the booked checkout day the gate stays locked and the Stay step offers the governed early
+  // departure (GM), which shortens the stay — after which this line is met on its own.
+  const checkOutIso = effectiveCheckOutIso(entry);
+  const early = departureWouldBeEarly(entry);
+  const checkoutLine: Precondition = entry.earlyDeparture
+    ? { label: `Early departure recorded — checkout ${shortDayLabel(entry.earlyDeparture.departureDate)}`, met: !early }
+    : checkOutIso
+      ? {
+          label: early
+            ? `Booked checkout is ${shortDayLabel(checkOutIso)} — leaving earlier is an early departure (GM, Stay step)`
+            : `Booked checkout day reached (${shortDayLabel(checkOutIso)})`,
+          met: !early,
+        }
+      : { label: "Checkout date on file", met: false };
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
   const h4Init = !!h4 && !h4.rejectedAt && ["CREATED", "ACCEPTED", "FULFILLED", "CLOSED"].includes(h4.state);
   const deficient = entry.roomAssignments?.[0]?.room?.deficientConditionRecords ?? [];
@@ -424,6 +468,7 @@ export function s7Readiness(entry: EntryDetail): Precondition[] {
     deficient.every((d) => ["RESOLVED", "UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"].includes(d.status));
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   return [
+    checkoutLine,
     { label: "Folio is live", met: folio?.state === "LIVE" },
     { label: "Charges posted", met: (folio?.lines ?? []).length > 0 },
     { label: "Pre-checkout handoff started", met: h4Init },

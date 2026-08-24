@@ -6,6 +6,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, Lock, Pause, Play } from "lucide-react";
 import { SpecialPreference } from "./special-preference";
+import { EarlyDepartureFacts } from "./early-departure";
 import { SegmentHistoryPanel } from "./segment-history";
 import { FolioLinesTable } from "./folio-lines";
 import { toast } from "sonner";
@@ -1234,9 +1235,11 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                 <span className="k">
                   {billing?.headline.kind === "BILLED_SO_FAR"
                     ? "Billed so far"
-                    : billing?.headline.frozen
-                      ? "Total · frozen"
-                      : "Total · indicative"}
+                    : billing?.stayTotal?.earlyDeparture
+                      ? "Total · shortened stay"
+                      : billing?.headline.frozen
+                        ? "Total · frozen"
+                        : "Total · indicative"}
                   {" ▾"}
                 </span>
                 <span className="v mono">
@@ -1620,6 +1623,7 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
         {/* Special preference — pinned in the non-scrolling top bar so it stays on screen through
             every stage (S1…S9). Add/edit in place; shows the saved value so it's never duplicated. */}
         <SpecialPreference entry={entry} />
+        <EarlyDepartureFacts entry={entry} />
       </div>
 
       {/* body — full-width canvas; the live feed + backend rail live in the right drawer */}

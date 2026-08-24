@@ -22,12 +22,12 @@ import {
   progressDispute,
   runNightAudit,
 } from "@/lib/api/in-stay";
-import { cancelEntryEarlyDeparture } from "@/lib/api/reservation-setup";
+import { EarlyDepartureBlock } from "./early-departure";
 import { getBillingSummary, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import { IdentityProofBlock } from "./identity-proof";
 import { FolioLinesTable, FolioTabStrip, filterLinesByTab, isTaxCompanion, roomTabsFor, type FolioTab } from "./folio-lines";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
-import { money, moneyOrDash } from "@/lib/desk/workspace";
+import { effectiveCheckOutIso, localTodayYmd, money, moneyOrDash } from "@/lib/desk/workspace";
 import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { DeskConfirmModal, DeskSuccessModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -82,9 +82,6 @@ export function StayStep({
   const { session } = useSession();
   const queryClient = useQueryClient();
   const elevated = isElevated(session?.actorLevel);
-  const isGm = session?.actorLevel === "L3" || session?.actorLevel === "L4";
-  const [earlyDepartOpen, setEarlyDepartOpen] = useState(false);
-  const [earlyDepartWaiver, setEarlyDepartWaiver] = useState(false);
 
   const reservation = entry.reservation;
   const folio = entry.folio;
@@ -202,7 +199,7 @@ export function StayStep({
   const disputes = entry.disputes ?? [];
   const currency = folioLines[0]?.currency;
 
-  const checkOutIso = reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? "";
+  const checkOutIso = effectiveCheckOutIso(entry) ?? "";
   const lastNightYmd = checkOutIso ? lastStayNightYmd(checkOutIso) : "";
 
   const [lineType, setLineType] = useState("F_AND_B");
@@ -240,7 +237,7 @@ export function StayStep({
   useEffect(() => {
     const t = new Date().toISOString().slice(0, 10);
     setChargeDate(t);
-    setNaDate(lastNightYmd || t);
+    setNaDate(lastNightYmd && lastNightYmd < t ? lastNightYmd : "");
   }, [lastNightYmd]);
 
   const invalidate = () => {
@@ -428,17 +425,6 @@ export function StayStep({
       });
     }, "Amendment recorded"),
   );
-  const earlyDepartM = useMutation({
-    mutationFn: () =>
-      cancelEntryEarlyDeparture(session!, entry.id, earlyDepartWaiver ? { penaltyWaiverRequested: true } : undefined),
-    onSuccess: () => {
-      setEarlyDepartOpen(false);
-      toast.success("Early departure recorded — stay ended, room released.");
-      invalidate();
-      void queryClient.invalidateQueries({ queryKey: ["entries"] });
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Early departure failed"),
-  });
   const openDisputes = disputes.filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   // Only CHARGES are correctable: the SC/GST companions ride on their charge (the backend refuses
   // to correct a tax line directly — a charge correction re-posts its own tax deltas), and an
@@ -465,9 +451,16 @@ export function StayStep({
   // Night audit runs only for a *completed* operating day. A future date is never valid; today is
   // allowed (it may be the final stay night needed for same-day checkout) but flagged, because
   // running it seals the day to further charges (SIG-S7 §2.2 / Policy 61).
-  const todayYmd = new Date().toISOString().slice(0, 10);
-  const naFuture = !!naDate && naDate > todayYmd;
-  const naIsToday = naDate === todayYmd;
+  const todayYmd = localTodayYmd();
+  const naYesterdayYmd = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return localTodayYmd(d);
+  })();
+  // Only a night that has ENDED is auditable (Policy 61, 2026-08-22) — running "today" used to
+  // seal the day early and let a guest check out ahead of the booked date through the standard
+  // route. A guest leaving early is an early departure (the block below); it audits nothing ahead.
+  const naFuture = !!naDate && naDate > naYesterdayYmd;
 
   // Persistent highlight: each group stays lit once its action has run (derived from real folio /
   // audit / handoff / dispute state). `firingKey` adds the transient "running now" pulse.
@@ -1004,7 +997,7 @@ export function StayStep({
             <div className="frow" style={{ marginTop: 9 }}>
               <div className="field">
                 <label>Run for date (L2+)</label>
-                <input type="date" value={naDate} max={todayYmd} onChange={(e) => setNaDate(e.target.value)} />
+                <input type="date" value={naDate} max={naYesterdayYmd} onChange={(e) => setNaDate(e.target.value)} />
               </div>
               <div className="field" style={{ alignSelf: "end" }}>
                 <button
@@ -1022,12 +1015,7 @@ export function StayStep({
             </div>
             {naFuture && (
               <p style={{ fontSize: 11.5, color: "var(--stop)", margin: "6px 0 0" }}>
-                Night audit can only run for a completed (past) day — a future date isn&rsquo;t valid.
-              </p>
-            )}
-            {naIsToday && !nightAuditOk && (
-              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "6px 0 0" }}>
-                This seals <b>today</b> to further charges — post all of today&rsquo;s charges first.
+                Night audit runs only for a night that has <b>ended</b> — today and ahead are not auditable. A guest leaving before the booked checkout is an <b>early departure</b> (the block below); it never needs a future night audited.
               </p>
             )}
           </>
@@ -1196,26 +1184,9 @@ export function StayStep({
         </div>
       )}
 
-      {/* Early departure (post-check-in, terminal) — SIG-S7 Policy 36 */}
-      <div className="block" style={{ borderColor: "#e2b3ac" }}>
-        <BlockH>
-          <AlertTriangle style={{ width: 13, height: 13 }} />
-          Early departure
-        </BlockH>
-        <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 0, lineHeight: 1.5 }}>
-          Guest is leaving before the booked checkout. Ends the stay now, posts the disclosed penalty on the
-          live folio, releases the room and terminates the booking — there&rsquo;s no undo.
-        </p>
-        {isGm && (
-          <label className="checkline" style={{ cursor: "pointer", marginBottom: 8 }}>
-            <input type="checkbox" checked={earlyDepartWaiver} onChange={(e) => setEarlyDepartWaiver(e.target.checked)} />
-            <span>Waive the early-departure penalty (GM authority)</span>
-          </label>
-        )}
-        <button className="btn btn-ghost" style={{ borderColor: "#e2b3ac", color: "var(--stop)" }} onClick={() => setEarlyDepartOpen(true)}>
-          Record early departure
-        </button>
-      </div>
+      {/* Early departure (Policy 36, 2026-08-22): the governed route — shortens the stay against the
+          commitment snapshot, posts/waives the fee, frees the unstayed nights, moves to Check-out. */}
+      <EarlyDepartureBlock entry={entry} setSelected={setSelected} />
       </div>
 
       <BackendRail entryId={entry.id} groups={railGroups} activeKeys={activeKeys} firingKey={firingKey} />
@@ -1240,28 +1211,6 @@ export function StayStep({
             : []
         }
         onClose={() => setPostedInfo(null)}
-      />
-
-      <DeskConfirmModal
-        open={earlyDepartOpen}
-        tone="danger"
-        title="Record early departure?"
-        subtitle={entry.id}
-        why="Ending an in-house stay early is terminal. Here is exactly what happens:"
-        consequences={[
-          "The stay ends now — the guest is checked out ahead of the booked date.",
-          <>
-            The disclosed early-departure <b>penalty</b>
-            {earlyDepartWaiver ? " is waived (GM)" : " (if any) is posted on the live folio"}.
-          </>,
-          "The room is released to housekeeping.",
-          "The booking becomes terminal — this cannot be undone.",
-        ]}
-        confirmLabel="Record early departure"
-        cancelLabel="Keep the stay"
-        pending={earlyDepartM.isPending}
-        onConfirm={() => earlyDepartM.mutate()}
-        onClose={() => setEarlyDepartOpen(false)}
       />
     </div>
   );
