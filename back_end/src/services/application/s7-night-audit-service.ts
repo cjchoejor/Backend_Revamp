@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { enforceNightAuditOperatingDateEnded } from "../../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
-import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
 import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -99,10 +99,22 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
       // Assignments with NULL startDate (legacy whole-stay) are active for every date the
       // entry is in S7 — same behaviour as before.
       const opTime = operatingDate.getTime();
-      const activeAssignments = (entry.roomAssignments ?? []).filter((a) => {
-        if (a.startDate == null || a.endDate == null) return true; // legacy whole-stay
-        return a.startDate.getTime() <= opTime && opTime < a.endDate.getTime();
-      });
+      // A room charge for a night outside the ENTRY's own stay window is always wrong —
+      // found live 2026-08-24: a catch-up audit for a past date posted room charges onto a
+      // stay that began days later, because its extension-run assignment row carries a null
+      // startDate, which the legacy whole-stay rule below reads as "active on every date".
+      // The stay window clamps first; the per-row ranges refine within it.
+      const stayStart = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
+      const stayEnd = effectiveCheckOutDate(entry);
+      const withinStay =
+        (stayStart == null || operatingDateUtc(stayStart).getTime() <= opTime) &&
+        (stayEnd == null || opTime < operatingDateUtc(stayEnd).getTime());
+      const activeAssignments = !withinStay
+        ? []
+        : (entry.roomAssignments ?? []).filter((a) => {
+            if (a.startDate == null || a.endDate == null) return true; // legacy whole-stay
+            return a.startDate.getTime() <= opTime && opTime < a.endDate.getTime();
+          });
 
       // Build per-room post plan. For each active assignment:
       //   - Preferred: use its `frozenSubtotal` (stay-total from composition) divided by

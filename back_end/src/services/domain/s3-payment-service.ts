@@ -949,6 +949,11 @@ export async function recordCreditExtensionApproval(
   }
 
   return prisma.$transaction(async (tx) => {
+    // Stage context follows the entry (2026-08-24): the same approval serves the S3 advance
+    // gate AND the S8 partial-settlement gate, so the trace must say where it happened —
+    // hardcoding S3 mislabelled a checkout-credit approval.
+    const entryRow = await tx.entry.findUnique({ where: { id: input.entryId }, select: { currentStage: true } });
+    const stageContext = (entryRow?.currentStage as Stage | undefined) ?? Stage.S3;
     // Pre-allocate a readable ID; if upsert hits the update path it's discarded harmlessly.
     const crId = await allocateReadableId(tx, "CREDIT_EXTENSION" as const, now);
     const rec = await tx.creditExtensionCeilingRecord.upsert({
@@ -984,13 +989,14 @@ export async function recordCreditExtensionApproval(
         entityId: rec.id,
         operation: "CREATE",
         timestamp: now,
-        stageContext: Stage.S3,
+        stageContext,
         entryId: input.entryId,
         payload: {
           entryId: input.entryId,
           folioId: input.folioId,
           ceilingAmount: input.ceilingAmount,
           expiresAt: expiresAt ? expiresAt.toISOString() : null,
+          stage: entryRow?.currentStage ?? null,
         },
         createdBy: actor.actorId,
       },

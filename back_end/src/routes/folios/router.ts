@@ -277,7 +277,11 @@ foliosRouter.get("/folios/:id", requireActorLevel("L1"), async (req, res, next) 
 
 foliosRouter.post("/folios/:id/settle", requireActorLevel("L1"), validateBody(initiateSettlementRequestSchema), async (req, res, next) => {
   try {
-    const updated = await s8SettlementService.initiateSettlement(prisma, req.params.id, req.actor!.actorId, req.body);
+    const updated = await s8SettlementService.initiateSettlement(prisma, req.params.id, req.actor!.actorId, req.body, {
+      // Verified session level (2026-08-24) — the partial-settlement gate needs the real
+      // authority, never a body field an L1 could type.
+      actorLevel: req.actor!.level,
+    });
     res.json(updated);
   } catch (e) {
     next(e);

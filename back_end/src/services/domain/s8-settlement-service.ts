@@ -9,7 +9,10 @@ import { enforceFolioLiveForS8Settlement } from "../../policies/13-billing-model
 import { enforceEntryAtS8ForSettlementOperations } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { enforceCreditCeilingFinalBalanceForSettlement } from "../../policies/18-credit-extension-ceiling/p46-credit-ceiling-final-settlement.js";
+import {
+  enforceCreditCeilingFinalBalanceForSettlement,
+  enforcePartialSettlementRequiresFomOrCreditExtension,
+} from "../../policies/18-credit-extension-ceiling/p46-credit-ceiling-final-settlement.js";
 import {
   enforceNightAuditsCompleteForStayBeforeSettlement,
   findIncompleteStayNightAuditDatesUtc,
@@ -183,7 +186,14 @@ export async function initiateSettlement(
     nightAuditFomAcknowledgementRef?: string;
     voucherAmount?: number;
   },
+  /**
+   * Verified session context (2026-08-24) — NEVER read from the request body (spoofable).
+   * The route passes `req.actor.level`; absent (legacy callers) is treated as L1, so the
+   * partial-settlement gate fails closed onto the credit-extension path.
+   */
+  opts?: { actorLevel?: "L1" | "L2" | "L3" | "L4" },
 ) {
+  const actorLevel = opts?.actorLevel ?? "L1";
   if (!input.settlementMethod?.trim()) throw new ValidationError("settlementMethod is required");
   if (!input.billingModelConfirmation?.trim()) throw new ValidationError("billingModelConfirmation is required");
 
@@ -302,7 +312,7 @@ export async function initiateSettlement(
       data: {
         eventType: "SETTLEMENT.NIGHT_AUDIT_FOM_ACK_USED",
         actorId,
-        actorLevel: "L1",
+        actorLevel,
         entityType: "Folio",
         entityId: folioId,
         operation: "ACK",
@@ -327,15 +337,12 @@ export async function initiateSettlement(
   const billing = targetBucket;
   enforceSettlementMethodCompatibility({ billingModel: billing, settlementMethod: method });
 
-  if ((method === "CASH" || method === "MOBILE_PAYMENT") && !input.paymentVerificationRef?.trim()) {
-    throw new ValidationError("paymentVerificationRef is required for CASH and MOBILE_PAYMENT");
-  }
-
   // Decimal-safe amount parsing so string inputs like "1099.75" don't drift via Number(). We keep
-  // number-typed validation locals for the guardrails (isFinite / <=0), but the amount that lands
-  // in the paymentRecord is a Decimal.
+  // number-typed validation locals for the guardrails (isFinite / <0), but the amount that lands
+  // in the paymentRecord is a Decimal. Zero is allowed since 2026-08-24 — "the guest pays nothing
+  // now, the whole balance leaves with them" is a legal partial under the FOM/credit gate below.
   const partialNumeric = input.partialAmount == null ? undefined : Number(input.partialAmount);
-  if (partialNumeric != null && (!Number.isFinite(partialNumeric) || partialNumeric <= 0)) throw new ValidationError("partialAmount must be a positive number");
+  if (partialNumeric != null && (!Number.isFinite(partialNumeric) || partialNumeric < 0)) throw new ValidationError("partialAmount must be zero or a positive number");
   const partialDec = input.partialAmount == null ? undefined : toDecimal(input.partialAmount);
 
   const voucherNumeric = input.voucherAmount == null ? undefined : Number(input.voucherAmount);
@@ -353,6 +360,38 @@ export async function initiateSettlement(
         ? minMoney(partialDec, outstandingDec)
         : outstandingDec;
   const settleAmount = Number(settleAmountDec.toFixed(2));
+
+  // The verification ref documents money actually taken now — a zero-pay partial (whole
+  // balance sanctioned onto credit) has no transaction to reference.
+  if ((method === "CASH" || method === "MOBILE_PAYMENT") && settleAmount > 0 && !input.paymentVerificationRef?.trim()) {
+    throw new ValidationError("paymentVerificationRef is required for CASH and MOBILE_PAYMENT");
+  }
+
+  // Partial settlement authority (2026-08-24, operator ruling — mirrors the S3 advance rule):
+  // a guest-pay settlement that leaves a remainder is the hotel extending credit. It needs
+  // FOM+ (L2+) — either the settling operator's own verified level, or an FOM-recorded credit
+  // extension (unexpired, ceiling covering the remainder) that sanctions an L1 completing it.
+  // The remainder is then S9's payment follow-up, the extension's expiry the pay-by date.
+  // DIRECT_BILL (outstanding-by-model — the company is invoiced) and short-voucher settlements
+  // (shortfall invoiced to the agent) are deliberately NOT this gate's business.
+  const remainderDec = outstandingDec.sub(settleAmountDec);
+  const isGuestPartial =
+    partialDec != null &&
+    method !== "VOUCHER" &&
+    method !== "DIRECT_BILL" &&
+    billing !== "DIRECT_BILL" &&
+    remainderDec.gt(0);
+  let partialSanction: "FOM_ACTOR" | "CREDIT_EXTENSION" | null = null;
+  let partialCreditExtension: { id: string; ceilingAmount: number; expiresAt: Date | null } | null = null;
+  if (isGuestPartial) {
+    const credit = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId } });
+    if (credit) partialCreditExtension = { id: credit.id, ceilingAmount: num(credit.ceilingAmount), expiresAt: credit.expiresAt };
+    partialSanction = enforcePartialSettlementRequiresFomOrCreditExtension({
+      actorLevel,
+      remainder: Number(remainderDec.toFixed(2)),
+      creditExtension: partialCreditExtension,
+    }).sanction;
+  }
 
   // Bucket tag stamped on every write below. `null` when running whole-folio (legacy),
   // otherwise the target bucket string — routes payments/invoices to their bucket-scoped
@@ -514,7 +553,7 @@ export async function initiateSettlement(
             ? "SETTLEMENT.COMPLETED"
             : "SETTLEMENT.OUTSTANDING",
         actorId,
-        actorLevel: "L1",
+        actorLevel,
         entityType: "Folio",
         entityId: folioId,
         operation: "UPDATE",
@@ -534,6 +573,16 @@ export async function initiateSettlement(
           bucketScoped: isBucketScoped,
           bucketTargeted: bucketTag,
           bucketOutstandingAfter: bucketAfter,
+          // Partial-settlement sanction (2026-08-24): what authorised leaving a remainder —
+          // the settling FOM's own level, or the credit extension on file.
+          partialSanction,
+          ...(partialSanction === "CREDIT_EXTENSION" && partialCreditExtension
+            ? {
+                creditExtensionId: partialCreditExtension.id,
+                creditExtensionCeiling: partialCreditExtension.ceilingAmount,
+                creditExtensionExpiresAt: partialCreditExtension.expiresAt ? partialCreditExtension.expiresAt.toISOString() : null,
+              }
+            : {}),
         },
         createdBy: actorId,
       },
