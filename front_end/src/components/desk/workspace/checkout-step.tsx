@@ -18,6 +18,7 @@ import {
   reEnterS8ToS2,
 } from "@/lib/api/checkout";
 import { correctFolioCharge, postCreditNote, progressDispute } from "@/lib/api/in-stay";
+import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { getBillingSummary } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
@@ -143,6 +144,32 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     if (balance != null && Number.isFinite(n) && n > 0) setPartialAmount(String(balance));
   }, [balance]);
   const [fomAckRef, setFomAckRef] = useState("");
+  // Checkout credit extension (2026-08-24, operator ruling — the S3 advance rule at S8): a
+  // partial settlement leaves the hotel extending credit, so it needs FOM+ — the FOM settling
+  // it themselves, or this recorded extension covering the remainder so an L1 can complete it.
+  // Ceiling defaults to the full balance (server figure, touched-latch like the amount above).
+  const [creditCeiling, setCreditCeiling] = useState("");
+  const creditCeilingTouched = useRef(false);
+  useEffect(() => {
+    if (creditCeilingTouched.current) return;
+    const n = Number(balance);
+    if (balance != null && Number.isFinite(n) && n > 0) setCreditCeiling(String(balance));
+  }, [balance]);
+  const [creditReason, setCreditReason] = useState("");
+  const [creditPayBy, setCreditPayBy] = useState("");
+  const payStatus = paymentStatus.data;
+  const creditActive = !!payStatus?.creditExtensionActive;
+  const creditExpired = !!payStatus?.creditExtensionExpired && !creditActive;
+  // Client-side mirror of the backend's partial-settlement gate — comparisons against server
+  // figures only, no derived money ever displayed. DIRECT_BILL / VOUCHER remainders are the
+  // company's / agent's bill, not guest credit, so they never trip this.
+  const balanceNum = Number(balance ?? 0);
+  const typedPartial = partialAmount.trim() === "" ? Number.NaN : Number.parseFloat(partialAmount);
+  const guestPayMethod = settlementMethod !== "DIRECT_BILL" && settlementMethod !== "VOUCHER";
+  const partialShort = guestPayMethod && Number.isFinite(typedPartial) && typedPartial >= 0 && balanceNum > 0 && typedPartial < balanceNum;
+  const creditCovers =
+    partialShort && creditActive && payStatus?.ceilingAmount != null && payStatus.ceilingAmount >= balanceNum - typedPartial;
+  const partialLocked = partialShort && !elevated && !creditCovers;
   const [finalChargeDesc, setFinalChargeDesc] = useState("");
   const [finalChargeAmount, setFinalChargeAmount] = useState("");
   // Per-room folio attribution (2026-08-14): which room the last-minute charge belongs to.
@@ -296,16 +323,40 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
       const body: Parameters<typeof initiateSettlement>[2] = { settlementMethod, billingModelConfirmation: folio.billingModel };
       if (paymentRef.trim()) body.paymentVerificationRef = paymentRef.trim();
       const partial = Number.parseFloat(partialAmount);
-      if (Number.isFinite(partial) && partial > 0) body.partialAmount = partial;
+      // Zero is a real answer (2026-08-24): "the guest pays nothing now, the balance leaves on
+      // credit" — dropping it would silently settle the FULL balance instead. Empty = full.
+      if (partialAmount.trim() !== "" && Number.isFinite(partial) && partial >= 0) body.partialAmount = partial;
       if (fomAckRef.trim()) body.fomAcknowledgementRef = fomAckRef.trim();
       return initiateSettlement(session!, folio.id, body);
     },
     onSuccess: () => {
       setSettleOpen(false);
-      toast.success("Settled — folio closed, room released to housekeeping");
+      toast.success(
+        partialShort
+          ? "Settled partially — the remainder stays outstanding for post-stay collection; room released"
+          : "Settled — folio closed, room released to housekeeping",
+      );
       invalidate();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Settlement failed"),
+  });
+  // FOM checkout credit extension (2026-08-24) — same endpoint the S3 advance form uses; the
+  // upsert re-approval resets the clock. Payment-status is its own query, so invalidate it.
+  const creditM = useMutation({
+    mutationFn: () => {
+      const body: Parameters<typeof recordCreditExtension>[2] = {
+        ceilingAmount: Number(creditCeiling),
+        reason: creditReason.trim(),
+      };
+      if (creditPayBy) body.validUntil = new Date(creditPayBy).toISOString();
+      return recordCreditExtension(session!, entry.id, body);
+    },
+    onSuccess: () => {
+      toast.success("Credit extension approved — a partial settlement within it can now be completed");
+      void queryClient.invalidateQueries({ queryKey: ["payment-status", entry.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Credit extension failed"),
   });
   const fulfilH4M = useMutation(wrap(() => fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(h4DeficientFlag)), "Handoff fulfilled"));
   const reEntryM = useMutation({
@@ -749,6 +800,24 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           </>
         ) : (
           <>
+            {/* Checkout credit stance (2026-08-24): a partial settlement is the hotel extending
+                credit — FOM+ act, or covered by this recorded extension. All figures server-side. */}
+            {creditActive && (
+              <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginBottom: 9, display: "block", lineHeight: 1.55 }}>
+                Credit extension on file — covers up to <b>{money(payStatus?.ceilingAmount, currency)}</b>
+                {payStatus?.creditExtensionExpiresAt
+                  ? <> · pay by <b>{new Date(payStatus.creditExtensionExpiresAt).toLocaleString()}</b></>
+                  : " · no time limit"}
+                . A partial settlement within it can be completed at any desk level; the remainder is
+                collected post-stay.
+              </div>
+            )}
+            {creditExpired && (
+              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "0 0 9px", lineHeight: 1.5 }}>
+                The credit extension on file has EXPIRED — it no longer sanctions a partial settlement.
+                An FOM has to re-approve it below or settle themselves.
+              </p>
+            )}
             <div className="frow">
               <div className="field">
                 <label>Settlement method</label>
@@ -788,11 +857,71 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                 </div>
               )}
             </div>
-            <button className="btn btn-primary" style={{ background: "var(--green)" }} disabled={!folioLive} onClick={() => setSettleOpen(true)}>
+            <button
+              className="btn btn-primary"
+              style={{ background: "var(--green)" }}
+              disabled={!folioLive || partialLocked}
+              onClick={() => setSettleOpen(true)}
+            >
               <Wallet style={{ width: 14, height: 14 }} />
               Take payment &amp; settle
             </button>
             {!folioLive && <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 0 }}>Folio must be live to settle.</p>}
+            {folioLive && partialLocked && (
+              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "7px 0 0", lineHeight: 1.55 }}>
+                Leaving part of the {money(balance, currency)} balance unpaid needs <b>FOM (L2+)</b> — same rule as
+                the S3 advance. Either an FOM settles this, or they record a credit extension covering the
+                remainder{creditExpired ? " (the one on file expired)" : creditActive ? " (the one on file doesn't cover it)" : ""}.
+              </p>
+            )}
+            {elevated && (
+              <div style={{ marginTop: 11, borderTop: "1px dashed var(--line-2)", paddingTop: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 6 }}>
+                  Let the guest leave owing — credit extension (FOM+)
+                </div>
+                <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 0 7px", lineHeight: 1.5 }}>
+                  Same mechanism as the S3 advance: your approval covers the unpaid remainder, so a partial
+                  (even zero) payment can settle and the rest is collected post-stay. Give it a pay-by date —
+                  past it the cover lapses and the balance reads overdue.
+                </p>
+                <div className="frow">
+                  <div className="field">
+                    <label>Cover up to (Nu)</label>
+                    <input
+                      type="number"
+                      value={creditCeiling}
+                      onChange={(e) => {
+                        creditCeilingTouched.current = true;
+                        setCreditCeiling(e.target.value);
+                      }}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Reason</label>
+                    <input
+                      value={creditReason}
+                      onChange={(e) => setCreditReason(e.target.value)}
+                      placeholder="e.g. bank transfer promised by Friday"
+                    />
+                  </div>
+                </div>
+                <div className="frow">
+                  <div className="field">
+                    <label>Pay by (optional)</label>
+                    <input type="datetime-local" value={creditPayBy} onChange={(e) => setCreditPayBy(e.target.value)} />
+                  </div>
+                  <div className="field" style={{ alignSelf: "end" }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      disabled={!creditCeiling || !creditReason.trim() || creditM.isPending}
+                      onClick={() => creditM.mutate()}
+                    >
+                      {creditM.isPending ? "Approving…" : creditActive || creditExpired ? "Re-approve credit extension" : "Approve credit extension"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -925,10 +1054,15 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           <>
             {/* Partial wording only when the typed figure is genuinely SHORT of the balance —
                 a comparison against the server's figure, no derived money shown. */}
-            {partialAmount && Number.parseFloat(partialAmount) < Number(balance ?? 0) ? (
+            {partialShort ? (
               <>
-                The guest pays <b>{money(Number.parseFloat(partialAmount), currency)}</b> now — the rest of the{" "}
+                The guest pays <b>{money(typedPartial, currency)}</b> now — the rest of the{" "}
                 {money(balance, currency)} balance stays outstanding, collected post-stay.
+                {elevated
+                  ? " Your FOM authority sanctions the remainder."
+                  : creditCovers
+                    ? " The credit extension on file covers it."
+                    : ""}
               </>
             ) : (
               <>

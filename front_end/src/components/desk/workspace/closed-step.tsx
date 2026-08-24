@@ -290,6 +290,33 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
             <label>Outstanding</label>
             <div className="val">{moneyOrDash(fin.outstanding, currency)}</div>
           </div>
+          {/* Checkout credit extension (2026-08-24): a partial settlement at S8 left under FOM
+              credit — the extension's expiry is the pay-by date for this follow-up. Read-time
+              facts from payment-status, same as the S3 surfaces. */}
+          {Number(fin.outstanding ?? 0) > 0 && paymentStatus.data?.creditExtensionActive && (
+            <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginTop: 4, display: "block", lineHeight: 1.55 }}>
+              Credit extended at check-out — up to <b>{moneyOrDash(paymentStatus.data.ceilingAmount, currency)}</b>
+              {paymentStatus.data.creditExtensionExpiresAt ? (
+                <>
+                  {" "}· pay by <b>{new Date(paymentStatus.data.creditExtensionExpiresAt).toLocaleString()}</b>
+                </>
+              ) : (
+                " · no time limit"
+              )}
+              . Collect the balance below by then.
+            </div>
+          )}
+          {Number(fin.outstanding ?? 0) > 0 &&
+            paymentStatus.data?.creditExtensionExpired &&
+            !paymentStatus.data?.creditExtensionActive && (
+              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "4px 0 0", lineHeight: 1.5 }}>
+                The checkout credit extension has EXPIRED
+                {paymentStatus.data.creditExtensionExpiresAt
+                  ? ` (${new Date(paymentStatus.data.creditExtensionExpiresAt).toLocaleString()})`
+                  : ""}{" "}
+                — the balance is overdue.
+              </p>
+            )}
         </div>
 
         {/* Bills & statements (2026-08-22): the master bill frozen at the folio seal (reprints
