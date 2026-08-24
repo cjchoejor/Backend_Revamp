@@ -378,7 +378,7 @@ async function main() {
     data: {
       hotelName: "Legphel Demo Hotel",
       registeredAddress: "Demo Registered Address",
-      tradingAddress: "Demo Trading Address",
+      tradingAddress: "Demo Address",
       contactNumbers: [{ label: "Front Desk", value: "+0000000000" }],
       primaryEmail: "admin@legphel.local",
       operatingHours: { checkIn: "14:00", checkOut: "12:00" },
