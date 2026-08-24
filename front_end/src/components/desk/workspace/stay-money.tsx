@@ -94,11 +94,25 @@ const toLocalInput = (iso: string | null | undefined) => {
 };
 const fromLocalInput = (v: string): string | undefined => (v ? new Date(v).toISOString() : undefined);
 
-function BlockH({ children }: { children: ReactNode }) {
+function BlockH({ children, expanded, onToggle }: { children: ReactNode; expanded?: boolean; onToggle?: () => void }) {
+  // With onToggle the whole header is the collapse control (2026-08-24, operator request —
+  // both money blocks start collapsed); the state tags stay on the header so an open bill or
+  // an overdue payment is never hidden behind the fold.
   return (
-    <div className="block-h">
+    <div
+      className="block-h"
+      onClick={onToggle}
+      role={onToggle ? "button" : undefined}
+      style={onToggle ? { cursor: "pointer", userSelect: "none" } : undefined}
+      title={onToggle ? (expanded ? "Hide this section" : "Show this section") : undefined}
+    >
       {children}
       <span className="ln" />
+      {onToggle && (
+        <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--ink-3)", whiteSpace: "nowrap", letterSpacing: 0.3 }}>
+          {expanded ? "Hide ▴" : "Show ▾"}
+        </span>
+      )}
     </div>
   );
 }
@@ -696,6 +710,8 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
   const [mode, setMode] = useState<"PERCENT" | "AMOUNT">("PERCENT");
   const [value, setValue] = useState("");
   const [note, setNote] = useState("");
+  // Collapsed until opened (2026-08-24, operator request) — the header tags carry the live state.
+  const [expanded, setExpanded] = useState(false);
 
   const createM = useMutation({
     mutationFn: () => createInterimPayment(session!, entryId, { askMode: mode, askValue: Number(value), note: note.trim() || undefined }),
@@ -715,13 +731,15 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
 
   return (
     <div className="block">
-      <BlockH>
+      <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
         <Receipt style={{ width: 13, height: 13 }} />
         Interim payment
         {suggested && <span className="tag warn">Due</span>}
         {open && !suggested && <span className={STATE_TAG[open.state]?.cls ?? "tag"}>{STATE_TAG[open.state]?.label ?? open.state}</span>}
         {open && !suggested && open.reminder?.overdue && <span className="tag stop">Payment overdue</span>}
       </BlockH>
+      {expanded && (
+      <>
       <p style={{ ...hint, fontSize: 12, color: "var(--ink-2)", marginBottom: 8 }}>
         A part payment during a long stay: ask for a share of the <b>projected total</b>, send the bill, record the guest&rsquo;s
         answer, then log the money. The night audit raises a prompt here every few nights on its own.
@@ -810,6 +828,8 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
           ))}
         </div>
       )}
+      </>
+      )}
     </div>
   );
 }
@@ -843,6 +863,8 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
   const [preview, setPreview] = useState<StayExtensionPreview | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
+  // Collapsed until opened (2026-08-24, operator request) — the header tags carry the live state.
+  const [expanded, setExpanded] = useState(false);
 
   // A move-to pick applies one room to every extra night, and names WHICH current room it
   // replaces — on a multi-room booking the backend must not guess that from the room list.
@@ -1200,12 +1222,14 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
 
   return (
     <div className="block">
-      <BlockH>
+      <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
         <CalendarPlus style={{ width: 13, height: 13 }} />
         Extend the stay
         {active && <span className={EXT_TAG[active.state]?.cls ?? "tag"}>{EXT_TAG[active.state]?.label ?? active.state}</span>}
         {activeOverdue && <span className="tag stop">Payment overdue</span>}
       </BlockH>
+      {expanded && (
+      <>
       <p style={{ ...hint, fontSize: 12, color: "var(--ink-2)", marginBottom: 8 }}>
         More nights for an in-house guest. Check the rooms, bill the guest for a share of the stay, take that payment, then commit —
         the checkout moves only at the commit. FOM (L2+).
@@ -1312,6 +1336,8 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );
