@@ -1062,6 +1062,13 @@ model Entry {
   keysIssuedCount Int?
   keysIssuedBy    String?
 
+  /// Early departure (2026-08-22, SIG-S8 §1.2 / Policy 36): the day the guest actually left when
+  /// the stay was shortened at the desk. NULL for every booking that stayed to its frozen checkout.
+  /// The Reservation row is immutable, so this is the denormalised "real end of the stay" every
+  /// date reader goes through via `effectiveCheckOutDate()` — the S7→S8 gate, the settlement
+  /// windows, the inventory claim, the billing summary and the statements.
+  actualCheckOutDate DateTime?
+
   /// SIG-S6 — registration snapshot at check-in completion.
   registrationCompletedAt DateTime?
   registrationCompletedBy String?
@@ -1104,6 +1111,7 @@ model Entry {
   timers                  TimerRecord[]
   interimPaymentRequests  InterimPaymentRequest[]
   stayExtensionRequests   StayExtensionRequest[]
+  earlyDeparture          EarlyDepartureRecord?
   writeOffRecords         WriteOffRecord[]
   followUpTasks           FollowUpTaskRecord[]
   communications          CommunicationRecord[]
@@ -2840,4 +2848,42 @@ model StayExtensionRequest {
   @@index([entryId, state])
   @@index([state, holdExpiresAt])
   @@map("stay_extension_requests")
+}
+
+/// Early departure (2026-08-22, SIG-S8 §1.2 / Policy 36): the one record of a stay shortened at the
+/// desk — what was booked, when the guest actually left, the commitment-snapshot figures the
+/// unstayed nights forgo, and the fee (or its waiver). Written once by `recordEarlyDeparture`; the
+/// assignment rows are end-dated in the same transaction and `Entry.actualCheckOutDate` is the
+/// denormalised copy every date reader uses. Never the rate: the slept nights stay priced exactly
+/// as the freeze priced them (the rate is not renegotiated as a condition of leaving early).
+model EarlyDepartureRecord {
+  id                   String   @id // readable ED-YYYYMMDD-NNNN — allocateReadableId("EARLY_DEPARTURE")
+  entryId              String   @unique
+  segmentId            String?
+  reservationId        String?
+  originalCheckOutDate DateTime
+  departureDate        DateTime
+  bookedNights         Int
+  sleptNights          Int
+  unstayedNights       Int
+  /// NET room charges the unstayed nights would have posted (Σ per-row frozenSubtotal share).
+  forgoneRoomSubtotal  Decimal  @db.Decimal(15, 2)
+  /// Tax-inclusive counterpart (Σ per-row frozenTotal share) — what the stay total drops by.
+  forgoneRoomTotal     Decimal  @db.Decimal(15, 2)
+  /// Per assignment row: { assignmentId, roomId, roomNumber, totalNights, sleptNights, unstayedNights, forgoneSubtotal, forgoneTotal }.
+  rooms                Json
+  /// The resolved `earlyDeparture.penalty` rule and the arithmetic behind `feeAmount`.
+  feeBasis             Json
+  /// NET fee posted on the folio (SC/GST companions follow the charge); 0 when waived or none.
+  feeAmount            Decimal  @db.Decimal(15, 2)
+  feeWaived            Boolean  @default(false)
+  feeFolioLineId       String?
+  reason               String
+  recordedAt           DateTime @default(now())
+  recordedBy           String
+  recordedByLevel      String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@map("early_departure_records")
 }

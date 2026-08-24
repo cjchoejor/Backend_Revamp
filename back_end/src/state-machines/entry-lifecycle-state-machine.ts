@@ -30,6 +30,8 @@ import { enforceDeficientRecordsHaveTerminalStatusForS7ToS8 } from "../policies/
 import { enforceCheckoutDatePresentForS7ToS8, enforceOccupiedRoomAssignmentForS7ToS8 } from "../policies/01-availability/p01-s7-exit-room-and-checkout-gates.js";
 import { enforceH4InitiatedBeforeS7ToS8UnlessSameDayDeparture } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8 } from "../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
+import { enforceDepartureNotBeforeBookedCheckout } from "../policies/14-cancellation/p36-early-departure.js";
+import { effectiveCheckOutDate, hotelTodayUtc, utcDateOnly } from "../lib/stay-dates.js";
 import { enforceNoUnresolvedNightAuditAnomaliesForS7ToS8 } from "../policies/24-night-audit/p60-unresolved-night-audit-anomalies-for-s7-to-s8.js";
 import {
   enforceEntryActiveForStageTransition,
@@ -467,15 +469,22 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   const bad = deficient.find((d) => d.status !== "RESOLVED" && d.status !== "UNRESOLVED");
   enforceDeficientRecordsHaveTerminalStatusForS7ToS8({ hasDeficientWithoutFinalStatus: !!bad });
 
+  // The stay ends on the EFFECTIVE checkout (2026-08-22): the early-departure date when one was
+  // recorded (Policy 36 shortened the stay first), else the frozen one. Everything below - the
+  // same-day H4 auto-fulfil, the date gate, the final-night audit - is keyed on it.
+  const hotelToday = hotelTodayUtc();
+  const checkout = effectiveCheckOutDate(entry);
+  enforceCheckoutDatePresentForS7ToS8({ checkout });
+  // Policy 36: the standard route is for a guest who slept every booked night. Before the booked
+  // checkout day this is an early departure, which must be RECORDED (GM) before checking out -
+  // it used to sail through here and bill the unstayed nights (ENT-20260814-0001, 2026-08-16).
+  enforceDepartureNotBeforeBookedCheckout({ hotelToday, checkOut: checkout });
+
   const h4 = entry.handoffs[0];
-  const checkoutForH4 = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
-  const nowForH4 = new Date();
-  const isSameDayDeparture = checkoutForH4 ? checkoutForH4.toISOString().slice(0, 10) === nowForH4.toISOString().slice(0, 10) : false;
+  const isSameDayDeparture = checkout ? utcDateOnly(checkout).getTime() === hotelToday.getTime() : false;
   const h4Valid = !!(h4 && ["CREATED", "ACCEPTED", "FULFILLED"].includes(String(h4.state)) && !h4.rejectedAt);
   enforceH4InitiatedBeforeS7ToS8UnlessSameDayDeparture({ h4Valid, isSameDayDeparture });
 
-  const checkout = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
-  enforceCheckoutDatePresentForS7ToS8({ checkout });
   const lastNight = new Date(Date.UTC(checkout!.getUTCFullYear(), checkout!.getUTCMonth(), checkout!.getUTCDate() - 1, 0, 0, 0, 0));
   const audit = await prisma.nightAuditRecord.findUnique({ where: { operatingDate: lastNight } });
   enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8({ nightAudit: audit });
@@ -500,9 +509,6 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   await prisma.$transaction(async (tx) => {
     // If H4 missing but same-day departure, auto-create + auto-fulfil (AC-S7-16).
     if (!h4 || !["CREATED", "ACCEPTED", "FULFILLED"].includes(h4.state) || h4.rejectedAt) {
-      const checkout = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
-      const today = now.toISOString().slice(0, 10);
-      const isSameDayDeparture = checkout ? checkout.toISOString().slice(0, 10) === today : false;
       if (isSameDayDeparture) {
         const h4Id = await allocateReadableId(tx, "HANDOFF" as const, now);
         const created = await tx.handoffRecord.create({

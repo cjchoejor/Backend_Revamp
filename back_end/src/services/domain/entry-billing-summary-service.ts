@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
@@ -52,6 +52,23 @@ export interface EntryBillingSummary {
     nights: number | null;
     /** Flat path only — the quotation row's own per-night figure. */
     perNightAmount: number | null;
+    /**
+     * Early departure (2026-08-22, Policy 36): the stay was shortened at the desk. `amount` above
+     * is already the shortened figure (the basis total less the unstayed nights' frozen room
+     * totals); this block says by how much and why, so the header can caption it.
+     */
+    earlyDeparture: {
+      departureDate: string;
+      originalCheckOutDate: string;
+      sleptNights: number;
+      unstayedNights: number;
+      /** Tax-inclusive room total of the unstayed nights, taken off the basis total. */
+      forgoneRoomTotal: number;
+      /** The basis total BEFORE the shortening. */
+      bookedStayTotal: number | null;
+      feeAmount: number;
+      feeWaived: boolean;
+    } | null;
   };
   /**
    * Per-room price breakdown (2026-08-13, operator request) — read from the basis quotation's
@@ -150,6 +167,17 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       segments: { orderBy: { segmentNumber: "desc" }, select: { id: true, segmentNumber: true } },
       reservation: { select: { segmentId: true, frozenCheckInDate: true, frozenCheckOutDate: true, frozenCommercialTerms: true } },
       folio: { select: { id: true, state: true, outstandingBalance: true } },
+      earlyDeparture: {
+        select: {
+          departureDate: true,
+          originalCheckOutDate: true,
+          sleptNights: true,
+          unstayedNights: true,
+          forgoneRoomTotal: true,
+          feeAmount: true,
+          feeWaived: true,
+        },
+      },
     },
   });
   if (!entry) throw new NotFoundError("Entry");
@@ -414,6 +442,30 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     };
   }
 
+  // Early departure (2026-08-22): the quotation still prices every booked night, but the guest
+  // left early — the stay total the header shows is the basis total LESS the unstayed nights'
+  // frozen room totals (the same figures the night audit would have posted), never below zero;
+  // nights follows the nights actually slept.
+  let earlyDepartureBlock: EntryBillingSummary["stayTotal"]["earlyDeparture"] = null;
+  if (entry.earlyDeparture) {
+    const ed = entry.earlyDeparture;
+    const bookedStayTotal = money(stayTotalDec);
+    if (stayTotalDec != null) {
+      const shortened = stayTotalDec.minus(toDecimal(ed.forgoneRoomTotal));
+      stayTotalDec = shortened.lessThan(0) ? new Prisma.Decimal(0) : shortened;
+    }
+    earlyDepartureBlock = {
+      departureDate: ed.departureDate.toISOString().slice(0, 10),
+      originalCheckOutDate: ed.originalCheckOutDate.toISOString().slice(0, 10),
+      sleptNights: ed.sleptNights,
+      unstayedNights: ed.unstayedNights,
+      forgoneRoomTotal: money(toDecimal(ed.forgoneRoomTotal)) ?? 0,
+      bookedStayTotal,
+      feeAmount: money(toDecimal(ed.feeAmount)) ?? 0,
+      feeWaived: ed.feeWaived,
+    };
+  }
+
   const stayTotal = money(stayTotalDec);
   const headline: EntryBillingSummary["headline"] =
     stayTotal != null
@@ -434,8 +486,9 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       quotationId: basisQuote?.id ?? null,
       quotationState: basisQuote?.state ?? null,
       segmentNumber: basisQuote?.segmentId ? segmentNumberById.get(basisQuote.segmentId) ?? null : null,
-      nights,
+      nights: earlyDepartureBlock ? earlyDepartureBlock.sleptNights : nights,
       perNightAmount,
+      earlyDeparture: earlyDepartureBlock,
     },
     rooms,
     folio: folioBlock,

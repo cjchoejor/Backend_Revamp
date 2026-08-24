@@ -28,6 +28,7 @@ import { buildSegmentHistory } from "../../services/domain/segment-history-servi
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
+import { previewEarlyDeparture, recordEarlyDeparture } from "../../services/domain/early-departure-service.js";
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
@@ -38,6 +39,8 @@ import {
   stayExtensionCommitRequestSchema,
   stayExtensionPreviewRequestSchema,
   stayExtensionRequestSchema,
+  earlyDeparturePreviewRequestSchema,
+  earlyDepartureRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
 import {
   commitStayExtension,
@@ -100,6 +103,38 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
  * Commit (FOM, only once the interim payment is in): the governed journey — new segment,
  * silent re-quote over the extended stay, re-freeze with the new checkout, back at S7.
  */
+/**
+ * Early departure (2026-08-22, SIG-S8 section 1.2 / Policy 36): a guest leaving before the booked
+ * checkout. Preview (L1): the figures against the commitment snapshot, the fee the configured rule
+ * yields, the slept nights still needing their audit, and every blocker - nothing written. Record
+ * (L3, GM): shortens the stay, posts or waives the fee, releases the unstayed nights and compresses
+ * into S8; the outcome says honestly whether the move happened.
+ */
+entriesRouter.post("/:id/early-departure/preview", requireActorLevel("L1"), validateBody(earlyDeparturePreviewRequestSchema), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await previewEarlyDeparture(prisma, req.params.id, { departureDate: req.body.departureDate ?? null }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/early-departure", requireActorLevel("L3"), validateBody(earlyDepartureRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await recordEarlyDeparture(prisma, actor, req.params.id, {
+        departureDate: req.body.departureDate ?? null,
+        reason: req.body.reason,
+        waiveFee: req.body.waiveFee === true,
+        waiveReason: req.body.waiveReason ?? null,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
 entriesRouter.post("/:id/stay-extension/preview", requireActorLevel("L1"), validateBody(stayExtensionPreviewRequestSchema), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");

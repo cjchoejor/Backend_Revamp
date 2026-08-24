@@ -24,6 +24,7 @@
  * WITHOUT rendering a PDF, writing storage, or snapshotting InvoiceLine rows.
  */
 import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
+import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import {
@@ -131,7 +132,8 @@ function invoicePrelude(inv: LoadedInvoice) {
   const terms = (quotation?.commercialTerms as QuotationTerms) ?? null;
 
   const checkIn = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? new Date();
-  const rawCheckOut = inv.entry.reservation?.frozenCheckOutDate ?? inv.entry.checkOutDate ?? null;
+  // Early departure (2026-08-22): the document prints the stay as it really ended.
+  const rawCheckOut = effectiveCheckOutDate(inv.entry);
   // Nights: the priced figure when the quote carries one, else the real stay length —
   // previously a missing terms value silently collapsed a 3-night stay to "1 night".
   const termNights = Number(terms?.pricingBreakdown?.nights ?? NaN);

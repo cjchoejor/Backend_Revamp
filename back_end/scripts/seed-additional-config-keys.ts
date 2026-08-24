@@ -32,6 +32,12 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
       "Stay extension (2026-08-21): how long the extra nights stay claimed while the interim payment comes in; W40 releases them when it runs out unpaid.",
   },
   {
+    key: "earlyDeparture.penalty",
+    value: { basis: "UNSTAYED_NIGHTS", nights: 1, percent: 100, amount: 0, perRatePlan: {} },
+    notes:
+      "Early departure fee (2026-08-22, Policy 36): basis NONE | FLAT_AMOUNT (amount, net) | UNSTAYED_NIGHTS (up to nights unstayed nights at the frozen per-night room figure x percent/100) | PERCENT_OF_UNSTAYED (percent of every unstayed night frozen room figure); perRatePlan overrides by rate plan id. Posted on the live folio as a SERVICE charge; the GM may waive it.",
+  },
+  {
     key: "expiry.parking.followUpDays",
     value: 30,
     notes:

@@ -13,6 +13,7 @@ import {
   reservedEntryRoomsSelect,
   roomsClaimedByReservedEntry,
   stillHoldsInventory,
+  reservedClaimEndDate,
 } from "../../lib/entry-inventory-claim.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
 import {
@@ -268,11 +269,13 @@ export async function runAvailabilityEngineForEntry(
   // assignments once they exist, and from the committed hold before that — a reservation made
   // at S4 has no assignments until pre-arrival, and without the fallback its rooms went
   // unblocked the moment the hold's TTL lapsed.
+  // Early departure (2026-08-22): a shortened stay blocks only up to the day the guest actually
+  // left - the claim end comes from `reservedClaimEndDate`, never from the frozen date alone.
   const reservedBlockages = reservations.flatMap((r) =>
     roomsClaimedByReservedEntry(r.entry).map((roomId) => ({
       roomId,
       startDate: r.frozenCheckInDate,
-      endDate: r.frozenCheckOutDate,
+      endDate: reservedClaimEndDate(r.frozenCheckOutDate, r.entry),
       source: "RESERVED" as const,
       // Confirmed while the advance was still short — the desk labels these nights
       // "Held · payment pending" rather than "Reserved". Same block either way.

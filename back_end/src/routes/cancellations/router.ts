@@ -49,9 +49,13 @@ cancellationsRouter.post(
   },
 );
 
+// SIG-S7 section 8.9 / Part 6: the S7 cancellation path is GM (L3) territory - was L2 until 2026-08-22.
+// This is the TERMINAL route (guest walks out, booking CANCELLED); a guest who simply leaves before
+// the booked checkout is an early departure and goes through POST /entries/:id/early-departure,
+// which shortens the stay and settles through S8/S9. Kept for API compatibility.
 cancellationsRouter.post(
   "/entries/:id/cancel-early-departure",
-  requireActorLevel("L2"),
+  requireActorLevel("L3"),
   validateBody(cancelEarlyDepartureRequestSchema),
   async (req, res, next) => {
     try {

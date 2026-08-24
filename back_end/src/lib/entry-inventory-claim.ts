@@ -41,12 +41,30 @@ export const stillHoldsInventory = {
 export const reservedEntryRoomsSelect = {
   roomAssignments: { select: { roomId: true } },
   committedHold: { select: { roomId: true, perNightBreakdown: true } },
+  // Early departure (2026-08-22): the day the guest actually left, when earlier than booked -
+  // the Reservation row is immutable, so the entry carries the real end of the claim.
+  actualCheckOutDate: true,
 } as const;
 
 type ReservedEntryRooms = {
   roomAssignments?: Array<{ roomId: string }> | null;
   committedHold?: { roomId: string | null; perNightBreakdown?: Prisma.JsonValue | null } | null;
+  actualCheckOutDate?: Date | null;
 };
+
+/**
+ * The night a RESERVED claim really ends (exclusive): the frozen checkout, or the earlier day the
+ * guest actually left (Policy 36 early departure). A shortened stay frees its unstayed nights the
+ * moment the departure is recorded - not when the booking finally closes - so the S1 search and
+ * the hold/conflict gates must read the claim end from here, never from the reservation alone.
+ */
+export function reservedClaimEndDate(
+  frozenCheckOutDate: Date,
+  entry: { actualCheckOutDate?: Date | null } | null | undefined,
+): Date {
+  const actual = entry?.actualCheckOutDate ?? null;
+  return actual && actual.getTime() < frozenCheckOutDate.getTime() ? actual : frozenCheckOutDate;
+}
 
 /** One room's claim over one span of nights. `endDate` is the EXCLUSIVE checkout. */
 export type ClaimSpan = { roomId: string; startDate: Date; endDate: Date };

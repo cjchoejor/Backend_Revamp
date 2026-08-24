@@ -486,6 +486,20 @@ export async function cancelEntryAtS5(
     }
 
     await recomputeFolioOutstandingBalance(tx, folio.id);
+    const recomputed = await tx.folio.findUnique({ where: { id: folio.id }, select: { outstandingBalance: true } });
+
+    // Part 13 "folio financial residue governed" (2026-08-22): the folio used to stay LIVE forever
+    // behind a CANCELLED booking - nothing could ever settle it. Seal it the way checkout does:
+    // OUTSTANDING while money is owed (the S9 follow-up machinery can chase it), SETTLED at zero.
+    const residual = Number((recomputed as { outstandingBalance?: unknown } | null)?.outstandingBalance ?? 0);
+    await tx.folio.update({
+      where: { id: folio.id },
+      data: {
+        state: Number.isFinite(residual) && residual > 0 ? FolioState.OUTSTANDING : FolioState.SETTLED,
+        closedAt: now,
+        closedBy: actorId,
+      },
+    });
 
     return tx.entry.update({
       where: { id: entryId },

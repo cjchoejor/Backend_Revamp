@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s8CheckoutService from "./s8-checkout-service.js";
@@ -220,12 +221,16 @@ export async function initiateSettlement(
   const outstanding = Number(outstandingDecScoped.toFixed(2));
   if (outstanding < 0) throw new ValidationError("Folio outstandingBalance cannot be negative at settlement");
 
+  // Early departure (2026-08-22): a shortened stay settles over the nights actually slept -
+  // the effective checkout, never the frozen one (which would demand audits for, and room
+  // charges on, nights the guest never spent here).
+  const settlementCheckOut = entry.reservation ? effectiveCheckOutDate(entry) ?? entry.reservation.frozenCheckOutDate : null;
   let incompleteNightAuditDates: string[] = [];
-  if (entry.reservation) {
+  if (entry.reservation && settlementCheckOut) {
     incompleteNightAuditDates = await findIncompleteStayNightAuditDatesUtc(
       prisma,
       entry.reservation.frozenCheckInDate,
-      entry.reservation.frozenCheckOutDate,
+      settlementCheckOut,
     );
   }
   enforceNightAuditsCompleteForStayBeforeSettlement({
@@ -263,8 +268,8 @@ export async function initiateSettlement(
     where: { folioId },
     select: { chargeDate: true, lineType: true, amount: true },
   });
-  if (entry.reservation) {
-    const stayNights = listStayNightOperatingDatesUtc(entry.reservation.frozenCheckInDate, entry.reservation.frozenCheckOutDate);
+  if (entry.reservation && settlementCheckOut) {
+    const stayNights = listStayNightOperatingDatesUtc(entry.reservation.frozenCheckInDate, settlementCheckOut);
     // Per-room composition basis (2026-08-17): when the assignments carry frozen composition
     // subtotals, the audit posts room+meals per room per night from exactly these figures —
     // so Σ frozenSubtotal is the correct expectation. `frozenRate × nights` (one room's
@@ -283,7 +288,7 @@ export async function initiateSettlement(
       totalRoomChargesInStayWindow: sumRoomChargesInStayWindowUtc(
         folioLines,
         entry.reservation.frozenCheckInDate,
-        entry.reservation.frozenCheckOutDate,
+        settlementCheckOut,
       ),
       skipNumericReconciliation: amendments.length > 0,
       relativeTolerance: 0.02,

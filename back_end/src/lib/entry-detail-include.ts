@@ -52,6 +52,9 @@ export const entryDetailInclude = {
     },
   },
   stayExtensionRequests: { orderBy: { createdAt: "desc" as const }, take: 5 },
+  // Early departure (2026-08-22): the one record of a shortened stay - the desk prints its facts
+  // on every step from Stay onward.
+  earlyDeparture: true,
   inquiry: { include: { agentProfile: { select: { id: true, displayName: true, commissionRate: true, commissionBasis: true } } } },
 } satisfies Prisma.EntryInclude;
 

@@ -1,4 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { enforceNightAuditOperatingDateEnded } from "../../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
+import { hotelTodayUtc } from "../../lib/stay-dates.js";
 import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -28,6 +30,12 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
   const d = new Date(input.operatingDate);
   if (Number.isNaN(d.getTime())) throw new ValidationError("operatingDate must be a valid ISO date");
   const operatingDate = operatingDateUtc(d);
+
+  // Policy 61 (2026-08-22): only a night that has ENDED on the hotel calendar is auditable. The
+  // desk used "run it for today" to audit the final night in the morning and check a guest out a
+  // day early through the standard route; and because this record is hotel-wide and the rerun
+  // below is idempotent, the real nightly run then posted nothing for everyone else that night.
+  enforceNightAuditOperatingDateEnded({ operatingDate, hotelToday: hotelTodayUtc() });
 
   const existing = await prisma.nightAuditRecord.findUnique({ where: { operatingDate } });
   if (existing) {

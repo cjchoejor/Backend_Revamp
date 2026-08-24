@@ -146,6 +146,12 @@ async function main() {
         "Stay extension (2026-08-21): how long the extra nights stay claimed for the guest while the interim invoice goes out and the payment comes in. W40 releases them and lapses the request when it runs out unpaid. 86400 = 24 hours.",
     },
     {
+      configKey: "earlyDeparture.penalty",
+      configValue: { basis: "UNSTAYED_NIGHTS", nights: 1, percent: 100, amount: 0, perRatePlan: {} },
+      notes:
+        "Early departure fee (2026-08-22, Policy 36 - early departure penalty terms per rate plan). basis: NONE | FLAT_AMOUNT (amount, net) | UNSTAYED_NIGHTS (up to nights unstayed nights at the frozen per-night room figure x percent/100) | PERCENT_OF_UNSTAYED (percent of every unstayed night frozen room figure). perRatePlan: { <ratePlanId>: { same shape } } overrides by the reservation frozen rate plan. Posted on the live folio as a SERVICE charge (SC/GST companions follow); the GM may waive it. The slept nights are never re-priced.",
+    },
+    {
       configKey: "expiry.parking.followUpDays",
       configValue: 30,
       notes:

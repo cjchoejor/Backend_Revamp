@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { toDecimal } from "../../lib/money.js";
@@ -94,7 +95,8 @@ function folioSealedAt(folio: Context["folio"]): Date | null {
 
 function stayFrame(entry: Context): { checkIn: Date | null; checkOut: Date | null; nights: number | null } {
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
-  const checkOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
+  // Early departure (2026-08-22): the statements frame the stay as it really ended.
+  const checkOut = effectiveCheckOutDate(entry);
   const nights =
     checkIn && checkOut ? Math.max(0, Math.round((checkOut.getTime() - checkIn.getTime()) / 86_400_000)) : null;
   return { checkIn, checkOut, nights };

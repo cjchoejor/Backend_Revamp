@@ -220,3 +220,21 @@ export const schedulePaymentMilestonesRequestSchema = z.object({
   dueAt: z.string().optional(),
 });
 export type SchedulePaymentMilestonesRequestDto = z.infer<typeof schedulePaymentMilestonesRequestSchema>;
+
+/** Early departure (2026-08-22, Policy 36) - preview the figures for a departure date (default: today). */
+export const earlyDeparturePreviewRequestSchema = z.object({
+  departureDate: z.string().trim().min(10).max(40).optional(),
+});
+export type EarlyDeparturePreviewRequestDto = z.infer<typeof earlyDeparturePreviewRequestSchema>;
+
+/** Early departure (2026-08-22, Policy 36) - record it (GM): shortens the stay, posts or waives the fee, moves to Check-out. */
+export const earlyDepartureRequestSchema = z
+  .object({
+    departureDate: z.string().trim().min(10).max(40).optional(),
+    reason: z.string().trim().min(1, "A reason for the early departure is required").max(500),
+    waiveFee: z.boolean().optional(),
+    waiveReason: z.string().trim().max(300).optional(),
+  })
+  .refine((v) => !v.waiveFee || !!v.waiveReason?.trim(), { message: "Waiving the fee needs a reason", path: ["waiveReason"] });
+export type EarlyDepartureRequestDto = z.infer<typeof earlyDepartureRequestSchema>;
+

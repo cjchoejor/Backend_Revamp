@@ -5,6 +5,7 @@ import {
   reservedEntryRoomsSelect,
   roomsClaimedByReservedEntry,
   stillHoldsInventory,
+  reservedClaimEndDate,
 } from "./entry-inventory-claim.js";
 
 /**
@@ -160,6 +161,11 @@ export async function findRoomBookingConflicts(
   const reservedKeys = new Set<string>();
   const heldKeys = new Set<string>();
   for (const r of reservations) {
+    // Early departure (2026-08-22): the claim ends the day the guest actually left, so a shortened
+    // stay frees its unstayed nights at once. A claim that ends before the asked window is no
+    // conflict at all (the where-clause above still selects it by the frozen dates).
+    const claimEnd = reservedClaimEndDate(r.frozenCheckOutDate, r.entry);
+    if (claimEnd.getTime() <= input.checkIn.getTime()) continue;
     for (const roomId of roomsClaimedByReservedEntry(r.entry)) {
       if (!roomIdSet.has(roomId)) continue;
       reservedKeys.add(`${r.entryId}:${roomId}`);
@@ -170,7 +176,7 @@ export async function findRoomBookingConflicts(
         entryReferenceNumber: r.entry?.inquiryId ?? null,
         guestName: guestNameOf(r.entry?.guestProfile),
         startDate: r.frozenCheckInDate,
-        endDate: r.frozenCheckOutDate,
+        endDate: claimEnd,
       });
     }
   }

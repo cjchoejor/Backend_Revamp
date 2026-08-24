@@ -96,6 +96,10 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "interimPayment.reminder": { validate: isObject, owner: "ConfigurationService" },
   // How long a requested stay extension keeps its extra nights claimed while unpaid (W40).
   "stayExtension.holdTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
+  // Early departure fee (2026-08-22, Policy 36 "early departure penalty terms per rate plan") -
+  // { basis: NONE | FLAT_AMOUNT | UNSTAYED_NIGHTS | PERCENT_OF_UNSTAYED, amount, nights, percent,
+  //   perRatePlan: { <ratePlanId>: { same shape } } }.
+  "earlyDeparture.penalty": { validate: isObject, owner: "ConfigurationService" },
   "ownership.assignmentRules": { validate: isArray, owner: "ConfigurationService" },
   "billingModel.availablePerSource": { validate: isObject, owner: "ConfigurationService" },
 

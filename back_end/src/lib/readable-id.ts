@@ -31,6 +31,8 @@ export const READABLE_ID_DEFAULT_PREFIXES = {
   PAYMENT: "PMT",
   AMENDMENT: "AMD",
   COMMUNICATION: "MSG",
+  // Early departure (2026-08-22, Policy 36) - the one record of a stay shortened at the desk.
+  EARLY_DEPARTURE: "ED",
   // Phase B — travel agents, corporate accounts, rate cards
   TRAVEL_AGENT: "TA",
   CORPORATE_ACCOUNT: "CORP",
@@ -66,6 +68,7 @@ export const READABLE_ID_ENTITIES: ReadableIdEntity[] = [
   "ROOM_ASSIGNMENT",
   "ROOM_INSPECTION",
   "WORK_ORDER",
+  "EARLY_DEPARTURE",
   // Phase B
   "TRAVEL_AGENT",
   "CORPORATE_ACCOUNT",
