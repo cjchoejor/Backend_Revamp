@@ -1984,6 +1984,11 @@ model KeyReturnRecord {
   returnedAt         DateTime
   keyCountIssued     Int
   keyCountReturned   Int
+  // How many of the missing keys the guest declared LOST, as opposed to merely unaccounted for
+  // (miscount, guest will post it back, second key never collected). SIG-S8 §2.5 names the lost
+  // key as the case reconciliationNote documents; storing the count makes it a fact both
+  // frontends can read rather than free text one of them has to parse. Requires a comment.
+  keyCountLost       Int      @default(0)
   countReconciled    Boolean
   reconciliationNote String?
   createdAt          DateTime @default(now())

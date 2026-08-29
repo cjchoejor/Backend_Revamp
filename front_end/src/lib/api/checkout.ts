@@ -12,7 +12,7 @@ export { postFolioCharge, correctFolioCharge } from "./in-stay";
 export async function recordKeyReturn(
   session: Session,
   entryId: string,
-  body: { keyCountReturned: number; reconciliationNote?: string },
+  body: { keyCountReturned: number; keyCountLost?: number; reconciliationNote?: string },
 ) {
   return apiRequest<KeyReturnSummary>(`/api/entries/${entryId}/key-return`, {
     method: "POST",

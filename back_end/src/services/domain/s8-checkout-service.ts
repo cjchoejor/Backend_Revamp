@@ -32,13 +32,24 @@ export async function getEntryWithRoom(db: DbClient, entryId: string) {
   return { entry, room, assignment };
 }
 
-export async function recordKeyReturn(prisma: PrismaClient, entryId: string, actorId: string, input: { keyCountReturned: number; reconciliationNote?: string }) {
+export async function recordKeyReturn(prisma: PrismaClient, entryId: string, actorId: string, input: { keyCountReturned: number; keyCountLost?: number; reconciliationNote?: string }) {
   if (!Number.isInteger(input.keyCountReturned) || input.keyCountReturned < 0) throw new ValidationError("keyCountReturned must be a non-negative integer");
+  const lost = input.keyCountLost ?? 0;
+  if (!Number.isInteger(lost) || lost < 0) throw new ValidationError("keyCountLost must be a non-negative integer");
   const { entry, room } = await getEntryWithRoom(prisma, entryId);
   enforceEntryAtS8ForKeyReturn({ currentStage: entry.currentStage });
   const issued = entry.keysIssuedCount ?? 0;
+  if (input.keyCountReturned + lost > issued) {
+    throw new ValidationError(`Keys returned (${input.keyCountReturned}) plus keys lost (${lost}) cannot exceed the ${issued} issued at check-in`);
+  }
   const reconciled = input.keyCountReturned === issued;
-  if (!reconciled && !input.reconciliationNote?.trim()) {
+  const note = input.reconciliationNote?.trim();
+  // A declared loss without an explanation is not a record of anything — SIG-S8 §2.5 expects the
+  // note to carry the governed resolution (what was lost, and what charge if any was assessed).
+  if (lost > 0 && !note) {
+    throw new ValidationError("reconciliationNote is required when any key is declared lost");
+  }
+  if (!reconciled && !note) {
     throw new ValidationError("reconciliationNote is required when keyCountReturned differs from keysIssuedCount");
   }
   const now = new Date();
@@ -53,13 +64,16 @@ export async function recordKeyReturn(prisma: PrismaClient, entryId: string, act
         returnedAt: now,
         keyCountIssued: issued,
         keyCountReturned: input.keyCountReturned,
+        keyCountLost: lost,
         countReconciled: reconciled,
-        reconciliationNote: reconciled ? null : input.reconciliationNote?.trim(),
+        // A note explaining a declared loss is kept even when the counts happen to reconcile
+        // (issued 0, or a replacement key handed back), otherwise the explanation is discarded.
+        reconciliationNote: reconciled && lost === 0 ? null : note,
       },
     });
     await tx.traceEvent.create({
       data: {
-        eventType: reconciled ? "KEY_RETURN.RECORDED" : "KEY_RETURN.DISCREPANCY",
+        eventType: lost > 0 ? "KEY_RETURN.KEYS_LOST" : reconciled ? "KEY_RETURN.RECORDED" : "KEY_RETURN.DISCREPANCY",
         actorId,
         actorLevel: "L1",
         entityType: "KeyReturnRecord",
@@ -69,7 +83,7 @@ export async function recordKeyReturn(prisma: PrismaClient, entryId: string, act
         stageContext: entry.currentStage,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, reconciled, reconciliationNote: reconciled ? null : input.reconciliationNote?.trim() ?? null },
+        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, keyCountLost: lost, reconciled, reconciliationNote: reconciled && lost === 0 ? null : note ?? null },
         createdBy: actorId,
       },
     });

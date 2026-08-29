@@ -28,6 +28,7 @@ import * as spaceAllocationService from "../../services/domain/space-allocation-
 import * as s3HoldService from "../../services/domain/s3-hold-service.js";
 import * as s3ReEntryService from "../../services/domain/s3-reentry-service.js";
 import * as s3ReservationSetupService from "../../services/domain/s3-reservation-setup-service.js";
+import { recommendBillingModelForEntry } from "../../services/domain/billing-model-recommendation.js";
 import * as s3UseTypeService from "../../services/domain/s3-use-type-service.js";
 import * as reservationService from "../../services/domain/reservation-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
@@ -388,6 +389,21 @@ reservationsRouter.post(
     }
   },
 );
+
+/**
+ * What billing model S3 should pre-select, and why (2026-08-04).
+ *
+ * A recommendation, not a decision — the desk shows it preselected with the reason and the
+ * operator may pick anything in `allowed`. Lives in the backend because "who settles the bill"
+ * is a business rule; it was previously a hardcoded GUEST_PAY in one frontend.
+ */
+reservationsRouter.get("/entries/:id/billing-model-recommendation", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await recommendBillingModelForEntry(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
 
 reservationsRouter.post("/entries/:id/folio/provisional", requireActorLevel("L1"), validateBody(ensureProvisionalFolioRequestSchema), async (req, res, next) => {
   try {

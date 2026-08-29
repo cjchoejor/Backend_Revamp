@@ -392,6 +392,8 @@ export type KeyReturnSummary = {
   roomId: string;
   keyCountIssued: number;
   keyCountReturned: number;
+  /** Of the missing keys, how many the guest declared lost. `reconciliationNote` carries why. */
+  keyCountLost: number;
   countReconciled: boolean;
   reconciliationNote?: string | null;
   returnedAt: string;

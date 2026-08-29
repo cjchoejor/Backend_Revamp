@@ -68,6 +68,8 @@ export type ReassignEntryCustodianRequestDto = z.infer<typeof reassignEntryCusto
 
 export const recordKeyReturnRequestSchema = z.object({
   keyCountReturned: z.coerce.number().int().min(0),
+  /** How many of the missing keys the guest declared lost. Requires reconciliationNote as the comment. */
+  keyCountLost: z.coerce.number().int().min(0).optional(),
   reconciliationNote: z.string().optional(),
 });
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;

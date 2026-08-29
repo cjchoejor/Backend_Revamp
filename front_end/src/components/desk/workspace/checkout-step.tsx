@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Handshake, KeyRound, Receipt, Scale, Search, Wallet } from "lucide-react";
+import { AlertTriangle, Check, Handshake, KeyRound, Receipt, Scale, Search, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
@@ -83,7 +83,9 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const checkoutChargeDate = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
   const checkoutChargeYmd = checkoutChargeDate ? checkoutChargeDate.slice(0, 10) : null;
 
-  const [keysReturned, setKeysReturned] = useState(String(keysIssued || 1));
+  const [keyOutcome, setKeyOutcome] = useState<"RETURNED" | "LOST">("RETURNED");
+  const [keysReturned, setKeysReturned] = useState(String(Math.max(keysIssued - 1, 0)));
+  const [keysLost, setKeysLost] = useState(keysIssued > 0 ? "1" : "0");
   const [keyReconcileNote, setKeyReconcileNote] = useState("");
   const [inspectionDeferred, setInspectionDeferred] = useState(false);
   const [deficientFlagStatus, setDeficientFlagStatus] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE">(
@@ -131,11 +133,20 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   );
   const keyReturnM = useMutation(
     wrap(() => {
-      const n = Number.parseInt(keysReturned, 10);
-      if (!Number.isInteger(n) || n < 0) throw new Error("Invalid key count");
-      const body: { keyCountReturned: number; reconciliationNote?: string } = { keyCountReturned: n };
-      if (n !== keysIssued) body.reconciliationNote = keyReconcileNote.trim();
-      return recordKeyReturn(session!, entry.id, body);
+      if (keyOutcome === "RETURNED") {
+        return recordKeyReturn(session!, entry.id, { keyCountReturned: keysIssued });
+      }
+      const ret = Number.parseInt(keysReturned, 10);
+      const lost = Number.parseInt(keysLost, 10);
+      if (!Number.isInteger(ret) || ret < 0) throw new Error("Invalid returned count");
+      if (!Number.isInteger(lost) || lost < 1) throw new Error("Enter how many keys were lost");
+      if (ret + lost > keysIssued) throw new Error(`Only ${keysIssued} key${keysIssued === 1 ? "" : "s"} were issued at check-in`);
+      if (!keyReconcileNote.trim()) throw new Error("A comment is required when a key is lost");
+      return recordKeyReturn(session!, entry.id, {
+        keyCountReturned: ret,
+        keyCountLost: lost,
+        reconciliationNote: keyReconcileNote.trim(),
+      });
     }, "Key return recorded"),
   );
   const inspectionM = useMutation(
@@ -303,26 +314,52 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         </BlockH>
         {keyReturn ? (
           <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 12.5 }}>
-            <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
+            {keyReturn.keyCountLost > 0 ? (
+              <AlertTriangle style={{ width: 14, height: 14, color: "var(--warn)" }} />
+            ) : (
+              <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
+            )}
             Returned {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued}
-            {keyReturn.countReconciled ? " · reconciled" : keyReturn.reconciliationNote ? ` · ${keyReturn.reconciliationNote}` : ""}
+            {keyReturn.keyCountLost > 0 ? ` · ${keyReturn.keyCountLost} lost` : ""}
+            {keyReturn.countReconciled && keyReturn.keyCountLost === 0
+              ? " · reconciled"
+              : keyReturn.reconciliationNote
+                ? ` · ${keyReturn.reconciliationNote}`
+                : ""}
           </div>
         ) : (
           <>
             <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0 }}>Keys issued at check-in: {keysIssued}</p>
-            <div className="frow">
-              <div className="field">
-                <label>Keys returned</label>
-                <input type="number" min={0} value={keysReturned} onChange={(e) => setKeysReturned(e.target.value)} />
-              </div>
-              {Number.parseInt(keysReturned, 10) !== keysIssued && (
-                <div className="field">
-                  <label>Reconciliation note</label>
-                  <input value={keyReconcileNote} onChange={(e) => setKeyReconcileNote(e.target.value)} />
-                </div>
-              )}
+            <div className="field">
+              <label>Outcome</label>
+              <select value={keyOutcome} onChange={(e) => setKeyOutcome(e.target.value as typeof keyOutcome)}>
+                <option value="RETURNED">All keys returned</option>
+                {keysIssued > 0 && <option value="LOST">Key lost / not returned</option>}
+              </select>
             </div>
-            <button className="btn btn-ghost" disabled={keyReturnM.isPending} onClick={() => keyReturnM.mutate()}>
+            {keyOutcome === "LOST" && (
+              <>
+                <div className="frow" style={{ marginTop: 7 }}>
+                  <div className="field">
+                    <label>Keys returned</label>
+                    <input type="number" min={0} max={keysIssued} value={keysReturned} onChange={(e) => setKeysReturned(e.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label>Keys lost</label>
+                    <input type="number" min={1} max={keysIssued} value={keysLost} onChange={(e) => setKeysLost(e.target.value)} />
+                  </div>
+                </div>
+                <div className="field" style={{ marginTop: 7 }}>
+                  <label>Comment (required)</label>
+                  <input
+                    value={keyReconcileNote}
+                    onChange={(e) => setKeyReconcileNote(e.target.value)}
+                    placeholder="What was lost, and any replacement charge assessed"
+                  />
+                </div>
+              </>
+            )}
+            <button className="btn btn-ghost" disabled={keyReturnM.isPending} onClick={() => keyReturnM.mutate()} style={{ marginTop: 9 }}>
               Record key return
             </button>
           </>

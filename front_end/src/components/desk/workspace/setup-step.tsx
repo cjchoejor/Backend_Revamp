@@ -22,6 +22,7 @@ import {
   recordFolioPayment,
   reconcileAdvancePayment,
   schedulePaymentMilestones,
+  getBillingModelRecommendation,
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -77,7 +78,27 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
   const needsMilestones = entry.useType === "CORPORATE" || entry.useType === "CONFERENCE";
 
-  const [billingModel, setBillingModel] = useState(folio?.billingModel ?? "GUEST_PAY");
+  /**
+   * The backend recommends which model to pre-select and why — travel agent -> tour-operator
+   * voucher, corporate -> direct bill, a group with no party -> direct bill, otherwise guest
+   * pays. It used to be a hardcoded GUEST_PAY here, which put a business rule in one UI.
+   * Only a suggestion: the operator can pick anything in `allowed`.
+   */
+  const recommendation = useQuery({
+    queryKey: ["billing-model-recommendation", entry.id],
+    queryFn: () => getBillingModelRecommendation(session!, entry.id),
+    enabled: !!session && !folio?.billingModel,
+  });
+
+  const [billingModel, setBillingModel] = useState(folio?.billingModel ?? "");
+  // Adopt the recommendation once it arrives, but never overwrite a model already on the folio
+  // or one the operator has just chosen.
+  useEffect(() => {
+    if (folio?.billingModel) return;
+    if (billingModel) return;
+    const rec = recommendation.data?.recommended;
+    if (rec) setBillingModel(rec);
+  }, [recommendation.data, folio?.billingModel, billingModel]);
   // Billing-model section collapses to a settled "Updated ✓ / Change" row once a model is on
   // the folio (same pattern as the disclosure block below). The form shows only on first
   // setup or after the operator clicks Change.
@@ -295,12 +316,21 @@ export function SetupStep({ entry, setSelected }: { entry: EntryDetail; setSelec
             <div className="field">
               <label>Billing model</label>
               <select value={billingModel} onChange={(e) => setBillingModel(e.target.value)}>
-                {BILLING_MODELS.map((m) => (
+                {/* Offer only what the config permits, so the operator can't pick something the
+                    backend will reject. Falls back to the static list if the recommendation
+                    hasn't loaded (or the folio already has a model, so it wasn't fetched). */}
+                {(recommendation.data?.allowed?.length ? recommendation.data.allowed : BILLING_MODELS).map((m) => (
                   <option key={m} value={m}>
-                    {BILLING_LABEL[m]}
+                    {BILLING_LABEL[m] ?? m}
                   </option>
                 ))}
               </select>
+              {recommendation.data && !folio?.billingModel && (
+                <div className="hint">
+                  Suggested: <b>{BILLING_LABEL[recommendation.data.recommended] ?? recommendation.data.recommended}</b>{" "}
+                  — {recommendation.data.reason} You can change it.
+                </div>
+              )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button

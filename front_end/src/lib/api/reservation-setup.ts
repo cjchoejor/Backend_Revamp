@@ -8,6 +8,26 @@ import type {
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/**
+ * What billing model S3 should pre-select, and why. A recommendation only — the operator may
+ * pick anything in `allowed`. Backend-resolved so both frontends agree on who settles the bill.
+ */
+export type BillingModelRecommendation = {
+  recommended: string;
+  reason: string;
+  allowed: string[];
+  basis: {
+    travelAgentName: string | null;
+    corporateAccountName: string | null;
+    isGroup: boolean;
+    guestCount: number | null;
+  };
+};
+
+export async function getBillingModelRecommendation(session: Session, entryId: string) {
+  return apiRequest<BillingModelRecommendation>(`/api/entries/${entryId}/billing-model-recommendation`, { session });
+}
+
 export async function ensureProvisionalFolio(
   session: Session,
   entryId: string,
