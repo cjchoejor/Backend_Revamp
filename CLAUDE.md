@@ -2,81 +2,107 @@
 
 This file is the operating reference for Claude when working in this repo. Update it whenever the codebase shape changes meaningfully (new admin services, new schema migrations, new runtime conventions, new dev commands).
 
-## ⚠️ Two frontends exist — backend must stay UI-agnostic
+## ⚠️ Handover — one developer, one codebase (2026-09-01)
 
-The user (cjchoejor) maintains the frontend at `front_end/` **for testing only**. The **real production frontend** is being built by a separate developer with a different UX design and different component structure. That means:
+The second developer has **resigned**. cjchoejor now owns the whole system, backend and frontend.
 
-- **Business logic MUST live in the backend.** Anywhere the testing frontend has a calculation, classification, envelope check, or validation, the backend has to expose it via an endpoint or shared service. Duplicating logic in the testing frontend is fine for local convenience but the backend is always the source of truth.
-- **No backend endpoint should assume the testing UI's shape.** Endpoints take inputs (JSON) and return outputs (JSON) — don't design them around what the current form fields look like.
-- **When adding a new feature: expose a backend endpoint FIRST, then have the testing UI consume it.** The friend's frontend consumes the same endpoint with a different UI. If the calculation only lives in the testing frontend, the friend's UI can't use it and business rules diverge.
-- **When you find business logic in `front_end/` that shouldn't be there** — extract it to a backend service + lookup endpoint, delete the frontend duplicate, and update the testing UI to call the endpoint.
+For his final stretch he worked the project alone, so **his branch carries far more than the user's own backend did**: since the two split at `e5693b6`, he made **240 commits** to the user's **16**. His final state was `UI-experiment2`, copied verbatim to **`UI-experiment3`** — the branch work continues on from now.
 
-**No money arithmetic in `front_end/` (enforced 2026-07-22).** Every financial figure the desk shows is read from the API — no sums, no `rate × nights`, no balance fallbacks. `deriveFinancials` ([lib/desk/workspace.ts](front_end/src/lib/desk/workspace.ts)) is a pure *selector* over `EntryDetail` + the `payment-status` response; `moneyOrDash()` renders "—" when the backend has no field. Advance-paid always comes from `GET /api/entries/:id/payment-status` → `totalReceived` (Decimal-safe server-side) via the shared `usePaymentStatus` hook — never from summing folio payment rows. The two figures that used to be dark — a **folio charges total** and a **stay total** (there is still no `frozenTotalAmount` column) — are supplied since 2026-08-13 by `GET /api/entries/:id/billing-summary` (see the billing-summary section below); keep new figures server-side the same way.
+What this changes:
 
-Existing backend-authoritative endpoints that show this pattern:
+- **`front_end/` on this branch is THE frontend.** It is no longer "the friend's production UI" — it is the product. The user's own testing UI (`my_front_end/`) exists only on `integration-prod-frontend`; whether to keep it is an open question, not a decision already made.
+- **There is no second API consumer to keep in step**, so the old "two frontends must agree" framing is dead. The backend-is-the-source-of-truth rule below survives it, for different reasons.
+- **`friend_back_end/` and the `git worktree` sync flow are gone.** Nothing needs pulling from anyone.
+- **Nobody else reads the commit history.** Messages are now written for the user's future self.
+
+### The backend stays the source of truth — the reason changed, the rule did not
+
+The old justification was "the other frontend can't reach logic that lives in the UI". That consumer is gone. Three reasons keep the rule load-bearing:
+
+- **Two frontends still exist in the repo.** `front_end/` here, `my_front_end/` on the other branch. Any rule duplicated in one drifts from the other the moment either is touched.
+- **The desk is not the only caller.** Workers (W1–W41), scripts under `back_end/scripts/`, the night audit and the PDF/email pipeline all re-derive the same figures. A rule in React is invisible to every one of them.
+- **A rule in the UI has no audit trail.** Policy gates throw typed errors and write TraceEvents; a React `if` writes nothing, so a refusal can never be explained after the fact.
+
+**No money arithmetic in `front_end/` (enforced 2026-07-22).** Every financial figure the desk shows is read from the API — no sums, no `rate × nights`, no balance fallbacks. `deriveFinancials` ([lib/desk/workspace.ts](front_end/src/lib/desk/workspace.ts)) is a pure *selector* over `EntryDetail` + the `payment-status` response; `moneyOrDash()` renders "—" when the backend has no field. Advance-paid always comes from `GET /api/entries/:id/payment-status` → `totalReceived` (Decimal-safe server-side) via the shared `usePaymentStatus` hook — never from summing folio payment rows. A folio charges total and a stay total (there is still no `frozenTotalAmount` column) come from `GET /api/entries/:id/billing-summary`; keep new figures server-side the same way.
+
+Endpoints that show the pattern:
 - `GET /api/lookups/child-policy` → child age bands, meal pricing, unaccompanied-minor cutoff
 - `POST /api/lookups/allowed-room-counts` → chargeable-occupants + allowed-room-count envelope
 - `POST /api/entries/:id/room-assignments/from-sealed-per-night` → bulk assignment from sealed per-night selection
 
-## ⚠️ Branches — main vs. integration-prod-frontend
+## ⚠️ Branches — where the work lives now
 
-Two long-lived branches on the same GitHub repo:
-
-| Branch | Contains | Purpose |
+| Branch | Contains | Status |
 |---|---|---|
-| `main` | `back_end/` + user's testing `front_end/` | Daily dev branch — the user's testing UI + backend, untouched by friend's code. |
-| `integration-prod-frontend` | `back_end/` + user's `front_end/` + `friend_back_end/` + `friend_front_end/` | Integration branch. Holds the friend's production frontend + a snapshot of the friend's backend for reference. User's backend is the source of truth on both branches. |
+| `UI-experiment3` | `back_end/` + `front_end/` (his final work) | **The working branch.** Copy of his final `UI-experiment2`. |
+| `UI-experiment2` | his final state | Frozen. His last push; `UI-experiment3` was cut from it. Do not commit here. |
+| `integration-prod-frontend` | the user's own `back_end/` + `my_front_end/` + `front_end/` | **Frozen, but not finished** — holds 16 commits of the user's work not yet ported here (see below). |
+| `main` | older daily branch | Stale; predates both. |
+| `UI-experiment` | his older branch | Superseded by `UI-experiment2`. |
 
-The friend pushes to his branch `UI-experiment` on the same repo. To pull his latest frontend/backend into the integration branch, use the worktree flow documented under **Working conventions → Pulling friend's latest from UI-experiment**.
+Both `UI-experiment3` and `integration-prod-frontend` are fully pushed. **Nothing is merged between them automatically** — a plain merge would be 119 conflicting backend files (see below), so work is ported deliberately, piece by piece.
 
-**Never merge integration-prod-frontend → main.** Backend changes flow `main → integration-prod-frontend`, never the other direction. Frontend changes stay branch-local.
+## ⚠️ Porting the user's own backend work into this branch — OPEN
 
-## Wired: friend's production frontend runs on user's backend (2026-07-14)
+The user's 16 commits on `integration-prod-frontend` are **not** in this branch and must be brought across **without breaking his code**. A straight merge is not viable: 119 backend files were edited independently on both sides.
 
-The friend's frontend (at `friend_front_end/` on the integration branch) is wired to run against **user's backend** (at `back_end/`). Both were forked from the same base, so the auth contract, endpoint shapes, and DTO structure are byte-equivalent — **no code changes** were needed on his frontend. The wiring is purely config:
+**Not yet started.** Port one theme at a time, each verified before the next.
 
-**How it works**:
-- Friend's `next.config.ts` proxies `/api/*` to `http://127.0.0.1:4000` (user's backend default port) via the `BACKEND_URL` env var. Default already matches — no override needed.
-- Friend's `apiRequest` client at [`friend_front_end/src/lib/api/client.ts`](friend_front_end/src/lib/api/client.ts) already sends `Authorization: Bearer <jwt>` from the stored session — matches user's JWT auth middleware.
-- Friend's login form calls `POST /api/auth/authenticate` with `{ username, pin, terminalId }` — matches user's endpoint shape exactly.
-- Friend's session shape (`{ sessionId, userId, username, actorLevel, terminalId, jwtToken, ... }`) matches what user's `session-service.authenticate` returns.
+New files, which carry no conflict (they simply don't exist here):
 
-**How to run both frontends against the same backend simultaneously**:
+| Theme | Commits | Files to bring |
+|---|---|---|
+| **HouseTariff** — extra-bed/meal rates for bookings with no rate card | `412a4fe` `ff8930d` | `lib/house-tariff.ts`, `services/admin/house-tariff-admin-service.ts`, `routes/admin/house-tariff-router.ts`, `scripts/seed-rate-plans-from-legacy-rooms.ts` |
+| **RatePackage** — rates move off the party onto named packages; agencies stop being duplicated | `291f12a` `63fb8ab` | `lib/rate-package-resolution.ts`, `services/admin/rate-package-admin-service.ts`, `routes/admin/rate-package-router.ts`, `scripts/migrate-rate-cards-to-packages.ts` |
+| **Deficiency reporting moves to operations** — L1 reports, L2 verifies, spaces included | `3582923` `16032b4` | `services/domain/deficient-condition-service.ts` |
+| **S3→S2 backflow retires the accepted quotation** | `de027da` `edb98fb` | `lib/supersede-accepted-quotation-on-backflow.ts`, `scripts/fix-stale-accepted-quotations.ts` |
+| **Confirmed holds never expire; a hold blocks every room it holds** | `07a2c98` | `lib/committed-hold-rooms.ts`, `lib/cancel-stage-dwell-monitors.ts` |
+| **S8 key loss + S3 billing-model recommendation** | `4e36b65` | `services/domain/billing-model-recommendation.ts`, `scripts/add-agent-billing-models.ts` |
+| **Availability 500 fix** (stale `contactNumber` select after the column drop) | `e14346e` | — edit only |
+| **Dropped `Room.capacity`** | `4ed3585` | — migration only |
 
-```bash
-# Terminal 1 — user's backend (port 4000)
-cd back_end
-npm run dev:workers            # or npm run dev
+Five migrations to replay here, against his 20 the user's branch never had:
 
-# Terminal 2 — user's testing frontend (port 3001, default)
-cd front_end
-npm run dev
-
-# Terminal 3 — friend's production frontend on a DIFFERENT port
-cd friend_front_end
-npm install                    # first time only — his deps aren't installed yet
-PORT=3002 npm run dev          # override the 3001 default to avoid collision
+```
+20260730060818_house_tariff_addon_rates
+20260804090000_drop_room_capacity
+20260804120000_deficient_spaces_and_verification
+20260804140000_rate_packages
+20260810090000_key_return_lost_count
 ```
 
-Then open:
-- `http://localhost:3001` — user's testing UI (talks to backend at :4000)
-- `http://localhost:3002` — friend's production UI (talks to same backend at :4000)
+**Known collisions — these need reconciling by hand, not by git:**
 
-Log in with the seeded users (`admin` / `4444`, `gm` / `3333`, `fom` / `2222`, `frontdesk` / `1111`).
+- **`s8-checkout-service.ts` / `recordKeyReturn`.** Both sides rewrote it. The user's adds `keyCountLost` + a required comment; his adds per-room `returnedRoomIds` and reads outstanding keys from `RoomAssignment.keyIssuedAt/keyReturnedAt` (`countOutstandingKeys`). They are complementary — "which room's key came back" vs "was it lost" — and both should survive.
+- **Rate resolution.** The user's RatePackage work retires `RateCard`; his branch still resolves through `RateCard` in `s2-quotation-service` and `rate-reference-service`. Deciding this one is a design call, not a merge.
+- **Deficiency.** His branch may have its own S7/S8 deficient-record handling to reconcile with the L1-reports/L2-verifies split.
 
-**Cleanup plan when validation is done**:
-Once friend's frontend is confirmed working end-to-end against user's backend, delete the two temporary references:
-```bash
-git rm -r friend_back_end
-git rm -r front_end   # ONLY if user decides to retire the testing frontend
-git commit -m "Retire scaffolding: friend's backend + user's testing frontend"
+## Databases
+
+| Database | Migrations | Contents | Used by |
+|---|---|---|---|
+| `legphel_pms_dev` | 32 | the real working data — 27 rooms, 170 entries | `integration-prod-frontend` (what `back_end/.env` points at) |
+| `legphel_pms_dev2` | 52 | seeded demo data only — 13 rooms, 4 entries | **this branch** |
+
+`back_end/.env` still points at `legphel_pms_dev`, so running this branch's backend needs an override per terminal — never edit `.env`, or the other branch silently starts writing to the wrong database:
+
+```powershell
+cd "d:\New Legphel Web\Backend_ReVamped\back_end"
+$env:DATABASE_URL = ((Select-String -Path .env -Pattern '^DATABASE_URL\s*=\s*"?([^"]+)"?').Matches[0].Groups[1].Value) -replace '/legphel_pms_dev\?', '/legphel_pms_dev2?'
+npm run dev:workers
 ```
 
-The friend's `friend_back_end/` is reference-only — user does NOT wire against it. It stays on the integration branch as a diff target: "if friend's frontend expects a shape user's backend doesn't provide, `friend_back_end/` shows what he originally built against."
+`$env:` persists for the whole terminal — `Remove-Item Env:DATABASE_URL` or open a fresh window to go back. **Running this branch's backend without the override points his code at the 32-migration database, which is missing 5 tables his features need.** It errors at query time; it does not corrupt.
 
-**Auth env vars now documented** in [`back_end/.env.example`](back_end/.env.example):
-- `JWT_SECRET` — set in production; dev falls back to `"dev-jwt-secret"` with a console warning
-- `AUTH_ALLOW_HEADER_FALLBACK` — set to `true` only if you need to accept legacy `X-Actor-Id`/`X-Actor-Level` headers (off by default, JWT is authoritative)
+`pgboss` is a **second schema**, created by pg-boss itself at first `boss.start()` (i.e. only under `RUN_WORKERS=true`). No Prisma migration creates it. It exists in `legphel_pms_dev` (8 tables) and appears in `legphel_pms_dev2` the first time `dev:workers` runs against it.
+
+**Switching branches means regenerating the Prisma client** — the two schemas differ, and a stale client fails at *query* time, not typecheck:
+
+```bash
+cd back_end && npx prisma generate
+```
+
+`node_modules` is shared across branches. His backend needs five packages the user's did not (`mrz`, `jsqr`, `sharp`, `tesseract.js`, `@huggingface/transformers` — the ID-OCR work); they are installed, and the user's branch needs nothing he lacks, so no reinstall is needed switching back.
 
 ## What this project is
 
@@ -536,7 +562,7 @@ The 13 spec-mandated regression paths (SIG-S2 §1.3, SIG-S4 §3.1, SIG-S5 §1.3,
 
 **Compatibility**: `isTransitionAllowedByMode(mode, from, to)` softly warns via `MODE.STAGEROUTE_INCONSISTENT` trace when the mode's `stageRoute` doesn't declare the requested transition. Doesn't block — the fixed backflow implementation is trusted, but the trace surfaces cases where the seed needs extending.
 
-**What still isn't there**: the frontend (testing UI) doesn't have buttons for the 9 new backflows yet. They're callable via API; front-desk-facing UI is a follow-up. Same for the friend's real production frontend — endpoints are stable so both can wire whenever.
+**What still isn't there**: no desk UI for the 9 new backflows yet. They're callable via API; a front-desk-facing surface is a follow-up.
 
 ### Cancellation entry points
 
@@ -1069,7 +1095,7 @@ If a particular tab is still slow in production, the bottleneck is almost always
 - **Skip wirings that already work.** If a config key is owned by a domain service and editable on its dedicated page, don't duplicate it on `/admin/timers-workers` — the generic-endpoint ownership check would reject the save.
 - **Verify the auditor.** When an Explore agent reports findings, spot-check at least the most load-bearing claims. The agent has been wrong about which keys are seeded (e.g. claimed `checkout.cutoffTime` was seeded when it 404'd in the UI).
 - **Commit when the work is ready — don't wait to be asked (operator ruling 2026-08-22; supersedes the old "no commits without being asked").** Claude commits on its own judgement whenever a unit of work is complete and verified — typecheck clean, and verified live (API / Puppeteer) where the change can be exercised — typically at the end of a feature, fix or doc pass, never mid-edit or with known-broken state. Still **never push, force-push, rebase or amend** unless explicitly asked, and keep the split below (backend / frontend / docs as separate commits). Say in the report what was committed.
-- **Commit `back_end/` and `front_end/` separately — but commit both.** When a change spans the two, land the backend commit *and* the frontend commit that consumes it; don't leave the UI side uncommitted just because the endpoint is done. Keep them as **two commits**, never one mixed commit. The reason is the two-frontend rule at the top of this file: the backend is shared with the production frontend while `front_end/` is the testing UI, so a backend fix has to be cherry-pickable and reviewable without dragging desk markup along with it. Order backend first — the frontend commit is meaningless without the endpoint it calls. A doc-only or CLAUDE.md change is its own third commit.
+- **Commit `back_end/` and `front_end/` separately — but commit both.** When a change spans the two, land the backend commit *and* the frontend commit that consumes it; don't leave the UI side uncommitted just because the endpoint is done. Keep them as **two commits**, never one mixed commit. The original reason (the backend was shared with a second developer's frontend) is gone, but the split still earns its keep: **16 commits are still waiting to be ported between branches**, and a backend fix tangled with desk markup cannot be cherry-picked across the divergence. Order backend first — the frontend commit is meaningless without the endpoint it calls. A doc-only or CLAUDE.md change is its own third commit.
 - **Update this file** whenever you:
   - Add a new admin service or route group
   - Add a new `registry.*` policy with a runtime consumer
@@ -1085,32 +1111,3 @@ If the change is single-file and contained (e.g., bugfix in one route handler), 
 
 When updating: edit the relevant section in place rather than appending — keep the file scannable. If a section grows past ~15 rows, split it into sub-sections rather than letting it bloat.
 
-### Pulling friend's latest from UI-experiment (integration branch only)
-
-When the friend pushes updates to `origin/UI-experiment`, sync them into `friend_back_end/` and `friend_front_end/` on the `integration-prod-frontend` branch. Uses a temporary `git worktree` — no submodules or subtrees.
-
-```bash
-# Make sure you're on the integration branch
-git checkout integration-prod-frontend
-git fetch origin UI-experiment
-
-# 1. Create a temporary parallel checkout of his branch at ../friend-tmp
-git worktree add ../friend-tmp origin/UI-experiment
-
-# 2. Wipe current friend_* folders so removed files on his side actually go away
-rm -rf friend_back_end friend_front_end
-
-# 3. Copy his latest back_end/ and front_end/ into your working tree under NEW names
-cp -r ../friend-tmp/back_end ./friend_back_end
-cp -r ../friend-tmp/front_end ./friend_front_end
-
-# 4. Remove the temporary worktree
-git worktree remove ../friend-tmp
-
-# 5. Commit + push
-git add -A friend_back_end friend_front_end
-git commit -m "Sync friend_back_end + friend_front_end from UI-experiment"
-git push
-```
-
-The reason for the temp worktree: git can only check out ONE branch per folder. To grab friend's files with a DIFFERENT folder name (so both his and yours can coexist), we need a second working tree pointed at his branch, then copy from it and throw it away. See the branch-management section for why this workflow exists.
