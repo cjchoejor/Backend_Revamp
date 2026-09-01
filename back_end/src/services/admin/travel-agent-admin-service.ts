@@ -11,7 +11,7 @@ export type { CoordinatorContact };
 
 export type TravelAgentInput = {
   displayName: string;
-  contactNumber?: string | null;
+  contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
   /** The agency's contact persons [{ name, phone?, email? }] — who actually rings in bookings. */
@@ -19,6 +19,12 @@ export type TravelAgentInput = {
   notes?: string | null;
   isActive?: boolean;
 };
+
+/** Trim, drop blanks, de-duplicate — a stored empty string reads as "has a number" downstream. */
+export function cleanNumbers(v: string[] | null | undefined): string[] | null {
+  if (v == null) return null;
+  return [...new Set(v.map((s) => String(s).trim()).filter((s) => s.length > 0))];
+}
 
 const ALLOWED_CONTACT_MODES: ContactMode[] = [
   ContactMode.PHONE,
@@ -59,7 +65,7 @@ export async function createTravelAgent(prisma: PrismaClient, input: TravelAgent
       data: {
         id,
         displayName: input.displayName.trim(),
-        contactNumber: input.contactNumber?.trim() || null,
+        contactNumbers: cleanNumbers(input.contactNumbers) ?? [],
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
         coordinators: normalizeCoordinators(input.coordinators),
@@ -99,7 +105,7 @@ export async function updateTravelAgent(
       where: { id },
       data: {
         displayName: input.displayName?.trim(),
-        contactNumber: input.contactNumber === undefined ? undefined : input.contactNumber?.trim() || null,
+        contactNumbers: input.contactNumbers === undefined ? undefined : (cleanNumbers(input.contactNumbers) ?? []),
         contactEmail: input.contactEmail === undefined ? undefined : input.contactEmail?.trim() || null,
         modeOfContact: input.modeOfContact ?? undefined,
         coordinators: input.coordinators === undefined ? undefined : normalizeCoordinators(input.coordinators),

@@ -281,9 +281,9 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       inquiry: {
         include: {
           guestProfile: true,
-          travelAgent: { select: { id: true, displayName: true, contactNumber: true, contactEmail: true } },
+          travelAgent: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true } },
           corporateAccount: {
-            select: { id: true, displayName: true, contactNumber: true, contactEmail: true, gstNumber: true, coordinators: true, contractRefs: true },
+            select: { id: true, displayName: true, contactNumbers: true, contactEmail: true, gstNumber: true, coordinators: true, contractRefs: true },
           },
         },
       },

@@ -15,6 +15,7 @@ import * as corporateSvc from "../../services/admin/corporate-account-admin-serv
 import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
 import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot } from "../../services/domain/capacity-validation-service.js";
+import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
 
 export const lookupsRouter = Router();
 const L1 = requireActorLevel("L1");
@@ -176,3 +177,22 @@ lookupsRouter.post(
     } catch (e) { next(e); }
   },
 );
+
+/**
+ * The packages a party can be quoted on, for the S1 picker.
+ *
+ * L1 because front desk choose the package while taking the booking. The admin equivalent
+ * (`/api/admin/rate-packages`) is L4 and also exposes history and the COMMON package; this one
+ * returns only what is currently sellable for one party, default first.
+ *
+ * An empty list means the party has no package of its own — pricing falls back to the COMMON
+ * package, so the desk should say so rather than block.
+ */
+lookupsRouter.get("/lookups/rate-packages", L1, async (req, res, next) => {
+  try {
+    const travelAgentId = typeof req.query.travelAgentId === "string" && req.query.travelAgentId ? req.query.travelAgentId : null;
+    const corporateAccountId = typeof req.query.corporateAccountId === "string" && req.query.corporateAccountId ? req.query.corporateAccountId : null;
+    const items = await listPackagesForParty(prisma, { travelAgentId, corporateAccountId });
+    res.json({ items, count: items.length });
+  } catch (e) { next(e); }
+});

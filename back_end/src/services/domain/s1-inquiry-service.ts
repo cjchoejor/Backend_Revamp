@@ -27,6 +27,12 @@ export async function createInquiry(
     travelAgentId?: string | null;
     /** Phase C — optional FK to CorporateAccount. Mutually exclusive with travelAgentId. */
     corporateAccountId?: string | null;
+    /**
+     * Which negotiated package this booking is quoted on. Optional: when omitted, pricing
+     * resolves the party's default package, then the COMMON one. Must belong to the party named
+     * above — a package from a different agency would price the wrong rate.
+     */
+    ratePackageId?: string | null;
   },
 ) {
   if (!input.guestProfileId?.trim()) throw new ValidationError("guestProfileId is required");
@@ -46,6 +52,29 @@ export async function createInquiry(
     const corp = await prisma.corporateAccount.findUnique({ where: { id: corporateAccountId } });
     if (!corp) throw new ValidationError(`Corporate account ${corporateAccountId} not found`);
     if (!corp.isActive) throw new ValidationError(`Corporate account ${corporateAccountId} is inactive`);
+  }
+
+  // A package must belong to the party it is being quoted for. Without this check a booking
+  // could carry another agency's package and be priced on their negotiated rate.
+  const ratePackageId = input.ratePackageId?.trim() || null;
+  if (ratePackageId) {
+    const pkg = await prisma.ratePackage.findUnique({
+      where: { id: ratePackageId },
+      select: { id: true, name: true, travelAgentId: true, corporateAccountId: true, scope: true, effectiveTo: true },
+    });
+    if (!pkg) throw new ValidationError(`Rate package ${ratePackageId} not found`);
+    if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
+      throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
+    }
+    if (!travelAgentId && !corporateAccountId) {
+      throw new ValidationError("A rate package can only be chosen for a travel agent or corporate booking");
+    }
+    const belongs =
+      (travelAgentId && pkg.travelAgentId === travelAgentId) ||
+      (corporateAccountId && pkg.corporateAccountId === corporateAccountId);
+    if (!belongs) {
+      throw new ValidationError(`Rate package "${pkg.name}" does not belong to the selected party`);
+    }
   }
 
   await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
@@ -69,6 +98,7 @@ export async function createInquiry(
         notes: input.notes?.trim() || null,
         travelAgentId,
         corporateAccountId,
+        ratePackageId,
         createdBy: actorId,
       },
     });
@@ -343,8 +373,8 @@ export async function getInquiryById(prisma: PrismaClient, inquiryId: string) {
       entries: { select: inquiryEntrySummarySelect },
       guestProfile: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
       duplicateFlags: { where: { status: "OPEN" }, orderBy: { createdAt: "desc" } },
-      travelAgent: { select: { id: true, displayName: true, modeOfContact: true, contactNumber: true, contactEmail: true } },
-      corporateAccount: { select: { id: true, displayName: true, modeOfContact: true, contactNumber: true, contactEmail: true, gstNumber: true, billingAddress: true } },
+      travelAgent: { select: { id: true, displayName: true, modeOfContact: true, contactNumbers: true, contactEmail: true } },
+      corporateAccount: { select: { id: true, displayName: true, modeOfContact: true, contactNumbers: true, contactEmail: true, gstNumber: true, billingAddress: true } },
     },
   });
   if (!inquiry) throw new NotFoundError("Inquiry");

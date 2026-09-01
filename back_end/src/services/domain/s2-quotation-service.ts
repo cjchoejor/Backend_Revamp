@@ -30,7 +30,7 @@ import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-pla
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
+import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib/rate-package-resolution.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { mulMoney, round2, sumMoney, toDecimal } from "../../lib/money.js";
@@ -59,31 +59,53 @@ import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-p
 async function resolveAgentRateForEntryQuotation(
   prisma: PrismaClient,
   args: { inquiryId: string; roomTypeId: string; asOf?: Date; mealPlan?: MealPlanType | null },
-): Promise<AgentRateBreakdown | null> {
+): Promise<(AgentRateBreakdown & { ratePackageId: string; packageName: string; resolvedVia: string }) | null> {
   const inq = await prisma.inquiry.findUnique({
     where: { id: args.inquiryId },
-    select: { travelAgentId: true, corporateAccountId: true },
+    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true },
   });
   if (!inq) return null;
-  if (inq.travelAgentId) {
-    return resolveAgentRate(prisma, {
-      partyType: "TRAVEL_AGENT",
-      partyId: inq.travelAgentId,
-      roomTypeId: args.roomTypeId,
-      asOf: args.asOf,
-      mealPlan: args.mealPlan,
-    });
-  }
-  if (inq.corporateAccountId) {
-    return resolveAgentRate(prisma, {
-      partyType: "CORPORATE",
-      partyId: inq.corporateAccountId,
-      roomTypeId: args.roomTypeId,
-      asOf: args.asOf,
-      mealPlan: args.mealPlan,
-    });
-  }
-  return null;
+
+  const pkg = await resolveRatePackageForBooking(prisma, {
+    ratePackageId: inq.ratePackageId,
+    travelAgentId: inq.travelAgentId,
+    corporateAccountId: inq.corporateAccountId,
+    roomTypeId: args.roomTypeId,
+    asOf: args.asOf,
+  });
+  if (!pkg) return null;
+
+  // The package carries all four plan rates; the legacy flat path wants the ONE the caller asked
+  // for. Selecting it here keeps `mealPlanRate` populated exactly as the RateCard resolver did —
+  // leaving it null would silently switch off the booking-wide meal-plan pricing below.
+  const mealPlanRate =
+    args.mealPlan === MealPlanType.CP ? pkg.mealPlanRates.cp
+    : args.mealPlan === MealPlanType.MAP_LUNCH ? pkg.mealPlanRates.mapLunch
+    : args.mealPlan === MealPlanType.MAP_DINNER ? pkg.mealPlanRates.mapDinner
+    : args.mealPlan === MealPlanType.AP ? pkg.mealPlanRates.ap
+    : null;
+
+  // Adapt to the breakdown shape the pricing path already consumes. `rateCardId` keeps its name
+  // for the commercialTerms snapshot's sake but now carries the package id; `partyId`/`partyType`
+  // still describe who the rate belongs to, with COMMON reported as such.
+  return {
+    rateCardId: pkg.ratePackageId,
+    partyType: (pkg.scope === "CORPORATE" ? "CORPORATE" : "TRAVEL_AGENT") as AgentRateBreakdown["partyType"],
+    partyId: pkg.travelAgentId ?? pkg.corporateAccountId ?? "COMMON",
+    roomTypeId: pkg.roomTypeId,
+    roomRate: pkg.roomRate,
+    roomRateSource: pkg.roomRateSource,
+    mealPlan: args.mealPlan ?? null,
+    mealPlanRate,
+    mealPlanRates: pkg.mealPlanRates,
+    perNightTotal: pkg.roomRate + (mealPlanRate ?? 0),
+    addOns: pkg.addOns,
+    cnbPercent: pkg.cnbPercent,
+    currency: pkg.currency,
+    ratePackageId: pkg.ratePackageId,
+    packageName: pkg.packageName,
+    resolvedVia: pkg.resolvedVia,
+  };
 }
 
 /** Shape mirrors the Zod `roomCompositionInputSchema` DTO. Kept as a local type so the

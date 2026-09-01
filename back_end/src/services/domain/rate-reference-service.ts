@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
-import { resolveAgentRate, type AgentRateBreakdown } from "../../lib/agent-rate-resolution.js";
+import { resolveRatePackageForBooking, type RatePackageBreakdown } from "../../lib/rate-package-resolution.js";
 import { resolveRatePlanPricingForS2Quotation } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s2-quotation.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
@@ -62,6 +62,9 @@ export async function buildEntryRateReference(
       availabilityConfigs: { orderBy: { createdAt: "desc" }, take: 25 },
       inquiry: {
         select: {
+          // The chosen package rides along so the reference strip anchors on the package the
+          // booking is actually quoted on, not just the party's default.
+          ratePackageId: true,
           travelAgent: { select: { id: true, displayName: true } },
           corporateAccount: { select: { id: true, displayName: true } },
         },
@@ -127,9 +130,14 @@ export async function buildEntryRateReference(
       /* no eligible rate plan — leave standard side null */
     }
 
-    let agentRate: AgentRateBreakdown | null = null;
+    let agentRate: RatePackageBreakdown | null = null;
     if (party) {
-      agentRate = await resolveAgentRate(prisma, { partyType: party.type, partyId: party.id, roomTypeId });
+      agentRate = await resolveRatePackageForBooking(prisma, {
+        ratePackageId: entry.inquiry?.ratePackageId ?? null,
+        travelAgentId: party.type === "TRAVEL_AGENT" ? party.id : null,
+        corporateAccountId: party.type === "CORPORATE" ? party.id : null,
+        roomTypeId,
+      });
     }
 
     if (agentRate?.currency) currency = agentRate.currency;

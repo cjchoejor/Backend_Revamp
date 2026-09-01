@@ -6,7 +6,7 @@ import { queryAvailability as availabilityEngineQuery } from "../../engines/avai
 import { enforceAvailabilityQueryParamsForS1 } from "../../policies/01-availability/p01-availability-query-params-s1.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { resolveIndicativePricingForS1Availability } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s1-indicative.js";
-import { resolveAgentRate } from "../../lib/agent-rate-resolution.js";
+import { resolveRatePackageForBooking } from "../../lib/rate-package-resolution.js";
 import {
   committedHoldSpans,
   pendingStayExtensionClaims,
@@ -41,15 +41,17 @@ type IndicativeChip = {
 async function resolvePartyForEntryInquiry(
   prisma: PrismaClient,
   inquiryId?: string | null,
-): Promise<{ partyType: PartyType; partyId: string } | null> {
+): Promise<{ partyType: PartyType; partyId: string; ratePackageId: string | null; travelAgentId: string | null; corporateAccountId: string | null } | null> {
   if (!inquiryId) return null;
   const inq = await prisma.inquiry.findUnique({
     where: { id: inquiryId },
-    select: { travelAgentId: true, corporateAccountId: true },
+    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true },
   });
   if (!inq) return null;
-  if (inq.travelAgentId) return { partyType: PartyType.TRAVEL_AGENT, partyId: inq.travelAgentId };
-  if (inq.corporateAccountId) return { partyType: PartyType.CORPORATE, partyId: inq.corporateAccountId };
+  // The chosen package rides along so the indicative chip prices on the package the operator
+  // actually picked, not merely the party default.
+  if (inq.travelAgentId) return { partyType: PartyType.TRAVEL_AGENT, partyId: inq.travelAgentId, ratePackageId: inq.ratePackageId, travelAgentId: inq.travelAgentId, corporateAccountId: null };
+  if (inq.corporateAccountId) return { partyType: PartyType.CORPORATE, partyId: inq.corporateAccountId, ratePackageId: inq.ratePackageId, travelAgentId: null, corporateAccountId: inq.corporateAccountId };
   return null;
 }
 
@@ -102,8 +104,8 @@ export async function runAvailabilityEngineForEntry(
     },
     inquiry: {
       select: {
-        travelAgent: { select: { displayName: true, contactNumber: true, contactEmail: true } },
-        corporateAccount: { select: { displayName: true, contactNumber: true, contactEmail: true } },
+        travelAgent: { select: { displayName: true, contactNumbers: true, contactEmail: true } },
+        corporateAccount: { select: { displayName: true, contactNumbers: true, contactEmail: true } },
       },
     },
   } as const;
@@ -220,8 +222,8 @@ export async function runAvailabilityEngineForEntry(
           contactPersonPhone: string | null;
           guestProfile: { firstName?: string | null; lastName?: string | null; email?: string | null; phone?: string | null } | null;
           inquiry: {
-            travelAgent: { displayName: string; contactNumber?: string | null; contactEmail?: string | null } | null;
-            corporateAccount: { displayName: string; contactNumber?: string | null; contactEmail?: string | null } | null;
+            travelAgent: { displayName: string; contactNumbers?: string[] | null; contactEmail?: string | null } | null;
+            corporateAccount: { displayName: string; contactNumbers?: string[] | null; contactEmail?: string | null } | null;
           } | null;
         }>)
       | null
@@ -239,7 +241,7 @@ export async function runAvailabilityEngineForEntry(
         guestEmail,
         agentType: "TRAVEL_AGENT" as const,
         agentName: ta.displayName,
-        agentPhone: ta.contactNumber ?? null,
+        agentPhone: ta.contactNumbers?.[0] ?? null,
         agentEmail: ta.contactEmail ?? null,
       };
     }
@@ -250,7 +252,7 @@ export async function runAvailabilityEngineForEntry(
         guestEmail,
         agentType: "CORPORATE" as const,
         agentName: ca.displayName,
-        agentPhone: ca.contactNumber ?? null,
+        agentPhone: ca.contactNumbers?.[0] ?? null,
         agentEmail: ca.contactEmail ?? null,
       };
     }
@@ -400,7 +402,12 @@ export async function runAvailabilityEngineForEntry(
       if (r.roomTypeId) distinctTypes.add(r.roomTypeId as string);
     }
     for (const roomTypeId of distinctTypes) {
-      const br = await resolveAgentRate(prisma, { partyType: party.partyType, partyId: party.partyId, roomTypeId });
+      const br = await resolveRatePackageForBooking(prisma, {
+        ratePackageId: party.ratePackageId,
+        travelAgentId: party.travelAgentId,
+        corporateAccountId: party.corporateAccountId,
+        roomTypeId,
+      });
       if (br) {
         agentChipByRoomType.set(roomTypeId, {
           rateAmount: br.roomRate,

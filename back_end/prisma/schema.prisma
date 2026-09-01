@@ -798,7 +798,7 @@ model GuestProfile {
 }
 
 model GuestIdentityDocument {
-  id             String  @id @default(uuid())
+  id             String    @id @default(uuid())
   guestProfileId String
   /// The booking the capture happened on. Nullable — typed captures at S6 verification
   /// predate this column and never carried it.
@@ -852,8 +852,8 @@ model GuestIdentityDocument {
   retentionExpiresAt DateTime
   createdAt          DateTime @default(now())
 
-  guestProfile GuestProfile @relation(fields: [guestProfileId], references: [id])
-  entry        Entry?       @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  guestProfile  GuestProfile           @relation(fields: [guestProfileId], references: [id])
+  entry         Entry?                 @relation(fields: [entryId], references: [id], onUpdate: Cascade)
   ocrSuggestion IdentityOcrSuggestion?
 
   @@index([entryId])
@@ -868,13 +868,13 @@ model GuestIdentityDocument {
 /// "VERIFIED" (check digit / signed QR) | "READ" (plain OCR); `raw` = the machine-readable
 /// payload the server parsed (MRZ lines / QR text) so the parse is reproducible.
 model IdentityOcrSuggestion {
-  id              String   @id @default(uuid())
-  photoDocumentId String   @unique
+  id              String    @id @default(uuid())
+  photoDocumentId String    @unique
   entryId         String
   subjectKey      String?
   /// Where the extraction ran: PHONE_QR · PHONE_MRZ · SERVER_QR · SERVER_MRZ · PHONE_MANUAL.
   engine          String
-  status          String   // PENDING | READY | EMPTY | FAILED | APPLIED | DISMISSED
+  status          String // PENDING | READY | EMPTY | FAILED | APPLIED | DISMISSED
   fields          Json?
   fieldConfidence Json?
   raw             Json?
@@ -884,8 +884,8 @@ model IdentityOcrSuggestion {
   appliedBy       String?
   dismissedAt     DateTime?
   dismissedBy     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   photo GuestIdentityDocument @relation(fields: [photoDocumentId], references: [id], onDelete: Cascade)
   entry Entry                 @relation(fields: [entryId], references: [id], onUpdate: Cascade)
@@ -935,6 +935,10 @@ model Inquiry {
   /// pre-Phase-B data; new intake forms write to these two FKs.
   travelAgentId              String?
   corporateAccountId         String?
+  /// WHICH package this booking was quoted on. Once an agency is a single row,
+  /// pointing at the agency no longer says whether the guest got season,
+  /// off-season or premium.
+  ratePackageId              String?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
   createdBy                  String    @default("actor-seed-system")
@@ -947,10 +951,12 @@ model Inquiry {
   agentProfile     AgentProfile?            @relation(fields: [agentProfileId], references: [id])
   travelAgent      TravelAgent?             @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
   corporateAccount CorporateAccount?        @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
+  ratePackage      RatePackage?             @relation(fields: [ratePackageId], references: [id], onUpdate: Cascade)
 
   @@index([guestProfileId])
   @@index([travelAgentId])
   @@index([corporateAccountId])
+  @@index([ratePackageId])
   @@map("inquiries")
 }
 
@@ -1391,6 +1397,8 @@ model RoomType {
   committedHolds CommittedHold[]
   rateOverrides  RoomTypeRateOverride[]
 
+  packageOverrides RoomTypePackageOverride[]
+
   @@map("room_types")
 }
 
@@ -1533,27 +1541,27 @@ model Quotation {
 }
 
 model SpeculativeHold {
-  id            String    @id @default(uuid())
-  entryId       String
-  segmentId     String
-  roomId        String?
-  spaceId       String?
+  id                String    @id @default(uuid())
+  entryId           String
+  segmentId         String
+  roomId            String?
+  spaceId           String?
   /// Snapshot of the sealed per-night selection at placement (2026-08-06) — same shape as
   /// CommittedHold.perNightBreakdown ([{date, roomIds: [{roomId}]}]). When present the hold
   /// covers EVERY room it names, each over its own nights; `roomId` stays the primary/anchor.
   /// Null on legacy and single-room holds — those cover `roomId` across the entry's stay.
   perNightBreakdown Json?
-  state         HoldState @default(PLACED)
-  placedAt      DateTime  @default(now())
-  placedBy      String
-  ttlSeconds    Int
-  expiresAt     DateTime
-  releasedAt    DateTime?
-  releasedBy    String?
-  releaseReason String?
-  upgradedToId  String?
-  notes         String?
-  createdAt     DateTime  @default(now())
+  state             HoldState @default(PLACED)
+  placedAt          DateTime  @default(now())
+  placedBy          String
+  ttlSeconds        Int
+  expiresAt         DateTime
+  releasedAt        DateTime?
+  releasedBy        String?
+  releaseReason     String?
+  upgradedToId      String?
+  notes             String?
+  createdAt         DateTime  @default(now())
 
   entry   Entry   @relation(fields: [entryId], references: [id])
   segment Segment @relation(fields: [segmentId], references: [id])
@@ -1634,7 +1642,7 @@ model Reservation {
   confirmationVoucherRenderedBy    String?
   confirmationVoucherInputSnapshot Json?
 
-  entry          Entry  @relation("EntryReservations", fields: [entryId], references: [id])
+  entry           Entry  @relation("EntryReservations", fields: [entryId], references: [id])
   currentForEntry Entry? @relation("EntryCurrentReservation")
 
   @@map("reservations")
@@ -1721,7 +1729,7 @@ model Folio {
   /// the S5/S6 gates still run on money received + credit extension; this records WHAT the
   /// guest said and WHEN the remainder is coming, drives the promise timer (W38) and the
   /// settlement surfaces at S4–S8. Segment-scoped by `setAt` like the requirement pin.
-  advancePaymentPlan    Json?
+  advancePaymentPlan Json?
 
   entry                   Entry                          @relation(fields: [entryId], references: [id])
   payments                PaymentRecord[]
@@ -1773,9 +1781,9 @@ model Invoice {
   /// rates, template body). Re-renders decades from now must produce the same bytes.
   renderInputSnapshot Json?
 
-  folio Folio         @relation(fields: [folioId], references: [id])
-  entry Entry         @relation(fields: [entryId], references: [id])
-  lines InvoiceLine[]
+  folio                 Folio                  @relation(fields: [folioId], references: [id])
+  entry                 Entry                  @relation(fields: [entryId], references: [id])
+  lines                 InvoiceLine[]
   interimPaymentRequest InterimPaymentRequest?
 
   @@map("invoices")
@@ -1950,19 +1958,19 @@ model PaymentRecord {
 }
 
 model CreditExtensionCeilingRecord {
-  id            String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("CREDIT_EXTENSION", ...)
-  folioId       String   @unique
+  id            String    @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("CREDIT_EXTENSION", ...)
+  folioId       String    @unique
   entryId       String
-  ceilingAmount Decimal  @db.Decimal(15, 2)
-  currency      String   @default("BTN")
+  ceilingAmount Decimal   @db.Decimal(15, 2)
+  currency      String    @default("BTN")
   approvedBy    String
-  approvedAt    DateTime @default(now())
+  approvedAt    DateTime  @default(now())
   reason        String
   /// Optional expiry (2026-08-01): past this instant the extension no longer satisfies the
   /// advance-payment condition. Enforced at read time in the payment evaluation — no worker
   /// needed; an expired extension simply stops counting. Null = no time limit (legacy rows).
   expiresAt     DateTime?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   @@map("credit_extension_ceiling_records")
 }
@@ -2612,24 +2620,28 @@ enum MealPlanType {
  * negotiated rate card.
  */
 model TravelAgent {
-  id            String      @id // readable TA-YYYYMMDD-NNNN
-  displayName   String
-  contactNumber String?
-  contactEmail  String?
-  modeOfContact ContactMode @default(PHONE)
+  id             String      @id // readable TA-YYYYMMDD-NNNN
+  displayName    String
+  /// Several numbers per party (office, owner, WhatsApp). `contactNumber` held one and
+  /// the rest were lost or crammed into notes.
+  contactNumbers String[]    @default([])
+  contactEmail   String?
+  modeOfContact  ContactMode @default(PHONE)
   // coordinators: the agency's contact persons, array of [{ name, phone?, email? }] — same shape as
   // CorporateAccount.coordinators. One agency routinely has several people who ring in bookings, so
   // the desk picks from this list at S1 intake to fill Entry.contactPerson* rather than retyping a
   // number each time. Appendable from the desk (L1) via POST /lookups/travel-agents/:id/contacts so
   // a new contact person captured mid-call is there for the next booking.
-  coordinators  Json?
-  notes         String?
-  isActive      Boolean     @default(true)
-  createdAt     DateTime    @default(now())
-  createdBy     String
-  updatedAt     DateTime    @updatedAt
+  coordinators   Json?
+  notes          String?
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  createdBy      String
+  updatedAt      DateTime    @updatedAt
 
   inquiries Inquiry[]
+
+  ratePackages RatePackage[]
 
   @@index([displayName])
   @@index([isActive])
@@ -2644,7 +2656,9 @@ model TravelAgent {
 model CorporateAccount {
   id             String      @id // readable CORP-YYYYMMDD-NNNN
   displayName    String
-  contactNumber  String?
+  /// Several numbers per party (office, owner, WhatsApp). `contactNumber` held one and
+  /// the rest were lost or crammed into notes.
+  contactNumbers String[]    @default([])
   contactEmail   String?
   modeOfContact  ContactMode @default(EMAIL)
   gstNumber      String?
@@ -2663,6 +2677,8 @@ model CorporateAccount {
   updatedAt      DateTime    @updatedAt
 
   inquiries Inquiry[]
+
+  ratePackages RatePackage[]
 
   @@index([displayName])
   @@index([isActive])
@@ -2890,4 +2906,75 @@ model EarlyDepartureRecord {
   entry Entry @relation(fields: [entryId], references: [id])
 
   @@map("early_departure_records")
+}
+
+enum RatePackageScope {
+  TRAVEL_AGENT
+  CORPORATE
+  /// The house fallback, used when a party has no package of its own.
+  COMMON
+}
+
+model RatePackage {
+  id String @id @default(uuid())
+
+  /// Which kind of party this belongs to. Explicit rather than inferred from the FKs so a
+  /// query can filter on it directly and the check constraint has something to verify against.
+  scope              RatePackageScope
+  travelAgentId      String?
+  corporateAccountId String?
+
+  /// Operator-facing name: "Off season", "Season", "Premium", "5 Rooms & more".
+  /// Agencies with a single negotiated rate get "Standard".
+  name String
+
+  /// Preselected in the picker when this party has more than one package.
+  isDefault Boolean @default(false)
+
+  // === Rates (same shape RateCard carried) ===
+  roomBaseRate       Decimal  @db.Decimal(10, 2)
+  extraBedRate       Decimal? @db.Decimal(10, 2)
+  cnbPercent         Int?
+  breakfastRate      Decimal? @db.Decimal(10, 2)
+  lunchRate          Decimal? @db.Decimal(10, 2)
+  dinnerRate         Decimal? @db.Decimal(10, 2)
+  cpRate             Decimal? @db.Decimal(10, 2)
+  mapLunchRate       Decimal? @db.Decimal(10, 2)
+  mapDinnerRate      Decimal? @db.Decimal(10, 2)
+  apRate             Decimal? @db.Decimal(10, 2)
+  currency           String   @default("BTN")
+  rateIsTaxInclusive Boolean  @default(false)
+
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime? // null = currently active
+  notes         String?
+  createdAt     DateTime  @default(now())
+  createdBy     String
+
+  travelAgent      TravelAgent?              @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
+  corporateAccount CorporateAccount?         @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
+  overrides        RoomTypePackageOverride[]
+  inquiries        Inquiry[]
+
+  @@index([scope, effectiveTo])
+  @@index([travelAgentId, effectiveTo])
+  @@index([corporateAccountId, effectiveTo])
+  @@map("rate_packages")
+}
+
+model RoomTypePackageOverride {
+  id            String   @id @default(uuid())
+  ratePackageId String
+  roomTypeId    String
+  roomBaseRate  Decimal  @db.Decimal(10, 2)
+  notes         String?
+  createdAt     DateTime @default(now())
+  createdBy     String
+
+  ratePackage RatePackage @relation(fields: [ratePackageId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  roomType    RoomType    @relation(fields: [roomTypeId], references: [id], onUpdate: Cascade)
+
+  @@unique([ratePackageId, roomTypeId])
+  @@index([roomTypeId])
+  @@map("room_type_package_overrides")
 }

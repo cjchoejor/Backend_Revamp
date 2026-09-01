@@ -30,7 +30,7 @@ import { adminIdPrefixRouter } from "./id-prefix-router.js";
 import { adminEntityVersionSnapshotRouter } from "./entity-version-snapshot-router.js";
 import { adminTravelAgentRouter } from "./travel-agent-router.js";
 import { adminCorporateAccountRouter } from "./corporate-account-router.js";
-import { adminRateCardRouter } from "./rate-card-router.js";
+import { adminRatePackageRouter } from "./rate-package-router.js";
 
 export const adminRouter = Router();
 
@@ -61,7 +61,7 @@ adminRouter.use(adminIdPrefixRouter);
 adminRouter.use(adminEntityVersionSnapshotRouter);
 adminRouter.use(adminTravelAgentRouter);
 adminRouter.use(adminCorporateAccountRouter);
-adminRouter.use(adminRateCardRouter);
+adminRouter.use(adminRatePackageRouter);
 
 /** Dev helper — enqueue a timer job (L4). */
 adminRouter.post("/enqueue", requireActorLevel("L4"), validateBody(adminEnqueueRequestSchema), async (req, res, next) => {

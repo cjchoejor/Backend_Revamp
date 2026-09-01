@@ -320,7 +320,7 @@ async function main() {
       if (p.partyType === PartyType.TRAVEL_AGENT) {
         const agent = await createTravelAgent(prisma, {
           displayName: p.name,
-          contactNumber: p.contactNumber,
+          contactNumbers: p.contactNumber ? [p.contactNumber] : [],
           contactEmail: null,
           modeOfContact: p.modeOfContact,
           notes,
@@ -331,7 +331,7 @@ async function main() {
       } else {
         const corp = await createCorporateAccount(prisma, {
           displayName: p.name,
-          contactNumber: p.contactNumber,
+          contactNumbers: p.contactNumber ? [p.contactNumber] : [],
           contactEmail: null,
           modeOfContact: p.modeOfContact,
           gstNumber: null,        // backfill later in admin UI
