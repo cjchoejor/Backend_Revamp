@@ -129,6 +129,7 @@ export async function createEntry(
     walkInCompressed?: boolean;
     contactPersonName?: string;
     contactPersonPhone?: string;
+    contactPersonEmail?: string;
   },
 ) {
   if (!input.inquiryId?.trim()) throw new ValidationError("inquiryId is required");
@@ -241,6 +242,7 @@ export async function createEntry(
         ...(bedTypeRequest ? { bedTypeRequest } : {}),
         contactPersonName: input.contactPersonName?.trim() || null,
         contactPersonPhone: input.contactPersonPhone?.trim() || null,
+        contactPersonEmail: input.contactPersonEmail?.trim() || null,
         otaSource: input.otaSource === true,
         ...(groupBillingMode != null ? { groupBillingMode } : {}),
         createdBy: actorId,
@@ -574,6 +576,7 @@ export async function updateEntryIntakeFields(
     useType?: string;
     contactPersonName?: string;
     contactPersonPhone?: string;
+    contactPersonEmail?: string;
     expectedVersion?: number;
   },
 ) {
@@ -693,6 +696,7 @@ export async function updateEntryIntakeFields(
         ...(input.useType ? { useType: input.useType as any } : {}),
         ...(input.contactPersonName !== undefined ? { contactPersonName: input.contactPersonName.trim() || null } : {}),
         ...(input.contactPersonPhone !== undefined ? { contactPersonPhone: input.contactPersonPhone.trim() || null } : {}),
+        ...(input.contactPersonEmail !== undefined ? { contactPersonEmail: input.contactPersonEmail.trim() || null } : {}),
         ...(groupModeChanged ? { groupBillingMode: nextGroupBillingMode ?? null } : {}),
         version: { increment: 1 },
       },

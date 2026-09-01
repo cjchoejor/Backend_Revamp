@@ -1032,6 +1032,10 @@ model Entry {
   /// otherwise). Business rule enforced backend-side, not just in the form.
   contactPersonName              String?
   contactPersonPhone             String?
+  /// The contact person's email. Optional everywhere — W4 requires only name + phone before
+  /// pre-arrival — but pulled from the party's contact record when there is one, so the desk
+  /// does not retype what the agency already told us.
+  contactPersonEmail             String?
   /// Confirmed while the advance was still short of full payment with the remainder due
   /// before/at check-in (2026-08-07, operator ruling): the rooms stay COMMITTED_HELD ("Held")
   /// instead of flipping to CONFIRMED ("Reserved") — the same inventory block either way, only

@@ -30,6 +30,7 @@ export const createEntryRequestSchema = z.object({
   // MANDATORY before S5 — the S4→S5 progression gate blocks otherwise.
   contactPersonName: z.string().trim().min(1).max(200).optional(),
   contactPersonPhone: z.string().trim().min(1).max(50).optional(),
+  contactPersonEmail: z.string().trim().email().max(200).optional().or(z.literal("")),
 });
 export type CreateEntryRequestDto = z.infer<typeof createEntryRequestSchema>;
 
@@ -53,6 +54,7 @@ export const updateEntryRequestSchema = z.object({
   useType: z.string().optional(),
   contactPersonName: z.string().trim().max(200).optional(),
   contactPersonPhone: z.string().trim().max(50).optional(),
+  contactPersonEmail: z.string().trim().max(200).optional(),
   expectedVersion: z.coerce.number().int().optional(),
 });
 export type UpdateEntryRequestDto = z.infer<typeof updateEntryRequestSchema>;
