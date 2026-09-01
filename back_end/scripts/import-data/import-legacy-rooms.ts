@@ -185,7 +185,6 @@ async function main() {
             roomNumber: r.room_no,
             roomTypeId: typeId,
             floorNumber: int(r.room_no[0]) || null,
-            capacity: int(r.adult_capacity) || 2,
             bedType: bed.bedType,
             bedCount: bed.bedCount,
             currentClaimState: InventoryClaimState.FREE,

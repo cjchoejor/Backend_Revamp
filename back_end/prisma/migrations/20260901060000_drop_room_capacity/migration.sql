@@ -1,0 +1,21 @@
+-- Drop Room.capacity.
+--
+-- Occupancy is a property of the room TYPE. `room_types."maxOccupancy"` (mapped as
+-- RoomType.standardCapacity) and `room_types."maxCapacity"` are what capacity-validation-service
+-- enforces, and what the allowed-room-count envelope derives from.
+--
+-- `rooms.capacity` was collected by the Rooms admin form, stored, returned by the availability
+-- search and declared on the engine's RoomCandidate type — but never read by any decision.
+-- queryAvailability decides on room type, date blockages, blocked/maintenance flags and
+-- deficiency. A room set to 2 whose type allowed 3 behaved identically to every other room of
+-- that type, and the number could silently contradict its own type's ceiling.
+--
+-- The existing values are the schema default (2) or the legacy CSV's adult_capacity, neither of
+-- which ever affected an outcome, so nothing meaningful is lost. Nothing reads the column at the
+-- point this migration runs.
+--
+-- Not reintroducible in principle: at S1 the guest count is validated before any specific room is
+-- chosen, so a per-room limit cannot be enforced where occupancy is actually checked.
+--
+-- `spaces.capacity` is a DIFFERENT table and is genuinely used (conference attendee limits).
+ALTER TABLE "rooms" DROP COLUMN "capacity";

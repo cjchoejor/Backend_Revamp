@@ -206,7 +206,6 @@ export async function createRoom(
     roomNumber: string;
     roomTypeId: string;
     floorNumber?: number | null;
-    capacity?: number;
     /** Physical bed setup — "KING" / "TWIN" / "QUEEN" / "SINGLE" (free-form uppercased). */
     bedType?: string | null;
     bedCount?: number | null;
@@ -236,7 +235,6 @@ export async function createRoom(
           roomNumber,
           roomTypeId: input.roomTypeId,
           floorNumber: input.floorNumber ?? null,
-          capacity: input.capacity ?? 2,
           bedType: input.bedType?.trim().toUpperCase() || null,
           bedCount: input.bedCount ?? null,
           currentClaimState: InventoryClaimState.FREE,
@@ -323,7 +321,7 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
 export async function updateRoom(
   prisma: PrismaClient,
   id: string,
-  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; capacity: number; bedType: string | null; bedCount: number | null; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
+  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; bedType: string | null; bedCount: number | null; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
   actorId: string,
 ) {
   const existing = await prisma.room.findUnique({ where: { id } });
@@ -358,7 +356,6 @@ export async function updateRoom(
           roomNumber: newRoomNumber,
           roomTypeId: input.roomTypeId,
           floorNumber: input.floorNumber,
-          capacity: input.capacity,
           bedType: input.bedType === undefined ? undefined : input.bedType?.trim().toUpperCase() || null,
           bedCount: input.bedCount,
           isShadowInventory: input.isShadowInventory,

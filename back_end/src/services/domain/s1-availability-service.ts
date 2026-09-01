@@ -371,7 +371,6 @@ export async function runAvailabilityEngineForEntry(
       roomNumber: r.roomNumber,
       roomTypeId: r.roomTypeId,
       roomTypeName: r.roomType?.name ?? null,
-      capacity: r.capacity,
       currentClaimState: r.currentClaimState,
       isShadowInventory: (r as any).isShadowInventory === true,
       isDeficient: r.isDeficient,

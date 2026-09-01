@@ -1399,7 +1399,11 @@ model Room {
   roomNumber        String              @unique
   roomTypeId        String
   floorNumber       Int?
-  capacity          Int                 @default(2)
+  // NOTE (2026-09-01): `capacity` was dropped. Occupancy is a property of the room TYPE —
+  // RoomType.standardCapacity / maxCapacity are what capacity-validation-service enforces and
+  // what the allowed-room-count envelope derives from. The per-room column was collected by the
+  // admin form and carried into the availability engine, but no decision ever read it.
+  // `Space.capacity` is a different table and IS used (conference attendee limits).
   /// Physical bed setup of THIS room (2026-08-10) — "KING" / "TWIN" / "QUEEN" / "SINGLE".
   /// Per room, not per type: the legacy data has e.g. Family Apartment split into (King) and
   /// (Twin) rooms. Backfilled from legacy-bookings/room.csv (`bed_size` + `no_of_beds`).
