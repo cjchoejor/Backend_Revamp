@@ -24,7 +24,6 @@ export type AvailabilityRoomResult = {
   roomNumber?: string;
   roomTypeId?: string;
   roomTypeName?: string | null;
-  capacity?: number;
   isDeficient?: boolean;
   deficientConditionCategory?: string | null;
   claimState?: string;
@@ -104,7 +103,6 @@ export function roomsFromResultSet(resultSet: unknown): {
     roomNumber: r.roomNumber as string | undefined,
     roomTypeId: r.roomTypeId as string | undefined,
     roomTypeName: (r.roomTypeName as string | null | undefined) ?? undefined,
-    capacity: typeof r.capacity === "number" ? r.capacity : undefined,
     isDeficient: r.isDeficient as boolean | undefined,
     deficientConditionCategory: r.deficientConditionCategory as string | null | undefined,
     claimState: r.claimState as string | undefined,

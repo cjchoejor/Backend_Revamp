@@ -261,7 +261,6 @@ export async function listAdminRooms(session: Session) {
       id: string;
       roomNumber: string;
       floorNumber: number | null;
-      capacity: number;
       currentClaimState: string;
       physicalState: string;
       isDeficient: boolean;
@@ -403,7 +402,7 @@ export async function deleteRoomType(session: Session, id: string) {
 
 export async function createAdminRoom(
   session: Session,
-  body: { roomNumber: string; roomTypeId: string; floorNumber?: number | null; capacity?: number; isShadowInventory?: boolean },
+  body: { roomNumber: string; roomTypeId: string; floorNumber?: number | null; isShadowInventory?: boolean },
 ) {
   return apiRequest("/api/admin/rooms", { method: "POST", session, body });
 }
@@ -415,7 +414,6 @@ export async function updateAdminRoom(
     roomNumber?: string;
     roomTypeId?: string;
     floorNumber?: number | null;
-    capacity?: number;
     isShadowInventory?: boolean;
     isBlocked?: boolean;
     blockedReason?: string | null;

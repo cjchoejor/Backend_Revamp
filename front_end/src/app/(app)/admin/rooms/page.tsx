@@ -9,19 +9,19 @@ import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
-type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string; capacity: string };
+type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string };
 
 export default function AdminRoomsPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const prompt = usePrompt();
-  const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "", capacity: "2" });
+  const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "" });
   const [defForm, setDefForm] = useState<DeficientForm | null>(null);
 
   // Edit-in-place: when not null, the row with this roomId renders as editable inputs.
   const [editId, setEditId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "", capacity: "" });
+  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "" });
 
   // Filters
   const [filterRoomTypeId, setFilterRoomTypeId] = useState<string>("ALL");
@@ -45,11 +45,10 @@ export default function AdminRoomsPage() {
         roomNumber: form.roomNumber,
         roomTypeId: form.roomTypeId,
         floorNumber: form.floorNumber ? Number.parseInt(form.floorNumber, 10) : null,
-        capacity: Number.parseInt(form.capacity, 10) || 2,
       }),
     onSuccess: () => {
       toast.success("Room created");
-      setForm({ roomNumber: "", roomTypeId: form.roomTypeId, floorNumber: "", capacity: "2" });
+      setForm({ roomNumber: "", roomTypeId: form.roomTypeId, floorNumber: "" });
       void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Create failed"),
@@ -59,12 +58,10 @@ export default function AdminRoomsPage() {
     mutationFn: () => {
       if (!editId) throw new Error("No row in edit mode");
       const floorNumber = editDraft.floorNumber.trim() === "" ? null : Number.parseInt(editDraft.floorNumber, 10);
-      const capacity = editDraft.capacity.trim() === "" ? undefined : Number.parseInt(editDraft.capacity, 10);
       return updateAdminRoom(session!, editId, {
         roomNumber: editDraft.roomNumber.trim(),
         roomTypeId: editDraft.roomTypeId,
         floorNumber,
-        capacity,
       });
     },
     onSuccess: () => {
@@ -155,13 +152,12 @@ export default function AdminRoomsPage() {
     return true;
   });
 
-  function startEdit(r: { id: string; roomNumber: string; roomType: { id: string }; floorNumber: number | null; capacity: number }) {
+  function startEdit(r: { id: string; roomNumber: string; roomType: { id: string }; floorNumber: number | null }) {
     setEditId(r.id);
     setEditDraft({
       roomNumber: r.roomNumber,
       roomTypeId: r.roomType.id,
       floorNumber: r.floorNumber == null ? "" : String(r.floorNumber),
-      capacity: String(r.capacity ?? ""),
     });
   }
   function cancelEdit() {
@@ -190,7 +186,6 @@ export default function AdminRoomsPage() {
           ))}
         </select>
         <input className="admin-input" placeholder="Floor" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
-        <input className="admin-input" placeholder="Capacity" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create room
         </button>
@@ -315,7 +310,6 @@ export default function AdminRoomsPage() {
               <th>Room</th>
               <th>Type</th>
               <th>Floor</th>
-              <th>Capacity</th>
               <th>Claim</th>
               <th>Physical</th>
               <th>Deficient</th>
@@ -356,15 +350,6 @@ export default function AdminRoomsPage() {
                         placeholder="—"
                       />
                     </td>
-                    <td>
-                      <input
-                        className="admin-input w-16"
-                        type="number"
-                        min={1}
-                        value={editDraft.capacity}
-                        onChange={(e) => setEditDraft({ ...editDraft, capacity: e.target.value })}
-                      />
-                    </td>
                     <td>{r.currentClaimState}</td>
                     <td>{r.physicalState}</td>
                     <td>{r.isDeficient ? "Yes" : "—"}</td>
@@ -396,7 +381,6 @@ export default function AdminRoomsPage() {
                   {r.roomType.name} <span className="text-xs opacity-60">({r.roomType.code})</span>
                 </td>
                 <td>{r.floorNumber ?? "—"}</td>
-                <td>{r.capacity ?? "—"}</td>
                 <td>{r.currentClaimState}</td>
                 <td>{r.physicalState}</td>
                 <td>{r.isDeficient ? "Yes" : "—"}</td>
