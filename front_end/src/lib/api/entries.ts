@@ -749,7 +749,9 @@ export type RoomTypeRateReference = {
   name: string;
   roomNumbers: string[];
   roomRate: number | null;
-  roomRateSource: "AGENT_RATE_CARD" | "STANDARD_RATE_PLAN" | null;
+  roomRateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
+  /** Which named package supplied the rate — "Season", "Premium". Null when standard. */
+  packageName?: string | null;
   standardRate: number | null;
   msrValue: number | null;
   extraBedRate: number | null;

@@ -90,9 +90,9 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
                   </td>
                 ))}
                 <td style={{ ...TD, paddingRight: 0 }}>
-                  {t.roomRateSource === "AGENT_RATE_CARD" ? (
+                  {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
                     <>
-                      rate card
+                      {t.packageName ?? "rate package"}
                       {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
                     </>
                   ) : t.roomRateSource === "STANDARD_RATE_PLAN" ? (
