@@ -1028,7 +1028,8 @@ export type MealPlanType = "CP" | "MAP_LUNCH" | "MAP_DINNER" | "AP";
 export type TravelAgentAdmin = {
   id: string;
   displayName: string;
-  contactNumber: string | null;
+  /** An agency/company usually has several: office, owner, WhatsApp. */
+  contactNumbers: string[];
   contactEmail: string | null;
   modeOfContact: ContactMode;
   /** The agency's contact persons — the desk picks one at intake to fill the booking contact. */
@@ -1042,7 +1043,7 @@ export type TravelAgentAdmin = {
 
 export type TravelAgentInput = {
   displayName: string;
-  contactNumber?: string | null;
+  contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
   coordinators?: CoordinatorContact[];
@@ -1078,7 +1079,8 @@ export type CoordinatorContact = { name: string; phone?: string | null; email?: 
 export type CorporateAccountAdmin = {
   id: string;
   displayName: string;
-  contactNumber: string | null;
+  /** An agency/company usually has several: office, owner, WhatsApp. */
+  contactNumbers: string[];
   contactEmail: string | null;
   modeOfContact: ContactMode;
   gstNumber: string | null;
@@ -1094,7 +1096,7 @@ export type CorporateAccountAdmin = {
 
 export type CorporateAccountInput = {
   displayName: string;
-  contactNumber?: string | null;
+  contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
   gstNumber?: string | null;
@@ -1126,23 +1128,28 @@ export async function reactivateCorporateAccount(session: Session, id: string) {
   return apiRequest<CorporateAccountAdmin>(`/api/admin/corporate-accounts/${id}/reactivate`, { method: "POST", session });
 }
 
-// ----- Rate cards (Phase B) -----
+// --- Rate packages (2026-08-04) -----------------------------------------
+// Replaces rate cards. A package belongs to a travel agent, a corporate account, or to nobody
+// (the COMMON house fallback used when a party has none of its own). Append-only: saving a
+// package with an existing name creates a new version and closes the previous one.
 
-export type RateCardOverride = {
+export type RatePackageScope = "TRAVEL_AGENT" | "CORPORATE" | "COMMON";
+
+export type RatePackageOverride = {
   id: string;
-  rateCardId: string;
   roomTypeId: string;
   roomBaseRate: string;
   notes: string | null;
-  createdAt: string;
-  createdBy: string;
-  roomType?: { id: string; code: string; name: string };
+  roomType?: { code: string; name: string } | null;
 };
 
-export type RateCardAdmin = {
+export type RatePackageAdmin = {
   id: string;
-  partyType: PartyType;
-  partyId: string;
+  scope: RatePackageScope;
+  travelAgentId: string | null;
+  corporateAccountId: string | null;
+  name: string;
+  isDefault: boolean;
   roomBaseRate: string;
   extraBedRate: string | null;
   cnbPercent: number | null;
@@ -1154,17 +1161,19 @@ export type RateCardAdmin = {
   mapDinnerRate: string | null;
   apRate: string | null;
   currency: string;
+  rateIsTaxInclusive: boolean;
   effectiveFrom: string;
   effectiveTo: string | null;
   notes: string | null;
-  createdAt: string;
   createdBy: string;
-  overrides: RateCardOverride[];
+  overrides?: RatePackageOverride[];
 };
 
-export type RateCardInput = {
-  partyType: PartyType;
-  partyId: string;
+/** Owner: exactly one id, or neither for the COMMON house package. */
+export type PackageOwner = { travelAgentId?: string | null; corporateAccountId?: string | null };
+
+export type RatePackageInput = PackageOwner & {
+  name: string;
   roomBaseRate: number | string;
   extraBedRate?: number | string | null;
   cnbPercent?: number | null;
@@ -1176,39 +1185,42 @@ export type RateCardInput = {
   mapDinnerRate?: number | string | null;
   apRate?: number | string | null;
   currency?: string;
+  rateIsTaxInclusive?: boolean;
+  isDefault?: boolean;
   notes?: string | null;
 };
 
-export async function listRateCards(session: Session, partyType: PartyType, partyId: string) {
-  const qs = new URLSearchParams({ partyType, partyId });
-  return apiRequest<{ cards: RateCardAdmin[] }>(`/api/admin/rate-cards?${qs}`, { session });
+function ownerQuery(owner: PackageOwner) {
+  if (owner.travelAgentId) return `?travelAgentId=${encodeURIComponent(owner.travelAgentId)}`;
+  if (owner.corporateAccountId) return `?corporateAccountId=${encodeURIComponent(owner.corporateAccountId)}`;
+  return ""; // no owner = the COMMON package
 }
 
-export async function getActiveRateCard(session: Session, partyType: PartyType, partyId: string) {
-  const qs = new URLSearchParams({ partyType, partyId });
-  return apiRequest<{ active: RateCardAdmin | null }>(`/api/admin/rate-cards/active?${qs}`, { session });
+export async function listRatePackages(session: Session, owner: PackageOwner) {
+  return apiRequest<{ items: RatePackageAdmin[] }>(`/api/admin/rate-packages${ownerQuery(owner)}`, { session });
 }
-
-export async function createRateCardVersion(session: Session, body: RateCardInput) {
-  return apiRequest<RateCardAdmin>(`/api/admin/rate-cards`, { method: "POST", session, body });
+export async function listRatePackageHistory(session: Session, owner: PackageOwner) {
+  return apiRequest<{ items: RatePackageAdmin[] }>(`/api/admin/rate-packages/history${ownerQuery(owner)}`, { session });
 }
-
-export async function setRateCardOverride(
+export async function saveRatePackage(session: Session, body: RatePackageInput) {
+  return apiRequest<RatePackageAdmin>("/api/admin/rate-packages", { method: "POST", session, body });
+}
+export async function setDefaultRatePackage(session: Session, id: string) {
+  return apiRequest<RatePackageAdmin>(`/api/admin/rate-packages/${id}/default`, { method: "POST", session });
+}
+export async function retireRatePackage(session: Session, id: string) {
+  return apiRequest<RatePackageAdmin>(`/api/admin/rate-packages/${id}/retire`, { method: "POST", session });
+}
+export async function setPackageRoomTypeOverride(
   session: Session,
-  rateCardId: string,
+  id: string,
   body: { roomTypeId: string; roomBaseRate: number | string; notes?: string | null },
 ) {
-  return apiRequest<RateCardOverride>(`/api/admin/rate-cards/${rateCardId}/overrides`, {
-    method: "PUT",
-    session,
-    body,
-  });
+  return apiRequest<RatePackageOverride>(`/api/admin/rate-packages/${id}/overrides`, { method: "PUT", session, body });
+}
+export async function deletePackageRoomTypeOverride(session: Session, overrideId: string) {
+  return apiRequest<RatePackageOverride>(`/api/admin/rate-packages/overrides/${overrideId}`, { method: "DELETE", session });
 }
 
-export async function deleteRateCardOverride(session: Session, overrideId: string) {
-  return apiRequest<{ ok: true }>(`/api/admin/rate-cards/overrides/${overrideId}`, {
-    method: "DELETE",
-    session,
-  });
-}
+// --- House tariff (hotel's own add-on price list) ------------------------
 

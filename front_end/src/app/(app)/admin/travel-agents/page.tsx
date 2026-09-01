@@ -16,7 +16,7 @@ import {
 } from "@/lib/api/admin";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
-import { RateCardEditor } from "@/components/admin/rate-card-editor";
+import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 import { VersionsTab } from "@/components/admin/versions-tab";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
@@ -50,7 +50,7 @@ export default function AdminTravelAgentsPage() {
     setSelectedId(a.id);
     setDraft({
       displayName: a.displayName,
-      contactNumber: a.contactNumber,
+      contactNumbers: a.contactNumbers ?? [],
       contactEmail: a.contactEmail,
       modeOfContact: a.modeOfContact,
       coordinators: a.coordinators ?? [],
@@ -158,8 +158,13 @@ export default function AdminTravelAgentsPage() {
                     </select>
                   </label>
                   <label className="block space-y-1">
-                    <span className="admin-muted text-xs">Contact number</span>
-                    <input className="admin-input" value={draft.contactNumber ?? ""} onChange={(e) => setDraft({ ...draft, contactNumber: e.target.value })} />
+                    <span className="admin-muted text-xs">Contact numbers</span>
+                    <input
+                      className="admin-input"
+                      placeholder="17123456, 77123456"
+                      value={(draft.contactNumbers ?? []).join(", ")}
+                      onChange={(e) => setDraft({ ...draft, contactNumbers: e.target.value.split(",").map((s) => s.trim()) })}
+                    />
                   </label>
                   <label className="block space-y-1">
                     <span className="admin-muted text-xs">Email</span>
@@ -262,7 +267,7 @@ export default function AdminTravelAgentsPage() {
 
               {!isNewMode && selected && (
                 <>
-                  <RateCardEditor partyType="TRAVEL_AGENT" partyId={selected.id} />
+                  <RatePackagesEditor owner={{ travelAgentId: selected.id }} ownerLabel={selected.displayName} />
                   <div className="admin-panel p-5">
                     <VersionsTab
                       entityType="TravelAgent"
