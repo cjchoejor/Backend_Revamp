@@ -150,7 +150,12 @@ async function main() {
             id,
             code: t.code,
             name: t.name,
-            maxOccupancy: t.maxOccupancy,
+            // `standardCapacity` is the 2026-07-10 rename of `maxOccupancy` and still @map()s to
+            // the same DB column, so this writes exactly what the pre-rename importer wrote.
+            // The importer had never been updated, so every run since has thrown on this line.
+            // `maxCapacity` is deliberately left at its schema default (3), which is what the
+            // legacy adults+children figure works out to for every type but Standard Single.
+            standardCapacity: t.maxOccupancy,
             maxChildren: t.maxChildren,
             requiredAccompanyingAdults: 1,
             maxExtraBeds: t.maxExtraBeds,
