@@ -112,6 +112,8 @@ export async function createEntry(
     bedTypeRequest?: Record<string, number>;
     contactPersonName?: string;
     contactPersonPhone?: string;
+    /** The party contact's email, pulled at intake. Optional — W4 needs only name + phone. */
+    contactPersonEmail?: string;
     otaSource?: boolean;
   },
 ) {
@@ -154,6 +156,8 @@ export async function updateEntryIntake(
     bedTypeRequest?: Record<string, number> | null;
     contactPersonName?: string;
     contactPersonPhone?: string;
+    /** The party contact's email, pulled at intake. Optional — W4 needs only name + phone. */
+    contactPersonEmail?: string;
     useType?: string;
     expectedVersion?: number;
   },

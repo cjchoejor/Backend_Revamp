@@ -74,7 +74,8 @@ export type CoordinatorContact = { name: string; phone?: string | null; email?: 
 export type LookupPartyMatch = {
   id: string;
   displayName: string;
-  contactNumber: string | null;
+  /** An agency usually has several: office, owner, WhatsApp. */
+  contactNumbers: string[];
   contactEmail: string | null;
   modeOfContact: string;
   gstNumber?: string | null;

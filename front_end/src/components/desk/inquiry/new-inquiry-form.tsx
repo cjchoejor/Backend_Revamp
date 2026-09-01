@@ -287,6 +287,10 @@ function PartyContacts({
   const contacts = party.coordinators ?? [];
   const noun = kind === "TRAVEL_AGENT" ? "agency" : "account";
 
+  // The contact is auto-pulled by the parent when the party changes (see defaultContactFor) —
+  // deliberately NOT here. A child effect setting it raced the parent's reset effect, which runs
+  // second and wiped it, so the operator saw the pick list every time.
+
   const addMutation = useMutation({
     mutationFn: () =>
       addPartyContact(session!, kind, party.id, {
@@ -376,19 +380,48 @@ function PartyContacts({
     return (
       <div className="field">
         <label>Contact person</label>
-        <div className="pickrow sel" style={{ borderRadius: "var(--r-md)", border: "1.5px solid var(--terra)" }}>
-          <span>
-            <b>{contact.name}</b>
-            {contact.phone && <span style={{ color: "var(--ink-3)" }}> · {contact.phone}</span>}
-          </span>
-          <button className="btn btn-ghost btn-sm" type="button" onClick={() => setContact(null)}>
-            Change
-          </button>
+        {/* Editable, not a read-only chip: the pulled details are a starting point, and the
+            person actually on the phone is often a colleague whose name is not on file yet. */}
+        <div style={{ display: "grid", gap: 6 }}>
+          <input
+            className="dinput"
+            placeholder="Contact person's name"
+            value={contact.name ?? ""}
+            onChange={(e) => setContact({ ...contact, name: e.target.value })}
+          />
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              className="dinput"
+              style={{ flex: 1 }}
+              inputMode="tel"
+              placeholder="Phone"
+              value={contact.phone ?? ""}
+              onChange={(e) => setContact({ ...contact, phone: e.target.value })}
+            />
+            <input
+              className="dinput"
+              style={{ flex: 1.3 }}
+              type="email"
+              placeholder="Email"
+              value={contact.email ?? ""}
+              onChange={(e) => setContact({ ...contact, email: e.target.value })}
+            />
+          </div>
         </div>
-        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "5px 0 0" }}>
-          The hotel rings this person about the booking. The guest travelling is captured below.
-          {(party.coordinators?.length ?? 0) > 1 && " “Change” lists everyone on file."}
-        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, flex: 1 }}>
+            {contacts.length === 0
+              ? `No contact person on file — these are ${party.displayName}'s own details. Type over them if someone else is calling.`
+              : contacts.length > 1
+                ? `Pulled from ${party.displayName} — ${contacts.length} people are on file, so check this is the right one.`
+                : `Pulled from ${party.displayName}. Edit if it's someone else.`}
+          </p>
+          {contacts.length > 1 && (
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => setContact(null)}>
+              Pick another
+            </button>
+          )}
+        </div>
         {addBlock}
       </div>
     );
@@ -407,6 +440,7 @@ function PartyContacts({
               <span>
                 <b>{c.name}</b>
                 {c.phone && <span style={{ color: "var(--ink-3)" }}> · {c.phone}</span>}
+                {c.email && <span style={{ color: "var(--ink-3)" }}> · {c.email}</span>}
               </span>
               <span className="brow-open">Use →</span>
             </button>
@@ -488,6 +522,20 @@ function RatePackagePicker({
       </span>
     </div>
   );
+}
+
+/**
+ * The contact a booking starts with when a party is chosen: the party's first named contact
+ * person, or — when none is on file — the party's own name, number and email.
+ */
+function defaultContactFor(party: LookupPartyMatch): CoordinatorContact {
+  const first = (party.coordinators ?? [])[0];
+  if (first) return first;
+  return {
+    name: party.displayName,
+    phone: party.contactNumbers?.[0] ?? null,
+    email: party.contactEmail ?? null,
+  };
 }
 
 /** Debounced search + pick for a single party kind (travel agent or corporate). */
@@ -899,9 +947,20 @@ export function DeskNewInquiryForm() {
     }
   }, [partyKind]);
 
-  // A contact belongs to one party — dropping or swapping the party drops the contact with it.
+  /**
+   * A contact belongs to one party, so swapping the party replaces the contact — but with the
+   * new party's details rather than with nothing. The operator should not have to click through
+   * to what the agency already told us.
+   *
+   * With SEVERAL people on file the system genuinely does not know which of them rang, so it
+   * takes the first and the UI says so; everyone else stays one click away under "Pick another".
+   *
+   * With NONE on file the agency ITSELF is the contact — its own name, first number and email.
+   * That is the honest answer for an agency that has never named a person, and every field is
+   * editable, so the operator types over it when someone else is on the phone.
+   */
   useEffect(() => {
-    setPartyContact(null);
+    setPartyContact(party ? defaultContactFor(party) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [party?.id]);
 
@@ -1284,6 +1343,10 @@ export function DeskNewInquiryForm() {
       // typed to find them, and their profile holds the real number.
       const contactPersonName = partyContact?.name?.trim() || `${firstName.trim()} ${lastName.trim()}`.trim();
       const contactPersonPhone = partyContact?.phone?.trim() || selectedGuest?.phone || fullPhone || "";
+      // The party's contact email; the guest's own address is NOT a fallback — they are
+      // different people, and mailing the traveller what was meant for the agency is worse
+      // than leaving it blank.
+      const contactPersonEmail = partyContact?.email?.trim() || "";
 
       return createEntry(session, {
         inquiryId: inquiry.id,
@@ -1300,6 +1363,7 @@ export function DeskNewInquiryForm() {
         otaSource: channel.channel === "OTA",
         contactPersonName: contactPersonName || undefined,
         contactPersonPhone: contactPersonPhone || undefined,
+        contactPersonEmail: contactPersonEmail || undefined,
       });
     },
     onSuccess: (entry) => {
