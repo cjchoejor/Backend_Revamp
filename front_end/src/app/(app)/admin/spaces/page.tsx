@@ -7,12 +7,16 @@ import { createSpace, deleteSpace, listSpaces, updateSpace } from "@/lib/api/adm
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
+import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 
 export default function AdminSpacesPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const [form, setForm] = useState({ code: "", name: "", capacity: "0" });
+  // Which space's fault panel is open. Same component the desk uses, so the two surfaces
+  // cannot drift apart on the report / verify / resolve rules.
+  const [faultSpace, setFaultSpace] = useState<{ id: string; code: string } | null>(null);
 
   const query = useQuery({
     queryKey: ["admin", "spaces"],
@@ -87,11 +91,26 @@ export default function AdminSpacesPage() {
                 <td>{s.name}</td>
                 <td>{s.spaceType}</td>
                 <td>{s.capacity}</td>
-                <td>{s.isAvailable ? <span className="admin-tag-ok admin-tag">available</span> : <span className="admin-tag-warn admin-tag">unavailable</span>}</td>
+                <td>
+                  {s.isDeficient ? (
+                    <span className="admin-tag-warn admin-tag">out of service</span>
+                  ) : s.isAvailable ? (
+                    <span className="admin-tag-ok admin-tag">available</span>
+                  ) : (
+                    <span className="admin-tag-warn admin-tag">unavailable</span>
+                  )}
+                </td>
                 <td className="text-right">
                   <div className="flex justify-end gap-1">
                     <button type="button" className="admin-btn text-[10px]" onClick={() => toggleMutation.mutate(s)}>
                       {s.isAvailable ? "Deactivate" : "Activate"}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn text-[10px]"
+                      onClick={() => setFaultSpace(faultSpace?.id === s.id ? null : { id: s.id, code: s.code })}
+                    >
+                      {faultSpace?.id === s.id ? "Hide faults" : "Faults"}
                     </button>
                     <button
                       type="button"
@@ -113,6 +132,17 @@ export default function AdminSpacesPage() {
                 </td>
               </tr>
             ))}
+            {faultSpace && (
+              <tr>
+                <td colSpan={6} className="bg-black/[0.02] p-3">
+                  <DeficiencyPanel
+                    target={{ spaceId: faultSpace.id }}
+                    targetLabel={`Space ${faultSpace.code}`}
+                    onChanged={() => { void queryClient.invalidateQueries({ queryKey: ["admin", "spaces"] }); }}
+                  />
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

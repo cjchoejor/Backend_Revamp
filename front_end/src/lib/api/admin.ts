@@ -424,7 +424,7 @@ export async function updateAdminRoom(
 
 export async function listSpaces(session: Session) {
   return apiRequest<{
-    items: Array<{ id: string; code: string; name: string; spaceType: string; capacity: number; isAvailable: boolean }>;
+    items: Array<{ id: string; code: string; name: string; spaceType: string; capacity: number; isAvailable: boolean; isDeficient?: boolean }>;
     count: number;
   }>("/api/admin/spaces", { session });
 }

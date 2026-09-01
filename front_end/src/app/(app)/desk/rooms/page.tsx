@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
+import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { useSession } from "@/hooks/use-session";
 import { listRooms, type RoomListItem } from "@/lib/api/rooms";
 import {
@@ -23,6 +25,19 @@ export default function DeskRoomsPage() {
   });
 
   const rooms = useMemo(() => roomsQuery.data?.items ?? [], [roomsQuery.data]);
+  const queryClient = useQueryClient();
+  // Which room's fault panel is open. Reporting is L1+, so front desk no longer waits for an
+  // admin to take a broken room out of service.
+  const [faultRoom, setFaultRoom] = useState<{ id: string; roomNumber: string } | null>(null);
+
+  // Escape closes the dialog. Bound to the document rather than the scrim, because a div only
+  // receives key events while focused and the operator's focus is inside the form.
+  useEffect(() => {
+    if (!faultRoom) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFaultRoom(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [faultRoom]);
   const isLoading = sessionLoading || roomsQuery.isLoading;
 
   const statusOf = useMemo(() => {
@@ -114,8 +129,22 @@ export default function DeskRoomsPage() {
                   const key = statusOf.get(r.id)!;
                   const meta = ROOM_STATUS[key];
                   return (
-                    <div className={`room${meta.tile ? ` ${meta.tile}` : ""}`} key={r.id}>
-                      <div className="rn">{r.roomNumber}</div>
+                    <div
+                      className={`room${meta.tile ? ` ${meta.tile}` : ""}`}
+                      key={r.id}
+                      role="button"
+                      tabIndex={0}
+                      title={r.isDeficient ? "Fault recorded — click to review" : "Click to report a fault"}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setFaultRoom({ id: r.id, roomNumber: r.roomNumber })}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setFaultRoom({ id: r.id, roomNumber: r.roomNumber }); }}
+                    >
+                      <div className="rn">
+                        {r.roomNumber}
+                        {r.isDeficient && (
+                          <AlertTriangle style={{ width: 12, height: 12, marginLeft: 4, verticalAlign: "-1px" }} />
+                        )}
+                      </div>
                       <div className="rt">{roomTypeShort(r.roomTypeId)}</div>
                       <div className="rs" style={{ color: meta.color }}>
                         <span className="d" style={{ background: meta.color }} />
@@ -127,6 +156,28 @@ export default function DeskRoomsPage() {
               </div>
             </div>
           ))}
+
+          {faultRoom && (
+            <div
+              onClick={() => setFaultRoom(null)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 60, display: "grid", placeItems: "center", padding: 16 }}
+            >
+              <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)", maxHeight: "85vh", overflowY: "auto" }}>
+                <div className="card" style={{ padding: 16, background: "var(--paper, #fff)" }}>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFaultRoom(null)}>
+                      Close
+                    </button>
+                  </div>
+                  <DeficiencyPanel
+                    target={{ roomId: faultRoom.id }}
+                    targetLabel={`Room ${faultRoom.roomNumber}`}
+                    onChanged={() => { void queryClient.invalidateQueries({ queryKey: ["rooms"] }); }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="legend">
             {ROOM_STATUS_ORDER.map((k) => (
