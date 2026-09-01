@@ -42,47 +42,56 @@ Endpoints that show the pattern:
 
 Both `UI-experiment3` and `integration-prod-frontend` are fully pushed. **Nothing is merged between them automatically** — a plain merge would be 119 conflicting backend files (see below), so work is ported deliberately, piece by piece.
 
-## ⚠️ Porting the user's own backend work into this branch — OPEN
+## Porting the user's own backend work into this branch — 1 of 8 left
 
-The user's 16 commits on `integration-prod-frontend` are **not** in this branch and must be brought across **without breaking his code**. A straight merge is not viable: 119 backend files were edited independently on both sides.
+The user's 16 commits on `integration-prod-frontend` were not in this branch and are being brought across **without breaking his code**. A straight merge was never viable: 119 backend files were edited independently on both sides, so each theme is ported deliberately and verified before the next.
 
-**Not yet started.** Port one theme at a time, each verified before the next.
+**Status as of 2026-09-01: seven themes closed, one left.**
 
-New files, which carry no conflict (they simply don't exist here):
+| Theme | Status |
+|---|---|
+| **RatePackage + multiple contact numbers** — rates move off the party onto named packages | ✅ ported (`a00b1c7` backend, `047e7dd` + `3ebb8f0` UI) |
+| **HouseTariff** — extra bed / meals / meal plans for bookings with no package | ✅ ported (`f4542a7` backend, `027d466` page) |
+| **Deficiency reporting moves to operations** — L1 reports, L2+ verifies, spaces included | ✅ ported (`7e6bce3` backend, `c0c0b9c` UI) |
+| **Dropped `Room.capacity`** | ✅ ported (`e099643` backend, `1f9d5f4` UI) |
+| **Availability 500 fix** (stale `contactNumber` select) | ✅ **not applicable** — the bug was self-inflicted on the other branch by its own `contactNumbers` rename. Fixed here as part of the RatePackage port, where the same rename happens. |
+| **Confirmed holds never expire; a hold blocks every room it holds** | ✅ **already fixed here**, differently: `roomsClaimedByReservedEntry` in [entry-inventory-claim.ts](back_end/src/lib/entry-inventory-claim.ts) falls back to the hold's rooms with NO expiry check, so a confirmed booking stays blocked regardless of TTL. The flat `expiresAt > now` in the availability hold query is therefore redundant, not dangerous. Do not port `07a2c98`. |
+| **S3→S2 backflow retires the accepted quotation** | ⏸ **deferred by the operator** — logged in [docs/bug.md](docs/bug.md). Real in code (`s3-reentry-state-machine.ts` never touches quotations) but defused here, because `resolveOperativeQuotation` is segment-scoped so a stale accepted quote from a sealed segment is invisible to every gate. 0 affected bookings on `legphel_pms_dev2`. |
+| **S8 key loss** (`keyCountLost` + required comment) | ⬜ **the one left — and the only real collision.** |
 
-| Theme | Commits | Files to bring |
-|---|---|---|
-| **HouseTariff** — extra-bed/meal rates for bookings with no rate card | `412a4fe` `ff8930d` | `lib/house-tariff.ts`, `services/admin/house-tariff-admin-service.ts`, `routes/admin/house-tariff-router.ts`, `scripts/seed-rate-plans-from-legacy-rooms.ts` |
-| **RatePackage** — rates move off the party onto named packages; agencies stop being duplicated | `291f12a` `63fb8ab` | `lib/rate-package-resolution.ts`, `services/admin/rate-package-admin-service.ts`, `routes/admin/rate-package-router.ts`, `scripts/migrate-rate-cards-to-packages.ts` |
-| **Deficiency reporting moves to operations** — L1 reports, L2 verifies, spaces included | `3582923` `16032b4` | `services/domain/deficient-condition-service.ts` |
-| **S3→S2 backflow retires the accepted quotation** | `de027da` `edb98fb` | `lib/supersede-accepted-quotation-on-backflow.ts`, `scripts/fix-stale-accepted-quotations.ts` |
-| **Confirmed holds never expire; a hold blocks every room it holds** | `07a2c98` | `lib/committed-hold-rooms.ts`, `lib/cancel-stage-dwell-monitors.ts` |
-| **S8 key loss + S3 billing-model recommendation** | `4e36b65` | `services/domain/billing-model-recommendation.ts`, `scripts/add-agent-billing-models.ts` |
-| **Availability 500 fix** (stale `contactNumber` select after the column drop) | `e14346e` | — edit only |
-| **Dropped `Room.capacity`** | `4ed3585` | — migration only |
+### The remaining collision: `recordKeyReturn`
 
-Five migrations to replay here, against his 20 the user's branch never had:
+Both branches rewrote the same function and the two changes are **complementary, so both should survive**:
+
+- **His** (already here): per-room return — `returnedRoomIds` on the request, outstanding keys read from `RoomAssignment.keyIssuedAt` / `keyReturnedAt` via `countOutstandingKeys`. Answers *which room's key came back*.
+- **The user's** (commit `4e36b65` on the other branch): `KeyReturnRecord.keyCountLost` with a DB check that returned + lost never exceeds issued, a required comment on any declared loss, and a three-way trace (`KEY_RETURN.KEYS_LOST` / `.DISCREPANCY` / `.RECORDED`). Answers *was it lost*.
+
+A lost key deliberately does NOT block S8→S9 and posts no automatic charge — no damage rate list exists to price one against.
+
+The same commit also carried the **S3 billing-model recommendation** (`services/domain/billing-model-recommendation.ts`, `scripts/add-agent-billing-models.ts`), which is independent of the key work and can be ported on its own.
+
+### Migrations already replayed here
+
+Renumbered to today's dates so they sort after his 52 rather than wedging into the middle of their history:
 
 ```
-20260730060818_house_tariff_addon_rates
-20260804090000_drop_room_capacity
-20260804120000_deficient_spaces_and_verification
-20260804140000_rate_packages
-20260810090000_key_return_lost_count
+20260901060000_drop_room_capacity
+20260901070000_rate_packages
+20260901080000_deficient_spaces_and_verification
+20260901090000_house_tariff
 ```
 
-**Known collisions — these need reconciling by hand, not by git:**
+### Resolved along the way
 
-- **`s8-checkout-service.ts` / `recordKeyReturn`.** Both sides rewrote it. The user's adds `keyCountLost` + a required comment; his adds per-room `returnedRoomIds` and reads outstanding keys from `RoomAssignment.keyIssuedAt/keyReturnedAt` (`countOutstandingKeys`). They are complementary — "which room's key came back" vs "was it lost" — and both should survive.
-- **Rate resolution.** The user's RatePackage work retires `RateCard`; his branch still resolves through `RateCard` in `s2-quotation-service` and `rate-reference-service`. Deciding this one is a design call, not a merge.
-- **Deficiency.** His branch may have its own S7/S8 deficient-record handling to reconcile with the L1-reports/L2-verifies split.
+- **Rate resolution** — settled. `RateCard` is retired (router, admin service and `agent-rate-resolution` deleted); the two TABLES are kept deliberately so `migrate-rate-cards-to-packages.ts` stays re-runnable. Pricing resolves explicit choice → party default → COMMON, and a walk-in falls to rate plans + HouseTariff.
+- **Deficiency** — no conflict found; his branch had only the finalize PATCH, preserved beneath the new report/verify/list endpoints.
 
 ## Databases
 
 | Database | Migrations | Contents | Used by |
 |---|---|---|---|
-| `legphel_pms_dev` | 32 | the real working data — 27 rooms, 170 entries | `integration-prod-frontend` (what `back_end/.env` points at) |
-| `legphel_pms_dev2` | 52 | seeded demo data only — 13 rooms, 4 entries | **this branch** |
+| `legphel_pms_dev` | 32 | the older working data — 27 rooms, 170 entries | `integration-prod-frontend` (what `back_end/.env` still points at) |
+| `legphel_pms_dev2` | 56 | **the real property data** — 27 rooms / 10 types, 127 travel agents, 9 corporates, 137 rate packages, 100 imported bookings | **this branch** |
 
 `back_end/.env` still points at `legphel_pms_dev`, so running this branch's backend needs an override per terminal — never edit `.env`, or the other branch silently starts writing to the wrong database:
 
@@ -161,19 +170,19 @@ Anchor these in your head before searching:
 | `prisma/schema.prisma` | Single Prisma schema (admin + operational models). Migrations under `prisma/migrations/`. |
 | `prisma/seed.ts` | Destructive seed — wipes tables it owns then re-seeds. Run via `npm run db:seed`. |
 | `scripts/` | One-off scripts: `check-party-seating.ts` (read-only seating diagnostic — who has no room / empty rooms per live booking), `resume-*-walk-ent-*.ts` (manual mirrors of a room-change / extension walk's tail for a booking a crash left mid-journey), targeted seeds (`seed-additional-policies.ts`, `seed-additional-config-keys.ts`, `seed-predefined-modes.ts`), rename helpers (`rename-room-type-id.ts`), inspection (`inspect-policy-registry.ts`), `audit-money.ts` (READ-ONLY money audit — ledger/balance, tax-companion math, frozen-layer, night-coverage and derived-surface invariants over every folio, graded CRITICAL/WARN/INFO; findings + method in `docs/money-audit-2026-08-24.md`), acceptance tests (`s*-acceptance-tests.ts`, `Test_ReVamp/`), the destructive `wipe-operational-data.ts` (`--confirm`; keeps config/staff/rooms/registries), `seed-in-house-test-booking.ts` — ONE minimal in-house (S7) `TEST-ED-` booking (dated assignment with frozen figures, LIVE folio, OCCUPIED room; `--slept/--ahead/--rate/--room`) for exercising checkout paths mid-stay (built for the early-departure work — no live booking was mid-stay), and `seed-availability-test-data.ts` — bookings from today across the next few nights that make every S1 state visible at once (RESERVED with an assignment, RESERVED with rooms only on a lapsed hold, committed HELD, speculative HELD, BLOCKED rooms). Dry-run by default; `--commit` writes and is re-runnable (it clears its own prior seed first), `--clean --commit` removes it. Everything it writes is `TEST-` prefixed. |
-| `scripts/import-data/` | **Real Legphel data importers** (dry-run by default, `--commit` to write). `import-legacy-rooms.ts` — `legacy-bookings/room.csv` → 10 RoomTypes + 27 Rooms + per-type RatePlanRegistry (clears the demo catalogue first). `import-legacy-agent-rates.ts` — `agent_rate` CSV → 127 TravelAgents + 9 CorporateAccounts + RateCards. `import-legacy-bookings.ts` — `legacy-bookings/*.csv` → Inquiry→Entry→…→Folio (looks rooms up by number, never creates them). **Load order: wipe → rooms → agents → bookings.** |
+| `scripts/import-data/` | **Real Legphel data importers** (dry-run by default, `--commit` to write). `import-legacy-rooms.ts` — `legacy-bookings/room.csv` → 10 RoomTypes + 27 Rooms + per-type RatePlanRegistry (clears the demo catalogue first). `import-legacy-agent-rates.ts` — `agent_rate` CSV → 127 TravelAgents + 9 CorporateAccounts + RateCards (then `migrate-rate-cards-to-packages.ts` turns those into RatePackages). `import-legacy-bookings.ts` — `legacy-bookings/*.csv` → Inquiry→Entry→…→Folio (looks rooms up by number, never creates them). **Load order: wipe → rooms → agents → bookings.** |
 | `src/index.ts` | Express bootstrap; spawns pg-boss + workers only when `RUN_WORKERS=true`. |
 | `src/db.ts` | Singleton `PrismaClient` export. Always import from here, never `new PrismaClient()`. |
 | `src/routes/admin/` | Admin route groups, one file per service. Guarded with `requireActorLevel("L4")` + `validateBody(zodSchema)`. |
 | `src/routes/` (non-admin) | Operational route groups (stage-aware). |
 | `src/services/admin/` | The 26 ACIG admin services (`*-admin-service.ts`). Plain exported functions, prisma as first arg. |
-| `src/services/domain/` | Operational stage services (`s1-entry-service.ts`, `s2-hold-service.ts`, etc.) + cross-stage services: `child-policy-service.ts` (age classification, meal rate, separate-bed charge), `capacity-validation-service.ts` (room-type capacity + composition checks). |
+| `src/services/domain/` | Operational stage services (`s1-entry-service.ts`, `s2-hold-service.ts`, etc.) + cross-stage services: `deficient-condition-service.ts` (L1 reports / L2+ verifies, rooms AND spaces), `child-policy-service.ts` (age classification, meal rate, separate-bed charge), `capacity-validation-service.ts` (room-type capacity + composition checks). |
 | `src/services/infrastructure/` | Timer engine, audit, notification, document-generation, **email-service.ts** (Nodemailer SMTP). |
 | `src/policies/**` | 149 compiled-runtime guard modules organised by domain (`01-availability/`, `08-pricing-rate-plan/`, …). Not admin-editable. |
 | `src/state-machines/` | Per-stage transition logic (`s1-state-machine.ts`, `entry-lifecycle-state-machine.ts`). |
 | `src/workers/` | W1–W37 background workers. `runner.ts` registers them with pg-boss. |
 | `src/engines/` | Pricing pipeline, tax, doc-gen, etc. |
-| `src/lib/` | Plumbing: `config-store.ts` (ConfigurationEntry reads), `policy-registry-runtime.ts` (registry → operational bridge), `errors.ts`, `timer-engine.ts`, `readable-id.ts`, `party-seating.ts` (who-sleeps-where derivation + the everyone-seated / no-empty-room invariants and their repair; mirrored by `front_end/src/lib/desk/party-rooms.ts`), `entry-inventory-claim.ts` (what still holds a room — reservations, holds, and since 2026-08-21 pending stay-extension claims), `folio-ledger-view.ts` (2026-08-22 — THE one reading of a folio every bill is a view of: charges vs SC/GST companions, the Room · F&B · Services component of each line, the additive ladder, the legacy read-time room tax; `buildFinalInvoiceFigures`, the Master Bill and the Interim Folio Statement all print from it). |
+| `src/lib/` | Plumbing: `rate-package-resolution.ts` (agent/corporate/COMMON rate resolution — replaces the deleted `agent-rate-resolution.ts`), `house-tariff.ts` (walk-in add-on rates), `config-store.ts` (ConfigurationEntry reads), `policy-registry-runtime.ts` (registry → operational bridge), `errors.ts`, `timer-engine.ts`, `readable-id.ts`, `party-seating.ts` (who-sleeps-where derivation + the everyone-seated / no-empty-room invariants and their repair; mirrored by `front_end/src/lib/desk/party-rooms.ts`), `entry-inventory-claim.ts` (what still holds a room — reservations, holds, and since 2026-08-21 pending stay-extension claims), `folio-ledger-view.ts` (2026-08-22 — THE one reading of a folio every bill is a view of: charges vs SC/GST companions, the Room · F&B · Services component of each line, the additive ladder, the legacy read-time room tax; `buildFinalInvoiceFigures`, the Master Bill and the Interim Folio Statement all print from it). |
 | `src/lib/admin/` | Admin-only plumbing: `config-key-registry.ts` (ownership + validators), `supersede-configuration.ts`, `write-admin-audit.ts`. |
 | `src/dtos/08-admin/request-schemas.ts` | Zod schemas for every admin write. |
 | `src/middleware/` | `auth.ts` (PIN-session + actor-level checks), `validate-body.ts`. |
@@ -476,7 +485,57 @@ The component shows snapshots newest-first, each row expands to view the prior J
 3. Inside each `prisma.$transaction(async (tx) => …)` that updates this entity, call `await captureSnapshotTx(tx, { entityType, entityId, actorId })` immediately before the `.update()`
 4. Drop `<VersionsTab>` on the admin page
 
-### Travel agents, corporate accounts, and rate cards (Phase B)
+### Rate packages — how agent and corporate rates actually work (2026-09-01)
+
+⚠️ **`RateCard` is RETIRED. Read this before the historical Phase-B section below.**
+
+Agent and rate card were fused one-to-one, so every negotiated variant needed its own travel-agent row — "Bhutan INC (Season)", "(Off season)", "(premium)" were three agencies with duplicated contact details. **`RatePackage`** is a named set of rates belonging to an agency, a company, or nobody:
+
+```
+scope = TRAVEL_AGENT -> travelAgentId set
+scope = CORPORATE    -> corporateAccountId set
+scope = COMMON       -> neither; the house fallback for a party with no package of its own
+```
+
+A DB check constraint (`rate_package_scope_matches_party`) enforces that pairing rather than trusting callers. `RoomTypePackageOverride` pins a different room rate per room type; `Inquiry.ratePackageId` records WHICH package a booking was quoted on, because once an agency is one row, pointing at the agency no longer says whether the guest got season, off-season or premium.
+
+**Resolution order** ([lib/rate-package-resolution.ts](back_end/src/lib/rate-package-resolution.ts) `resolveRatePackageForBooking`): explicit choice → party default (`isDefault`, then newest) → COMMON. A booking with **no party returns null** — that is a walk-in, priced from rate plans + HouseTariff, never from the common package. Explicit selection is deliberately NOT date-filtered: a booking quoted on a since-superseded package must still resolve to the one it was quoted on.
+
+**Where each rate comes from — the whole picture:**
+
+| What | Source | Notes |
+|---|---|---|
+| Room rate | `RatePlanRegistry` per room type, or the party's package | Package wins when a party is attached; rate plans own the MSR floor, season multiplier and discount pipeline |
+| Extra bed · meals · meal plans | The party's package → else **HouseTariff** | The two never mix on one booking |
+| Per-room negotiation (S2) | The operator's typed rate on the composition row | Beats both |
+
+In one line: **negotiated rate → rate package → house tariff → 0.** A blank field on a *package* deliberately does NOT fall back to the house tariff — "we agreed nothing" means free, not rack price.
+
+**Surfaces**: `/admin/travel-agents` and `/admin/corporate-accounts` carry `RatePackagesEditor` (packages + per-room-type overrides + a Rate history panel); `/admin/common-rate-package` owns the COMMON fallback; the S1 intake form has a package picker (`GET /api/lookups/rate-packages`, L1) preselecting the party default. `roomRateSource` reports `AGENT_RATE_PACKAGE` and the desk strip prints the package NAME.
+
+**Data migration**: [scripts/migrate-rate-cards-to-packages.ts](back_end/scripts/migrate-rate-cards-to-packages.ts) (dry-run default) merged 127 agent rows → 113 agencies + 137 packages, deactivating merged-away rows rather than deleting them and repointing 86 inquiries. **The `rate_cards` / `room_type_rate_overrides` TABLES are kept on purpose** — the script reads them, so dropping them would make the grouping un-rerunnable.
+
+### HouseTariff — add-ons for guests with no package (2026-09-01)
+
+The hotel's own price list for **extra bed, the three à-la-carte meals, and the four meal-plan rates**. Before it, `agentRate?.addOns?.breakfast ?? 0` meant a walk-in's room priced from the rate plan and everything on top priced at **zero**. Append-only versioned; the ROOM rate is deliberately not here.
+
+Edited at **`/admin/house-tariff`** ("House tariff (walk-in add-ons)" under Commercial). Resolved by [lib/house-tariff.ts](back_end/src/lib/house-tariff.ts) `resolveActiveHouseTariff` (30s cache; `invalidateHouseTariffCache()` after admin writes) and wired into all three pricing paths — the S2 draft, the live preview, and the rate reference — so they cannot disagree.
+
+**Meal plans**: a plan rate is charged INSTEAD of the meals it covers. `null` means unpriced and falls back to the SUM of its constituents, which reproduces earlier totals to the cent; a plan rate of **0 is honoured as deliberately free**. Because this branch prices meals per-meal (child-banded, with a per-meal split the negotiation table reads), a plan rate is attributed back across its meals **in proportion to their à-la-carte rates** — AP 900 against 300/350/350 charges each at 90%, and when the plan rate equals the sum the factor is exactly 1. A **negotiated constituent meal beats a configured plan rate**, so negotiating dinner is never silently ignored.
+
+⚠️ **Left EMPTY deliberately** — until real prices are entered, walk-in add-ons still price at 0. The mechanism and the screen exist; the prices are the operator's to set.
+
+### Deficiency reporting is operational — L1 reports, L2+ verifies (2026-09-01)
+
+Reporting a fault was L4-only on the admin console, so a broken room stayed sellable until an admin was free. Now **L1 reports directly and the target leaves service immediately**, before verification — a broken room must never stay sellable overnight. The report lands `PENDING_VERIFICATION`; an **L2+ verifies or rejects**, and a rejection returns the target to service. A report raised BY an L2+ (or through the L4 admin route) is `VERIFIED` on arrival — they are the verifying authority.
+
+`verificationStatus` is independent of `status`: verification asks "is this fault real?", resolution asks "has it been fixed?".
+
+**Spaces are reportable too.** `roomId` is nullable, `spaceId` joins it, and a DB check constraint (`deficient_target_xor`) enforces exactly one target. `Space.isDeficient` mirrors `Room.isDeficient` and space allocation refuses a deficient space before the capacity check. `GET /api/spaces` (L1) mirrors `/rooms`.
+
+Service: [deficient-condition-service.ts](back_end/src/services/domain/deficient-condition-service.ts). Surfaces: the shared `DeficiencyPanel` on **`/desk/rooms`** (click any tile), the new **`/desk/spaces`** board, and `/admin/spaces`. The panel is inline-styled on purpose — the desk theme is scoped under `.desk-root` and `admin-theme.css` only loads on `/admin`, so a class-based component would render unstyled on one of the two.
+
+### Travel agents, corporate accounts, and rate cards (Phase B — HISTORICAL, superseded above)
 
 Domain 03 (Commercial) now has dedicated CRUD for **TravelAgent** and **CorporateAccount** under `/admin/travel-agents` and `/admin/corporate-accounts`. Each carries a versioned **RateCard** (append-only — editing creates a new version, prior gets `effectiveTo` set) plus optional per-room-type overrides.
 
