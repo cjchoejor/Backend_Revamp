@@ -61,7 +61,7 @@ async function main() {
   const cardByParty = new Map(cards.map((c) => [`${c.partyType}:${c.partyId}`, c]));
 
   // --- group agents -------------------------------------------------------
-  type Member = { id: string; displayName: string; variant: string | null; inquiries: number };
+  type Member = { id: string; displayName: string; variant: string | null; inquiries: number; contactNumbers: string[]; contactEmail: string | null };
   const groups = new Map<string, { base: string; members: Member[] }>();
 
   for (const a of agents) {
@@ -71,7 +71,7 @@ async function main() {
     const g = groups.get(k)!;
     // Keep the longest spelling of the base as the display name — usually the most complete.
     if (base.length > g.base.length) g.base = base;
-    g.members.push({ id: a.id, displayName: a.displayName, variant, inquiries: inqCount.get(a.id) ?? 0 });
+    g.members.push({ id: a.id, displayName: a.displayName, variant, inquiries: inqCount.get(a.id) ?? 0, contactNumbers: a.contactNumbers ?? [], contactEmail: a.contactEmail ?? null });
   }
 
   const merges = [...groups.values()].filter((g) => g.members.length > 1);
@@ -114,8 +114,37 @@ async function main() {
     for (const g of groups.values()) {
       const survivor = [...g.members].sort((a, b) => b.inquiries - a.inquiries || a.id.localeCompare(b.id))[0]!;
 
-      // The surviving row carries the merged agency name (qualifier stripped when it was a variant).
-      await tx.travelAgent.update({ where: { id: survivor.id }, data: { displayName: g.base } });
+      // The surviving row carries the merged agency name (qualifier stripped when it was a
+      // variant) AND every contact detail the merged-away rows brought with them.
+      //
+      // Each variant row was a separate agency record, so each carried its OWN office / owner /
+      // WhatsApp number — "Bhutan INC (Off season)" and "(premium)" had different numbers from
+      // "(Season)". Keeping only the survivor's would delete the others the moment the rows
+      // merged, which is the exact loss `contactNumbers String[]` exists to prevent. Union,
+      // survivor's own first, de-duplicated by exact string.
+      // De-duplicated by DIGITS, not exact string: "91 7363002410" and "917363002410" are the
+      // same number typed differently, and matching raw text would list it twice.
+      const seenNum = new Set<string>();
+      const mergedNumbers: string[] = [];
+      for (const m of [survivor, ...g.members.filter((x) => x.id !== survivor.id)]) {
+        for (const raw of m.contactNumbers ?? []) {
+          const v = String(raw).trim();
+          if (!v) continue;
+          const k = v.replace(/\D/g, "") || v.toLowerCase();
+          if (seenNum.has(k)) continue;
+          seenNum.add(k);
+          mergedNumbers.push(v);
+        }
+      }
+      // An email is one field, so it cannot union — the survivor's wins, and only a row with
+      // none adopts a merged-away one rather than staying blank.
+      const mergedEmail =
+        survivor.contactEmail ?? g.members.find((m) => m.contactEmail)?.contactEmail ?? null;
+
+      await tx.travelAgent.update({
+        where: { id: survivor.id },
+        data: { displayName: g.base, contactNumbers: mergedNumbers, contactEmail: mergedEmail },
+      });
 
       for (const m of g.members) {
         const card = cardByParty.get(`TRAVEL_AGENT:${m.id}`);
