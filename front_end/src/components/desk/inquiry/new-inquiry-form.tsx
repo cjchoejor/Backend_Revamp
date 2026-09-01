@@ -38,6 +38,8 @@ import {
   searchTravelAgentsLookup,
   type CoordinatorContact,
   type LookupPartyMatch,
+  listRatePackagesLookup,
+  type LookupRatePackage,
 } from "@/lib/api/inquiries";
 import { createEntry, getEntry, updateEntryIntake } from "@/lib/api/entries";
 import { listRooms } from "@/lib/api/rooms";
@@ -421,6 +423,73 @@ function PartyContacts({
   );
 }
 
+
+/**
+ * Which negotiated package this booking is quoted on.
+ *
+ * An agency can carry several rates side by side — Season, Off season, Premium — and they are
+ * not decorative: the difference between them is real money on the quote. Leaving it unset is
+ * legal and resolves the party's default package, then the hotel's common one, so this never
+ * blocks intake; it just records the choice when the operator has one to make.
+ */
+function RatePackagePicker({
+  kind,
+  party,
+  value,
+  onChange,
+}: {
+  kind: PartyKind;
+  party: LookupPartyMatch | null;
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const { session } = useSession();
+  const owner = kind === "TRAVEL_AGENT" ? { travelAgentId: party?.id } : { corporateAccountId: party?.id };
+  const q = useQuery({
+    queryKey: ["lookup-rate-packages", kind, party?.id],
+    queryFn: () => listRatePackagesLookup(session!, owner),
+    enabled: !!session && !!party?.id,
+  });
+  const items: LookupRatePackage[] = q.data?.items ?? [];
+
+  // Preselect the party default so the shown price matches what pricing would resolve anyway.
+  useEffect(() => {
+    if (!party?.id) { onChange(null); return; }
+    if (items.length === 0) { onChange(null); return; }
+    if (value && items.some((i) => i.id === value)) return;
+    onChange(items.find((i) => i.isDefault)?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [party?.id, items.length]);
+
+  if (!party?.id) return null;
+  if (q.isLoading) return <p className="hint">Loading rate packages…</p>;
+  if (items.length === 0) {
+    return (
+      <p className="hint">
+        No rate package on file for {party.displayName} — this booking prices on the hotel&rsquo;s common rate.
+      </p>
+    );
+  }
+  return (
+    <div className="field">
+      <label>Rate package</label>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+        {items.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+            {p.isDefault ? " (default)" : ""} — {p.currency} {Number.parseFloat(p.roomBaseRate).toFixed(2)}/night
+          </option>
+        ))}
+      </select>
+      <span className="hint">
+        {items.length === 1
+          ? "The only package on file for this party."
+          : `${items.length} packages on file — the rate differs between them, so pick the one agreed with the guest.`}
+      </span>
+    </div>
+  );
+}
+
 /** Debounced search + pick for a single party kind (travel agent or corporate). */
 function PartySearch({
   kind,
@@ -707,6 +776,8 @@ export function DeskNewInquiryForm() {
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
   // The agency/account contact person handling this booking — becomes Entry.contactPerson* below.
   const [partyContact, setPartyContact] = useState<CoordinatorContact | null>(null);
+  // Which negotiated package the booking is quoted on; null resolves party default -> common.
+  const [ratePackageId, setRatePackageId] = useState<string | null>(null);
   // Policy 17 / SIG-S1 §100.6 — CORPORATE bookings must record a client reference + coordinator
   // on the inquiry, else the entry can't exit S1. Captured here at intake.
   const [corpClientRef, setCorpClientRef] = useState("");
@@ -1192,6 +1263,7 @@ export function DeskNewInquiryForm() {
         proposedCheckOut: checkOut || undefined,
         travelAgentId: partyKind === "TRAVEL_AGENT" ? party?.id ?? null : null,
         corporateAccountId: partyKind === "CORPORATE" ? party?.id ?? null : null,
+        ratePackageId: party?.id ? ratePackageId : null,
       });
 
       // Corporate/government context (Policy 17) — required before the entry can exit S1.
@@ -1434,13 +1506,16 @@ export function DeskNewInquiryForm() {
               pre-fill below. Shown under the New/Returning tabs (operator request 2026-07-31 —
               it used to sit above them) so the guest-identity choice stays the block's lead. */}
           {partyKind && (
-            <PartySearch
-              kind={partyKind}
-              party={party}
-              setParty={setParty}
-              contact={partyContact}
-              setContact={setPartyContact}
-            />
+            <>
+              <PartySearch
+                kind={partyKind}
+                party={party}
+                setParty={setParty}
+                contact={partyContact}
+                setContact={setPartyContact}
+              />
+              <RatePackagePicker kind={partyKind} party={party} value={ratePackageId} onChange={setRatePackageId} />
+            </>
           )}
 
           {/* Adopted existing guest (from phone match or returning search) */}

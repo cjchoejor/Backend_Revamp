@@ -22,6 +22,11 @@ export async function createInquiry(
     travelAgentId?: string | null;
     /** Phase C — optional link to a Phase-B CorporateAccount (mutually exclusive with travelAgentId). */
     corporateAccountId?: string | null;
+    /**
+     * Which negotiated package this booking is quoted on. Omit to let pricing use the party's
+     * default package, then the hotel's common one.
+     */
+    ratePackageId?: string | null;
   },
 ) {
   return apiRequest<InquiryListItem>("/api/inquiries", {
@@ -121,4 +126,35 @@ export async function addPartyContact(
     session,
     body: contact,
   });
+}
+
+/**
+ * The packages a party can be quoted on. An agency can carry several negotiated rates —
+ * Season, Off season, Premium — so the desk picks one when taking the booking.
+ * An empty list means the party has none and pricing falls back to the hotel's common package.
+ */
+export type LookupRatePackage = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  roomBaseRate: string;
+  extraBedRate: string | null;
+  breakfastRate: string | null;
+  lunchRate: string | null;
+  dinnerRate: string | null;
+  cpRate: string | null;
+  mapLunchRate: string | null;
+  mapDinnerRate: string | null;
+  apRate: string | null;
+  currency: string;
+};
+
+export async function listRatePackagesLookup(
+  session: Session,
+  owner: { travelAgentId?: string; corporateAccountId?: string },
+) {
+  const qs = new URLSearchParams(
+    owner.travelAgentId ? { travelAgentId: owner.travelAgentId } : { corporateAccountId: owner.corporateAccountId! },
+  );
+  return apiRequest<{ items: LookupRatePackage[]; count: number }>(`/api/lookups/rate-packages?${qs}`, { session });
 }

@@ -1,17 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import {
+  deletePackageRoomTypeOverride,
   listRatePackages,
+  listRoomTypes,
   retireRatePackage,
   saveRatePackage,
   setDefaultRatePackage,
+  setPackageRoomTypeOverride,
   type PackageOwner,
   type RatePackageAdmin,
+  type RoomTypeAdmin,
 } from "@/lib/api/admin";
 
 /**
@@ -102,6 +106,46 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
     enabled: !!session && session.actorLevel === "L4",
   });
   const packages = useMemo(() => query.data?.items ?? [], [query.data]);
+
+  /* ----- per-room-type overrides -----------------------------------------
+   * A package carries ONE room rate, but a Suite and a Standard Double rarely
+   * negotiate to the same number. An override pins a different room rate for one
+   * room type; resolution reports roomRateSource = ROOM_TYPE_OVERRIDE when one applies.
+   * Overrides belong to a package VERSION and are carried forward when it is superseded. */
+  const [openOverridesFor, setOpenOverridesFor] = useState<string | null>(null);
+  const [ovRoomTypeId, setOvRoomTypeId] = useState("");
+  const [ovRate, setOvRate] = useState("");
+
+  const roomTypesQuery = useQuery({
+    queryKey: ["admin", "room-types"],
+    queryFn: () => listRoomTypes(session!),
+    enabled: !!session,
+  });
+  const roomTypes: RoomTypeAdmin[] = roomTypesQuery.data?.items ?? [];
+
+  const setOverrideM = useMutation({
+    mutationFn: (packageId: string) => {
+      const rate = Number.parseFloat(ovRate);
+      if (!ovRoomTypeId) throw new Error("Choose a room type");
+      if (!Number.isFinite(rate) || rate < 0) throw new Error("Enter a valid room rate");
+      return setPackageRoomTypeOverride(session!, packageId, { roomTypeId: ovRoomTypeId, roomBaseRate: rate });
+    },
+    onSuccess: () => {
+      toast.success("Room-type override saved");
+      setOvRoomTypeId("");
+      setOvRate("");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "rate-packages"] });
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : (e as Error).message),
+  });
+  const deleteOverrideM = useMutation({
+    mutationFn: (overrideId: string) => deletePackageRoomTypeOverride(session!, overrideId),
+    onSuccess: () => {
+      toast.success("Override removed");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "rate-packages"] });
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Could not remove the override"),
+  });
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey });
 
@@ -196,13 +240,20 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
             </thead>
             <tbody>
               {packages.map((p) => (
-                <tr key={p.id}>
+                <Fragment key={p.id}>
+                <tr>
                   <td>
                     {p.name}
                     {p.isDefault && <span className="admin-tag admin-tag-ok ml-2">default</span>}
-                    {(p.overrides?.length ?? 0) > 0 && (
-                      <span className="admin-muted ml-2 text-[10px]">{p.overrides!.length} room-type override(s)</span>
-                    )}
+                    <button
+                      type="button"
+                      className="admin-muted ml-2 text-[10px] underline"
+                      onClick={() => setOpenOverridesFor(openOverridesFor === p.id ? null : p.id)}
+                    >
+                      {(p.overrides?.length ?? 0) > 0
+                        ? `${p.overrides!.length} room-type override(s)`
+                        : "add room-type override"}
+                    </button>
                   </td>
                   <td className="font-mono">{money(p.roomBaseRate, p.currency)}</td>
                   <td className="font-mono">{money(p.extraBedRate, p.currency)}</td>
@@ -232,6 +283,66 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
                     </div>
                   </td>
                 </tr>
+                {openOverridesFor === p.id && (
+                  <tr>
+                    <td colSpan={7} className="bg-black/[0.02] p-3">
+                      <div className="admin-muted mb-2 text-[11px]">
+                        Per-room-type room rate for <strong>{p.name}</strong>. A Suite and a Standard Double rarely
+                        negotiate to the same number; without an override every room type is quoted at the
+                        package&rsquo;s single room rate.
+                      </div>
+                      {(p.overrides?.length ?? 0) > 0 ? (
+                        <table className="admin-table mb-3">
+                          <thead><tr><th>Room type</th><th>Room rate</th><th /></tr></thead>
+                          <tbody>
+                            {p.overrides!.map((o) => (
+                              <tr key={o.id}>
+                                <td>{roomTypes.find((rt) => rt.id === o.roomTypeId)?.name ?? o.roomTypeId}</td>
+                                <td className="font-mono">{money(o.roomBaseRate, p.currency)}</td>
+                                <td className="text-right">
+                                  <button
+                                    type="button"
+                                    className="admin-btn text-[10px]"
+                                    disabled={deleteOverrideM.isPending}
+                                    onClick={() => deleteOverrideM.mutate(o.id)}
+                                  >
+                                    Remove
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="admin-muted mb-3 text-[11px]">No overrides — every room type uses {money(p.roomBaseRate, p.currency)}.</div>
+                      )}
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="admin-muted text-xs">
+                          Room type
+                          <select className="admin-input mt-1" value={ovRoomTypeId} onChange={(e) => setOvRoomTypeId(e.target.value)}>
+                            <option value="">Select…</option>
+                            {roomTypes.map((rt) => (
+                              <option key={rt.id} value={rt.id}>{rt.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="admin-muted text-xs">
+                          Room rate
+                          <input className="admin-input mt-1" inputMode="decimal" value={ovRate} onChange={(e) => setOvRate(e.target.value)} />
+                        </label>
+                        <button
+                          type="button"
+                          className="admin-btn"
+                          disabled={setOverrideM.isPending}
+                          onClick={() => setOverrideM.mutate(p.id)}
+                        >
+                          {p.overrides?.some((o) => o.roomTypeId === ovRoomTypeId) ? "Replace override" : "Add override"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
