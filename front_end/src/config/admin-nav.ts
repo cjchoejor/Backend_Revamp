@@ -88,6 +88,7 @@ export const adminNavGroups: AdminNavGroup[] = [
       { title: "Stay packages (inclusions)", href: "/admin/packages", icon: Receipt, description: "Stay package registry & inclusions — NOT agent rates" },
       { title: "Travel agents & rate packages", href: "/admin/travel-agents", icon: Users, description: "Agencies and their negotiated rate packages" },
       { title: "Common rate package", href: "/admin/common-rate-package", icon: Banknote, description: "Fallback rate for an agent or company with no package of their own" },
+      { title: "House tariff (walk-in add-ons)", href: "/admin/house-tariff", icon: Banknote, description: "Extra bed, meals and meal plans for guests with no agency package" },
       { title: "Corporate accounts & rate packages", href: "/admin/corporate-accounts", icon: Building2, description: "Company accounts + their negotiated rate packages" },
       { title: "Commercial thresholds", href: "/admin/commercial", icon: Receipt, description: "Discount, FOC, overbooking, credit ceiling, write-off" },
     ],
