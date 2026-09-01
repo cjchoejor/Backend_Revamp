@@ -28,7 +28,9 @@ export type RoomTypeRateReference = {
   roomNumbers: string[];
   /** The per-night room rate the pricing will use when no negotiated rate is entered. */
   roomRate: number | null;
-  roomRateSource: "AGENT_RATE_CARD" | "STANDARD_RATE_PLAN" | null;
+  roomRateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
+  /** Which named package supplied the rate — "Season", "Premium". Null when standard. */
+  packageName: string | null;
   /** Standard rate-plan resolution, kept as reference even when a card applies. */
   standardRate: number | null;
   /** Minimum sellable rate from the standard plan — the discount floor. Null for card rates (negotiated, not MSR-bound). */
@@ -149,7 +151,8 @@ export async function buildEntryRateReference(
       name: g.name,
       roomNumbers: g.roomNumbers.sort(),
       roomRate: agentRate ? agentRate.roomRate : standardRate,
-      roomRateSource: agentRate ? "AGENT_RATE_CARD" : standardRate != null ? "STANDARD_RATE_PLAN" : null,
+      roomRateSource: agentRate ? "AGENT_RATE_PACKAGE" : standardRate != null ? "STANDARD_RATE_PLAN" : null,
+      packageName: agentRate?.packageName ?? null,
       standardRate,
       // Agent rates are negotiated and not MSR-bound (same rule as the quotation pipeline).
       msrValue: agentRate ? null : msrValue,

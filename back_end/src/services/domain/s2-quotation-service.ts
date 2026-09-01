@@ -357,7 +357,7 @@ async function prepareQuotationDraft(
   const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
   const resolvedNightlyRate = agentRate ? agentRate.roomRate : pricing.resolvedNightlyRate;
   const currency = agentRate ? agentRate.currency : pricing.currency;
-  const resolutionPath = agentRate ? `${pricing.resolutionPath ?? ""} → AGENT_RATE_CARD` : pricing.resolutionPath;
+  const resolutionPath = agentRate ? `${pricing.resolutionPath ?? ""} → AGENT_RATE_PACKAGE` : pricing.resolutionPath;
 
   // Meal + extra-bed pricing (Phase-D, Track A). Only priced when the booking is linked to an
   // agent/corporate rate card (agentRate present). Extra beds are a manual per-night surcharge.

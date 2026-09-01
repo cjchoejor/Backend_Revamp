@@ -414,7 +414,7 @@ export async function runAvailabilityEngineForEntry(
           currency: br.currency,
           stayNights,
           lineTotalIndicative: br.roomRate * stayNights,
-          source: "AGENT_RATE_CARD",
+          source: "AGENT_RATE_PACKAGE",
           disclaimer: "INDICATIVE_ONLY_NO_QUOTATION",
         });
       }
