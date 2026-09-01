@@ -56,6 +56,11 @@ export async function createQuotedSpaceAllocationForAvailabilityQuery(
   const space = await tx.space.findUnique({ where: { id: params.spaceId } });
   if (!space) throw new NotFoundError("Space");
 
+  // A space with an open fault is out of service, exactly as a deficient room leaves the
+  // booking pool. Checked before capacity so the operator gets the real reason.
+  if (space.isDeficient) {
+    throw new ValidationError(`Space ${space.code} is out of service — an unresolved fault is recorded against it`);
+  }
   const cap = Number(space.capacity ?? space.defaultCapacity ?? 0);
   enforceConferenceSpaceAttendeeCapacity({ attendeeCount: params.attendeeCount, capacity: cap });
 
@@ -105,6 +110,11 @@ export async function allocateConferenceSpace(
   const space = await prisma.space.findUnique({ where: { code: input.spaceCode.trim() } });
   if (!space) throw new NotFoundError("Space");
 
+  // A space with an open fault is out of service, exactly as a deficient room leaves the
+  // booking pool. Checked before capacity so the operator gets the real reason.
+  if (space.isDeficient) {
+    throw new ValidationError(`Space ${space.code} is out of service — an unresolved fault is recorded against it`);
+  }
   const cap = Number(space.capacity ?? space.defaultCapacity ?? 0);
   enforceConferenceSpaceAttendeeCapacity({ attendeeCount, capacity: cap });
 

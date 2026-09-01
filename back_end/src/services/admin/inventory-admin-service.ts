@@ -531,6 +531,12 @@ export async function markRoomDeficient(
         detectedBy: actorId,
         resolutionDeadline: deadline,
         status: "UNRESOLVED",
+        // This route is L4-only, and L4 is a verifying authority — a fault raised here is
+        // confirmed on arrival rather than queued for someone to re-confirm. Reports from the
+        // operational surface follow the same rule for L2+; only L1 reports await verification.
+        verificationStatus: "VERIFIED",
+        verifiedAt: now,
+        verifiedBy: actorId,
       },
     });
     const updatedRoom = await tx.room.update({
