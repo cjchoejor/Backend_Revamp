@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -17,7 +17,9 @@ import {
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
 import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
+import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
+import { useSelectionParam } from "@/hooks/use-selection-param";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: TravelAgentInput = { displayName: "", modeOfContact: "PHONE" };
@@ -28,7 +30,9 @@ export default function AdminTravelAgentsPage() {
   const confirmDialog = useConfirm();
   const enabled = !!session && session.actorLevel === "L4";
   const [showInactive, setShowInactive] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useSelectionParam("agent");
+  // Which saved contact rows the operator has re-opened for editing (index -> true).
+  const [editingContacts, setEditingContacts] = useState<Record<number, boolean>>({});
   const [draft, setDraft] = useState<TravelAgentInput>(EMPTY);
 
   const agentsQuery = useQuery({
@@ -40,14 +44,36 @@ export default function AdminTravelAgentsPage() {
   const selected: TravelAgentAdmin | null =
     selectedId === "new" ? null : agents.find((a) => a.id === selectedId) ?? null;
 
+
+  // The selection now comes from the URL, so a refresh restores `selectedId` without ever going
+  // through selectAgent() — which is what seeds the draft. Without this the detail pane rendered
+  // with an EMPTY draft: every field blank, and saving would have wiped the agent.
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selected || seededFor.current === selected.id) return;
+    seededFor.current = selected.id;
+    setEditingContacts({});
+    setDraft({
+      displayName: selected.displayName,
+      contactNumbers: selected.contactNumbers ?? [],
+      contactEmail: selected.contactEmail,
+      modeOfContact: selected.modeOfContact,
+      coordinators: selected.coordinators ?? [],
+      notes: selected.notes,
+      isActive: selected.isActive,
+    });
+  }, [selected]);
+
   const isNewMode = selectedId === "new";
 
   function startNew() {
     setSelectedId("new");
     setDraft(EMPTY);
+    setEditingContacts({});
   }
   function selectAgent(a: TravelAgentAdmin) {
     setSelectedId(a.id);
+    setEditingContacts({});
     setDraft({
       displayName: a.displayName,
       contactNumbers: a.contactNumbers ?? [],
@@ -183,6 +209,40 @@ export default function AdminTravelAgentsPage() {
                         next[i] = { ...next[i], ...patch };
                         setDraft({ ...draft, coordinators: next });
                       };
+                      const remove = () =>
+                        setDraft({ ...draft, coordinators: (draft.coordinators ?? []).filter((_, j) => j !== i) });
+
+                      // A contact that is already on file reads as a RECORD, not as a form. Three
+                      // open inputs look identical whether they hold saved data or an abandoned
+                      // half-entry, so a saved contact showed as unfinished work forever.
+                      // "Saved" here means: present on the row the server returned, and unedited.
+                      const savedList = (selected?.coordinators ?? []) as typeof draft.coordinators;
+                      const savedMatch = (savedList ?? []).find(
+                        (sc) => sc.name === c.name && (sc.phone ?? "") === (c.phone ?? "") && (sc.email ?? "") === (c.email ?? ""),
+                      );
+                      const isSaved = !!savedMatch && !editingContacts[i];
+
+                      if (isSaved) {
+                        return (
+                          <div key={i} className="flex flex-wrap items-center gap-2 rounded border border-black/10 bg-black/[0.02] px-3 py-2">
+                            <span className="text-sm">{c.name}</span>
+                            {c.phone && <span className="admin-muted font-mono text-xs">{c.phone}</span>}
+                            {c.email && <span className="admin-muted text-xs">{c.email}</span>}
+                            <span className="admin-tag admin-tag-ok text-[10px]">saved</span>
+                            <span className="flex-1" />
+                            <button
+                              type="button"
+                              className="admin-btn admin-btn-ghost admin-btn-sm"
+                              onClick={() => setEditingContacts((m) => ({ ...m, [i]: true }))}
+                            >
+                              Edit
+                            </button>
+                            <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
+                              Remove
+                            </button>
+                          </div>
+                        );
+                      }
                       return (
                         <div key={i} className="flex flex-wrap gap-2">
                           <input
@@ -206,13 +266,7 @@ export default function AdminTravelAgentsPage() {
                             placeholder="Email"
                             onChange={(e) => update({ email: e.target.value })}
                           />
-                          <button
-                            type="button"
-                            className="admin-btn admin-btn-ghost admin-btn-sm"
-                            onClick={() =>
-                              setDraft({ ...draft, coordinators: (draft.coordinators ?? []).filter((_, j) => j !== i) })
-                            }
-                          >
+                          <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
                             Remove
                           </button>
                         </div>
@@ -268,6 +322,10 @@ export default function AdminTravelAgentsPage() {
               {!isNewMode && selected && (
                 <>
                   <RatePackagesEditor owner={{ travelAgentId: selected.id }} ownerLabel={selected.displayName} />
+                  <div className="admin-panel p-5">
+                    <h3 className="admin-display mb-2 text-base">Rate history</h3>
+                    <RatePackageHistory owner={{ travelAgentId: selected.id }} ownerLabel={selected.displayName} />
+                  </div>
                   <div className="admin-panel p-5">
                     <VersionsTab
                       entityType="TravelAgent"

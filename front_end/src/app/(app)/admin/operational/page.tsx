@@ -6,6 +6,7 @@ import { StructuredConfigPanel } from "@/components/admin/structured-config-pane
 import { getOperationalConfig, listOperationalConfigKeys, setOperationalConfig } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { getConfigSchema } from "@/lib/admin/config-schemas";
+import { useSelectionParam } from "@/hooks/use-selection-param";
 
 const OPERATIONAL_LABELS: Record<string, string> = {
   "nightAudit.scheduleTime": "Night audit schedule (cron)",
@@ -20,7 +21,8 @@ const OPERATIONAL_LABELS: Record<string, string> = {
 
 export default function AdminOperationalPage() {
   const { session } = useSession();
-  const [selectedKey, setSelectedKey] = useState("nightAudit.scheduleTime");
+  const [selectedKeyRaw, setSelectedKey] = useSelectionParam("key", "nightAudit.scheduleTime");
+  const selectedKey = selectedKeyRaw ?? "nightAudit.scheduleTime";
 
   const keysQuery = useQuery({
     queryKey: ["admin", "operational-keys"],

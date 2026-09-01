@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { StructuredConfigPanel } from "@/components/admin/structured-config-panel";
 import { getFinancialConfig, listFinancialConfigKeys, setFinancialConfig } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
+import { useSelectionParam } from "@/hooks/use-selection-param";
 const FINANCIAL_LABELS: Record<string, string> = {
   "billing.salesTaxRate": "GST rate (decimal)",
   "billing.serviceChargeRate": "Service charge rate (decimal)",
@@ -22,7 +23,8 @@ const FINANCIAL_LABELS: Record<string, string> = {
 
 export default function AdminFinancialPage() {
   const { session } = useSession();
-  const [selectedKey, setSelectedKey] = useState("payment.followUp.intervals");
+  const [selectedKeyRaw, setSelectedKey] = useSelectionParam("key", "payment.followUp.intervals");
+  const selectedKey = selectedKeyRaw ?? "payment.followUp.intervals";
 
   const keysQuery = useQuery({
     queryKey: ["admin", "financial-keys"],

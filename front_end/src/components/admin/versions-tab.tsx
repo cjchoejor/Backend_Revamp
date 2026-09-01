@@ -26,7 +26,7 @@ type Props = {
    * Optional renderer for the row payload. Defaults to a `<pre>` with prettified JSON.
    * Useful for compact summaries on entities with many fields.
    */
-  renderPayload?: (rowJson: Record<string, unknown>) => React.ReactNode;
+  renderPayload?: (rowJson: Record<string, unknown>, previous?: Record<string, unknown> | null) => React.ReactNode;
 };
 
 function formatTimestamp(iso: string): string {
@@ -37,11 +37,95 @@ function formatTimestamp(iso: string): string {
   }
 }
 
-function defaultRenderPayload(rowJson: Record<string, unknown>) {
+/** Bookkeeping columns nobody audits — hidden so the fields that matter are not buried. */
+const NOISE_FIELDS = new Set(["id", "createdAt", "updatedAt", "createdBy"]);
+
+/** "contactNumbers" -> "Contact numbers"; "gstNumber" -> "Gst number". */
+function humanizeField(key: string): string {
+  const spaced = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_.]/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+/** Render one stored value as something an operator can read, never as raw JSON. */
+function humanizeValue(v: unknown): React.ReactNode {
+  if (v === null || v === undefined || v === "") return <span className="admin-muted">—</span>;
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span className="admin-muted">none</span>;
+    // Arrays of contact objects ({name, phone, email}) read far better as lines than as JSON.
+    if (v.every((x) => x && typeof x === "object" && !Array.isArray(x))) {
+      return (
+        <div className="space-y-0.5">
+          {v.map((x, i) => (
+            <div key={i}>
+              {Object.entries(x as Record<string, unknown>)
+                .filter(([, val]) => val !== null && val !== undefined && val !== "")
+                .map(([k, val]) => `${humanizeField(k)}: ${String(val)}`)
+                .join(" · ") || <span className="admin-muted">empty</span>}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return v.map((x) => String(x)).join(", ");
+  }
+  if (typeof v === "object") {
+    return (
+      <div className="space-y-0.5">
+        {Object.entries(v as Record<string, unknown>).map(([k, val]) => (
+          <div key={k}>
+            <span className="admin-muted">{humanizeField(k)}:</span> {String(val)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  const str = String(v);
+  // ISO timestamps stored as strings should read as dates, not as machine text.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(str)) {
+    try { return new Date(str).toLocaleString(); } catch { return str; }
+  }
+  return str;
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * A readable field table instead of a JSON blob.
+ *
+ * `previous` is the version immediately BEFORE this one, so each row can say whether this
+ * version is where the field actually changed — the question anyone opening a version history
+ * is really asking. Without it every version looks identical and the reader has to diff by eye.
+ */
+function defaultRenderPayload(rowJson: Record<string, unknown>, previous?: Record<string, unknown> | null) {
+  const entries = Object.entries(rowJson).filter(([k]) => !NOISE_FIELDS.has(k));
+  if (entries.length === 0) {
+    return <p className="admin-muted text-xs">Nothing recorded on this version.</p>;
+  }
   return (
-    <pre className="admin-input overflow-x-auto whitespace-pre-wrap font-mono text-[11px] leading-snug">
-      {JSON.stringify(rowJson, null, 2)}
-    </pre>
+    <div className="overflow-x-auto">
+      <table className="admin-table">
+        <thead>
+          <tr><th style={{ width: "30%" }}>Field</th><th>Value at this version</th></tr>
+        </thead>
+        <tbody>
+          {entries.map(([k, v]) => {
+            const changed = previous ? !sameValue(v, previous[k]) : false;
+            return (
+              <tr key={k}>
+                <td className="align-top">
+                  {humanizeField(k)}
+                  {changed && <span className="admin-tag ml-2 text-[10px]">changed</span>}
+                </td>
+                <td className="align-top text-sm">{humanizeValue(v)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -119,8 +203,10 @@ export function VersionsTab({ entityType, entityId, invalidateOnRestore, renderP
       )}
 
       <div className="space-y-2">
-        {snapshots.map((s) => {
+        {snapshots.map((s, idx) => {
           const isOpen = !!expanded[s.id];
+          // Newest-first, so the chronologically previous version is the NEXT row down.
+          const previous = (snapshots[idx + 1]?.rowJson ?? null) as Record<string, unknown> | null;
           return (
             <div key={s.id} className="admin-panel space-y-2 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -150,7 +236,7 @@ export function VersionsTab({ entityType, entityId, invalidateOnRestore, renderP
                   </button>
                 </div>
               </div>
-              {isOpen && renderRow(s.rowJson as Record<string, unknown>)}
+              {isOpen && renderRow(s.rowJson as Record<string, unknown>, previous)}
             </div>
           );
         })}

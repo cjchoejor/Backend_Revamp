@@ -5,11 +5,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { StructuredConfigPanel } from "@/components/admin/structured-config-panel";
 import { getCommercialConfig, listCommercialConfigKeys, setCommercialConfig } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
+import { useSelectionParam } from "@/hooks/use-selection-param";
 
 export default function AdminCommercialPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [selectedKey, setSelectedKey] = useState("discount.fom.maxPercentage");
+  const [selectedKeyRaw, setSelectedKey] = useSelectionParam("key", "discount.fom.maxPercentage");
+  const selectedKey = selectedKeyRaw ?? "discount.fom.maxPercentage";
 
   const keysQuery = useQuery({
     queryKey: ["admin", "commercial-keys"],

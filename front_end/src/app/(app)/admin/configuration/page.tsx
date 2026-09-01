@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { StructuredConfigPanel } from "@/components/admin/structured-config-panel";
 import { getConfiguration, listConfigurationKeys, setConfiguration } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
+import { useSelectionParam } from "@/hooks/use-selection-param";
 
 /**
  * Per ACIG §6.2.25, the generic ConfigurationService surface only owns keys that don't have a
@@ -81,7 +82,8 @@ function isOrphaned(key: string): boolean {
 export default function AdminConfigurationPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [selectedKey, setSelectedKey] = useState("");
+  const [selectedKeyRaw, setSelectedKey] = useSelectionParam("key");
+  const selectedKey = selectedKeyRaw ?? "";
 
   const keysQuery = useQuery({
     queryKey: ["admin", "config-keys"],

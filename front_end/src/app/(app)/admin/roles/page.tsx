@@ -16,6 +16,7 @@ import {
 import { useSession } from "@/hooks/use-session";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { cn } from "@/lib/utils";
+import { useSelectionParam } from "@/hooks/use-selection-param";
 
 export default function AdminRolesPage() {
   const { session } = useSession();
@@ -24,7 +25,8 @@ export default function AdminRolesPage() {
   const prompt = usePrompt();
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({ roleCode: "", displayName: "", actorLevel: "L1" as const });
-  const [selectedRoleId, setSelectedRoleId] = useState<string>("");
+  const [selectedRoleIdRaw, setSelectedRoleId] = useSelectionParam("role");
+  const selectedRoleId = selectedRoleIdRaw ?? "";
   const [permissionList, setPermissionList] = useState<string[]>([]);
   const [permInput, setPermInput] = useState("");
   const [sessionCfgDraft, setSessionCfgDraft] = useState({ idle: "600", hard: "28800", manual: true });
