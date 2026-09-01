@@ -3025,3 +3025,37 @@ model RoomTypePackageOverride {
   @@index([roomTypeId])
   @@map("room_type_package_overrides")
 }
+
+model HouseTariff {
+  id String @id @default(uuid())
+
+  /// Per extra bed, per night.
+  extraBedRate Decimal? @db.Decimal(10, 2)
+
+  // === Standalone (à la carte) meal rates — per guest, per serving ===
+  /// Also the fallback unit price for meal plans that have no explicit plan rate.
+  breakfastRate Decimal? @db.Decimal(10, 2)
+  lunchRate     Decimal? @db.Decimal(10, 2)
+  dinnerRate    Decimal? @db.Decimal(10, 2)
+
+  // === Meal-plan rates — per guest, per night ===
+  /// A guest on a plan is charged THIS instead of the individual meals the plan covers
+  /// (CP = breakfast; MAP_LUNCH = breakfast + lunch; MAP_DINNER = breakfast + dinner;
+  /// AP = all three). When a plan rate is NULL the constituent à-la-carte rates are summed,
+  /// which reproduces the pre-2026-07-30 pricing exactly.
+  cpRate        Decimal? @db.Decimal(10, 2)
+  mapLunchRate  Decimal? @db.Decimal(10, 2)
+  mapDinnerRate Decimal? @db.Decimal(10, 2)
+  apRate        Decimal? @db.Decimal(10, 2)
+
+  currency      String    @default("BTN")
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime? // null = currently active
+  notes         String?
+  createdAt     DateTime  @default(now())
+  createdBy     String
+
+  @@index([effectiveFrom])
+  @@index([effectiveTo])
+  @@map("house_tariffs")
+}

@@ -92,6 +92,20 @@ export type RoomCompositionRateContext = {
   defaultRoomRate: Prisma.Decimal;
   defaultExtraBedRate: Prisma.Decimal;
   defaultBreakfastRate: Prisma.Decimal;
+  /**
+   * Meal-PLAN rates (per guest, per night) — from the party's rate package or the HouseTariff.
+   * A guest on a plan is charged their plan rate INSTEAD of the individual meals it covers
+   * (CP = breakfast; MAPL = breakfast + lunch; MAPD = breakfast + dinner; AP = all three).
+   *
+   * `null` / omitted means the plan is not separately priced and falls back to the SUM of its
+   * constituent a-la-carte rates — which is exactly the previous formula, so leaving all four
+   * unset reproduces existing totals to the cent. A plan rate of 0 is honoured as "deliberately
+   * free"; only null triggers the fallback.
+   */
+  defaultCpRate?: Prisma.Decimal | null;
+  defaultMapLunchRate?: Prisma.Decimal | null;
+  defaultMapDinnerRate?: Prisma.Decimal | null;
+  defaultApRate?: Prisma.Decimal | null;
   defaultLunchRate: Prisma.Decimal;
   defaultDinnerRate: Prisma.Decimal;
   /** Service-charge percentage (e.g., 0.10 for 10%). Comes from
@@ -397,13 +411,73 @@ export function computeRoomComposition(
 
   /** One night's meals for a given distribution, split by meal — the split is what the
    *  negotiation table's per-column money reads; `mealsSubtotal` stays their exact sum. */
+  const bf = toDecimal(breakfastRate);
+  const ln = toDecimal(lunchRate);
+  const dn = toDecimal(dinnerRate);
+
+  // Per-room negotiation beats the hotel's configured plan price. Without this, a hotel that
+  // sets CP = 350 would ignore an operator who negotiated breakfast down to 300 for one room —
+  // the CP guests would still be charged 350 and the negotiation would silently do nothing.
+  // Scoped per plan: only plans that actually INCLUDE a re-priced meal are re-derived, so
+  // negotiating dinner re-prices MAPD and AP but leaves CP (breakfast-only) alone.
+  const bfNeg = input.negotiatedBreakfastRate != null;
+  const lnNeg = input.negotiatedLunchRate != null;
+  const dnNeg = input.negotiatedDinnerRate != null;
+  const resolvePlanRate = (
+    configured: Prisma.Decimal | null | undefined,
+    alaCarteSum: Prisma.Decimal,
+    anyConstituentNegotiated: boolean,
+  ): Prisma.Decimal => {
+    if (anyConstituentNegotiated) return alaCarteSum;
+    return configured != null ? toDecimal(configured) : alaCarteSum;
+  };
+
+  /**
+   * A plan's price is charged as ONE figure per guest, but the negotiation table shows money per
+   * MEAL — so a plan rate that differs from the sum of its meals has to be attributed back
+   * across them, or the columns would stop adding up to the total.
+   *
+   * Attribution is proportional to the a-la-carte rates: an AP rate of 900 against meals of
+   * 300/350/350 (sum 1000) charges each meal at 90%. When the plan rate EQUALS the sum — the
+   * normal case, and what happens whenever no plan rate is configured — the factor is exactly 1
+   * and every figure is identical to before. When the constituent rates are all zero there is
+   * nothing to be proportional to, so the plan rate is split evenly among its meals.
+   */
+  const planMeals: Array<{ pax: number; rate: Prisma.Decimal; meals: Array<"b" | "l" | "d"> }> = [
+    { pax: input.mealPlanCpCount ?? 0, rate: resolvePlanRate(ctx.defaultCpRate, bf, bfNeg), meals: ["b"] },
+    { pax: input.mealPlanMaplCount ?? 0, rate: resolvePlanRate(ctx.defaultMapLunchRate, bf.add(ln), bfNeg || lnNeg), meals: ["b", "l"] },
+    { pax: input.mealPlanMapdCount ?? 0, rate: resolvePlanRate(ctx.defaultMapDinnerRate, bf.add(dn), bfNeg || dnNeg), meals: ["b", "d"] },
+    { pax: input.mealPlanApCount ?? 0, rate: resolvePlanRate(ctx.defaultApRate, bf.add(ln).add(dn), bfNeg || lnNeg || dnNeg), meals: ["b", "l", "d"] },
+  ];
+  const rateOf = (m: "b" | "l" | "d") => (m === "b" ? bf : m === "l" ? ln : dn);
+
   const mealCostByMeal = (counts: RoomCompositionInput) => {
-    const p = paxFromMealPlanCounts(counts);
-    return {
-      breakfast: bandedMealCost(breakfastRate, p.breakfastPax),
-      lunch: bandedMealCost(lunchRate, p.lunchPax),
-      dinner: bandedMealCost(dinnerRate, p.dinnerPax),
+    const acc = { breakfast: ZERO, lunch: ZERO, dinner: ZERO };
+    const bump = (m: "b" | "l" | "d", v: Prisma.Decimal) => {
+      if (m === "b") acc.breakfast = acc.breakfast.add(v);
+      else if (m === "l") acc.lunch = acc.lunch.add(v);
+      else acc.dinner = acc.dinner.add(v);
     };
+    const paxFor = (i: number) =>
+      [counts.mealPlanCpCount ?? 0, counts.mealPlanMaplCount ?? 0, counts.mealPlanMapdCount ?? 0, counts.mealPlanApCount ?? 0][i];
+
+    planMeals.forEach((plan, i) => {
+      const pax = paxFor(i);
+      if (pax <= 0) return;
+      const sum = plan.meals.reduce((t, m) => t.add(rateOf(m)), ZERO);
+      for (const m of plan.meals) {
+        const share = sum.isZero()
+          ? plan.rate.div(plan.meals.length)
+          : rateOf(m).mul(plan.rate).div(sum);
+        bump(m, bandedMealCost(share, pax));
+      }
+    });
+
+    // OTHERS-category guests eat a la carte — charged per serving consumed, no plan involved.
+    bump("b", bandedMealCost(bf, counts.othersBreakfastPax ?? 0));
+    bump("l", bandedMealCost(ln, counts.othersLunchPax ?? 0));
+    bump("d", bandedMealCost(dn, counts.othersDinnerPax ?? 0));
+    return acc;
   };
   // The room's usual night — what an un-overridden night costs, and what the UI shows as
   // "per night".

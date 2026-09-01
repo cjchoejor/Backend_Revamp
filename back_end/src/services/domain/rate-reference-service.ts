@@ -4,6 +4,7 @@ import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { resolveRatePackageForBooking, type RatePackageBreakdown } from "../../lib/rate-package-resolution.js";
 import { resolveRatePlanPricingForS2Quotation } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s2-quotation.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
 
 /**
  * Rate reference for the S2 composition editors (2026-08-01).
@@ -38,6 +39,14 @@ export type RoomTypeRateReference = {
   /** Add-on per-unit rates from the rate card. Null when the party has no card (no house price list yet — Track B). */
   extraBedRate: number | null;
   breakfastRate: number | null;
+  /** Meal-PLAN rates. Null means the plan is not separately priced and falls back to the sum
+   *  of its constituent meals. */
+  cpRate?: number | null;
+  mapLunchRate?: number | null;
+  mapDinnerRate?: number | null;
+  apRate?: number | null;
+  /** Where the add-ons came from — the party's package, or the hotel's own tariff. */
+  addOnSource?: "RATE_PACKAGE" | "HOUSE_TARIFF" | null;
   lunchRate: number | null;
   dinnerRate: number | null;
 };
@@ -115,6 +124,10 @@ export async function buildEntryRateReference(
     byType.set(r.roomType.id, g);
   }
 
+  // Loaded once for the whole reference: it is a hotel-wide list, not per room type.
+  const houseTariff = party ? null : await resolveActiveHouseTariff(prisma);
+  const num = (v: unknown): number | null => (v == null ? null : Number(v));
+
   let currency = "BTN";
   const roomTypes: RoomTypeRateReference[] = [];
   for (const [roomTypeId, g] of byType) {
@@ -156,10 +169,18 @@ export async function buildEntryRateReference(
       standardRate,
       // Agent rates are negotiated and not MSR-bound (same rule as the quotation pipeline).
       msrValue: agentRate ? null : msrValue,
-      extraBedRate: agentRate?.addOns.extraBed ?? null,
-      breakfastRate: agentRate?.addOns.breakfast ?? null,
-      lunchRate: agentRate?.addOns.lunch ?? null,
-      dinnerRate: agentRate?.addOns.dinner ?? null,
+      // A booking with no package resolves add-ons from the hotel's own tariff; one WITH a
+      // package does not, because a blank field on a negotiated package means "we agreed
+      // nothing" and must stay free rather than acquire the rack price.
+      extraBedRate: agentRate?.addOns.extraBed ?? num(houseTariff?.extraBedRate) ?? null,
+      breakfastRate: agentRate?.addOns.breakfast ?? num(houseTariff?.breakfastRate) ?? null,
+      lunchRate: agentRate?.addOns.lunch ?? num(houseTariff?.lunchRate) ?? null,
+      dinnerRate: agentRate?.addOns.dinner ?? num(houseTariff?.dinnerRate) ?? null,
+      cpRate: agentRate?.mealPlanRates?.cp ?? num(houseTariff?.cpRate) ?? null,
+      mapLunchRate: agentRate?.mealPlanRates?.mapLunch ?? num(houseTariff?.mapLunchRate) ?? null,
+      mapDinnerRate: agentRate?.mealPlanRates?.mapDinner ?? num(houseTariff?.mapDinnerRate) ?? null,
+      apRate: agentRate?.mealPlanRates?.ap ?? num(houseTariff?.apRate) ?? null,
+      addOnSource: agentRate ? "RATE_PACKAGE" : houseTariff ? "HOUSE_TARIFF" : null,
     });
   }
 

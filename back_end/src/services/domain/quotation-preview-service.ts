@@ -314,6 +314,11 @@ export async function buildQuotationPreview(
       defaultBreakfastRate: dec(ref?.breakfastRate),
       defaultLunchRate: dec(ref?.lunchRate),
       defaultDinnerRate: dec(ref?.dinnerRate),
+      // Null stays null: an unpriced plan falls back to summing its constituent meals.
+      defaultCpRate: ref?.cpRate != null ? dec(ref.cpRate) : null,
+      defaultMapLunchRate: ref?.mapLunchRate != null ? dec(ref.mapLunchRate) : null,
+      defaultMapDinnerRate: ref?.mapDinnerRate != null ? dec(ref.mapDinnerRate) : null,
+      defaultApRate: ref?.apRate != null ? dec(ref.apRate) : null,
       serviceChargeRate: reference.serviceChargeRate,
       gstRate: reference.gstRate,
       childMealPricing: childPolicy.mealPricing,

@@ -50,6 +50,7 @@ import {
   enforceNightOverridesWithinStay,
 } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
 import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-pdf.js";
+import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -505,13 +506,37 @@ async function prepareQuotationDraft(
       }));
     }
 
-    // Default meal / extra-bed rates come from the agent rate card's add-ons when present;
-    // otherwise 0. Operators can still enter per-room negotiatedBreakfast/Lunch/DinnerRate
-    // to override in the composition payload.
-    const defaultBreakfast = toDecimal(agentRate?.addOns?.breakfast ?? 0);
-    const defaultLunch = toDecimal(agentRate?.addOns?.lunch ?? 0);
-    const defaultDinner = toDecimal(agentRate?.addOns?.dinner ?? 0);
-    const defaultExtraBed = toDecimal(agentRate?.addOns?.extraBed ?? 0);
+    // Default meal / extra-bed / meal-plan rates.
+    //
+    // A booking with NO negotiated package (walk-in, direct, OTA) resolves its add-ons from the
+    // hotel's own HouseTariff instead of falling straight to 0. That zero was silently giving
+    // away every extra bed and every meal on non-agent bookings — the room priced from the rate
+    // plan, and everything on top priced at nothing.
+    //
+    // Agent / corporate packages deliberately do NOT fall back to the house tariff: a blank
+    // field on a negotiated package means "we agreed nothing", and the operator's decision is
+    // that it stays free rather than quietly acquiring the rack price. So the house tariff is
+    // loaded ONLY when there is no package at all, and the two sources never mix on one booking.
+    const houseTariff = agentRate ? null : await resolveActiveHouseTariff(prisma);
+    const addOns = agentRate?.addOns ?? null;
+    const defaultBreakfast = toDecimal(addOns?.breakfast ?? houseTariff?.breakfastRate ?? 0);
+    const defaultLunch = toDecimal(addOns?.lunch ?? houseTariff?.lunchRate ?? 0);
+    const defaultDinner = toDecimal(addOns?.dinner ?? houseTariff?.dinnerRate ?? 0);
+    const defaultExtraBed = toDecimal(addOns?.extraBed ?? houseTariff?.extraBedRate ?? 0);
+
+    // Meal-PLAN rates. A guest on a plan is charged the plan rate instead of the individual
+    // meals it covers; null means unpriced, and computeRoomComposition then falls back to
+    // summing that plan's a-la-carte meals — identical to the previous behaviour.
+    const planRates = agentRate?.mealPlanRates ?? null;
+    const pickPlan = (agentValue: number | null | undefined, houseValue: Prisma.Decimal | null | undefined) => {
+      if (agentValue != null) return new Prisma.Decimal(agentValue);
+      if (!agentRate && houseValue != null) return houseValue;
+      return null;
+    };
+    const defaultCp = pickPlan(planRates?.cp, houseTariff?.cpRate);
+    const defaultMapLunch = pickPlan(planRates?.mapLunch, houseTariff?.mapLunchRate);
+    const defaultMapDinner = pickPlan(planRates?.mapDinner, houseTariff?.mapDinnerRate);
+    const defaultAp = pickPlan(planRates?.ap, houseTariff?.apRate);
     // Cost the composition from the EFFECTIVE (post-discount) rate, not the resolved base.
     // Fixed 2026-07-28: this previously read `resolvedNightlyRate`, which is the rate BEFORE
     // any discount is applied — so on a composition-priced quote the discount reached
@@ -674,6 +699,10 @@ async function prepareQuotationDraft(
         defaultBreakfastRate: tr.breakfast,
         defaultLunchRate: tr.lunch,
         defaultDinnerRate: tr.dinner,
+        defaultCpRate: defaultCp,
+        defaultMapLunchRate: defaultMapLunch,
+        defaultMapDinnerRate: defaultMapDinner,
+        defaultApRate: defaultAp,
         serviceChargeRate,
         gstRate,
         // Age-band meal shares (under-6 free, 6–10 at 70% of the adult rate) — the composition
