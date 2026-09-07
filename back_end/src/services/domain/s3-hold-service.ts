@@ -48,6 +48,11 @@ import {
 } from "../../policies/11-committed-hold/p26-committed-hold-release-on-reentry-requires-fom.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceFolioPresentBeforeCommittedHoldS3 } from "../../policies/13-billing-model/p31-folio-required-before-committed-hold-s3.js";
+import {
+  claimFlagReportsPhysicalState,
+  committedHoldMayFreeClaimFlag,
+  committedHoldMayPinClaimFlag,
+} from "../../lib/room-claim-flag.js";
 
 export async function placeCommittedHold(
   prisma: PrismaClient,
@@ -288,7 +293,12 @@ export async function placeCommittedHold(
       ...additionalRoomRows.map((r) => ({ id: r.id, currentClaimState: r.currentClaimState })),
     ];
     for (const r of roomsToPin) {
-      if (r.currentClaimState === InventoryClaimState.COMMITTED_HELD) continue;
+      // PMS-236: pin the display flag ONLY when nothing stronger owns it. A room occupied
+      // tonight, or awaiting housekeeping, is legitimately held by THIS booking for other
+      // nights — the hold row says so — but overwriting its flag erased a live occupancy and
+      // the S8 gate then refused the in-house guest's checkout. Same rule s2-hold-service has
+      // followed since 2026-08-06.
+      if (!committedHoldMayPinClaimFlag(r.currentClaimState)) continue;
       await tx.room.update({ where: { id: r.id }, data: { currentClaimState: InventoryClaimState.COMMITTED_HELD } });
       await tx.roomClaimStateEvent.create({
         data: {
@@ -543,10 +553,11 @@ export async function confirmCommittedHoldTx(
     if (!roomRow) throw new NotFoundError("Room");
     if (input.paymentPending) continue;
     if (roomRow.currentClaimState === InventoryClaimState.CONFIRMED) continue;
-    // An OCCUPIED room outranks "Reserved" — the in-house room-change re-walk re-confirms at
-    // S4 while the guest is already sleeping in the rooms (2026-08-12); flipping them to
-    // CONFIRMED would downgrade a live occupancy to a pre-arrival label.
-    if (roomRow.currentClaimState === InventoryClaimState.OCCUPIED) continue;
+    // A room that is occupied — or just vacated and awaiting housekeeping — outranks
+    // "Reserved": the in-house room-change re-walk re-confirms at S4 while the guest is already
+    // sleeping in the rooms (2026-08-12), and flipping them would downgrade a live occupancy to
+    // a pre-arrival label. Widened from OCCUPIED to the whole physical family with PMS-236.
+    if (claimFlagReportsPhysicalState(roomRow.currentClaimState)) continue;
     await tx.room.update({
       where: { id: roomId },
       data: { currentClaimState: InventoryClaimState.CONFIRMED },
@@ -686,7 +697,9 @@ export async function releaseCommittedHoldForRoomChange(
   // Multi-room: release EVERY held room via the helper (reads perNightBreakdown + roomId).
   for (const roomId of allHeldRoomIds(hold)) {
     const room = await tx.room.findUnique({ where: { id: roomId } });
-    if (room && room.currentClaimState !== InventoryClaimState.FREE) {
+    // PMS-236: free the flag only when it reads a state THIS hold set. Releasing a
+    // future-dated hold must never reset a room someone is sleeping in tonight.
+    if (room && committedHoldMayFreeClaimFlag(room.currentClaimState)) {
       await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
       await tx.roomClaimStateEvent.create({
         data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason, effectiveFrom: now },
@@ -829,7 +842,9 @@ export async function releaseCommittedHoldByAuthority(
   return prisma.$transaction(async (tx) => {
     for (const roomId of requested) {
       const room = await tx.room.findUnique({ where: { id: roomId } });
-      if (room && room.currentClaimState !== InventoryClaimState.FREE) {
+      // PMS-236: free the flag only when it reads a state THIS hold set. Releasing a
+    // future-dated hold must never reset a room someone is sleeping in tonight.
+    if (room && committedHoldMayFreeClaimFlag(room.currentClaimState)) {
         await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
         await tx.roomClaimStateEvent.create({
           data: {
@@ -897,7 +912,8 @@ export async function releaseOnReEntry(
   for (const roomId of allHeldRoomIds(hold)) {
     const room = await tx.room.findUnique({ where: { id: roomId } });
     if (!room) continue;
-    if (room.currentClaimState === InventoryClaimState.FREE) continue;
+    // PMS-236: only this hold's own flag is ours to clear (see room-claim-flag.ts).
+    if (!committedHoldMayFreeClaimFlag(room.currentClaimState)) continue;
     await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
     await tx.roomClaimStateEvent.create({
       data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason: `${reason}_HOLD_RELEASED`, effectiveFrom: now },

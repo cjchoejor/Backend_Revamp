@@ -368,17 +368,23 @@ export async function completeCheckInToS7(
       });
     }
 
-    // Every room being checked in transitions CONFIRMED → OCCUPIED. For non-group entries
-    // there's only one assignment in the list; for groups this fires per room. Rooms not in
-    // an expected state (already OCCUPIED from a prior check-in, or something unexpected)
-    // are skipped rather than force-transitioned — the physical-ready guard above already
-    // rejected anything obviously wrong, so this branch is defensive.
-    // COMMITTED_HELD is expected too (2026-08-07): a payment-pending confirmation keeps its
-    // rooms "Held" until the advance completes, and a credit-extension-covered booking can
-    // legitimately reach check-in still Held — the guest walking in occupies the room either way.
+    // Every room being checked in becomes OCCUPIED. For non-group entries there's only one
+    // assignment in the list; for groups this fires per room.
+    //
+    // The room's PRIOR flag is deliberately not a condition (PMS-236). It used to require
+    // CONFIRMED, then CONFIRMED-or-COMMITTED_HELD (2026-08-07, for a payment-pending or
+    // credit-covered booking that legitimately arrives still "Held"). But since a hold no
+    // longer pins the flag of a room that was occupied by someone else when the hold was
+    // placed, a perfectly valid booking can reach its own check-in with the room reading FREE
+    // or DEPARTED_CLEAN — and skipping it there would leave the room un-OCCUPIED and block
+    // this guest's own checkout later, moving the bug rather than fixing it.
+    //
+    // Nothing is lost by dropping the condition: the room is this booking's own assignment,
+    // and the physical-ready guard above has already rejected a room housekeeping isn't done
+    // with. Only an already-OCCUPIED room is skipped, which keeps a repeat check-in idempotent.
     for (const a of assignmentsToCheckIn) {
       const fromState = a.room.currentClaimState;
-      if (fromState !== InventoryClaimState.CONFIRMED && fromState !== InventoryClaimState.COMMITTED_HELD) continue;
+      if (fromState === InventoryClaimState.OCCUPIED) continue;
       await tx.room.update({
         where: { id: a.room.id },
         data: { currentClaimState: InventoryClaimState.OCCUPIED, updatedAt: now },
