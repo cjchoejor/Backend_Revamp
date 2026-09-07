@@ -5,6 +5,12 @@ import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import {
+  assertValidBedCount,
+  defaultBedCountForBedType,
+  normaliseBedType,
+  type RoomBedType,
+} from "../domain/room-bed-type-service.js";
 
 export async function listRoomTypes(prisma: PrismaClient) {
   return prisma.roomType.findMany({
@@ -206,7 +212,7 @@ export async function createRoom(
     roomNumber: string;
     roomTypeId: string;
     floorNumber?: number | null;
-    /** Physical bed setup — "KING" / "TWIN" / "QUEEN" / "SINGLE" (free-form uppercased). */
+    /** Physical bed setup — one of ROOM_BED_TYPES; validated, not free-form. */
     bedType?: string | null;
     bedCount?: number | null;
     isShadowInventory?: boolean;
@@ -215,6 +221,13 @@ export async function createRoom(
 ) {
   const roomNumber = input.roomNumber.trim();
   if (!roomNumber) throw new ValidationError("roomNumber is required");
+
+  // Same vocabulary and same "TWIN = 2 beds" default as the desk's own bed-type endpoint
+  // (2026-09-07) — a room registered here and a room reconfigured at the desk must end up
+  // describing their beds identically, or the two surfaces disagree about one fact.
+  const bedType = normaliseBedType(input.bedType);
+  const bedCount = bedType ? (input.bedCount ?? defaultBedCountForBedType(bedType)) : null;
+  if (bedCount != null) assertValidBedCount(bedCount);
 
   const roomType = await prisma.roomType.findUnique({ where: { id: input.roomTypeId } });
   if (!roomType) throw new NotFoundError("RoomType");
@@ -235,8 +248,8 @@ export async function createRoom(
           roomNumber,
           roomTypeId: input.roomTypeId,
           floorNumber: input.floorNumber ?? null,
-          bedType: input.bedType?.trim().toUpperCase() || null,
-          bedCount: input.bedCount ?? null,
+          bedType,
+          bedCount,
           currentClaimState: InventoryClaimState.FREE,
           physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
           isShadowInventory: input.isShadowInventory ?? false,
@@ -252,7 +265,7 @@ export async function createRoom(
         entityType: "Room",
         entityId: created.id,
         operation: "CREATE",
-        payload: { roomNumber, roomTypeId: input.roomTypeId },
+        payload: { roomNumber, roomTypeId: input.roomTypeId, bedType, bedCount },
       });
       return created;
     });
@@ -348,6 +361,21 @@ export async function updateRoom(
     if (!roomType) throw new NotFoundError("RoomType");
   }
 
+  // Bed setup (2026-09-07). `undefined` leaves it alone; explicit null clears it. A changed
+  // bed type re-derives the count when the caller didn't state one, so an admin switching a
+  // room to TWIN gets the 2 beds the desk endpoint would have given it — the count is a
+  // consequence of the setup, and leaving the old one behind would say "1 twin bed".
+  let bedType: RoomBedType | null | undefined;
+  let bedCount: number | null | undefined = input.bedCount;
+  if (input.bedType !== undefined) {
+    bedType = normaliseBedType(input.bedType);
+    if (bedType && bedType !== existing.bedType && input.bedCount === undefined) {
+      bedCount = defaultBedCountForBedType(bedType);
+    }
+    if (bedType === null) bedCount = null;
+  }
+  if (bedCount != null) assertValidBedCount(bedCount);
+
   try {
     return await prisma.$transaction(async (tx) => {
       const updated = await tx.room.update({
@@ -356,8 +384,8 @@ export async function updateRoom(
           roomNumber: newRoomNumber,
           roomTypeId: input.roomTypeId,
           floorNumber: input.floorNumber,
-          bedType: input.bedType === undefined ? undefined : input.bedType?.trim().toUpperCase() || null,
-          bedCount: input.bedCount,
+          bedType,
+          bedCount,
           isShadowInventory: input.isShadowInventory,
           isBlocked: input.isBlocked,
           blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason?.trim() || null,

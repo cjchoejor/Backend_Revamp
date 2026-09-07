@@ -37,27 +37,49 @@ export function bedTypeConversionGroup(bedType: string | null | undefined): stri
   return group ? [...group] : [bedType];
 }
 
+/**
+ * Trim + uppercase a caller's bed type and check it against the vocabulary. Shared with the
+ * L4 admin room editor (2026-09-07) so the registry cannot take a typo from either surface —
+ * an unknown value would give the room an `allowedBedTypes` of just itself and quietly break
+ * every desk dropdown. `null`/blank means "no bed setup recorded" and is allowed.
+ */
+export function normaliseBedType(value: string | null | undefined): RoomBedType | null {
+  const bedType = value?.trim().toUpperCase();
+  if (!bedType) return null;
+  if (!ROOM_BED_TYPES.includes(bedType as RoomBedType)) {
+    throw new ValidationError(`bedType must be one of: ${ROOM_BED_TYPES.join(", ")}`);
+  }
+  return bedType as RoomBedType;
+}
+
+/** TWIN means two single beds; every other setup is one bed — unless the caller says otherwise. */
+export function defaultBedCountForBedType(bedType: RoomBedType): number {
+  return bedType === "TWIN" ? 2 : 1;
+}
+
+/** Guard for an explicitly supplied count, shared by the desk and admin write paths. */
+export function assertValidBedCount(bedCount: number): void {
+  if (!Number.isInteger(bedCount) || bedCount < 1 || bedCount > 6) {
+    throw new ValidationError("bedCount must be a whole number between 1 and 6");
+  }
+}
+
 export async function setRoomBedType(
   prisma: PrismaClient,
   roomId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
   input: { bedType: string; bedCount?: number | null },
 ) {
-  const bedType = input.bedType?.trim().toUpperCase();
-  if (!ROOM_BED_TYPES.includes(bedType as RoomBedType)) {
-    throw new ValidationError(`bedType must be one of: ${ROOM_BED_TYPES.join(", ")}`);
-  }
+  const bedType = normaliseBedType(input.bedType);
+  if (!bedType) throw new ValidationError(`bedType must be one of: ${ROOM_BED_TYPES.join(", ")}`);
   const room = await prisma.room.findUnique({
     where: { id: roomId },
     select: { id: true, roomNumber: true, bedType: true, bedCount: true },
   });
   if (!room) throw new NotFoundError("Room");
 
-  // TWIN means two single beds; every other setup is one bed — unless the caller says otherwise.
-  const bedCount = input.bedCount ?? (bedType === "TWIN" ? 2 : 1);
-  if (!Number.isInteger(bedCount) || bedCount < 1 || bedCount > 6) {
-    throw new ValidationError("bedCount must be a whole number between 1 and 6");
-  }
+  const bedCount = input.bedCount ?? defaultBedCountForBedType(bedType);
+  assertValidBedCount(bedCount);
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {

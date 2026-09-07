@@ -13,6 +13,7 @@ import {
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as inventoryAdminService from "../../services/admin/inventory-admin-service.js";
+import { ROOM_BED_TYPES } from "../../services/domain/room-bed-type-service.js";
 
 export const adminInventoryRouter = Router();
 
@@ -65,7 +66,12 @@ adminInventoryRouter.delete("/room-types/:id", requireActorLevel("L4"), async (r
 adminInventoryRouter.get("/rooms", requireActorLevel("L4"), async (_req, res, next) => {
   try {
     const items = await inventoryAdminService.listRooms(prisma);
-    res.json({ items, count: items.length });
+    // The FULL vocabulary, deliberately — unlike the desk's `/api/rooms`, which narrows each
+    // room to the setups its own bed stock converts into (`allowedBedTypes`). The console is
+    // the registry authority: it is where a room's beds are declared in the first place, and
+    // where a wrongly-registered one is corrected. Narrowing here would be circular — a room
+    // mis-entered as QUEEN could never be set back to KING.
+    res.json({ items, count: items.length, bedTypes: ROOM_BED_TYPES });
   } catch (e) {
     next(e);
   }
