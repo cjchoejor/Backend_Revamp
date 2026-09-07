@@ -23,6 +23,7 @@ import { getBillingSummary } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { FolioDocumentsBlock } from "./folio-documents";
+import { FolioLinesTable } from "./folio-lines";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -46,59 +47,6 @@ function isGm(level?: string) {
 }
 function folioTerminal(state?: string) {
   return state === "SETTLED" || state === "OUTSTANDING";
-}
-
-/**
- * What the guest is actually being charged, split the way the ledger charges it (PMS-141 —
- * "in settlement show outstanding, paid, taxes and all"). The bill said what was received and
- * what was left but never what the taxes were, so an operator answering "why is it 5,775?" had
- * to open the tax invoice.
- *
- * Every figure is a SERVER field off the billing summary's `chargeBreakdown` — base +
- * serviceCharge + gst = billedSoFar, Decimal-summed backend-side over the folio's own lines.
- * Nothing is added up here, and the labels match the S7 live-folio footer exactly so the two
- * surfaces can't describe one ledger differently.
- */
-function ChargeSplitStrip({
-  breakdown,
-  currency,
-}: {
-  breakdown: { base: number; serviceCharge: number; gst: number; total: number };
-  currency?: string;
-}) {
-  const cells: Array<[string, number]> = [
-    ["Charges", breakdown.base],
-    ["Service charge", breakdown.serviceCharge],
-    ["GST", breakdown.gst],
-    ["Billed so far", breakdown.total],
-  ];
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "4px 20px",
-        padding: "8px 12px",
-        marginBottom: 10,
-        background: "var(--cream)",
-        border: "1px solid var(--line-2)",
-        borderRadius: 5,
-        fontSize: 12,
-      }}
-      title="The whole ledger, split into charges, service charge and GST — summed on the server. GST is charged on charges + service charge."
-    >
-      {cells.map(([label, v]) => (
-        <div key={label} style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--ink-3)" }}>
-            {label}
-          </div>
-          <div style={{ fontWeight: label === "Billed so far" ? 700 : 600, fontVariantNumeric: "tabular-nums" }}>
-            {money(v, currency)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSelected: (n: number) => void }) {
@@ -511,9 +459,9 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           <Receipt style={{ width: 13, height: 13 }} />
           The bill
         </BlockH>
-        {/* Every figure here is read from the backend. The folio carries no charges-total field,
-            so that row is gone rather than summed in the browser — the line list below still
-            shows each backend-priced charge individually. */}
+        {/* Every figure here is read from the backend — the table's totals are the billing
+            summary's server-summed splits and the balance is the folio's own outstandingBalance.
+            Nothing on this page adds a column up. */}
         {/* Advance plan telltale (2026-08-07): a guest who said "I'll pay the rest at check-out"
             arrives at this desk with the advance legitimately short — say so, name the figure,
             and point at the settlement below. All figures from payment-status. */}
@@ -536,7 +484,27 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             balance below — settlement collects it with the rest of the bill.
           </div>
         )}
-        {chargeBreakdown && <ChargeSplitStrip breakdown={chargeBreakdown} currency={currency} />}
+        {/* The folio ITSELF, exactly as the Stay step shows it (2026-09-07, operator request —
+            the first cut showed only a summary strip). Same component, so check-out and in-house
+            cannot present one ledger differently: every line with its SC/GST folded under it,
+            All-charges / per-room / whole-booking tabs each with their own server-summed
+            Charges · Service charge · GST · Total footer, the Σ room chips, and Balance due
+            pinned below the scroll. It carries the whole money picture, so the separate split
+            strip, the "Charges by room" grid and the "Balance due" row it replaced are gone. */}
+        <div style={{ marginBottom: 12 }}>
+          <FolioLinesTable
+            lines={folioLines}
+            roomNumberById={roomNumberById}
+            perRoomCharges={perRoomCharges}
+            unassignedCharges={unassignedCharges}
+            chargeBreakdown={chargeBreakdown}
+            balance={balance}
+            currency={currency}
+            emptyText="No charges on this folio"
+            // Opening a room tab defaults the charge form's "For room" below, same as S7.
+            onTabChange={(t) => setFinalChargeRoomId(typeof t === "string" ? "" : t.roomId)}
+          />
+        </div>
         <div className="field">
           <label>Advance / payments received</label>
           <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>
@@ -553,47 +521,6 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             <div className="val">{money(writtenOff, currency)}</div>
           </div>
         )}
-        {/* Per-room charge subtotals (2026-08-14) — SERVER-summed billing-summary buckets, so
-            the checkout review can answer "what did each room spend" before settlement. */}
-        {perRoomCharges && perRoomCharges.length > 0 && (
-          <div className="field">
-            <label>Charges by room</label>
-            <div style={{ display: "grid", gap: 4 }}>
-              {perRoomCharges.map((r) => (
-                <div
-                  key={r.roomId}
-                  style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}
-                  // Each bucket carries its own split server-side, so a guest querying one
-                  // room's share gets the same answer the whole-ledger strip above gives.
-                  title={`Charges ${money(r.base, currency)} · Service charge ${money(r.serviceCharge, currency)} · GST ${money(r.gst, currency)}`}
-                >
-                  <span>
-                    Room {r.roomNumber ?? "?"}{" "}
-                    <span style={{ color: "var(--ink-3)" }}>
-                      · {r.lineCount} line{r.lineCount === 1 ? "" : "s"}
-                    </span>
-                  </span>
-                  <span style={{ fontWeight: 600 }}>{money(r.charges, currency)}</span>
-                </div>
-              ))}
-              {unassignedCharges && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
-                  <span>
-                    Whole booking (no room named){" "}
-                    <span style={{ color: "var(--ink-3)" }}>
-                      · {unassignedCharges.lineCount} line{unassignedCharges.lineCount === 1 ? "" : "s"}
-                    </span>
-                  </span>
-                  <span style={{ fontWeight: 600 }}>{money(unassignedCharges.charges, currency)}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        <div className="field">
-          <label>Balance due</label>
-          <div className="val">{moneyOrDash(balance, currency)}</div>
-        </div>
         {folioLive && (
           <div style={{ marginTop: 6, borderTop: "1px dashed var(--line-2)", paddingTop: 11 }}>
             {/* Full charge toolkit, same as the Stay step (2026-08-03): the backend posts at
