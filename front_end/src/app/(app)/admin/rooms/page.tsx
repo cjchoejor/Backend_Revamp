@@ -9,19 +9,33 @@ import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
-type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string };
+type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string; bedType: string; bedCount: string };
+
+/**
+ * "KING" → "King". The vocabulary itself comes from the API (`bedTypes` on the rooms
+ * response) — this only makes it readable, so a bed type added backend-side still renders.
+ */
+function bedLabel(bedType: string) {
+  return bedType.charAt(0) + bedType.slice(1).toLowerCase();
+}
+
+/** What a room's beds read as in the table: "Twin · 2 beds", "King", "—". */
+function bedSummary(bedType: string | null, bedCount: number | null) {
+  if (!bedType) return null;
+  return bedCount && bedCount > 1 ? `${bedLabel(bedType)} · ${bedCount} beds` : bedLabel(bedType);
+}
 
 export default function AdminRoomsPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const prompt = usePrompt();
-  const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "" });
+  const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "", bedType: "" });
   const [defForm, setDefForm] = useState<DeficientForm | null>(null);
 
   // Edit-in-place: when not null, the row with this roomId renders as editable inputs.
   const [editId, setEditId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "" });
+  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "", bedType: "", bedCount: "" });
 
   // Filters
   const [filterRoomTypeId, setFilterRoomTypeId] = useState<string>("ALL");
@@ -45,10 +59,13 @@ export default function AdminRoomsPage() {
         roomNumber: form.roomNumber,
         roomTypeId: form.roomTypeId,
         floorNumber: form.floorNumber ? Number.parseInt(form.floorNumber, 10) : null,
+        // bedCount is deliberately not sent — the backend derives it from the setup, so the
+        // console and the desk's bed-type endpoint agree on what a TWIN means.
+        bedType: form.bedType || null,
       }),
     onSuccess: () => {
       toast.success("Room created");
-      setForm({ roomNumber: "", roomTypeId: form.roomTypeId, floorNumber: "" });
+      setForm({ roomNumber: "", roomTypeId: form.roomTypeId, floorNumber: "", bedType: form.bedType });
       void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Create failed"),
@@ -58,10 +75,16 @@ export default function AdminRoomsPage() {
     mutationFn: () => {
       if (!editId) throw new Error("No row in edit mode");
       const floorNumber = editDraft.floorNumber.trim() === "" ? null : Number.parseInt(editDraft.floorNumber, 10);
+      const bedType = editDraft.bedType || null;
+      const bedCount = editDraft.bedCount.trim() === "" ? undefined : Number.parseInt(editDraft.bedCount, 10);
       return updateAdminRoom(session!, editId, {
         roomNumber: editDraft.roomNumber.trim(),
         roomTypeId: editDraft.roomTypeId,
         floorNumber,
+        bedType,
+        // Omitted on a changed setup with a blank count, so the backend re-derives it rather
+        // than carrying "1 bed" onto a room that just became a Twin.
+        bedCount,
       });
     },
     onSuccess: () => {
@@ -132,6 +155,8 @@ export default function AdminRoomsPage() {
   });
 
   const allRooms = roomsQuery.data?.items ?? [];
+  // Served by the API so a bed type added backend-side appears here without a UI change.
+  const bedTypes = roomsQuery.data?.bedTypes ?? [];
 
   // Derive the unique floor values from the loaded inventory for the floor filter.
   const distinctFloors = Array.from(
@@ -152,12 +177,21 @@ export default function AdminRoomsPage() {
     return true;
   });
 
-  function startEdit(r: { id: string; roomNumber: string; roomType: { id: string }; floorNumber: number | null }) {
+  function startEdit(r: {
+    id: string;
+    roomNumber: string;
+    roomType: { id: string };
+    floorNumber: number | null;
+    bedType: string | null;
+    bedCount: number | null;
+  }) {
     setEditId(r.id);
     setEditDraft({
       roomNumber: r.roomNumber,
       roomTypeId: r.roomType.id,
       floorNumber: r.floorNumber == null ? "" : String(r.floorNumber),
+      bedType: r.bedType ?? "",
+      bedCount: r.bedCount == null ? "" : String(r.bedCount),
     });
   }
   function cancelEdit() {
@@ -186,6 +220,19 @@ export default function AdminRoomsPage() {
           ))}
         </select>
         <input className="admin-input" placeholder="Floor" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
+        <select className="admin-select" value={form.bedType} onChange={(e) => setForm({ ...form, bedType: e.target.value })}>
+          <option value="">Bed setup — not recorded</option>
+          {bedTypes.map((b) => (
+            <option key={b} value={b}>
+              {bedLabel(b)}
+            </option>
+          ))}
+        </select>
+        <p className="admin-muted col-span-full text-xs">
+          The bed setup is per room, not per room type — the same Family Apartment exists as a King and as a Twin. The
+          number of beds follows the setup (a Twin is two singles); the desk can re-record it when a room is physically
+          reconfigured, and that change comes back here.
+        </p>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create room
         </button>
@@ -310,6 +357,7 @@ export default function AdminRoomsPage() {
               <th>Room</th>
               <th>Type</th>
               <th>Floor</th>
+              <th>Bed</th>
               <th>Claim</th>
               <th>Physical</th>
               <th>Deficient</th>
@@ -350,6 +398,42 @@ export default function AdminRoomsPage() {
                         placeholder="—"
                       />
                     </td>
+                    <td>
+                      <div className="flex items-center gap-1">
+                        <select
+                          className="admin-select w-24"
+                          value={editDraft.bedType}
+                          // Changing the setup blanks the count so the backend re-derives it —
+                          // carrying the King's "1" onto a Twin would record one twin bed.
+                          onChange={(e) =>
+                            setEditDraft({
+                              ...editDraft,
+                              bedType: e.target.value,
+                              bedCount: e.target.value === editDraft.bedType ? editDraft.bedCount : "",
+                            })
+                          }
+                        >
+                          <option value="">—</option>
+                          {bedTypes.map((b) => (
+                            <option key={b} value={b}>
+                              {bedLabel(b)}
+                            </option>
+                          ))}
+                        </select>
+                        {editDraft.bedType && (
+                          <input
+                            className="admin-input w-12"
+                            type="number"
+                            min={1}
+                            max={6}
+                            value={editDraft.bedCount}
+                            onChange={(e) => setEditDraft({ ...editDraft, bedCount: e.target.value })}
+                            placeholder={editDraft.bedType === "TWIN" ? "2" : "1"}
+                            title="Number of beds — leave blank to use the setup's default"
+                          />
+                        )}
+                      </div>
+                    </td>
                     <td>{r.currentClaimState}</td>
                     <td>{r.physicalState}</td>
                     <td>{r.isDeficient ? "Yes" : "—"}</td>
@@ -381,6 +465,7 @@ export default function AdminRoomsPage() {
                   {r.roomType.name} <span className="text-xs opacity-60">({r.roomType.code})</span>
                 </td>
                 <td>{r.floorNumber ?? "—"}</td>
+                <td>{bedSummary(r.bedType, r.bedCount) ?? <span className="opacity-50">—</span>}</td>
                 <td>{r.currentClaimState}</td>
                 <td>{r.physicalState}</td>
                 <td>{r.isDeficient ? "Yes" : "—"}</td>

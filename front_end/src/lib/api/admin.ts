@@ -265,9 +265,13 @@ export async function listAdminRooms(session: Session) {
       physicalState: string;
       isDeficient: boolean;
       isBlocked: boolean;
+      bedType: string | null;
+      bedCount: number | null;
       roomType: { id: string; code: string; name: string };
     }>;
     count: number;
+    /** The bed vocabulary the write endpoints accept — never hardcode it in a dropdown. */
+    bedTypes: string[];
   }>("/api/admin/rooms", { session });
 }
 
@@ -402,7 +406,15 @@ export async function deleteRoomType(session: Session, id: string) {
 
 export async function createAdminRoom(
   session: Session,
-  body: { roomNumber: string; roomTypeId: string; floorNumber?: number | null; isShadowInventory?: boolean },
+  body: {
+    roomNumber: string;
+    roomTypeId: string;
+    floorNumber?: number | null;
+    bedType?: string | null;
+    /** Omit and the backend derives it from the setup (TWIN = 2 beds, everything else 1). */
+    bedCount?: number | null;
+    isShadowInventory?: boolean;
+  },
 ) {
   return apiRequest("/api/admin/rooms", { method: "POST", session, body });
 }
@@ -414,6 +426,9 @@ export async function updateAdminRoom(
     roomNumber?: string;
     roomTypeId?: string;
     floorNumber?: number | null;
+    /** Explicit null clears the recorded setup; omit to leave it untouched. */
+    bedType?: string | null;
+    bedCount?: number | null;
     isShadowInventory?: boolean;
     isBlocked?: boolean;
     blockedReason?: string | null;
