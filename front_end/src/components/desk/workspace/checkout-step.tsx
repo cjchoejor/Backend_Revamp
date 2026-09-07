@@ -48,6 +48,59 @@ function folioTerminal(state?: string) {
   return state === "SETTLED" || state === "OUTSTANDING";
 }
 
+/**
+ * What the guest is actually being charged, split the way the ledger charges it (PMS-141 —
+ * "in settlement show outstanding, paid, taxes and all"). The bill said what was received and
+ * what was left but never what the taxes were, so an operator answering "why is it 5,775?" had
+ * to open the tax invoice.
+ *
+ * Every figure is a SERVER field off the billing summary's `chargeBreakdown` — base +
+ * serviceCharge + gst = billedSoFar, Decimal-summed backend-side over the folio's own lines.
+ * Nothing is added up here, and the labels match the S7 live-folio footer exactly so the two
+ * surfaces can't describe one ledger differently.
+ */
+function ChargeSplitStrip({
+  breakdown,
+  currency,
+}: {
+  breakdown: { base: number; serviceCharge: number; gst: number; total: number };
+  currency?: string;
+}) {
+  const cells: Array<[string, number]> = [
+    ["Charges", breakdown.base],
+    ["Service charge", breakdown.serviceCharge],
+    ["GST", breakdown.gst],
+    ["Billed so far", breakdown.total],
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "4px 20px",
+        padding: "8px 12px",
+        marginBottom: 10,
+        background: "var(--cream)",
+        border: "1px solid var(--line-2)",
+        borderRadius: 5,
+        fontSize: 12,
+      }}
+      title="The whole ledger, split into charges, service charge and GST — summed on the server. GST is charged on charges + service charge."
+    >
+      {cells.map(([label, v]) => (
+        <div key={label} style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--ink-3)" }}>
+            {label}
+          </div>
+          <div style={{ fontWeight: label === "Billed so far" ? 700 : 600, fontVariantNumeric: "tabular-nums" }}>
+            {money(v, currency)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSelected: (n: number) => void }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -99,6 +152,13 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   });
   const perRoomCharges = billingQuery.data?.folio?.perRoomCharges ?? null;
   const unassignedCharges = billingQuery.data?.folio?.unassignedCharges ?? null;
+  // The tax split behind the bill (PMS-141). Null on a folio with no lines — a legacy import
+  // or a booking that never posted anything — where there is nothing to split.
+  const chargeBreakdown = billingQuery.data?.folio?.chargeBreakdown ?? null;
+  // Shown only when they exist: a refund or a write-off sits between "billed" and "balance",
+  // and leaving them out would make the bill look like it doesn't add up.
+  const refunded = billingQuery.data?.folio?.refunded ?? null;
+  const writtenOff = billingQuery.data?.folio?.writtenOff ?? null;
 
   const [keysReturned, setKeysReturned] = useState(String(keysIssued || 1));
   const [keyReconcileNote, setKeyReconcileNote] = useState("");
@@ -476,10 +536,23 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             balance below — settlement collects it with the rest of the bill.
           </div>
         )}
+        {chargeBreakdown && <ChargeSplitStrip breakdown={chargeBreakdown} currency={currency} />}
         <div className="field">
           <label>Advance / payments received</label>
           <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>
         </div>
+        {refunded != null && refunded > 0 && (
+          <div className="field">
+            <label>Refunded</label>
+            <div className="val">{money(refunded, currency)}</div>
+          </div>
+        )}
+        {writtenOff != null && writtenOff > 0 && (
+          <div className="field">
+            <label>Written off</label>
+            <div className="val">{money(writtenOff, currency)}</div>
+          </div>
+        )}
         {/* Per-room charge subtotals (2026-08-14) — SERVER-summed billing-summary buckets, so
             the checkout review can answer "what did each room spend" before settlement. */}
         {perRoomCharges && perRoomCharges.length > 0 && (
@@ -487,7 +560,13 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             <label>Charges by room</label>
             <div style={{ display: "grid", gap: 4 }}>
               {perRoomCharges.map((r) => (
-                <div key={r.roomId} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                <div
+                  key={r.roomId}
+                  style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}
+                  // Each bucket carries its own split server-side, so a guest querying one
+                  // room's share gets the same answer the whole-ledger strip above gives.
+                  title={`Charges ${money(r.base, currency)} · Service charge ${money(r.serviceCharge, currency)} · GST ${money(r.gst, currency)}`}
+                >
                   <span>
                     Room {r.roomNumber ?? "?"}{" "}
                     <span style={{ color: "var(--ink-3)" }}>
@@ -800,6 +879,17 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
           </>
         ) : (
           <>
+            {/* What is being settled, at the point the money is taken (PMS-141) — the bill is
+                above, but the operator typing an amount should not have to scroll back up to
+                see what it is against. Server figures, restated, never re-derived. */}
+            {chargeBreakdown && (
+              <div className="fact b-bound" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginBottom: 10, display: "block", lineHeight: 1.6 }}>
+                Billed so far <b>{money(chargeBreakdown.total, currency)}</b> — charges{" "}
+                {money(chargeBreakdown.base, currency)} + service charge {money(chargeBreakdown.serviceCharge, currency)} + GST{" "}
+                {money(chargeBreakdown.gst, currency)}. Received <b>{moneyOrDash(fin.advanceReceived, currency)}</b> ·
+                outstanding <b>{moneyOrDash(balance, currency)}</b>.
+              </div>
+            )}
             {/* Checkout credit stance (2026-08-24): a partial settlement is the hotel extending
                 credit — FOM+ act, or covered by this recorded extension. All figures server-side. */}
             {creditActive && (
