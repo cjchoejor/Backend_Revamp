@@ -12,6 +12,19 @@ import { FolioLineType } from "@prisma/client";
 
 export const SERVICE_CHARGE_DESCRIPTION_PREFIX = "Service charge (";
 export const GST_DESCRIPTION_PREFIX = "GST (";
+/**
+ * `Tax (imported — BST + service charge)` — the ONE combined tax line the legacy importer
+ * writes per folio (`scripts/import-data/import-legacy-bookings.ts`). The old system stored
+ * service charge and sales tax as a single figure, so it arrives here un-split.
+ *
+ * It is tax, not a charge, and recognising it matters twice over: counted as a charge it
+ * inflated "Charges" and left the Service charge / GST cells reading 0.00 on 98 imported
+ * folios, and — worse — `folio-ledger-view` then ALSO computed tax on the same room line at
+ * render time, so every imported booking's tax invoice and master bill double-counted it
+ * (ENT-20260607-0003: total 5,580.25 against a billed-and-settled 4,919.99, with a balance
+ * due printed on a folio that owed nothing).
+ */
+export const LEGACY_IMPORTED_TAX_DESCRIPTION_PREFIX = "Tax (imported";
 export const SALES_TAX_CORRECTION_DESCRIPTION_PREFIX = "Sales tax correction on:";
 /** `Service charge correction on: <base description>` — the SC delta a charge correction posts (2026-08-21). */
 export const SERVICE_CHARGE_CORRECTION_DESCRIPTION_PREFIX = "Service charge correction on:";
@@ -67,7 +80,34 @@ export function isCorrectionCompanionDescription(description: string): boolean {
   return d.startsWith(SALES_TAX_CORRECTION_DESCRIPTION_PREFIX) || d.startsWith(SERVICE_CHARGE_CORRECTION_DESCRIPTION_PREFIX);
 }
 
-export type FolioLineKind = "CHARGE" | "SERVICE_CHARGE" | "GST";
+export type FolioLineKind = "CHARGE" | "SERVICE_CHARGE" | "GST" | "LEGACY_COMBINED_TAX";
+
+/**
+ * Split a legacy combined tax figure back into its service-charge and GST parts.
+ *
+ * The ratio needs only the RATES, not the amount it was charged on: SC = svc·n and
+ * GST = gst·(n + svc·n), so SC : GST is fixed at svc : gst(1+svc) whatever n was. The two
+ * parts are forced to sum to the stored figure exactly (one is rounded, the other is the
+ * remainder), so nothing drifts from the ledger.
+ *
+ * This is recovery, not invention: checked against all 98 imported folios on
+ * `legphel_pms_dev2`, the stored figure equals SC(10%) + compound GST(5%) on the imported
+ * room net — 75 to the cent and 23 within the ±0.01 the old system's own rounding explains.
+ * With both rates at 0 the composition is unknowable, so it is reported as GST, the
+ * statutory part.
+ */
+export function splitCombinedTax(
+  total: number,
+  svcRate: number,
+  gstRate: number,
+): { serviceCharge: number; gst: number } {
+  const scWeight = svcRate;
+  const gstWeight = gstRate * (1 + svcRate);
+  const denom = scWeight + gstWeight;
+  if (!(denom > 0)) return { serviceCharge: 0, gst: total };
+  const serviceCharge = Math.round(total * (scWeight / denom) * 100) / 100;
+  return { serviceCharge, gst: Math.round((total - serviceCharge) * 100) / 100 };
+}
 
 /**
  * Tell a tax companion apart from a real charge. Anything not recognised as a companion is a
@@ -75,6 +115,9 @@ export type FolioLineKind = "CHARGE" | "SERVICE_CHARGE" | "GST";
  */
 export function classifyFolioLine(line: { lineType: FolioLineType | string; description: string }): FolioLineKind {
   const d = line.description ?? "";
+  if (line.lineType === FolioLineType.OTHER && d.startsWith(LEGACY_IMPORTED_TAX_DESCRIPTION_PREFIX)) {
+    return "LEGACY_COMBINED_TAX";
+  }
   if (
     line.lineType === FolioLineType.SERVICE &&
     (d.startsWith(SERVICE_CHARGE_DESCRIPTION_PREFIX) || d.startsWith(SERVICE_CHARGE_CORRECTION_DESCRIPTION_PREFIX))

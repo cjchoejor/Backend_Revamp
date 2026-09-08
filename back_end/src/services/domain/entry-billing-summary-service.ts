@@ -2,7 +2,8 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
-import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
+import { classifyFolioLine, splitCombinedTax } from "../../lib/folio-tax-lines.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 /**
  * ENTRY BILLING SUMMARY — the booking's money position in one read (2026-08-13, operator
@@ -358,6 +359,9 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
   // --- Folio ledger — mirrors recomputeFolioOutstandingBalance's aggregates exactly ----------
   let folioBlock: EntryBillingSummary["folio"] = null;
   if (entry.folio) {
+    // Only the RATES are needed to split a legacy combined tax back into its parts — the ratio
+    // svc : gst(1+svc) does not depend on what it was charged on. See `splitCombinedTax`.
+    const taxRates = await resolveChargeRates(prisma);
     const [lines, inAgg, outAgg, writeOffAgg] = await Promise.all([
       prisma.folioLine.findMany({
         where: { folioId: entry.folio.id },
@@ -375,8 +379,25 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     // Each bucket is split into base charges / SC companions / GST companions (2026-08-21) so
     // the desk's per-room tabs can print "Charges · Service charge · GST · Total" for one room
     // without adding anything up itself. `sum` stays the bucket's all-in figure.
-    type Bucket = { roomNumber: string | null; sum: Prisma.Decimal; base: Prisma.Decimal; sc: Prisma.Decimal; gst: Prisma.Decimal; count: number };
-    const newBucket = (roomNumber: string | null): Bucket => ({ roomNumber, sum: toDecimal(0), base: toDecimal(0), sc: toDecimal(0), gst: toDecimal(0), count: 0 });
+    type Bucket = {
+      roomNumber: string | null;
+      sum: Prisma.Decimal;
+      base: Prisma.Decimal;
+      sc: Prisma.Decimal;
+      gst: Prisma.Decimal;
+      /** Legacy imported tax, held apart until it can be split (see `split` below). */
+      combined: Prisma.Decimal;
+      count: number;
+    };
+    const newBucket = (roomNumber: string | null): Bucket => ({
+      roomNumber,
+      sum: toDecimal(0),
+      base: toDecimal(0),
+      sc: toDecimal(0),
+      gst: toDecimal(0),
+      combined: toDecimal(0),
+      count: 0,
+    });
     const addTo = (b: Bucket, l: (typeof lines)[number]) => {
       const amt = toDecimal(l.amount);
       b.sum = b.sum.add(amt);
@@ -384,7 +405,19 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       const kind = classifyFolioLine(l);
       if (kind === "SERVICE_CHARGE") b.sc = b.sc.add(amt);
       else if (kind === "GST") b.gst = b.gst.add(amt);
+      else if (kind === "LEGACY_COMBINED_TAX") b.combined = b.combined.add(amt);
       else b.base = b.base.add(amt);
+    };
+    /**
+     * An imported folio's tax is ONE combined figure, so it is split into the two cells at read
+     * time (2026-09-07 — before this, it fell into `base` and the desk's Service charge / GST
+     * cells read 0.00 while a tax line sat plainly in the list above them). base + sc + gst
+     * still equals the bucket's `sum` exactly, because the split is forced to reconcile.
+     */
+    const split = (b: Bucket) => {
+      if (b.combined.lte(0)) return { base: b.base, sc: b.sc, gst: b.gst };
+      const s = splitCombinedTax(b.combined.toNumber(), taxRates.serviceChargeRate, taxRates.gstRate);
+      return { base: b.base, sc: b.sc.add(toDecimal(s.serviceCharge)), gst: b.gst.add(toDecimal(s.gst)) };
     };
     const byRoom = new Map<string, Bucket>();
     const unassigned = newBucket(null);
@@ -404,15 +437,18 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     const perRoomCharges =
       byRoom.size > 0
         ? Array.from(byRoom.entries())
-            .map(([roomId, v]) => ({
-              roomId,
-              roomNumber: v.roomNumber,
-              charges: money(v.sum) ?? 0,
-              lineCount: v.count,
-              base: money(v.base) ?? 0,
-              serviceCharge: money(v.sc) ?? 0,
-              gst: money(v.gst) ?? 0,
-            }))
+            .map(([roomId, v]) => {
+              const s = split(v);
+              return {
+                roomId,
+                roomNumber: v.roomNumber,
+                charges: money(v.sum) ?? 0,
+                lineCount: v.count,
+                base: money(s.base) ?? 0,
+                serviceCharge: money(s.sc) ?? 0,
+                gst: money(s.gst) ?? 0,
+              };
+            })
             .sort((a, b) => (a.roomNumber ?? "").localeCompare(b.roomNumber ?? "", undefined, { numeric: true }))
         : null;
 
@@ -430,14 +466,19 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
           ? {
               charges: money(unassignedSum) ?? 0,
               lineCount: unassignedCount,
-              base: money(unassigned.base) ?? 0,
-              serviceCharge: money(unassigned.sc) ?? 0,
-              gst: money(unassigned.gst) ?? 0,
+              base: money(split(unassigned).base) ?? 0,
+              serviceCharge: money(split(unassigned).sc) ?? 0,
+              gst: money(split(unassigned).gst) ?? 0,
             }
           : null,
       chargeBreakdown:
         lines.length > 0
-          ? { base: money(whole.base) ?? 0, serviceCharge: money(whole.sc) ?? 0, gst: money(whole.gst) ?? 0, total: money(whole.sum) ?? 0 }
+          ? {
+              base: money(split(whole).base) ?? 0,
+              serviceCharge: money(split(whole).sc) ?? 0,
+              gst: money(split(whole).gst) ?? 0,
+              total: money(whole.sum) ?? 0,
+            }
           : null,
     };
   }

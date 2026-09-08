@@ -5,6 +5,7 @@ import {
   classifyFolioLine,
   companionBaseDescription,
   isCorrectionCompanionDescription,
+  splitCombinedTax,
 } from "./folio-tax-lines.js";
 
 /**
@@ -110,8 +111,12 @@ export type FolioLedgerView<L extends LedgerLineLike = LedgerLineLike, P extends
   /** Charge lines in bill order: room nights first (night, room, posting), then the rest in posting order. */
   charges: Array<LedgerCharge<L>>;
   companions: Array<LedgerCompanion<L>>;
-  /** Σ net of room lines whose tax is computed at read time (see module note). */
+  /** Σ net of room lines whose tax is computed at read time (see module note). Zero on an
+   *  imported folio, where the tax is already a ledger line and is split instead. */
   legacyRoomNet: Prisma.Decimal;
+  /** Σ of the importer's combined "Tax (imported …)" lines — the tax that IS on the ledger. */
+  legacyCombinedTax: Prisma.Decimal;
+  /** The read-time tax, or the combined figure split — whichever applies; never both. */
   legacyServiceCharge: Prisma.Decimal;
   legacyGst: Prisma.Decimal;
   components: Record<LedgerComponentKey, LedgerComponentBucket>;
@@ -179,12 +184,19 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   const chargeLines = covered.filter((l) => classifyFolioLine(l) === "CHARGE");
   const scLines = covered.filter((l) => classifyFolioLine(l) === "SERVICE_CHARGE");
   const gstLines = covered.filter((l) => classifyFolioLine(l) === "GST");
+  // The legacy importer's ONE combined "Tax (imported — BST + service charge)" line per folio.
+  // It is the tax for the imported room charge, already on the ledger.
+  const combinedTaxLines = covered.filter((l) => classifyFolioLine(l) === "LEGACY_COMBINED_TAX");
+  const combinedTax = sumMoney(combinedTaxLines.map((l) => l.amount));
 
   // A room line is "covered" by ledger tax when a companion exists for the same night-audit run —
   // the structural pairing the audit writes (mirrors buildFinalInvoiceFigures' original rule).
   const auditRunsWithCompanions = new Set(
     [...scLines, ...gstLines].map((l) => l.nightAuditRecordId).filter((id): id is string => !!id),
   );
+  // …and a folio carrying an imported tax line is covered outright: computing tax on its room
+  // line as well is what made every imported bill overstate itself by exactly that line.
+  const taxAlreadyOnLedger = combinedTax.gt(0);
 
   // Bill order: room nights first (by night, then room, then posting), then every other charge
   // in posting order — the way a guest reads a hotel bill; the include carries no ordering.
@@ -208,7 +220,10 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
       component,
       isRoom,
       isCorrection: (line.description ?? "").startsWith(CORRECTION_LINE_PREFIX),
-      legacyTaxAtRender: isRoom && !(!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)),
+      legacyTaxAtRender:
+        isRoom &&
+        !taxAlreadyOnLedger &&
+        !(!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)),
     };
   });
 
@@ -239,7 +254,14 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   ];
 
   const legacyRoomNet = sumMoney(charges.filter((c) => c.legacyTaxAtRender).map((c) => c.line.amount));
-  const legacy = legacyTaxOn(legacyRoomNet, input.svcRate, input.gstRate);
+  // Either the tax is computed at render (an old room night nobody taxed) or it is the stored
+  // imported figure split back into its two parts — never both, or the folio is taxed twice.
+  const legacy = taxAlreadyOnLedger
+    ? (() => {
+        const s = splitCombinedTax(combinedTax.toNumber(), input.svcRate, input.gstRate);
+        return { serviceCharge: toDecimal(s.serviceCharge), gst: toDecimal(s.gst) };
+      })()
+    : legacyTaxOn(legacyRoomNet, input.svcRate, input.gstRate);
 
   const components = Object.fromEntries(
     LEDGER_COMPONENTS.map(({ key, label }) => {
@@ -285,6 +307,7 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
     charges,
     companions,
     legacyRoomNet,
+    legacyCombinedTax: combinedTax,
     legacyServiceCharge: legacy.serviceCharge,
     legacyGst: legacy.gst,
     components,
