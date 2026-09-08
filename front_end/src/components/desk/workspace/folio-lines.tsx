@@ -422,13 +422,50 @@ export function FolioLinesTable({
                 <th style={th}>Date</th>
                 {anyRoom && <th style={th}>Room</th>}
                 <th style={{ ...th, width: "99%" }}>Charge</th>
+                {/* Amount · Service charge · GST as three columns (2026-09-08, operator request
+                    — the folded "+ SC / + GST" sub-lines left the middle of a wide row empty).
+                    Same three words as the pinned footer, so a row reads across to its Σ. */}
                 <th style={{ ...th, textAlign: "right" }}>Amount</th>
+                <th style={{ ...th, textAlign: "right" }}>Service charge</th>
+                <th style={{ ...th, textAlign: "right" }}>GST</th>
               </tr>
             </thead>
             <tbody>
               {rows.flatMap((r) => {
                 const l = r.line;
                 const sys = !!l.nightAuditRecordId;
+                // An ORPHAN companion (its charge fell outside the window, or a legacy
+                // description names no base) renders as a main row — its amount belongs in its
+                // own tax column, not under Amount, or the columns would stop meaning anything.
+                const ownKind = companionKind(l);
+                /**
+                 * One tax column's cell. Stacks when a charge carries more than one companion
+                 * of that kind (a correction posts its own SC / GST delta beside the original's)
+                 * — each printed at its stored amount. Nothing is added up here; the column
+                 * totals come from the server, in the footer below.
+                 */
+                const taxCell = (kind: "SC" | "GST") => {
+                  if (ownKind === kind) {
+                    return (
+                      <span title={l.description} style={{ color: "var(--ink-3)" }}>
+                        {money(l.amount, l.currency)}
+                      </span>
+                    );
+                  }
+                  // Expanded: every companion has its own row below, so the parent leaves these
+                  // blank rather than printing the same figure twice.
+                  const mine = showTax ? [] : r.companions.filter((c) => c.kind === kind);
+                  if (mine.length === 0) return <span style={{ color: "var(--ink-4)" }}>—</span>;
+                  return (
+                    <span style={{ color: "var(--ink-3)" }}>
+                      {mine.map((c) => (
+                        <div key={c.line.id} title={c.line.description} style={{ whiteSpace: "nowrap" }}>
+                          {money(c.line.amount, c.line.currency)}
+                        </div>
+                      ))}
+                    </span>
+                  );
+                };
                 const main = (
                   <tr key={l.id}>
                     <td style={{ ...td, color: "var(--ink-2)" }}>{l.chargeDate?.slice(0, 10) ?? "—"}</td>
@@ -448,20 +485,10 @@ export function FolioLinesTable({
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{l.lineType}</span>
                     </td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                      {money(l.amount, l.currency)}
-                      {/* The tax companions sit UNDER the amount, in the same column (2026-08-21,
-                          operator request: "keep the amounts above the GST and service charge") —
-                          printed at their own stored amounts, never summed. */}
-                      {!showTax && r.companions.length > 0 && (
-                        <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 1, lineHeight: 1.35 }}>
-                          {r.companions.map((c) => (
-                            <div key={c.line.id} title={c.line.description} style={{ whiteSpace: "nowrap" }}>
-                              + {c.kind === "SC" ? "SC" : "GST"} {money(c.line.amount, c.line.currency)}
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      {ownKind ? <span style={{ color: "var(--ink-4)" }}>—</span> : money(l.amount, l.currency)}
                     </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{taxCell("SC")}</td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{taxCell("GST")}</td>
                   </tr>
                 );
                 if (!showTax) return [main];
@@ -480,8 +507,14 @@ export function FolioLinesTable({
                         {c.line.description}
                         <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{c.line.lineType}</span>
                       </td>
+                      {/* Expanded: the companion's own row, its amount under the column it IS —
+                          so the three money columns line up whether the taxes are folded or not. */}
+                      <td style={{ ...td, textAlign: "right", color: "var(--ink-4)" }}>—</td>
                       <td style={{ ...td, textAlign: "right", color: "var(--ink-3)", fontVariantNumeric: "tabular-nums" }}>
-                        {money(c.line.amount, c.line.currency)}
+                        {c.kind === "SC" ? money(c.line.amount, c.line.currency) : <span style={{ color: "var(--ink-4)" }}>—</span>}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", color: "var(--ink-3)", fontVariantNumeric: "tabular-nums" }}>
+                        {c.kind === "GST" ? money(c.line.amount, c.line.currency) : <span style={{ color: "var(--ink-4)" }}>—</span>}
                       </td>
                     </tr>
                   )),
