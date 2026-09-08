@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileText, Handshake, Receipt, Scale, Wallet } from "lucide-react";
 import { toast } from "sonner";
@@ -19,12 +19,13 @@ import {
 } from "@/lib/api/post-stay";
 import { progressDispute } from "@/lib/api/in-stay";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
-import { listEntryCommunications } from "@/lib/api/entries";
+import { getBillingSummary, listEntryCommunications } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash, s9CloseReadiness } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { FolioDocumentsBlock } from "./folio-documents";
+import { FolioLinesTable } from "./folio-lines";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -81,6 +82,19 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
   const currency = (folio?.lines ?? [])[0]?.currency;
   const checks = s9CloseReadiness(entry);
 
+  // The folio table's server-summed figures — the same shared query the Stay, Check-out and
+  // header surfaces use, so the four never disagree. The desk sums nothing itself.
+  const roomNumberById = useMemo(
+    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
+    [entry.roomAssignments],
+  );
+  const billingQuery = useQuery({
+    queryKey: ["billing-summary", entry.id, entry.updatedAt],
+    queryFn: () => getBillingSummary(session!, entry.id),
+    enabled: !!session && !!entry.folio?.id,
+    refetchInterval: 30_000,
+  });
+
   const [postStayLineType, setPostStayLineType] = useState<string>("OTHER");
   const [postStayDesc, setPostStayDesc] = useState("");
   const [postStayAmount, setPostStayAmount] = useState("");
@@ -103,6 +117,9 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
     void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry.id] });
+    // A post-stay charge / credit note changes the folio table's footer, and its query key is
+    // not part of the entry payload — without this the figures would sit until the 30s refetch.
+    void queryClient.invalidateQueries({ queryKey: ["billing-summary", entry.id] });
   };
 
   // Auto-pull the outstanding balance into the payment-event amount (see the ref above).
@@ -280,16 +297,31 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
             <Receipt style={{ width: 13, height: 13 }} />
             The bill
           </BlockH>
-          {/* Read from the backend only — no charges-total field exists on the folio, so it is
-              omitted rather than summed here. */}
+          {/* The folio itself, the same table the Stay and Check-out steps show (2026-09-07,
+              operator request — "payment can happen here as well", so the post-stay desk needs
+              to see what is being paid for, not just the two totals). Same component, so all
+              three stages present one ledger identically: lines with their SC/GST folded under
+              them, All-charges / per-room / whole-booking tabs each with their own server-summed
+              footer, Σ room chips and Balance due. Read-only here — S9 charges post through the
+              blocks below and are booking-wide, so no tab is wired to a room. */}
+          <div style={{ marginBottom: 12 }}>
+            <FolioLinesTable
+              lines={folio?.lines ?? []}
+              roomNumberById={roomNumberById}
+              perRoomCharges={billingQuery.data?.folio?.perRoomCharges ?? null}
+              unassignedCharges={billingQuery.data?.folio?.unassignedCharges ?? null}
+              chargeBreakdown={billingQuery.data?.folio?.chargeBreakdown ?? null}
+              balance={fin.outstanding}
+              currency={currency}
+              emptyText="No charges on this folio"
+            />
+          </div>
           <div className="field">
             <label>Payments received</label>
             <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>
           </div>
-          <div className="field">
-            <label>Outstanding</label>
-            <div className="val">{moneyOrDash(fin.outstanding, currency)}</div>
-          </div>
+          {/* No separate "Outstanding" row — the table pins Balance due below its footer, and
+              the same figure twice in one block is noise (matches the Check-out step). */}
           {/* Checkout credit extension (2026-08-24): a partial settlement at S8 left under FOM
               credit — the extension's expiry is the pay-by date for this follow-up. Read-time
               facts from payment-status, same as the S3 surfaces. */}
