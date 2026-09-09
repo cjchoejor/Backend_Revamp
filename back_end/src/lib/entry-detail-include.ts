@@ -12,6 +12,11 @@ export const entryDetailInclude = {
       billingModelTransitions: { orderBy: { createdAt: "desc" as const }, take: 10 },
     },
   },
+  /** The conference rooms / halls this booking holds — a charge can name one (PMS-237). */
+  spaceAllocations: {
+    include: { space: { select: { id: true, code: true, name: true, spaceType: true } } },
+    orderBy: { createdAt: "asc" as const },
+  },
   disputes: { orderBy: { openedAt: "desc" as const }, take: 20 },
   cancellationDisclosure: true,
   guestProfile: true,
