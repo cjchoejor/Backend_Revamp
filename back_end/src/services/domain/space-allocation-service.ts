@@ -2,7 +2,11 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { SpaceAllocationState, type Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceConferenceSpaceAttendeeCapacity } from "../../policies/27-work-order/p67-conference-s1-exit-space-gates.js";
-import { enforceEntryAtS1ForConferenceSpaceAllocation } from "../../policies/01-availability/p01-entry-at-s1-for-conference-space-allocation.js";
+import {
+  enforceEntryAtS1ForConferenceSpaceAllocation,
+  enforceEntryStageForSpaceAllocation,
+} from "../../policies/01-availability/p01-entry-at-s1-for-conference-space-allocation.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { assertSpaceTurnaroundBufferAllowsQuotedAllocation } from "../../policies/27-work-order/p67-space-turnaround-buffer.js";
 
 export const CONFERENCE_LIKE_USE_TYPES = ["CONFERENCE", "CATERING"] as const;
@@ -104,7 +108,8 @@ export async function allocateConferenceSpace(
 
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } } });
   if (!entry) throw new NotFoundError("Entry");
-  enforceEntryAtS1ForConferenceSpaceAllocation({ currentStage: entry.currentStage });
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  enforceEntryStageForSpaceAllocation({ currentStage: entry.currentStage });
 
   const segmentId = entry.segments[0]?.id ?? null;
   const space = await prisma.space.findUnique({ where: { code: input.spaceCode.trim() } });
@@ -118,14 +123,25 @@ export async function allocateConferenceSpace(
   const cap = Number(space.capacity ?? space.defaultCapacity ?? 0);
   enforceConferenceSpaceAttendeeCapacity({ attendeeCount, capacity: cap });
 
+  // The same space twice on one booking would give the folio two identical tabs and no way to
+  // tell the charges apart; the operator means to CHANGE the ask, so the existing row is
+  // rewritten rather than joined by a second.
+  const existing = await prisma.spaceAllocation.findFirst({
+    where: { entryId, spaceId: space.id, state: { not: SpaceAllocationState.RELEASED } },
+  });
+  const eventBlock = { attendeeCount, seatingConfig: input.seatingConfig.trim() } as any;
+
   return prisma.$transaction(async (tx) => {
+    if (existing) {
+      return tx.spaceAllocation.update({ where: { id: existing.id }, data: { eventBlock, segmentId } });
+    }
     return tx.spaceAllocation.create({
       data: {
         spaceId: space.id,
         entryId,
         segmentId,
         state: SpaceAllocationState.QUOTED,
-        eventBlock: { attendeeCount, seatingConfig: input.seatingConfig.trim() } as any,
+        eventBlock,
         createdBy: actorId,
       },
     });
