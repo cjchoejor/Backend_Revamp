@@ -33,6 +33,39 @@ const SC_CORR_PREFIX = "Service charge correction on:";
 /** A charge correction's own line ("Correction for <lineId>: <reason>"). */
 const CORRECTION_PREFIX = "Correction for ";
 
+/**
+ * A folio-line id is `<folioId>-L<nn>` since 2026-09-09 (`FOL-20260908-0001-L03`). Every line
+ * in one table belongs to the same folio, so the prefix is the same on every row — it is
+ * printed muted and the `L03` bold, which is what the eye actually matches on. A legacy uuid
+ * (nothing on this database, but an older export could carry one) falls back to itself.
+ */
+function LineId({ id }: { id: string }) {
+  const m = /^(.*-)(L\d+)$/.exec(id ?? "");
+  return (
+    <span title={id} style={{ fontFamily: "var(--font-plex-mono), monospace", fontSize: 10.5, whiteSpace: "nowrap" }}>
+      {m ? (
+        <>
+          <span style={{ color: "var(--ink-4)" }}>{m[1]}</span>
+          <b style={{ color: "var(--ink-2)" }}>{m[2]}</b>
+        </>
+      ) : (
+        <span style={{ color: "var(--ink-4)" }}>{(id ?? "").slice(0, 8)}…</span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A correction names the line it adjusts — "Correction for FOL-20260908-0001-L04: …". The
+ * folio part is already on every row of this table, so it is dropped from the sentence and
+ * only the `L04` kept: the operator matches it against the Line column beside it.
+ */
+function describeLine(description: string): string {
+  const d = description ?? "";
+  if (!d.startsWith(CORRECTION_PREFIX)) return d;
+  return d.replace(/^(Correction for )\S*-(L\d+):/, "$1$2:");
+}
+
 type Companion = { line: FolioLineSummary; kind: "SC" | "GST" };
 type FolioRow = { line: FolioLineSummary; companions: Companion[] };
 
@@ -419,6 +452,9 @@ export function FolioLinesTable({
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr>
+                {/* The line's own id (2026-09-09, operator request) — it is what a correction
+                    row names, so it has to be readable off the table it points into. */}
+                <th style={th}>Line</th>
                 <th style={th}>Date</th>
                 {anyRoom && <th style={th}>Room</th>}
                 <th style={{ ...th, width: "99%" }}>Charge</th>
@@ -468,6 +504,9 @@ export function FolioLinesTable({
                 };
                 const main = (
                   <tr key={l.id}>
+                    <td style={td}>
+                      <LineId id={l.id} />
+                    </td>
                     <td style={{ ...td, color: "var(--ink-2)" }}>{l.chargeDate?.slice(0, 10) ?? "—"}</td>
                     {anyRoom && (
                       <td style={{ ...td, color: l.roomId ? undefined : "var(--ink-4)" }}>
@@ -481,7 +520,7 @@ export function FolioLinesTable({
                       >
                         {sys ? "⚙" : "✎"}
                       </span>
-                      {l.description}
+                      {describeLine(l.description)}
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{l.lineType}</span>
                     </td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
@@ -497,6 +536,9 @@ export function FolioLinesTable({
                   main,
                   ...r.companions.map((c) => (
                     <tr key={c.line.id}>
+                      <td style={td}>
+                        <LineId id={c.line.id} />
+                      </td>
                       <td style={{ ...td, color: "var(--ink-4)" }}>{c.line.chargeDate?.slice(0, 10) ?? "—"}</td>
                       {anyRoom && (
                         <td style={{ ...td, color: "var(--ink-4)" }}>
@@ -504,7 +546,7 @@ export function FolioLinesTable({
                         </td>
                       )}
                       <td style={{ ...td, whiteSpace: "normal", color: "var(--ink-3)", paddingLeft: 26 }}>
-                        {c.line.description}
+                        {describeLine(c.line.description)}
                         <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{c.line.lineType}</span>
                       </td>
                       {/* Expanded: the companion's own row, its amount under the column it IS —
