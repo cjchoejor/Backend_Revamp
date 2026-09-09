@@ -26,6 +26,7 @@
  * is skipped, so re-running is safe.
  */
 import { FolioLineType, Stage } from "@prisma/client";
+import { allocateFolioLineId } from "../src/lib/readable-id.js";
 import { prisma } from "../src/db.js";
 import { resolveChargeRates } from "../src/services/infrastructure/compute-stay-charges.js";
 import { recomputeFolioOutstandingBalance } from "../src/lib/folio-outstanding-from-payment.js";
@@ -112,7 +113,7 @@ for (const [folioId, lines] of byFolio) {
   postedLines += creates.length;
   if (COMMIT) {
     await prisma.$transaction(async (tx) => {
-      for (const data of creates) await tx.folioLine.create({ data });
+      for (const data of creates) await tx.folioLine.create({ data: { ...data, id: await allocateFolioLineId(tx, folioId) } });
       await recomputeFolioOutstandingBalance(tx, folioId);
     });
     const after = await prisma.folio.findUniqueOrThrow({ where: { id: folioId }, select: { outstandingBalance: true } });

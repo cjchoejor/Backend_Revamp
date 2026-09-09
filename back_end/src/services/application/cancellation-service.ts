@@ -17,7 +17,7 @@ import { generateCancellationConfirmationPdf } from "../domain/cancellation-conf
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import type { ActorLevel as RequestActorLevel } from "../../types/actor.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
-import { allocateReadableId } from "../../lib/readable-id.js";
+import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 
@@ -132,6 +132,7 @@ export async function cancelEntryAtS3(
       const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({
         data: {
+          id: await allocateFolioLineId(tx, folio.id),
           folioId: folio.id,
           lineType: FolioLineType.SERVICE,
           description: "S3 pre-confirmation cancellation penalty",
@@ -378,6 +379,7 @@ export async function cancelEntryAtS5(
       const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({
         data: {
+          id: await allocateFolioLineId(tx, folio.id),
           folioId: folio.id,
           lineType: FolioLineType.SERVICE,
           description: "Pre-arrival cancellation penalty",
@@ -609,6 +611,7 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
       const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({
         data: {
+          id: await allocateFolioLineId(tx, folio.id),
           folioId: folio.id,
           lineType: FolioLineType.SERVICE,
           description: "Early departure cancellation penalty (post check-in)",

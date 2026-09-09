@@ -25,7 +25,7 @@
 import { PrismaClient, EntryStatus, FolioState, FolioLineType, HandoffType, HandoffState, HoldState, InventoryClaimState, PaymentDirection, QuotationState, Stage } from "@prisma/client";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { allocateReadableId } from "../../src/lib/readable-id.js";
+import { allocateReadableId, allocateFolioLineId } from "../../src/lib/readable-id.js";
 
 const COMMIT = process.argv.includes("--commit");
 const ACTOR_ID = "actor-seed-system";
@@ -692,6 +692,7 @@ async function main() {
           for (const l of lines) {
             await tx.folioLine.create({
               data: {
+                id: await allocateFolioLineId(tx, folioId),
                 folioId,
                 lineType: l.type,
                 description: l.desc,

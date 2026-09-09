@@ -1,4 +1,5 @@
 import { prisma } from "../src/db.js";
+import { allocateFolioLineId } from "../src/lib/readable-id.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -377,6 +378,7 @@ async function main() {
       const folio = await prisma.folio.findUniqueOrThrow({ where: { id: provisional.id } });
       await prisma.folioLine.create({
         data: {
+          id: await allocateFolioLineId(prisma, folio.id),
           folioId: folio.id,
           lineType: "OTHER",
           description: "S8 settlement harness charge",

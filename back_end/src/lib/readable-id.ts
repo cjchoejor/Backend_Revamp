@@ -196,3 +196,46 @@ export async function allocateReadableId(
 
   return formatReadableId(prefix, sequenceDate, row.lastValue);
 }
+
+// =============================================================================
+// FOLIO LINES — a child id, not a day-sequenced one
+// =============================================================================
+
+/**
+ * Mint the next folio-line id: `<folioId>-L<nn>`, e.g. `FOL-20260908-0001-L03`.
+ *
+ * Folio lines are NOT in the PREFIX-YYYYMMDD-NNNN family above, deliberately (2026-09-09,
+ * operator ruling). A line only ever means anything inside its folio — "the third line of
+ * FOL-20260908-0001" — and the desk prints that id on the correction row that adjusts it, so
+ * naming the parent is the whole point. A global `FL-20260909-0003` would read the same on
+ * every folio and tell the operator nothing about where it belongs.
+ *
+ * The number comes from an ATOMIC increment of `Folio.lineSequence`, not from counting the
+ * lines already there. Postgres row-locks the folio for the rest of the transaction, so two
+ * charges posted at the same instant serialise and take L03 and L04 — with a count-then-add
+ * they would both read 2 and both claim L03. It also means a deleted line never frees its
+ * number, so an id is never silently reused by a different charge.
+ *
+ * Call it INSIDE the transaction that creates the line, passing that transaction's client —
+ * on a rollback the sequence rolls back with it and no number is burnt.
+ */
+export async function allocateFolioLineId(db: IdDb, folioId: string): Promise<string> {
+  const rows = await db.$queryRaw<Array<{ lineSequence: number }>>`
+    UPDATE "folios" SET "lineSequence" = "lineSequence" + 1
+    WHERE "id" = ${folioId}
+    RETURNING "lineSequence"
+  `;
+  const next = rows[0]?.lineSequence;
+  if (!next) throw new Error(`Cannot allocate a folio-line id: folio ${folioId} does not exist`);
+  return formatFolioLineId(folioId, next);
+}
+
+/** `FOL-20260908-0001` + 3 → `FOL-20260908-0001-L03`. Padded to 2, then grows (L100). */
+export function formatFolioLineId(folioId: string, sequence: number): string {
+  return `${folioId}-L${String(sequence).padStart(2, "0")}`;
+}
+
+/** The `L03` tail of a folio-line id, or null for a legacy uuid. Display-only. */
+export function folioLineSuffix(folioLineId: string): string | null {
+  return /-(L\d+)$/.exec(folioLineId ?? "")?.[1] ?? null;
+}

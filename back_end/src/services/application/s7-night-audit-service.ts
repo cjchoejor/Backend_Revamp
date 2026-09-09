@@ -6,7 +6,7 @@ import { MissingConfigurationError, NotFoundError, ValidationError } from "../..
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
-import { allocateReadableId } from "../../lib/readable-id.js";
+import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
 import { maybePromptInterimPaymentTx } from "../domain/interim-payment-service.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
@@ -212,6 +212,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
           const roomAmount = round2(toDecimal(post.amount));
           await tx.folioLine.create({
             data: {
+              id: await allocateFolioLineId(tx, p.folioId),
               folioId: p.folioId,
               lineType: FolioLineType.ROOM_CHARGE,
               description: post.description,
@@ -237,6 +238,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
             if (serviceCharge.gt(0)) {
               await tx.folioLine.create({
                 data: {
+                  id: await allocateFolioLineId(tx, p.folioId),
                   folioId: p.folioId,
                   lineType: FolioLineType.SERVICE,
                   description: serviceChargeLineDescription(serviceChargeRate, post.description),
@@ -256,6 +258,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
             if (gst.gt(0)) {
               await tx.folioLine.create({
                 data: {
+                  id: await allocateFolioLineId(tx, p.folioId),
                   folioId: p.folioId,
                   lineType: FolioLineType.OTHER,
                   description: gstLineDescription(gstRate, post.description),

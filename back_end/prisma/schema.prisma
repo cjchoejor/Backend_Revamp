@@ -1733,7 +1733,9 @@ model BillingModelTransitionRecord {
 
   folio     Folio      @relation(fields: [folioId], references: [id])
   segment   Segment    @relation(fields: [segmentId], references: [id])
-  folioLine FolioLine? @relation(fields: [folioLineId], references: [id], onDelete: SetNull)
+  /// `onUpdate: Cascade` is explicit because folio-line ids are readable and therefore
+  /// re-writable (the 2026-09-09 backfill renamed every uuid) — same rule as the tier-A FKs.
+  folioLine FolioLine? @relation(fields: [folioLineId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([folioId, segmentId])
   @@index([folioLineId])
@@ -1763,6 +1765,15 @@ model Folio {
 
   outstandingBalance                   Decimal @default(0) @db.Decimal(15, 2)
   advancePaymentReconciliationComplete Boolean @default(false)
+
+  /// How many folio lines this folio has ever minted (2026-09-09). It is the SEQUENCE behind
+  /// each line's readable id (`FOL-20260908-0001-L03` = the third line of this folio), not a
+  /// live count — a deleted line never frees its number, so an id is never reused.
+  ///
+  /// It is incremented with an atomic `UPDATE … RETURNING` inside the posting transaction, so
+  /// two charges posted at the same instant serialise on this row and cannot both claim L03.
+  /// Counting the existing lines instead would let them.
+  lineSequence Int @default(0)
 
   /// Operator-set advance requirement for THIS booking (2026-08-01). When set it overrides
   /// the `advancePayment.thresholds` config (and the group boost) in the payment evaluation,
@@ -1926,7 +1937,12 @@ model InvoiceIntegrityCheck {
 }
 
 model FolioLine {
-  id                 String        @id @default(uuid())
+  /// `<folioId>-L<nn>` — e.g. `FOL-20260908-0001-L03`, the third line of that folio
+  /// (2026-09-09, operator request: a correction printed "Correction for
+  /// e3da4110-8272-4617-…" on the desk, which says nothing to the person reading it).
+  /// Minted by `allocateFolioLineId` off `Folio.lineSequence`; NO uuid default, so a caller
+  /// that forgets to allocate fails loudly at insert instead of writing an opaque id.
+  id                 String        @id
   folioId            String
   lineType           FolioLineType
   description        String

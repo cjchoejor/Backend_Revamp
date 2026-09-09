@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
-import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
@@ -1101,6 +1101,7 @@ export async function postStayCharge(
     const billingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType as any);
     const line = await tx.folioLine.create({
       data: {
+        id: await allocateFolioLineId(tx, folioId),
         folioId,
         lineType: input.lineType as any,
         description: input.description,

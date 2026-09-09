@@ -28,7 +28,7 @@
  * Base URL override: OLD_SYSTEM_URL=http://192.168.0.101:3800
  */
 import { PrismaClient, EntryStatus, FolioState, FolioLineType, Stage } from "@prisma/client";
-import { allocateReadableId } from "../../src/lib/readable-id.js";
+import { allocateReadableId, allocateFolioLineId } from "../../src/lib/readable-id.js";
 
 const COMMIT = process.argv.includes("--commit");
 const LIMIT = (() => {
@@ -367,7 +367,7 @@ async function main() {
         if (taxTotal > 0) lines.push({ type: FolioLineType.OTHER, desc: "BST + service charge (imported)", amount: taxTotal });
         for (const l of lines) {
           await tx.folioLine.create({
-            data: { folioId, lineType: l.type, description: l.desc, amount: l.amount, currency: "BTN", chargeDate: resvDate, stage: Stage.S4, postedBy: ACTOR_ID },
+            data: { id: await allocateFolioLineId(tx, folioId), folioId, lineType: l.type, description: l.desc, amount: l.amount, currency: "BTN", chargeDate: resvDate, stage: Stage.S4, postedBy: ACTOR_ID },
           });
         }
         okFolios++;

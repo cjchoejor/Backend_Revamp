@@ -1,4 +1,5 @@
 import { FolioLineType, FolioState, Prisma, Stage, type PrismaClient } from "@prisma/client";
+import { allocateFolioLineId } from "../../lib/readable-id.js";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
@@ -246,6 +247,7 @@ export async function postCharge(
     const primaryBillingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType);
     const line = await tx.folioLine.create({
       data: {
+        id: await allocateFolioLineId(tx, folioId),
         folioId,
         lineType: input.lineType,
         description: input.description,
@@ -276,6 +278,7 @@ export async function postCharge(
       if (serviceCharge.gt(0)) {
         await tx.folioLine.create({
           data: {
+            id: await allocateFolioLineId(tx, folioId),
             folioId,
             lineType: FolioLineType.SERVICE,
             description: serviceChargeLineDescription(serviceChargeRate, input.description),
@@ -298,6 +301,7 @@ export async function postCharge(
       if (gst.gt(0)) {
         await tx.folioLine.create({
           data: {
+            id: await allocateFolioLineId(tx, folioId),
             folioId,
             lineType: FolioLineType.OTHER,
             description: gstLineDescription(gstRate, input.description),
@@ -473,6 +477,7 @@ export async function correctCharge(
       original.billingModel ?? (await resolveBillingModelForNewLine(tx, folioId, original.lineType));
     const correctionLine = await tx.folioLine.create({
       data: {
+        id: await allocateFolioLineId(tx, folioId),
         folioId,
         lineType: original.lineType,
         description: `Correction for ${original.id}: ${input.reason}`,
@@ -535,6 +540,7 @@ export async function correctCharge(
       if (scDelta.abs().gte(toDecimal("0.005"))) {
         await tx.folioLine.create({
           data: {
+            id: await allocateFolioLineId(tx, folioId),
             folioId,
             lineType: FolioLineType.SERVICE,
             description: serviceChargeCorrectionDescription(original.description),
@@ -551,6 +557,7 @@ export async function correctCharge(
       if (gstDelta.abs().gte(toDecimal("0.005"))) {
         await tx.folioLine.create({
           data: {
+            id: await allocateFolioLineId(tx, folioId),
             folioId,
             lineType: FolioLineType.OTHER,
             description: salesTaxCorrectionDescription(original.description),
