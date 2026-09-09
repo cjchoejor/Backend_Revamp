@@ -26,6 +26,7 @@ import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { FolioDocumentsBlock } from "./folio-documents";
 import { FolioLinesTable, spaceNamesFromAllocations } from "./folio-lines";
+import { SplitSettlementBlock } from "./split-settlement";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -318,6 +319,9 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
               emptyText="No charges on this folio"
             />
           </div>
+          {/* Who's paying for what (2026-09-09, PMS-237) — post-stay the remainder is chased
+              here, so the same rows answer "which room still owes". */}
+          {folio?.id && <SplitSettlementBlock entry={entry} folioId={folio.id} />}
           <div className="field">
             <label>Payments received</label>
             <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>

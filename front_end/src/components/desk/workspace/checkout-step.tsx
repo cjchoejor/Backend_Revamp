@@ -24,6 +24,7 @@ import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { FolioDocumentsBlock } from "./folio-documents";
 import { ChargeTargetSelect, FolioLinesTable, chargeTargetSpaces, spaceNamesFromAllocations, splitChargeTarget } from "./folio-lines";
+import { SplitSettlementBlock } from "./split-settlement";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -519,6 +520,9 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             }
           />
         </div>
+        {/* Who's paying for what (2026-09-09, PMS-237) — open by default here, because
+            splitting the bill between the rooms IS the job at the check-out desk. */}
+        {folio?.id && <SplitSettlementBlock entry={entry} folioId={folio.id} defaultOpen />}
         <div className="field">
           <label>Advance / payments received</label>
           <div className="val">{moneyOrDash(fin.advanceReceived, currency)}</div>

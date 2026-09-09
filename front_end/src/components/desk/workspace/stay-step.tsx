@@ -23,6 +23,7 @@ import {
   runNightAudit,
 } from "@/lib/api/in-stay";
 import { EarlyDepartureBlock } from "./early-departure";
+import { SplitSettlementBlock } from "./split-settlement";
 import { getBillingSummary, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import { IdentityProofBlock } from "./identity-proof";
 import {
@@ -787,6 +788,11 @@ export function StayStep({
             onTabChange={(t) => setChargeTarget(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)}
           />
         </div>
+
+        {/* Who's paying for what (2026-09-09, PMS-237) — a guest can settle their own room
+            mid-stay while the rest of the booking keeps running. Sits under the folio it
+            slices; collapsed, because in-house the job is charges and money is the exception. */}
+        {folio?.id && <SplitSettlementBlock entry={entry} folioId={folio.id} />}
 
         {!folioLive && <p style={{ fontSize: 12, color: "var(--stop)", marginTop: 0 }}>Folio must be live (complete check-in first).</p>}
 
