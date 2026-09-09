@@ -40,7 +40,24 @@ export async function getSettlementTargets(session: Session, folioId: string) {
   return apiRequest<SettlementTargets>(`/api/folios/${folioId}/settlement-targets`, { session });
 }
 
+export type RoomDeparture = {
+  roomId: string;
+  roomNumber: string | null;
+  departureDate: string;
+  sleptNights: number;
+  unstayedNights: number;
+  forgoneSubtotal: number;
+  forgoneTotal: number;
+  roomReleased: boolean;
+  nothingForgone: boolean;
+};
+
 export type TargetPaymentOutcome = {
+  /** Set when the room was actually released; null when it was not asked for or was refused. */
+  departure: RoomDeparture | null;
+  /** Why the release was refused — the MONEY still landed. Never conflate the two. */
+  departureRefused: string | null;
+  roomStatus: "STILL_STAYING" | "LEFT" | null;
   paymentId: string;
   amount: number;
   roomId: string | null;
@@ -69,6 +86,13 @@ export async function recordTargetPayment(
     paymentMethod?: string;
     paymentVerificationRef?: string;
     notes?: string;
+    /**
+     * Is this room's guest still here? Only meaningful with `roomId`. Omitted means "don't
+     * touch the room" — a payment must never release a room by accident. LEFT ends the room's
+     * assignment today and releases it, which gives up any unstayed nights and needs the GM.
+     */
+    roomStatus?: "STILL_STAYING" | "LEFT";
+    departureReason?: string;
   },
 ) {
   return apiRequest<TargetPaymentOutcome>(`/api/folios/${folioId}/target-payments`, {

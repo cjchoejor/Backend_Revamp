@@ -41,6 +41,11 @@ export function SplitSettlementBlock({
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("CASH");
   const [ref, setRef] = useState("");
+  // Is this room's guest still here? (2026-09-09, operator ruling.) Deliberately starts unset:
+  // paying for a room says nothing about whether anyone is still in it, and a payment must
+  // never release a room by accident.
+  const [roomStatus, setRoomStatus] = useState<"" | "STILL_STAYING" | "LEFT">("");
+  const [departureReason, setDepartureReason] = useState("");
 
   const q = useQuery({
     queryKey: ["settlement-targets", folioId, entry.updatedAt],
@@ -63,6 +68,8 @@ export function SplitSettlementBlock({
   // Prefill with what the row can actually take, so the common case is one click and Enter.
   useEffect(() => {
     if (activeRow) setAmount(activeRow.collectable > 0 ? activeRow.collectable.toFixed(2) : "");
+    setRoomStatus("");
+    setDepartureReason("");
   }, [collecting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const invalidate = () => {
@@ -84,6 +91,8 @@ export function SplitSettlementBlock({
         amount: amt,
         paymentMethod: method,
         ...(ref.trim() ? { paymentVerificationRef: ref.trim() } : {}),
+        ...(roomStatus ? { roomStatus } : {}),
+        ...(roomStatus === "LEFT" && departureReason.trim() ? { departureReason: departureReason.trim() } : {}),
       });
     },
     onSuccess: (out) => {
@@ -93,6 +102,17 @@ export function SplitSettlementBlock({
           ? `${name} is paid in full — ${money(out.amount, cur)} received`
           : `${money(out.amount, cur)} received for ${name} · ${money(out.targetOutstandingAfter, cur)} still owing`,
       );
+      // The money and the room are two outcomes, and the refusal of one must never read as
+      // the failure of the other — the operator has already taken the cash.
+      if (out.departure) {
+        toast.success(
+          out.departure.nothingForgone
+            ? `${name} released — the room is ready for housekeeping`
+            : `${name} released · ${out.departure.unstayedNights} unstayed night${out.departure.unstayedNights === 1 ? "" : "s"} given up`,
+        );
+      } else if (out.departureRefused) {
+        toast.warning(`The money is recorded, but the room was NOT released — ${out.departureRefused}`, { duration: 12_000 });
+      }
       setCollecting(null);
       setAmount("");
       setRef("");
@@ -288,6 +308,35 @@ export function SplitSettlementBlock({
                   <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="receipt / txn no." />
                 </div>
               </div>
+              {/* Still staying, or gone? (2026-09-09, operator ruling — "if someone pays for
+                  the room, there can be an option like flag the room as guest is still staying
+                  … or left if he only paid for 2 nights"). Only a ROOM can be flagged, and the
+                  default is neither: paying says nothing about whether anyone is still in it. */}
+              {activeRow.kind === "ROOM" && (
+                <div className="field" style={{ marginTop: 2 }}>
+                  <label>Is the guest of this room still here?</label>
+                  <select value={roomStatus} onChange={(e) => setRoomStatus(e.target.value as typeof roomStatus)}>
+                    <option value="">Don&apos;t change the room</option>
+                    <option value="STILL_STAYING">Still staying — paying ahead</option>
+                    <option value="LEFT">Left — release the room</option>
+                  </select>
+                  {roomStatus === "LEFT" && (
+                    <>
+                      <input
+                        style={{ marginTop: 6 }}
+                        value={departureReason}
+                        onChange={(e) => setDepartureReason(e.target.value)}
+                        placeholder="Why is the room being released?"
+                      />
+                      <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "4px 0 0" }}>
+                        The room&apos;s nights stop being billed from today and it goes to housekeeping. The rest of
+                        the booking carries on. Giving up nights still booked needs the GM — if it is refused, the
+                        money is still recorded.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
               <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "2px 0 8px" }}>
                 {activeRow.collectable < activeRow.outstanding ? (
                   <>
