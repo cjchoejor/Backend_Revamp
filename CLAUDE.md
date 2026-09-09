@@ -438,6 +438,12 @@ The actor's LEVEL is **authenticated from the login session token**, not a clien
 
 ### Readable business ID prefixes (admin-editable)
 
+**Folio lines are the one exception — a CHILD id, not a day-sequenced one (2026-09-09).** `FolioLine.id` is `<folioId>-L<nn>` (`FOL-20260908-0001-L03` = the third line of that folio), minted by `allocateFolioLineId` ([readable-id.ts](back_end/src/lib/readable-id.ts)) and deliberately NOT part of the PREFIX-YYYYMMDD-NNNN family above. The operator asked for it after a correction row printed "Correction for e3da4110-8272-…" on the desk: a line only means anything inside its folio, and the desk prints this id on the row that adjusts a charge, so naming the parent IS the point — a global `FL-20260909-0003` would read the same on every folio.
+
+The number is an **atomic** `UPDATE folios SET "lineSequence" = "lineSequence" + 1 … RETURNING` inside the posting transaction (migration `20260909100000_folio_line_child_ids`), never a count of the lines already there: Postgres row-locks the folio, so two charges posted at the same instant take L03 and L04 where count-then-add would have both claim L03. A deleted line never frees its number, so an id is never silently reused.
+
+`FolioLine.id` has **no uuid default** — every writer (13 service sites + 4 scripts) allocates inside its own transaction, so a caller that forgets fails loudly at insert instead of writing an opaque id, and a rollback returns the number. Three things reference a line id and the backfill ([backfill-folio-line-ids.ts](back_end/scripts/backfill-folio-line-ids.ts), dry-run default, 205 rows renamed) carries all three: the `billing_model_transition_records` FK (ON UPDATE CASCADE, now explicit in the schema), the SOFT `invoice_lines.folioLineId`, and the `Correction for <id>:` descriptions — **which `correctCharge` matches with `startsWith`** to find a charge's earlier corrections, so a missed rewrite would have silently broken "set net to". Desk: the folio table's **Line** column prints the id (folio part muted, `L04` bold, full id on hover) on S7/S8/S9, and a correction row shortens its sentence to "Correction for L04" since the column supplies the rest.
+
 Per [readable-id.ts](back_end/src/lib/readable-id.ts) the system mints `PREFIX-YYYYMMDD-NNNN` IDs for 20 business entities:
 
 All 20 entities now use **readable IDs as the primary key**:
