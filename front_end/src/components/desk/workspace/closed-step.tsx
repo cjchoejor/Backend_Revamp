@@ -25,7 +25,7 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
 import { PdfButton } from "./pdf-button";
 import { FolioDocumentsBlock } from "./folio-documents";
-import { FolioLinesTable } from "./folio-lines";
+import { FolioLinesTable, spaceNamesFromAllocations } from "./folio-lines";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -310,6 +310,7 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
               roomNumberById={roomNumberById}
               perRoomCharges={billingQuery.data?.folio?.perRoomCharges ?? null}
               perSpaceCharges={billingQuery.data?.folio?.perSpaceCharges ?? null}
+              spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
               unassignedCharges={billingQuery.data?.folio?.unassignedCharges ?? null}
               chargeBreakdown={billingQuery.data?.folio?.chargeBreakdown ?? null}
               balance={fin.outstanding}

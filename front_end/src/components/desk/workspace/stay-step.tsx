@@ -25,7 +25,19 @@ import {
 import { EarlyDepartureBlock } from "./early-departure";
 import { getBillingSummary, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import { IdentityProofBlock } from "./identity-proof";
-import { FolioLinesTable, FolioTabStrip, filterLinesByTab, isTaxCompanion, roomTabsFor, spaceTabsFor, type FolioTab } from "./folio-lines";
+import {
+  ChargeTargetSelect,
+  FolioLinesTable,
+  FolioTabStrip,
+  chargeTargetSpaces,
+  filterLinesByTab,
+  isTaxCompanion,
+  roomTabsFor,
+  spaceNamesFromAllocations,
+  spaceTabsFor,
+  splitChargeTarget,
+  type FolioTab,
+} from "./folio-lines";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { effectiveCheckOutIso, localTodayYmd, money, moneyOrDash } from "@/lib/desk/workspace";
 import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
@@ -209,16 +221,27 @@ export function StayStep({
   const [chargeDate, setChargeDate] = useState("");
   // Per-room folio attribution (2026-08-14): which room this charge belongs to. "" = the
   // whole booking. Applies to both "Post a charge" and the credit note.
-  const [chargeRoomId, setChargeRoomId] = useState("");
+  // What a charge belongs to: a room, a space, or the booking itself (2026-09-09, PMS-237).
+  // One value, prefixed by kind — the backend refuses a charge naming both.
+  const [chargeTarget, setChargeTarget] = useState("");
+  const chargeSpaces = useMemo(() => chargeTargetSpaces(entry.spaceAllocations), [entry.spaceAllocations]);
+  const spaceNameById = useMemo(() => spaceNamesFromAllocations(entry.spaceAllocations), [entry.spaceAllocations]);
   // Posted-charge receipt (2026-08-17, operator request): a success dialog naming what was
   // posted and for which room, the inputs cleared for the next charge, and the button flashing
   // "Posted ✓" for ~2s while the dialog is up.
+  /** What the posted line was filed against, for the receipt — a room, a space, or neither. */
+  const targetLabelFor = (line: { roomId?: string | null; spaceId?: string | null }) =>
+    line.roomId
+      ? `for Room ${roomNumberById.get(line.roomId) ?? "?"}`
+      : line.spaceId
+        ? `for ${chargeSpaces.find((sp) => sp.spaceId === line.spaceId)?.spaceName ?? "the space"}`
+        : "for the whole booking";
   const [postedInfo, setPostedInfo] = useState<null | {
     description: string;
     amount: string | number;
     currency?: string;
     lineType: string;
-    roomNumber: string | null;
+    targetLabel: string;
   }>(null);
   const [postedFlash, setPostedFlash] = useState(false);
   const [correctLineId, setCorrectLineId] = useState("");
@@ -329,7 +352,7 @@ export function StayStep({
         description: desc.trim() || lineType,
         amount: amt,
         chargeDate: chargeDate ? `${chargeDate}T12:00:00.000Z` : undefined,
-        roomId: chargeRoomId || undefined,
+        ...splitChargeTarget(chargeTarget),
       });
     },
     // Posted-charge receipt (2026-08-17): dialog with the posted facts, inputs cleared for
@@ -341,7 +364,7 @@ export function StayStep({
         amount: line.amount,
         currency: line.currency,
         lineType: line.lineType,
-        roomNumber: line.roomId ? roomNumberById.get(line.roomId) ?? null : null,
+        targetLabel: targetLabelFor(line),
       });
       setDesc("");
       setAmount("");
@@ -359,7 +382,7 @@ export function StayStep({
         description: desc.trim() || "Credit note",
         amount: amt,
         creditDate: new Date().toISOString(),
-        roomId: chargeRoomId || undefined,
+        ...splitChargeTarget(chargeTarget),
       });
     }, "Credit note posted"),
   );
@@ -442,7 +465,10 @@ export function StayStep({
   // switch is dropped from the selection.
   const [correctTab, setCorrectTab] = useState<FolioTab>("ALL");
   const correctRoomTabs = useMemo(() => roomTabsFor(correctable, roomNumberById), [correctable, roomNumberById]);
-  const correctSpaceTabs = useMemo(() => spaceTabsFor(correctable, perSpaceCharges), [correctable, perSpaceCharges]);
+  const correctSpaceTabs = useMemo(
+    () => spaceTabsFor(correctable, perSpaceCharges, spaceNameById),
+    [correctable, perSpaceCharges, spaceNameById],
+  );
   const correctSpaceNameById = useMemo(
     () => new Map(correctSpaceTabs.map((sp) => [sp.spaceId, sp.spaceName])),
     [correctSpaceTabs],
@@ -751,13 +777,14 @@ export function StayStep({
             roomNumberById={roomNumberById}
             perRoomCharges={perRoomCharges}
             perSpaceCharges={perSpaceCharges}
+            spaceNameById={spaceNameById}
             unassignedCharges={unassignedCharges}
             chargeBreakdown={billingQuery.data?.folio?.chargeBreakdown ?? null}
             balance={folio?.outstandingBalance ?? null}
             currency={currency}
             // An open room tab becomes the default "For room" of the charge form below (2026-08-21,
             // "keep tab of each room separately") — still freely changeable before posting.
-            onTabChange={(t) => setChargeRoomId(typeof t === "string" || "spaceId" in t ? "" : t.roomId)}
+            onTabChange={(t) => setChargeTarget(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)}
           />
         </div>
 
@@ -773,17 +800,16 @@ export function StayStep({
             </select>
           </div>
           <div className="field">
-            <label>For room</label>
-            {/* Per-room folio attribution (2026-08-14): the room this charge belongs to —
-                the room-service dinner goes on 501, not the whole party's bill. Optional. */}
-            <select value={chargeRoomId} onChange={(e) => setChargeRoomId(e.target.value)}>
-              <option value="">No room / space</option>
-              {keyPlan.map((k) => (
-                <option key={k.roomId} value={k.roomId}>
-                  Room {k.roomNumber}
-                </option>
-              ))}
-            </select>
+            <label>For room / space</label>
+            {/* Per-room folio attribution (2026-08-14): the room-service dinner goes on 501,
+                not the whole party's bill. Spaces joined it 2026-09-09 (PMS-237) — the hall
+                hire the company settles is its own slice of the folio. Optional. */}
+            <ChargeTargetSelect
+              value={chargeTarget}
+              onChange={setChargeTarget}
+              rooms={keyPlan.map((k) => ({ roomId: k.roomId, roomNumber: k.roomNumber }))}
+              spaces={chargeSpaces}
+            />
           </div>
           <div className="field">
             <label>Amount</label>
@@ -1225,8 +1251,7 @@ export function StayStep({
                   <b>{money(postedInfo.amount, postedInfo.currency)}</b> — {postedInfo.description}
                 </>,
                 <>
-                  {postedInfo.lineType === "F_AND_B" ? "F & B" : postedInfo.lineType} ·{" "}
-                  {postedInfo.roomNumber ? `for Room ${postedInfo.roomNumber}` : "for the whole booking"}
+                  {postedInfo.lineType === "F_AND_B" ? "F & B" : postedInfo.lineType} · {postedInfo.targetLabel}
                 </>,
                 "Service charge and GST companion lines post automatically alongside.",
               ]

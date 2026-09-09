@@ -23,7 +23,7 @@ import { getBillingSummary } from "@/lib/api/entries";
 import { deriveFinancials, money, moneyOrDash } from "@/lib/desk/workspace";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { FolioDocumentsBlock } from "./folio-documents";
-import { FolioLinesTable } from "./folio-lines";
+import { ChargeTargetSelect, FolioLinesTable, chargeTargetSpaces, spaceNamesFromAllocations, splitChargeTarget } from "./folio-lines";
 import { BackendRail, type RailGroup } from "./backend-inline";
 import { STAGE_ACTIONS } from "@/lib/desk/backend-actions";
 import type { EntryDetail } from "@/types/api";
@@ -183,14 +183,23 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
   const [finalChargeAmount, setFinalChargeAmount] = useState("");
   // Per-room folio attribution (2026-08-14): which room the last-minute charge belongs to.
   // "" = the whole booking. Applies to the charge and the credit note alike.
-  const [finalChargeRoomId, setFinalChargeRoomId] = useState("");
+  // Same one-value charge target as the Stay step (2026-09-09, PMS-237).
+  const [finalChargeTarget, setFinalChargeTarget] = useState("");
+  const chargeSpaces = useMemo(() => chargeTargetSpaces(entry.spaceAllocations), [entry.spaceAllocations]);
   // Posted-charge receipt (2026-08-17): same dialog + "Posted ✓" flash as the Stay step.
+  /** What the posted line was filed against, for the receipt — a room, a space, or neither. */
+  const targetLabelFor = (line: { roomId?: string | null; spaceId?: string | null }) =>
+    line.roomId
+      ? `for Room ${roomNumberById.get(line.roomId) ?? "?"}`
+      : line.spaceId
+        ? `for ${chargeSpaces.find((sp) => sp.spaceId === line.spaceId)?.spaceName ?? "the space"}`
+        : "for the whole booking";
   const [postedInfo, setPostedInfo] = useState<null | {
     description: string;
     amount: string | number;
     currency?: string;
     lineType: string;
-    roomNumber: string | null;
+    targetLabel: string;
   }>(null);
   const [postedFlash, setPostedFlash] = useState(false);
   // Same charge toolkit as the Stay step (2026-08-03, operator request): type select, credit
@@ -235,7 +244,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         description: finalChargeDesc.trim() || "Final morning charge",
         amount: amt,
         chargeDate: checkoutChargeDate ?? new Date().toISOString(),
-        roomId: finalChargeRoomId || undefined,
+        ...splitChargeTarget(finalChargeTarget),
       });
     },
     // Posted-charge receipt (2026-08-17): dialog with the posted facts, inputs cleared for
@@ -247,7 +256,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         amount: line.amount,
         currency: line.currency,
         lineType: line.lineType,
-        roomNumber: line.roomId ? roomNumberById.get(line.roomId) ?? null : null,
+        targetLabel: targetLabelFor(line),
       });
       setFinalChargeDesc("");
       setFinalChargeAmount("");
@@ -267,7 +276,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
         description: finalChargeDesc.trim() || "Credit note",
         amount: amt,
         creditDate: checkoutChargeDate ?? new Date().toISOString(),
-        roomId: finalChargeRoomId || undefined,
+        ...splitChargeTarget(finalChargeTarget),
       });
     }, "Credit note posted"),
   );
@@ -498,13 +507,16 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             roomNumberById={roomNumberById}
             perRoomCharges={perRoomCharges}
             perSpaceCharges={perSpaceCharges}
+            spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
             unassignedCharges={unassignedCharges}
             chargeBreakdown={chargeBreakdown}
             balance={balance}
             currency={currency}
             emptyText="No charges on this folio"
             // Opening a room tab defaults the charge form's "For room" below, same as S7.
-            onTabChange={(t) => setFinalChargeRoomId(typeof t === "string" || "spaceId" in t ? "" : t.roomId)}
+            onTabChange={(t) =>
+              setFinalChargeTarget(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)
+            }
           />
         </div>
         <div className="field">
@@ -543,16 +555,17 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                 </select>
               </div>
               <div className="field">
-                <label>For room</label>
-                {/* Per-room folio attribution (2026-08-14) — same as the Stay step's form. */}
-                <select value={finalChargeRoomId} onChange={(e) => setFinalChargeRoomId(e.target.value)}>
-                  <option value="">No room / space</option>
-                  {Array.from(new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values()).map((a) => (
-                    <option key={a.roomId} value={a.roomId}>
-                      Room {a.room?.roomNumber ?? a.roomId.slice(0, 6)}
-                    </option>
-                  ))}
-                </select>
+                <label>For room / space</label>
+                {/* Per-room and per-space folio attribution — same control as the Stay step. */}
+                <ChargeTargetSelect
+                  value={finalChargeTarget}
+                  onChange={setFinalChargeTarget}
+                  rooms={Array.from(new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values()).map((a) => ({
+                    roomId: a.roomId,
+                    roomNumber: a.room?.roomNumber ?? a.roomId.slice(0, 6),
+                  }))}
+                  spaces={chargeSpaces}
+                />
               </div>
               <div className="field">
                 <label>Amount</label>
@@ -1054,8 +1067,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                   <b>{money(postedInfo.amount, postedInfo.currency)}</b> — {postedInfo.description}
                 </>,
                 <>
-                  {postedInfo.lineType === "F_AND_B" ? "F & B" : postedInfo.lineType} ·{" "}
-                  {postedInfo.roomNumber ? `for Room ${postedInfo.roomNumber}` : "for the whole booking"}
+                  {postedInfo.lineType === "F_AND_B" ? "F & B" : postedInfo.lineType} · {postedInfo.targetLabel}
                 </>,
                 "Service charge and GST companion lines post automatically alongside.",
               ]

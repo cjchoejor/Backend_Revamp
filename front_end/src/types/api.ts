@@ -262,6 +262,15 @@ export type FolioLineSummary = {
   spaceId?: string | null;
 };
 
+/** A conference room / hall this booking holds (2026-09-09, PMS-237) — a charge can name one. */
+export type SpaceAllocationSummary = {
+  id: string;
+  spaceId: string;
+  entryId: string;
+  state: string;
+  space?: { id: string; code: string; name: string; spaceType?: string | null } | null;
+};
+
 export type FolioDetail = {
   id: string;
   entryId: string;
@@ -558,6 +567,8 @@ export type EntryDetail = EntryListItem & {
   handoffs?: HandoffSummary[];
   preArrivalTasks?: PreArrivalTaskSummary[];
   roomAssignments?: RoomAssignmentSummary[];
+  /** The conference rooms / halls this booking holds (2026-09-09, PMS-237). */
+  spaceAllocations?: SpaceAllocationSummary[];
   availabilityConfigs?: AvailabilityConfigSummary[];
   segments?: SegmentSummary[];
   quotations?: QuotationSummary[];

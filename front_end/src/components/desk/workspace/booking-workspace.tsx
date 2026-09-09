@@ -8,7 +8,7 @@ import { Activity, ArrowRight, Check, ChevronLeft, History, Layers, ListChecks, 
 import { SpecialPreference } from "./special-preference";
 import { EarlyDepartureFacts } from "./early-departure";
 import { SegmentHistoryPanel } from "./segment-history";
-import { FolioLinesTable } from "./folio-lines";
+import { FolioLinesTable, spaceNamesFromAllocations } from "./folio-lines";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import {
@@ -422,6 +422,7 @@ function StepCanvasBase({
             roomNumberById={new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)]))}
             perRoomCharges={billing?.perRoomCharges ?? null}
             perSpaceCharges={billing?.perSpaceCharges ?? null}
+            spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
             unassignedCharges={billing?.unassignedCharges ?? null}
             chargeBreakdown={billing?.chargeBreakdown ?? null}
             balance={fin.outstanding ?? null}

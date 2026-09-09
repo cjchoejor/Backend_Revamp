@@ -209,6 +209,7 @@ export function roomTabsFor(
 export function spaceTabsFor(
   lines: Array<{ spaceId?: string | null }>,
   perSpaceCharges?: Array<{ spaceId: string; spaceName: string | null }> | null,
+  spaceNameById?: Map<string, string>,
 ): SpaceTab[] {
   const ids = new Set<string>();
   for (const l of lines) if (l.spaceId) ids.add(l.spaceId);
@@ -216,7 +217,7 @@ export function spaceTabsFor(
   return Array.from(ids)
     .map((spaceId) => ({
       spaceId,
-      spaceName: perSpaceCharges?.find((b) => b.spaceId === spaceId)?.spaceName ?? "Space",
+      spaceName: perSpaceCharges?.find((b) => b.spaceId === spaceId)?.spaceName ?? spaceNameById?.get(spaceId) ?? "Space",
     }))
     .sort((a, b) => a.spaceName.localeCompare(b.spaceName, undefined, { numeric: true }));
 }
@@ -311,11 +312,77 @@ export function FolioTabStrip({
   );
 }
 
+/**
+ * "For room / space" — the one place the desk asks what a charge belongs to (2026-09-09,
+ * PMS-237). The value is prefixed so the caller can tell a room from a space without a lookup;
+ * `splitChargeTarget` turns it back into the body the API takes.
+ */
+export type ChargeTargetRoom = { roomId: string; roomNumber: string | null };
+export type ChargeTargetSpace = { spaceId: string; spaceName: string };
+
+export function splitChargeTarget(value: string): { roomId?: string; spaceId?: string } {
+  if (value.startsWith("room:")) return { roomId: value.slice(5) };
+  if (value.startsWith("space:")) return { spaceId: value.slice(6) };
+  return {};
+}
+
+/** spaceId -> name, from the booking's own allocations (never the ledger). */
+export function spaceNamesFromAllocations(
+  allocations: Array<{ spaceId: string; space?: { name: string; code: string } | null }> | null | undefined,
+): Map<string, string> {
+  return new Map(chargeTargetSpaces(allocations).map((sp) => [sp.spaceId, sp.spaceName]));
+}
+
+/** The spaces a booking holds, as target options — deduped, named, in allocation order. */
+export function chargeTargetSpaces(
+  allocations: Array<{ spaceId: string; space?: { name: string; code: string } | null }> | null | undefined,
+): ChargeTargetSpace[] {
+  const seen = new Map<string, ChargeTargetSpace>();
+  for (const a of allocations ?? []) {
+    if (!a.spaceId || seen.has(a.spaceId)) continue;
+    seen.set(a.spaceId, { spaceId: a.spaceId, spaceName: a.space?.name ?? a.space?.code ?? "Space" });
+  }
+  return Array.from(seen.values());
+}
+
+export function ChargeTargetSelect({
+  value,
+  onChange,
+  rooms,
+  spaces,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  rooms: ChargeTargetRoom[];
+  spaces: ChargeTargetSpace[];
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">No room / space</option>
+      {rooms.map((r) => (
+        <option key={r.roomId} value={`room:${r.roomId}`}>
+          Room {r.roomNumber ?? r.roomId.slice(0, 6)}
+        </option>
+      ))}
+      {spaces.length > 0 && (
+        <optgroup label="Spaces">
+          {spaces.map((sp) => (
+            <option key={sp.spaceId} value={`space:${sp.spaceId}`}>
+              {sp.spaceName}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </select>
+  );
+}
+
 export function FolioLinesTable({
   lines,
   roomNumberById,
   perRoomCharges,
   perSpaceCharges,
+  spaceNameById: spaceNames,
   unassignedCharges,
   chargeBreakdown,
   balance,
@@ -330,6 +397,8 @@ export function FolioLinesTable({
   perRoomCharges?: Bucket[] | null;
   /** The same, per space — a conference hall's charges (2026-09-09, PMS-237). */
   perSpaceCharges?: SpaceBucket[] | null;
+  /** The booking's own space names, so a just-posted line is named before the buckets land. */
+  spaceNameById?: Map<string, string>;
   unassignedCharges?: Omit<Bucket, "roomId" | "roomNumber"> | null;
   /** The whole ledger's server-summed split (base + SC + GST = billed so far). */
   chargeBreakdown?: TaxSplit | null;
@@ -349,7 +418,7 @@ export function FolioLinesTable({
   // lines; "No room / space" is the rest. Filtering is display-only; every figure in a tab's
   // footer is the server's own bucket split, so nothing is summed on the desk.
   const roomTabs = useMemo(() => roomTabsFor(lines, roomNumberById, perRoomCharges), [lines, perRoomCharges, roomNumberById]);
-  const spaceTabs = useMemo(() => spaceTabsFor(lines, perSpaceCharges), [lines, perSpaceCharges]);
+  const spaceTabs = useMemo(() => spaceTabsFor(lines, perSpaceCharges, spaceNames), [lines, perSpaceCharges, spaceNames]);
   const spaceNameById = useMemo(() => new Map(spaceTabs.map((sp) => [sp.spaceId, sp.spaceName])), [spaceTabs]);
   const hasRoomless = lines.some((l) => !l.roomId && !l.spaceId);
   const [tab, setTabState] = useState<FolioTab>("ALL");

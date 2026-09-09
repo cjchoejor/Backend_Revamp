@@ -25,6 +25,9 @@ export async function postFolioCharge(
     chargeDate?: string;
     /** Per-room folio attribution (2026-08-14) — optional; must be a room of the booking. */
     roomId?: string;
+    /** Per-SPACE attribution (2026-09-09, PMS-237) — a space allocated to this booking.
+     *  A charge names a room OR a space, never both; the backend refuses both together. */
+    spaceId?: string;
   },
 ) {
   return apiRequest<FolioLineSummary>(`/api/folios/${folioId}/charges`, {
@@ -64,6 +67,8 @@ export async function postCreditNote(
     currency?: string;
     /** Per-room folio attribution (2026-08-14) — optional; must be a room of the booking. */
     roomId?: string;
+    /** Per-SPACE attribution (2026-09-09, PMS-237) — mutually exclusive with roomId. */
+    spaceId?: string;
   },
 ) {
   return apiRequest<FolioLineSummary>(`/api/folios/${folioId}/credit-notes`, {
