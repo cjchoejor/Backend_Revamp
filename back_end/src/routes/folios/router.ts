@@ -330,7 +330,14 @@ foliosRouter.post(
   validateBody(recordTargetPaymentRequestSchema),
   async (req, res, next) => {
     try {
-      const out = await folioTargetPaymentService.recordTargetPayment(prisma, req.params.id, req.actor!.actorId, req.body);
+      const out = await folioTargetPaymentService.recordTargetPayment(
+        prisma,
+        req.params.id,
+        req.actor!.actorId,
+        req.body,
+        // Verified session level — the room-release gate must never read authority from a body.
+        { actorLevel: req.actor!.level },
+      );
       res.status(201).json({
         ...out,
         summary: {

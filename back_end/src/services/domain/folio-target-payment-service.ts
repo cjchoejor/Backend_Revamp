@@ -11,6 +11,7 @@ import {
 } from "../../lib/folio-outstanding-per-target.js";
 import { round2, toDecimal } from "../../lib/money.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { departRoomEarly, type RoomDepartureOutcome } from "./room-early-departure-service.js";
 import {
   enforceEntryStageForTargetPayment,
   enforceFolioOpenForTargetPayment,
@@ -44,6 +45,22 @@ export type RecordTargetPaymentInput = {
   /** Bank / wallet reference — required for CASH and MOBILE_PAYMENT, as at settlement. */
   paymentVerificationRef?: string;
   notes?: string;
+  /**
+   * Is this room's guest still here? (2026-09-09, operator ruling — "if someone pays for the
+   * room, there can be an option like flag the room as guest is still staying, for cases when
+   * the guest might pay for the whole stay in advance on day 2, or LEFT if he only paid for 2
+   * nights"). Both answers are real and neither is the default:
+   *
+   *   STILL_STAYING — money now, the room keeps running. Nothing moves but the balance.
+   *   LEFT          — the room empties: its assignment row ends today with the frozen figures
+   *                   scaled to the nights slept, and the room goes DEPARTED_DIRTY. Giving up
+   *                   unstayed nights needs the GM, the same as any early departure.
+   *
+   * Omitted means "don't touch the room" — a payment must never release a room by accident.
+   */
+  roomStatus?: "STILL_STAYING" | "LEFT";
+  /** Why the room is being released. Recorded on the claim event and the trace. */
+  departureReason?: string;
 };
 
 export async function recordTargetPayment(
@@ -51,6 +68,8 @@ export async function recordTargetPayment(
   folioId: string,
   actorId: string,
   input: RecordTargetPaymentInput,
+  /** Verified session level — never read from the body; the room-release gate needs the truth. */
+  opts?: { actorLevel?: "L1" | "L2" | "L3" | "L4" },
 ) {
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
@@ -68,6 +87,11 @@ export async function recordTargetPayment(
   const spaceId = input.spaceId?.trim() || null;
   if (roomId && spaceId) {
     throw new ValidationError("A payment settles a room OR a space, not both — omit one");
+  }
+  // A space has no guest to still be staying, so the flag is meaningless on one — refuse it
+  // rather than accept a word that will be silently dropped.
+  if (input.roomStatus && !roomId) {
+    throw new ValidationError("Only a ROOM can be flagged as still staying or left — name the room");
   }
   // Same ownership rule as a charge: any room the booking ever held, any space it was ever
   // allocated. A vacated room's bill is still that room's to pay.
@@ -166,9 +190,32 @@ export async function recordTargetPayment(
     return { payment, folioOutstandingAfter: after.outstandingBalance, targetAfter };
   });
 
+  // The room release runs AFTER the money is durably recorded, and on its own. Order is the
+  // point: if the release fails its authority gate, the payment must still stand — the guest
+  // handed over money and "the amount paid and remainder are not lost" was the operator's
+  // explicit requirement. The caller is told what happened either way.
+  let departure: RoomDepartureOutcome | null = null;
+  let departureRefused: string | null = null;
+  if (input.roomStatus === "LEFT" && roomId) {
+    try {
+      departure = await departRoomEarly(prisma, {
+        entryId: entry.id,
+        roomId,
+        actorId,
+        actorLevel: opts?.actorLevel ?? "L1",
+        reason: input.departureReason,
+      });
+    } catch (e) {
+      departureRefused = e instanceof Error ? e.message : "The room could not be released";
+    }
+  }
+
   // The whole picture back, so the desk re-renders every slice without a second round trip.
   const summary = await summariseSettlementTargets(prisma, folioId);
   return {
+    departure,
+    departureRefused,
+    roomStatus: input.roomStatus ?? null,
     paymentId: result.payment.id,
     amount: Number(amountDec.toFixed(2)),
     roomId,

@@ -164,6 +164,13 @@ export const recordTargetPaymentRequestSchema = z
     paymentMethod: z.string().min(1).max(40).optional(),
     paymentVerificationRef: z.string().min(1).max(120).optional(),
     notes: z.string().max(500).optional(),
+    /** Is this room's guest still here? Only meaningful with roomId; see the service. */
+    roomStatus: z.enum(["STILL_STAYING", "LEFT"]).optional(),
+    departureReason: z.string().min(1).max(300).optional(),
+  })
+  .refine((v) => !(v.roomStatus && !v.roomId), {
+    message: "Only a room can be flagged as still staying or left — name the room",
+    path: ["roomStatus"],
   })
   .refine((v) => !(v.roomId && v.spaceId), {
     message: "A payment settles a room OR a space, not both — omit one",

@@ -9,7 +9,10 @@
  *   npx tsx scripts/seed-in-house-test-booking.ts --clean --commit  # remove it
  *
  * Options: --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4)
- *          · --rate R (frozen NET per-night room figure, default 2000) · --room NNN (room number).
+ *          · --rate R (frozen NET per-night room figure, default 2000) · --room NNN (room number)
+ *          · --rooms N (how many rooms, default 1 — a MULTI-room booking, added 2026-09-09 for
+ *            PMS-237's one-room-leaves-early path, which by definition cannot be exercised on a
+ *            single-room stay).
  *
  * Shape (mirrors what the real S1→S7 walk leaves behind, minimally): guest profile, inquiry,
  * entry at S7/ACTIVE with check-in `slept` days ago and checkout `ahead` days ahead, one segment,
@@ -33,6 +36,7 @@ const SLEPT = Math.max(0, Number(arg("--slept", "2")));
 const AHEAD = Math.max(1, Number(arg("--ahead", "4")));
 const RATE = Number(arg("--rate", "2000"));
 const ROOM = arg("--room", "");
+const ROOM_COUNT = Math.max(1, Number(arg("--rooms", "1")));
 const P = "TEST-ED-";
 
 const dayStart = (offsetDays: number): Date => {
@@ -48,7 +52,7 @@ async function clean() {
   const ids = entries.map((e) => e.id);
   const folios = await prisma.folio.findMany({ where: { entryId: { in: ids } }, select: { id: true } });
   const folioIds = folios.map((f) => f.id);
-  const rooms = await prisma.roomAssignment.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } });
+  const occupied = await prisma.roomAssignment.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } });
   console.log(`removing ${ids.length} test entries and their rows`);
   if (!COMMIT) return;
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
@@ -70,10 +74,10 @@ async function clean() {
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
   await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });
-  for (const r of rooms) {
+  for (const r of occupied) {
     await prisma.room.update({ where: { id: r.roomId }, data: { currentClaimState: "FREE" } });
   }
-  console.log(`clean complete (${rooms.length} room(s) back to FREE)`);
+  console.log(`clean complete (${occupied.length} room(s) back to FREE)`);
 }
 
 async function main() {
@@ -99,14 +103,18 @@ async function main() {
   }
   for (const h of await prisma.committedHold.findMany({ where: { roomId: { not: null }, state: { in: ["PLACED", "CONFIRMED"] }, expiresAt: { gt: new Date() } }, select: { roomId: true } }))
     if (h.roomId) busy.add(h.roomId);
-  const room = ROOM
-    ? await prisma.room.findFirst({ where: { roomNumber: ROOM }, select: { id: true, roomNumber: true, roomTypeId: true, currentClaimState: true } })
-    : await prisma.room.findFirst({
+  const picked = ROOM
+    ? await prisma.room.findMany({ where: { roomNumber: ROOM }, select: { id: true, roomNumber: true, roomTypeId: true, currentClaimState: true }, take: 1 })
+    : await prisma.room.findMany({
         where: { id: { notIn: [...busy] }, isBlocked: false, currentClaimState: "FREE", isShadowInventory: false },
         select: { id: true, roomNumber: true, roomTypeId: true, currentClaimState: true },
         orderBy: { roomNumber: "asc" },
+        take: ROOM_COUNT,
       });
-  if (!room) throw new Error("no free room for the test booking");
+  if (picked.length === 0) throw new Error("no free room for the test booking");
+  if (picked.length < ROOM_COUNT) throw new Error(`only ${picked.length} free room(s) available, asked for ${ROOM_COUNT}`);
+  const rooms = picked;
+  const room = rooms[0];
 
   const scRow = await prisma.configurationEntry.findFirst({ where: { configKey: "billing.serviceChargeRate", effectiveTo: null }, orderBy: { effectiveFrom: "desc" } });
   const gstRow = await prisma.configurationEntry.findFirst({ where: { configKey: "billing.salesTaxRate", effectiveTo: null }, orderBy: { effectiveFrom: "desc" } });
@@ -115,7 +123,9 @@ async function main() {
   const subtotal = new Prisma.Decimal(RATE).mul(nights);
   const total = subtotal.mul(1 + sc).mul(1 + gst).toDecimalPlaces(2);
 
-  console.log(`in-house test booking: room ${room.roomNumber} (${room.currentClaimState}) · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights, ${SLEPT} slept) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total}`);
+  console.log(
+    `in-house test booking: room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights, ${SLEPT} slept) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total} PER ROOM`,
+  );
   if (!COMMIT) return console.log("(dry run — pass --commit to write)");
 
   const gp = await prisma.guestProfile.create({ data: { id: `${P}GP`, firstName: "Early", lastName: "Leaver", phone: "+97517000099", email: null } });
@@ -134,12 +144,12 @@ async function main() {
       checkOutDate: checkOut,
       guestCount: 2,
       adultCount: 2,
-      numberOfRooms: 1,
+      numberOfRooms: rooms.length,
       contactPersonName: "Early Leaver",
       contactPersonPhone: "+97517000099",
       createdBy: staff.id,
       keysIssuedAt: checkIn,
-      keysIssuedCount: 1,
+      keysIssuedCount: rooms.length,
       keysIssuedBy: staff.id,
       registrationCompletedAt: checkIn,
       registrationCompletedBy: staff.id,
@@ -150,7 +160,7 @@ async function main() {
     data: {
       id: `${P}CH`, entryId: entry.id, segmentId: seg.id, roomId: room.id, roomTypeId: room.roomTypeId, state: "CONFIRMED",
       placedBy: staff.id, ttlSeconds: 86_400, expiresAt: checkOut,
-      perNightBreakdown: [{ date: iso(checkIn), roomIds: [{ roomId: room.id }] }] as Prisma.InputJsonValue,
+      perNightBreakdown: [{ date: iso(checkIn), roomIds: rooms.map((r) => ({ roomId: r.id })) }] as Prisma.InputJsonValue,
     },
   });
   await prisma.reservation.create({
@@ -165,15 +175,17 @@ async function main() {
   await prisma.folio.create({
     data: { id: `${P}FOL`, entryId: entry.id, state: "LIVE", billingModel: "GUEST_PAY", createdBy: staff.id, convertedToLiveAt: checkIn, convertedBy: staff.id, outstandingBalance: new Prisma.Decimal(0) },
   });
-  await prisma.roomAssignment.create({
-    data: {
-      id: `${P}RA`, entryId: entry.id, roomId: room.id, assignedBy: staff.id, startDate: checkIn, endDate: checkOut,
-      occupantCount: 2, adultCount: 2, frozenSubtotal: subtotal, frozenTotal: total, keyIssuedAt: checkIn, keyIssuedBy: staff.id,
-    } as Prisma.RoomAssignmentUncheckedCreateInput,
-  });
-  await prisma.room.update({ where: { id: room.id }, data: { currentClaimState: "OCCUPIED" } });
+  for (const [i, r] of rooms.entries()) {
+    await prisma.roomAssignment.create({
+      data: {
+        id: `${P}RA${i === 0 ? "" : i + 1}`, entryId: entry.id, roomId: r.id, assignedBy: staff.id, startDate: checkIn, endDate: checkOut,
+        occupantCount: 2, adultCount: 2, frozenSubtotal: subtotal, frozenTotal: total, keyIssuedAt: checkIn, keyIssuedBy: staff.id,
+      } as Prisma.RoomAssignmentUncheckedCreateInput,
+    });
+    await prisma.room.update({ where: { id: r.id }, data: { currentClaimState: "OCCUPIED" } });
+  }
   await prisma.stageDwellRecord.create({ data: { entryId: entry.id, stage: "S7", enteredAt: checkIn } });
-  console.log(`created ${entry.id} in room ${room.roomNumber} — now run the night audit for ${SLEPT > 0 ? `${iso(checkIn)} … ${iso(dayStart(-1))}` : "(no slept nights)"}`);
+  console.log(`created ${entry.id} in room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} — now run the night audit for ${SLEPT > 0 ? `${iso(checkIn)} … ${iso(dayStart(-1))}` : "(no slept nights)"}`);
 }
 
 main().catch((e) => { console.error("FAILED:", e.message); process.exit(1); }).finally(() => prisma.$disconnect());
