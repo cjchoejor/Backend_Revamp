@@ -25,7 +25,7 @@ import {
 import { EarlyDepartureBlock } from "./early-departure";
 import { getBillingSummary, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import { IdentityProofBlock } from "./identity-proof";
-import { FolioLinesTable, FolioTabStrip, filterLinesByTab, isTaxCompanion, roomTabsFor, type FolioTab } from "./folio-lines";
+import { FolioLinesTable, FolioTabStrip, filterLinesByTab, isTaxCompanion, roomTabsFor, spaceTabsFor, type FolioTab } from "./folio-lines";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { effectiveCheckOutIso, localTodayYmd, money, moneyOrDash } from "@/lib/desk/workspace";
 import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
@@ -193,6 +193,7 @@ export function StayStep({
     refetchInterval: 30_000,
   });
   const perRoomCharges = billingQuery.data?.folio?.perRoomCharges ?? null;
+  const perSpaceCharges = billingQuery.data?.folio?.perSpaceCharges ?? null;
   const unassignedCharges = billingQuery.data?.folio?.unassignedCharges ?? null;
 
   const deficientRecords = assignment?.room?.deficientConditionRecords ?? [];
@@ -435,12 +436,18 @@ export function StayStep({
     () => folioLines.filter((l) => !isTaxCompanion(l) && !l.description.toLowerCase().startsWith("sales tax") && !l.description.toLowerCase().startsWith("correction for")),
     [folioLines],
   );
-  // The picker splits by room / whole booking exactly like the folio above (2026-08-21, operator
-  // request) — same tab strip, same slicing. Its tab is independent of the folio's so a pick in
-  // progress never jumps; a line hidden by a tab switch is dropped from the selection.
+  // The picker splits by room / space / neither exactly like the folio above (2026-08-21,
+  // operator request; spaces added 2026-09-09 with PMS-237) — same tab strip, same slicing. Its
+  // tab is independent of the folio's so a pick in progress never jumps; a line hidden by a tab
+  // switch is dropped from the selection.
   const [correctTab, setCorrectTab] = useState<FolioTab>("ALL");
   const correctRoomTabs = useMemo(() => roomTabsFor(correctable, roomNumberById), [correctable, roomNumberById]);
-  const correctHasRoomless = correctable.some((l) => !l.roomId);
+  const correctSpaceTabs = useMemo(() => spaceTabsFor(correctable, perSpaceCharges), [correctable, perSpaceCharges]);
+  const correctSpaceNameById = useMemo(
+    () => new Map(correctSpaceTabs.map((sp) => [sp.spaceId, sp.spaceName])),
+    [correctSpaceTabs],
+  );
+  const correctHasRoomless = correctable.some((l) => !l.roomId && !l.spaceId);
   const correctableVisible = useMemo(() => filterLinesByTab(correctable, correctTab), [correctable, correctTab]);
   const pickCorrectTab = (tab: FolioTab) => {
     setCorrectTab(tab);
@@ -743,13 +750,14 @@ export function StayStep({
             lines={folioLines}
             roomNumberById={roomNumberById}
             perRoomCharges={perRoomCharges}
+            perSpaceCharges={perSpaceCharges}
             unassignedCharges={unassignedCharges}
             chargeBreakdown={billingQuery.data?.folio?.chargeBreakdown ?? null}
             balance={folio?.outstandingBalance ?? null}
             currency={currency}
             // An open room tab becomes the default "For room" of the charge form below (2026-08-21,
             // "keep tab of each room separately") — still freely changeable before posting.
-            onTabChange={(t) => setChargeRoomId(typeof t === "string" ? "" : t.roomId)}
+            onTabChange={(t) => setChargeRoomId(typeof t === "string" || "spaceId" in t ? "" : t.roomId)}
           />
         </div>
 
@@ -769,7 +777,7 @@ export function StayStep({
             {/* Per-room folio attribution (2026-08-14): the room this charge belongs to —
                 the room-service dinner goes on 501, not the whole party's bill. Optional. */}
             <select value={chargeRoomId} onChange={(e) => setChargeRoomId(e.target.value)}>
-              <option value="">Whole booking</option>
+              <option value="">No room / space</option>
               {keyPlan.map((k) => (
                 <option key={k.roomId} value={k.roomId}>
                   Room {k.roomNumber}
@@ -826,14 +834,21 @@ export function StayStep({
                 Which posted charge is wrong?{" "}
                 <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>
                   — {correctableVisible.length} posted charge{correctableVisible.length === 1 ? "" : "s"}
-                  {correctTab === "ALL" ? "" : correctTab === "WHOLE" ? " on the whole booking" : ` on Room ${correctRoomTabs.find((r) => r.roomId === correctTab.roomId)?.roomNumber ?? "?"}`}
+                  {correctTab === "ALL"
+                    ? ""
+                    : correctTab === "WHOLE"
+                      ? " with no room or space named"
+                      : "spaceId" in correctTab
+                        ? ` on ${correctSpaceNameById.get(correctTab.spaceId) ?? "this space"}`
+                        : ` on Room ${correctRoomTabs.find((r) => r.roomId === correctTab.roomId)?.roomNumber ?? "?"}`}
                   {correctLineId ? "" : " · click the row to pick one"}
                 </span>
               </label>
               <div style={{ border: "1px solid var(--line-2)", borderRadius: "var(--r-sm)", overflow: "hidden" }}>
-                {(correctRoomTabs.length > 0 || correctHasRoomless) && (
+                {(correctRoomTabs.length > 0 || correctSpaceTabs.length > 0 || correctHasRoomless) && (
                   <FolioTabStrip
                     roomTabs={correctRoomTabs}
+                    spaceTabs={correctSpaceTabs}
                     hasRoomless={correctHasRoomless}
                     tab={correctTab}
                     onChange={pickCorrectTab}
@@ -844,7 +859,10 @@ export function StayStep({
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr>
-                        {(correctTab === "ALL" ? ["", "Date", "Room", "Charge", "Type", "Amount"] : ["", "Date", "Charge", "Type", "Amount"]).map((h, i, arr) => (
+                        {(correctTab === "ALL"
+                          ? ["", "Date", correctSpaceTabs.length > 0 ? "Room / space" : "Room", "Charge", "Type", "Amount"]
+                          : ["", "Date", "Charge", "Type", "Amount"]
+                        ).map((h, i, arr) => (
                           <th
                             key={h || `c${i}`}
                             style={{
@@ -903,8 +921,12 @@ export function StayStep({
                             </td>
                             <td style={{ ...cell, color: "var(--ink-2)" }}>{l.chargeDate?.slice(0, 10) ?? "—"}</td>
                             {correctTab === "ALL" && (
-                              <td style={{ ...cell, color: l.roomId ? undefined : "var(--ink-3)" }}>
-                                {l.roomId ? `Room ${roomNumberById.get(l.roomId) ?? "?"}` : "Whole booking"}
+                              <td style={{ ...cell, color: l.roomId || l.spaceId ? undefined : "var(--ink-3)" }}>
+                                {l.roomId
+                                  ? `Room ${roomNumberById.get(l.roomId) ?? "?"}`
+                                  : l.spaceId
+                                    ? correctSpaceNameById.get(l.spaceId) ?? "Space"
+                                    : "No room / space"}
                               </td>
                             )}
                             {/* The description carries the detail, so it is the one column allowed

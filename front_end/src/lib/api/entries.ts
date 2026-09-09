@@ -523,7 +523,17 @@ export type EntryBillingSummary = {
       serviceCharge: number;
       gst: number;
     }> | null;
-    /** Net sum + count of booking-wide (roomless) lines, with the same tax split. Null when none. */
+    /** The same, per SPACE (2026-09-09, PMS-237) — a conference room's own charges. Null when none. */
+    perSpaceCharges: Array<{
+      spaceId: string;
+      spaceName: string | null;
+      charges: number;
+      lineCount: number;
+      base: number;
+      serviceCharge: number;
+      gst: number;
+    }> | null;
+    /** Net sum + count of lines naming NEITHER a room nor a space, with the same tax split. Null when none. */
     unassignedCharges: { charges: number; lineCount: number; base: number; serviceCharge: number; gst: number } | null;
     /** Whole-ledger tax split — base + serviceCharge + gst = billedSoFar. Null when no lines. */
     chargeBreakdown: { base: number; serviceCharge: number; gst: number; total: number } | null;

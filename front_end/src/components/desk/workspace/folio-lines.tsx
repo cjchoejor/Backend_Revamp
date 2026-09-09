@@ -177,11 +177,16 @@ const td: React.CSSProperties = {
 /** A server-summed bucket's tax split — printed as-is, never added up on the desk. */
 type TaxSplit = { base: number; serviceCharge: number; gst: number; total: number };
 type Bucket = { roomId: string; roomNumber: string | null; charges: number; lineCount: number; base: number; serviceCharge: number; gst: number };
+type SpaceBucket = { spaceId: string; spaceName: string | null; charges: number; lineCount: number; base: number; serviceCharge: number; gst: number };
 
-/** Which slice of the ledger a tab shows: every line, one room's lines, or the roomless ones. */
-export type FolioTab = "ALL" | "WHOLE" | { roomId: string };
+/**
+ * Which slice of the ledger a tab shows: every line, one room's, one space's, or the ones
+ * attributed to neither (2026-09-09 — a conference hall is billed like a room, PMS-237).
+ */
+export type FolioTab = "ALL" | "WHOLE" | { roomId: string } | { spaceId: string };
 
 export type RoomTab = { roomId: string; roomNumber: string };
+export type SpaceTab = { spaceId: string; spaceName: string };
 
 /** The room tabs a set of lines earns: one per room that has a line (or a server bucket). */
 export function roomTabsFor(
@@ -200,15 +205,34 @@ export function roomTabsFor(
     .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
 }
 
+/** The space tabs a set of lines earns: one per space that has a line (or a server bucket). */
+export function spaceTabsFor(
+  lines: Array<{ spaceId?: string | null }>,
+  perSpaceCharges?: Array<{ spaceId: string; spaceName: string | null }> | null,
+): SpaceTab[] {
+  const ids = new Set<string>();
+  for (const l of lines) if (l.spaceId) ids.add(l.spaceId);
+  for (const b of perSpaceCharges ?? []) ids.add(b.spaceId);
+  return Array.from(ids)
+    .map((spaceId) => ({
+      spaceId,
+      spaceName: perSpaceCharges?.find((b) => b.spaceId === spaceId)?.spaceName ?? "Space",
+    }))
+    .sort((a, b) => a.spaceName.localeCompare(b.spaceName, undefined, { numeric: true }));
+}
+
 /** Display-only slice of the lines for a tab — never touches any figure. */
-export function filterLinesByTab<T extends { roomId?: string | null }>(lines: T[], tab: FolioTab): T[] {
+export function filterLinesByTab<T extends { roomId?: string | null; spaceId?: string | null }>(lines: T[], tab: FolioTab): T[] {
   if (tab === "ALL") return lines;
-  if (tab === "WHOLE") return lines.filter((l) => !l.roomId);
+  if (tab === "WHOLE") return lines.filter((l) => !l.roomId && !l.spaceId);
+  if ("spaceId" in tab) return lines.filter((l) => l.spaceId === tab.spaceId);
   return lines.filter((l) => l.roomId === tab.roomId);
 }
 
 export function sameTab(a: FolioTab, b: FolioTab): boolean {
-  return typeof a === "string" || typeof b === "string" ? a === b : a.roomId === b.roomId;
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  if ("spaceId" in a) return "spaceId" in b && a.spaceId === b.spaceId;
+  return "roomId" in b && a.roomId === b.roomId;
 }
 
 const tabBtnStyle = (active: boolean): React.CSSProperties => ({
@@ -229,12 +253,15 @@ const tabBtnStyle = (active: boolean): React.CSSProperties => ({
  */
 export function FolioTabStrip({
   roomTabs,
+  spaceTabs = [],
   hasRoomless,
   tab,
   onChange,
   roomTitle,
 }: {
   roomTabs: RoomTab[];
+  /** One tab per conference room / hall that carries a charge (2026-09-09, PMS-237). */
+  spaceTabs?: SpaceTab[];
   hasRoomless: boolean;
   tab: FolioTab;
   onChange: (tab: FolioTab) => void;
@@ -257,9 +284,27 @@ export function FolioTabStrip({
           Room {r.roomNumber}
         </button>
       ))}
+      {spaceTabs.map((sp) => (
+        <button
+          key={sp.spaceId}
+          type="button"
+          style={tabBtnStyle(sameTab(tab, { spaceId: sp.spaceId }))}
+          onClick={() => onChange({ spaceId: sp.spaceId })}
+          title={`Only the charges posted against ${sp.spaceName}, with their own service charge and GST`}
+        >
+          {sp.spaceName}
+        </button>
+      ))}
       {hasRoomless && (
-        <button type="button" style={tabBtnStyle(sameTab(tab, "WHOLE"))} onClick={() => onChange("WHOLE")} title="Charges posted against the whole booking — no room named">
-          Whole booking
+        // Named for what it holds, not for "everything" — "All charges" is the whole ledger, and
+        // this is the slice attributed to neither a room nor a space (2026-09-09, PMS-237).
+        <button
+          type="button"
+          style={tabBtnStyle(sameTab(tab, "WHOLE"))}
+          onClick={() => onChange("WHOLE")}
+          title="Charges posted against the booking itself — no room and no space named"
+        >
+          No room / space
         </button>
       )}
     </div>
@@ -270,6 +315,7 @@ export function FolioLinesTable({
   lines,
   roomNumberById,
   perRoomCharges,
+  perSpaceCharges,
   unassignedCharges,
   chargeBreakdown,
   balance,
@@ -282,6 +328,8 @@ export function FolioLinesTable({
   roomNumberById?: Map<string, string>;
   /** Server-summed per-room buckets from the billing summary — shown, never added up here. */
   perRoomCharges?: Bucket[] | null;
+  /** The same, per space — a conference hall's charges (2026-09-09, PMS-237). */
+  perSpaceCharges?: SpaceBucket[] | null;
   unassignedCharges?: Omit<Bucket, "roomId" | "roomNumber"> | null;
   /** The whole ledger's server-summed split (base + SC + GST = billed so far). */
   chargeBreakdown?: TaxSplit | null;
@@ -297,11 +345,13 @@ export function FolioLinesTable({
 
   // ── Tabs (2026-08-21, operator request: "show it separately — keep the whole booking and
   // room-wise separately, and apply GST and service charge per tab"). "All charges" is the full
-  // ledger; one tab per room shows only that room's lines; "Whole booking" is the roomless
-  // lines. Filtering is display-only; every figure in a tab's footer is the server's own
-  // bucket split, so nothing is summed on the desk.
+  // ledger; one tab per room (and, since 2026-09-09, per space) shows only that target's
+  // lines; "No room / space" is the rest. Filtering is display-only; every figure in a tab's
+  // footer is the server's own bucket split, so nothing is summed on the desk.
   const roomTabs = useMemo(() => roomTabsFor(lines, roomNumberById, perRoomCharges), [lines, perRoomCharges, roomNumberById]);
-  const hasRoomless = lines.some((l) => !l.roomId);
+  const spaceTabs = useMemo(() => spaceTabsFor(lines, perSpaceCharges), [lines, perSpaceCharges]);
+  const spaceNameById = useMemo(() => new Map(spaceTabs.map((sp) => [sp.spaceId, sp.spaceName])), [spaceTabs]);
+  const hasRoomless = lines.some((l) => !l.roomId && !l.spaceId);
   const [tab, setTabState] = useState<FolioTab>("ALL");
   const setTab = (t: FolioTab) => {
     setTabState(t);
@@ -315,6 +365,9 @@ export function FolioLinesTable({
     split = unassignedCharges
       ? { base: unassignedCharges.base, serviceCharge: unassignedCharges.serviceCharge, gst: unassignedCharges.gst, total: unassignedCharges.charges }
       : null;
+  } else if ("spaceId" in tab) {
+    const b = perSpaceCharges?.find((x) => x.spaceId === tab.spaceId);
+    split = b ? { base: b.base, serviceCharge: b.serviceCharge, gst: b.gst, total: b.charges } : null;
   } else {
     const b = perRoomCharges?.find((x) => x.roomId === tab.roomId);
     split = b ? { base: b.base, serviceCharge: b.serviceCharge, gst: b.gst, total: b.charges } : null;
@@ -322,7 +375,13 @@ export function FolioLinesTable({
 
   const rows = useMemo(() => foldTaxCompanions(visibleLines), [visibleLines]);
   const foldedCount = visibleLines.length - rows.length;
-  const anyRoom = tab === "ALL" && rows.some((r) => r.line.roomId);
+  // The attribution column shows on the All tab, where a row's room or space is the fact that
+  // tells it apart; inside a tab every row shares the same one.
+  const anySpace = rows.some((r) => r.line.spaceId);
+  const anyRoom = tab === "ALL" && rows.some((r) => r.line.roomId || r.line.spaceId);
+  /** What a line is billed against, for the column and the tooltips. */
+  const targetOf = (l: FolioLineSummary) =>
+    l.roomId ? roomNumberById?.get(l.roomId) ?? "?" : l.spaceId ? spaceNameById.get(l.spaceId) ?? "Space" : null;
 
   const [showTax, setShowTax] = useState(false);
 
@@ -343,7 +402,14 @@ export function FolioLinesTable({
       document.body.style.overflow = prev;
     };
   }, [expanded]);
-  const tabLabel = tab === "ALL" ? "All charges" : tab === "WHOLE" ? "Whole booking" : `Room ${roomTabs.find((r) => r.roomId === tab.roomId)?.roomNumber ?? "?"}`;
+  const tabLabel =
+    tab === "ALL"
+      ? "All charges"
+      : tab === "WHOLE"
+        ? "No room / space"
+        : "spaceId" in tab
+          ? spaceNameById.get(tab.spaceId) ?? "Space"
+          : `Room ${roomTabs.find((r) => r.roomId === tab.roomId)?.roomNumber ?? "?"}`;
 
 
   return (
@@ -417,9 +483,10 @@ export function FolioLinesTable({
         </span>
       </div>
 
-      {(roomTabs.length > 0 || hasRoomless) && lines.length > 0 && (
+      {(roomTabs.length > 0 || spaceTabs.length > 0 || hasRoomless) && lines.length > 0 && (
         <FolioTabStrip
           roomTabs={roomTabs}
+          spaceTabs={spaceTabs}
           hasRoomless={hasRoomless}
           tab={tab}
           onChange={setTab}
@@ -456,7 +523,7 @@ export function FolioLinesTable({
                     row names, so it has to be readable off the table it points into. */}
                 <th style={th}>Line</th>
                 <th style={th}>Date</th>
-                {anyRoom && <th style={th}>Room</th>}
+                {anyRoom && <th style={th}>{anySpace ? "Room / space" : "Room"}</th>}
                 <th style={{ ...th, width: "99%" }}>Charge</th>
                 {/* Amount · Service charge · GST as three columns (2026-09-08, operator request
                     — the folded "+ SC / + GST" sub-lines left the middle of a wide row empty).
@@ -509,9 +576,7 @@ export function FolioLinesTable({
                     </td>
                     <td style={{ ...td, color: "var(--ink-2)" }}>{l.chargeDate?.slice(0, 10) ?? "—"}</td>
                     {anyRoom && (
-                      <td style={{ ...td, color: l.roomId ? undefined : "var(--ink-4)" }}>
-                        {l.roomId ? roomNumberById?.get(l.roomId) ?? "?" : "—"}
-                      </td>
+                      <td style={{ ...td, color: targetOf(l) ? undefined : "var(--ink-4)" }}>{targetOf(l) ?? "—"}</td>
                     )}
                     <td style={{ ...td, whiteSpace: "normal", minWidth: 160 }}>
                       <span
@@ -540,11 +605,7 @@ export function FolioLinesTable({
                         <LineId id={c.line.id} />
                       </td>
                       <td style={{ ...td, color: "var(--ink-4)" }}>{c.line.chargeDate?.slice(0, 10) ?? "—"}</td>
-                      {anyRoom && (
-                        <td style={{ ...td, color: "var(--ink-4)" }}>
-                          {c.line.roomId ? roomNumberById?.get(c.line.roomId) ?? "?" : "—"}
-                        </td>
-                      )}
+                      {anyRoom && <td style={{ ...td, color: "var(--ink-4)" }}>{targetOf(c.line) ?? "—"}</td>}
                       <td style={{ ...td, whiteSpace: "normal", color: "var(--ink-3)", paddingLeft: 26 }}>
                         {describeLine(c.line.description)}
                         <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{c.line.lineType}</span>
@@ -584,8 +645,10 @@ export function FolioLinesTable({
             tab === "ALL"
               ? "The whole ledger, split into charges, service charge and GST — summed on the server"
               : tab === "WHOLE"
-                ? "Charges with no room named, with their own service charge and GST — summed on the server"
-                : "This room's charges, service charge and GST — summed on the server"
+                ? "Charges with no room and no space named, with their own service charge and GST — summed on the server"
+                : "spaceId" in tab
+                  ? "This space's charges, service charge and GST — summed on the server"
+                  : "This room's charges, service charge and GST — summed on the server"
           }
         >
           {(
@@ -603,7 +666,7 @@ export function FolioLinesTable({
           ))}
         </div>
       )}
-      {tab === "ALL" && perRoomCharges && perRoomCharges.length > 0 && (
+      {tab === "ALL" && ((perRoomCharges && perRoomCharges.length > 0) || (perSpaceCharges && perSpaceCharges.length > 0)) && (
         <div
           style={{
             display: "flex",
@@ -615,7 +678,7 @@ export function FolioLinesTable({
             fontSize: 11.5,
           }}
         >
-          {perRoomCharges.map((r) => (
+          {(perRoomCharges ?? []).map((r) => (
             <button
               key={r.roomId}
               type="button"
@@ -627,14 +690,26 @@ export function FolioLinesTable({
               <b style={{ fontVariantNumeric: "tabular-nums" }}>{money(r.charges, cur)}</b>
             </button>
           ))}
+          {(perSpaceCharges ?? []).map((sp) => (
+            <button
+              key={sp.spaceId}
+              type="button"
+              onClick={() => setTab({ spaceId: sp.spaceId })}
+              style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", font: "inherit" }}
+              title={`${sp.lineCount} line${sp.lineCount === 1 ? "" : "s"} — summed on the server · open this space's tab`}
+            >
+              <span style={{ color: "var(--ink-3)" }}>Σ {sp.spaceName ?? "Space"}</span>{" "}
+              <b style={{ fontVariantNumeric: "tabular-nums" }}>{money(sp.charges, cur)}</b>
+            </button>
+          ))}
           {unassignedCharges && (
             <button
               type="button"
               onClick={() => setTab("WHOLE")}
               style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", font: "inherit" }}
-              title={`${unassignedCharges.lineCount} line${unassignedCharges.lineCount === 1 ? "" : "s"} with no room named · open the whole-booking tab`}
+              title={`${unassignedCharges.lineCount} line${unassignedCharges.lineCount === 1 ? "" : "s"} with no room or space named · open that tab`}
             >
-              <span style={{ color: "var(--ink-3)" }}>Σ Whole booking</span>{" "}
+              <span style={{ color: "var(--ink-3)" }}>Σ No room / space</span>{" "}
               <b style={{ fontVariantNumeric: "tabular-nums" }}>{money(unassignedCharges.charges, cur)}</b>
             </button>
           )}

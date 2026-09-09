@@ -421,6 +421,7 @@ function StepCanvasBase({
             lines={lines}
             roomNumberById={new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)]))}
             perRoomCharges={billing?.perRoomCharges ?? null}
+            perSpaceCharges={billing?.perSpaceCharges ?? null}
             unassignedCharges={billing?.unassignedCharges ?? null}
             chargeBreakdown={billing?.chargeBreakdown ?? null}
             balance={fin.outstanding ?? null}

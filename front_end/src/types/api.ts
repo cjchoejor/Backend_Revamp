@@ -257,6 +257,9 @@ export type FolioLineSummary = {
   nightAuditRecordId?: string | null;
   /** Which room this charge belongs to (2026-08-14, per-room folio breakdown). Null = booking-wide. */
   roomId?: string | null;
+  /** Which SPACE it belongs to instead (2026-09-09, PMS-237) — a conference room or hall.
+   *  A line names a room OR a space, never both (DB check constraint folio_line_target_xor). */
+  spaceId?: string | null;
 };
 
 export type FolioDetail = {

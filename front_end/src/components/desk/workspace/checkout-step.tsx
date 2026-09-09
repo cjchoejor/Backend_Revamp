@@ -99,6 +99,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
     refetchInterval: 30_000,
   });
   const perRoomCharges = billingQuery.data?.folio?.perRoomCharges ?? null;
+  const perSpaceCharges = billingQuery.data?.folio?.perSpaceCharges ?? null;
   const unassignedCharges = billingQuery.data?.folio?.unassignedCharges ?? null;
   // The tax split behind the bill (PMS-141). Null on a folio with no lines — a legacy import
   // or a booking that never posted anything — where there is nothing to split.
@@ -496,13 +497,14 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
             lines={folioLines}
             roomNumberById={roomNumberById}
             perRoomCharges={perRoomCharges}
+            perSpaceCharges={perSpaceCharges}
             unassignedCharges={unassignedCharges}
             chargeBreakdown={chargeBreakdown}
             balance={balance}
             currency={currency}
             emptyText="No charges on this folio"
             // Opening a room tab defaults the charge form's "For room" below, same as S7.
-            onTabChange={(t) => setFinalChargeRoomId(typeof t === "string" ? "" : t.roomId)}
+            onTabChange={(t) => setFinalChargeRoomId(typeof t === "string" || "spaceId" in t ? "" : t.roomId)}
           />
         </div>
         <div className="field">
@@ -544,7 +546,7 @@ export function CheckOutStep({ entry, setSelected }: { entry: EntryDetail; setSe
                 <label>For room</label>
                 {/* Per-room folio attribution (2026-08-14) — same as the Stay step's form. */}
                 <select value={finalChargeRoomId} onChange={(e) => setFinalChargeRoomId(e.target.value)}>
-                  <option value="">Whole booking</option>
+                  <option value="">No room / space</option>
                   {Array.from(new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a])).values()).map((a) => (
                     <option key={a.roomId} value={a.roomId}>
                       Room {a.room?.roomNumber ?? a.roomId.slice(0, 6)}

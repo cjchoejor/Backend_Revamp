@@ -309,6 +309,7 @@ export function PostStayStep({ entry }: { entry: EntryDetail }) {
               lines={folio?.lines ?? []}
               roomNumberById={roomNumberById}
               perRoomCharges={billingQuery.data?.folio?.perRoomCharges ?? null}
+              perSpaceCharges={billingQuery.data?.folio?.perSpaceCharges ?? null}
               unassignedCharges={billingQuery.data?.folio?.unassignedCharges ?? null}
               chargeBreakdown={billingQuery.data?.folio?.chargeBreakdown ?? null}
               balance={fin.outstanding}
