@@ -150,6 +150,27 @@ export const correctFolioChargeRequestSchema = z
   });
 export type CorrectFolioChargeRequestDto = z.infer<typeof correctFolioChargeRequestSchema>;
 
+/**
+ * Money against ONE slice of the folio — a room or a space (2026-09-09, PMS-237). The XOR is
+ * refined here AND re-checked in the service, same as the charge body: a caller must never be
+ * able to reach a DB constraint violation instead of a sentence.
+ */
+export const recordTargetPaymentRequestSchema = z
+  .object({
+    entryId: z.string().min(1),
+    roomId: z.string().min(1).optional(),
+    spaceId: z.string().min(1).optional(),
+    amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be a positive number"),
+    paymentMethod: z.string().min(1).max(40).optional(),
+    paymentVerificationRef: z.string().min(1).max(120).optional(),
+    notes: z.string().max(500).optional(),
+  })
+  .refine((v) => !(v.roomId && v.spaceId), {
+    message: "A payment settles a room OR a space, not both — omit one",
+    path: ["spaceId"],
+  });
+export type RecordTargetPaymentRequestDto = z.infer<typeof recordTargetPaymentRequestSchema>;
+
 export const postCreditNoteRequestSchema = z.object({
   entryId: z.string().min(1),
   description: z.string().min(1),

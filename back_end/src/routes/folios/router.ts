@@ -5,6 +5,7 @@ import {
   summariseSettlementTargets,
   sumTargetOutstanding,
 } from "../../lib/folio-outstanding-per-target.js";
+import * as folioTargetPaymentService from "../../services/domain/folio-target-payment-service.js";
 import {
   advancePaymentReconcileRequestSchema,
   correctFolioChargeRequestSchema,
@@ -12,6 +13,7 @@ import {
   initiateSettlementRequestSchema,
   issueProformaInvoiceRequestSchema,
   postCreditNoteRequestSchema,
+  recordTargetPaymentRequestSchema,
   postFolioChargesBodySchema,
   postStayChargeRequestSchema,
   reassignFolioLineBillingModelRequestSchema,
@@ -316,6 +318,42 @@ foliosRouter.get("/folios/:id/settlement-targets", requireActorLevel("L1"), asyn
     next(e);
   }
 });
+
+/**
+ * Take money against ONE room or space (2026-09-09, PMS-237). Deliberately NOT settlement —
+ * settlement closes a stay and drags the whole S8 apparatus with it. This is a payment that
+ * knows what it was for, and it is valid in-house (S7), at check-out (S8) and post-stay (S9).
+ */
+foliosRouter.post(
+  "/folios/:id/target-payments",
+  requireActorLevel("L1"),
+  validateBody(recordTargetPaymentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const out = await folioTargetPaymentService.recordTargetPayment(prisma, req.params.id, req.actor!.actorId, req.body);
+      res.status(201).json({
+        ...out,
+        summary: {
+          folioOutstanding: Number(out.summary.folioOutstanding.toFixed(2)),
+          unappliedPayments: Number(out.summary.unappliedPayments.toFixed(2)),
+          targets: out.summary.targets.map((t) => ({
+            kind: t.target === "UNASSIGNED" ? "UNASSIGNED" : "roomId" in t.target && t.target.roomId ? "ROOM" : "SPACE",
+            roomId: t.target !== "UNASSIGNED" && "roomId" in t.target ? t.target.roomId ?? null : null,
+            spaceId: t.target !== "UNASSIGNED" && "spaceId" in t.target ? t.target.spaceId ?? null : null,
+            label: t.label,
+            charges: Number(t.charges.toFixed(2)),
+            paid: Number(t.paid.toFixed(2)),
+            outstanding: Number(t.outstanding.toFixed(2)),
+            collectable: Number(collectableForTarget(t.outstanding, out.summary.folioOutstanding).toFixed(2)),
+            lineCount: t.lineCount,
+          })),
+        },
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 foliosRouter.post("/folios/:id/settle", requireActorLevel("L1"), validateBody(initiateSettlementRequestSchema), async (req, res, next) => {
   try {
