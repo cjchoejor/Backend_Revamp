@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
+  collectableForTarget,
+  summariseSettlementTargets,
+  sumTargetOutstanding,
+} from "../../lib/folio-outstanding-per-target.js";
+import {
   advancePaymentReconcileRequestSchema,
   correctFolioChargeRequestSchema,
   dispatchInvoiceRequestSchema,
@@ -272,6 +277,41 @@ foliosRouter.get("/folios/:id", requireActorLevel("L1"), async (req, res, next) 
   try {
     const folio = await s8SettlementService.getFolio(prisma, req.params.id);
     res.json(folio);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * What each slice of the folio still owes (2026-09-09, PMS-237) — one row per room, per space,
+ * and one for the lines that name neither. Pure read; every figure Decimal-summed server-side.
+ * `unappliedPayments` is money held against the booking as a whole (the advance), which is why
+ * the rows can sum to more than the folio's own balance — `collectable` is each row capped at
+ * that balance, and is the figure the desk may actually ask for.
+ */
+foliosRouter.get("/folios/:id/settlement-targets", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const folio = await s8SettlementService.getFolio(prisma, req.params.id);
+    const summary = await summariseSettlementTargets(prisma, folio.id);
+    res.set("Cache-Control", "no-store").json({
+      folioId: folio.id,
+      folioState: folio.state,
+      currency: "BTN",
+      folioOutstanding: Number(summary.folioOutstanding.toFixed(2)),
+      unappliedPayments: Number(summary.unappliedPayments.toFixed(2)),
+      targetOutstandingTotal: Number(sumTargetOutstanding(summary.targets).toFixed(2)),
+      targets: summary.targets.map((t) => ({
+        kind: t.target === "UNASSIGNED" ? "UNASSIGNED" : "roomId" in t.target && t.target.roomId ? "ROOM" : "SPACE",
+        roomId: t.target !== "UNASSIGNED" && "roomId" in t.target ? t.target.roomId ?? null : null,
+        spaceId: t.target !== "UNASSIGNED" && "spaceId" in t.target ? t.target.spaceId ?? null : null,
+        label: t.label,
+        charges: Number(t.charges.toFixed(2)),
+        paid: Number(t.paid.toFixed(2)),
+        outstanding: Number(t.outstanding.toFixed(2)),
+        collectable: Number(collectableForTarget(t.outstanding, summary.folioOutstanding).toFixed(2)),
+        lineCount: t.lineCount,
+      })),
+    });
   } catch (e) {
     next(e);
   }
