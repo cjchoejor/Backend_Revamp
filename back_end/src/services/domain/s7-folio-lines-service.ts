@@ -155,6 +155,10 @@ export async function postCharge(
      *  omitted = booking-wide. Must be a room assigned to this entry; the auto tax/service
      *  companion lines inherit it. */
     roomId?: string;
+    /** Which SPACE this charge belongs to (2026-09-09, PMS-237) — the conference hall's own
+     *  charges. Must be a space allocated to this entry. Mutually exclusive with `roomId`;
+     *  the companion lines inherit it exactly as they inherit the room. */
+    spaceId?: string;
   },
 ) {
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
@@ -178,11 +182,27 @@ export async function postCharge(
   // Per-room attribution (2026-08-14): the named room must be one of this booking's rooms —
   // any room the entry ever held qualifies (a vacated room's minibar charge is still real).
   const chargeRoomId = input.roomId?.trim() || null;
+  const chargeSpaceId = input.spaceId?.trim() || null;
+  // A charge belongs to ONE place or to the booking as a whole (2026-09-09) — the DB check
+  // `folio_line_target_xor` backs this up, but refuse here so the caller gets a clear message
+  // instead of a constraint violation.
+  if (chargeRoomId && chargeSpaceId) {
+    throw new ValidationError("A charge belongs to a room OR a space, not both — omit one");
+  }
   if (chargeRoomId) {
     const owned = await prisma.roomAssignment.findFirst({
       where: { entryId: input.entryId, roomId: chargeRoomId },
     });
     if (!owned) throw new ValidationError("roomId is not a room of this booking");
+  }
+  // Same rule for a space: any space this entry was ever allocated qualifies, whatever state
+  // that allocation is in — a released hall's projector charge is still real, exactly as a
+  // vacated room's minibar charge is.
+  if (chargeSpaceId) {
+    const allocated = await prisma.spaceAllocation.findFirst({
+      where: { entryId: input.entryId, spaceId: chargeSpaceId },
+    });
+    if (!allocated) throw new ValidationError("spaceId is not a space of this booking");
   }
 
   await ensureChargeDateNotSealed(prisma, chargeDate);
@@ -258,6 +278,8 @@ export async function postCharge(
         postedBy: actorId,
         billingModel: primaryBillingModel,
         roomId: chargeRoomId,
+
+        spaceId: chargeSpaceId,
       },
     });
 
@@ -290,6 +312,8 @@ export async function postCharge(
             // Service charge inherits the primary line's billing model — same guest event.
             billingModel: primaryBillingModel,
             roomId: chargeRoomId,
+
+            spaceId: chargeSpaceId,
           },
         });
       }
@@ -312,6 +336,8 @@ export async function postCharge(
             postedBy: actorId,
             billingModel: primaryBillingModel,
             roomId: chargeRoomId,
+
+            spaceId: chargeSpaceId,
           },
         });
       }
@@ -374,7 +400,7 @@ export async function postCreditNote(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; description: string; amount: number; currency?: string; creditDate: string; roomId?: string },
+  input: { entryId: string; description: string; amount: number; currency?: string; creditDate: string; roomId?: string; spaceId?: string },
 ) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) throw new ValidationError("amount must be a positive number");
   const creditDate = new Date(input.creditDate);
@@ -489,6 +515,7 @@ export async function correctCharge(
         billingModel: correctionBillingModel,
         // A correction adjusts a charge already attributed to a room — the delta stays there.
         roomId: original.roomId,
+        spaceId: original.spaceId,
       },
     });
 
@@ -504,7 +531,7 @@ export async function correctCharge(
       // keeps the previous GST-only behaviour so imported folios don't gain tax lines they never had.
       const suffix = taxLineSuffixForCharge(original.description);
       const related = await tx.folioLine.findMany({
-        where: { folioId, description: { contains: suffix }, roomId: original.roomId ?? null },
+        where: { folioId, description: { contains: suffix }, roomId: original.roomId ?? null, spaceId: original.spaceId ?? null },
         select: { lineType: true, description: true, amount: true },
       });
       const scLines = related.filter((l) => classifyFolioLine(l) === "SERVICE_CHARGE");
@@ -551,6 +578,7 @@ export async function correctCharge(
             postedBy: actorId,
             billingModel: correctionBillingModel,
             roomId: original.roomId,
+            spaceId: original.spaceId,
           },
         });
       }
@@ -568,6 +596,7 @@ export async function correctCharge(
             postedBy: actorId,
             billingModel: correctionBillingModel,
             roomId: original.roomId,
+            spaceId: original.spaceId,
           },
         });
       }

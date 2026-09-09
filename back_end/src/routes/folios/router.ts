@@ -227,7 +227,7 @@ foliosRouter.post("/folios/:id/charges", requireActorLevel("L1"), validateBody(p
       return;
     }
 
-    const { lineType, description, amount, currency, chargeDate, roomId } = req.body;
+    const { lineType, description, amount, currency, chargeDate, roomId, spaceId } = req.body;
     // Authority is hierarchical (L4 ≥ L3 ≥ L2) — the credit-ceiling soft-gate bypass belongs
     // to every FOM-or-above actor. L4 was missing (2026-08-17, found live: admin blocked on
     // the tier-2 gate an FOM would have passed).
@@ -241,6 +241,8 @@ foliosRouter.post("/folios/:id/charges", requireActorLevel("L1"), validateBody(p
       chargeDate,
       allowSoftGateBypass,
       roomId,
+
+      spaceId,
     } as any);
     res.json(created);
   } catch (e) {

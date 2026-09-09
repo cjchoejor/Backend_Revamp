@@ -112,6 +112,8 @@ export const postFolioChargesBodySchema = z
     isPostStay: z.boolean().optional(),
     /** Per-room folio attribution (2026-08-14) — optional; must be a room of this booking. */
     roomId: z.string().optional(),
+    /** Per-space attribution (2026-09-09, PMS-237) — a conference hall's own charges. Mutually exclusive with roomId. */
+    spaceId: z.string().optional(),
   })
   .passthrough();
 export type PostFolioChargesBodyDto = z.infer<typeof postFolioChargesBodySchema>;
@@ -156,6 +158,8 @@ export const postCreditNoteRequestSchema = z.object({
   creditDate: z.string().min(1),
   /** Per-room folio attribution (2026-08-14) — optional; must be a room of this booking. */
   roomId: z.string().optional(),
+  /** Per-space attribution (2026-09-09, PMS-237) — a conference hall's own charges. Mutually exclusive with roomId. */
+  spaceId: z.string().optional(),
 });
 export type PostCreditNoteRequestDto = z.infer<typeof postCreditNoteRequestSchema>;
 

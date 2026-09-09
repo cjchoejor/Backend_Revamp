@@ -1352,6 +1352,8 @@ model Space {
 
   deficientConditions DeficientConditionRecord[]
   speculativeHolds    SpeculativeHold[]
+  folioLines          FolioLine[]
+  payments            PaymentRecord[]
 
   @@map("spaces")
 }
@@ -1459,6 +1461,7 @@ model Room {
   roomInspectionRecords     RoomInspectionRecord[]
   keyReturnRecords          KeyReturnRecord[]
   folioLines                FolioLine[]
+  payments                  PaymentRecord[]
 
   @@map("rooms")
 }
@@ -1966,13 +1969,21 @@ model FolioLine {
   /// the desk's manual charge posting (auto tax/service lines + corrections inherit it).
   /// NULL = booking-wide (legacy lines, unattributed charges).
   roomId             String?
+  /// Which SPACE this charge belongs to (2026-09-09, PMS-237) — a conference hall is a Space,
+  /// not a Room, so without this every conference charge fell into the same unattributed
+  /// bucket as booking-wide fees and "settle the conference, leave the rooms" could not be
+  /// expressed. Mutually exclusive with `roomId` (DB check `folio_line_target_xor`): a charge
+  /// belongs to one place or to the booking as a whole, never both.
+  spaceId            String?
 
   folio                   Folio                          @relation(fields: [folioId], references: [id])
   nightAuditRecord        NightAuditRecord?              @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
   room                    Room?                          @relation(fields: [roomId], references: [id], onUpdate: Cascade)
+  space                   Space?                         @relation(fields: [spaceId], references: [id], onUpdate: Cascade)
   billingModelTransitions BillingModelTransitionRecord[]
 
   @@index([roomId])
+  @@index([spaceId])
   @@map("folio_lines")
 }
 
@@ -2018,9 +2029,21 @@ model PaymentRecord {
   /// or an extension's conditional payment. NULL for advances and settlements.
   interimPaymentRequestId String?
 
+  /// Which room / space this money settles (2026-09-09, PMS-237). Charges have carried a room
+  /// since 2026-08-14 but payments never did, so "room 202 is paid, 203 still owes" could not
+  /// be answered — a per-room balance is that room's charges MINUS its payments, and only the
+  /// charges half was attributed. NULL = paid against the booking as a whole, which is every
+  /// payment taken before this. Mutually exclusive (DB check `payment_record_target_xor`).
+  roomId  String?
+  spaceId String?
+
   folio                 Folio                  @relation(fields: [folioId], references: [id])
   interimPaymentRequest InterimPaymentRequest? @relation(fields: [interimPaymentRequestId], references: [id])
+  room                  Room?                  @relation(fields: [roomId], references: [id], onUpdate: Cascade)
+  space                 Space?                 @relation(fields: [spaceId], references: [id], onUpdate: Cascade)
 
+  @@index([roomId])
+  @@index([spaceId])
   @@map("payment_records")
 }
 

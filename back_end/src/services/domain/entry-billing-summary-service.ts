@@ -134,7 +134,18 @@ export interface EntryBillingSummary {
       serviceCharge: number;
       gst: number;
     }> | null;
-    /** Net sum + count of lines with NO room attribution (booking-wide). Null when none. */
+    /** Per-SPACE charge subtotals (2026-09-09, PMS-237) — same shape as perRoomCharges, for
+     *  conference halls and other bookable spaces. Null when no line carries a space. */
+    perSpaceCharges: Array<{
+      spaceId: string;
+      spaceName: string | null;
+      charges: number;
+      lineCount: number;
+      base: number;
+      serviceCharge: number;
+      gst: number;
+    }> | null;
+    /** Net sum + count of lines with NO room OR SPACE attribution (booking-wide). Null when none. */
     unassignedCharges: { charges: number; lineCount: number; base: number; serviceCharge: number; gst: number } | null;
     /** The whole ledger's tax breakdown — base + serviceCharge + gst = billedSoFar. Null when no lines. */
     chargeBreakdown: { base: number; serviceCharge: number; gst: number; total: number } | null;
@@ -365,7 +376,11 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     const [lines, inAgg, outAgg, writeOffAgg] = await Promise.all([
       prisma.folioLine.findMany({
         where: { folioId: entry.folio.id },
-        select: { amount: true, roomId: true, lineType: true, description: true, room: { select: { roomNumber: true } } },
+        select: {
+          amount: true, roomId: true, spaceId: true, lineType: true, description: true,
+          room: { select: { roomNumber: true } },
+          space: { select: { name: true, code: true } },
+        },
       }),
       prisma.paymentRecord.aggregate({ where: { folioId: entry.folio.id, paymentDirection: "IN" }, _sum: { amount: true } }),
       prisma.paymentRecord.aggregate({ where: { folioId: entry.folio.id, paymentDirection: "OUT" }, _sum: { amount: true } }),
@@ -420,6 +435,10 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       return { base: b.base, sc: b.sc.add(toDecimal(s.serviceCharge)), gst: b.gst.add(toDecimal(s.gst)) };
     };
     const byRoom = new Map<string, Bucket>();
+    // Per-space buckets (2026-09-09, PMS-237): a conference hall bills like a room, so it
+    // gets its own bucket. `unassigned` therefore now means "attached to neither a room nor
+    // a space" — genuinely booking-wide — where before it swept up every hall charge too.
+    const bySpace = new Map<string, Bucket>();
     const unassigned = newBucket(null);
     const whole = newBucket(null);
     for (const l of lines) {
@@ -428,6 +447,10 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
         const cur = byRoom.get(l.roomId) ?? newBucket(l.room?.roomNumber ?? null);
         addTo(cur, l);
         byRoom.set(l.roomId, cur);
+      } else if (l.spaceId) {
+        const cur = bySpace.get(l.spaceId) ?? newBucket(l.space?.name ?? l.space?.code ?? null);
+        addTo(cur, l);
+        bySpace.set(l.spaceId, cur);
       } else {
         addTo(unassigned, l);
       }
@@ -451,6 +474,25 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
             })
             .sort((a, b) => (a.roomNumber ?? "").localeCompare(b.roomNumber ?? "", undefined, { numeric: true }))
         : null;
+        // Spaces bill exactly like rooms (2026-09-09) — same bucket shape, keyed by space and
+        // labelled with its name so the desk can offer "settle the conference" as its own slice.
+        const perSpaceCharges =
+          bySpace.size > 0
+            ? Array.from(bySpace.entries())
+                .map(([spaceId, v]) => {
+                  const s = split(v);
+                  return {
+                    spaceId,
+                    spaceName: v.roomNumber,
+                    charges: money(v.sum) ?? 0,
+                    lineCount: v.count,
+                    base: money(s.base) ?? 0,
+                    serviceCharge: money(s.sc) ?? 0,
+                    gst: money(s.gst) ?? 0,
+                  };
+                })
+                .sort((a, b) => (a.spaceName ?? "").localeCompare(b.spaceName ?? ""))
+            : null;
 
     folioBlock = {
       state: entry.folio.state,
@@ -461,6 +503,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       writtenOff: writtenOffDec.gt(0) ? money(writtenOffDec) : null,
       outstandingBalance: money(toDecimal(entry.folio.outstandingBalance)),
       perRoomCharges,
+      perSpaceCharges,
       unassignedCharges:
         unassignedCount > 0
           ? {
