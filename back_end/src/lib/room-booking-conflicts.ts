@@ -3,7 +3,7 @@ import {
   committedHoldSpans,
   pendingStayExtensionClaims,
   reservedEntryRoomsSelect,
-  roomsClaimedByReservedEntry,
+  reservedEntrySpans,
   stillHoldsInventory,
   reservedClaimEndDate,
 } from "./entry-inventory-claim.js";
@@ -166,17 +166,24 @@ export async function findRoomBookingConflicts(
     // conflict at all (the where-clause above still selects it by the frozen dates).
     const claimEnd = reservedClaimEndDate(r.frozenCheckOutDate, r.entry);
     if (claimEnd.getTime() <= input.checkIn.getTime()) continue;
-    for (const roomId of roomsClaimedByReservedEntry(r.entry)) {
-      if (!roomIdSet.has(roomId)) continue;
-      reservedKeys.add(`${r.entryId}:${roomId}`);
+    // Per-ROOM nights since 2026-09-11 (see `reservedEntrySpans`): a room released mid-stay,
+    // one half of a per-night split and a vacated room after a mid-stay change each stop
+    // blocking when their own row ends, instead of holding the booking's full range. A room
+    // with no dated row still claims the whole stay, so nothing legacy moves.
+    for (const span of reservedEntrySpans(r.entry, { checkIn: r.frozenCheckInDate, checkOut: claimEnd })) {
+      if (!roomIdSet.has(span.roomId)) continue;
+      // Only the nights this span actually covers overlap the requested range — same
+      // half-open test the hold loop below uses.
+      if (span.startDate >= input.checkOut || span.endDate <= input.checkIn) continue;
+      reservedKeys.add(`${r.entryId}:${span.roomId}`);
       conflicts.push({
-        roomId,
+        roomId: span.roomId,
         source: "RESERVED",
         entryId: r.entryId,
         entryReferenceNumber: r.entry?.inquiryId ?? null,
         guestName: guestNameOf(r.entry?.guestProfile),
-        startDate: r.frozenCheckInDate,
-        endDate: claimEnd,
+        startDate: span.startDate,
+        endDate: span.endDate,
       });
     }
   }

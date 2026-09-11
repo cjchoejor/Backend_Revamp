@@ -11,7 +11,7 @@ import {
   committedHoldSpans,
   pendingStayExtensionClaims,
   reservedEntryRoomsSelect,
-  roomsClaimedByReservedEntry,
+  reservedEntrySpans,
   stillHoldsInventory,
   reservedClaimEndDate,
 } from "../../lib/entry-inventory-claim.js";
@@ -273,11 +273,17 @@ export async function runAvailabilityEngineForEntry(
   // unblocked the moment the hold's TTL lapsed.
   // Early departure (2026-08-22): a shortened stay blocks only up to the day the guest actually
   // left - the claim end comes from `reservedClaimEndDate`, never from the frozen date alone.
+  // Per-ROOM nights since 2026-09-11 (`reservedEntrySpans`): each room blocks the nights its
+  // own assignment row covers, so a room released mid-stay becomes sellable for the rest of the
+  // booking. A room whose row carries no dates still claims the whole stay — see the helper.
   const reservedBlockages = reservations.flatMap((r) =>
-    roomsClaimedByReservedEntry(r.entry).map((roomId) => ({
-      roomId,
-      startDate: r.frozenCheckInDate,
-      endDate: reservedClaimEndDate(r.frozenCheckOutDate, r.entry),
+    reservedEntrySpans(r.entry, {
+      checkIn: r.frozenCheckInDate,
+      checkOut: reservedClaimEndDate(r.frozenCheckOutDate, r.entry),
+    }).map((span) => ({
+      roomId: span.roomId,
+      startDate: span.startDate,
+      endDate: span.endDate,
       source: "RESERVED" as const,
       // Confirmed while the advance was still short — the desk labels these nights
       // "Held · payment pending" rather than "Reserved". Same block either way.

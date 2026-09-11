@@ -37,9 +37,12 @@ export const stillHoldsInventory = {
   status: { notIn: INVENTORY_RELEASED_STATUSES },
 } satisfies Prisma.EntryWhereInput;
 
-/** The select needed by `roomsClaimedByReservedEntry`. */
+/** The select needed by `reservedEntrySpans` / `roomsClaimedByReservedEntry`. */
 export const reservedEntryRoomsSelect = {
-  roomAssignments: { select: { roomId: true } },
+  // The row's OWN nights (2026-09-11): a room released mid-stay, a per-night split and a
+  // mid-stay room change each end-date their row, and the claim must follow. Nullable —
+  // a plain whole-stay booking stores neither, which means "the whole stay".
+  roomAssignments: { select: { roomId: true, startDate: true, endDate: true } },
   committedHold: { select: { roomId: true, perNightBreakdown: true } },
   // Early departure (2026-08-22): the day the guest actually left, when earlier than booked -
   // the Reservation row is immutable, so the entry carries the real end of the claim.
@@ -47,7 +50,7 @@ export const reservedEntryRoomsSelect = {
 } as const;
 
 type ReservedEntryRooms = {
-  roomAssignments?: Array<{ roomId: string }> | null;
+  roomAssignments?: Array<{ roomId: string; startDate?: Date | null; endDate?: Date | null }> | null;
   committedHold?: { roomId: string | null; perNightBreakdown?: Prisma.JsonValue | null } | null;
   actualCheckOutDate?: Date | null;
 };
@@ -185,6 +188,63 @@ export function roomsClaimedByReservedEntry(entry: ReservedEntryRooms | null | u
   const ids = new Set(roomIdsFromPerNight(hold.perNightBreakdown));
   if (hold.roomId) ids.add(hold.roomId);
   return [...ids];
+}
+
+/**
+ * WHICH NIGHTS a reserved entry claims each of its rooms for (2026-09-11).
+ *
+ * The date-aware twin of `roomsClaimedByReservedEntry`, and the direct analogue of
+ * `committedHoldSpans` above — holds have answered per-night since 2026-08-06; reservations
+ * answered "every room, the whole booking" until now. That flat answer is wrong in three
+ * places the system already creates:
+ *
+ *   - a room RELEASED mid-stay (PMS-237) — its row ends the day the guest left, but the room
+ *     stayed unsellable for the rest of the booking, which was the whole point of releasing it;
+ *   - a per-night SPLIT (601 for nights 1–2, then 204) — each room blocked all four nights;
+ *   - a mid-stay room CHANGE — the vacated room kept blocking to the original checkout.
+ *
+ * All three over-block, so the flat rule was safe but wasteful. The fix must not become
+ * unsafe in the other direction, so two rules are deliberately blunt:
+ *
+ *   1. **A row with no dates claims the WHOLE booking.** Nullable `startDate`/`endDate` are
+ *      normal — every plain "same room, whole stay" booking stores neither. Reading that as
+ *      "no nights" would un-block every such booking at once, which is the mass-overbooking
+ *      failure and the only way this change goes badly.
+ *   2. **Anything that doesn't resolve to a real forward range falls back to the whole
+ *      booking.** Over-blocking costs a sale; under-blocking sells one room to two guests.
+ *
+ * `stay.checkOut` must already be the entry's EFFECTIVE claim end (`reservedClaimEndDate`),
+ * and every span is clamped to it — a row can never out-live the booking that owns it.
+ *
+ * The no-assignments fallback is deliberately UNCHANGED: between the S4 freeze and pre-arrival
+ * there are no rows, and the committed hold answers whole-stay exactly as it did before. That
+ * window keeps its old behaviour to the letter.
+ */
+export function reservedEntrySpans(
+  entry: ReservedEntryRooms | null | undefined,
+  stay: { checkIn: Date; checkOut: Date },
+): ClaimSpan[] {
+  const rows = (entry?.roomAssignments ?? []).filter((a) => !!a.roomId);
+  if (rows.length > 0) {
+    const wholeStay = (roomId: string): ClaimSpan => ({ roomId, startDate: stay.checkIn, endDate: stay.checkOut });
+    return rows.map((a) => {
+      const start = a.startDate ?? stay.checkIn;
+      const rawEnd = a.endDate ?? stay.checkOut;
+      // Clamp to the booking's own end — an early departure shortens every room with it.
+      const end = rawEnd.getTime() < stay.checkOut.getTime() ? rawEnd : stay.checkOut;
+      if (!(start.getTime() < end.getTime())) return wholeStay(a.roomId);
+      return { roomId: a.roomId, startDate: start, endDate: end };
+    });
+  }
+  // No rows yet — the committed hold is the only record of what was committed. Whole stay,
+  // exactly as before; narrowing this window is a separate question with its own risks.
+  const hold = entry?.committedHold;
+  if (!hold) return [];
+  return roomsClaimedByReservedEntry(entry).map((roomId) => ({
+    roomId,
+    startDate: stay.checkIn,
+    endDate: stay.checkOut,
+  }));
 }
 
 /**
