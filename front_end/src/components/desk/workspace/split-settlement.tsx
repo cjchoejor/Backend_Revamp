@@ -46,6 +46,12 @@ export function SplitSettlementBlock({
   // never release a room by accident.
   const [roomStatus, setRoomStatus] = useState<"" | "STILL_STAYING" | "LEFT">("");
   const [departureReason, setDepartureReason] = useState("");
+  // Draw on the advance for this slice (2026-09-11, operator request — "if there is advance
+  // paid, have an option where that guest can choose to use all or a percentage or some of it,
+  // and note how much was deducted and what is left"). Starts unset: the advance is the
+  // booking's money and must never land on a room because a form defaulted it there.
+  const [advMode, setAdvMode] = useState<"" | "ALL" | "PERCENT" | "AMOUNT">("");
+  const [advValue, setAdvValue] = useState("");
 
   const q = useQuery({
     queryKey: ["settlement-targets", folioId, entry.updatedAt],
@@ -70,7 +76,17 @@ export function SplitSettlementBlock({
     if (activeRow) setAmount(activeRow.collectable > 0 ? activeRow.collectable.toFixed(2) : "");
     setRoomStatus("");
     setDepartureReason("");
+    setAdvMode("");
+    setAdvValue("");
   }, [collecting]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Choosing to use the advance zeroes the cash box, because the case that prompted this is the
+  // guest who hands over nothing — the advance covers their room. It is a DEFAULT, not a
+  // calculation: whatever cash is actually taken is typed, and the server decides if it fits.
+  useEffect(() => {
+    if (advMode) setAmount("0");
+    else if (activeRow) setAmount(activeRow.collectable > 0 ? activeRow.collectable.toFixed(2) : "");
+  }, [advMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["settlement-targets"] });
@@ -82,8 +98,13 @@ export function SplitSettlementBlock({
   const payM = useMutation({
     mutationFn: async () => {
       if (!activeRow) throw new Error("Pick a part of the bill first");
-      const amt = Number.parseFloat(amount);
-      if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter the amount received");
+      const amt = amount.trim() === "" ? 0 : Number.parseFloat(amount);
+      if (!Number.isFinite(amt) || amt < 0) throw new Error("Enter the amount received");
+      if (amt <= 0 && !advMode) throw new Error("Enter the amount received, or choose how much of the advance to use");
+      const advValueNum = Number.parseFloat(advValue);
+      if (advMode && advMode !== "ALL" && (!Number.isFinite(advValueNum) || advValueNum <= 0)) {
+        throw new Error(advMode === "PERCENT" ? "Enter the percentage of the advance to use" : "Enter how much of the advance to use");
+      }
       return recordTargetPayment(session!, folioId, {
         entryId: entry.id,
         ...(activeRow.roomId ? { roomId: activeRow.roomId } : {}),
@@ -93,15 +114,37 @@ export function SplitSettlementBlock({
         ...(ref.trim() ? { paymentVerificationRef: ref.trim() } : {}),
         ...(roomStatus ? { roomStatus } : {}),
         ...(roomStatus === "LEFT" && departureReason.trim() ? { departureReason: departureReason.trim() } : {}),
+        ...(advMode
+          ? { advanceApplication: { mode: advMode, ...(advMode === "ALL" ? {} : { value: advValueNum }) } }
+          : {}),
       });
     },
     onSuccess: (out) => {
       const name = activeRow ? rowName(activeRow) : "this part of the bill";
+      // What was taken and where it came from, said separately — cash the hotel now holds is
+      // not the same event as advance it already held being pointed at this room.
+      const took =
+        out.advanceApplied > 0 && out.amount > 0
+          ? `${money(out.amount, cur)} received and ${money(out.advanceApplied, cur)} taken from the advance`
+          : out.advanceApplied > 0
+            ? `${money(out.advanceApplied, cur)} taken from the advance`
+            : `${money(out.amount, cur)} received`;
       toast.success(
         out.targetSettledInFull
-          ? `${name} is paid in full — ${money(out.amount, cur)} received`
-          : `${money(out.amount, cur)} received for ${name} · ${money(out.targetOutstandingAfter, cur)} still owing`,
+          ? `${name} is paid in full — ${took}`
+          : `${took} for ${name} · ${money(out.targetOutstandingAfter, cur)} still owing`,
       );
+      if (out.advanceApplied > 0) {
+        toast.info(
+          `Advance left on the booking: ${money(out.advanceRemaining, cur)}` +
+            (out.advanceCappedBy === "SLICE_OWES"
+              ? ` — only what ${name} still owed was used`
+              : out.advanceCappedBy === "ADVANCE_AVAILABLE"
+                ? " — that was all the advance still had"
+                : ""),
+          { duration: 9_000 },
+        );
+      }
       // The money and the room are two outcomes, and the refusal of one must never read as
       // the failure of the other — the operator has already taken the cash.
       if (out.departure) {
@@ -205,6 +248,13 @@ export function SplitSettlementBlock({
                         </td>
                         <td style={{ padding: "6px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--ink-3)" }}>
                           {r.paid > 0 ? money(r.paid, cur) : "—"}
+                          {/* Where that money came from matters: advance already held reads
+                              differently from cash taken at the desk for this room. */}
+                          {r.advanceApplied > 0 && (
+                            <div style={{ fontSize: 10, color: "var(--ink-3)" }}>
+                              incl. {money(r.advanceApplied, cur)} advance
+                            </div>
+                          )}
                         </td>
                         <td
                           style={{
@@ -308,6 +358,41 @@ export function SplitSettlementBlock({
                   <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="receipt / txn no." />
                 </div>
               </div>
+              {/* Use the advance for this slice (2026-09-11). Offered only when the booking
+                  actually holds unapplied money and this part still owes something — there is
+                  nothing to decide otherwise. No money moves: this records which slice the
+                  advance answers for, so the booking's own balance does not change. */}
+              {activeRow.kind !== "UNASSIGNED" && (data?.unappliedPayments ?? 0) > 0 && activeRow.outstanding > 0 && (
+                <div className="field" style={{ marginTop: 2 }}>
+                  <label>Use the advance for this part?</label>
+                  <select value={advMode} onChange={(e) => setAdvMode(e.target.value as typeof advMode)}>
+                    <option value="">No — money received now</option>
+                    <option value="ALL">All of the advance it can absorb</option>
+                    <option value="PERCENT">A percentage of the advance</option>
+                    <option value="AMOUNT">A set amount of the advance</option>
+                  </select>
+                  {(advMode === "PERCENT" || advMode === "AMOUNT") && (
+                    <input
+                      style={{ marginTop: 6 }}
+                      type="number"
+                      min={0}
+                      step={advMode === "PERCENT" ? "1" : "0.01"}
+                      max={advMode === "PERCENT" ? 100 : undefined}
+                      value={advValue}
+                      onChange={(e) => setAdvValue(e.target.value)}
+                      placeholder={advMode === "PERCENT" ? "% of the advance (1–100)" : "amount of the advance to use"}
+                    />
+                  )}
+                  {advMode && (
+                    <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "4px 0 0" }}>
+                      {money(data?.unappliedPayments ?? 0, cur)} of advance is unapplied. Using it moves no money —
+                      it records that this part of the bill is answered by what the guest already paid, so the
+                      booking&apos;s balance stays as it is. You will be told how much was used and how much is left.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Still staying, or gone? (2026-09-09, operator ruling — "if someone pays for
                   the room, there can be an option like flag the room as guest is still staying
                   … or left if he only paid for 2 nights"). Only a ROOM can be flagged, and the
@@ -351,11 +436,26 @@ export function SplitSettlementBlock({
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={payM.isPending || !amount.trim() || (needsRef && !ref.trim())}
+                disabled={
+                  payM.isPending ||
+                  // Something must actually be happening: cash, or advance being applied.
+                  (!(Number.parseFloat(amount) > 0) && !advMode) ||
+                  // A reference belongs to money changing hands — an advance-only entry takes none.
+                  (Number.parseFloat(amount) > 0 && needsRef && !ref.trim()) ||
+                  (advMode !== "" && advMode !== "ALL" && !advValue.trim())
+                }
                 onClick={() => payM.mutate()}
-                title={needsRef && !ref.trim() ? "Cash and mobile payments need a reference" : undefined}
+                title={
+                  Number.parseFloat(amount) > 0 && needsRef && !ref.trim()
+                    ? "Cash and mobile payments need a reference"
+                    : undefined
+                }
               >
-                {payM.isPending ? "Recording…" : "Record payment"}
+                {payM.isPending
+                  ? "Recording…"
+                  : advMode && !(Number.parseFloat(amount) > 0)
+                    ? "Use the advance"
+                    : "Record payment"}
               </button>
             </div>
           )}

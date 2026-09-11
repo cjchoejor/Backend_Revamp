@@ -18,6 +18,8 @@ export type SettlementTargetRow = {
   label: string | null;
   charges: number;
   paid: number;
+  /** The part of `paid` that came out of the advance rather than a fresh payment. */
+  advanceApplied: number;
   outstanding: number;
   /** What may actually be collected now — `outstanding` capped at the folio's own balance. */
   collectable: number;
@@ -58,8 +60,15 @@ export type TargetPaymentOutcome = {
   /** Why the release was refused — the MONEY still landed. Never conflate the two. */
   departureRefused: string | null;
   roomStatus: "STILL_STAYING" | "LEFT" | null;
-  paymentId: string;
+  /** Null when nothing was collected in cash — an advance-only settlement writes no payment. */
+  paymentId: string | null;
   amount: number;
+  /** How much of the advance was used here, and what is left of it afterwards. */
+  advanceApplied: number;
+  advanceApplicationId: string | null;
+  advanceRemaining: number;
+  /** Why the ask was trimmed: the slice owed less, or less advance was left. */
+  advanceCappedBy: "ADVANCE_AVAILABLE" | "SLICE_OWES" | null;
   roomId: string | null;
   spaceId: string | null;
   stage: string;
@@ -93,6 +102,16 @@ export async function recordTargetPayment(
      */
     roomStatus?: "STILL_STAYING" | "LEFT";
     departureReason?: string;
+    /**
+     * Put part of the ADVANCE against this slice. No money moves — the advance is already on
+     * the folio; this records WHICH SLICE it answers for, so the room's outstanding falls and
+     * the unapplied pool falls with it while the booking's balance stays put.
+     *
+     *   ALL     — as much as this slice can absorb
+     *   PERCENT — value% OF THE ADVANCE, trimmed to what the slice owes
+     *   AMOUNT  — exactly value; refused if it exceeds the advance or the slice's bill
+     */
+    advanceApplication?: { mode: "ALL" | "PERCENT" | "AMOUNT"; value?: number; reason?: string };
   },
 ) {
   return apiRequest<TargetPaymentOutcome>(`/api/folios/${folioId}/target-payments`, {
