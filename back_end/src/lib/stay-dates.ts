@@ -68,6 +68,36 @@ export function hotelTodayUtc(at: Date = new Date()): Date {
   return new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
 }
 
+/** HOTEL_TIMEZONE's offset from UTC at `at`, in ms (Bhutan has no DST, so this is constant). */
+function hotelOffsetMs(at: Date): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: HOTEL_TIMEZONE,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(at);
+  const n = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const hour = n("hour") % 24; // some ICU builds render midnight as "24"
+  return Date.UTC(n("year"), n("month") - 1, n("day"), hour, n("minute"), n("second")) - at.getTime();
+}
+
+/**
+ * The instant the hotel-local calendar day CONTAINING `at` ends - i.e. the next local midnight.
+ *
+ * Needed because stay dates are day markers whose stored midnight is not consistent: some rows
+ * hold UTC midnight, others the hotel's local midnight (6h earlier in UTC terms). Both name the
+ * same calendar day, so anything reasoning about "the end of that day" must go through the
+ * timezone rather than adding 24h to whatever happens to be stored.
+ */
+export function hotelDayEndUtc(at: Date): Date {
+  const [y, m, d] = hotelCalendarYmd(at).split("-").map((x) => Number(x));
+  return new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0, 0) - hotelOffsetMs(at));
+}
+
 export type StayDateSource = {
   checkInDate?: Date | null;
   checkOutDate?: Date | null;

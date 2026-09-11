@@ -11,6 +11,7 @@ import { allocateReadableId } from "../../lib/readable-id.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { maxZeroSub, pctOf, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
+import { hotelCalendarYmd, hotelDayEndUtc } from "../../lib/stay-dates.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -696,18 +697,26 @@ export async function setAdvancePaymentPlan(
       if (promised.getTime() <= now.getTime()) {
         throw new ValidationError("The promised date is already in the past — pick a future date");
       }
-      // The advance window closes at check-in; a promise beyond it means "before check-in"
-      // in name only. Clamp rather than reject — the guest's words were "before check-in".
-      // A check-in already in the past makes the whole framing impossible (the clamp would
-      // land in the past and the timer would fire immediately) — refuse with the right
-      // alternatives instead.
+      // The advance window closes when the guest ARRIVES — but we never store an arrival
+      // instant, only the check-in DAY (`checkInDate` is that day's midnight). Comparing an
+      // instant against it therefore treated the whole check-in day as "already arrived"
+      // (2026-09-11 operator report): a guest checking in this afternoon who promises to
+      // transfer at 5pm was refused at 16:44, because midnight had long passed. The question
+      // is a calendar one, so ask it in calendar terms, in the hotel's own timezone.
       const checkIn = entry.checkInDate ?? null;
-      if (checkIn && checkIn.getTime() <= now.getTime()) {
+      const checkInDay = checkIn ? hotelCalendarYmd(checkIn) : null;
+      if (checkInDay && checkInDay < hotelCalendarYmd(now)) {
         throw new ValidationError(
-          `Check-in has already arrived — record ${subject} as due at the check-in desk instead`,
+          `Check-in day (${checkInDay}) has already passed — record ${subject} as due at the check-in desk instead`,
         );
       }
-      const clamped = checkIn && promised.getTime() > checkIn.getTime() ? checkIn : promised;
+      // A promise beyond the check-in day is "before check-in" in name only, so clamp it to
+      // the end of that day rather than rejecting — the guest's words were "before check-in".
+      // Clamping to the stored midnight (the old rule) would have thrown every same-day
+      // promise INTO THE PAST and fired W38 immediately, so the ceiling has to be the day's
+      // end, resolved through the hotel's timezone (stored midnights are not all UTC).
+      const dayEnd = checkIn ? hotelDayEndUtc(checkIn) : null;
+      const clamped = dayEnd && promised.getTime() > dayEnd.getTime() ? dayEnd : promised;
       promisedByIso = clamped.toISOString();
     } else if (input.promisedBy) {
       throw new ValidationError("An at-check-in plan doesn't take a date — the desk itself is the deadline");
