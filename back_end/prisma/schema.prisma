@@ -1354,6 +1354,7 @@ model Space {
   speculativeHolds    SpeculativeHold[]
   folioLines          FolioLine[]
   payments            PaymentRecord[]
+  advanceApplications AdvanceApplication[]
 
   @@map("spaces")
 }
@@ -1462,6 +1463,7 @@ model Room {
   keyReturnRecords          KeyReturnRecord[]
   folioLines                FolioLine[]
   payments                  PaymentRecord[]
+  advanceApplications       AdvanceApplication[]
 
   @@map("rooms")
 }
@@ -1805,6 +1807,7 @@ model Folio {
   billingModelTransitions BillingModelTransitionRecord[]
 
   interimPaymentRequests InterimPaymentRequest[]
+  advanceApplications    AdvanceApplication[]
 
   @@map("folios")
 }
@@ -3101,4 +3104,56 @@ model HouseTariff {
   @@index([effectiveFrom])
   @@index([effectiveTo])
   @@map("house_tariffs")
+}
+
+/// Part of the advance, put against ONE room or space (2026-09-11, operator request).
+///
+/// The advance is money the hotel ALREADY holds: it reduced the folio's balance at S3, but it
+/// names no room, because nobody knew yet which room would run up a minibar bill. So when the
+/// guest in 301 leaves early and says "take it out of what I already paid", nothing new arrives
+/// — what changes is only WHICH SLICE that held money answers for.
+///
+/// That is why this is not a PaymentRecord. A second IN row would be counted again by
+/// `recomputeFolioOutstandingBalance` and the hotel would believe it had received the money
+/// twice. An application moves attribution and leaves the folio's balance exactly where it was:
+/// the target's `paid` rises, `unappliedPayments` falls, the total is untouched.
+///
+/// Append-only, like every other money record here. Applying too much is prevented at write
+/// time (never more than is still unapplied, never more than the slice owes); an application
+/// made in error is reversed by `reversedById` pointing at its reversal, not by deletion.
+model AdvanceApplication {
+  id      String @id @default(uuid())
+  folioId String
+  folio   Folio  @relation(fields: [folioId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  entryId String
+
+  /// Exactly one of these — DB check `advance_application_target_xor`. Unlike a charge, an
+  /// application to "the booking as a whole" is meaningless: that is where the money already is.
+  roomId  String?
+  room    Room?   @relation(fields: [roomId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  spaceId String?
+  space   Space?  @relation(fields: [spaceId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  /// Always positive. A reversal is its own row with `reversalOfId` set, never a negative here.
+  amount Decimal @db.Decimal(12, 2)
+
+  /// How the operator expressed it: `{ mode: "ALL" | "PERCENT" | "AMOUNT", value?, unappliedBefore,
+  /// targetOutstandingBefore }`. Display/audit only — `amount` above is the operative figure.
+  basis  Json?
+  reason String?
+
+  /// Set on the row that UNDOES an earlier application; the original keeps its own history.
+  reversalOfId String?
+  reversalOf   AdvanceApplication?  @relation("AdvanceApplicationReversal", fields: [reversalOfId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  reversals    AdvanceApplication[] @relation("AdvanceApplicationReversal")
+
+  stage     Stage?
+  appliedAt DateTime @default(now())
+  appliedBy String
+
+  @@index([folioId])
+  @@index([entryId])
+  @@index([roomId])
+  @@index([spaceId])
+  @@map("advance_applications")
 }

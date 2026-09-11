@@ -34,6 +34,17 @@ type Tx = Prisma.TransactionClient | PrismaClient;
  * money the hotel holds that has not been applied to a slice yet — but it must be SHOWN, never
  * silently netted off one target. `summariseSettlementTargets` returns it as `unappliedPayments`
  * so the desk can say so, and settlement caps what a slice can take at the folio's own balance.
+ *
+ * ## Applying the advance is the deliberate act that closes that gap (2026-09-11)
+ *
+ * The operator can now say "the guest in 301 is leaving early — take it out of what they already
+ * paid". That writes an `AdvanceApplication`: the slice's `paid` rises, `unappliedPayments`
+ * falls by the same figure, and the FOLIO'S BALANCE DOES NOT MOVE, because no new money arrived.
+ * It is attribution, not a receipt — which is exactly why an application is not a PaymentRecord
+ * (a second IN row would be summed again and the hotel would believe it was paid twice).
+ *
+ * The automatic netting this module refuses is still refused. Nothing is applied unless someone
+ * chooses to apply it, and every application says who, when, how much, and against what.
  */
 export type SettlementTarget = { roomId: string; spaceId?: never } | { spaceId: string; roomId?: never } | "UNASSIGNED";
 
@@ -43,8 +54,10 @@ export type SettlementTargetSummary = {
   label: string | null;
   /** Σ of this target's folio lines — charges, taxes, corrections and credit notes alike. */
   charges: Prisma.Decimal;
-  /** Money already applied to THIS target (settlements scoped to it). */
+  /** Money already applied to THIS target — payments scoped to it, plus applied advance. */
   paid: Prisma.Decimal;
+  /** The part of `paid` that came from the advance rather than a fresh payment (2026-09-11). */
+  advanceApplied: Prisma.Decimal;
   /** max(0, charges − paid). */
   outstanding: Prisma.Decimal;
   lineCount: number;
@@ -56,14 +69,35 @@ function targetWhere(target: SettlementTarget) {
   return { spaceId: (target as { spaceId: string }).spaceId };
 }
 
-/** `max(0, charges − payments IN + payments OUT)` for one target. Decimal throughout. */
+/**
+ * Applied advance for one target: applications minus their reversals. A reversal is its own
+ * row (amounts are positive by DB check), so it is subtracted here rather than stored negative.
+ */
+export async function computeAdvanceAppliedToTarget(
+  tx: Tx,
+  folioId: string,
+  target: SettlementTarget,
+): Promise<Prisma.Decimal> {
+  if (target === "UNASSIGNED") return round2(toDecimal(0)); // nothing is applied to "the booking"
+  const scope = targetWhere(target);
+  const [applied, reversed] = await Promise.all([
+    tx.advanceApplication.aggregate({ where: { folioId, reversalOfId: null, ...scope }, _sum: { amount: true } }),
+    tx.advanceApplication.aggregate({
+      where: { folioId, reversalOfId: { not: null }, ...scope },
+      _sum: { amount: true },
+    }),
+  ]);
+  return round2(toDecimal(applied._sum.amount).sub(toDecimal(reversed._sum.amount)));
+}
+
+/** `max(0, charges − payments IN + payments OUT − applied advance)` for one target. */
 export async function computeOutstandingForTarget(
   tx: Tx,
   folioId: string,
   target: SettlementTarget,
 ): Promise<Prisma.Decimal> {
   const scope = targetWhere(target);
-  const [lineAgg, inAgg, outAgg] = await Promise.all([
+  const [lineAgg, inAgg, outAgg, advance] = await Promise.all([
     tx.folioLine.aggregate({ where: { folioId, ...scope }, _sum: { amount: true } }),
     tx.paymentRecord.aggregate({
       where: { folioId, paymentDirection: PaymentDirection.IN, ...scope },
@@ -73,9 +107,13 @@ export async function computeOutstandingForTarget(
       where: { folioId, paymentDirection: PaymentDirection.OUT, ...scope },
       _sum: { amount: true },
     }),
+    computeAdvanceAppliedToTarget(tx, folioId, target),
   ]);
   return round2(
-    maxZeroSub(toDecimal(lineAgg._sum.amount).add(toDecimal(outAgg._sum.amount)), toDecimal(inAgg._sum.amount)),
+    maxZeroSub(
+      toDecimal(lineAgg._sum.amount).add(toDecimal(outAgg._sum.amount)),
+      toDecimal(inAgg._sum.amount).add(advance),
+    ),
   );
 }
 
@@ -97,7 +135,7 @@ export async function summariseSettlementTargets(
   /** The folio's own balance; a slice can never take more than this. */
   folioOutstanding: Prisma.Decimal;
 }> {
-  const [lines, payments, folio] = await Promise.all([
+  const [lines, payments, applications, folio] = await Promise.all([
     tx.folioLine.findMany({
       where: { folioId },
       select: { amount: true, roomId: true, spaceId: true },
@@ -106,15 +144,29 @@ export async function summariseSettlementTargets(
       where: { folioId },
       select: { amount: true, paymentDirection: true, roomId: true, spaceId: true },
     }),
+    tx.advanceApplication.findMany({
+      where: { folioId },
+      select: { amount: true, roomId: true, spaceId: true, reversalOfId: true },
+    }),
     tx.folio.findUnique({ where: { id: folioId }, select: { outstandingBalance: true } }),
   ]);
 
-  type Bucket = { charges: Prisma.Decimal; paid: Prisma.Decimal; lineCount: number };
+  type Bucket = {
+    charges: Prisma.Decimal;
+    paid: Prisma.Decimal;
+    advanceApplied: Prisma.Decimal;
+    lineCount: number;
+  };
+  const empty = (): Bucket => ({
+    charges: toDecimal(0),
+    paid: toDecimal(0),
+    advanceApplied: toDecimal(0),
+    lineCount: 0,
+  });
   const byRoom = new Map<string, Bucket>();
   const bySpace = new Map<string, Bucket>();
-  let unassigned: Bucket = { charges: toDecimal(0), paid: toDecimal(0), lineCount: 0 };
-  const bucket = (m: Map<string, Bucket>, k: string) =>
-    m.get(k) ?? { charges: toDecimal(0), paid: toDecimal(0), lineCount: 0 };
+  let unassigned: Bucket = empty();
+  const bucket = (m: Map<string, Bucket>, k: string) => m.get(k) ?? empty();
 
   for (const l of lines) {
     const amt = toDecimal(l.amount);
@@ -148,6 +200,21 @@ export async function summariseSettlementTargets(
     }
   }
 
+  // Applied advance moves money from the unattributed pool onto a slice. It is the SAME money,
+  // so it is added to that slice's `paid` and taken off `unapplied` — the folio's own balance
+  // is untouched by design (see the header). A reversal row gives its amount back to the pool.
+  for (const a of applications) {
+    const amt = a.reversalOfId ? toDecimal(a.amount).neg() : toDecimal(a.amount);
+    if (a.roomId) {
+      const b = bucket(byRoom, a.roomId);
+      byRoom.set(a.roomId, { ...b, paid: b.paid.add(amt), advanceApplied: b.advanceApplied.add(amt) });
+    } else if (a.spaceId) {
+      const b = bucket(bySpace, a.spaceId);
+      bySpace.set(a.spaceId, { ...b, paid: b.paid.add(amt), advanceApplied: b.advanceApplied.add(amt) });
+    }
+    unapplied = unapplied.sub(amt);
+  }
+
   const [rooms, spaces] = await Promise.all([
     byRoom.size > 0
       ? tx.room.findMany({ where: { id: { in: [...byRoom.keys()] } }, select: { id: true, roomNumber: true } })
@@ -164,6 +231,7 @@ export async function summariseSettlementTargets(
     label,
     charges: round2(b.charges),
     paid: round2(b.paid),
+    advanceApplied: round2(b.advanceApplied),
     outstanding: round2(maxZeroSub(b.charges, b.paid)),
     lineCount: b.lineCount,
   });

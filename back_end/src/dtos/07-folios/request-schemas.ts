@@ -160,17 +160,47 @@ export const recordTargetPaymentRequestSchema = z
     entryId: z.string().min(1),
     roomId: z.string().min(1).optional(),
     spaceId: z.string().min(1).optional(),
-    amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be a positive number"),
+    // Zero is legal since 2026-09-11 — "the advance covers this room, the guest hands over
+    // nothing" is a real settlement. The service refuses a call where BOTH cash and advance
+    // are zero, which is the case that actually means nothing.
+    amount: z.coerce.number().refine((n) => Number.isFinite(n) && n >= 0, "amount cannot be negative"),
     paymentMethod: z.string().min(1).max(40).optional(),
     paymentVerificationRef: z.string().min(1).max(120).optional(),
     notes: z.string().max(500).optional(),
     /** Is this room's guest still here? Only meaningful with roomId; see the service. */
     roomStatus: z.enum(["STILL_STAYING", "LEFT"]).optional(),
     departureReason: z.string().min(1).max(300).optional(),
+    /**
+     * Draw on the advance for this slice (2026-09-11). PERCENT/AMOUNT need `value`; ALL must
+     * not carry one, so "use all of it" can never be read as "use 0".
+     */
+    advanceApplication: z
+      .object({
+        mode: z.enum(["ALL", "PERCENT", "AMOUNT"]),
+        value: z.coerce.number().positive().optional(),
+        reason: z.string().min(1).max(300).optional(),
+      })
+      .refine((a) => a.mode === "ALL" || a.value != null, {
+        message: "Say how much of the advance to use",
+        path: ["value"],
+      })
+      .refine((a) => a.mode !== "ALL" || a.value == null, {
+        message: "\"All of the advance\" takes no amount — drop the value or pick a different mode",
+        path: ["value"],
+      })
+      .refine((a) => a.mode !== "PERCENT" || (a.value! > 0 && a.value! <= 100), {
+        message: "The percentage of the advance must be between 0 and 100",
+        path: ["value"],
+      })
+      .optional(),
   })
   .refine((v) => !(v.roomStatus && !v.roomId), {
     message: "Only a room can be flagged as still staying or left — name the room",
     path: ["roomStatus"],
+  })
+  .refine((v) => !(v.advanceApplication && !v.roomId && !v.spaceId), {
+    message: "Name the room or space the advance should be put against",
+    path: ["advanceApplication"],
   })
   .refine((v) => !(v.roomId && v.spaceId), {
     message: "A payment settles a room OR a space, not both — omit one",

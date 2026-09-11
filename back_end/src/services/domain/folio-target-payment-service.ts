@@ -1,4 +1,5 @@
 import { PaymentDirection, Stage } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "../../db.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -61,7 +62,70 @@ export type RecordTargetPaymentInput = {
   roomStatus?: "STILL_STAYING" | "LEFT";
   /** Why the room is being released. Recorded on the claim event and the trace. */
   departureReason?: string;
+  /**
+   * Put part of the ADVANCE against this slice (2026-09-11, operator request: "in case one
+   * guest decides to return early, if there is advance paid, have an option where that guest
+   * can choose to use all or a percentage or some of the advance paid amount — and note how
+   * much was deducted from the advance and what is left").
+   *
+   * No money moves. The advance is already on the folio; this says WHICH SLICE it answers for,
+   * so the room's outstanding falls, the unapplied pool falls with it, and the folio's balance
+   * stays exactly where it was. See `folio-outstanding-per-target.ts`.
+   *
+   *   ALL     — as much of the advance as this slice can absorb
+   *   PERCENT — `value`% OF THE ADVANCE (not of the bill), capped at what the slice owes
+   *   AMOUNT  — exactly `value`, refused if it exceeds the advance or the slice's own bill
+   *
+   * Cash may be 0 alongside it: "the advance covers this room, the guest hands over nothing"
+   * is the whole point of the early-departure case.
+   */
+  advanceApplication?: { mode: "ALL" | "PERCENT" | "AMOUNT"; value?: number | string; reason?: string };
 };
+
+/** What the requested advance application comes to, and why it isn't more. */
+function resolveAdvanceToApply(
+  ask: RecordTargetPaymentInput["advanceApplication"],
+  unapplied: Prisma.Decimal,
+  targetOutstanding: Prisma.Decimal,
+): { amount: Prisma.Decimal; cappedBy: "ADVANCE_AVAILABLE" | "SLICE_OWES" | null } {
+  if (!ask) return { amount: toDecimal(0), cappedBy: null };
+  if (unapplied.lte(0)) {
+    throw new ValidationError("There is no unapplied advance on this booking to draw from");
+  }
+
+  let wanted: Prisma.Decimal;
+  if (ask.mode === "ALL") {
+    wanted = unapplied;
+  } else if (ask.mode === "PERCENT") {
+    const pct = toDecimal(ask.value ?? 0);
+    if (!pct.isFinite() || pct.lte(0) || pct.gt(100)) {
+      throw new ValidationError("The percentage of the advance to use must be between 0 and 100");
+    }
+    wanted = round2(unapplied.mul(pct).div(100));
+  } else {
+    wanted = round2(toDecimal(ask.value ?? 0));
+    if (!wanted.isFinite() || wanted.lte(0)) {
+      throw new ValidationError("The amount of advance to use must be a positive number");
+    }
+    // An explicit figure is refused rather than silently trimmed — the operator typed it, so
+    // being told why it cannot stand is more useful than a quiet different number.
+    if (wanted.gt(unapplied)) {
+      throw new ValidationError(
+        `Only ${unapplied.toFixed(2)} of the advance is still unapplied — that is the most that can be used`,
+      );
+    }
+    if (wanted.gt(targetOutstanding)) {
+      throw new ValidationError(
+        `This part of the bill only owes ${targetOutstanding.toFixed(2)} — using more of the advance against it would over-credit it`,
+      );
+    }
+  }
+
+  // ALL and PERCENT are asks about the advance, so they trim to fit the slice rather than refuse.
+  if (wanted.gt(targetOutstanding)) return { amount: round2(targetOutstanding), cappedBy: "SLICE_OWES" };
+  if (wanted.gt(unapplied)) return { amount: round2(unapplied), cappedBy: "ADVANCE_AVAILABLE" };
+  return { amount: round2(wanted), cappedBy: null };
+}
 
 export async function recordTargetPayment(
   prisma: PrismaClient,
@@ -104,56 +168,107 @@ export async function recordTargetPayment(
     if (!allocated) throw new ValidationError("spaceId is not a space of this booking");
   }
 
-  const amountDec = toDecimal(input.amount);
-  if (!amountDec.isFinite() || amountDec.lte(0)) throw new ValidationError("amount must be a positive number");
+  // Cash may legitimately be ZERO when the advance is covering this slice, so the positivity
+  // check moved below — after we know whether any advance is being applied.
+  const amountDec = round2(toDecimal(input.amount ?? 0));
+  if (!amountDec.isFinite() || amountDec.lt(0)) throw new ValidationError("amount must be a positive number");
 
   const method = input.paymentMethod?.trim() || "CASH";
-  if ((method === "CASH" || method === "MOBILE_PAYMENT") && !input.paymentVerificationRef?.trim()) {
+  if (amountDec.gt(0) && (method === "CASH" || method === "MOBILE_PAYMENT") && !input.paymentVerificationRef?.trim()) {
     throw new ValidationError("paymentVerificationRef is required for CASH and MOBILE_PAYMENT");
   }
 
   const target: SettlementTarget = roomId ? { roomId } : spaceId ? { spaceId } : "UNASSIGNED";
+  if (input.advanceApplication && target === "UNASSIGNED") {
+    throw new ValidationError(
+      "Name the room or space the advance should be put against — applying it to the booking as a whole is where it already sits",
+    );
+  }
+
   const targetOutstanding = await computeOutstandingForTarget(prisma, folioId, target);
   const folioOutstanding = round2(toDecimal(folio.outstandingBalance));
-  const collectable = collectableForTarget(targetOutstanding, folioOutstanding);
+  const before = await summariseSettlementTargets(prisma, folioId);
+  const unappliedBefore = before.unappliedPayments;
 
-  if (collectable.lte(0)) {
+  const advance = resolveAdvanceToApply(input.advanceApplication, unappliedBefore, targetOutstanding);
+  const advanceDec = advance.amount;
+
+  // What CASH can still be taken once the advance has done its part. The folio cap survives
+  // untouched: applying the advance does not change the folio's balance, so cash can never
+  // exceed it — that is what stops the same money being collected twice.
+  const cashCap = collectableForTarget(round2(targetOutstanding.sub(advanceDec)), folioOutstanding);
+
+  if (amountDec.lte(0) && advanceDec.lte(0)) {
     throw new ValidationError(
       targetOutstanding.lte(0)
         ? "This part of the bill is already paid — nothing to collect against it"
-        : "The booking's balance is already covered by money received — nothing left to collect",
+        : cashCap.lte(0)
+          ? "The booking's balance is already covered by money received — apply the advance to this room instead of collecting again"
+          : "Enter an amount to collect, or choose how much of the advance to use",
     );
   }
-  if (amountDec.gt(collectable)) {
+  if (amountDec.gt(cashCap)) {
     throw new ValidationError(
       `That is more than this part of the bill can take. It owes ${targetOutstanding.toFixed(2)}` +
-        (collectable.lt(targetOutstanding)
-          ? `, but only ${collectable.toFixed(2)} of that is still uncovered — the rest is already paid for by money received against the booking.`
-          : ` — collect at most ${collectable.toFixed(2)}.`),
+        (advanceDec.gt(0) ? `, of which ${advanceDec.toFixed(2)} is being covered by the advance` : "") +
+        (cashCap.lt(targetOutstanding)
+          ? `, and only ${cashCap.toFixed(2)} is still uncovered — the rest is already paid for by money received against the booking.`
+          : ` — collect at most ${cashCap.toFixed(2)}.`),
     );
   }
 
   const stage = entry.currentStage;
   const result = await prisma.$transaction(async (tx) => {
-    const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
-    const payment = await tx.paymentRecord.create({
-      data: {
-        id: paymentId,
-        folioId,
-        entryId: entry.id,
-        amount: amountDec,
-        paymentDirection: PaymentDirection.IN,
-        paymentMethod: method,
-        receivedAt: new Date(),
-        recordedBy: actorId,
-        stage,
-        roomId,
-        spaceId,
-        notes:
-          input.notes?.trim() ||
-          `${method}${input.paymentVerificationRef?.trim() ? `:${input.paymentVerificationRef.trim()}` : ""}`,
-      },
-    });
+    // The advance application first: it is the cheaper write and, if the pool moved under us
+    // between the read and here, we would rather fail before taking the guest's money.
+    let applicationId: string | null = null;
+    if (advanceDec.gt(0)) {
+      const app = await tx.advanceApplication.create({
+        data: {
+          folioId,
+          entryId: entry.id,
+          roomId,
+          spaceId,
+          amount: advanceDec,
+          stage,
+          appliedBy: actorId,
+          reason: input.advanceApplication?.reason?.trim() || input.notes?.trim() || null,
+          basis: {
+            mode: input.advanceApplication!.mode,
+            value: input.advanceApplication?.value != null ? String(input.advanceApplication.value) : null,
+            unappliedBefore: unappliedBefore.toFixed(2),
+            targetOutstandingBefore: targetOutstanding.toFixed(2),
+            cappedBy: advance.cappedBy,
+          },
+        },
+      });
+      applicationId = app.id;
+    }
+
+    // Only real money gets a PaymentRecord. An advance-only settlement writes none, because
+    // nothing arrived — the folio's balance must not move for an attribution.
+    let payment: { id: string } | null = null;
+    if (amountDec.gt(0)) {
+      const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
+      payment = await tx.paymentRecord.create({
+        data: {
+          id: paymentId,
+          folioId,
+          entryId: entry.id,
+          amount: amountDec,
+          paymentDirection: PaymentDirection.IN,
+          paymentMethod: method,
+          receivedAt: new Date(),
+          recordedBy: actorId,
+          stage,
+          roomId,
+          spaceId,
+          notes:
+            input.notes?.trim() ||
+            `${method}${input.paymentVerificationRef?.trim() ? `:${input.paymentVerificationRef.trim()}` : ""}`,
+        },
+      });
+    }
 
     await recomputeFolioOutstandingBalance(tx, folioId);
     const after = await tx.folio.findUniqueOrThrow({
@@ -174,11 +289,15 @@ export async function recordTargetPayment(
         inquiryId: entry.inquiryId,
         entryId: entry.id,
         payload: {
-          paymentId,
+          paymentId: payment?.id ?? null,
           roomId,
           spaceId,
           amount: amountDec.toFixed(2),
-          paymentMethod: method,
+          paymentMethod: amountDec.gt(0) ? method : null,
+          advanceApplicationId: applicationId,
+          advanceApplied: advanceDec.toFixed(2),
+          advanceMode: input.advanceApplication?.mode ?? null,
+          unappliedAdvanceBefore: unappliedBefore.toFixed(2),
           targetOutstandingBefore: targetOutstanding.toFixed(2),
           targetOutstandingAfter: targetAfter.toFixed(2),
           folioOutstandingAfter: after.outstandingBalance.toString(),
@@ -187,7 +306,7 @@ export async function recordTargetPayment(
       },
     });
 
-    return { payment, folioOutstandingAfter: after.outstandingBalance, targetAfter };
+    return { payment, applicationId, folioOutstandingAfter: after.outstandingBalance, targetAfter };
   });
 
   // The room release runs AFTER the money is durably recorded, and on its own. Order is the
@@ -216,8 +335,13 @@ export async function recordTargetPayment(
     departure,
     departureRefused,
     roomStatus: input.roomStatus ?? null,
-    paymentId: result.payment.id,
+    paymentId: result.payment?.id ?? null,
     amount: Number(amountDec.toFixed(2)),
+    /** What was taken out of the advance, and what is left of it — the operator's own question. */
+    advanceApplied: Number(advanceDec.toFixed(2)),
+    advanceApplicationId: result.applicationId,
+    advanceRemaining: Number(summary.unappliedPayments.toFixed(2)),
+    advanceCappedBy: advance.cappedBy,
     roomId,
     spaceId,
     stage,
