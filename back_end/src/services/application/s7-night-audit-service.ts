@@ -7,6 +7,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
 import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
+import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
 import { maybePromptInterimPaymentTx } from "../domain/interim-payment-service.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
@@ -75,6 +76,12 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
     roomId: string;
     roomNumber: string;
     amount: number;
+    /**
+     * ROOM_CHARGE for the accommodation, F_AND_B for the meal plan (2026-09-11). One night of
+     * one room posts up to two lines, so the folio can say what the money was for — a bill on
+     * MAP+D used to show the dinner nowhere, folded inside the room charge.
+     */
+    lineType: FolioLineType;
     /** Description string used for both display and idempotency (per-room lookup). */
     description: string;
     /** The room's own tax toggles from its composition (S2 negotiation) — default apply. */
@@ -122,28 +129,60 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
       //   - Fall back to reservation.frozenRate when composition wasn't populated
       //     (single-room legacy bookings pre-Phase-A).
       const fallbackRate = num(entry.reservation?.frozenRate ?? null);
+      // The frozen split — accommodation vs meals — read from the reservation's own terms,
+      // the operative quotation as the fallback. See `frozen-room-composition.ts` for why the
+      // ROW owns the total and the composition owns only the proportion.
+      // The reservation's own frozen terms are the authority at S7 — the booking is confirmed
+      // by definition here, so there is no un-frozen case to fall back to.
+      const composition = frozenCompositionByRoom([entry.reservation?.frozenCommercialTerms ?? null]);
       const perRoomPostCandidates: PerRoomPost[] = [];
       for (const a of activeAssignments) {
         const roomNumber = a.room.roomNumber ?? a.roomId.slice(0, 6);
-        let amount = fallbackRate;
-        if (a.frozenSubtotal != null && a.startDate && a.endDate) {
-          const totalNights = Math.max(
-            1,
-            Math.round((a.endDate.getTime() - a.startDate.getTime()) / 86_400_000),
-          );
-          amount = num(a.frozenSubtotal) / totalNights;
-        }
+        // Nights from the row when it is dated; the composition supplies them otherwise. That
+        // second case is the bug this fixes — an undated row used to fall through to the
+        // ROOM-only `frozenRate` and silently drop the meals.
+        const rowNights =
+          a.startDate && a.endDate
+            ? Math.max(1, Math.round((a.endDate.getTime() - a.startDate.getTime()) / 86_400_000))
+            : null;
+        const split = splitFrozenRow({
+          roomId: a.roomId,
+          rowSubtotal: a.frozenSubtotal,
+          rowNights,
+          composition: composition.get(a.roomId),
+        });
+
+        // Legacy row with no composition anywhere: one flat room line, exactly as before.
+        const accommodationPerNight = split ? num(split.accommodation) / split.nights : fallbackRate;
+        const mealsPerNight = split ? num(split.meals) / split.nights : 0;
+
         perRoomPostCandidates.push({
           assignmentId: a.id,
           roomId: a.roomId,
           roomNumber,
-          amount,
+          amount: accommodationPerNight,
+          lineType: FolioLineType.ROOM_CHARGE,
           description: `Night audit room charge · Room ${roomNumber}`,
           // An FOC room prices to 0 already; a room negotiated SC- or GST-exempt at S2 keeps
           // that exemption on the ledger, exactly as its frozenTotal was computed.
           serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
           gstApplies: a.isFoc ? false : a.gstApplies !== false,
         });
+
+        // The meal plan as its own line — only when the frozen terms actually price one, so a
+        // room-only (EP) booking gains nothing and no folio grows an empty 0.00 row.
+        if (mealsPerNight > 0) {
+          perRoomPostCandidates.push({
+            assignmentId: a.id,
+            roomId: a.roomId,
+            roomNumber,
+            amount: mealsPerNight,
+            lineType: FolioLineType.F_AND_B,
+            description: `Night audit meal plan · Room ${roomNumber}`,
+            serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
+            gstApplies: a.isFoc ? false : a.gstApplies !== false,
+          });
+        }
       }
 
       // Idempotency: skip any per-room post whose (folioId, description, chargeDate) already exists.
@@ -153,7 +192,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
         const already = await prisma.folioLine.findFirst({
           where: {
             folioId: entry.folio.id,
-            lineType: FolioLineType.ROOM_CHARGE,
+            lineType: p.lineType,
             chargeDate: operatingDate,
             description: p.description,
           },
@@ -204,8 +243,14 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
       if (p.perRoomPosts.length > 0) {
         // Split billing: room charges inherit the folio's per-line-type default. One resolve
         // per folio — every room line on this folio settles under the same model.
-        const billingModel = await resolveBillingModelForNewLine(tx, p.folioId, FolioLineType.ROOM_CHARGE);
+        // Split billing resolves per LINE TYPE — a folio can route meals to a different payer
+        // than the room (the agent covers accommodation, the guest covers their own meals).
+        const billingModelByType = new Map<FolioLineType, string | null>();
+        for (const t of new Set(p.perRoomPosts.map((x) => x.lineType))) {
+          billingModelByType.set(t, await resolveBillingModelForNewLine(tx, p.folioId, t));
+        }
         for (const post of p.perRoomPosts) {
+          const billingModel = billingModelByType.get(post.lineType) ?? null;
           // Decimal-safe: the stored room amount and the base the tax is computed on are the
           // same rounded figure (a float per-night split would otherwise be rounded by the
           // column and taxed on the unrounded value).
@@ -214,7 +259,7 @@ export async function runNightAudit(prisma: PrismaClient, actorId: string, input
             data: {
               id: await allocateFolioLineId(tx, p.folioId),
               folioId: p.folioId,
-              lineType: FolioLineType.ROOM_CHARGE,
+              lineType: post.lineType,
               description: post.description,
               amount: roomAmount,
               currency: "BTN",

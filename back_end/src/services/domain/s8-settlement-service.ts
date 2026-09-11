@@ -26,6 +26,7 @@ import {
 import { minMoney, toDecimal } from "../../lib/money.js";
 import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
 
 function num(d: Prisma.Decimal | null | undefined): number {
   if (d == null) return 0;
@@ -286,11 +287,31 @@ export async function initiateSettlement(
     // room-only rate) stays as the legacy-flat fallback.
     const compositionRows = await prisma.roomAssignment.findMany({
       where: { entryId: folio.entryId, frozenSubtotal: { not: null } },
-      select: { frozenSubtotal: true },
+      select: { roomId: true, frozenSubtotal: true, startDate: true, endDate: true },
     });
     const compositionExpectedTotal =
       compositionRows.length > 0
         ? compositionRows.reduce((s, r) => s + num(r.frozenSubtotal), 0)
+        : null;
+    // The accommodation half of the same basis (2026-09-11) — what Σ ROOM_CHARGE comes to once
+    // the night audit posts the meal plan as its own F&B line. Read through the SAME helper the
+    // audit posts from, so the two can never disagree about what a room-night is worth; that
+    // disagreement is exactly what stranded ENT-20260908-0001 at settlement.
+    const frozenSplit = frozenCompositionByRoom([entry.reservation?.frozenCommercialTerms ?? null]);
+    const compositionAccommodationTotal =
+      compositionRows.length > 0
+        ? compositionRows.reduce((s, r) => {
+            const split = splitFrozenRow({
+              roomId: r.roomId,
+              rowSubtotal: r.frozenSubtotal,
+              rowNights:
+                r.startDate && r.endDate
+                  ? Math.max(1, Math.round((r.endDate.getTime() - r.startDate.getTime()) / 86_400_000))
+                  : null,
+              composition: frozenSplit.get(r.roomId),
+            });
+            return s + (split ? Number(split.accommodation.toString()) : num(r.frozenSubtotal));
+          }, 0)
         : null;
     enforceRoomChargeSumMatchesFrozenRateBasis({
       frozenRatePerNight: num(entry.reservation.frozenRate),
@@ -303,6 +324,7 @@ export async function initiateSettlement(
       skipNumericReconciliation: amendments.length > 0,
       relativeTolerance: 0.02,
       compositionExpectedTotal,
+      compositionAccommodationTotal,
     });
   }
 

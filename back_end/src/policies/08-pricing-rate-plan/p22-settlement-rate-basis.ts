@@ -69,6 +69,21 @@ export function enforceRoomChargeSumMatchesFrozenRateBasis(input: {
   relativeTolerance: number;
   /** Σ RoomAssignment.frozenSubtotal when the booking has per-room composition; null = legacy. */
   compositionExpectedTotal?: number | null;
+  /**
+   * Σ the ACCOMMODATION half of the composition — room + extra bed, meals excluded (2026-09-11).
+   *
+   * The ledger legitimately carries two shapes. Before the split, one ROOM_CHARGE line per
+   * night carried room AND meals together, so `compositionExpectedTotal` was the right
+   * expectation. Since the night audit posts the meal plan as its own F&B line, Σ ROOM_CHARGE
+   * is the accommodation alone. A folio can even hold both — audited across the change.
+   *
+   * So the check accepts EITHER basis. That is not a loosening: its job is to catch a room
+   * billed at the wrong RATE, and both figures are frozen, neither is caller-supplied, and the
+   * gap between them is the meals — which are still on the folio either way, just under a
+   * different line type. Demanding one shape would refuse settlement on every booking audited
+   * on the other side of the change.
+   */
+  compositionAccommodationTotal?: number | null;
 }) {
   if (input.skipNumericReconciliation) return;
   const composition =
@@ -83,13 +98,29 @@ export function enforceRoomChargeSumMatchesFrozenRateBasis(input: {
   const expected = composition
     ? (input.compositionExpectedTotal as number)
     : input.frozenRatePerNight * input.stayNightCount;
+  const within = (target: number) =>
+    Math.abs(input.totalRoomChargesInStayWindow - target) <= Math.max(0.01, Math.abs(target) * input.relativeTolerance);
+  if (within(expected)) return;
+  // The accommodation-only basis — a folio whose meals are their own F&B line.
+  const accommodation = input.compositionAccommodationTotal;
+  if (
+    composition &&
+    accommodation != null &&
+    Number.isFinite(accommodation) &&
+    accommodation > 0 &&
+    within(accommodation)
+  ) {
+    return;
+  }
   const tol = Math.max(0.01, Math.abs(expected) * input.relativeTolerance);
-  if (Math.abs(input.totalRoomChargesInStayWindow - expected) <= tol) return;
+  void tol;
 
   throw new PolicyGateBlockedError(
     "SETTLEMENT_RATE_BASIS_MISMATCH",
     composition
-      ? `Posted ROOM_CHARGE total for stay (${input.totalRoomChargesInStayWindow.toFixed(2)}) does not match the frozen per-room composition basis (${expected.toFixed(2)} = Σ room frozen subtotals)`
+      ? `Posted ROOM_CHARGE total for stay (${input.totalRoomChargesInStayWindow.toFixed(2)}) does not match the frozen per-room composition basis (${expected.toFixed(2)} = Σ room frozen subtotals${
+          accommodation != null && accommodation > 0 ? `, or ${accommodation.toFixed(2)} with the meal plan posted separately` : ""
+        })`
       : `Posted ROOM_CHARGE total for stay (${input.totalRoomChargesInStayWindow.toFixed(2)}) does not match frozen rate basis (${expected.toFixed(2)} = ${input.frozenRatePerNight.toFixed(2)} × ${input.stayNightCount} night(s))`,
   );
 }
