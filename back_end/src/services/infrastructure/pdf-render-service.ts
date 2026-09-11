@@ -9,19 +9,38 @@
  * The A4 defaults + inline CSS match the reference bills. Templates should embed their own
  * fonts / colours; this wrapper does not inject any styling.
  *
- * Windows note: Puppeteer 25 bundles Chromium and downloads it on `npm install`. On this
- * machine it lives under `back_end/node_modules/puppeteer/.local-chromium/`. No system
- * Chrome required.
+ * Windows note: Puppeteer 25 downloads its browsers on `npm install`, into the per-user cache
+ * (`~/.cache/puppeteer`), not into `node_modules`. No system Chrome required.
+ *
+ * WHY `headless: "shell"` AND NOT `true` (2026-09-11, operator report — "whenever I send a mail
+ * a black box appears"). Since Puppeteer 22, `headless: true` means Chrome's **new** headless:
+ * the full `chrome.exe` run with `--headless=new`. It is not windowless — it creates a real
+ * platform window and merely tries to keep it off-screen, and on this Windows box that window
+ * paints as a black rectangle over the desk. Because the browser is deliberately kept alive
+ * between renders (below), the box did not flash and vanish — it sat there until the backend
+ * restarted, appearing on the first mail sent after every boot.
+ *
+ * `"shell"` runs `chrome-headless-shell` instead — the old headless binary, which has no window
+ * surface at all. Puppeteer downloads it alongside Chrome, so nothing new is installed. It is
+ * the right tool here: this module only ever loads a self-contained HTML string and prints it,
+ * and every API it uses (setContent, fonts.ready, emulateMediaType, setViewport, pdf) is
+ * supported there.
+ *
+ * `PDF_HEADLESS=chrome` forces the new-headless path back on, as an escape hatch if a future
+ * template ever needs something only full Chrome renders. Expect the black window to return.
  */
 import type { Browser, LaunchOptions } from "puppeteer";
 import { launch } from "puppeteer";
 
 let browserPromise: Promise<Browser> | null = null;
 
+/** `true` = new headless (full Chrome, opens a window on Windows); `"shell"` = windowless. */
+const HEADLESS_MODE: LaunchOptions["headless"] = process.env.PDF_HEADLESS === "chrome" ? true : "shell";
+
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     const opts: LaunchOptions = {
-      headless: true,
+      headless: HEADLESS_MODE,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     };
     browserPromise = launch(opts);
