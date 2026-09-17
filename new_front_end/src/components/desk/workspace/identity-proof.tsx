@@ -7,6 +7,14 @@ import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
+
+/** The verification path in the desk's words — the same wording as the select below. */
+const PATH_WORD: Record<string, string> = {
+  FIRST_TIME: "first-time guest",
+  RETURNING_VALID: "returning, ID valid",
+  RETURNING_EXPIRED: "returning, ID expired",
+  VIP: "VIP path",
+};
 import { fetchPdfObjectUrl } from "@/lib/api/documents";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listRooms } from "@/lib/api/rooms";
@@ -659,7 +667,7 @@ export function IdentityProofBlock({
       return verifyGuestIdentity(session, guest.id, body);
     },
     onSuccess: () => {
-      toast.success(identityVerified ? `Identity verification updated · ${verificationPath}` : "Identity verified");
+      toast.success(identityVerified ? `Identity verification updated · ${PATH_WORD[verificationPath] ?? verificationPath}` : "Identity verified");
       void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
@@ -1301,7 +1309,7 @@ export function IdentityProofBlock({
           <StepAction
             className="btn btn-primary"
             label={identityVerified && pathChanged ? "Update identity verification" : "Record identity verification"}
-            doneLabel={`Identity verified${recordedPath ? ` · ${recordedPath}` : ""}`}
+            doneLabel={`Identity verified${recordedPath ? ` · ${PATH_WORD[recordedPath] ?? recordedPath}` : ""}`}
             done={identityVerified && !pathChanged}
             pending={verifyM.isPending}
             disabled={!guest?.id || verifyMissing || detailsIncomplete || (identityVerified && !pathChanged)}

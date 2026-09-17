@@ -363,6 +363,8 @@ export type CommittedHoldSummary = {
 export type ReservationSummary = {
   id: string;
   entryId: string;
+  /** The pass this reservation froze — one per pass. */
+  segmentId?: string | null;
   frozenRate: string | number;
   frozenRatePlanId: string;
   frozenBillingModel: string;

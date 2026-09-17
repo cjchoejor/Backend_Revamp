@@ -92,6 +92,34 @@ export type DeskFinancials = {
   folio: FolioView;
 };
 
+/** The pass the booking is in now — the newest segment. */
+export function currentPassId(entry: EntryDetail): string | null {
+  const segs = entry.segments ?? [];
+  if (segs.length === 0) return null;
+  return segs.reduce((a, b) => ((b.segmentNumber ?? 0) > (a.segmentNumber ?? 0) ? b : a)).id;
+}
+
+/** Live quotations of the current pass — the backend's gates read only these. */
+export function liveQuotesThisPass(entry: EntryDetail): QuotationSummary[] {
+  const pass = currentPassId(entry);
+  return (entry.quotations ?? []).filter(
+    (q) => (q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED") && (!pass || q.segmentId === pass),
+  );
+}
+
+/**
+ * Whether the booking has been reserved IN THIS PASS. A re-entry opens a new pass and the backend
+ * makes one reservation per pass, but `entry.reservation` keeps pointing at the earlier pass's row
+ * until the booking is reserved again — so its mere presence does not mean "frozen now".
+ */
+export function reservedThisPass(entry: EntryDetail): boolean {
+  const r = entry.reservation;
+  if (!r) return false;
+  const pass = currentPassId(entry);
+  if (!r.segmentId || !pass) return true;
+  return r.segmentId === pass;
+}
+
 export function deriveFinancials(
   entry: EntryDetail,
   opts?: { paymentStatus?: PaymentStatusSummary | null },
@@ -110,7 +138,7 @@ export function deriveFinancials(
 
   return {
     currency,
-    frozen: !!reservation,
+    frozen: reservedThisPass(entry),
     indicativeTotal: quote ? toNum(quote.totalAmount) : null,
     frozenRate: reservation ? toNum(reservation.frozenRate) : null,
     nights,
@@ -198,9 +226,7 @@ export function s3Readiness(
     // quote is still preferred as that basis when there is one.
     {
       label: "Quote generated",
-      met: (entry.quotations ?? []).some(
-        (q) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED",
-      ),
+      met: liveQuotesThisPass(entry).length > 0,
     },
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
@@ -316,9 +342,8 @@ export function canProgressS1(entry: EntryDetail): boolean {
  * glance whether the guest actually said yes.
  */
 export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Precondition[] {
-  const quotes = entry.quotations ?? [];
-  const live = quotes.filter((q) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED");
-  const accepted = quotes.find((q) => q.state === "ACCEPTED");
+  const live = liveQuotesThisPass(entry);
+  const accepted = live.find((q) => q.state === "ACCEPTED");
   const operative = accepted ?? live[0];
   const sealed = (entry.availabilityConfigs ?? []).some((c) => c.sealedAt && c.optionSelected);
   const holds = entry.speculativeHolds ?? [];

@@ -13,7 +13,7 @@
  */
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
@@ -71,34 +71,25 @@ import { channelWord, factsFromEntry, standingOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtDay, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
-import { traceWords } from "@/lib/ds/trace-words";
+import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
 import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
 import { JourneySummaryBlock } from "@/components/desk/workspace/journey-summary";
-import { CancellationVoucherBlock } from "@/components/desk/workspace/confirmation-voucher";
-import { InquiryStep as InquiryStepBase } from "@/components/desk/workspace/inquiry-step";
-import { QuoteStep as QuoteStepBase } from "@/components/desk/workspace/quote-step";
-import { SetupStep as SetupStepBase } from "@/components/desk/workspace/setup-step";
-import { ConfirmStep as ConfirmStepBase } from "@/components/desk/workspace/confirm-step";
-import { ArrivalStep as ArrivalStepBase } from "@/components/desk/workspace/arrival-step";
-import { CheckInStep as CheckInStepBase } from "@/components/desk/workspace/checkin-step";
-import { StayStep as StayStepBase } from "@/components/desk/workspace/stay-step";
-import { CheckOutStep as CheckOutStepBase } from "@/components/desk/workspace/checkout-step";
-import { PostStayStep as PostStayStepBase } from "@/components/desk/workspace/closed-step";
 import type { EntryDetail } from "@/types/api";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
+import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
+import { S3SetUp } from "@/components/ds/steps/s3-setup";
+import { S4Reserve } from "@/components/ds/steps/s4-reserve";
+import { S5Arrival } from "@/components/ds/steps/s5-arrival";
+import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
+import { S7Stay } from "@/components/ds/steps/s7-stay";
+import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
+import { S9Closed } from "@/components/ds/steps/s9-closed";
+import { atLeast } from "@/components/ds/steps/kit";
+const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
-const InquiryStep = memo(InquiryStepBase);
-const QuoteStep = memo(QuoteStepBase);
-const SetupStep = memo(SetupStepBase);
-const ConfirmStep = memo(ConfirmStepBase);
-const ArrivalStep = memo(ArrivalStepBase);
-const CheckInStep = memo(CheckInStepBase);
-const StayStep = memo(StayStepBase);
-const CheckOutStep = memo(CheckOutStepBase);
-const PostStayStep = memo(PostStayStepBase);
 
 const NOOP = () => {};
 
@@ -219,6 +210,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
 
   /* ---- the per-room key checklist (survives a refresh until check-in stamps it) ---- */
+  const [reserveExtras, setReserveExtras] = useState<string[]>([]);
+  const reportReserveExtras = useMemo(
+    () => (items: string[]) => setReserveExtras((prev) => (prev.join("|") === items.join("|") ? prev : items)),
+    [],
+  );
   const [issuedKeyRooms, setIssuedKeyRooms] = useState<Record<string, boolean>>({});
   const toggleKeyRoom = useMemo(() => (roomId: string) => setIssuedKeyRooms((prev) => ({ ...prev, [roomId]: !prev[roomId] })), []);
   const setKeyRooms = useMemo(
@@ -473,14 +469,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       (!segStart || (c.createdAt ?? "") >= segStart),
   );
 
-  const ready = readyToConfirm;
+  const ready = readyToConfirm && reserveExtras.length === 0;
   const sealedOutcome =
     entry.status === "CANCELLED" ? "Cancelled — a read-only record" : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL" ? "Expired — a read-only record" : "Closed and sealed — a read-only record";
 
   const preconds: Precondition[] = sealed
     ? []
     : confirmStepActive || setupStepActive
-      ? confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications })
+      ? [
+          ...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }),
+          ...(confirmStepActive ? reserveExtras.map((label) => ({ label, met: false })) : []),
+        ]
       : inquiryStepActive
         ? s1Readiness(entry)
         : quoteStepActive
@@ -637,61 +636,69 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     setParkExitFlow(false);
     setParkOpen(true);
   };
-  /** The steps already rebuilt in the redesign render natively; the rest are the old tools. */
+  /** Each step is drawn by its own canvas (components/ds/steps). */
   const nativeBody = (): ReactNode | null => {
     switch (step.key) {
       case "inquiry":
         return <S1Inquiry entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} />;
+      case "quote":
+        return <S2Negotiation entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} />;
+      case "setup":
+        return <S3SetUp entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+      case "confirm":
+        return (
+          <S4Reserve
+            entry={entry}
+            past={viewingPast}
+            onPark={parkable ? openPark : undefined}
+            goToStep={viewingPast ? NOOP : gotoStep}
+            reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
+            onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
+          />
+        );
+      case "arrival":
+        return (
+          <S5Arrival
+            entry={entry}
+            past={viewingPast}
+            onPark={parkable ? openPark : undefined}
+            guestPresent={guestPresent}
+            setGuestPresent={arrivalStepActive ? setGuestPresent : NOOP}
+          />
+        );
+      case "checkin":
+        return (
+          <S6CheckIn
+            entry={entry}
+            past={viewingPast}
+            issuedKeyRooms={issuedKeyRooms}
+            toggleKeyRoom={checkInStepActive ? toggleKeyRoom : NOOP}
+            setKeyRooms={checkInStepActive ? setKeyRooms : NOOP}
+            registrationConfirmed={registrationConfirmed}
+            setRegistrationConfirmed={checkInStepActive ? setRegistrationConfirmed : NOOP}
+            checkIn={checkInStepActive ? { onClick: () => setCheckInOpen(true), ready: canCheckIn, reason: canCheckIn ? undefined : firstNote } : null}
+          />
+        );
+      case "stay":
+        return <S7Stay entry={entry} past={viewingPast} setNightAuditOk={stayStepActive ? setNightAuditOk : NOOP} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+      case "checkout":
+        return <S8CheckOut entry={entry} past={viewingPast} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+      case "closed": {
+        const canClose = canCloseS9(entry, session?.actorLevel);
+        const closeReason = canClose ? undefined : !atLeastFom(session?.actorLevel) ? "closing needs the FOM" : firstNote;
+        return (
+          <S9Closed
+            entry={entry}
+            past={viewingPast}
+            close={closedStepActive ? { onClick: () => setCloseOpen(true), ready: canClose, reason: closeReason } : null}
+          />
+        );
+      }
       default:
         return null;
     }
   };
   const native = nativeBody();
-  const stepBody = (): ReactNode => {
-    if (viewingPast) {
-      switch (step.key) {
-        case "inquiry":
-          return <InquiryStep entry={entry} />;
-        case "quote":
-          return <QuoteStep entry={entry} />;
-        case "setup":
-          return <SetupStep entry={entry} setSelected={NOOP} />;
-        case "confirm":
-          return <ConfirmStep entry={entry} />;
-        case "arrival":
-          return <ArrivalStep entry={entry} guestPresent={guestPresent} setGuestPresent={NOOP} />;
-        case "checkin":
-          return <CheckInStep entry={entry} issuedKeyRooms={issuedKeyRooms} toggleKeyRoom={NOOP} setKeyRooms={NOOP} registrationConfirmed={registrationConfirmed} setRegistrationConfirmed={NOOP} />;
-        case "stay":
-          return <StayStep entry={entry} setNightAuditOk={NOOP} setSelected={NOOP} />;
-        case "checkout":
-          return <CheckOutStep entry={entry} setSelected={NOOP} />;
-        default:
-          return <PostStayStep entry={entry} />;
-      }
-    }
-    if (inquiryStepActive) return <InquiryStep entry={entry} />;
-    if (quoteStepActive) return <QuoteStep entry={entry} />;
-    if (setupStepActive) return <SetupStep entry={entry} setSelected={stableSetSelected} />;
-    if (confirmStepActive || confirmedS4Active) return <ConfirmStep entry={entry} />;
-    if (arrivalStepActive) return <ArrivalStep entry={entry} guestPresent={guestPresent} setGuestPresent={setGuestPresent} />;
-    if (checkInStepActive)
-      return (
-        <CheckInStep
-          entry={entry}
-          issuedKeyRooms={issuedKeyRooms}
-          toggleKeyRoom={toggleKeyRoom}
-          setKeyRooms={setKeyRooms}
-          registrationConfirmed={registrationConfirmed}
-          setRegistrationConfirmed={setRegistrationConfirmed}
-        />
-      );
-    if (stayStepActive) return <StayStep entry={entry} setNightAuditOk={setNightAuditOk} setSelected={stableSetSelected} />;
-    if (checkOutStepActive) return <CheckOutStep entry={entry} setSelected={stableSetSelected} />;
-    if (step.key === "closed") return <PostStayStep entry={entry} />;
-    // A step already reached but not yet worked (e.g. Reserve viewed after the freeze moved on).
-    return <ConfirmStep entry={entry} />;
-  };
 
   /* ---- the header ---- */
   const standing = standingOf(factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null), hotelToday);
@@ -895,36 +902,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </span>
                   </div>
                 ) : null}
-                {native ? (
-                  <>
-                    {viewingPast ? (
-                      <div className="notice inert">
-                        <span className="sm">
-                          {sealed
-                            ? sealedOutcome
-                            : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. Any change is a governed re-entry.`}
-                        </span>
-                      </div>
-                    ) : null}
-                    {native}
-                  </>
-                ) : viewingPast ? (
-                  <>
-                    <div className="notice inert">
-                      <span className="sm">
-                        {sealed
-                          ? sealedOutcome
-                          : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. Any change is a governed re-entry.`}
-                      </span>
-                    </div>
-                    <div className="desk-root">
-                      <div inert>{stepBody()}</div>
-                      {entry.status === "CANCELLED" ? <CancellationVoucherBlock entry={entry} /> : null}
-                    </div>
-                  </>
-                ) : (
-                  <div className="desk-root">{stepBody()}</div>
-                )}
+                {viewingPast ? (
+                  <div className="notice inert">
+                    <span className="sm">
+                      {sealed
+                        ? sealedOutcome
+                        : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. Any change is a governed re-entry.`}
+                    </span>
+                  </div>
+                ) : null}
+                {native}
               </>
             )}
             {/* the old side column's "what runs here" target — kept mounted, not shown */}
@@ -1320,7 +1307,7 @@ function SidePanel({
     .filter((x): x is { t: (typeof timers)[number]; label: string } => !!x.label)
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
     .slice(0, 8);
-  const recent = events.slice(0, 6);
+  const recent = events.filter((e) => !isHousekeeping(e.eventType)).slice(0, 6);
   const papers = communications.filter((c) => c.direction !== "INBOUND").slice(0, 8);
   return (
     <aside className="side">

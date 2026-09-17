@@ -59,6 +59,43 @@ const WORDS: Record<string, string> = {
   "INQUIRY.SPECIAL_PREFERENCE_UPDATED": "Preference changed",
   "PRE_ARRIVAL_TASK.COMPLETED": "Arrival task done",
   "EARLY_DEPARTURE.RECORDED": "Left early",
+  CONFIGURATION_SELECTED: "Rooms chosen",
+  OWNERSHIP_ASSIGNED: "Custodian assigned",
+  RESERVATION_CONFIRMED: "Reserved",
+  CHECK_IN_COMPLETE: "Checked in",
+  FOLIO_CONVERTED_TO_LIVE: "The bill opened",
+  "FOLIO.CREATED": "Bill started",
+  "FOLIO.REENTRY_CONTINUATION": "The bill carried into the new pass",
+  "INVOICE.CREATED": "Invoice generated",
+  "INVOICE.SUPERSEDED": "Invoice replaced by a new version",
+  "INVOICE.PDF_GENERATED": "Invoice printed to PDF",
+  "QUOTATION.PDF_GENERATED": "Quotation printed to PDF",
+  "RESERVATION.CONFIRMATION_VOUCHER_PDF_GENERATED": "Voucher printed to PDF",
+  "CANCELLATION_CONFIRMATION.RENDERED": "Cancellation confirmation printed",
+  "CANCELLATION_DISCLOSURE.RECORDED": "Cancellation terms disclosed",
+  "GUEST_PROFILE.CREATED": "Guest record created",
+  "GUEST.IDENTITY_DETAILS_UNLOCKED": "Guest details opened for changes",
+  "GUEST.IDENTITY_VERIFIED": "Identity verified",
+  "ADVANCE_PAYMENT.PLAN_CLEARED": "Payment plan cleared",
+  "ADVANCE_PAYMENT.S5_RECONCILIATION_AUTO": "Advance reconciled by the system",
+  "PRE_ARRIVAL_TASK.RESET_FOR_ARRIVAL_VERIFICATION": "Arrival tasks reopened for checking",
+  "PRE_ARRIVAL.ACTIVATION_FIRED": "Arrival opened",
+  "NO_SHOW_CUTOFF.FIRED": "No-show time passed",
+  "HANDOFF.H1_ACCEPTED": "Front-desk handoff accepted",
+  "HANDOFF.H1_FULFILLED": "Front-desk handoff done",
+  "HANDOFF.H1_CLOSED": "Front-desk handoff closed",
+  "HANDOFF.ACCEPTANCE_WINDOW_EXPIRED": "A handoff was not accepted in time",
+  "HANDOFF.FOM_ALERTED": "The FOM was alerted about a handoff",
+  "CHECK_IN.ESCORT_COMPLETE": "Guest escorted to the room",
+  "STAGE_DWELL.WARNING_FIRED": "Sitting too long at this step",
+  "STAGE_DWELL.CRITICAL_FIRED": "Sitting far too long at this step",
+  "STAGE_DWELL.FOM_ESCALATED": "Raised with the FOM for sitting too long",
+  "COMMITTED_HOLD.EXPIRY_TRIGGERED": "Block ran out",
+  "ENTRY.S3.CANCELLED": "Cancelled",
+  "ROOM.DEFICIENCY_REPORTED": "Room fault reported",
+  "SPACE.DEFICIENCY_REPORTED": "Hall fault reported",
+  "DEFICIENCY.VERIFIED": "Fault confirmed",
+  "DEFICIENCY.REJECTED": "Fault report rejected",
 };
 
 const LEVEL_WORD: Record<string, string> = { L1: "desk", L2: "FOM", L3: "GM", L4: "administrator" };
@@ -82,4 +119,21 @@ export function traceWords(ev: TraceEvent): string {
   let line = translateMessage(readable(ev.eventType));
   line = line.replace(/\b(l[1-4])\b/gi, (m) => LEVEL_WORD[m.toUpperCase()] ?? m);
   return line;
+}
+
+/** System bookkeeping that says nothing to the desk — kept in History, left out of "Recent". */
+const HOUSEKEEPING = [
+  /^TIMER_MANAGEMENT\./,
+  /^NIGHT_AUDIT_TIMERS\./,
+  /^NOTIFICATION\./,
+  /^MODE\./,
+  /^REENTRY\.CONSEQUENCES_COMPUTED$/,
+  /\.PDF_GENERATED$/,
+  /_PDF_GENERATED$/,
+  /^ADMIN\./,
+  /\.W\d+_FIRED$/,
+];
+
+export function isHousekeeping(eventType: string): boolean {
+  return HOUSEKEEPING.some((r) => r.test(eventType));
 }

@@ -250,6 +250,7 @@ export function SeeRow({
         {label}
       </Button>
       <span className="meta">→ {note}</span>
+      {reason && (state === "inert" || !onClick) ? <span className="meta warn-ink">· {reason}</span> : null}
     </div>
   );
 }
@@ -632,14 +633,16 @@ export function AnswerLine({
   const comms = useCommunications(entryId);
   const c = latestDispatched(comms.data?.items, type, sinceIso);
   const [open, setOpen] = useState(false);
-  const [method, setMethod] = useState<"WRITTEN" | "VERBAL">("WRITTEN");
+  // No default (N8): the operator says which way the answer came.
+  const [method, setMethod] = useState<"WRITTEN" | "VERBAL" | null>(null);
   const [words, setWords] = useState("");
   const save = useMutation({
-    mutationFn: () => acknowledgeCommunication(session!, c!.id, { method, verbatimNote: words.trim() || undefined }),
+    mutationFn: () => acknowledgeCommunication(session!, c!.id, { method: method!, verbatimNote: words.trim() || undefined }),
     onSuccess: () => {
       toast.success(`Their answer to ${what} is on record`);
       setOpen(false);
       setWords("");
+      setMethod(null);
       refresh();
     },
     onError: (e) => toastRefusal(e, "The answer could not be recorded"),
@@ -679,14 +682,14 @@ export function AnswerLine({
             onChange={setMethod}
           />
           <div className="field">
-            <label>{method === "VERBAL" ? "What they said · the words are the record" : "What they wrote · optional"}</label>
+            <label>{method === "VERBAL" ? "What they said · the words are the record" : method === "WRITTEN" ? "What they wrote · optional" : "Their words"}</label>
             <textarea className="input" rows={2} value={words} onChange={(e) => setWords(e.target.value)} placeholder="'noted, thank you — we will pay on Friday'" />
           </div>
           <div className="row-acts">
             <Button
               compact
-              state={save.isPending ? "working" : method === "VERBAL" && !words.trim() ? "inert" : "default"}
-              title={method === "VERBAL" && !words.trim() ? "write what they said first" : undefined}
+              state={save.isPending ? "working" : !method || (method === "VERBAL" && !words.trim()) ? "inert" : "default"}
+              title={!method ? "say how the answer came" : method === "VERBAL" && !words.trim() ? "write what they said first" : undefined}
               onClick={() => save.mutate()}
             >
               Record
@@ -717,6 +720,7 @@ export function useRefreshEntry(entryId: string) {
       ["billing-summary", entryId],
       ["payment-status", entryId],
       ["folio-documents", entryId],
+      ["journey-summary", entryId],
       ...extra,
     ];
     for (const k of keys) void qc.invalidateQueries({ queryKey: k as unknown[] });
