@@ -16,10 +16,11 @@ on :4000.
 | The frame (bar, clock, bell, user panel, second row) | `src/components/ds/app-shell.tsx`, mounted by `src/app/(app)/(ds)/layout.tsx` |
 | Shared list pieces (step chip, status chip, row that opens a booking) | `src/components/ds/ui.tsx` |
 | The booking workspace | `src/components/ds/workspace/ds-workspace.tsx` |
+| The nine step canvases, and the kit they share | `src/components/ds/steps/` (`kit.tsx`, `s1-inquiry.tsx` … `s9-closed.tsx`, with their `sN-*.tsx` parts) |
 | Desk words: steps, status phrase, timers, refusals, history lines | `src/lib/ds/` (`steps`, `status`, `timers`, `words`, `translate`, `trace-words`) |
 | Today's lists (what needs a person, the hotel's day) | `src/lib/ds/attention.ts` |
 | Dates, times and money formatting | `src/lib/ds/format.ts` |
-| Old working tools used inside the new frame | `src/components/desk/**`, rendered inside `.desk-root` and re-coloured by `styles/legacy-bridge.css` |
+| Old working tools used inside the new cards | `src/components/desk/**` — the composition planner, the room-by-night table, the guest table, the folio lines, the money blocks — each placed in a card through the kit's `Tool`, inside `.desk-root`, re-dressed by `styles/legacy-bridge.css` |
 
 **Rules the code keeps.**
 - **No stage codes on screen.** Steps are always Inquiry · Negotiation · Set up · Reserve · Arrival · Check-in · Stay · Check-out · Closed. Every error message from the backend is translated once, in `lib/api/client.ts`.
@@ -33,7 +34,7 @@ on :4000.
 | Today | `/today` | `GET /api/desk/bookings`, `POST /api/desk/bookings/money` (Leaving list), `GET /api/rooms` (occupancy line) | Built. Needs attention (bands, folds), the incomplete record, the hotel's day (arriving / leaving / in-house / new inquiries / parked), arriving this week. |
 | Bookings | `/bookings` | same list + money for the rows on screen | Built. Search, date range, phase groups, Parked / Cancelled, sort, "Show 50 more", preview on click, open on double-click. The filters live in the address. |
 | New booking | `/bookings/new` | the existing intake (`/api/guest-profiles`, `/api/inquiries`, `/api/entries`, lookups) | The working intake form, shown inside the new frame. Its redesigned canvas is still to come. |
-| Booking workspace | `/bookings/:id?step=N&view=details\|history` | `GET /api/entries/:id`, `…/billing-summary`, `…/payment-status`, `…/communications`, `…/timers`, `…/trace`, `…/identity-proofs` (at Check-in) | Built frame. **Header:** status, dates, rooms, source, custodian, total with its money breakdown. **Preference strip.** **Rail:** phases, the two boundaries, Re-enter, Park / Resume, Under the hood. **Tabs:** This step · Booking details · History. **Side panel:** Timers · Recent · Papers sent. **Gate bar:** the readiness list and one forward move, with Reserve, Check-in and Close behind their commit dialogs. The step canvases are the existing working tools, re-dressed. |
+| Booking workspace | `/bookings/:id?step=N&view=details\|history` | `GET /api/entries/:id`, `…/billing-summary`, `…/payment-status`, `…/communications`, `…/timers`, `…/trace`, `…/identity-proofs` (at Check-in) | Built frame. **Header:** status, dates, rooms, source, custodian, total with its money breakdown. **Preference strip.** **Rail:** phases, the two boundaries, Re-enter, Park / Resume, Under the hood. **Tabs:** This step · Booking details · History. **Side panel:** Timers · Recent · Papers sent. **Gate bar:** the readiness list and one forward move, with Reserve, Check-in and Close behind their commit dialogs. **Step canvases:** built from the prototype's cards (see below). |
 | Under the hood | `/bookings/:id/backend` | as before | The existing view, inside the frame. |
 | Rooms | `/rooms` | `GET /api/rooms`, `GET /api/spaces`, deficiency routes | Built. Claim standing and physical state are shown separately, with each room's occupant. Halls and spaces are on the same page. A tile opens its fault record (the old desk's Spaces page is merged in here). |
 | Billing | `/billing` | list + money | Built: open bills (in-house, check-out) and money still owed after a stay. There are no account totals (see gaps). |
@@ -45,6 +46,28 @@ on :4000.
 | Console | `/admin/**` | unchanged | Copied as it was. Reached from the user panel (administrators only). |
 
 The old `/desk/...` addresses redirect to the new ones.
+
+## The step canvases
+
+Each step is its own canvas in `src/components/ds/steps/`, built from the prototype's cards and the 13–14 Sep storyboards.
+
+- Every action the old step offered is still there. Facts, small forms and buttons are native; the big old grids sit inside a card through `Tool`.
+- A passed step shows what was decided, with the working controls hidden. Its papers still open.
+- Every step ends with Requests (BE-64), "Other ways this booking can go" and Papers.
+
+| Step | Cards, in order | Old tools placed inside |
+|---|---|---|
+| Inquiry | Who is asking · The guest · The stay · Rate and notes, with **The house** beside them (free rooms by type, the indicative price, Take it) · Which rooms | the room-by-night table and the guest board, behind "Choose the rooms…" |
+| Negotiation | The rate, with its basis · Counter-offers (BE-39) · Who sleeps where, and their meals · Provisional block, or send the quote · Quotation · every version · competing claims | the composition planner (with its discount bar and rate strip), "Why this price" |
+| Set up | The three parties · Billing model · The committed hold · The payment plan · Terms disclosed · Proforma · coordinator, milestones and free rooms when they apply | — |
+| Reserve | Before: Before you reserve (signature rows with Fix) · Who receives the confirmation · Reserve · Everything chosen so far. After: What Reserve decided · Confirmation voucher · Pre-arrival tasks · The advance | the journey summary, the advance block |
+| Arrival | Ready the room · Assign the rooms · Guest details · The front-desk handoff · Pre-arrival tasks · Advance and credit · the pre-arrival answer · Billing model | the per-room editors, the guest table, the advance block |
+| Check-in | Before you check in · The document, at the desk · Registration card · the remaining advance · Rooms with their keys · Check in | the guest table, the per-room editors, the advance block |
+| Stay | The folio · live · Post a charge (by outlet) · Chits waiting (BE-68) · The nights · Rooms in use · Keys · the departments · disputes · faults · a change to the terms · Billing model | the folio lines, interim payment, extension, split settlement, bills and statements, leaving early, the guest table |
+| Check-out | Is the folio complete? · Master bill · Add or correct a charge · How the bill is settled · Tax invoice, by payer · The departure | the folio lines, split settlement |
+| Closed | What the stay was · After the stay · One door back in · Sealed papers | the folio lines, split settlement |
+
+"Frozen" means **reserved in this pass** (`reservedThisPass`). The quote readiness lines count only this pass's quotations, as the backend's gates do.
 
 ## Backend added for this frontend
 
@@ -71,9 +94,18 @@ All read-only, in `back_end/src/routes/desk/router.ts` and `services/domain/desk
 | Editing a guest record, with its change trail | Guest record | BE-32 |
 | Rooms sold per night ahead | Rooms | — |
 | Custodian names on imported bookings (their custodian ids match no staff record, so the header shows "—") | workspace header, preview | data |
+| Counter-offers, requests, chits, tablet registration, voucher versions, a second confirmation channel, per-payer tax invoices | the step canvases (drawn inert, each naming its item) | BE-39, BE-64, BE-68, BE-45, BE-42, BE-65, BE-41/43/69 |
+| The bill's totals by category (rooms · food and drink · services) on the billing summary | Closed, "What the stay was" | BE-55 |
 
 ## Next passes
 
-1. Redesign the step canvases one by one, per the SS03 rulings. The old tools still show some system words: "Segment", folio states (LIVE, PROVISIONAL) and verification path codes.
+1. Replace the old tools still placed inside the canvases with native ones:
+   - the composition planner
+   - the room-by-night table
+   - the guest table
+   - the folio lines
+   - the money blocks (interim, extension, split, advance, leaving early)
+
+   They still show a few old words, such as "min threshold".
 2. Redesign the intake canvas ("looking is recording").
 3. Build the second-row boards as their backend reads land.

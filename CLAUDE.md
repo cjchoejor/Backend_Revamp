@@ -213,6 +213,7 @@ Anchor these in your head before searching:
 | `MAPPING.md` | Screen → backend reads → gaps. Keep it current. |
 | `src/app/(app)/(ds)/` | The redesigned desk's routes and their layout. |
 | `src/components/ds/` | `app-shell.tsx`, `ui.tsx` (shared list pieces), `workspace/ds-workspace.tsx`. |
+| `src/components/ds/steps/` | The nine step canvases (`s1-inquiry.tsx` … `s9-closed.tsx`, with their `sN-*.tsx` parts) and `kit.tsx`, the cards they share. |
 | `src/design-system/` | Tokens, generated components CSS, `frame.css`, `legacy-bridge.css`, fonts, icon sprite, React primitives. |
 | `src/lib/ds/` | Desk words and selections: steps, status phrase, attention lists, timers, format, refusal and trace wording. |
 | `src/hooks/use-desk-data.ts` · `use-hotel-clock.ts` | The desk list, money, staff and rooms reads; the server-corrected clock. |
@@ -231,7 +232,24 @@ The boss's redesign (`September 14 2026/`, built on `September 11 2026/`) is bei
 
 - **Routes** (under `src/app/(app)/(ds)/`, which mounts `AppShell` and the stylesheets): `/today`, `/bookings`, `/bookings/new`, `/bookings/:id?step=N&view=details|history`, `/bookings/:id/backend`, `/rooms` (halls and spaces included), `/billing`, `/shift`, `/reports`, `/guests`, `/guests/:id`, `/audit`, `/handoffs` · `/disputes` · `/messages` ("Not available yet"). The middleware redirects old `/desk/...` addresses and protects everything except `/login`, `/capture` and `/api`.
 - **Styling**: `src/design-system/styles/components.css` is **generated** from the prototype's CSS. Every selector is prefixed `.ds` and excluded from `.desk-root` with `:not(.desk-root *)`. Don't hand-edit it; put frame additions in `frame.css`. The old step tools render inside `.desk-root`, re-coloured by `legacy-bridge.css`. Stylesheet order is fixed by the `(ds)` layout.
-- **Workspace**: [ds-workspace.tsx](new_front_end/src/components/ds/workspace/ds-workspace.tsx) replaces `booking-workspace.tsx` (deleted in the copy). It keeps its readiness lists, forward moves, commit dialogs, park/resume, exit-park prompt and key checklist. The nine step canvases are still the old components; redesigning them is the next pass.
+- **Workspace**: [ds-workspace.tsx](new_front_end/src/components/ds/workspace/ds-workspace.tsx) replaces `booking-workspace.tsx` (deleted in the copy). It keeps its readiness lists, forward moves, commit dialogs, park/resume, exit-park prompt and key checklist.
+- **Step canvases (2026-09-17)**: all nine are native, in [components/ds/steps/](new_front_end/src/components/ds/steps/).
+  - **Why:** the user said the steps "look like my old frontend with colors of the new front end".
+  - **Files:** `s1-inquiry.tsx` … `s9-closed.tsx` with their `sN-*.tsx` parts, built from the prototype's cards and the storyboards. The workspace renders only these; the old step components in `components/desk/workspace/` are no longer mounted.
+  - **The shared kit** is [kit.tsx](new_front_end/src/components/ds/steps/kit.tsx):
+    - `StepCanvas` (past mode), `StepCard`, `Facts`/`Fact`, `FactLine`, `Choice`
+    - `SeeRow`/`OtherWays`, `RequestsCard`, `PapersCard` + `PaperDrawer`, `AnswerLine`
+    - `DsDialog`/`ReasonDialog`, `Tool`, `useRefreshEntry`
+  - **Old tools inside cards:** the composition planner, the room-by-night table, the guest table, the folio lines and the money blocks sit inside cards through `Tool`, re-dressed by `legacy-bridge.css`. Replacing them natively is the next pass.
+  - **Every old action is still reachable.** What the backend lacks is drawn inert and names its BE item:
+    - BE-39 counter-offers
+    - BE-64 requests
+    - BE-68 chits
+    - BE-45 tablet registration
+    - BE-42 voucher versions
+    - BE-65 other channels
+  - **"Frozen" means reserved in this pass** (`reservedThisPass` and `liveQuotesThisPass` in [lib/desk/workspace.ts](new_front_end/src/lib/desk/workspace.ts)). After a re-entry, `entry.reservation` still points at the earlier pass's row, which hid Reserve at Set up. `front_end/` still has that fault.
+  - **The workspace passes each canvas its state:** the guest-present attestation, the key checklist, registration, the night-audit flag, and the Reserve / Check-in / Close commit openers. The Reserve canvas reports its extra open items (`onOpenItems`), so the gate-bar Reserve agrees with it.
 - **Vocabulary**: steps are Inquiry · Negotiation · Set up · **Reserve** · Arrival · Check-in · Stay · Check-out · Closed (`lib/ds/steps.ts`). No stage code reaches a screen. `apiRequest` runs every backend error message through `translateMessage` ([lib/ds/words.ts](new_front_end/src/lib/ds/words.ts)), so old components' toasts are translated too. The status phrase lives in `lib/ds/status.ts`, history lines in `lib/ds/trace-words.ts`.
 - **Same rules as front_end**: no money arithmetic (figures come from `/billing-summary` and `/api/desk/bookings/money`), and the hotel's day comes from `useHotelDay()` only.
 - **Backend reads added for it** ([routes/desk/router.ts](back_end/src/routes/desk/router.ts), [desk-read-service.ts](back_end/src/services/domain/desk-read-service.ts), all read-only):
