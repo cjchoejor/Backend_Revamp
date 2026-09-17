@@ -413,12 +413,9 @@ export function s6Readiness(
   ];
 }
 
-/** S7 exit readiness (SIG-S7) — derivable gates before checkout prep (S8). Night audit is reported separately. */
-/** The browser-local calendar day (yyyy-mm-dd) — the desk sits in the hotel, so this is the hotel day. */
-export function localTodayYmd(d: Date = new Date()): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+// (2026-09-17) `localTodayYmd()` lived here: "the desk sits in the hotel, so this is the hotel
+// day". That assumption was the bug — a desk's clock is whatever its machine is set to. The
+// hotel's day now comes from the server via `useHotelDay()`; nothing on the desk computes it.
 
 /**
  * The day the stay really ends (2026-08-22): the early-departure date when one is recorded (and
@@ -432,10 +429,16 @@ export function effectiveCheckOutIso(entry: EntryDetail): string | null {
   return booked;
 }
 
-/** True while today is before the (effective) checkout day — leaving now would be an early departure. */
-export function departureWouldBeEarly(entry: EntryDetail): boolean {
+/**
+ * True while the HOTEL's today is before the (effective) checkout day — leaving now would be an
+ * early departure. `hotelToday` comes from `useHotelDay()`; `null` means it isn't known yet,
+ * and so is the answer — callers hold the decision rather than guess.
+ */
+export function departureWouldBeEarly(entry: EntryDetail, hotelToday: string | null): boolean | null {
   const co = effectiveCheckOutIso(entry);
-  return !!co && localTodayYmd() < co.slice(0, 10);
+  if (!co) return false;
+  if (!hotelToday) return null;
+  return hotelToday < co.slice(0, 10);
 }
 
 function shortDayLabel(iso: string): string {
@@ -443,14 +446,18 @@ function shortDayLabel(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
-export function s7Readiness(entry: EntryDetail): Precondition[] {
+/** S7 exit readiness (SIG-S7) — derivable gates before checkout prep (S8). Night audit is reported separately. */
+export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null): Precondition[] {
   const folio = entry.folio;
   // Policy 36 (2026-08-22): the standard checkout is for a guest who slept every booked night. Before
   // the booked checkout day the gate stays locked and the Stay step offers the governed early
   // departure (GM), which shortens the stay — after which this line is met on its own.
   const checkOutIso = effectiveCheckOutIso(entry);
-  const early = departureWouldBeEarly(entry);
-  const checkoutLine: Precondition = entry.earlyDeparture
+  const early = departureWouldBeEarly(entry, hotelToday);
+  const checkoutLine: Precondition = early === null
+    ? // Until the server says what day it is, the gate stays shut — fail closed, never guess.
+      { label: "Checking today's date at the hotel…", met: false }
+    : entry.earlyDeparture
     ? { label: `Early departure recorded — checkout ${shortDayLabel(entry.earlyDeparture.departureDate)}`, met: !early }
     : checkOutIso
       ? {
@@ -477,8 +484,8 @@ export function s7Readiness(entry: EntryDetail): Precondition[] {
   ];
 }
 
-export function canProgressS7(entry: EntryDetail, nightAuditOk: boolean): boolean {
-  return entry.currentStage === "S7" && nightAuditOk && s7Readiness(entry).every((c) => c.met);
+export function canProgressS7(entry: EntryDetail, nightAuditOk: boolean, hotelToday: string | null): boolean {
+  return entry.currentStage === "S7" && nightAuditOk && s7Readiness(entry, hotelToday).every((c) => c.met);
 }
 
 /** S8 exit readiness (SIG-S8) — gates before settlement & close (S9). H5 is auto-created on progress. */
@@ -590,7 +597,7 @@ export function stepStateFor(order: number, currentOrder: number): StepState {
 export type Precondition = { label: string; met: boolean };
 
 /** Real-state preconditions surfaced in the gate bar for each step. */
-export function preconditionsFor(entry: EntryDetail, step: DeskStep): Precondition[] {
+export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday: string | null = null): Precondition[] {
   const fin = deriveFinancials(entry);
   const quote = activeQuotation(entry);
   switch (step.key) {
@@ -615,7 +622,7 @@ export function preconditionsFor(entry: EntryDetail, step: DeskStep): Preconditi
         ? [{ label: "Checked in · folio live", met: true }]
         : s6Readiness(entry);
     case "stay":
-      return s7Readiness(entry);
+      return s7Readiness(entry, hotelToday);
     case "checkout":
       return s8Readiness(entry);
     case "closed":

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BedDouble, FileEdit, Handshake, KeyRound, Moon, Receipt, Scale } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { ApiError } from "@/lib/api/client";
 import {
   acceptHandoff,
@@ -40,7 +41,7 @@ import {
   type FolioTab,
 } from "./folio-lines";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
-import { effectiveCheckOutIso, localTodayYmd, money, moneyOrDash } from "@/lib/desk/workspace";
+import { effectiveCheckOutIso, money, moneyOrDash } from "@/lib/desk/workspace";
 import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { DeskConfirmModal, DeskSuccessModal } from "./confirm-modal";
 import { BackendRail, type RailGroup } from "./backend-inline";
@@ -93,6 +94,13 @@ export function StayStep({
   setSelected: (n: number) => void;
 }) {
   const { session } = useSession();
+  // The HOTEL's calendar (2026-09-17). This step used to hold three different "todays": the UTC
+  // date (a day behind Bhutan until 06:00) for rooms-in-use, keys and the charge date, and the
+  // machine's local date for the night-audit cap. All of them now read the server's answer.
+  // `null` until it arrives — everything below holds rather than guesses.
+  const hotelDay = useHotelDay();
+  const hotelToday = hotelDay?.today ?? null;
+  const hotelYesterday = hotelDay?.yesterday ?? null;
   const queryClient = useQueryClient();
   const elevated = isElevated(session?.actorLevel);
 
@@ -109,13 +117,13 @@ export function StayStep({
   // keeping only rooms whose assignment is still current (an S7 room change end-dates the old
   // room's row at tonight, so it drops off this list while its slept nights stay billed).
   const distinctRooms = useMemo(() => {
-    const todayYmdLocal = new Date().toISOString().slice(0, 10);
     const rows = (entry.roomAssignments ?? []).filter((a) => {
-      if (!a.endDate) return true;
-      return String(a.endDate).slice(0, 10) > todayYmdLocal;
+      // Until the hotel's day is known, list every room rather than drop one too early.
+      if (!a.endDate || !hotelToday) return true;
+      return String(a.endDate).slice(0, 10) > hotelToday;
     });
     return Array.from(new Map(rows.map((a) => [a.roomId, a])).values());
-  }, [entry.roomAssignments]);
+  }, [entry.roomAssignments, hotelToday]);
   // Which NIGHTS each room holds (2026-08-14, operator request) — shown beside each room.
   const stayRangesByRoom = useMemo(() => roomStayRangesByRoom(entry), [entry]);
   // Rows in CHRONOLOGICAL order (2026-08-14): first night first, longer stays before shorter
@@ -137,7 +145,7 @@ export function StayStep({
     const rows = entry.roomAssignments ?? [];
     const byRoom = new Map<string, typeof rows>();
     for (const a of rows) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = hotelToday;
     const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
       const stay = stayRangesByRoom.get(roomId);
       const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt);
@@ -146,7 +154,9 @@ export function StayStep({
       // ONLY then is "Return key" offered (2026-08-16, operator ruling — while the guest
       // still has nights left in the room, the row just says "Key with guest"; the backend
       // refuses a premature return too). A room kept to checkout returns its key at S8.
-      const vacated = rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= todayIso);
+      // Unknown day → not vacated: "Return key" is never offered on a guess (the backend refuses
+      // a premature return anyway, but the desk should not invite one).
+      const vacated = !!todayIso && rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= todayIso);
       return {
         roomId,
         roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 8),
@@ -154,8 +164,8 @@ export function StayStep({
         keyOut,
         keyReturned,
         vacated,
-        movesInToday: stay?.firstNight === todayIso,
-        movesInLater: !!stay?.firstNight && stay.firstNight > todayIso,
+        movesInToday: !!todayIso && stay?.firstNight === todayIso,
+        movesInLater: !!todayIso && !!stay?.firstNight && stay.firstNight > todayIso,
       };
     });
     items.sort(
@@ -164,7 +174,7 @@ export function StayStep({
         (y.stay?.nightCount ?? 0) - (x.stay?.nightCount ?? 0),
     );
     return items;
-  }, [entry.roomAssignments, entry.checkOutDate, stayRangesByRoom]);
+  }, [entry.roomAssignments, entry.checkOutDate, stayRangesByRoom, hotelToday]);
   // The Keys block earns its place on sequential plans and on any booking with key stamps;
   // a legacy single-room stay with no stamps stays clean.
   const showKeysBlock = keyPlan.length > 1 || keyPlan.some((k) => k.keyOut || k.keyReturned);
@@ -260,10 +270,12 @@ export function StayStep({
   const [amendTerms, setAmendTerms] = useState("");
 
   useEffect(() => {
-    const t = new Date().toISOString().slice(0, 10);
-    setChargeDate(t);
-    setNaDate(lastNightYmd && lastNightYmd < t ? lastNightYmd : "");
-  }, [lastNightYmd]);
+    if (!hotelToday) return;
+    setChargeDate(hotelToday);
+    // Pre-fill the audit with the stay's last night only once that night has ENDED on the
+    // hotel's calendar — the same rule the server enforces (Policy 61).
+    setNaDate(lastNightYmd && lastNightYmd < hotelToday ? lastNightYmd : "");
+  }, [lastNightYmd, hotelToday]);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
@@ -482,19 +494,13 @@ export function StayStep({
   };
   const h4MandatoryComplete = h4Items.filter((i) => i.mandatory).every((i) => h4Checklist[i.code] === true);
 
-  // Night audit runs only for a *completed* operating day. A future date is never valid; today is
-  // allowed (it may be the final stay night needed for same-day checkout) but flagged, because
-  // running it seals the day to further charges (SIG-S7 §2.2 / Policy 61).
-  const todayYmd = localTodayYmd();
-  const naYesterdayYmd = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return localTodayYmd(d);
-  })();
-  // Only a night that has ENDED is auditable (Policy 61, 2026-08-22) — running "today" used to
-  // seal the day early and let a guest check out ahead of the booked date through the standard
-  // route. A guest leaving early is an early departure (the block below); it audits nothing ahead.
-  const naFuture = !!naDate && naDate > naYesterdayYmd;
+  // Only a night that has ENDED on the hotel's calendar is auditable (Policy 61, 2026-08-22) —
+  // running "today" used to seal the day early and let a guest check out ahead of the booked
+  // date through the standard route; a guest leaving early is an early departure (the block
+  // below). The latest auditable night is the HOTEL's yesterday, from the server. While that is
+  // unknown the picker is disabled and Run stays shut.
+  const naYesterdayYmd = hotelYesterday;
+  const naFuture = !naYesterdayYmd || (!!naDate && naDate > naYesterdayYmd);
 
   // Persistent highlight: each group stays lit once its action has run (derived from real folio /
   // audit / handoff / dispute state). `firingKey` adds the transient "running now" pulse.
@@ -1051,7 +1057,14 @@ export function StayStep({
             <div className="frow" style={{ marginTop: 9 }}>
               <div className="field">
                 <label>Run for date (L2+)</label>
-                <input type="date" value={naDate} max={naYesterdayYmd} onChange={(e) => setNaDate(e.target.value)} />
+                <input
+                  type="date"
+                  value={naDate}
+                  max={naYesterdayYmd ?? undefined}
+                  disabled={!naYesterdayYmd}
+                  title={naYesterdayYmd ? undefined : "Checking today's date at the hotel…"}
+                  onChange={(e) => setNaDate(e.target.value)}
+                />
               </div>
               <div className="field" style={{ alignSelf: "end" }}>
                 <button

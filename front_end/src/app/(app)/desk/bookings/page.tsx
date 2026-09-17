@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Calendar, Plus } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listEntries } from "@/lib/api/entries";
 import { DESK_STEPS, toDeskBooking, type DeskBooking } from "@/lib/desk/model";
 
@@ -27,23 +28,24 @@ function bookingDate(b: DeskBooking): string {
   return b.checkInDate ?? b.createdAt;
 }
 
-/** Today's date as a local `YYYY-MM-DD` string (matches the <input type="date"> value format). */
-function todayYmd(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 export default function DeskBookingsPage() {
   const { session, isLoading: sessionLoading } = useSession();
   const router = useRouter();
   const [filter, setFilter] = useState("all");
-  // Default the date range to today so the Bookings tab opens on today's bookings (by check-in
-  // date). "Clear dates" resets to the full list.
-  const [fromDate, setFromDate] = useState(() => todayYmd());
-  const [toDate, setToDate] = useState(() => todayYmd());
+  // The Bookings tab opens on today's bookings (by check-in date) — the HOTEL's today, from the
+  // server (2026-09-17; it was the machine's local date). The range starts empty and is filled
+  // ONCE when that answer arrives: a range the operator already set, or emptied with "Clear
+  // dates", is never overwritten, and the minute-by-minute poll can't reset it at midnight.
+  const hotelToday = useHotelDay()?.today ?? null;
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const rangeDefaulted = useRef(false);
+  useEffect(() => {
+    if (!hotelToday || rangeDefaulted.current) return;
+    rangeDefaulted.current = true;
+    setFromDate((cur) => cur || hotelToday);
+    setToDate((cur) => cur || hotelToday);
+  }, [hotelToday]);
 
   const entriesQuery = useQuery({
     queryKey: ["entries", { limit: 200 }],
@@ -135,7 +137,7 @@ export default function DeskBookingsPage() {
             className="dinput"
             value={fromDate}
             max={toDate || undefined}
-            onChange={(e) => setFromDate(e.target.value)}
+            onChange={(e) => { rangeDefaulted.current = true; setFromDate(e.target.value); }}
             style={{ width: "auto", padding: "6px 9px", fontSize: 13 }}
           />
         </label>
@@ -146,7 +148,7 @@ export default function DeskBookingsPage() {
             className="dinput"
             value={toDate}
             min={fromDate || undefined}
-            onChange={(e) => setToDate(e.target.value)}
+            onChange={(e) => { rangeDefaulted.current = true; setToDate(e.target.value); }}
             style={{ width: "auto", padding: "6px 9px", fontSize: 13 }}
           />
         </label>
@@ -154,6 +156,7 @@ export default function DeskBookingsPage() {
           <button
             className="chip-filter"
             onClick={() => {
+              rangeDefaulted.current = true;
               setFromDate("");
               setToDate("");
             }}

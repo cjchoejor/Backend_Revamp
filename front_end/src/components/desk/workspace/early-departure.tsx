@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { ApiError } from "@/lib/api/client";
 import { previewEarlyDeparture, recordEarlyDeparture } from "@/lib/api/entries";
 import { runNightAudit } from "@/lib/api/in-stay";
@@ -37,7 +38,9 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
   const level = session?.actorLevel ?? "L1";
   const isGm = level === "L3" || level === "L4";
   const elevated = level === "L2" || isGm;
-  const early = departureWouldBeEarly(entry);
+  // Early by the HOTEL's calendar; null until the server has said what day it is, which hides
+  // the block rather than offering (or withholding) an early departure on a guess.
+  const early = departureWouldBeEarly(entry, useHotelDay()?.today ?? null);
 
   const [reason, setReason] = useState("");
   const [waive, setWaive] = useState(false);
@@ -47,7 +50,7 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
   const previewQ = useQuery({
     queryKey: ["early-departure-preview", entry.id, entry.updatedAt],
     queryFn: () => previewEarlyDeparture(session!, entry.id),
-    enabled: !!session && early && !entry.earlyDeparture && entry.currentStage === "S7",
+    enabled: !!session && early === true && !entry.earlyDeparture && entry.currentStage === "S7",
   });
   const fig = previewQ.data ?? null;
 
@@ -93,7 +96,7 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
   });
 
   // Not early (checkout day reached / passed), already recorded, or not in-house — nothing to offer.
-  if (!early || entry.earlyDeparture || entry.currentStage !== "S7") return null;
+  if (early !== true || entry.earlyDeparture || entry.currentStage !== "S7") return null;
 
   const missing = fig?.missingNightYmds ?? [];
   const blockers = (fig?.blockers ?? []).filter((b) => b.code !== "NIGHT_AUDITS_INCOMPLETE");

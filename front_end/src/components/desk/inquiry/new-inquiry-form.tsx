@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -112,11 +113,6 @@ function splitStoredPhone(full: string | null | undefined): { code: string; numb
   // No dialling code at all — the majority of the imported legacy numbers. Leave the code blank
   // rather than assuming one; the guest's stored number is what gets used downstream either way.
   return { code: "", number: v };
-}
-
-function isoDate(d: Date): string {
-  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
-  return z.toISOString().slice(0, 10);
 }
 
 /** ISO date `n` nights after `iso` (UTC-safe). */
@@ -848,7 +844,11 @@ export function DeskNewInquiryForm() {
   // Number of nights — the primary stay-length input. Check-out derives from check-in + nights;
   // picking a check-out date manually recomputes nights (two-way sync).
   const [nightsStr, setNightsStr] = useState("1");
-  const [today, setToday] = useState("");
+  // The earliest check-in the date field offers — the HOTEL's today, from the server
+  // (2026-09-17; it was the machine's local date). Empty until the answer arrives, which leaves
+  // the field unbounded for that moment — the backend refuses a past check-in regardless.
+  const today = useHotelDay()?.today ?? "";
+  const checkInDefaulted = useRef(false);
   const [notes, setNotes] = useState("");
 
   // --- Edit-mode data load + one-time pre-fill ---
@@ -913,14 +913,14 @@ export function DeskNewInquiryForm() {
     first?.focus();
   }, [wizardStep, mode]);
 
-  // Default check-in to TODAY client-side (avoids SSR hydration mismatch). In edit mode the
-  // loaded booking's own dates win — only `today` (the date-field floor) is still set.
+  // Default check-in to the hotel's today, once, when that answer first arrives. In edit mode the
+  // loaded booking's own dates win. A date the operator already typed is never replaced, and the
+  // once-only latch stops the minute-by-minute poll from resetting the field at midnight.
   useEffect(() => {
-    const t = new Date();
-    setToday(isoDate(t));
-    if (isEdit) return;
-    setCheckIn(isoDate(t));
-  }, [isEdit]);
+    if (!today || isEdit || checkInDefaulted.current) return;
+    checkInDefaulted.current = true;
+    setCheckIn((cur) => cur || today);
+  }, [today, isEdit]);
 
   // Check-out derives from check-in + nights, so setting the check-in date and typing a night
   // count auto-selects the check-out date.

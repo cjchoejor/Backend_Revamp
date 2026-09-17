@@ -173,15 +173,15 @@ export function QuoteStep({ entry }: { entry: EntryDetail }) {
   const [validDays, setValidDays] = useState("2");
   /**
    * The largest validity the backend will take: 30 days hard cap, and the window must end
-   * before check-in. Calendar-day arithmetic only (no money); the backend re-validates.
+   * before check-in. Measured exactly as `resolveQuotationValidity` measures it — whole
+   * 24-hour periods from NOW to the stored check-in instant — not as calendar days from the
+   * machine's local date, which offered a day more than the server accepts (2026-09-17). An
+   * instant needs no timezone; the backend re-validates regardless.
    */
   const maxValidDays = useMemo(() => {
-    const iso = entry.checkInDate?.slice(0, 10);
-    const ci = iso ? new Date(`${iso}T00:00:00.000Z`) : null;
+    const ci = entry.checkInDate ? new Date(entry.checkInDate) : null;
     if (!ci || Number.isNaN(ci.getTime())) return 30;
-    const t = new Date();
-    const today = Date.UTC(t.getFullYear(), t.getMonth(), t.getDate());
-    const diff = Math.floor((ci.getTime() - today) / 86400_000);
+    const diff = Math.floor((ci.getTime() - Date.now()) / 86400_000);
     // Check-in today / past / within a day: the backend clamps to check-in itself — offer 1.
     return Math.max(1, Math.min(30, diff));
   }, [entry.checkInDate]);

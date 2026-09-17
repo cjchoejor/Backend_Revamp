@@ -23,6 +23,7 @@ import {
 } from "@/lib/api/entries";
 import { countdownTo, findParkTimer } from "@/lib/desk/timers";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
@@ -554,6 +555,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
   // the confirm gate's `satisfied` flag AND every "advance paid" figure the workspace renders, so
   // it is fetched from the moment a folio exists rather than only at S3.
   const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
+  // The hotel's day — the checkout gate asks whether it is before the booked checkout.
+  const hotelToday = useHotelDay()?.today ?? null;
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
   // Amount actually RECEIVED — distinct from `satisfied`. The backend's proforma-dispatch gate
   // keys on this, because a voluntary advance against a zero threshold still needs the invoice
@@ -1098,12 +1101,12 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
                   },
                 ]
               : stayStepActive
-                ? [...s7Readiness(entry), { label: "Night audit complete", met: nightAuditOk }]
+                ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk }]
                 : checkOutStepActive
                   ? s8Readiness(entry)
                   : closedStepActive
                     ? s9CloseReadiness(entry)
-                    : preconditionsFor(entry, step);
+                    : preconditionsFor(entry, step, hotelToday);
   const needsLabel = sealed
     ? "This booking"
     : setupStepActive
@@ -1583,8 +1586,8 @@ export function BookingWorkspace({ entryId }: { entryId: string }) {
               </button>
             ) : stayStepActive ? (
               <button
-                className={`adv${canProgressS7(entry, nightAuditOk) ? "" : " locked"}`}
-                disabled={!canProgressS7(entry, nightAuditOk) || advanceMutation.isPending}
+                className={`adv${canProgressS7(entry, nightAuditOk, hotelToday) ? "" : " locked"}`}
+                disabled={!canProgressS7(entry, nightAuditOk, hotelToday) || advanceMutation.isPending}
                 onClick={() => advanceMutation.mutate({ targetStage: "S8" })}
               >
                 {advanceMutation.isPending ? "Moving…" : "Continue to Check-out"}

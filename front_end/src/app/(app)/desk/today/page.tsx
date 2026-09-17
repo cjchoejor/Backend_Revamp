@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlarmClock, ArrowRight, Clock, LogIn, LogOut, Pause } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listEntries } from "@/lib/api/entries";
 import { isLiveStatus, toDeskBooking, type DeskBooking } from "@/lib/desk/model";
 
@@ -13,13 +14,6 @@ const URGENCY_RANK: Record<DeskBooking["timer"]["level"], number> = { crit: 0, w
 
 /** How many individual rows the attention list shows before folding into per-step counts. */
 const ATTN_LIMIT = 7;
-
-/** Local calendar day as YYYY-MM-DD — entry dates are date-only at UTC midnight, so comparing
- *  the ISO day substring is exact and immune to timezone drift. */
-function localTodayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 export default function DeskTodayPage() {
   const { session, isLoading: sessionLoading } = useSession();
@@ -68,8 +62,10 @@ export default function DeskTodayPage() {
   }, [attention]);
 
   // The hotel day: who arrives, who leaves, who is in the house — the desk's actual rhythm.
-  const todayIso = localTodayIso();
-  const isToday = (s?: string | null) => !!s && s.slice(0, 10) === todayIso;
+  // "Today" is the HOTEL's calendar day, from the server (2026-09-17; it was the machine's local
+  // date). Entry dates are date-only at UTC midnight, so comparing the day substring is exact.
+  const todayIso = useHotelDay()?.today ?? null;
+  const isToday = (s?: string | null) => !!todayIso && !!s && s.slice(0, 10) === todayIso;
   const arrivals = useMemo(
     () =>
       bookings
@@ -101,6 +97,8 @@ export default function DeskTodayPage() {
   const firstName = /\d/.test(rawName) ? rawName : rawName.split(/\s+/)[0] || "there";
 
   const isLoading = sessionLoading || entriesQuery.isLoading;
+  // Arriving / leaving can't be counted until the hotel's day is known — show "…", never a 0.
+  const dayLoading = isLoading || !todayIso;
 
   const openBooking = (b: DeskBooking) => router.push(`/desk/bookings/${b.id}`);
 
@@ -126,7 +124,7 @@ export default function DeskTodayPage() {
         {greeting}, {firstName}.
       </h1>
       <p className="lead">
-        {isLoading
+        {dayLoading
           ? "Pulling the desk together…"
           : attention.length === 0
             ? "Nothing is waiting on you right now. New bookings will appear here as they come in."
@@ -212,11 +210,11 @@ export default function DeskTodayPage() {
             </div>
             <div className="statgrid">
               <div>
-                <span className="ms-v mono">{isLoading ? "…" : arrivals.length}</span>
+                <span className="ms-v mono">{dayLoading ? "…" : arrivals.length}</span>
                 <span className="ms-k">Arriving today</span>
               </div>
               <div>
-                <span className="ms-v mono">{isLoading ? "…" : departures.length}</span>
+                <span className="ms-v mono">{dayLoading ? "…" : departures.length}</span>
                 <span className="ms-k">Leaving today</span>
               </div>
               <div>
@@ -234,7 +232,7 @@ export default function DeskTodayPage() {
             <div className="mini-h">
               <LogIn /> Arriving today
             </div>
-            {isLoading ? null : arrivals.length === 0 ? (
+            {dayLoading ? null : arrivals.length === 0 ? (
               <p className="mini-empty">No arrivals booked for today.</p>
             ) : (
               <div className="mini-list">
@@ -249,7 +247,7 @@ export default function DeskTodayPage() {
             <div className="mini-h" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
               <LogOut /> Leaving today
             </div>
-            {isLoading ? null : departures.length === 0 ? (
+            {dayLoading ? null : departures.length === 0 ? (
               <p className="mini-empty">No departures due today.</p>
             ) : (
               <div className="mini-list">
