@@ -1,0 +1,161 @@
+import type { InquiryListItem, ListResponse } from "@/types/api";
+import type { Session } from "@/types/session";
+import { apiRequest } from "./client";
+
+export async function listInquiries(session: Session, limit = 50) {
+  return apiRequest<ListResponse<InquiryListItem>>(`/api/inquiries?limit=${limit}`, { session });
+}
+
+export async function getInquiry(session: Session, inquiryId: string) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}`, { session });
+}
+
+export async function createInquiry(
+  session: Session,
+  body: {
+    guestProfileId: string;
+    sourceChannel: string;
+    notes?: string;
+    proposedCheckIn?: string;
+    proposedCheckOut?: string;
+    /** Phase C — optional link to a Phase-B TravelAgent (mutually exclusive with corporateAccountId). */
+    travelAgentId?: string | null;
+    /** Phase C — optional link to a Phase-B CorporateAccount (mutually exclusive with travelAgentId). */
+    corporateAccountId?: string | null;
+    /**
+     * Which negotiated package this booking is quoted on. Omit to let pricing use the party's
+     * default package, then the hotel's common one.
+     */
+    ratePackageId?: string | null;
+  },
+) {
+  return apiRequest<InquiryListItem>("/api/inquiries", {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
+/**
+ * Capture the corporate/government commercial context on an inquiry (SIG-S1 §100.6, Policy 17).
+ * Required for `sourceChannel` CORPORATE or GOVERNMENT before the entry can exit S1 — the backend
+ * bills the organisation, so it needs the client reference (their PO/account/authorisation ref)
+ * and the coordinator (their contact person). `PATCH /api/inquiries/:id/corporate-context` (L1+).
+ */
+export async function captureCorporateContext(
+  session: Session,
+  inquiryId: string,
+  body: { corporateClientRef: string; corporateCoordinator: string },
+) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/corporate-context`, {
+    method: "PATCH",
+    session,
+    body,
+  });
+}
+
+/**
+ * Edit the free-text special-preference note (`Inquiry.notes`) from any stage. Stage-agnostic
+ * (L1+); an empty string clears it. Overwrites in place so the preference is never duplicated.
+ * `PATCH /api/inquiries/:id/notes`.
+ */
+export async function updateInquiryNotes(session: Session, inquiryId: string, notes: string) {
+  return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/notes`, {
+    method: "PATCH",
+    session,
+    body: { notes },
+  });
+}
+
+// ----- Phase C operational lookups (L1-accessible search) -----
+
+export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+
+export type LookupPartyMatch = {
+  id: string;
+  displayName: string;
+  /** An agency usually has several: office, owner, WhatsApp. */
+  contactNumbers: string[];
+  contactEmail: string | null;
+  modeOfContact: string;
+  gstNumber?: string | null;
+  /** Corporate accounts only — contract references inherited at intake (spec §2.6.2). */
+  contractRefs?: string[];
+  /** The party's contact persons — who actually rings in bookings. Both party kinds carry these. */
+  coordinators?: CoordinatorContact[];
+};
+
+/**
+ * A blank `q` lists every active party — that is what lets the picker open as a browsable
+ * dropdown. `limit` is the server's own cap: receiving exactly that many rows means the roster
+ * was cut, so the caller can say so without hardcoding the number here.
+ */
+type PartyLookupResult = { matches: LookupPartyMatch[]; limit?: number };
+
+export async function searchTravelAgentsLookup(session: Session, q: string) {
+  const qs = new URLSearchParams({ q });
+  return apiRequest<PartyLookupResult>(`/api/lookups/travel-agents/search?${qs}`, { session });
+}
+
+export async function searchCorporateAccountsLookup(session: Session, q: string) {
+  const qs = new URLSearchParams({ q });
+  return apiRequest<PartyLookupResult>(`/api/lookups/corporate-accounts/search?${qs}`, { session });
+}
+
+export type AddPartyContactResult = {
+  contact: CoordinatorContact;
+  /** False when the party already had this number — the stored contact is returned unchanged. */
+  added: boolean;
+  coordinators: CoordinatorContact[];
+};
+
+/**
+ * Append a contact person to a travel agent / corporate account from the desk (L1).
+ *
+ * Append-only by design — the desk can add a person who came up on a call, but renaming or
+ * removing contacts stays an L4 action in Admin. Idempotent by phone.
+ */
+export async function addPartyContact(
+  session: Session,
+  kind: "TRAVEL_AGENT" | "CORPORATE",
+  partyId: string,
+  contact: CoordinatorContact,
+) {
+  const base = kind === "TRAVEL_AGENT" ? "travel-agents" : "corporate-accounts";
+  return apiRequest<AddPartyContactResult>(`/api/lookups/${base}/${partyId}/contacts`, {
+    method: "POST",
+    session,
+    body: contact,
+  });
+}
+
+/**
+ * The packages a party can be quoted on. An agency can carry several negotiated rates —
+ * Season, Off season, Premium — so the desk picks one when taking the booking.
+ * An empty list means the party has none and pricing falls back to the hotel's common package.
+ */
+export type LookupRatePackage = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  roomBaseRate: string;
+  extraBedRate: string | null;
+  breakfastRate: string | null;
+  lunchRate: string | null;
+  dinnerRate: string | null;
+  cpRate: string | null;
+  mapLunchRate: string | null;
+  mapDinnerRate: string | null;
+  apRate: string | null;
+  currency: string;
+};
+
+export async function listRatePackagesLookup(
+  session: Session,
+  owner: { travelAgentId?: string; corporateAccountId?: string },
+) {
+  const qs = new URLSearchParams(
+    owner.travelAgentId ? { travelAgentId: owner.travelAgentId } : { corporateAccountId: owner.corporateAccountId! },
+  );
+  return apiRequest<{ items: LookupRatePackage[]; count: number }>(`/api/lookups/rate-packages?${qs}`, { session });
+}

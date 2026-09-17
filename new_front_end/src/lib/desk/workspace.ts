@@ -1,0 +1,635 @@
+/**
+ * Per-booking derivations for the front-desk workspace.
+ *
+ * Everything here reads from the real `EntryDetail` the backend returns and
+ * shapes it into the operator-language facts the journey canvas and summary
+ * rail render. No fabrication — where the API doesn't carry a value we show
+ * "—" rather than inventing one.
+ *
+ * **No money arithmetic lives in this file, or anywhere else in the frontend.** Totals, balances
+ * and rates are read straight from the API. If a figure the desk wants doesn't exist server-side,
+ * it renders "—" and the fix belongs in the backend, not here — the production frontend consumes
+ * the same endpoints and must not have to re-derive it.
+ */
+import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
+import { DESK_STEPS, nightsBetween, stepForStage, type DeskStep } from "./model";
+
+export function toNum(v: string | number | null | undefined): number {
+  if (v === null || v === undefined) return 0;
+  const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Money in the mockup's idiom — "Nu 12,345" for BTN, otherwise "<CCY> 12,345". */
+export function money(amount: string | number | null | undefined, currency?: string | null): string {
+  const n = toNum(amount);
+  const sym = !currency || currency.toUpperCase() === "BTN" ? "Nu" : currency.toUpperCase();
+  // Always two decimals. Money is never rounded to whole units for display — Nu 1963.50 must
+  // read as "Nu 1,963.50", and a whole amount reads "Nu 1,964.00". Rounding only ever happens
+  // at the 2dp boundary in the backend's Decimal math (1963.544 → 1963.54), never here.
+  return `${sym} ${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Money, or an em dash when the backend supplies no value for it. Use this for every financial
+ * figure so a missing server-side field reads as "not available" instead of a confident Nu 0.
+ */
+export function moneyOrDash(amount: string | number | null | undefined, currency?: string | null): string {
+  return amount == null ? "—" : money(amount, currency);
+}
+
+/** The quotation that currently represents the offer (latest, not superseded). */
+export function activeQuotation(entry: EntryDetail): QuotationSummary | null {
+  const qs = entry.quotations ?? [];
+  if (qs.length === 0) return null;
+  const live = qs.filter((q) => q.state !== "SUPERSEDED");
+  const pool = live.length ? live : qs;
+  return [...pool].sort((a, b) => (b.versionNumber ?? 0) - (a.versionNumber ?? 0))[0] ?? null;
+}
+
+export type FolioView = {
+  state: "Not opened" | "Provisional" | "Live" | "Settled";
+  frame: "b-live" | "b-transit" | "b-bound";
+};
+
+export function folioView(entry: EntryDetail): FolioView {
+  const s = entry.folio?.state?.toUpperCase();
+  if (!s) return { state: "Not opened", frame: "b-live" };
+  if (s === "SETTLED" || s === "CLOSED") return { state: "Settled", frame: "b-bound" };
+  if (s === "LIVE") return { state: "Live", frame: "b-bound" };
+  return { state: "Provisional", frame: "b-transit" };
+}
+
+/**
+ * Money on the desk is **read from the backend, never computed here.**
+ *
+ * The backend is the single source of truth for every figure (CLAUDE.md — two frontends exist, and
+ * anything derived here would diverge from the production UI's own arithmetic). This type therefore
+ * carries only values the API actually returns; a field is `null` when the backend has no field for
+ * it, and callers must render "—" rather than filling the gap with a local sum or multiplication.
+ *
+ * Deliberately absent here — supplied since 2026-08-13 by `GET /api/entries/:id/billing-summary`
+ * (`getBillingSummary` in lib/api/entries.ts), which the workspace header consumes directly:
+ *  - the stay total on the current commercial basis (server-resolved; there is still no
+ *    `frozenTotalAmount` column — the endpoint reads the operative/frozen quotation)
+ *  - the folio charges total (server-summed; only `outstandingBalance` is stored)
+ */
+export type DeskFinancials = {
+  currency: string;
+  frozen: boolean;
+  /** Backend `Quotation.totalAmount` of the active quotation. */
+  indicativeTotal: number | null;
+  /** Backend `Reservation.frozenRate` — a PER-NIGHT rate, not a stay total. */
+  frozenRate: number | null;
+  nights: number | null;
+  /**
+   * Backend `payment-status.totalReceived` (Decimal-safe, server-side). `null` until the caller
+   * passes a payment-status snapshot — never summed from folio payment rows here.
+   */
+  advanceReceived: number | null;
+  /** Backend `Folio.outstandingBalance`. `null` when the folio carries none. */
+  outstanding: number | null;
+  folio: FolioView;
+};
+
+export function deriveFinancials(
+  entry: EntryDetail,
+  opts?: { paymentStatus?: PaymentStatusSummary | null },
+): DeskFinancials {
+  const quote = activeQuotation(entry);
+  const reservation = entry.reservation ?? null;
+  const folio = entry.folio ?? null;
+  const currency = quote?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+
+  // Date arithmetic, not money — used for captions like "3 nights", never to multiply a rate.
+  const nights =
+    nightsBetween(
+      reservation?.frozenCheckInDate ?? entry.checkInDate,
+      reservation?.frozenCheckOutDate ?? entry.checkOutDate,
+    ) ?? null;
+
+  return {
+    currency,
+    frozen: !!reservation,
+    indicativeTotal: quote ? toNum(quote.totalAmount) : null,
+    frozenRate: reservation ? toNum(reservation.frozenRate) : null,
+    nights,
+    advanceReceived: opts?.paymentStatus ? toNum(opts.paymentStatus.totalReceived) : null,
+    outstanding: folio?.outstandingBalance != null ? toNum(folio.outstandingBalance) : null,
+    folio: folioView(entry),
+  };
+}
+
+export type StepState = "done" | "cur" | "future";
+
+export function currentStepOrder(entry: EntryDetail): number {
+  if (entry.status === "CLOSED" || entry.currentStage === "TERMINAL") return 9;
+  return stepForStage(entry.currentStage).order;
+}
+
+/**
+ * Furthest step the operator can navigate to. Usually the current step, but the
+ * commitment boundary lives between two desk steps and one backend transition:
+ * confirming happens *while at S3* and crosses into S4. So an entry at S3 can
+ * reach the Confirm step (4) to perform the freeze.
+ */
+export function maxReachableOrder(entry: EntryDetail): number {
+  const cur = currentStepOrder(entry);
+  if (entry.currentStage === "S3") return 4;
+  return cur;
+}
+
+/**
+ * S3 exit / pre-confirm readiness (SIG-S3 §exit, SIG-S4) — the gates that must be
+ * green before the booking can be frozen at S4. Mirrors the existing S3 workspace
+ * checklist. Payment "satisfied" is approximated from folio payments (the server
+ * re-validates the real payment-status on confirm).
+ */
+/**
+ * Slice of `EntryCommunication` the S3 checklist needs — structural, so callers can pass the
+ * `/api/entries/:id/communications` items straight through without this module importing the
+ * API client.
+ */
+export type CommForReadiness = {
+  commType: string;
+  direction: string | null;
+  sendStatus: string | null;
+  acknowledgementStatus: string | null;
+  /** ISO creation instant — used to scope the check to the current segment's window. */
+  createdAt?: string | null;
+};
+
+export function s3Readiness(
+  entry: EntryDetail,
+  opts?: {
+    paymentSatisfied?: boolean;
+    totalReceived?: number | null;
+    /** The server's required advance (payment-status). 0 = the hotel demands nothing. */
+    requiredAmount?: number | null;
+    /** Newest-first items from GET /api/entries/:id/communications. */
+    communications?: CommForReadiness[] | null;
+  },
+): Precondition[] {
+  const folio = entry.folio;
+  const hold = entry.committedHold;
+  const inPayments = (folio?.payments ?? []).filter(
+    (p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""),
+  );
+  const proformas = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
+  const proforma = proformas.length > 0;
+  // Mirrors the backend's `enforceProformaDispatchedWhenAdvancePaid` (p40, 2026-07-28): once the
+  // guest has actually paid ANY advance, the proforma must have gone out to them. Keyed on the
+  // amount RECEIVED, not on whether the advance requirement is satisfied — a voluntary payment
+  // against a zero threshold still needs the invoice documented. Without this line the desk
+  // showed all-green (a DRAFT proforma satisfies "on folio") and the freeze then failed with
+  // PROFORMA_INVOICE_NOT_DISPATCHED, which is what "everything is done but it won't seal" was.
+  const advanceReceived = typeof opts?.totalReceived === "number" ? opts.totalReceived : 0;
+  const proformaDispatched = proformas
+    .filter((i) => i.state !== "SUPERSEDED")
+    .some((i) => i.dispatchedAt != null || i.state !== "DRAFT");
+  // The advance-payment condition (SIG-S3 Policy 27 / §115) is satisfied by an actual advance
+  // payment OR an FOM credit extension (Policy 42). Prefer the authoritative server payment-status
+  // flag (which counts the credit extension); fall back to raw folio payments only when it hasn't
+  // been fetched. Using inPayments alone wrongly blocks agent/OTA/credit-extension bookings.
+  const advanceSatisfied = opts?.paymentSatisfied ?? inPayments.length > 0;
+  return [
+    // Mirrors the relaxed backend gate (`enforceQuotationPresentForS4Confirmation`): the freeze
+    // needs a quotation to exist as its commercial basis, not one the guest accepted. An accepted
+    // quote is still preferred as that basis when there is one.
+    {
+      label: "Quote generated",
+      met: (entry.quotations ?? []).some(
+        (q) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED",
+      ),
+    },
+    { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
+    { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
+    // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
+    // advance is demanded or the guest asks). So "generated" is the standing item, and the
+    // dispatch/settlement items below appear only when they actually apply — a vacuously-true
+    // green line ("sent ✓" when nothing was ever sent or owed) misreads as work done.
+    { label: "Proforma invoice generated", met: proforma },
+    // Money was received → the bill it was paid against must have gone out (backend p40 +
+    // the bill-before-money guard). Hidden when nothing has been received: nothing to document.
+    ...(advanceReceived > 0
+      ? [
+          {
+            label: "Proforma sent to guest (advance was received)",
+            met: proformaDispatched,
+          },
+        ]
+      : []),
+    // Mirrors the backend's `enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation`
+    // (p40, 2026-07-31): once the proforma actually WENT OUT, the guest's answer must be on
+    // record before the freeze. Only shown when a live proforma was dispatched — a generated-
+    // but-never-sent proforma asks the guest nothing, so there is nothing to answer. The latest
+    // dispatched proforma communication decides (items arrive newest-first); while the
+    // communications feed hasn't loaded the item reads unmet rather than green, so the desk
+    // never declares freeze-ready on data it doesn't have.
+    // Segment-scoped (2026-08-02, mirrors the backend gate): only THIS segment's dispatches
+    // count — a prior segment's bill and its answer belong to a sealed pass.
+    ...((() => {
+      const segStartIso = (entry.segments ?? [])[0]?.startedAt ?? null;
+      const dispatchedThisSegment = proformas
+        .filter((i) => i.state !== "SUPERSEDED" && (!segStartIso || i.createdAt >= segStartIso))
+        .some((i) => i.dispatchedAt != null || i.state !== "DRAFT");
+      if (!dispatchedThisSegment) return [];
+      return [
+        {
+          label: "Guest's answer to the proforma recorded",
+          met:
+            (opts?.communications ?? []).find(
+              (c) =>
+                c.commType === "PROFORMA_INVOICE" &&
+                c.direction === "OUTBOUND" &&
+                c.sendStatus === "DISPATCHED" &&
+                (!segStartIso || (c.createdAt ?? "") >= segStartIso),
+            )?.acknowledgementStatus === "RECEIVED",
+        },
+      ];
+    })()),
+    // Shown only when an advance is actually DEMANDED (required > 0 — config threshold or the
+    // desk's per-booking requirement), when money has already come in, or when the requirement
+    // is unknown (status not fetched — conservative). With required = 0 the hotel asks for
+    // nothing, and a green "settled ✓" over zero activity misreads as a payment having happened.
+    ...(typeof opts?.requiredAmount !== "number" || opts.requiredAmount > 0 || advanceReceived > 0
+      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied }]
+      : []),
+    // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
+    // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
+    // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
+    { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED" },
+    {
+      label: "Guest contact on file",
+      met: !!(entry.guestProfile?.email || entry.guestProfile?.phone),
+    },
+  ];
+}
+
+/** Alias — the confirm step's gate is exactly the S3 exit checklist. */
+export function confirmReadiness(
+  entry: EntryDetail,
+  opts?: Parameters<typeof s3Readiness>[1],
+): Precondition[] {
+  return s3Readiness(entry, opts);
+}
+
+export function canConfirm(
+  entry: EntryDetail,
+  opts?: Parameters<typeof s3Readiness>[1],
+): boolean {
+  return entry.currentStage === "S3" && s3Readiness(entry, opts).every((c) => c.met);
+}
+
+/** S1 exit readiness (SIG-S1) — the gates before progressing to Negotiation (S2). */
+export function s1Readiness(entry: EntryDetail): Precondition[] {
+  const configs = entry.availabilityConfigs ?? [];
+  const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
+  return [
+    { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate) },
+    { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1 },
+    {
+      label: "Guest contact on file",
+      met: !!(entry.guestProfile?.email || entry.guestProfile?.phone),
+    },
+    { label: "Availability searched", met: configs.length > 0 },
+    { label: "Preferred room selected", met: !!preferred },
+  ];
+}
+
+export function canProgressS1(entry: EntryDetail): boolean {
+  return (
+    entry.currentStage === "S1" &&
+    !!(entry.checkInDate && entry.checkOutDate) &&
+    s1Readiness(entry).every((c) => c.met)
+  );
+}
+
+/** S2 exit readiness (SIG-S2) — gates before reservation setup (S3). */
+/**
+ * S2 exit readiness. Mirrors the backend gate, which requires a quotation to have been
+ * GENERATED — not accepted (operator ruling 2026-07-28: generating is mandatory, sending is
+ * optional, and acceptance is only recordable on something sent, so it can't be the gate).
+ * See `resolveOperativeQuotation` / `enforceQuotationGeneratedForS2Exit` on the backend.
+ *
+ * Acceptance is still surfaced, as an unmet-but-non-blocking line, so the operator can see at a
+ * glance whether the guest actually said yes.
+ */
+export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Precondition[] {
+  const quotes = entry.quotations ?? [];
+  const live = quotes.filter((q) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED");
+  const accepted = quotes.find((q) => q.state === "ACCEPTED");
+  const operative = accepted ?? live[0];
+  const sealed = (entry.availabilityConfigs ?? []).some((c) => c.sealedAt && c.optionSelected);
+  const holds = entry.speculativeHolds ?? [];
+  const holdsOk = holds.length === 0 || holds.every((h) => h.state === "PLACED" || h.state === "UPGRADED");
+  const validOk = !operative?.validUntil || new Date(operative.validUntil).getTime() > now;
+  return [
+    { label: "Availability sealed from Inquiry", met: sealed },
+    { label: "Quote generated", met: live.length > 0 },
+    { label: "Quote still valid", met: !operative || validOk },
+    { label: "Any holds still healthy", met: holdsOk },
+  ];
+}
+
+export function canProgressS2(entry: EntryDetail): boolean {
+  return entry.currentStage === "S2" && s2Readiness(entry).every((c) => c.met);
+}
+
+/** S5 exit readiness (SIG-S5 §1.5) — gates before check-in (S6). Guest-present is a UI attestation. */
+export function s5Readiness(entry: EntryDetail): Precondition[] {
+  const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
+  const tasks = entry.preArrivalTasks ?? [];
+  // Mirrors p44 (2026-08-14): the FOM tier-2 acknowledgement is required only when the folio
+  // balance is NEAR the extended ceiling (registry `tier2Percent`, default 90%) — NOT merely
+  // because a ceiling exists. The frozen reservation carries `creditCeilingIfExtended`
+  // forever, so requiring an ack unconditionally deadlocked check-in once the credit
+  // extension expired (the ack button only renders while the extension is active). If an
+  // admin lowers the registry percent below 90 the backend gate still enforces — the desk
+  // can show green slightly early but the click returns p44's clear error.
+  const ceiling =
+    entry.reservation?.creditCeilingIfExtended != null ? Number(entry.reservation.creditCeilingIfExtended) : null;
+  const outstanding = entry.folio?.outstandingBalance != null ? Number(entry.folio.outstandingBalance) : 0;
+  const tier2AckNeeded = ceiling != null && Number.isFinite(ceiling) && ceiling > 0 && outstanding / ceiling >= 0.9;
+  return [
+    { label: "Handoff to front desk fulfilled", met: h1?.state === "FULFILLED" },
+    { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0 },
+    {
+      label: "Pre-arrival tasks done",
+      met: tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED"),
+    },
+    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true },
+    {
+      label: "Credit ceiling acknowledged",
+      met: !tier2AckNeeded || !!entry.creditCeilingTier2AcknowledgedAt,
+    },
+  ];
+}
+
+export function canProgressS5(entry: EntryDetail, guestPresent: boolean): boolean {
+  return entry.currentStage === "S5" && guestPresent && s5Readiness(entry).every((c) => c.met);
+}
+
+/** S6 exit readiness (SIG-S6) — derivable gates before check-in completes (folio goes live → S7).
+ *
+ * `opts.guestDetails` is the server-computed coverage from the identity-proofs feed (2026-08-11,
+ * operator ruling): every guest needs a document number or ID photo on file before check-in,
+ * VIP bookings exempt. Callers without that feed omit it — the line is skipped and the backend
+ * gate still enforces. */
+export function s6Readiness(
+  entry: EntryDetail,
+  opts?: {
+    guestDetails?: { satisfied: boolean; vipExempt: boolean; filledSlots: number; totalSlots: number } | null;
+  },
+): Precondition[] {
+  const g = entry.guestProfile;
+  // EVERY assigned room must be ready, not just the first. `completeCheckInToS7` fails fast on the
+  // first room that isn't physically ready, so checking only [0] let the desk show a green gate
+  // that the backend then rejected on a multi-room booking. Deduped by roomId because a per-night
+  // booking holds one assignment row per (room, date-range).
+  const rooms = Array.from(new Map((entry.roomAssignments ?? []).map((x) => [x.roomId, x])).values());
+  const isReady = (a: (typeof rooms)[number]) => {
+    const ps = a.room?.physicalState;
+    if (ps) return ps === "AVAILABLE_CLEAN" || ps === "AVAILABLE_INSPECTED";
+    return a.deficientAtAssignment ? !!(a.acknowledgementActorId && a.acknowledgementAt) : true;
+  };
+  const roomReady = rooms.length > 0 && rooms.every(isReady);
+  const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
+  const h1Ok = entry.walkInCompressed === true || !h1 || h1.state === "FULFILLED" || h1.state === "CLOSED";
+  const isVip = !!g?.vipTier?.trim();
+  const gd = opts?.guestDetails;
+  return [
+    { label: "Identity verified", met: !!g?.identityVerifiedAt },
+    ...(gd && !gd.vipExempt
+      ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied }]
+      : []),
+    {
+      label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",
+      met: roomReady,
+    },
+    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true },
+    { label: "Handoff fulfilled", met: h1Ok },
+    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0 },
+  ];
+}
+
+// (2026-09-17) `localTodayYmd()` lived here: "the desk sits in the hotel, so this is the hotel
+// day". That assumption was the bug — a desk's clock is whatever its machine is set to. The
+// hotel's day now comes from the server via `useHotelDay()`; nothing on the desk computes it.
+
+/**
+ * The day the stay really ends (2026-08-22): the early-departure date when one is recorded (and
+ * earlier than booked), else the frozen checkout, else the intake one. Mirrors the backend
+ * `effectiveCheckOutDate()` — keep the two in step.
+ */
+export function effectiveCheckOutIso(entry: EntryDetail): string | null {
+  const booked = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
+  const actual = entry.actualCheckOutDate ?? null;
+  if (actual && (!booked || actual.slice(0, 10) < booked.slice(0, 10))) return actual;
+  return booked;
+}
+
+/**
+ * True while the HOTEL's today is before the (effective) checkout day — leaving now would be an
+ * early departure. `hotelToday` comes from `useHotelDay()`; `null` means it isn't known yet,
+ * and so is the answer — callers hold the decision rather than guess.
+ */
+export function departureWouldBeEarly(entry: EntryDetail, hotelToday: string | null): boolean | null {
+  const co = effectiveCheckOutIso(entry);
+  if (!co) return false;
+  if (!hotelToday) return null;
+  return hotelToday < co.slice(0, 10);
+}
+
+function shortDayLabel(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** S7 exit readiness (SIG-S7) — derivable gates before checkout prep (S8). Night audit is reported separately. */
+export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null): Precondition[] {
+  const folio = entry.folio;
+  // Policy 36 (2026-08-22): the standard checkout is for a guest who slept every booked night. Before
+  // the booked checkout day the gate stays locked and the Stay step offers the governed early
+  // departure (GM), which shortens the stay — after which this line is met on its own.
+  const checkOutIso = effectiveCheckOutIso(entry);
+  const early = departureWouldBeEarly(entry, hotelToday);
+  const checkoutLine: Precondition = early === null
+    ? // Until the server says what day it is, the gate stays shut — fail closed, never guess.
+      { label: "Checking today's date at the hotel…", met: false }
+    : entry.earlyDeparture
+    ? { label: `Early departure recorded — checkout ${shortDayLabel(entry.earlyDeparture.departureDate)}`, met: !early }
+    : checkOutIso
+      ? {
+          label: early
+            ? `Booked checkout is ${shortDayLabel(checkOutIso)} — leaving earlier is an early departure (GM, Stay step)`
+            : `Booked checkout day reached (${shortDayLabel(checkOutIso)})`,
+          met: !early,
+        }
+      : { label: "Checkout date on file", met: false };
+  const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
+  const h4Init = !!h4 && !h4.rejectedAt && ["CREATED", "ACCEPTED", "FULFILLED", "CLOSED"].includes(h4.state);
+  const deficient = entry.roomAssignments?.[0]?.room?.deficientConditionRecords ?? [];
+  const deficientFinal =
+    deficient.length === 0 ||
+    deficient.every((d) => ["RESOLVED", "UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"].includes(d.status));
+  const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
+  return [
+    checkoutLine,
+    { label: "Folio is live", met: folio?.state === "LIVE" },
+    { label: "Charges posted", met: (folio?.lines ?? []).length > 0 },
+    { label: "Pre-checkout handoff started", met: h4Init },
+    { label: "Deficiencies resolved", met: deficientFinal },
+    { label: "No open disputes", met: openDisputes.length === 0 },
+  ];
+}
+
+export function canProgressS7(entry: EntryDetail, nightAuditOk: boolean, hotelToday: string | null): boolean {
+  return entry.currentStage === "S7" && nightAuditOk && s7Readiness(entry, hotelToday).every((c) => c.met);
+}
+
+/** S8 exit readiness (SIG-S8) — gates before settlement & close (S9). H5 is auto-created on progress. */
+export function s8Readiness(entry: EntryDetail): Precondition[] {
+  const folio = entry.folio;
+  const keyReturn = (entry.keyReturnRecords ?? [])[0];
+  const inspection = (entry.roomInspectionRecords ?? [])[0];
+  const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
+  const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
+  // EVERY distinct room must be released (2026-08-17 — the old check read only the first
+  // assignment's room, so a multi-room booking could show green with rooms still occupied).
+  // DEPARTED_CLEAN counts too: housekeeping may already have turned a room by the time the
+  // operator looks. Ticks itself when settlement fires the physical departure.
+  const distinctRooms = Array.from(
+    new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room])).values(),
+  );
+  const roomsReleased =
+    distinctRooms.length > 0 &&
+    distinctRooms.every(
+      (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
+    );
+  return [
+    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" },
+    {
+      label: "Keys returned",
+      met: !!keyReturn && (keyReturn.countReconciled || !!keyReturn.reconciliationNote),
+    },
+    {
+      label:
+        distinctRooms.length > 1 ? "Rooms released to housekeeping" : "Room released to housekeeping",
+      met: roomsReleased,
+    },
+    { label: "Room inspection recorded", met: !!inspection },
+    { label: "Pre-checkout handoff fulfilled", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true) },
+    { label: "No open disputes", met: openDisputes.length === 0 },
+  ];
+}
+
+export function canProgressS8(entry: EntryDetail): boolean {
+  return entry.currentStage === "S8" && s8Readiness(entry).every((c) => c.met);
+}
+
+// --- S9 loop-closure (SIG-S9 §closure) — the checks that must pass before the entry can be
+// sealed via closeEntryAtS9. Mirrors the OLD s9-workspace closureChecks. -----------------------
+function s9H5Blocking(state?: string): boolean {
+  return state === "CREATED" || state === "ASSIGNED" || state === "ACCEPTED";
+}
+function s9DeferredInspectionUnresolved(entry: EntryDetail): boolean {
+  const inspections = entry.roomInspectionRecords ?? [];
+  const latest = inspections[0];
+  if (!latest || !latest.isDeferred) return false;
+  return !inspections.some((i) => !i.isDeferred);
+}
+
+export function s9CloseReadiness(entry: EntryDetail): Precondition[] {
+  const folio = entry.folio;
+  const invoices = folio?.invoices ?? [];
+  const disputes = entry.disputes ?? [];
+  const openDisputes = disputes.filter(
+    (d) => d.status === "OPEN" || d.status === "IN_PROGRESS" || d.status === "REOPENED",
+  );
+  const draftInvoices = invoices.filter((i) => i.state === "DRAFT");
+  const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5");
+  const isNoShow = folio?.state === "NO_SHOW_CLOSED";
+  const isGovernment = folio?.billingModel === "GOVERNMENT";
+  const outstanding = deriveFinancials(entry).outstanding ?? 0;
+  const latestInvoice = invoices[0];
+  const checks: Precondition[] = [
+    { label: "All disputes terminal", met: openDisputes.length === 0 },
+    { label: "Invoices dispatched (no draft)", met: draftInvoices.length === 0 },
+    { label: "H5 fulfilled or closed", met: !s9H5Blocking(h5?.state) },
+    { label: "Deferred inspection resolved", met: !s9DeferredInspectionUnresolved(entry) },
+    {
+      label: "Folio on a closure path",
+      met:
+        isNoShow ||
+        folio?.state === "SETTLED" ||
+        folio?.state === "WRITTEN_OFF" ||
+        (folio?.state === "OUTSTANDING" && outstanding > 0),
+    },
+  ];
+  if (isGovernment) {
+    checks.push({
+      label: "Government invoice payment-tracked",
+      met:
+        !!latestInvoice &&
+        (latestInvoice.state === "PAYMENT_TRACKED" || latestInvoice.state === "RECONCILED"),
+    });
+  }
+  return checks;
+}
+
+export function canCloseS9(entry: EntryDetail, actorLevel?: string): boolean {
+  const elevated = actorLevel === "L2" || actorLevel === "L3" || actorLevel === "L4";
+  return (
+    entry.status !== "CLOSED" &&
+    entry.currentStage === "S9" &&
+    elevated &&
+    s9CloseReadiness(entry).every((c) => c.met)
+  );
+}
+
+export function stepStateFor(order: number, currentOrder: number): StepState {
+  if (order < currentOrder) return "done";
+  if (order === currentOrder) return "cur";
+  return "future";
+}
+
+export type Precondition = { label: string; met: boolean };
+
+/** Real-state preconditions surfaced in the gate bar for each step. */
+export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday: string | null = null): Precondition[] {
+  const fin = deriveFinancials(entry);
+  const quote = activeQuotation(entry);
+  switch (step.key) {
+    case "inquiry":
+      return [
+        {
+          label: "Configuration chosen",
+          met: !!(entry.availabilityConfigs ?? []).some((c) => c.optionSelected),
+        },
+      ];
+    case "quote":
+      // Generated, not sent — emailing the quote is optional and never gates the step.
+      return [{ label: "Quote generated", met: !!quote }];
+    case "setup":
+      return s3Readiness(entry);
+    case "confirm":
+      return [{ label: "Booking confirmed & frozen", met: fin.frozen }];
+    case "arrival":
+      return s5Readiness(entry);
+    case "checkin":
+      return fin.folio.state === "Live" || fin.folio.state === "Settled"
+        ? [{ label: "Checked in · folio live", met: true }]
+        : s6Readiness(entry);
+    case "stay":
+      return s7Readiness(entry, hotelToday);
+    case "checkout":
+      return s8Readiness(entry);
+    case "closed":
+      return [{ label: "Stay sealed", met: !!entry.closedAt || entry.status === "CLOSED" }];
+    default:
+      return [];
+  }
+}
+
+export { DESK_STEPS };

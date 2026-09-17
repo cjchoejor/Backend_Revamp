@@ -1,0 +1,72 @@
+/* ============================================================
+   Frame additions — treatments the prototype set inline, and the few the
+   real frame needs that a static prototype did not (Next.js links in the
+   bar, panels with rows). Same tokens, same scope; nothing here restyles
+   a component from components.css.
+   ============================================================ */
+
+.ds .control-wrap { display: inline-grid; gap: 2px; justify-items: start; }
+.ds .topbar .mark:hover { text-decoration: none; }
+.ds .topbar .mark:focus-visible { border-radius: var(--r-control); }
+.ds .panel-from-bar { top: 56px; right: 16px; }
+.ds .panel-from-bar h4 { font-size: var(--t-base); }
+.ds .panel-row { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-control); color: var(--ink); background: var(--surface); }
+.ds .panel-row:hover { background: var(--surface-2); text-decoration: none; }
+.ds .shell { min-height: 100vh; }
+
+/* a page that is a list: the title line with its one primary button */
+.ds .page-title { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); flex-wrap: wrap; }
+.ds .page-title h2 { font-family: var(--font-head); }
+.ds .count-grey { color: var(--ink-3); font-size: var(--t-sm); font-weight: 400; margin-left: 6px; }
+
+/* the reason line under an inert control, when it stands alone */
+.ds .reason { font-size: var(--t-meta); color: var(--ink-3); }
+
+/* the booking header as a real frame (not the prototype's inline markup) */
+.ds .ws-head .who h2 { font-size: var(--t-h2); font-family: var(--font-head); }
+.ds .ws-head .total .figure { cursor: pointer; background: none; border: 0; padding: 0; color: var(--ink); }
+.ds .ws-head .total .figure:hover { text-decoration: underline dotted var(--ink-3); }
+.ds .money-pop { position: absolute; right: 0; top: 100%; z-index: 30; width: 380px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); box-shadow: var(--shadow-pop); padding: var(--s4); text-align: left; }
+.ds .money-pop .ml { display: flex; justify-content: space-between; gap: 12px; font-size: var(--t-sm); padding: 3px 0; }
+.ds .money-pop .ml.b { font-weight: 700; border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; }
+
+/* the rail's step rows are links in the real frame */
+.ds .rail a.step { text-decoration: none; }
+.ds .rail a.step:hover { background: rgba(255,255,255,.06); }
+.ds .rail .step.unreachable { cursor: not-allowed; }
+.ds .rail .legend .btn { justify-content: flex-start; }
+
+/* the gate bar's forward move sits in a column with its reason */
+.ds .gatebar .gate .item.met { color: var(--ink-2); }
+.ds .gatebar .gate .whose { color: var(--ink-3); font-size: var(--t-meta); margin-left: 4px; }
+.ds .gatebar .gate .item.grey { color: var(--ink-3); }
+
+/* the side panel's short lists */
+.ds .side .row .t { color: var(--ink); }
+.ds .side .quiet { color: var(--ink-3); font-size: var(--t-sm); }
+
+/* legacy working tools sit inside the canvas without their old page chrome */
+.ds .canvas .desk-root { display: block; }
+.ds .canvas .desk-root .view { padding: 0; max-width: none; }
+
+/* a toast in the design system's ink */
+.ds-toast { font-family: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif !important; }
+
+/* tables whose rows open something: the whole row is the target */
+.ds .table tbody tr.static { cursor: default; }
+.ds .table tbody tr.static:hover { background: transparent; }
+.ds .table td.nowrap, .ds .table th.nowrap { white-space: nowrap; }
+.ds .table .sub { display: block; color: var(--ink-3); font-size: var(--t-meta); font-weight: 400; }
+.ds .table .name-i { font-style: italic; font-weight: 700; }
+
+/* the sign-in card */
+.ds .signin-wrap { min-height: 100vh; display: grid; place-items: center; padding: var(--s6); }
+
+/* Tailwind's preflight (loaded for the admin console) makes every svg a block and strips list
+   markers; the desk's icons sit inline beside words, and its plain lists keep their bullets. */
+.ds .ic { display: inline-block; }
+.ds .plain-list { list-style: disc; }
+
+/* the phase the viewed step belongs to reads white on the ink rail (a later light-rail rule would
+   otherwise paint it ink on ink) */
+.ds .rail .phase.current { color: #fff; }

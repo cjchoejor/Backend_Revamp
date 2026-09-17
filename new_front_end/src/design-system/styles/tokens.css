@@ -1,0 +1,70 @@
+/* ============================================================
+   LEGPHEL PMS — design-system tokens (DSS v1.0, locked 9 Sep 2026;
+   palette ruled 10 Sep: ink frame, plum accent, Poppins headings).
+   The single place a colour or size changes. Scoped to `.ds`, the root
+   of the desk frame, so none of it reaches the admin console, whose own
+   theme uses some of the same variable names (--accent, --line).
+   ============================================================ */
+
+.ds {
+  /* --- surfaces: warm, greyed, never cream ------------------------------ */
+  --paper:      #F6F1E8;   /* app background: warm, low-glare under medium light */
+  --surface:    #FFFFFF;   /* working surfaces: forms, tables, cards */
+  --surface-2:  #F9F5EE;   /* panels and locked (Bound) fills */
+  --surface-3:  #EEE6D8;   /* pressed / selected-row wash when accent would shout */
+  --line:       #DED4C4;   /* hairlines */
+  --line-2:     #C2B49E;   /* control borders, table header rule */
+
+  /* --- the frame: the bar and the journey rail are ink ------------------- */
+  --frame:      #1E1C19;
+  --frame-2:    #2A2723;
+  --frame-ink:  #D8D3CA;
+  --frame-dim:  #8F887E;
+
+  /* --- ink: text hierarchy by weight and grey, never by colour ----------- */
+  --ink:    #1E1C19;
+  --ink-2:  #514C45;
+  --ink-3:  #706A61;       /* meta: labels, timestamps — AA on white, paper and panel surfaces */
+  --ink-4:  #A39C92;       /* disabled text — deliberately below AA, it is inert */
+
+  /* --- the one accent: position, selection, focus ------------------------ */
+  --accent:       #6D2E8C;
+  --accent-ink:   #55206F;
+  --accent-soft:  #F1E7F6;
+  --accent-line:  #CDA9DB;
+
+  /* --- semantic colours, defined on their own ---------------------------- */
+  --danger:        #B3261E;  --danger-soft:  #FBECEA;  --danger-line: #E5A9A3;
+  --warning:       #8F5300;  --warning-soft: #FBF1DF;  --warning-line:#E6C48A;
+  --success:       #1E7A4F;  --success-soft: #E6F3EC;  --success-line:#A6D4BC;
+
+  /* --- type ---------------------------------------------------------------- */
+  --font: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  --font-head: "Poppins", "Carlito", "Calibri", sans-serif;
+  --font-mark: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  --t-meta: 13px;    --t-sm: 15px;  --t-base: 16px;  --t-lead: 18px;
+  --t-h3: 21px;      --t-h2: 26px;  --t-h1: 32px;    --t-figure: 24px;   /* 24-inch FHD at 92 ppi, read at 60–90 cm */
+  --lh: 1.45;
+
+  /* --- geometry ------------------------------------------------------------ */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s7: 32px; --s8: 40px; --s9: 48px;
+  --r-chip: 3px; --r-control: 4px; --r-card: 6px; --r-dialog: 8px;
+  --control-h: 36px;          /* desk default */
+  --control-h-compact: 30px;  /* dense lists, the room board */
+  --target: 36px;             /* minimum pointer target */
+  --shadow-pop: 0 4px 14px rgba(30,28,25,.14);
+  --shadow-dialog: 0 16px 40px rgba(30,28,25,.22);
+  --focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+
+  /* Tailwind's preflight paints every border with --border; keep it the design system's hairline */
+  --border: #DED4C4;
+
+  min-height: 100vh;
+}
+
+/* touch mode: same design, finger-sized. Applied to the frame, not per screen. */
+.ds.touch, .ds .touch {
+  --t-meta: 14.5px; --t-sm: 16px; --t-base: 17.5px; --t-lead: 20px; --t-h3: 23px; --t-h2: 28px;
+  --control-h: 48px; --control-h-compact: 44px; --target: 48px;
+  --s3: 14px; --s4: 20px;
+}

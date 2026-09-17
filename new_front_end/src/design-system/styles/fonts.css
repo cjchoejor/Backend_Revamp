@@ -1,0 +1,5 @@
+/* Carlito (metric-identical to Calibri) for everything read; Poppins Medium for h1–h3.
+   Self-hosted — nothing is fetched at runtime (DSS §2.2). */
+@font-face { font-family: "Carlito"; font-weight: 400; font-style: normal; font-display: swap; src: url("../fonts/carlito-regular.woff") format("woff"); }
+@font-face { font-family: "Carlito"; font-weight: 700; font-style: normal; font-display: swap; src: url("../fonts/carlito-bold.woff") format("woff"); }
+@font-face { font-family: "Poppins"; font-weight: 500; font-style: normal; font-display: swap; src: url("../fonts/poppins-medium.woff") format("woff"); }

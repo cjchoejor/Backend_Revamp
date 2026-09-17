@@ -1,0 +1,422 @@
+/* ════════════════════════════════════════════════════════════════
+   Admin console — reskinned into the front-desk (/desk) cream/green
+   format (2026-06-26). The entire admin surface is scoped under
+   `.admin-console` (set on AdminShell's root). Redefining the
+   design-system tokens here recolours every `admin-*` class, every
+   Tailwind semantic utility (bg-background, text-muted-foreground,
+   border-border, …) and every shadcn component in ONE place — no
+   per-page edits. Palette + type ported from src/styles/desk-theme.css.
+   Because `.admin-console` is a closer ancestor than `:root`/`.dark`,
+   these token values win for the whole subtree (admin has no dark mode).
+   ════════════════════════════════════════════════════════════════ */
+
+.admin-console {
+  /* desk cream/green palette → design-system tokens */
+  --background: #f5f1e6;            /* desk --cream  (page)   */
+  --foreground: #202a23;           /* desk --ink             */
+  --card: #fcf9f2;                 /* desk --paper  (panels) */
+  --card-foreground: #202a23;
+  --popover: #fcf9f2;
+  --popover-foreground: #202a23;
+  --primary: #3c5a45;              /* desk --green           */
+  --primary-foreground: #fcf9f2;
+  --secondary: #efe9da;            /* desk --cream-2         */
+  --secondary-foreground: #2c4434; /* desk --green-d         */
+  --muted: #efe9da;
+  --muted-foreground: #5a645a;     /* desk --ink-2           */
+  --accent: #e7efe8;               /* desk --green-t         */
+  --accent-foreground: #2c4434;
+  --destructive: #a8514a;          /* desk --stop            */
+  --success: #3f7d5a;              /* desk --ok              */
+  --border: #d6cdb7;               /* desk --line-2          */
+  --input: #d6cdb7;
+  --ring: #3c5a45;
+  --radius: 0.75rem;
+  --gradient-primary: linear-gradient(135deg, #3c5a45 0%, #22382b 100%);
+
+  /* desk typography (Hanken Grotesk for both body and display) */
+  --font-sans: var(--font-hanken), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-hanken), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  /* legacy admin-* aliases — unchanged, now resolve to the cream/green tokens */
+  --admin-bg: var(--background);
+  --admin-bg-elev: var(--card);
+  --admin-ink: var(--foreground);
+  --admin-ink-soft: var(--muted-foreground);
+  --admin-ink-faint: color-mix(in srgb, var(--muted-foreground) 75%, transparent);
+  --admin-rule: var(--border);
+  --admin-rule-strong: var(--border);
+  --admin-brass: var(--primary);
+  --admin-brass-glow: color-mix(in srgb, var(--primary) 12%, transparent);
+  --admin-teal: var(--success);
+  --admin-crimson: var(--destructive);
+
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+.admin-console .admin-display {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.admin-console .admin-muted {
+  color: var(--muted-foreground);
+}
+
+.admin-console .admin-eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.admin-console .admin-brand {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+  text-transform: uppercase;
+  line-height: 1.2;
+  border-left-color: var(--primary) !important;
+}
+
+.admin-console .admin-brand small {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+  letter-spacing: 0.14em;
+  font-weight: 500;
+  margin-top: 2px;
+  text-transform: uppercase;
+}
+
+.admin-console .admin-topnav {
+  background: color-mix(in srgb, var(--card) 95%, transparent);
+  backdrop-filter: blur(8px);
+  border-color: var(--border);
+}
+
+.admin-console .admin-nav-link {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  padding: 0.375rem 0.75rem;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.admin-console .admin-nav-link:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.admin-console .admin-nav-link.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.admin-console .admin-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  /* desk card shadow (--sh-sm) — warm, ink-tinted, low elevation */
+  box-shadow: 0 1px 2px rgba(32, 42, 35, 0.05), 0 1px 1px rgba(32, 42, 35, 0.03);
+}
+
+.admin-console .admin-stat {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--card);
+}
+
+.admin-console .admin-stat > div {
+  padding: 1.25rem 1.5rem;
+  border-right: 1px solid var(--border);
+}
+
+.admin-console .admin-stat > div:last-child {
+  border-right: 0;
+}
+
+.admin-console .admin-stat dt {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.admin-console .admin-stat dd {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--primary);
+  margin: 0;
+  line-height: 1;
+}
+
+.admin-console .admin-tag {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--secondary));
+  border-radius: var(--radius-sm);
+}
+
+.admin-console .admin-tag-warn {
+  border-color: color-mix(in srgb, var(--destructive) 40%, transparent);
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, var(--card));
+}
+
+.admin-console .admin-tag-ok {
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--accent));
+}
+
+.admin-console .admin-input,
+.admin-console .admin-textarea,
+.admin-console .admin-select {
+  width: 100%;
+  background: var(--background);
+  border: 1px solid var(--input);
+  color: var(--foreground);
+  border-radius: var(--radius-md);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+
+.admin-console .admin-input:focus,
+.admin-console .admin-textarea:focus,
+.admin-console .admin-select:focus {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 25%, transparent);
+}
+
+.admin-console .admin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  cursor: pointer;
+  transition: opacity 0.15s ease, filter 0.15s ease;
+}
+
+.admin-console .admin-btn:hover {
+  filter: brightness(1.05);
+}
+
+.admin-console .admin-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Affirmative variant for resolve / reactivate actions — distinct from the default and
+   from any destructive (Deactivate / Delete) action so operators can't confuse them. */
+.admin-console .admin-btn-success {
+  border-color: color-mix(in srgb, var(--success) 60%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, var(--accent));
+  color: var(--success);
+}
+
+.admin-console .admin-btn-success:hover {
+  background: color-mix(in srgb, var(--success) 22%, var(--accent));
+  filter: none;
+}
+
+/* Destructive variant for Delete / Deactivate confirmations in the dialog. */
+.admin-console .admin-btn-danger {
+  border-color: color-mix(in srgb, var(--destructive) 60%, transparent);
+  background: var(--destructive);
+  color: white;
+}
+
+.admin-console .admin-btn-danger:hover {
+  filter: brightness(1.05);
+}
+
+/* Ghost variant for the Cancel button in dialogs. */
+.admin-console .admin-btn-ghost {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--admin-ink) 18%, transparent);
+  color: var(--admin-ink);
+}
+
+.admin-console .admin-btn-ghost:hover {
+  background: color-mix(in srgb, var(--admin-ink) 6%, transparent);
+}
+
+.admin-console table.admin-table {
+  width: 100%;
+  font-size: 0.875rem;
+  border-collapse: collapse;
+}
+
+.admin-console table.admin-table th {
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-console table.admin-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.admin-console table.admin-table td strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.admin-console .admin-callout {
+  border-left: 3px solid var(--primary);
+  padding-left: 1rem;
+  color: var(--muted-foreground);
+  max-width: 42rem;
+  background: color-mix(in srgb, var(--secondary) 50%, transparent);
+  padding: 0.75rem 1rem;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+/* Sidebar nav items — mirror operational sidebar */
+.admin-console .admin-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: var(--radius-lg);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.admin-console .admin-sidebar-link:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.admin-console .admin-sidebar-link.active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.admin-console .admin-sidebar-link.active svg {
+  color: inherit;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Layout polish (2026-07-07): the sidebar is now a floating card panel
+   with clear separation from the main content (was flush against a bare
+   border). These are the accompanying central touches — no per-page or
+   logic changes; every admin page inherits them.
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Type scale: trim the admin console's display/heading sizes about one
+   step smaller across the board, without editing each page. Only font-size
+   is set (not line-height) so leading-* utilities keep working, and body
+   sizes (text-sm / text-xs) are intentionally left alone. Scoped +
+   two-class specificity beats Tailwind's single-class utilities. ── */
+.admin-console .text-5xl { font-size: 2.5rem; }
+.admin-console .text-4xl { font-size: 2rem; }
+.admin-console .text-3xl { font-size: 1.625rem; }
+.admin-console .text-2xl { font-size: 1.375rem; }
+.admin-console .text-xl { font-size: 1.15rem; }
+.admin-console .text-lg { font-size: 1rem; }
+
+/* Stat readouts scale down with the headings */
+.admin-console .admin-stat dd {
+  font-size: 1.5rem;
+}
+
+/* Thin, themed scrollbar for the sidebar panel (long domain lists) */
+.admin-console .admin-sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--primary) 30%, transparent) transparent;
+}
+.admin-console .admin-sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.admin-console .admin-sidebar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+  border-radius: 999px;
+}
+.admin-console .admin-sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* A hair more breathing room between the nine domain drawers */
+.admin-console .admin-sidebar-group + .admin-sidebar-group {
+  margin-top: 2px;
+}
+
+/* Config tables: subtle row hover so wide registries are easier to scan */
+.admin-console table.admin-table tbody tr {
+  transition: background 0.12s ease;
+}
+.admin-console table.admin-table tbody tr:hover {
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+/* When a panel is itself a link, give it a gentle interactive lift.
+   Harmless for the static panels that make up most pages. */
+.admin-console a.admin-panel {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.admin-console a.admin-panel:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  box-shadow: 0 6px 18px rgba(32, 42, 35, 0.09);
+  transform: translateY(-1px);
+}
+
+/* Config key picker (configuration / commercial pages) */
+.admin-console .admin-key-item {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-md);
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.admin-console .admin-key-item:hover,
+.admin-console .admin-key-item.is-active {
+  background: color-mix(in srgb, var(--primary) 10%, var(--secondary));
+  color: var(--primary);
+}

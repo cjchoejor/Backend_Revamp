@@ -1,0 +1,797 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { Lock, Maximize2, Minimize2 } from "lucide-react";
+import type { FolioLineSummary } from "@/types/api";
+import { money, moneyOrDash } from "@/lib/desk/workspace";
+
+/**
+ * Compact tabular folio (2026-08-21, operator report: "the folio display is looking a bit too
+ * elongated and not clear to look at — make it tabular or think of some other way").
+ *
+ * Two things caused the elongation, and each gets its own fix:
+ *
+ *  1. Every folio line was a full-height stacked row (description + meta line + amount), so a
+ *     multi-room in-house booking — where the night audit posts room charge + SC + GST per room
+ *     per night — ran to dozens of rows. It is now a TABLE (Date · Room · Charge · Amount),
+ *     scroll-capped with a sticky header so the page never grows with the ledger; the Σ per-room
+ *     subtotals and the balance stay pinned below the scroll area, always visible.
+ *
+ *  2. Two of every three audit lines are TAX COMPANIONS ("Service charge (10.00%) on: …",
+ *     "GST (5.00%) on: …"). Each companion now folds into its parent charge's row as a muted
+ *     "+ SC … · GST …" sub-line instead of two more full rows — pure display grouping: the
+ *     companion lines' own stored amounts are PRINTED, never added up (no desk money math),
+ *     and a companion whose parent can't be found renders as its own row, so no line is ever
+ *     hidden. Detection mirrors the backend's one-home convention (lib/folio-tax-lines.ts).
+ */
+
+/** Mirror of back_end/src/lib/folio-tax-lines.ts — keep the prefixes in step. */
+const SC_PREFIX = "Service charge (";
+const GST_PREFIX = "GST (";
+const TAX_CORR_PREFIX = "Sales tax correction on:";
+const SC_CORR_PREFIX = "Service charge correction on:";
+/** A charge correction's own line ("Correction for <lineId>: <reason>"). */
+const CORRECTION_PREFIX = "Correction for ";
+
+/**
+ * A folio-line id is `<folioId>-L<nn>` since 2026-09-09 (`FOL-20260908-0001-L03`). Every line
+ * in one table belongs to the same folio, so the prefix is the same on every row — it is
+ * printed muted and the `L03` bold, which is what the eye actually matches on. A legacy uuid
+ * (nothing on this database, but an older export could carry one) falls back to itself.
+ */
+function LineId({ id }: { id: string }) {
+  const m = /^(.*-)(L\d+)$/.exec(id ?? "");
+  return (
+    <span title={id} style={{ fontFamily: "var(--font-plex-mono), monospace", fontSize: 10.5, whiteSpace: "nowrap" }}>
+      {m ? (
+        <>
+          <span style={{ color: "var(--ink-4)" }}>{m[1]}</span>
+          <b style={{ color: "var(--ink-2)" }}>{m[2]}</b>
+        </>
+      ) : (
+        <span style={{ color: "var(--ink-4)" }}>{(id ?? "").slice(0, 8)}…</span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A correction names the line it adjusts — "Correction for FOL-20260908-0001-L04: …". The
+ * folio part is already on every row of this table, so it is dropped from the sentence and
+ * only the `L04` kept: the operator matches it against the Line column beside it.
+ */
+function describeLine(description: string): string {
+  const d = description ?? "";
+  if (!d.startsWith(CORRECTION_PREFIX)) return d;
+  return d.replace(/^(Correction for )\S*-(L\d+):/, "$1$2:");
+}
+
+type Companion = { line: FolioLineSummary; kind: "SC" | "GST" };
+type FolioRow = { line: FolioLineSummary; companions: Companion[] };
+
+function companionKind(l: FolioLineSummary): "SC" | "GST" | null {
+  const d = l.description ?? "";
+  if (l.lineType === "SERVICE" && (d.startsWith(SC_PREFIX) || d.startsWith(SC_CORR_PREFIX))) return "SC";
+  if (l.lineType === "OTHER" && (d.startsWith(GST_PREFIX) || d.startsWith(TAX_CORR_PREFIX))) return "GST";
+  return null;
+}
+/** A companion posted BY A CORRECTION (its SC / GST delta) rather than by the charge itself. */
+function isCorrectionCompanion(l: FolioLineSummary): boolean {
+  const d = l.description ?? "";
+  return d.startsWith(TAX_CORR_PREFIX) || d.startsWith(SC_CORR_PREFIX);
+}
+
+/** True for a service-charge / GST companion line — the ones that ride on a charge and are
+ *  never corrected directly (the backend refuses: "correct the underlying charge line"). */
+export function isTaxCompanion(l: FolioLineSummary): boolean {
+  return companionKind(l) !== null;
+}
+
+/** The base-charge description a companion names ("… on: <base>"), or null. */
+function companionBase(l: FolioLineSummary): string | null {
+  const d = l.description ?? "";
+  const i = d.indexOf(" on: ");
+  if (i >= 0) return d.slice(i + 5).trim();
+  if (d.startsWith(TAX_CORR_PREFIX)) return d.slice(TAX_CORR_PREFIX.length).trim();
+  return null;
+}
+
+/**
+ * Group companions under their parent charge; unmatched companions stay standalone rows.
+ *
+ * ORDER-INDEPENDENT on purpose: the entry payload serves lines newest-first (postedAt desc),
+ * and a backfilled companion (scripts/backfill-night-audit-tax-lines.ts) was posted days after
+ * its charge — so array position says nothing about parentage. A companion matches the charge
+ * with the same room, the same charge date and the exact base description it names; when two
+ * identical charges share a day (two "Dinner" on room 501), the one closest by posting time
+ * wins. No match → the companion keeps its own row, so no ledger line is ever hidden.
+ */
+function foldTaxCompanions(lines: FolioLineSummary[]): FolioRow[] {
+  const rows: FolioRow[] = [];
+  const companions: { line: FolioLineSummary; kind: "SC" | "GST" }[] = [];
+  for (const l of lines) {
+    const kind = companionKind(l);
+    if (kind) companions.push({ line: l, kind });
+    else rows.push({ line: l, companions: [] });
+  }
+  const leftover: FolioRow[] = [];
+  for (const c of companions) {
+    const base = companionBase(c.line);
+    // A correction's SC / GST delta names the ORIGINAL charge (so the backend can find every
+    // tax line of that charge later) but is dated with the CORRECTION — so it folds under the
+    // "Correction for …" row posted with it: same room, same charge date, nearest in time.
+    const candidates = isCorrectionCompanion(c.line)
+      ? rows.filter(
+          (r) =>
+            (r.line.roomId ?? null) === (c.line.roomId ?? null) &&
+            r.line.chargeDate?.slice(0, 10) === c.line.chargeDate?.slice(0, 10) &&
+            (r.line.description ?? "").startsWith(CORRECTION_PREFIX),
+        )
+      : rows.filter(
+          (r) =>
+            (r.line.roomId ?? null) === (c.line.roomId ?? null) &&
+            r.line.chargeDate?.slice(0, 10) === c.line.chargeDate?.slice(0, 10) &&
+            (base == null || r.line.description === base),
+        );
+    if (!candidates.length) {
+      leftover.push({ line: c.line, companions: [] });
+      continue;
+    }
+    const ct = new Date(c.line.postedAt).getTime();
+    candidates.sort(
+      (a, b) => Math.abs(new Date(a.line.postedAt).getTime() - ct) - Math.abs(new Date(b.line.postedAt).getTime() - ct),
+    );
+    candidates[0].companions.push(c);
+  }
+  // SC before GST on every sub-line — the order the charge maths runs in (GST compounds on
+  // net + SC), whatever order the two companions happened to be posted in.
+  for (const r of rows) r.companions.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "SC" ? -1 : 1));
+  // Orphans keep the ledger's own position semantics: they trail the matched rows rather than
+  // interleaving misleadingly (they are rare — a companion whose charge fell off the 100-line
+  // window, or a legacy description that names no base).
+  return [...rows, ...leftover];
+}
+
+const th: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  background: "var(--cream)",
+  textAlign: "left",
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "var(--ink-3)",
+  padding: "5px 8px",
+  borderBottom: "1px solid var(--line-2)",
+  whiteSpace: "nowrap",
+};
+const td: React.CSSProperties = {
+  padding: "5px 8px",
+  borderBottom: "1px dashed var(--line)",
+  verticalAlign: "top",
+  whiteSpace: "nowrap",
+};
+
+/** A server-summed bucket's tax split — printed as-is, never added up on the desk. */
+type TaxSplit = { base: number; serviceCharge: number; gst: number; total: number };
+type Bucket = { roomId: string; roomNumber: string | null; charges: number; lineCount: number; base: number; serviceCharge: number; gst: number };
+type SpaceBucket = { spaceId: string; spaceName: string | null; charges: number; lineCount: number; base: number; serviceCharge: number; gst: number };
+
+/**
+ * Which slice of the ledger a tab shows: every line, one room's, one space's, or the ones
+ * attributed to neither (2026-09-09 — a conference hall is billed like a room, PMS-237).
+ */
+export type FolioTab = "ALL" | "WHOLE" | { roomId: string } | { spaceId: string };
+
+export type RoomTab = { roomId: string; roomNumber: string };
+export type SpaceTab = { spaceId: string; spaceName: string };
+
+/** The room tabs a set of lines earns: one per room that has a line (or a server bucket). */
+export function roomTabsFor(
+  lines: FolioLineSummary[],
+  roomNumberById?: Map<string, string>,
+  perRoomCharges?: Array<{ roomId: string; roomNumber: string | null }> | null,
+): RoomTab[] {
+  const ids = new Set<string>();
+  for (const l of lines) if (l.roomId) ids.add(l.roomId);
+  for (const b of perRoomCharges ?? []) ids.add(b.roomId);
+  return Array.from(ids)
+    .map((roomId) => ({
+      roomId,
+      roomNumber: perRoomCharges?.find((b) => b.roomId === roomId)?.roomNumber ?? roomNumberById?.get(roomId) ?? "?",
+    }))
+    .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+}
+
+/** The space tabs a set of lines earns: one per space that has a line (or a server bucket). */
+export function spaceTabsFor(
+  lines: Array<{ spaceId?: string | null }>,
+  perSpaceCharges?: Array<{ spaceId: string; spaceName: string | null }> | null,
+  spaceNameById?: Map<string, string>,
+): SpaceTab[] {
+  const ids = new Set<string>();
+  for (const l of lines) if (l.spaceId) ids.add(l.spaceId);
+  for (const b of perSpaceCharges ?? []) ids.add(b.spaceId);
+  return Array.from(ids)
+    .map((spaceId) => ({
+      spaceId,
+      spaceName: perSpaceCharges?.find((b) => b.spaceId === spaceId)?.spaceName ?? spaceNameById?.get(spaceId) ?? "Space",
+    }))
+    .sort((a, b) => a.spaceName.localeCompare(b.spaceName, undefined, { numeric: true }));
+}
+
+/** Display-only slice of the lines for a tab — never touches any figure. */
+export function filterLinesByTab<T extends { roomId?: string | null; spaceId?: string | null }>(lines: T[], tab: FolioTab): T[] {
+  if (tab === "ALL") return lines;
+  if (tab === "WHOLE") return lines.filter((l) => !l.roomId && !l.spaceId);
+  if ("spaceId" in tab) return lines.filter((l) => l.spaceId === tab.spaceId);
+  return lines.filter((l) => l.roomId === tab.roomId);
+}
+
+export function sameTab(a: FolioTab, b: FolioTab): boolean {
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  if ("spaceId" in a) return "spaceId" in b && a.spaceId === b.spaceId;
+  return "roomId" in b && a.roomId === b.roomId;
+}
+
+const tabBtnStyle = (active: boolean): React.CSSProperties => ({
+  border: "none",
+  borderBottom: active ? "2px solid var(--green)" : "2px solid transparent",
+  background: "transparent",
+  color: active ? "var(--ink)" : "var(--ink-3)",
+  fontWeight: active ? 700 : 600,
+  fontSize: 11.5,
+  padding: "6px 10px",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+
+/**
+ * The room / whole-booking tab strip — shared by the live folio and the S7 correction picker
+ * (2026-08-21, operator request for both), so the two can never disagree about what a tab means.
+ */
+export function FolioTabStrip({
+  roomTabs,
+  spaceTabs = [],
+  hasRoomless,
+  tab,
+  onChange,
+  roomTitle,
+}: {
+  roomTabs: RoomTab[];
+  /** One tab per conference room / hall that carries a charge (2026-09-09, PMS-237). */
+  spaceTabs?: SpaceTab[];
+  hasRoomless: boolean;
+  tab: FolioTab;
+  onChange: (tab: FolioTab) => void;
+  /** Tooltip for a room tab, given its number. */
+  roomTitle?: (roomNumber: string) => string;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "stretch", overflowX: "auto", background: "var(--cream-2)", borderBottom: "1px solid var(--line-2)" }}>
+      <button type="button" style={tabBtnStyle(sameTab(tab, "ALL"))} onClick={() => onChange("ALL")} title="Every line">
+        All charges
+      </button>
+      {roomTabs.map((r) => (
+        <button
+          key={r.roomId}
+          type="button"
+          style={tabBtnStyle(sameTab(tab, { roomId: r.roomId }))}
+          onClick={() => onChange({ roomId: r.roomId })}
+          title={roomTitle ? roomTitle(r.roomNumber) : `Only the charges posted against Room ${r.roomNumber}`}
+        >
+          Room {r.roomNumber}
+        </button>
+      ))}
+      {spaceTabs.map((sp) => (
+        <button
+          key={sp.spaceId}
+          type="button"
+          style={tabBtnStyle(sameTab(tab, { spaceId: sp.spaceId }))}
+          onClick={() => onChange({ spaceId: sp.spaceId })}
+          title={`Only the charges posted against ${sp.spaceName}, with their own service charge and GST`}
+        >
+          {sp.spaceName}
+        </button>
+      ))}
+      {hasRoomless && (
+        // Named for what it holds, not for "everything" — "All charges" is the whole ledger, and
+        // this is the slice attributed to neither a room nor a space (2026-09-09, PMS-237).
+        <button
+          type="button"
+          style={tabBtnStyle(sameTab(tab, "WHOLE"))}
+          onClick={() => onChange("WHOLE")}
+          title="Charges posted against the booking itself — no room and no space named"
+        >
+          No room / space
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "For room / space" — the one place the desk asks what a charge belongs to (2026-09-09,
+ * PMS-237). The value is prefixed so the caller can tell a room from a space without a lookup;
+ * `splitChargeTarget` turns it back into the body the API takes.
+ */
+export type ChargeTargetRoom = { roomId: string; roomNumber: string | null };
+export type ChargeTargetSpace = { spaceId: string; spaceName: string };
+
+export function splitChargeTarget(value: string): { roomId?: string; spaceId?: string } {
+  if (value.startsWith("room:")) return { roomId: value.slice(5) };
+  if (value.startsWith("space:")) return { spaceId: value.slice(6) };
+  return {};
+}
+
+/** spaceId -> name, from the booking's own allocations (never the ledger). */
+export function spaceNamesFromAllocations(
+  allocations: Array<{ spaceId: string; space?: { name: string; code: string } | null }> | null | undefined,
+): Map<string, string> {
+  return new Map(chargeTargetSpaces(allocations).map((sp) => [sp.spaceId, sp.spaceName]));
+}
+
+/** The spaces a booking holds, as target options — deduped, named, in allocation order. */
+export function chargeTargetSpaces(
+  allocations: Array<{ spaceId: string; space?: { name: string; code: string } | null }> | null | undefined,
+): ChargeTargetSpace[] {
+  const seen = new Map<string, ChargeTargetSpace>();
+  for (const a of allocations ?? []) {
+    if (!a.spaceId || seen.has(a.spaceId)) continue;
+    seen.set(a.spaceId, { spaceId: a.spaceId, spaceName: a.space?.name ?? a.space?.code ?? "Space" });
+  }
+  return Array.from(seen.values());
+}
+
+export function ChargeTargetSelect({
+  value,
+  onChange,
+  rooms,
+  spaces,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  rooms: ChargeTargetRoom[];
+  spaces: ChargeTargetSpace[];
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">No room / space</option>
+      {rooms.map((r) => (
+        <option key={r.roomId} value={`room:${r.roomId}`}>
+          Room {r.roomNumber ?? r.roomId.slice(0, 6)}
+        </option>
+      ))}
+      {spaces.length > 0 && (
+        <optgroup label="Spaces">
+          {spaces.map((sp) => (
+            <option key={sp.spaceId} value={`space:${sp.spaceId}`}>
+              {sp.spaceName}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </select>
+  );
+}
+
+export function FolioLinesTable({
+  lines,
+  roomNumberById,
+  perRoomCharges,
+  perSpaceCharges,
+  spaceNameById: spaceNames,
+  unassignedCharges,
+  chargeBreakdown,
+  balance,
+  currency,
+  emptyText = "No charges yet",
+  maxHeight = 320,
+  onTabChange,
+}: {
+  lines: FolioLineSummary[];
+  roomNumberById?: Map<string, string>;
+  /** Server-summed per-room buckets from the billing summary — shown, never added up here. */
+  perRoomCharges?: Bucket[] | null;
+  /** The same, per space — a conference hall's charges (2026-09-09, PMS-237). */
+  perSpaceCharges?: SpaceBucket[] | null;
+  /** The booking's own space names, so a just-posted line is named before the buckets land. */
+  spaceNameById?: Map<string, string>;
+  unassignedCharges?: Omit<Bucket, "roomId" | "roomNumber"> | null;
+  /** The whole ledger's server-summed split (base + SC + GST = billed so far). */
+  chargeBreakdown?: TaxSplit | null;
+  /** The backend's own outstandingBalance — there is no sum-of-lines on the desk. */
+  balance?: string | number | null;
+  currency?: string | null;
+  emptyText?: string;
+  maxHeight?: number;
+  /** Fires when the operator opens a tab — the Stay step defaults its "For room" select to it. */
+  onTabChange?: (tab: FolioTab) => void;
+}) {
+  const cur = currency ?? lines[0]?.currency;
+
+  // ── Tabs (2026-08-21, operator request: "show it separately — keep the whole booking and
+  // room-wise separately, and apply GST and service charge per tab"). "All charges" is the full
+  // ledger; one tab per room (and, since 2026-09-09, per space) shows only that target's
+  // lines; "No room / space" is the rest. Filtering is display-only; every figure in a tab's
+  // footer is the server's own bucket split, so nothing is summed on the desk.
+  const roomTabs = useMemo(() => roomTabsFor(lines, roomNumberById, perRoomCharges), [lines, perRoomCharges, roomNumberById]);
+  const spaceTabs = useMemo(() => spaceTabsFor(lines, perSpaceCharges, spaceNames), [lines, perSpaceCharges, spaceNames]);
+  const spaceNameById = useMemo(() => new Map(spaceTabs.map((sp) => [sp.spaceId, sp.spaceName])), [spaceTabs]);
+  const hasRoomless = lines.some((l) => !l.roomId && !l.spaceId);
+  const [tab, setTabState] = useState<FolioTab>("ALL");
+  const setTab = (t: FolioTab) => {
+    setTabState(t);
+    onTabChange?.(t);
+  };
+  const visibleLines = useMemo(() => filterLinesByTab(lines, tab), [lines, tab]);
+  /** The open tab's server-summed split, or null when the backend hasn't sent one. */
+  let split: TaxSplit | null = null;
+  if (tab === "ALL") split = chargeBreakdown ?? null;
+  else if (tab === "WHOLE") {
+    split = unassignedCharges
+      ? { base: unassignedCharges.base, serviceCharge: unassignedCharges.serviceCharge, gst: unassignedCharges.gst, total: unassignedCharges.charges }
+      : null;
+  } else if ("spaceId" in tab) {
+    const b = perSpaceCharges?.find((x) => x.spaceId === tab.spaceId);
+    split = b ? { base: b.base, serviceCharge: b.serviceCharge, gst: b.gst, total: b.charges } : null;
+  } else {
+    const b = perRoomCharges?.find((x) => x.roomId === tab.roomId);
+    split = b ? { base: b.base, serviceCharge: b.serviceCharge, gst: b.gst, total: b.charges } : null;
+  }
+
+  const rows = useMemo(() => foldTaxCompanions(visibleLines), [visibleLines]);
+  const foldedCount = visibleLines.length - rows.length;
+  // The attribution column shows on the All tab, where a row's room or space is the fact that
+  // tells it apart; inside a tab every row shares the same one.
+  const anySpace = rows.some((r) => r.line.spaceId);
+  const anyRoom = tab === "ALL" && rows.some((r) => r.line.roomId || r.line.spaceId);
+  /** What a line is billed against, for the column and the tooltips. */
+  const targetOf = (l: FolioLineSummary) =>
+    l.roomId ? roomNumberById?.get(l.roomId) ?? "?" : l.spaceId ? spaceNameById.get(l.spaceId) ?? "Space" : null;
+
+  const [showTax, setShowTax] = useState(false);
+
+  // Expandable (2026-08-21, operator request): the same table lifted to the full-screen layer
+  // the S1 room table and the S2 grid use (`.rst-expandwrap.on`), so a long ledger is read
+  // whole instead of through a 320px window. Escape closes; the page behind stops scrolling.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [expanded]);
+  const tabLabel =
+    tab === "ALL"
+      ? "All charges"
+      : tab === "WHOLE"
+        ? "No room / space"
+        : "spaceId" in tab
+          ? spaceNameById.get(tab.spaceId) ?? "Space"
+          : `Room ${roomTabs.find((r) => r.roomId === tab.roomId)?.roomNumber ?? "?"}`;
+
+
+  return (
+    <div className={expanded ? "rst-expandwrap on" : "rst-expandwrap"}>
+      {expanded && (
+        <div className="rst-expandbar">
+          <b>
+            Live folio · {tabLabel} · {rows.length} charge{rows.length === 1 ? "" : "s"}
+          </b>
+          <span className="ln" />
+          <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)} title="Close the expanded folio (Esc)">
+            <Minimize2 style={{ width: 13, height: 13 }} /> Close
+          </button>
+        </div>
+      )}
+    <div
+      className="folio"
+      // In the layer the shell is a flex column that fills the screen; only the rows scroll.
+      style={expanded ? { display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 } : undefined}
+    >
+      <div className="folio-h">
+        Charges{visibleLines.length > 0 ? ` · ${rows.length}` : ""}
+        {foldedCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowTax((v) => !v)}
+            title="Service-charge and GST companion lines are folded under the charge they belong to — toggle to list every ledger line on its own row"
+            style={{
+              border: "none",
+              background: "rgba(255,255,255,0.16)",
+              color: "inherit",
+              borderRadius: 999,
+              padding: "1px 8px",
+              fontSize: 9.5,
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+              textTransform: "none",
+              cursor: "pointer",
+            }}
+          >
+            {showTax ? "fold tax lines" : `+ ${foldedCount} tax lines folded`}
+          </button>
+        )}
+        {!expanded && lines.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            title="Expand the folio to the full screen (Esc closes)"
+            style={{
+              border: "none",
+              background: "rgba(255,255,255,0.16)",
+              color: "inherit",
+              borderRadius: 999,
+              padding: "1px 8px",
+              fontSize: 9.5,
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+              textTransform: "none",
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <Maximize2 style={{ width: 10, height: 10 }} /> Expand
+          </button>
+        )}
+        <span className="lk">
+          <Lock />
+          live · append-only
+        </span>
+      </div>
+
+      {(roomTabs.length > 0 || spaceTabs.length > 0 || hasRoomless) && lines.length > 0 && (
+        <FolioTabStrip
+          roomTabs={roomTabs}
+          spaceTabs={spaceTabs}
+          hasRoomless={hasRoomless}
+          tab={tab}
+          onChange={setTab}
+          roomTitle={(n) => `Only the charges posted against Room ${n}, with their own service charge and GST`}
+        />
+      )}
+
+      {lines.length === 0 ? (
+        <div className="fline">
+          <span className="fl-d" style={{ color: "var(--ink-3)" }}>
+            {emptyText}
+          </span>
+        </div>
+      ) : visibleLines.length === 0 ? (
+        <div className="fline">
+          <span className="fl-d" style={{ color: "var(--ink-3)" }}>
+            Nothing posted here yet
+          </span>
+        </div>
+      ) : (
+        // Lines arrive newest-first from the entry payload, so today's postings sit at the
+        // top of the scroll area with no anchoring needed.
+        <div
+          style={
+            expanded
+              ? { flex: "1 1 auto", minHeight: 160, overflowY: "auto", overflowX: "auto", background: "var(--paper)" }
+              : { maxHeight, overflowY: "auto", overflowX: "auto", background: "var(--paper)" }
+          }
+        >
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr>
+                {/* The line's own id (2026-09-09, operator request) — it is what a correction
+                    row names, so it has to be readable off the table it points into. */}
+                <th style={th}>Line</th>
+                <th style={th}>Date</th>
+                {anyRoom && <th style={th}>{anySpace ? "Room / space" : "Room"}</th>}
+                <th style={{ ...th, width: "99%" }}>Charge</th>
+                {/* Amount · Service charge · GST as three columns (2026-09-08, operator request
+                    — the folded "+ SC / + GST" sub-lines left the middle of a wide row empty).
+                    Same three words as the pinned footer, so a row reads across to its Σ. */}
+                <th style={{ ...th, textAlign: "right" }}>Amount</th>
+                <th style={{ ...th, textAlign: "right" }}>Service charge</th>
+                <th style={{ ...th, textAlign: "right" }}>GST</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.flatMap((r) => {
+                const l = r.line;
+                const sys = !!l.nightAuditRecordId;
+                // An ORPHAN companion (its charge fell outside the window, or a legacy
+                // description names no base) renders as a main row — its amount belongs in its
+                // own tax column, not under Amount, or the columns would stop meaning anything.
+                const ownKind = companionKind(l);
+                /**
+                 * One tax column's cell. Stacks when a charge carries more than one companion
+                 * of that kind (a correction posts its own SC / GST delta beside the original's)
+                 * — each printed at its stored amount. Nothing is added up here; the column
+                 * totals come from the server, in the footer below.
+                 */
+                const taxCell = (kind: "SC" | "GST") => {
+                  if (ownKind === kind) {
+                    return (
+                      <span title={l.description} style={{ color: "var(--ink-3)" }}>
+                        {money(l.amount, l.currency)}
+                      </span>
+                    );
+                  }
+                  // Expanded: every companion has its own row below, so the parent leaves these
+                  // blank rather than printing the same figure twice.
+                  const mine = showTax ? [] : r.companions.filter((c) => c.kind === kind);
+                  if (mine.length === 0) return <span style={{ color: "var(--ink-4)" }}>—</span>;
+                  return (
+                    <span style={{ color: "var(--ink-3)" }}>
+                      {mine.map((c) => (
+                        <div key={c.line.id} title={c.line.description} style={{ whiteSpace: "nowrap" }}>
+                          {money(c.line.amount, c.line.currency)}
+                        </div>
+                      ))}
+                    </span>
+                  );
+                };
+                const main = (
+                  <tr key={l.id}>
+                    <td style={td}>
+                      <LineId id={l.id} />
+                    </td>
+                    <td style={{ ...td, color: "var(--ink-2)" }}>{l.chargeDate?.slice(0, 10) ?? "—"}</td>
+                    {anyRoom && (
+                      <td style={{ ...td, color: targetOf(l) ? undefined : "var(--ink-4)" }}>{targetOf(l) ?? "—"}</td>
+                    )}
+                    <td style={{ ...td, whiteSpace: "normal", minWidth: 160 }}>
+                      <span
+                        style={{ marginRight: 5, color: "var(--ink-3)" }}
+                        title={sys ? "Posted by the night audit" : "Posted at the desk"}
+                      >
+                        {sys ? "⚙" : "✎"}
+                      </span>
+                      {describeLine(l.description)}
+                      <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{l.lineType}</span>
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      {ownKind ? <span style={{ color: "var(--ink-4)" }}>—</span> : money(l.amount, l.currency)}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{taxCell("SC")}</td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{taxCell("GST")}</td>
+                  </tr>
+                );
+                if (!showTax) return [main];
+                // Expanded: each companion becomes its own (muted) row, ledger-faithful.
+                return [
+                  main,
+                  ...r.companions.map((c) => (
+                    <tr key={c.line.id}>
+                      <td style={td}>
+                        <LineId id={c.line.id} />
+                      </td>
+                      <td style={{ ...td, color: "var(--ink-4)" }}>{c.line.chargeDate?.slice(0, 10) ?? "—"}</td>
+                      {anyRoom && <td style={{ ...td, color: "var(--ink-4)" }}>{targetOf(c.line) ?? "—"}</td>}
+                      <td style={{ ...td, whiteSpace: "normal", color: "var(--ink-3)", paddingLeft: 26 }}>
+                        {describeLine(c.line.description)}
+                        <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{c.line.lineType}</span>
+                      </td>
+                      {/* Expanded: the companion's own row, its amount under the column it IS —
+                          so the three money columns line up whether the taxes are folded or not. */}
+                      <td style={{ ...td, textAlign: "right", color: "var(--ink-4)" }}>—</td>
+                      <td style={{ ...td, textAlign: "right", color: "var(--ink-3)", fontVariantNumeric: "tabular-nums" }}>
+                        {c.kind === "SC" ? money(c.line.amount, c.line.currency) : <span style={{ color: "var(--ink-4)" }}>—</span>}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", color: "var(--ink-3)", fontVariantNumeric: "tabular-nums" }}>
+                        {c.kind === "GST" ? money(c.line.amount, c.line.currency) : <span style={{ color: "var(--ink-4)" }}>—</span>}
+                      </td>
+                    </tr>
+                  )),
+                ];
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Pinned footer — the summary must stay visible while the ledger scrolls. Every figure is
+          SERVER-summed (billing summary); the balance is the folio's own outstandingBalance. */}
+      {split && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 8,
+            padding: "7px 13px",
+            background: "var(--paper)",
+            borderTop: "1px solid var(--line-2)",
+            fontSize: 11.5,
+          }}
+          title={
+            tab === "ALL"
+              ? "The whole ledger, split into charges, service charge and GST — summed on the server"
+              : tab === "WHOLE"
+                ? "Charges with no room and no space named, with their own service charge and GST — summed on the server"
+                : "spaceId" in tab
+                  ? "This space's charges, service charge and GST — summed on the server"
+                  : "This room's charges, service charge and GST — summed on the server"
+          }
+        >
+          {(
+            [
+              ["Charges", split.base],
+              ["Service charge", split.serviceCharge],
+              ["GST", split.gst],
+              [tab === "ALL" ? "Billed so far" : "Total", split.total],
+            ] as Array<[string, number]>
+          ).map(([label, v]) => (
+            <div key={label} style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--ink-3)" }}>{label}</div>
+              <div style={{ fontWeight: label === "Total" || label === "Billed so far" ? 700 : 600, fontVariantNumeric: "tabular-nums" }}>{money(v, cur)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {tab === "ALL" && ((perRoomCharges && perRoomCharges.length > 0) || (perSpaceCharges && perSpaceCharges.length > 0)) && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "3px 14px",
+            padding: "6px 13px",
+            background: "var(--cream)",
+            borderTop: "1px solid var(--line-2)",
+            fontSize: 11.5,
+          }}
+        >
+          {(perRoomCharges ?? []).map((r) => (
+            <button
+              key={r.roomId}
+              type="button"
+              onClick={() => setTab({ roomId: r.roomId })}
+              style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", font: "inherit" }}
+              title={`${r.lineCount} line${r.lineCount === 1 ? "" : "s"} — summed on the server · open this room's tab`}
+            >
+              <span style={{ color: "var(--ink-3)" }}>Σ Room {r.roomNumber ?? "?"}</span>{" "}
+              <b style={{ fontVariantNumeric: "tabular-nums" }}>{money(r.charges, cur)}</b>
+            </button>
+          ))}
+          {(perSpaceCharges ?? []).map((sp) => (
+            <button
+              key={sp.spaceId}
+              type="button"
+              onClick={() => setTab({ spaceId: sp.spaceId })}
+              style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", font: "inherit" }}
+              title={`${sp.lineCount} line${sp.lineCount === 1 ? "" : "s"} — summed on the server · open this space's tab`}
+            >
+              <span style={{ color: "var(--ink-3)" }}>Σ {sp.spaceName ?? "Space"}</span>{" "}
+              <b style={{ fontVariantNumeric: "tabular-nums" }}>{money(sp.charges, cur)}</b>
+            </button>
+          ))}
+          {unassignedCharges && (
+            <button
+              type="button"
+              onClick={() => setTab("WHOLE")}
+              style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", font: "inherit" }}
+              title={`${unassignedCharges.lineCount} line${unassignedCharges.lineCount === 1 ? "" : "s"} with no room or space named · open that tab`}
+            >
+              <span style={{ color: "var(--ink-3)" }}>Σ No room / space</span>{" "}
+              <b style={{ fontVariantNumeric: "tabular-nums" }}>{money(unassignedCharges.charges, cur)}</b>
+            </button>
+          )}
+        </div>
+      )}
+      {balance !== undefined && tab === "ALL" && (
+        <div className="fline total">
+          <span className="fl-mk mk sys">⚙</span>
+          <span className="fl-d">Balance due (from folio)</span>
+          <span className="fl-a">{moneyOrDash(balance, cur)}</span>
+        </div>
+      )}
+    </div>
+    </div>
+  );
+}

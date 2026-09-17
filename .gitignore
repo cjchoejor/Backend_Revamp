@@ -15,3 +15,9 @@ back_end/storage/
 front_end/public/tessdata/
 front_end/public/tesseract/
 front_end/public/tesseract-core/
+new_front_end/public/tessdata/
+new_front_end/public/tesseract/
+new_front_end/public/tesseract-core/
+
+# macOS archive metadata that came with the design handover
+__MACOSX/

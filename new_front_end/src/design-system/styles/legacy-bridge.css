@@ -1,0 +1,70 @@
+/* ============================================================
+   Legacy bridge — the working tools carried over from the first desk
+   (the quote planner, the guest-detail table, the folio table, …) still
+   render under `.desk-root` with the old theme's class names. Inside the
+   new frame their variables are re-pointed at the design system's values,
+   so they read in ink and plum instead of cream and green, until each one
+   is redrawn in the new vocabulary. Delete this file when the last
+   `.desk-root` is gone.
+   ============================================================ */
+
+.ds .desk-root {
+  /* surfaces */
+  --paper:   #FFFFFF;
+  --cream:   #F9F5EE;
+  --cream-2: #EEE6D8;
+  --cream-3: #E4DACB;
+  --line:    #DED4C4;
+  --line-2:  #C2B49E;
+  --line-3:  #A99B84;
+  /* ink */
+  --ink:   #1E1C19;
+  --ink-2: #514C45;
+  --ink-3: #706A61;
+  --ink-4: #A39C92;
+  /* the old desk's selection / active colour → the one accent (position, selection, focus) */
+  --green:    #6D2E8C;
+  --green-d:  #55206F;
+  --green-dd: #3E1752;
+  --green-t:  #F1E7F6;
+  --green-t2: #CDA9DB;
+  /* the old desk's primary-button colour → ink, as the design system's primary buttons are */
+  --terra:   #1E1C19;
+  --terra-d: #33302B;
+  --terra-t: #EEE6D8;
+  /* meaning */
+  --ok:     #1E7A4F;
+  --warn:   #8F5300;
+  --warn-t: #FBF1DF;
+  --stop:   #B3261E;
+  --stop-t: #FBECEA;
+  --bind-bound: #514C45;
+  /* shape and type */
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 6px;
+  --r-xl: 8px;
+  --sh-sm: none;
+  --sh-md: 0 4px 14px rgba(30, 28, 25, .14);
+  --sh-lg: 0 16px 40px rgba(30, 28, 25, .22);
+  --deskui: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  --deskmono: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+
+  background: transparent;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* primary buttons carry no coloured glow in the new design */
+.ds .desk-root .btn-primary { box-shadow: none; }
+
+/* Inside the new canvas the "what runs here" rail is portalled away, so a step's two-column
+   split collapses to its working column (the old workspace did the same under `.ws`). */
+.ds .desk-root .bx-split { grid-template-columns: minmax(0, 1fr); }
+
+/* The re-entry menu sits on the ink rail: its trigger reads on dark, its menu opens rightward
+   over the canvas instead of off the left edge. */
+.ds .rail .rail-legacy { display: block; background: transparent; font-size: var(--t-meta); }
+.ds .rail .rail-legacy .btn-ghost { color: #D8D3CA; background: transparent; border-color: #3A3631; }
+.ds .rail .rail-legacy .btn-ghost:hover { color: #fff; background: rgba(255, 255, 255, .06); }
+.ds .rail .rail-legacy [role="menu"] { right: auto !important; left: 0 !important; color: #1E1C19; }
