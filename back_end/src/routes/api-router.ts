@@ -30,6 +30,7 @@ import { backflowsRouter } from "./backflows/router.js";
 import { documentsRouter } from "./documents/router.js";
 import { communicationsRouter } from "./communications/router.js";
 import { identityCaptureRouter } from "./identity-capture/router.js";
+import { deskRouter } from "./desk/router.js";
 
 export const apiRouter = Router();
 
@@ -88,5 +89,6 @@ apiRouter.use(deficientConditionsRouter);
 apiRouter.use(lookupsRouter);
 apiRouter.use(backflowsRouter);
 apiRouter.use(documentsRouter);
+apiRouter.use("/desk", deskRouter);
 apiRouter.use("/admin", adminRouter);
 
