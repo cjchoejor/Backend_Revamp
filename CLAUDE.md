@@ -159,6 +159,7 @@ When a user asks "what does the spec say about X?", the relevant document above 
 
 - **Backend**: Node + TypeScript (ESM), Express, Prisma 5, PostgreSQL (DB: `legphel_pms_dev`), pg-boss for timer queue. Path: `back_end/`. Dev port 4000.
 - **Frontend**: Next.js (App Router) + TypeScript + TanStack Query + sonner toasts. Path: `front_end/`. Dev port 3001 (proxies `/api/*` to backend).
+- **New frontend (the September 2026 redesign)**: same stack, path `new_front_end/`, dev port **3002**. See **The redesigned desk** below.
 
 ## Repo map — where things live
 
@@ -205,6 +206,17 @@ Anchor these in your head before searching:
 | `src/components/stages/s1/availability-calendar.tsx` | Date × room-type calendar grid used inside the S1 workspace during the booking flow. |
 | `src/lib/api/child-policy.ts` | Client for `GET /api/lookups/child-policy` (drives child-age input cap). |
 
+### New frontend (`new_front_end/`)
+
+| Location | What's there |
+|---|---|
+| `MAPPING.md` | Screen → backend reads → gaps. Keep it current. |
+| `src/app/(app)/(ds)/` | The redesigned desk's routes and their layout. |
+| `src/components/ds/` | `app-shell.tsx`, `ui.tsx` (shared list pieces), `workspace/ds-workspace.tsx`. |
+| `src/design-system/` | Tokens, generated components CSS, `frame.css`, `legacy-bridge.css`, fonts, icon sprite, React primitives. |
+| `src/lib/ds/` | Desk words and selections: steps, status phrase, attention lists, timers, format, refusal and trace wording. |
+| `src/hooks/use-desk-data.ts` · `use-hotel-clock.ts` | The desk list, money, staff and rooms reads; the server-corrected clock. |
+
 ### Memory / Claude state
 
 | Location | What's there |
@@ -212,6 +224,23 @@ Anchor these in your head before searching:
 | `C:\Users\ASUS\.claude\projects\d--New-Legphel-Web-Backend-ReVamped\memory\` | Persistent memory directory. |
 | `…/memory/MEMORY.md` | Index — always loaded into Claude's context. Keep entries one line each. |
 | `…/memory/project_orientation.md`, `…/user_profile.md`, `…/reference_specs.md`, `…/project_modes_registry.md` | Individual memory files. |
+
+## The redesigned desk — `new_front_end/` (2026-09-17)
+
+The boss's redesign (`September 14 2026/`, built on `September 11 2026/`) is being built as a **separate app** so `front_end/` keeps working meanwhile. It began as a copy of `front_end/`: the admin console, `/capture`, sign-in and `lib/api/*` are unchanged. The desk is rebuilt in the new design. **[new_front_end/MAPPING.md](new_front_end/MAPPING.md) is the reference**: screen → backend reads → gaps → next passes. The folders' **Trial runs** and the prototype's hotel-clock strip are reference only and are **not** built.
+
+- **Routes** (under `src/app/(app)/(ds)/`, which mounts `AppShell` and the stylesheets): `/today`, `/bookings`, `/bookings/new`, `/bookings/:id?step=N&view=details|history`, `/bookings/:id/backend`, `/rooms` (halls and spaces included), `/billing`, `/shift`, `/reports`, `/guests`, `/guests/:id`, `/audit`, `/handoffs` · `/disputes` · `/messages` ("Not available yet"). The middleware redirects old `/desk/...` addresses and protects everything except `/login`, `/capture` and `/api`.
+- **Styling**: `src/design-system/styles/components.css` is **generated** from the prototype's CSS. Every selector is prefixed `.ds` and excluded from `.desk-root` with `:not(.desk-root *)`. Don't hand-edit it; put frame additions in `frame.css`. The old step tools render inside `.desk-root`, re-coloured by `legacy-bridge.css`. Stylesheet order is fixed by the `(ds)` layout.
+- **Workspace**: [ds-workspace.tsx](new_front_end/src/components/ds/workspace/ds-workspace.tsx) replaces `booking-workspace.tsx` (deleted in the copy). It keeps its readiness lists, forward moves, commit dialogs, park/resume, exit-park prompt and key checklist. The nine step canvases are still the old components; redesigning them is the next pass.
+- **Vocabulary**: steps are Inquiry · Negotiation · Set up · **Reserve** · Arrival · Check-in · Stay · Check-out · Closed (`lib/ds/steps.ts`). No stage code reaches a screen. `apiRequest` runs every backend error message through `translateMessage` ([lib/ds/words.ts](new_front_end/src/lib/ds/words.ts)), so old components' toasts are translated too. The status phrase lives in `lib/ds/status.ts`, history lines in `lib/ds/trace-words.ts`.
+- **Same rules as front_end**: no money arithmetic (figures come from `/billing-summary` and `/api/desk/bookings/money`), and the hotel's day comes from `useHotelDay()` only.
+- **Backend reads added for it** ([routes/desk/router.ts](back_end/src/routes/desk/router.ts), [desk-read-service.ts](back_end/src/services/domain/desk-read-service.ts), all read-only):
+  - `GET /api/desk/bookings` (L1, ≤500, no money)
+  - `POST /api/desk/bookings/money` (L1, ≤100 ids, each booking's billing-summary headline and folio)
+  - `GET /api/desk/staff` (L1)
+  - `GET /api/desk/activity?date=` (**L2**, one hotel day of the trace)
+- **Known data gap**: imported bookings' `defaultCustodianId` values (e.g. `staff-frontdesk-1`) match no StaffUser, so the custodian shows "—".
+- **Machine setup**: `npm install` in `new_front_end/` (its postinstall copies the tesseract assets, which are gitignored like front_end's), then `npm run dev`.
 
 ## Front-desk operator surface (`/desk`) — THE operational frontend
 
