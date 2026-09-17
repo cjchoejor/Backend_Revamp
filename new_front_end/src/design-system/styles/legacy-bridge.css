@@ -68,3 +68,114 @@
 .ds .rail .rail-legacy .btn-ghost { color: #D8D3CA; background: transparent; border-color: #3A3631; }
 .ds .rail .rail-legacy .btn-ghost:hover { color: #fff; background: rgba(255, 255, 255, .06); }
 .ds .rail .rail-legacy [role="menu"] { right: auto !important; left: 0 !important; color: #1E1C19; }
+
+/* ------------------------------------------------------------------
+   The old tools' shapes, redrawn in the design system's vocabulary.
+   A tool that has not been rebuilt yet still reads as the new desk:
+   white cards on paper, sentence-case titles, ink primary buttons,
+   quiet secondary buttons, chips instead of tags.
+   ------------------------------------------------------------------ */
+
+.ds .desk-root { color: var(--ink); line-height: 1.45; }
+
+/* the "do this next" speech block belonged to the old frame — the step title says it now */
+.ds .desk-root .speak { display: none; }
+
+/* a block is a card */
+.ds .desk-root .block {
+  background: #FFFFFF;
+  border: 1px solid #DED4C4;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 20px;
+  box-shadow: none;
+}
+.ds .desk-root .block-h {
+  font-family: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #1E1C19;
+  margin-bottom: 10px;
+}
+.ds .desk-root .block-h .ln { display: none; }
+.ds .desk-root .block-h .tag,
+.ds .desk-root .block-h .btn { font-family: inherit; }
+
+/* buttons */
+.ds .desk-root .btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.ds .desk-root .btn-sm { height: 30px; padding: 0 12px; font-size: 15px; }
+.ds .desk-root .btn-primary { background: #1E1C19; color: #FFFFFF; border-color: #1E1C19; }
+.ds .desk-root .btn-primary:hover:not(:disabled) { background: #33302B; }
+.ds .desk-root .btn-ghost { background: #FFFFFF; color: #1E1C19; border-color: #C2B49E; }
+.ds .desk-root .btn-ghost:hover:not(:disabled) { background: #F9F5EE; border-color: #706A61; }
+.ds .desk-root .btn:disabled,
+.ds .desk-root .btn[disabled] { background: #EEE6D8; color: #A39C92; border-color: #EEE6D8; opacity: 1; cursor: not-allowed; }
+.ds .desk-root .btn svg { width: 16px; height: 16px; }
+
+/* tags read as chips */
+.ds .desk-root .tag {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  border-color: #DED4C4;
+  background: #FFFFFF;
+  color: #514C45;
+}
+.ds .desk-root .tag.ok, .ds .desk-root .tag.good, .ds .desk-root .tag.green { background: #E6F3EC; border-color: #A6D4BC; color: #1E7A4F; }
+.ds .desk-root .tag.warn { background: #FBF1DF; border-color: #E6C48A; color: #8F5300; }
+.ds .desk-root .tag.stop, .ds .desk-root .tag.bad { background: #FBECEA; border-color: #E5A9A3; color: #B3261E; }
+
+/* a fact strip is a bound box */
+.ds .desk-root .fact {
+  border-radius: 6px;
+  border: 1px solid #DED4C4;
+  font-size: 15px;
+  padding: 6px 10px;
+}
+
+/* forms */
+.ds .desk-root .field > label,
+.ds .desk-root label.lbl {
+  font-size: 15px;
+  font-weight: 700;
+  color: #514C45;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.ds .desk-root input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.ds .desk-root select,
+.ds .desk-root textarea {
+  font-family: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  font-size: 16px;
+  border-radius: 4px;
+  border-color: #C2B49E;
+}
+.ds .desk-root input:focus-visible,
+.ds .desk-root select:focus-visible,
+.ds .desk-root textarea:focus-visible { outline: none; border-color: #6D2E8C; box-shadow: 0 0 0 3px #F1E7F6; }
+.ds .desk-root .val { border-radius: 4px; border-width: 1px; font-size: 16px; }
+.ds .desk-root .mono { font-family: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif; }
+
+/* dialogs */
+.ds .desk-root .scrim { background: rgba(30, 28, 25, .3); }
+.ds .desk-root .modal { border-radius: 8px; border: 1px solid #DED4C4; box-shadow: 0 16px 40px rgba(30, 28, 25, .22); background: #FFFFFF; }
+.ds .desk-root .modal-top { background: #FFFFFF; border-bottom: 1px solid #DED4C4; }
+.ds .desk-root .modal-top h3 { font-family: "Poppins", "Carlito", sans-serif; font-weight: 500; font-size: 21px; }
+.ds .desk-root .modal-ic { background: #1E1C19 !important; border-radius: 4px; }
+.ds .desk-root .modal-foot { background: #F9F5EE; }
+
+/* tables the old tools draw */
+.ds .desk-root table { font-variant-numeric: tabular-nums lining-nums; }
+.ds .desk-root th { font-size: 13px; letter-spacing: 0; text-transform: none; }

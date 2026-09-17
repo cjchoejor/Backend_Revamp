@@ -87,6 +87,7 @@ import { StayStep as StayStepBase } from "@/components/desk/workspace/stay-step"
 import { CheckOutStep as CheckOutStepBase } from "@/components/desk/workspace/checkout-step";
 import { PostStayStep as PostStayStepBase } from "@/components/desk/workspace/closed-step";
 import type { EntryDetail } from "@/types/api";
+import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
 const InquiryStep = memo(InquiryStepBase);
@@ -632,6 +633,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   }
 
   /* ---- the canvas ---- */
+  const openPark = () => {
+    setParkExitFlow(false);
+    setParkOpen(true);
+  };
+  /** The steps already rebuilt in the redesign render natively; the rest are the old tools. */
+  const nativeBody = (): ReactNode | null => {
+    switch (step.key) {
+      case "inquiry":
+        return <S1Inquiry entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} />;
+      default:
+        return null;
+    }
+  };
+  const native = nativeBody();
   const stepBody = (): ReactNode => {
     if (viewingPast) {
       switch (step.key) {
@@ -880,7 +895,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </span>
                   </div>
                 ) : null}
-                {viewingPast ? (
+                {native ? (
+                  <>
+                    {viewingPast ? (
+                      <div className="notice inert">
+                        <span className="sm">
+                          {sealed
+                            ? sealedOutcome
+                            : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. Any change is a governed re-entry.`}
+                        </span>
+                      </div>
+                    ) : null}
+                    {native}
+                  </>
+                ) : viewingPast ? (
                   <>
                     <div className="notice inert">
                       <span className="sm">

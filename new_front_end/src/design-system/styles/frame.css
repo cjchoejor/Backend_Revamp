@@ -69,4 +69,46 @@
 
 /* the phase the viewed step belongs to reads white on the ink rail (a later light-rail rule would
    otherwise paint it ink on ink) */
-.ds .rail .phase.current { color: #fff; }
+.ds .rail .phase.current:not(.desk-root *) { color: #fff; }
+
+/* ---- the step canvases (SS03 · the 13–14 Sep storyboards) ----
+   The prototype set these inline on each card; named here so the nine canvases share them. */
+.ds .steps-canvas { display: grid; gap: var(--s4); }
+.ds .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ds .card-top h4 { display: inline-flex; align-items: center; gap: 6px; }
+.ds .card.quiet { background: var(--surface); }
+/* a signature's fact row: what · the value and who recorded it · on record or the one control */
+.ds .fact.line { grid-template-columns: 170px 1fr auto; align-items: baseline; gap: 0 12px; }
+.ds .fact.line .v .who { display: block; margin-left: 0; color: var(--ink-3); font-size: var(--t-meta); }
+.ds .fact.line.missing .v, .ds .fact.line.word .v { color: var(--warning); }
+.ds .fact.line .r { justify-self: end; }
+.ds .warn-ink { color: var(--warning); }
+.ds .ok-ink { color: var(--success); }
+/* an action and what it sets off */
+.ds .seerow { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: baseline; }
+.ds .seerow .meta { display: inline; }
+/* a choice among a few words (Came in as · What kind of stay · Night) */
+.ds .choice { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.ds .choice .btn[aria-pressed="true"] { background: var(--surface); border-color: var(--ink); color: var(--ink); }
+/* a note between the fields of a form: a line above it */
+.ds .form2 .rule-above { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 2px; }
+.ds .count-in { display: inline-flex; align-items: center; gap: 6px; }
+.ds .count-in .input { width: 56px; height: 28px; padding: 0 8px; }
+.ds .input.narrow { width: 80px; }
+.ds textarea.input { height: auto; min-height: 60px; padding-top: 8px; padding-bottom: 8px; resize: vertical; }
+/* the house's answer: one row per type, the chosen one marked */
+.ds .table tbody tr.pickable { cursor: pointer; }
+.ds .table tbody tr.pickable.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+/* a past step: what was decided, with the working controls muted (the papers still open) */
+.ds .steps-canvas.past .card :is(input, select, textarea) { pointer-events: none; opacity: .6; }
+.ds .steps-canvas.past .edit-only { display: none; }
+/* a legacy working tool placed inside a native card */
+.ds .card > .desk-root, .ds .card .tool { margin-top: var(--s2); }
+.ds .card .desk-root .block { border: 0; padding: 0; margin: 0; background: transparent; }
+/* the room grid lifted to the whole screen */
+.ds .fullscreen-layer { position: fixed; inset: 0; z-index: 60; background: var(--paper); padding: var(--s4); overflow: auto; }
+.ds .fullscreen-layer .card { min-height: calc(100vh - 32px); }
+/* a document shown inline beneath its card */
+.ds .doc-frame { margin-top: var(--s3); border: 1px solid var(--line); border-radius: var(--r-control); overflow: hidden; background: #fff; }
+.ds .chip.count-in { height: auto; padding: 2px 2px 2px 8px; }
+.ds .chip.count-in .input { height: 24px; width: 48px; }
