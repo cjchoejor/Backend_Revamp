@@ -74,9 +74,11 @@ import { timerLabel } from "@/lib/ds/timers";
 import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
 import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
-import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
-import { JourneySummaryBlock } from "@/components/desk/workspace/journey-summary";
 import type { EntryDetail } from "@/types/api";
+import { CaseCards } from "@/components/ds/steps/case-cards";
+import { HistoryView } from "@/components/ds/workspace/history-view";
+import { DetailsView } from "@/components/ds/workspace/details-view";
+import { SidePapers } from "@/components/ds/workspace/side-papers";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp } from "@/components/ds/steps/s3-setup";
@@ -95,14 +97,6 @@ const NOOP = () => {};
 
 type View = "step" | "details" | "history";
 
-const PAPER_NAME: Record<string, string> = {
-  QUOTATION: "Quotation",
-  PROFORMA_INVOICE: "Proforma",
-  CONFIRMATION_VOUCHER: "Confirmation voucher",
-  PRE_ARRIVAL_REMINDER: "Pre-arrival message",
-  FINAL_INVOICE: "Tax invoice",
-  INTERIM_INVOICE: "Interim bill",
-};
 
 /* ------------------------------------------------------------------ */
 
@@ -887,21 +881,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ) : null}
 
             {view === "details" ? (
-              <DetailsView entry={entry} booker={booker} custodian={listRow?.custodianName ?? null} />
+              <DetailsView entry={entry} booker={booker} custodian={listRow?.custodianName ?? null} billing={billing ?? null} />
             ) : view === "history" ? (
-              <HistoryView entry={entry} events={traceQuery.data?.items ?? []} loading={traceQuery.isLoading} tz={clock.tz} onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))} />
+              <HistoryView entry={entry} billing={billing ?? null} tz={clock.tz} onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))} />
             ) : (
               <>
                 <h3>
                   {STEP_NAMES[viewing - 1]} <span className="need">{STEP_NEEDS[viewing as StepNo]}</span>
                 </h3>
-                {parked ? (
-                  <div className="notice inert">
-                    <span className="sm">
-                      <b>Parked.</b> {listRow?.parkReason ? `“${listRow.parkReason}” · ` : ""}It keeps its place; resume it to work on it.
-                    </span>
-                  </div>
-                ) : null}
                 {viewingPast ? (
                   <div className="notice inert">
                     <span className="sm">
@@ -911,6 +898,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </span>
                   </div>
                 ) : null}
+                <CaseCards
+                    entry={entry}
+                    step={viewing}
+                    events={traceQuery.data?.items ?? []}
+                    tz={clock.tz}
+                    park={parked ? { reason: listRow?.parkReason ?? null, followUpAt: listRow?.parkFollowUpAt ?? null, lapsesAt: parkTimer?.firesAt ?? null } : null}
+                    onResume={parked ? () => unparkMutation.mutate() : undefined}
+                    resuming={unparkMutation.isPending}
+                    onHistory={() => setView("history", viewing)}
+                  />
                 {native}
               </>
             )}
@@ -919,6 +916,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           </div>
 
           <SidePanel
+            entry={entry}
+            sealed={sealed}
+            onGo={(n) => gotoStep(n)}
             timers={timersQuery.data?.items ?? []}
             events={traceQuery.data?.items ?? []}
             communications={communications ?? []}
@@ -1287,6 +1287,9 @@ function PrefStrip({ entry, onDetails }: { entry: EntryDetail; onDetails: () => 
 }
 
 function SidePanel({
+  entry,
+  sealed,
+  onGo,
   timers,
   events,
   communications,
@@ -1294,6 +1297,9 @@ function SidePanel({
   tz,
   onHistory,
 }: {
+  entry: EntryDetail;
+  sealed: boolean;
+  onGo: (step: number) => void;
   timers: Array<{ id: string; timerCode: string; timerType: string; stageContext: string | null; firesAt: string; status: string }>;
   events: import("@/lib/trace/humanize").TraceEvent[];
   communications: EntryCommunication[];
@@ -1308,7 +1314,6 @@ function SidePanel({
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
     .slice(0, 8);
   const recent = events.filter((e) => !isHousekeeping(e.eventType)).slice(0, 6);
-  const papers = communications.filter((c) => c.direction !== "INBOUND").slice(0, 8);
   return (
     <aside className="side">
       <div>
@@ -1355,162 +1360,9 @@ function SidePanel({
           </Button>
         </div>
       </div>
-      <div>
-        <h4>Papers sent, and what they said</h4>
-        <div className="list">
-          {papers.length ? (
-            papers.map((c) => (
-              <div className="row" key={c.id}>
-                <span className="t">
-                  {PAPER_NAME[c.commType] ?? c.commType} · {c.channel?.toLowerCase() ?? "email"}
-                </span>
-                <span className="meta">
-                  {c.sendStatus === "DISPATCHED" ? `sent ${fmtStamp(c.createdAt, tz)}` : "not sent"}
-                  {" · "}
-                  {c.acknowledgementStatus === "RECEIVED"
-                    ? "answered"
-                    : c.isOverdue
-                      ? "no answer — overdue"
-                      : c.sendStatus === "DISPATCHED"
-                        ? "awaiting an answer"
-                        : ""}
-                </span>
-              </div>
-            ))
-          ) : (
-            <span className="quiet">nothing sent yet</span>
-          )}
-        </div>
-      </div>
+      <SidePapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />
     </aside>
   );
 }
 
-function DetailsView({ entry, booker, custodian }: { entry: EntryDetail; booker: string | null; custodian: string | null }) {
-  const router = useRouter();
-  const g = entry.guestProfile ?? null;
-  const ages = entry.childAges?.length ? ` (ages ${entry.childAges.join(", ")})` : "";
-  const beds = entry.bedTypeRequest
-    ? Object.entries(entry.bedTypeRequest)
-        .filter(([, n]) => n > 0)
-        .map(([t, n]) => `${n} ${t.charAt(0) + t.slice(1).toLowerCase()}`)
-        .join(" · ")
-    : "";
-  const fact = (k: string, v: ReactNode) => (
-    <div className="fact">
-      <span className="k">{k}</span>
-      <span className="v">{v || <span className="dash">—</span>}</span>
-    </div>
-  );
-  const editable = entry.currentStage === "S1" && entry.status === "ACTIVE";
-  // the entry payload carries every scalar; the type declares only what the old screens read
-  const contact = entry as EntryDetail & { contactPersonName?: string | null; contactPersonPhone?: string | null };
-  return (
-    <>
-      <h3>
-        Booking details <span className="need">what the booking is</span>
-      </h3>
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <h4>The booking</h4>
-          <Button
-            kind="secondary"
-            compact
-            state={editable ? "default" : "inert"}
-            reason={editable ? undefined : "after the inquiry, dates and party change through a re-entry"}
-            onClick={() => router.push(`/bookings/new?edit=${encodeURIComponent(entry.id)}`)}
-          >
-            Edit booking details
-          </Button>
-        </div>
-        <div className="grid2" style={{ marginTop: 8 }}>
-          <div>
-            {fact("Guest", g ? guestName(g) : "to come from the agent")}
-            {fact("Phone", g?.phone)}
-            {fact("Email", g?.email)}
-            {fact("On-site contact", [contact.contactPersonName, contact.contactPersonPhone].filter(Boolean).join(" · "))}
-            {fact("VIP", g?.vipTier ?? "")}
-          </div>
-          <div>
-            {fact("Stay", `${fmtRange(entry.checkInDate, entry.actualCheckOutDate ?? entry.checkOutDate)}${nightsOf(entry.checkInDate, entry.checkOutDate) ? ` · ${plural(nightsOf(entry.checkInDate, entry.checkOutDate)!, "night")}` : ""}`)}
-            {fact(
-              "Party",
-              [entry.adultCount ? plural(entry.adultCount, "adult") : null, entry.childCount ? `${plural(entry.childCount, "child", "children")}${ages}` : null].filter(Boolean).join(" · ") ||
-                (entry.guestCount ? plural(entry.guestCount, "guest") : ""),
-            )}
-            {fact("Rooms asked for", `${entry.numberOfRooms ?? "—"}${beds ? ` · ${beds}` : ""}`)}
-            {fact("Came in as", `${channelWord(entry.inquiry?.sourceChannel)}${booker ? ` · ${booker}` : ""}`)}
-            {fact("Custodian", custodian)}
-            {fact("Billing", entry.groupBillingMode === "GROUP_MASTER" ? "group" : entry.folio?.billingModel ? entry.folio.billingModel.toLowerCase().replace(/_/g, " ") : "")}
-          </div>
-        </div>
-      </div>
-      <div className="desk-root">
-        <JourneySummaryBlock entryId={entry.id} />
-      </div>
-    </>
-  );
-}
 
-function HistoryView({
-  entry,
-  events,
-  loading,
-  tz,
-  onOpenedPass,
-}: {
-  entry: EntryDetail;
-  events: import("@/lib/trace/humanize").TraceEvent[];
-  loading: boolean;
-  tz: string;
-  onOpenedPass: (stage: string) => void;
-}) {
-  return (
-    <>
-      <h3>
-        History <span className="need">how it got here</span>
-      </h3>
-      <section className="block">
-        <div className="block-head">
-          <h4>What happened</h4>
-          <span className="meta">newest first · the last {events.length}</span>
-        </div>
-        {loading ? (
-          <p className="meta">Reading the record…</p>
-        ) : events.length ? (
-          <table className="table compact">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>What</th>
-                <th>Who</th>
-                <th>Step</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((ev) => (
-                <tr key={ev.id} className="static">
-                  <td className="nowrap">{fmtStamp(ev.timestamp, tz)}</td>
-                  <td>{traceWords(ev)}</td>
-                  <td className="nowrap">{whoDid(ev)}</td>
-                  <td className="nowrap">{ev.stageContext && /^S[1-9]$/.test(ev.stageContext) ? STEP_NAMES[stepNoOfStage(ev.stageContext) - 1] : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <EmptyState title="Nothing recorded yet" />
-        )}
-      </section>
-      <section className="block">
-        <div className="block-head">
-          <h4>Passes</h4>
-          <span className="meta">a change after reserving seals the current pass and opens a new one</span>
-        </div>
-        <div className="desk-root">
-          <SegmentHistoryPanel entryId={entry.id} currentStage={entry.currentStage} onSegmentOpened={onOpenedPass} />
-        </div>
-      </section>
-    </>
-  );
-}

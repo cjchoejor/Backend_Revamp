@@ -1241,7 +1241,7 @@ export function ExtraBedEditor({
           </span>
         }
         consequences={[
-          "A new segment opens; the booking is re-priced silently and walks straight back to this step — nothing is sent to the guest unless you send it.",
+          "A new pass opens; the booking is re-priced silently and walks straight back to this step — nothing is sent to the guest unless you send it.",
           inHouse
             ? "Applies from tonight — the nights already slept keep the old count on the bill."
             : "Applies to every night of the stay.",

@@ -893,7 +893,7 @@ export function IdentityProofBlock({
             <div style={{ flex: 1, minWidth: 240 }}>
               <b>{seatingIssues.unseated.length > 0 ? "Not everyone has a room." : "A room has no guests."}</b> {sentence}.
               {canRepairSeating
-                ? " Seating them re-records the booking's current rooms with everyone in one (a new segment, re-priced silently — nothing goes to the guest)."
+                ? " Seating them re-records the booking's current rooms with everyone in one (a new pass, re-priced silently — nothing goes to the guest)."
                 : " It is repaired from Arrival, Check-in or Stay."}
             </div>
             {canRepairSeating && (
@@ -1371,7 +1371,7 @@ export function IdentityProofBlock({
         subtitle="Restores the room plan's occupants — nobody changes rooms"
         why="The recorded composition leaves guests without a room, or a room without guests. Seating them re-records the booking's current rooms with everyone in one."
         consequences={[
-          "A new segment opens and the stay is re-priced silently on the same rooms — nothing is sent to the guest.",
+          "A new pass opens and the stay is re-priced silently on the same rooms — nothing is sent to the guest.",
           "Guests without a room are seated in the emptiest room with space on every night they stay; a room that had nobody recorded gets them on room-only (set meals through the room-change table if needed).",
           "The audit trail records this as a system seating repair with exactly who went where.",
         ]}

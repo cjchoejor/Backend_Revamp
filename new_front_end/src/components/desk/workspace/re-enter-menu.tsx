@@ -15,6 +15,10 @@ import {
 import { DateField, nextDayIso } from "@/components/desk/date-field";
 import type { EntryDetail } from "@/types/api";
 import type { Session } from "@/types/session";
+import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
+
+/** A stage in the desk's words — no stage code reaches the screen. */
+const stepWord = (stage?: string | null) => (stage ? STEP_NAMES[stepNoOfStage(stage) - 1] : "");
 
 const LEVEL_RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
 
@@ -96,7 +100,7 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
-      toast.success(`Re-entered to ${active?.toStage} — a new segment is open.`);
+      toast.success(`Back at ${stepWord(active?.toStage)} — a new pass is open.`);
       setActive(null);
       setReason("");
       setNewCheckOutDate("");
@@ -164,7 +168,7 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
               padding: "6px 10px 4px",
             }}
           >
-            Re-enter from {entry.currentStage}
+            Re-enter from {stepWord(entry.currentStage)}
           </div>
           {descriptors.map((d) => {
             const allowed = canDo(d);
@@ -234,13 +238,13 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
               <div>
                 <h3>{active.label}</h3>
                 <p>
-                  Re-enter to {active.toStage} · {entry.currentStage} → {active.toStage}
+                  Back to {stepWord(active.toStage)} · from {stepWord(entry.currentStage)}
                 </p>
               </div>
             </div>
             <div className="modal-body">
               <p className="why">
-                This opens a <b>new segment</b> at {active.toStage}. What&rsquo;s already sealed stays as read-only
+                This opens a <b>new pass</b> at {stepWord(active.toStage)}. What&rsquo;s already sealed stays as read-only
                 history — this doesn&rsquo;t quietly edit it. The reason is recorded on the audit trail.
               </p>
               {active.needsNewCheckOutDate && (
@@ -276,7 +280,7 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
                 disabled={submitDisabled}
               >
                 <CornerUpLeft />
-                {mutation.isPending ? "Re-entering…" : `Re-enter to ${active.toStage}`}
+                {mutation.isPending ? "Re-entering…" : `Back to ${stepWord(active.toStage)}`}
               </button>
             </div>
           </div>

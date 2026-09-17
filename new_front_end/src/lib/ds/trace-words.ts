@@ -8,6 +8,7 @@
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { STEP_NAMES } from "./steps";
 import { translateMessage } from "./words";
+import { money as fmtMoney } from "./format";
 
 const WORDS: Record<string, string> = {
   "ENTRY.CREATED": "Booking recorded",
@@ -110,9 +111,11 @@ export function traceWords(ev: TraceEvent): string {
   if (known) return known;
   const p = (ev.payload ?? {}) as Record<string, unknown>;
   // A move between steps reads as the move.
-  const from = typeof p.fromStage === "string" ? /^S([1-9])$/.exec(p.fromStage) : null;
-  const to = typeof p.toStage === "string" ? /^S([1-9])$/.exec(p.toStage) : null;
-  if (to && (ev.eventType.includes("TRANSITION") || ev.eventType.includes("PROGRESS") || ev.eventType.includes("BACKFLOW"))) {
+  const fromCode = typeof p.fromStage === "string" ? p.fromStage : typeof p.from === "string" ? p.from : null;
+  const toCode = typeof p.toStage === "string" ? p.toStage : typeof p.to === "string" ? p.to : null;
+  const from = fromCode ? /^S([1-9])$/.exec(fromCode) : null;
+  const to = toCode ? /^S([1-9])$/.exec(toCode) : null;
+  if (to && (ev.eventType.includes("TRANSITION") || ev.eventType.includes("PROGRESS") || ev.eventType.includes("BACKFLOW") || ev.eventType.includes("ACTIVATION"))) {
     const back = ev.eventType.includes("BACKFLOW") ? "Re-entered" : "Moved";
     return `${back}${from ? ` from ${STEP_NAMES[Number(from[1]) - 1]}` : ""} to ${STEP_NAMES[Number(to[1]) - 1]}`;
   }
@@ -136,4 +139,70 @@ const HOUSEKEEPING = [
 
 export function isHousekeeping(eventType: string): boolean {
   return HOUSEKEEPING.some((r) => r.test(eventType));
+}
+
+const DETAIL_WORD: Record<string, string> = {
+  WRITTEN: "they wrote",
+  VERBAL: "they said",
+  PROFORMA: "proforma",
+  FINAL: "tax invoice",
+  INTERIM: "interim bill",
+  FULL: "the full amount",
+  PARTIAL: "part now, the rest later",
+  INSTALLMENTS: "in instalments",
+  ADVANCE_PAYMENT: "held when the advance came in",
+  MANUAL: "placed by hand",
+};
+
+/** The backend's figure, formatted — never computed here. */
+function money(v: unknown): string | null {
+  if (typeof v !== "number" && !(typeof v === "string" && v.trim() !== "")) return null;
+  const out = fmtMoney(v as number | string);
+  return out === "—" ? null : out;
+}
+
+function readableCode(v: unknown): string | null {
+  if (typeof v !== "string" || !v) return null;
+  if (DETAIL_WORD[v]) return DETAIL_WORD[v];
+  const w = v.replace(/_/g, " ").toLowerCase();
+  return w;
+}
+
+/**
+ * The second line of an act — the readable part of what the record carries: the reason, the
+ * guest's own words, the amount, who it went to. Ids, checksums and storage keys never show.
+ */
+export function traceDetail(ev: TraceEvent): string | null {
+  const p = (ev.payload ?? {}) as Record<string, unknown>;
+  const bits: string[] = [];
+  const str = (k: string) => (typeof p[k] === "string" && (p[k] as string).trim() ? (p[k] as string).trim() : null);
+  const amount = money(p.amount) ?? money(p.requiredAmount);
+  if (amount) bits.push(amount);
+  if (typeof p.penalty === "number") bits.push(`charge ${money(p.penalty)}`);
+  if (typeof p.netRefund === "number" && p.netRefund > 0) bits.push(`refund ${money(p.netRefund)}`);
+  const how = readableCode(p.acknowledgementMethod ?? p.acceptanceMethod);
+  if (how) bits.push(how);
+  const said = str("verbatimNote");
+  if (said) bits.push(`“${said}”`);
+  const reason = str("reason") ?? str("decisionReason");
+  if (reason && !/^[A-Z_]+$/.test(reason)) bits.push(reason);
+  else if (reason) bits.push(readableCode(reason) ?? reason);
+  const note = str("note");
+  if (note && note !== said) bits.push(note);
+  const plan = readableCode(p.plan);
+  if (plan && ev.eventType.includes("PLAN")) bits.push(plan);
+  const task = readableCode(p.taskType);
+  if (task) bits.push(task);
+  const who = str("subjectLabel");
+  if (who) bits.push(who);
+  const room = str("roomNumber");
+  if (room) bits.push(`room ${room}`);
+  if (typeof p.keyCount === "number") bits.push(`${p.keyCount} key${p.keyCount === 1 ? "" : "s"}`);
+  const to = str("intendedRecipient") ?? str("dispatchedTo");
+  if (to) bits.push(`to ${to}`);
+  const trigger = readableCode(p.trigger);
+  if (trigger && ev.eventType.includes("HOLD")) bits.push(trigger);
+  const kind = readableCode(p.invoiceType);
+  if (kind && ev.eventType.startsWith("INVOICE")) bits.push(kind);
+  return bits.length ? translateMessage(bits.join(" · ")) : null;
 }

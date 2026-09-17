@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { fmtDateTime as dsDateTime, fmtInstantDate as dsInstantDate } from "@/lib/ds/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, History, Lock } from "lucide-react";
 import { toast } from "sonner";
@@ -17,15 +18,15 @@ import { DESK_STEPS, stepForStage } from "@/lib/desk/model";
 import { moneyOrDash } from "@/lib/desk/workspace";
 
 /**
- * Segment history. One Segment per pass through the stages (Implementation Reference §1.2):
+ * Pass history. One Pass per pass through the stages (Implementation Reference §1.2):
  * a re-entry seals the current pass read-only and opens a new one, so the booking's full story
- * is a stack of segments. Rendered from the backend aggregation at
- * GET /api/entries/:id/segments — nothing is derived here (money included).
+ * is a stack of passes. Rendered from the backend aggregation at
+ * GET /api/entries/:id/passes — nothing is derived here (money included).
  *
- * Each segment with a basis can be COPIED into a new segment — a governed re-entry opens the
- * new segment, then the source's basis is recalled and revalidated into it (Canon Block 10 §59).
- * The within-segment "reuse" action was removed from this surface (2026-07-31, operator request);
- * only the copy-into-new-segment composite remains.
+ * Each pass with a basis can be COPIED into a new pass — a governed re-entry opens the
+ * new pass, then the source's basis is recalled and revalidated into it (Canon Block 10 §59).
+ * The within-pass "reuse" action was removed from this surface (2026-07-31, operator request);
+ * only the copy-into-new-pass composite remains.
  */
 
 const MODE_LABEL: Record<string, string> = {
@@ -56,22 +57,13 @@ function sealCauseText(cause: string | null): string | null {
   return cause;
 }
 
+/** Instants on the hotel's clock, never the machine's. */
 function fmtDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${fmtDate(iso)} ${hh}:${min}`;
+  return dsDateTime(iso);
 }
 
 function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}/${d.getFullYear()}`;
+  return dsInstantDate(iso);
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -93,14 +85,14 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /**
- * Stage-by-stage drill-in for ONE segment: the nine journey steps, marked by whether this
- * segment actually reached them, each carrying that segment's own records.
+ * Stage-by-stage drill-in for ONE pass: the nine journey steps, marked by whether this
+ * pass actually reached them, each carrying that pass's own records.
  *
  * Honesty note baked into the S3 row: the folio, committed hold, and cancellation disclosure are
  * `entryId @unique` singletons in the schema — one row per booking that persists (and mutates)
- * across every segment, by design (the Implementation Reference is explicit that the entry-level
- * folio "persists through every segment"). So those cannot be shown "as they were" in an earlier
- * segment; only the genuinely segment-scoped records can (availability configuration, quotations,
+ * across every pass, by design (the Implementation Reference is explicit that the entry-level
+ * folio "persists through every pass"). So those cannot be shown "as they were" in an earlier
+ * pass; only the genuinely pass-scoped records can (availability configuration, quotations,
  * speculative holds, reservation, amendments, billing-model transitions).
  */
 function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
@@ -117,13 +109,13 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
           marginBottom: 8,
         }}
       >
-        Step by step in this segment
+        Step by step in this pass
       </div>
       {DESK_STEPS.map((step) => {
         const wasReached = reached.has(step.stage);
         const amendmentsHere = seg.amendments.filter((a) => a.stageAtAmendment === step.stage);
 
-        // Segment-scoped records that belong to this step.
+        // Pass-scoped records that belong to this step.
         const rows: React.ReactNode[] = [];
         if (step.stage === "S1") {
           for (const c of seg.availabilityConfigs) {
@@ -137,7 +129,7 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
                 {c.selectionShape === "per-night" ? " (varies per night)" : ""}
                 {c.sealedAt ? " · sealed" : c.rooms.length ? " · not sealed" : ""}
                 {c.recalledFromSegmentNumber != null ? (
-                  <span style={{ color: "var(--green)" }}> · reused from segment {c.recalledFromSegmentNumber}</span>
+                  <span style={{ color: "var(--green)" }}> · reused from pass {c.recalledFromSegmentNumber}</span>
                 ) : null}
               </div>,
             );
@@ -174,7 +166,7 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
             rows.push(
               <div key="entry-level" style={{ color: "var(--ink-3)", fontStyle: "italic" }}>
                 Folio, committed hold and cancellation terms are booking-level — they carry across every
-                segment, so they show current state rather than this segment&rsquo;s.
+                pass, so they show current state rather than this pass&rsquo;s.
               </div>,
             );
           }
@@ -236,7 +228,7 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
                 rows
               ) : (
                 <span style={{ color: "var(--ink-3)" }}>
-                  {wasReached ? "Reached — nothing recorded at this step" : "Not reached in this segment"}
+                  {wasReached ? "Reached — nothing recorded at this step" : "Not reached in this pass"}
                 </span>
               )}
             </span>
@@ -256,9 +248,9 @@ function RoundCard({
 }: {
   seg: SegmentHistoryItem;
   canDuplicate: boolean;
-  /** Whether a room selection is in force for this segment — its own, or one it inherited. */
+  /** Whether a room selection is in force for this pass — its own, or one it inherited. */
   hasBasis: boolean;
-  /** True when that selection belongs to an earlier segment rather than this one. */
+  /** True when that selection belongs to an earlier pass rather than this one. */
   basisInherited: boolean;
   onDuplicate: () => void;
 }) {
@@ -280,7 +272,7 @@ function RoundCard({
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          title={open ? "Hide the step-by-step detail" : "See what was done at each step in this segment"}
+          title={open ? "Hide the step-by-step detail" : "See what was done at each step in this pass"}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -298,7 +290,7 @@ function RoundCard({
           ) : (
             <ChevronRight style={{ width: 14, height: 14, color: "var(--ink-3)" }} />
           )}
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Segment {seg.segmentNumber}</span>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>Pass {seg.segmentNumber}</span>
         </button>
         {seg.isActive ? (
           <span
@@ -377,7 +369,7 @@ function RoundCard({
           {moneyOrDash(acceptedQuote.totalAmount, acceptedQuote.currency)}
         </Row>
       ) : seg.quotations.length ? (
-        <Row label="Quotes">{seg.quotations.length} drafted · none accepted in this segment</Row>
+        <Row label="Quotes">{seg.quotations.length} drafted · none accepted in this pass</Row>
       ) : null}
 
       {seg.amendments.length ? (
@@ -416,11 +408,11 @@ function RoundCard({
         >
           <button className="btn btn-ghost btn-sm" onClick={onDuplicate}>
             <Copy style={{ width: 12, height: 12 }} />
-            Copy into a new segment
+            Copy into a new pass
           </button>
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            Availability is re-checked first — this segment stays as it is.
-            {basisInherited ? " Its rooms carry over from an earlier segment." : ""}
+            Availability is re-checked first — this pass stays as it is.
+            {basisInherited ? " Its rooms carry over from an earlier pass." : ""}
           </span>
         </div>
       ) : null}
@@ -429,9 +421,9 @@ function RoundCard({
 }
 
 /**
- * "Copy into a new segment" — the composite action. Two governed steps behind one dialog: a
- * re-entry opens the new segment (authority enforced per route — e.g. leaving a confirmed
- * booking needs FOM), then the source segment's basis is recalled and revalidated into it.
+ * "Copy into a new pass" — the composite action. Two governed steps behind one dialog: a
+ * re-entry opens the new pass (authority enforced per route — e.g. leaving a confirmed
+ * booking needs FOM), then the source pass's basis is recalled and revalidated into it.
  */
 function DuplicateModal({
   entryId,
@@ -460,10 +452,10 @@ function DuplicateModal({
 
   // Dry run: re-check the basis against today's availability and show what would actually carry
   // over BEFORE the re-entry commits. A copy is not undoable — the re-entry seals the current
-  // segment either way — so finding out afterwards that half the rooms were dropped is too late.
+  // pass either way — so finding out afterwards that half the rooms were dropped is too late.
   // Writes nothing (`apply` defaults to false); the commit below is what writes.
   const preview = useQuery({
-    queryKey: ["segment-recall-preview", entryId, fromSegmentNumber],
+    queryKey: ["pass-recall-preview", entryId, fromSegmentNumber],
     queryFn: () => recallSegment(session!, entryId, fromSegmentNumber),
     enabled: !!session,
     retry: false,
@@ -484,20 +476,20 @@ function DuplicateModal({
 
   return (
     <div className="scrim" onClick={(e) => e.target === e.currentTarget && !pending && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Copy into a new segment">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Copy into a new pass">
         <div className="modal-top">
           <div className="modal-ic">
             <Copy />
           </div>
           <div>
-            <h3>Copy segment {fromSegmentNumber} into a new segment?</h3>
-            <p>Opens a fresh segment and carries this one&rsquo;s rooms and dates into it</p>
+            <h3>Copy pass {fromSegmentNumber} into a new pass?</h3>
+            <p>Opens a fresh pass and carries this one&rsquo;s rooms and dates into it</p>
           </div>
         </div>
         <div className="modal-body">
           <p className="why">
-            Segment {fromSegmentNumber} stays sealed exactly as it is. A new segment opens, and this
-            segment&rsquo;s basis is re-checked against today&rsquo;s availability before it&rsquo;s carried over — so
+            Pass {fromSegmentNumber} stays sealed exactly as it is. A new pass opens, and this
+            pass&rsquo;s basis is re-checked against today&rsquo;s availability before it&rsquo;s carried over — so
             you start from what worked rather than from a blank search.
           </p>
           <div style={{ marginTop: 12 }}>
@@ -566,7 +558,7 @@ function DuplicateModal({
           </div>
 
           <div className="field" style={{ marginTop: 12 }}>
-            <label htmlFor="dup-stage">Where should the new segment start?</label>
+            <label htmlFor="dup-stage">Where should the new pass start?</label>
             <select id="dup-stage" value={stage} onChange={(e) => setStage(e.target.value)} disabled={pending}>
               {routes.map((r) => (
                 <option key={r} value={r}>
@@ -597,7 +589,7 @@ function DuplicateModal({
           </button>
           <button className="btn btn-primary" onClick={onConfirm} disabled={pending || !reason.trim()}>
             <Copy />
-            {pending ? "Copying…" : "Copy into a new segment"}
+            {pending ? "Copying…" : "Copy into a new pass"}
           </button>
         </div>
       </div>
@@ -613,8 +605,8 @@ export function SegmentHistoryPanel({
   entryId: string;
   currentStage?: string;
   /**
-   * Fired once a copy has actually opened a new segment, with the stage it opened at. The panel
-   * lives in a side tab, so without this the operator is left looking at the segment list while
+   * Fired once a copy has actually opened a new pass, with the stage it opened at. The panel
+   * lives in a side tab, so without this the operator is left looking at the pass list while
    * the booking has moved back to Inquiry behind them — they'd have to find the step themselves.
    */
   onSegmentOpened?: (toStage: string) => void;
@@ -640,14 +632,14 @@ export function SegmentHistoryPanel({
       void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
       void queryClient.invalidateQueries({ queryKey: ["segment-history", entryId] });
-      // The booking has moved back to the stage the new segment opened at, so take the operator
-      // there. Both branches navigate — the segment is real either way, and leaving them on the
+      // The booking has moved back to the stage the new pass opened at, so take the operator
+      // there. Both branches navigate — the pass is real either way, and leaving them on the
       // old step (this panel is a side tab) means the move happens invisibly behind them.
       onSegmentOpened?.(out.toStage);
       if (out.prefilled) {
         const dropped = out.recall?.droppedRooms?.length ?? 0;
         toast.success(
-          `Segment ${out.newSegmentNumber} opened at ${stageLabel(out.toStage)} with segment ${out.fromSegmentNumber}'s basis — review the selection and save it.` +
+          `Pass ${out.newSegmentNumber} opened at ${stageLabel(out.toStage)} with pass ${out.fromSegmentNumber}'s basis — review the selection and save it.` +
             (dropped > 0
               ? ` ${dropped} room${dropped === 1 ? "" : "s"} didn't carry over: ${out.recall!.droppedRooms.map((d) => d.roomNumber ?? d.roomId.slice(0, 6)).join(", ")}.`
               : ""),
@@ -656,21 +648,21 @@ export function SegmentHistoryPanel({
       } else {
         // The re-entry committed; only the basis carry-over was blocked (usually the FOM gate).
         toast.warning(
-          `Segment ${out.newSegmentNumber} opened, but the basis needs approval before it carries over. ${out.recallBlocked?.message ?? ""}`,
+          `Pass ${out.newSegmentNumber} opened, but the basis needs approval before it carries over. ${out.recallBlocked?.message ?? ""}`,
           { duration: 10_000 },
         );
       }
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't copy that segment"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't copy that pass"),
   });
 
   if (q.isLoading) {
-    return <div style={{ fontSize: 12, color: "var(--ink-3)", padding: "8px 0" }}>Loading segments…</div>;
+    return <div style={{ fontSize: 12, color: "var(--ink-3)", padding: "8px 0" }}>Loading passes…</div>;
   }
   if (q.isError || !q.data) {
     return (
       <div style={{ fontSize: 12, color: "var(--stop)", padding: "8px 0" }}>
-        Couldn&rsquo;t load the segment history.
+        Couldn&rsquo;t load the pass history.
       </div>
     );
   }
@@ -678,7 +670,7 @@ export function SegmentHistoryPanel({
   const segs = q.data.segments;
   const sealedCount = segs.filter((s) => !s.isActive).length;
   const stage = currentStage ?? q.data.currentStage;
-  // Which stages a new segment could open at from here. Empty → no re-entry route leads back to a
+  // Which stages a new pass could open at from here. Empty → no re-entry route leads back to a
   // configuration stage (e.g. already at S1, or in-house past the point of re-quoting).
   const dupRoutes = DUPLICATE_ROUTES[String(stage)] ?? [];
 
@@ -687,20 +679,20 @@ export function SegmentHistoryPanel({
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
         <History style={{ width: 14, height: 14, color: "var(--green)" }} />
         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>
-          {segs.length === 1 ? "One segment so far" : `${segs.length} segments`}
+          {segs.length === 1 ? "One pass so far" : `${segs.length} passes`}
         </span>
       </div>
       <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "2px 0 6px", lineHeight: 1.5 }}>
-        Each segment is one pass through the journey. A change after confirmation doesn&rsquo;t edit the
-        old segment — it seals it as history and opens a fresh one.
-        {sealedCount > 0 ? ` ${sealedCount} sealed segment${sealedCount === 1 ? "" : "s"} below are read-only.` : ""}
+        Each pass is one pass through the journey. A change after confirmation doesn&rsquo;t edit the
+        old pass — it seals it as history and opens a fresh one.
+        {sealedCount > 0 ? ` ${sealedCount} sealed pass${sealedCount === 1 ? "" : "s"} below are read-only.` : ""}
       </p>
-      {/* Newest first — the active segment on top, history beneath. */}
+      {/* Newest first — the active pass on top, history beneath. */}
       {[...segs].reverse().map((s) => {
-        // A segment can be copied when a room selection is IN FORCE for it — its own, or one
-        // inherited from an earlier segment. Only a segment opened at S1 seals a configuration of
+        // A pass can be copied when a room selection is IN FORCE for it — its own, or one
+        // inherited from an earlier pass. Only a pass opened at S1 seals a configuration of
         // its own; one opened at S2/S3 by re-entry runs on what it inherited, and gating on
-        // ownership alone hid the copy action on every segment after the first.
+        // ownership alone hid the copy action on every pass after the first.
         const ownsBasis = s.availabilityConfigs.some((c) => c.rooms.length > 0);
         const inheritsBasis = segs.some(
           (e) => e.segmentNumber <= s.segmentNumber && e.availabilityConfigs.some((c) => c.rooms.length > 0),

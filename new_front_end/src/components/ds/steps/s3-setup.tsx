@@ -257,7 +257,7 @@ export function S3SetUp({
         onChanged={changed}
       />
 
-      {isGroupLike ? <CoordinatorCard entry={entry} editable={editable} inq={inq} onChanged={changed} /> : null}
+      {isGroupLike || entry.useType === "CORPORATE" ? <CoordinatorCard entry={entry} editable={editable} inq={inq} onChanged={changed} /> : null}
       {isGroupLike ? <FocCard entry={entry} editable={editable} gm={gm} onChanged={changed} /> : null}
       {needsMilestones ? <MilestonesCard entry={entry} editable={editable} onChanged={changed} /> : null}
       {isParty ? <PartyBlock entry={entry} /> : null}
@@ -986,7 +986,7 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
   const ok = name.trim().length > 0 && scope.trim().length > 0;
   return (
     <StepCard
-      title="The coordinator"
+      title={entry.useType === "CORPORATE" ? "The company's coordinator" : "The coordinator"}
       right={confirmed ? <OnRecord word={`confirmed · ${confirmed}`} /> : null}
       acts={
         past ? undefined : (
@@ -1011,14 +1011,14 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
       }
     >
       <span className="meta">
-        Who answers for this {entry.useType === "CONFERENCE" ? "conference" : "group"} — the booking asks for a name before Reserve.
+        Who answers for this {entry.useType === "CONFERENCE" ? "conference" : entry.useType === "CORPORATE" ? "company's booking" : "group"} — the booking asks for a name before Reserve.
       </span>
       {open ? (
         <DsDialog
           open
           onClose={() => setOpen(false)}
           busy={confirm.isPending}
-          title="The coordinator"
+          title={entry.useType === "CORPORATE" ? "The company's coordinator" : "The coordinator"}
           footer={
             <>
               <Button kind="quiet" state={confirm.isPending ? "inert" : "default"} onClick={() => setOpen(false)}>

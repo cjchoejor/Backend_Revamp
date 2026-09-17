@@ -1209,7 +1209,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
                 className="btn btn-primary btn-sm"
                 disabled={!isFom || commitM.isPending}
                 onClick={() => setCommitOpen(true)}
-                title="New segment, re-freeze with the new checkout, back here"
+                title="New pass, re-freeze with the new checkout, back here"
               >
                 {commitM.isPending ? "Committing…" : "Commit extension"}
               </button>
@@ -1282,7 +1282,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             open={commitOpen}
             title="Commit the stay extension"
             subtitle={`Checkout ${fmtDay(active.priorCheckOutDate)} → ${fmtDay(active.newCheckOutDate)}`}
-            why="The interim payment is in. Committing runs the governed journey — a new segment, a silent re-quote over the extended stay, a re-freeze with the new checkout — and brings the booking back to the Stay step."
+            why="The interim payment is in. Committing runs the governed journey — a new pass, a silent re-quote over the extended stay, a re-freeze with the new checkout — and brings the booking back to the Stay step."
             consequences={[
               "The reservation is re-frozen with the new checkout date (a new immutable record); the extra nights get their night-audit clocks.",
               active.pricingPreview?.moves?.length
