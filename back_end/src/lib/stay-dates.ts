@@ -88,10 +88,13 @@ function hotelOffsetMs(at: Date): number {
 /**
  * The instant the hotel-local calendar day CONTAINING `at` ends - i.e. the next local midnight.
  *
- * Needed because stay dates are day markers whose stored midnight is not consistent: some rows
- * hold UTC midnight, others the hotel's local midnight (6h earlier in UTC terms). Both name the
- * same calendar day, so anything reasoning about "the end of that day" must go through the
- * timezone rather than adding 24h to whatever happens to be stored.
+ * Stay dates are stored at UTC midnight, which is already 06:00 in Bhutan - so "stored date +
+ * 24h" overshoots the end of that day by six hours and lands in the next one. The end of a
+ * hotel day is a question about the hotel's clock, so it goes through the timezone.
+ *
+ * (Corrected 2026-09-17: an earlier version of this note claimed some rows were stored at the
+ * hotel's local midnight instead. That was a misreading - node-postgres renders a timestamp
+ * column in the process's zone. Every stay date on the database is UTC midnight.)
  */
 export function hotelDayEndUtc(at: Date): Date {
   const [y, m, d] = hotelCalendarYmd(at).split("-").map((x) => Number(x));

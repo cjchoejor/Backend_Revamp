@@ -43,6 +43,7 @@ import { enforceFolioOutstandingForWriteOff } from "../../policies/13-billing-mo
 import { shouldCreateCommissionDueRecord } from "../../policies/28-commission-production/p68-commission-due-record-creation.js";
 import { computeGuestDataRetentionDueAt } from "../../policies/07-guest-data-governance/p18-guest-data-retention.js";
 import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
+import { hotelTodayUtc } from "../../lib/stay-dates.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -1107,7 +1108,9 @@ export async function postStayCharge(
         description: input.description,
         amount: input.amount,
         currency: input.currency?.trim() ? input.currency.trim() : "BTN",
-        chargeDate: postedAt,
+        // The posting INSTANT stays on postedAt; the day it belongs to is the hotel's (a
+        // 3am post-stay charge is today's, though its UTC date is still yesterday).
+        chargeDate: hotelTodayUtc(postedAt),
         stage: Stage.S9,
         postedBy: actorId,
         isPostStay: true,

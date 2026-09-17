@@ -48,6 +48,7 @@ import { recordCommunicationAcknowledgement } from "./communication-acknowledgem
 import { assignRoomsFromSealedPerNight } from "./room-assignment-service.js";
 import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { hotelTodayUtc } from "../../lib/stay-dates.js";
 
 /**
  * IN-PLACE ROOM CHANGE (2026-08-12 operator ruling) — one desk action, the full governed
@@ -167,10 +168,6 @@ function isoNightsBetween(checkIn: Date, checkOut: Date): string[] {
   return out;
 }
 
-function todayUtcMidnight(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
 
 export type RoomChangeCandidate = {
   roomId: string;
@@ -320,7 +317,7 @@ async function loadRoomChangeContext(
 
   // Nights the substitution covers: all of the from-room's nights — except in-house (S7),
   // where slept nights stay with the old room and the change runs from tonight onward.
-  const today = todayUtcMidnight();
+  const today = hotelTodayUtc();
   const todayIso = today.toISOString().slice(0, 10);
   const substitutionNights = extension
     ? Array.from(new Set(extension.extraNights.map((n) => String(n.date).slice(0, 10)))).sort()

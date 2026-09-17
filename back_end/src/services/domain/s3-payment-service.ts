@@ -714,7 +714,8 @@ export async function setAdvancePaymentPlan(
       // the end of that day rather than rejecting — the guest's words were "before check-in".
       // Clamping to the stored midnight (the old rule) would have thrown every same-day
       // promise INTO THE PAST and fired W38 immediately, so the ceiling has to be the day's
-      // end, resolved through the hotel's timezone (stored midnights are not all UTC).
+      // end, resolved through the hotel's timezone (the stored UTC midnight is already 06:00 in
+      // Bhutan, so +24h would overshoot the day by six hours).
       const dayEnd = checkIn ? hotelDayEndUtc(checkIn) : null;
       const clamped = dayEnd && promised.getTime() > dayEnd.getTime() ? dayEnd : promised;
       promisedByIso = clamped.toISOString();

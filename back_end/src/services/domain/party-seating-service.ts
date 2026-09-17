@@ -15,6 +15,7 @@ import {
 } from "../../lib/party-seating.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { changeRoomToNewSegment, type RoomChangeOutcome } from "./room-change-service.js";
+import { hotelCalendarYmd } from "../../lib/stay-dates.js";
 
 /**
  * Party seating, as a service (2026-08-21, operator ruling — "when a room is changed make sure
@@ -162,7 +163,7 @@ export async function buildPartySeatingStatus(prisma: PrismaClient, entryId: str
       ...repointed.actions.flatMap((a) => (a.type === "ROW_REPOINTED" ? [a.toRoomId] : [])),
       ...dry.actions.flatMap((a) => ("roomId" in a ? [a.roomId] : [])),
     ]);
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = hotelCalendarYmd();
     // In-house the setup-only form needs a room with nights LEFT (the change runs from tonight);
     // prefer a room the repair touches, then the room with the most remaining nights.
     const remaining = (id: string) =>

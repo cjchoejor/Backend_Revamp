@@ -13,6 +13,7 @@ import {
 } from "../../policies/35-interim-payment/p80-interim-payment-gates.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { hotelTodayUtc } from "../../lib/stay-dates.js";
 
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient | Tx;
@@ -320,10 +321,6 @@ const DAY_MS = 86_400_000;
 const n2 = (d: Prisma.Decimal): number => Number(round2(d));
 const isoDay = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
 
-function todayUtcMidnight(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
 
 export function describeInterimAsk(ask: InterimAsk | null, currency = "BTN"): string | null {
   if (!ask) return null;
@@ -358,7 +355,7 @@ export async function computeInterimFigures(
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
   const checkOut = opts?.projection?.checkOut ?? entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
   const nightsTotal = checkIn && checkOut ? Math.max(0, Math.round((checkOut.getTime() - checkIn.getTime()) / DAY_MS)) : 0;
-  const today = todayUtcMidnight();
+  const today = hotelTodayUtc();
   const nightsSlept = checkIn ? Math.max(0, Math.min(nightsTotal, Math.round((today.getTime() - checkIn.getTime()) / DAY_MS))) : 0;
   const nightsToCome = Math.max(0, nightsTotal - nightsSlept);
 

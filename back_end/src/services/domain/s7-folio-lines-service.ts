@@ -15,6 +15,7 @@ import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import { hotelTodayUtc } from "../../lib/stay-dates.js";
 import {
   classifyFolioLine,
   companionRateFromDescription,
@@ -166,8 +167,14 @@ export async function postCharge(
   if (!Number.isFinite(input.amount)) throw new ValidationError("amount must be a number");
   if (!input.chargeDate?.trim()) throw new ValidationError("chargeDate is required");
 
-  const chargeDate = new Date(input.chargeDate);
-  if (Number.isNaN(chargeDate.getTime())) throw new ValidationError("chargeDate must be a valid ISO date");
+  const parsedChargeDate = new Date(input.chargeDate);
+  if (Number.isNaN(parsedChargeDate.getTime())) throw new ValidationError("chargeDate must be a valid ISO date");
+  // A charge is dated on the HOTEL's calendar (2026-09-17). A date-only value — the S7 form's
+  // "2026-09-17", the S8 checkout day, the night audit's operating date — is stored at UTC
+  // midnight and passes through unchanged. An instant ("now", which credit notes and S9 send)
+  // becomes the hotel day it falls on: its UTC date is still yesterday in Bhutan until 06:00,
+  // which dated a 3am posting — and seal-checked it — against the previous night.
+  const chargeDate = hotelTodayUtc(parsedChargeDate);
 
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
@@ -444,8 +451,10 @@ export async function correctCharge(
     throw new ValidationError("Provide correctionAmount (signed delta) or correctToAmount (target net for the charge line)");
   }
 
-  const correctionDate = new Date(input.correctionDate);
-  if (Number.isNaN(correctionDate.getTime())) throw new ValidationError("correctionDate must be a valid ISO date");
+  const parsedCorrectionDate = new Date(input.correctionDate);
+  if (Number.isNaN(parsedCorrectionDate.getTime())) throw new ValidationError("correctionDate must be a valid ISO date");
+  // Same rule as a charge: the hotel day the correction falls on (see postCharge).
+  const correctionDate = hotelTodayUtc(parsedCorrectionDate);
 
   const original = await prisma.folioLine.findUnique({ where: { id: input.originalFolioLineId } });
   if (!original) throw new NotFoundError("FolioLine");

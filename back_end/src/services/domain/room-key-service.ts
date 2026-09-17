@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError, StageGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { hotelCalendarYmd } from "../../lib/stay-dates.js";
 
 /**
  * Per-room key lifecycle (2026-08-14, operator ruling).
@@ -16,6 +17,7 @@ import { NotFoundError, StageGateBlockedError, ValidationError } from "../../lib
  * (see s8-checkout-service).
  */
 
+/** A STORED day marker as yyyy-mm-dd. Stay dates are kept at UTC midnight, so this is exact. */
 const isoDay = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
 
 type KeyAssignmentRow = {
@@ -235,7 +237,7 @@ export async function issueRoomKeysBulk(
     if (unknown.length > 0) throw new ValidationError("roomIds names a room that is not part of this booking");
   }
 
-  const todayIso = isoDay(new Date());
+  const todayIso = hotelCalendarYmd();
   const dayOne = dayOneRoomIds(entry.roomAssignments, entry.checkInDate);
   /** First night of a room's claim — null when undatable (legacy rows). */
   const firstNightOf = (rows: KeyAssignmentRow[]): string | null =>
@@ -364,7 +366,7 @@ export async function returnRoomKey(prisma: PrismaClient, entryId: string, roomI
   // the room's last night must be done — its latest end (the exclusive move-out morning) has
   // arrived. Until then the key is simply with the guest. Undated rows fall back to the
   // booking's checkout; no dates at all → nothing to sequence, allow.
-  const todayIso = isoDay(new Date());
+  const todayIso = hotelCalendarYmd();
   const lastEnd = roomRangesIso(rows, entry.checkInDate, entry.checkOutDate).reduce<string | null>(
     (acc, r) => (r.end && (!acc || r.end > acc) ? r.end : acc),
     null,

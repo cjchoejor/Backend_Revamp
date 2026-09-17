@@ -16,9 +16,36 @@ import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
 import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot } from "../../services/domain/capacity-validation-service.js";
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
+import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { HOTEL_TIMEZONE } from "../../services/infrastructure/pdf-templates/legphel-document-format.js";
 
 export const lookupsRouter = Router();
 const L1 = requireActorLevel("L1");
+
+/**
+ * The hotel's own calendar day (2026-09-17) — the one answer to "what day is it here".
+ *
+ * The desk used to decide that for itself: from the machine's timezone in some places and from
+ * the UTC date in others, while every backend rule judges by HOTEL_TIMEZONE. The UTC date is
+ * YESTERDAY in Bhutan from midnight until 06:00, so even a correctly configured desk disagreed
+ * with the server for six hours a day; a machine set to another zone disagreed for longer, in
+ * either direction. Offering a night the server then refuses was the mild outcome; hiding one
+ * it would accept, with nothing on screen to say why, was the bad one.
+ *
+ * So the desk asks here. The server's clock and the hotel's zone decide; the terminal's
+ * settings play no part. Cheap and uncached so a poll rolls it over at midnight.
+ */
+lookupsRouter.get("/lookups/hotel-day", L1, (_req, res) => {
+  const now = new Date();
+  const today = hotelTodayUtc(now);
+  res.set("Cache-Control", "no-store").json({
+    timezone: HOTEL_TIMEZONE,
+    today: ymdUtc(today),
+    yesterday: ymdUtc(addUtcDays(today, -1)),
+    tomorrow: ymdUtc(addUtcDays(today, 1)),
+    now: now.toISOString(),
+  });
+});
 
 /**
  * Live snapshot of the child-policy bundle for the front-desk forms. The booking flow's child
