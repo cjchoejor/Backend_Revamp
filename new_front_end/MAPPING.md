@@ -33,8 +33,8 @@ on :4000.
 |---|---|---|---|
 | Today | `/today` | `GET /api/desk/bookings`, `POST /api/desk/bookings/money` (Leaving list), `GET /api/rooms` (occupancy line) | Built. Needs attention (bands, folds), the incomplete record, the hotel's day (arriving / leaving / in-house / new inquiries / parked), arriving this week. |
 | Bookings | `/bookings` | same list + money for the rows on screen | Built. Search, date range, phase groups, Parked / Cancelled, sort, "Show 50 more", preview on click, open on double-click. The filters live in the address. |
-| New booking | `/bookings/new` | the existing intake (`/api/guest-profiles`, `/api/inquiries`, `/api/entries`, lookups) | The working intake form, shown inside the new frame. Its redesigned canvas is still to come. |
-| Booking workspace | `/bookings/:id?step=N&view=details\|history` | `GET /api/entries/:id`, `…/billing-summary`, `…/payment-status`, `…/communications`, `…/timers`, `…/trace`, `…/identity-proofs` (at Check-in) | Built frame. **Header:** status, dates, rooms, source, custodian, total with its money breakdown. **Preference strip.** **Rail:** phases, the two boundaries, Re-enter, Park / Resume, Under the hood. **Tabs:** This step · Booking details · History. **Side panel:** Timers · Recent · Papers sent. **Gate bar:** the readiness list and one forward move, with Reserve, Check-in and Close behind their commit dialogs. **Step canvases:** built from the prototype's cards (see below). |
+| New booking | `/bookings/new` | the existing intake (`/api/guest-profiles`, `/api/inquiries`, `/api/entries`, lookups) | Built (`components/ds/steps/new-inquiry.tsx`). The four Inquiry cards as a form, the house card and the gate bar ("Start the inquiry · keep the lead"). "Ask the house" keeps the lead, runs the search and opens the booking. Every rule of the old intake is kept, including `?edit=`. "Name to come from the agent" waits for BE-62. |
+| Booking workspace | `/bookings/:id?step=N&view=details\|history` | `GET /api/entries/:id`, `…/billing-summary`, `…/payment-status`, `…/communications`, `…/timers`, `…/trace`, `…/identity-proofs` (at Check-in) | Built frame. **Header:** status, dates, rooms, source, custodian, total with its money breakdown. **Preference strip.** **Rail:** phases, the two boundaries, Re-enter, Park / Resume, Under the hood. **Tabs:** This step · Booking details (the three parties, the stay, the numbers, the thread, papers) · History ("As it stands", then every act in chapters by step, with lenses for Money, Papers, Requests, Changes, Approvals, Messages; read from `…/trace?limit=300` and `…/segments`). **Situation cards** above any step when they apply: parked, cancelled, no-show, passes and amendments, credit ceiling. **Side panel:** Timers · Recent (without the system's bookkeeping) · Papers sent, each with its answer, Record and Send again · The thread. **Gate bar:** the readiness list and one forward move, with Reserve, Check-in and Close behind their commit dialogs. **Step canvases:** built from the prototype's cards (see below). |
 | Under the hood | `/bookings/:id/backend` | as before | The existing view, inside the frame. |
 | Rooms | `/rooms` | `GET /api/rooms`, `GET /api/spaces`, deficiency routes | Built. Claim standing and physical state are shown separately, with each room's occupant. Halls and spaces are on the same page. A tile opens its fault record (the old desk's Spaces page is merged in here). |
 | Billing | `/billing` | list + money | Built: open bills (in-house, check-out) and money still owed after a stay. There are no account totals (see gaps). |
@@ -93,7 +93,9 @@ All read-only, in `back_end/src/routes/desk/router.ts` and `services/domain/desk
 | Hotel-wide boards: handoffs, disputes, the message inbox | second row | HW-02 |
 | Editing a guest record, with its change trail | Guest record | BE-32 |
 | Rooms sold per night ahead | Rooms | — |
-| Custodian names on imported bookings (their custodian ids match no staff record, so the header shows "—") | workspace header, preview | data |
+| Custodian names: every inquiry — new ones too — gets `staff-frontdesk-1` from the ownership rules, and no staff record has that id (staff ids are `STF-…`), so the custodian shows "—" everywhere | workspace header, preview, lists | config (`ownership.assignmentRules`) |
+| A walk-in checked in in one governed act | the walk-in screen (not built) | BE-16 |
+| An agent's record with its change trail, statements and outstanding by account | agent record, accounts (not built) | BE-31, BE-32, BE-48 |
 | Counter-offers, requests, chits, tablet registration, voucher versions, a second confirmation channel, per-payer tax invoices | the step canvases (drawn inert, each naming its item) | BE-39, BE-64, BE-68, BE-45, BE-42, BE-65, BE-41/43/69 |
 | The bill's totals by category (rooms · food and drink · services) on the billing summary | Closed, "What the stay was" | BE-55 |
 
@@ -107,5 +109,4 @@ All read-only, in `back_end/src/routes/desk/router.ts` and `services/domain/desk
    - the money blocks (interim, extension, split, advance, leaving early)
 
    They still show a few old words, such as "min threshold".
-2. Redesign the intake canvas ("looking is recording").
-3. Build the second-row boards as their backend reads land.
+2. Build the second-row boards, the walk-in, the agent record and the accounts as their backend items land.

@@ -235,6 +235,11 @@ The boss's redesign (`September 14 2026/`, built on `September 11 2026/`) is bei
 - **Workspace**: [ds-workspace.tsx](new_front_end/src/components/ds/workspace/ds-workspace.tsx) replaces `booking-workspace.tsx` (deleted in the copy). It keeps its readiness lists, forward moves, commit dialogs, park/resume, exit-park prompt and key checklist.
 - **Step canvases (2026-09-17)**: all nine are native, in [components/ds/steps/](new_front_end/src/components/ds/steps/).
   - **Why:** the user said the steps "look like my old frontend with colors of the new front end".
+  - **Also rebuilt from the prototype, in the same pass:**
+    - [new-inquiry.tsx](new_front_end/src/components/ds/steps/new-inquiry.tsx), the `/bookings/new` screen. "Ask the house" keeps the lead, searches, and opens the booking.
+    - [case-cards.tsx](new_front_end/src/components/ds/steps/case-cards.tsx), the cards shown above any step when they apply: parked, cancelled, no-show, passes and amendments, credit ceiling.
+    - [history-view.tsx](new_front_end/src/components/ds/workspace/history-view.tsx) ("As it stands", chapters by step, lenses) and [details-view.tsx](new_front_end/src/components/ds/workspace/details-view.tsx).
+    - [side-papers.tsx](new_front_end/src/components/ds/workspace/side-papers.tsx): each sent paper with its answer, Record, and Send again.
   - **Files:** `s1-inquiry.tsx` … `s9-closed.tsx` with their `sN-*.tsx` parts, built from the prototype's cards and the storyboards. The workspace renders only these; the old step components in `components/desk/workspace/` are no longer mounted.
   - **The shared kit** is [kit.tsx](new_front_end/src/components/ds/steps/kit.tsx):
     - `StepCanvas` (past mode), `StepCard`, `Facts`/`Fact`, `FactLine`, `Choice`
@@ -257,7 +262,7 @@ The boss's redesign (`September 14 2026/`, built on `September 11 2026/`) is bei
   - `POST /api/desk/bookings/money` (L1, ≤100 ids, each booking's billing-summary headline and folio)
   - `GET /api/desk/staff` (L1)
   - `GET /api/desk/activity?date=` (**L2**, one hotel day of the trace)
-- **Known data gap**: imported bookings' `defaultCustodianId` values (e.g. `staff-frontdesk-1`) match no StaffUser, so the custodian shows "—".
+- **Known data gap**: every inquiry gets `defaultCustodianId` `staff-frontdesk-1` from the ownership rules, new ones included. No StaffUser has that id (staff ids are `STF-…`), so the custodian shows "—" on every booking. Fixing it means correcting `ownership.assignmentRules` or Policy 3's fallback.
 - **Machine setup**: `npm install` in `new_front_end/` (its postinstall copies the tesseract assets, which are gitignored like front_end's), then `npm run dev`.
 
 ## Front-desk operator surface (`/desk`) — THE operational frontend
