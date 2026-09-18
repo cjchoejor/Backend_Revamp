@@ -36,6 +36,7 @@ import { partySeatingIssues, seatPartyByComposition } from "@/lib/desk/party-roo
 import { DeskConfirmModal } from "./confirm-modal";
 import { StepAction } from "./step-action";
 import type { EntryDetail } from "@/types/api";
+import { fmtDateTime, fmtTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 
 /**
  * Guest-detail table on Arrival (2026-08-10, operator request — "store ID proof of every
@@ -151,7 +152,7 @@ function ProofThumb({ proof, size = 40 }: { proof: IdentityProofSummary; size?: 
     <button
       type="button"
       onClick={open}
-      title={`${(proof.documentType ?? "ID").replace(/_/g, " ")} · ${proof.capturedAt.slice(0, 16).replace("T", " ")} — open full size`}
+      title={`${(proof.documentType ?? "ID").replace(/_/g, " ")} · ${fmtDateTime(proof.capturedAt, HOTEL_TZ_DEFAULT)} — open full size`}
       style={{
         width: Math.round((size * 4) / 3),
         height: size,
@@ -1095,7 +1096,7 @@ export function IdentityProofBlock({
                     {locked && (
                       <span
                         style={{ marginLeft: 6, display: "inline-flex", alignItems: "center", color: "var(--ok)" }}
-                        title={`Confirmed ${new Date(detailRow(slot.key)!.detailsConfirmedAt!).toLocaleString()} — read-only until "Make changes"`}
+                        title={`Confirmed ${fmtDateTime(detailRow(slot.key)!.detailsConfirmedAt!, HOTEL_TZ_DEFAULT)} — read-only until "Make changes"`}
                       >
                         <Lock style={{ width: 11, height: 11 }} />
                       </span>
@@ -1490,7 +1491,7 @@ export function IdentityProofBlock({
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                Code valid until {new Date(phoneCapture.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                Code valid until {fmtTime(phoneCapture.expiresAt, HOTEL_TZ_DEFAULT)}
               </span>
               <button type="button" className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={() => setPhoneCapture(null)}>
                 Done

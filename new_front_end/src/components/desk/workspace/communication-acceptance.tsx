@@ -12,6 +12,7 @@ import {
   type EntryCommunication,
   type EntryCommunicationType,
 } from "@/lib/api/entries";
+import { fmtDateTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 
 /**
  * "Record the guest's answer" for a governed outbound communication — the same affordance the S2
@@ -74,8 +75,9 @@ const COPY: Record<EntryCommunicationType, { title: string; nothingSent: string;
   },
 };
 
+/** An instant on the hotel's clock (2026-09-18) — it printed the UTC time, six hours behind Thimphu. */
 function fmt(ts: string | null | undefined) {
-  return ts ? ts.slice(0, 16).replace("T", " ") : "—";
+  return ts ? fmtDateTime(ts, HOTEL_TZ_DEFAULT) : "—";
 }
 
 export function CommunicationAcceptanceBlock({

@@ -28,8 +28,8 @@ import type { EntryDetail } from "@/types/api";
 
 function shortDay(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail; setSelected: (n: number) => void }) {

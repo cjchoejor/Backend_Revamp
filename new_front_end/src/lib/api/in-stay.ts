@@ -11,6 +11,8 @@ export type NightAuditRecord = {
   operatingDate: string;
   runStatus: string;
   entriesProcessed?: number;
+  /** On a re-run of an audited night: how many bookings it caught up (0 = nothing was missing). */
+  caughtUp?: number;
 };
 
 export async function postFolioCharge(

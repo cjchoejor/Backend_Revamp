@@ -502,8 +502,8 @@ export function departureWouldBeEarly(entry: EntryDetail, hotelToday: string | n
 }
 
 function shortDayLabel(iso: string): string {
-  const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 /** S7 exit readiness (SIG-S7) — derivable gates before checkout prep (S8). Night audit is reported separately. */

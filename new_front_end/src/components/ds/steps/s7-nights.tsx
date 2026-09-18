@@ -90,17 +90,29 @@ export function NightsCard({
   );
   const roomLines = (ymd: string) => (entry.folio?.lines ?? []).filter((l) => l.lineType === "ROOM_CHARGE" && l.chargeDate?.slice(0, 10) === ymd);
 
-  // Which night to run: the one picked, else the earliest ended night not yet complete.
-  const firstOpen = asked.find((n) => !!yesterday && n <= yesterday && recordOf(n)?.runStatus !== "COMPLETE") ?? "";
+  // A night the hotel's audit ran BEFORE this booking was in-house (a check-in completed after
+  // the run) carries no charge for it; running the night again charges it (the backend catches up
+  // only the bookings the run missed). "Audited" alone read as done while the room was never
+  // billed, and settlement then refused the stay (2026-09-18).
+  const hasRooms = (entry.roomAssignments ?? []).length > 0;
+  const notChargedHere = (n: string) =>
+    hasRooms && !!yesterday && n <= yesterday && recordOf(n)?.runStatus === "COMPLETE" && roomLines(n).length === 0;
+
+  // Which night to run: the one picked, else the earliest ended night not yet complete — or
+  // audited without this booking's charge.
+  const firstOpen =
+    asked.find((n) => !!yesterday && n <= yesterday && (recordOf(n)?.runStatus !== "COMPLETE" || notChargedHere(n))) ?? "";
   const [picked, setPicked] = useState<string | null>(null);
   const runDate = picked ?? firstOpen;
   const runFuture = !yesterday || (!!runDate && runDate > yesterday);
-  const runDone = !!runDate && recordOf(runDate)?.runStatus === "COMPLETE";
+  const runDone = !!runDate && recordOf(runDate)?.runStatus === "COMPLETE" && !notChargedHere(runDate);
 
   const run = useMutation({
     mutationFn: (ymd: string) => runNightAudit(session!, `${ymd}T00:00:00.000Z`),
-    onSuccess: (_d, ymd) => {
-      toast.success(`The night audit has run for ${fmtDate(ymd)}`);
+    onSuccess: (rec, ymd) => {
+      if (rec?.caughtUp == null) toast.success(`The night audit has run for ${fmtDate(ymd)}`);
+      else if (rec.caughtUp > 0) toast.success(`${fmtDate(ymd)} was audited already — the charges it missed are posted now`);
+      else toast.message(`${fmtDate(ymd)} was audited already — nothing it can charge is missing`);
       setPicked(null);
       refresh([["night-audit"], ["early-departure-preview", entry.id]]);
     },
@@ -109,6 +121,19 @@ export function NightsCard({
 
   const audit = (n: string) => {
     const rec = recordOf(n);
+    if (notChargedHere(n))
+      return (
+        <span className="row-acts" style={{ alignItems: "center" }}>
+          <Chip tone="warning">audited · not charged here</Chip>
+          {elevated ? (
+            <Live>
+              <Button kind="quiet" compact state={run.isPending ? "working" : "default"} workingLabel="Running…" onClick={() => run.mutate(n)}>
+                Run it again
+              </Button>
+            </Live>
+          ) : null}
+        </span>
+      );
     if (rec?.runStatus === "COMPLETE")
       return (
         <Chip tone="success" icon="check">
@@ -132,8 +157,6 @@ export function NightsCard({
     if (n === today) return <Chip tone="quiet">tonight</Chip>;
     return <Chip tone="quiet">ahead</Chip>;
   };
-
-  const hasRooms = (entry.roomAssignments ?? []).length > 0;
 
   return (
     <StepCard title="The nights" icon="clock">
@@ -178,7 +201,7 @@ export function NightsCard({
         </table>
       )}
       <div className="meta" style={{ marginTop: 6 }}>
-        A night&rsquo;s charge is posted and its date sealed by the night audit · every night must be audited before check-out · a night is audited once it has ended · the run covers the whole hotel, so a night already audited from another booking needs nothing more here
+        A night&rsquo;s charge is posted and its date sealed by the night audit · every night must be audited before check-out · a night is audited once it has ended · the run covers the whole hotel · a night audited before this booking was in-house is run again to charge it
       </div>
       <Live>
         <div className="row-acts" style={{ marginTop: 12, alignItems: "flex-end" }}>
