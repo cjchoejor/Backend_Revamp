@@ -17,6 +17,13 @@ const PHRASES: Array<[RegExp, string]> = [
     /Multi-booking overlap detected; FOM acknowledgement required/g,
     "This guest already holds a booking over these nights — the FOM acknowledges it (Acknowledge an overlap… on this step), then Reserve again",
   ],
+  // Two screens on one booking (2026-09-19): the second one's act arrives after the first moved it on.
+  // Say that, not only the rule it broke — the workspace refreshes itself on these (see client.ts).
+  [
+    /Entry version mismatch — refresh and retry/g,
+    "This booking was changed on another screen a moment ago — the page now shows it as it stands; check it, then try again",
+  ],
+  [/^(Entry (?:must be|is not) at S[1-9][^.;]*)$/g, "$1 — it has moved on, perhaps on another screen; the page now shows where it stands"],
   [/\bspeculative holds?\b/gi, "provisional block"],
   [/\bcommitted holds?\b/gi, "block"],
   [/\bsegments?\b/gi, "pass"],

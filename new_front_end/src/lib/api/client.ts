@@ -60,6 +60,15 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 
   if (!res.ok) {
     const err = data as ApiErrorBody | null;
+    // A stale page (2026-09-19): the booking moved on under this screen — another terminal reserved
+    // it, or bumped its version. Tell the open workspace to re-read it, so the person sees where it
+    // stands instead of pressing a button that can no longer work.
+    const stale =
+      res.status === 409 &&
+      (err?.error === "OptimisticLockError" ||
+        /^NOT_AT_S[1-9]$/.test(String((err as { blockingCondition?: unknown } | null)?.blockingCondition ?? "")) ||
+        /^Entry (?:must be|is not) at S[1-9]\b/.test(err?.message ?? ""));
+    if (stale && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("desk:stale-booking"));
     throw new ApiError(
       res.status,
       err?.error ?? "RequestError",

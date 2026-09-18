@@ -117,6 +117,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     enabled: !!session && !sessionLoading,
   });
   const entry = entryQuery.data ?? null;
+  // Another screen moved this booking on (client.ts raises the event on a stale refusal): re-read it.
+  useEffect(() => {
+    const onStale = () => refreshEntry();
+    window.addEventListener("desk:stale-booking", onStale);
+    return () => window.removeEventListener("desk:stale-booking", onStale);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryId]);
 
   // The list row carries what the entry payload does not: the custodian's name, the booker's name.
   const listRow = useDeskBookings().data?.items.find((r) => r.id === entryId) ?? null;
