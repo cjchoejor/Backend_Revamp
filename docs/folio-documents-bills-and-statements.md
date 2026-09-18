@@ -63,8 +63,10 @@ where they were.
 
 `back_end/src/lib/folio-ledger-view.ts` — `buildFolioLedgerView()` — is the single pure reading of a folio:
 charges vs SC/GST companions (the one-home convention in `folio-tax-lines.ts`), the **component** of every line
-(Room · Food & beverage · Services & other; a companion follows the charge it rides on, matched exactly as the
-desk's folio fold matches it — same room, same date, the base description it names, nearest posting), the
+(Room · Food & beverage · Services & other · **Credits & allowances** — a credit note is its own line since
+2026-09-19, as DFG-001 wants a discount rendered, rather than a negative "Services & other"; a companion follows the
+charge it rides on, matched exactly as the desk's folio fold matches it — same room, same date, the base description
+it names, nearest posting — so a credit note's reversed service charge and GST follow it), the
 **ladder** additive from the ledger's own lines (net → service → taxable → GST → total), and the legacy
 read-time tax for room nights audited before 2026-08-18. `buildFinalInvoiceFigures` (the verified S8/S9 money
 builder, also behind the FINAL-invoice email) now delegates to it — its nine original output fields were
