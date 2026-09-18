@@ -65,6 +65,8 @@ found was fixed, re-tested, and committed; this file is the record.
 | 40 | **An advance by transfer, then cancelled at Set up**: a walk-in with no email · 50% asked · the proforma handed over (nothing emailed) · the answer · Nu 2,425.50 by bank transfer, rooms held automatically · cancelled: Nu 100 charged, Nu 2,325.50 refunded **by bank transfer** · the Set-up dialog now carries the GM's waiver and the refund choice | **Passes** after fixes 111–112 |
 | 41 | **Parked at Set up and at Arrival, then resumed**: the company booking (Set up) and a reserved booking at Arrival are parked by the front desk with a reason · "Parked · Resume to continue" in place of the forward move, a 30-day park expiry armed, the stage's own clocks running on (quote validity, the no-show cut-off) · both leave Needs attention for Today's parked list · resumed: the park expiry gone, the booking back where it was | **Passes** after fix 114 |
 | 42 | **A quote renegotiated after it went out**: a walk-in with no email, quoted at the rack rate (Nu 4,851) and handed over — the desk said "sent by email to +97517111042" (fix 115) · the guest wants it cheaper · the FOM puts 10% off in the table and generates the quote again: v2 Nu 4,365.90, approved at generation, v1 kept as replaced · v2 handed over ("recorded as sent — nothing was emailed") · the acceptance in the guest's words · Set up on the new price | **Passes** after fixes 115–116 |
+| 43 | **The phone hand-off for guest IDs**: on the in-house pair the desk makes one code for every guest · the link, opened on a phone-sized screen, names the booking, "0 of 2 guests have a photo", and lists each guest under tonight's room (Room 304 · Executive; Room 202 · Standard Double) with the name typed at the desk; it fits the phone's width · a tampered link is turned away ("ask the desk for a fresh code") | **Passes** — the photo itself was not sent (see "Not covered yet") |
+| 44 | **A long stay and the mid-stay payment**: an in-house guest in 5051 for 12–22 Sep with seven nights slept · the FOM audits the seven nights one by one from the Stay step (two had been audited hotel-wide before the booking — "run it again" charges them) · seven room charges with their service charge and GST, Nu 24,255 · the seventh audit raises the mid-stay payment prompt on its own · the front desk asks 40% of the projected Nu 34,650 = Nu 13,860: bill, "paying now", handed over, the answer, the cash — the bill paid, the folio at Nu 10,395 | **Passes** |
 
 ## Issues found
 
@@ -265,6 +267,9 @@ misleading screen · **Low** = wording / cosmetic.
   Rooms page, but nothing records it cleaned — there is no housekeeping step on the desk, and the check-in and
   room-change gates read a separate physical-state field that a departure never changes. Closing a booking is what
   resets its rooms. A housekeeping flow is its own piece of work.
+- **Cash receipts mid-stay carry no reference.** A cash settlement at Check-out demands a payment reference (the
+  receipt number); a mid-stay interim payment or a Set-up advance in cash does not ask for one. Left as it is — which
+  cash takings must carry a receipt number is a policy call.
 - **Agents' commission is never raised for a desk booking.** The closure reads the retired agent
   profile; bookings now link a travel agent, which carries no commission rate. Where it would
   fire it records the booking's *outstanding balance* as the commission. Needs a decision on
@@ -272,4 +277,7 @@ misleading screen · **Low** = wording / cosmetic.
 
 ## Not covered yet
 
-(Filled in as the run proceeds.)
+- **An ID photo sent from the phone.** The capture page was driven up to the photo, not past it: the server reads
+  every uploaded photo with an OCR model that is only partly downloaded on this machine (a few hundred MB still to
+  fetch), and an upload would have started that download. The page, the code and the roster were checked; the
+  upload path itself was verified end to end when it was built (2026-08-12).
