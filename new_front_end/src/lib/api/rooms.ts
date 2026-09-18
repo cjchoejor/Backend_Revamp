@@ -136,6 +136,11 @@ export async function listSpaceDeficiencies(session: Session, spaceId: string) {
 }
 
 /** Mark a fault fixed. L1+ — front desk both find and clear these. */
+/** The fault categories a report accepts — the admin's active list (2026-09-18). */
+export async function listDeficientCategories(session: Session) {
+  return apiRequest<{ items: Array<{ code: string; label: string }> }>("/api/lookups/deficient-categories", { session });
+}
+
 export async function resolveDeficiency(session: Session, recordId: string, resolutionNotes?: string) {
   return apiRequest<DeficientConditionRecord>(`/api/deficient-conditions/${recordId}/finalize`, {
     method: "PATCH",

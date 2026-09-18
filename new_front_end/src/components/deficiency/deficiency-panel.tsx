@@ -1,11 +1,14 @@
 "use client";
 
 import { useState } from "react";
+// Hotel time, not the machine's (2026-09-18) — the panel read the browser's own timezone.
+import { fmtDateTime } from "@/lib/ds/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import {
+  listDeficientCategories,
   listRoomDeficiencies,
   listSpaceDeficiencies,
   reportRoomDeficiency,
@@ -28,12 +31,16 @@ import {
  * both surfaces render identically, and they match the desk's existing house style.
  */
 
-/** Mirrors the seeded `deficientCondition.categories`; the backend rejects anything deactivated. */
-const CATEGORIES = [
+/**
+ * The categories come from the backend (`GET /lookups/deficient-categories` — the admin's active
+ * list, limited to what a report accepts). The panel carried its own list (Cleanliness,
+ * Equipment, Safety…) that the backend refused, so three of its five choices could never be
+ * reported (2026-09-18). Used until the answer arrives: the backend's own four.
+ */
+const FALLBACK_CATEGORIES = [
   { code: "MAINTENANCE", label: "Maintenance" },
-  { code: "CLEANLINESS", label: "Cleanliness" },
-  { code: "EQUIPMENT", label: "Equipment" },
-  { code: "SAFETY", label: "Safety" },
+  { code: "HOUSEKEEPING", label: "Housekeeping" },
+  { code: "SOFT_FURNISHING", label: "Soft furnishing" },
   { code: "OTHER", label: "Other" },
 ];
 
@@ -95,7 +102,14 @@ export function DeficiencyPanel({
   const isRoom = "roomId" in target;
   const targetId = isRoom ? target.roomId : target.spaceId;
 
-  const [category, setCategory] = useState(CATEGORIES[0]!.code);
+  const categoriesQuery = useQuery({
+    queryKey: ["lookup", "deficient-categories"],
+    queryFn: () => listDeficientCategories(session!),
+    enabled: !!session,
+    staleTime: 10 * 60_000,
+  });
+  const CATEGORIES = categoriesQuery.data?.items?.length ? categoriesQuery.data.items : FALLBACK_CATEGORIES;
+  const [category, setCategory] = useState(FALLBACK_CATEGORIES[0]!.code);
   const [description, setDescription] = useState("");
   const [rejectNotes, setRejectNotes] = useState<Record<string, string>>({});
 
@@ -201,7 +215,7 @@ export function DeficiencyPanel({
             ) : (
               <span style={{ ...S.tag, background: "rgba(46,160,90,.18)", color: "#1c7a43" }}>verified</span>
             )}
-            <span style={S.muted}>{new Date(r.detectedAt).toLocaleString()}</span>
+            <span style={S.muted}>{fmtDateTime(r.detectedAt)}</span>
           </div>
           <p style={{ margin: "0 0 9px", fontSize: 13 }}>{r.description}</p>
 
@@ -246,7 +260,7 @@ export function DeficiencyPanel({
           <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
             {history.map((r) => (
               <div key={r.id} style={S.muted}>
-                {new Date(r.detectedAt).toLocaleDateString()} · {r.category} · {r.description} ·{" "}
+                {fmtDateTime(r.detectedAt)} · {r.category} · {r.description} ·{" "}
                 {r.verificationStatus === "REJECTED" ? `rejected (${r.verificationNotes ?? "no reason given"})` : "resolved"}
               </div>
             ))}
