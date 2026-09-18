@@ -207,7 +207,9 @@ export function AssignRoomsCard({
   const cands = useQuery({
     queryKey: ["room-change-candidates", entry.id, anchor],
     queryFn: () => listRoomChangeCandidates(session!, entry.id, anchor!),
-    enabled: !!session && !!anchor && boardOpen && !past,
+    // Not for a parked booking (2026-09-19): it cannot change rooms until it is resumed, and the
+    // backend refuses the question — the board fired four refused requests on every visit.
+    enabled: !!session && !!anchor && boardOpen && !past && entry.status === "ACTIVE",
     staleTime: 30_000,
   });
   const freeRooms = useMemo(() => {
