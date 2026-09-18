@@ -133,6 +133,9 @@ export function AssignRoomsCard({
   const sealedIds = optionSelectedRoomIds(sealed?.optionSelected);
   const numberOfRooms = entry.numberOfRooms ?? 1;
   const multi = numberOfRooms > 1;
+  // The rooms the PLAN names (2026-09-18): a night-by-night change keeps 2 rooms a night but puts
+  // 3 rooms in the plan, and the card read "3 of 2 assigned" / "Assign all 2 rooms".
+  const planRoomCount = Math.max(numberOfRooms, sealedIds.length);
   const holdRoom = entry.committedHold?.roomId ?? null;
   const stayRanges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
   const roomNights = useMemo(() => roomNightsByRoom(entry), [entry]);
@@ -300,10 +303,12 @@ export function AssignRoomsCard({
         <>
           {assigned ? (
             <Chip tone="success" icon="check">
-              {assignedIds.length === numberOfRooms ? "assigned" : `${assignedIds.length} of ${numberOfRooms} assigned`}
+              {assignedIds.length >= planRoomCount ? "assigned" : `${assignedIds.length} of ${planRoomCount} assigned`}
             </Chip>
           ) : (
-            <Chip tone="warning">{plural(numberOfRooms, "room")} needed</Chip>
+            <Chip tone="warning">
+              {planRoomCount > numberOfRooms ? `${plural(planRoomCount, "room")} in the plan · ${numberOfRooms} a night` : `${plural(numberOfRooms, "room")} needed`}
+            </Chip>
           )}
           {planIds.length ? (
             <Button kind="quiet" compact onClick={() => setBoardOpen(!boardOpen)}>
@@ -414,7 +419,7 @@ export function AssignRoomsCard({
         <>
           <div className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
             <span className="meta">
-              {multi ? `${plural(numberOfRooms, "room")} needed · ${assignedIds.length} assigned` : assigned ? "assigned" : "chosen earlier — not yet assigned"}
+              {multi ? `${plural(planRoomCount, "room")} in the plan · ${assignedIds.length} assigned` : assigned ? "assigned" : "chosen earlier — not yet assigned"}
             </span>
             {planIds.length > 1 ? (
               <Button kind="quiet" compact onClick={() => setOpenRooms(allOpen ? new Set() : new Set(planIds))}>
@@ -454,7 +459,7 @@ export function AssignRoomsCard({
             sealed ? (
               <div className="row-acts" style={{ marginTop: 12, alignItems: "center" }}>
                 <Button state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
-                  Assign all {numberOfRooms} rooms
+                  Assign all {planRoomCount} rooms
                 </Button>
                 <span className="meta">the rooms chosen at Inquiry, each for its own nights · a room above can be changed first</span>
               </div>
