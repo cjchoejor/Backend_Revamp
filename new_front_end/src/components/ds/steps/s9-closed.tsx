@@ -725,6 +725,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
 const POST_STAY_METHODS = [
   ["BANK_TRANSFER", "Bank transfer"],
   ["MOBILE_PAYMENT", "Mobile payment (QR)"],
+  ["CARD", "Card (POS terminal)"],
   ["CASH", "Cash"],
 ] as const;
 

@@ -25,6 +25,7 @@ import { SendToField, useBookedBy, useSendTo } from "./s8-parts";
 
 export const SETTLE_METHODS = [
   ["CASH", "Cash"],
+  ["CARD", "Card (POS terminal)"],
   ["MOBILE_PAYMENT", "Mobile payment (QR)"],
   ["BANK_TRANSFER", "Bank transfer"],
   // "On account" fits every account holder — a company, an agency, a government office, or a

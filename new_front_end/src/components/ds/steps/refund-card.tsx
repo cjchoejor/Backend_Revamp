@@ -22,6 +22,7 @@ import { useBilling } from "./s8-parts";
 
 const REFUND_METHODS = [
   ["CASH", "Cash"],
+  ["CARD", "Back to the card (POS)"],
   ["MOBILE_PAYMENT", "Mobile payment (QR)"],
   ["BANK_TRANSFER", "Bank transfer"],
 ] as const;

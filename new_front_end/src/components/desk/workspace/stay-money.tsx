@@ -675,8 +675,8 @@ function InterimRequestPanel({
                 <select value={method} onChange={(e) => setMethod(e.target.value)}>
                   <option value="CASH">Cash</option>
                   <option value="CARD">Card</option>
+                  <option value="MOBILE_PAYMENT">QR (BoB merchant)</option>
                   <option value="BANK_TRANSFER">Bank transfer</option>
-                  <option value="MBOB">mBoB</option>
                 </select>
               </div>
               <button type="button" className="btn btn-primary btn-sm" disabled={payM.isPending || !(Number(amount) > 0)} onClick={() => payM.mutate()}>

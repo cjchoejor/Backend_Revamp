@@ -107,6 +107,7 @@ export type AdvanceAutoHold =
 export const ADVANCE_PAYMENT_MODES = [
   ["CASH", "Cash — Nu."],
   ["CASH_INR", "Cash — INR at par"],
+  ["CARD", "Card (POS terminal)"],
   ["MOBILE_PAYMENT", "QR (BoB merchant)"],
   ["BANK_TRANSFER", "Bank transfer"],
   ["INWARD_REMITTANCE", "Inward remittance"],
