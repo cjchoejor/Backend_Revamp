@@ -30,6 +30,9 @@ found was fixed, re-tested, and committed; this file is the record.
 
 ## Scenarios
 
+Fifty scenarios, numbered 1 to 51. There is no 15: the numbering skipped it, and the later numbers are kept because
+the notes below refer to them.
+
 | # | Scenario | Result |
 |---|---|---|
 | 1 | Walk-in, 1 adult, 1 night, arriving today (18 Sep): Inquiry → Negotiation (quote generated, not sent) → Set up (no advance, disclosure, committed hold) → Reserve (guest with no email; voucher answer taken by phone) → Arrival (room assigned, handoff, all tasks) → Check-in (first-time guest, CID, keys) → Stay (restaurant charge to the room, airport transfer to the booking, two corrections) → **left early the same day** (GM) → Check-out (key, inspection, cash settlement, tax invoice) → Closed (sealed by the FOM) | **Passes end to end** after fixes 3–14 |
