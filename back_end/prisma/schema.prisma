@@ -30,6 +30,17 @@ enum EntryStatus {
   EXPIRED
 }
 
+/// How the guest came in (Inquiry.cameInAs) — each maps to exactly one `sourceChannel`.
+enum InquiryCameInAs {
+  WALK_IN
+  DIRECT_VOICE
+  DIRECT_ONLINE
+  OTA
+  TRAVEL_AGENT
+  CORPORATE
+  GROUP_MICE
+}
+
 enum EntryUseType {
   LEISURE
   CORPORATE
@@ -922,6 +933,11 @@ model Inquiry {
   guestProfileId             String
   agentProfileId             String?
   sourceChannel              String    @default("DIRECT")
+  /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
+  /// five values custodian assignment knows, so "direct by phone", "direct online" and "group /
+  /// MICE" all read DIRECT there — the finer choice used to be appended to `notes` and read back
+  /// by matching that text. Null when a caller gave only a plain DIRECT (voice or online unknown).
+  cameInAs                   InquiryCameInAs?
   defaultCustodianId         String
   notes                      String?
   /// SIG-S1 corporate/government context (required for CORP/GOV at S1→S2 exit)

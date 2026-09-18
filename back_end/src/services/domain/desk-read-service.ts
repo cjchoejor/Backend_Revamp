@@ -50,6 +50,7 @@ const listSelect = {
       id: true,
       referenceNumber: true,
       sourceChannel: true,
+      cameInAs: true,
       defaultCustodianId: true,
       notes: true,
       travelAgent: { select: { id: true, displayName: true } },

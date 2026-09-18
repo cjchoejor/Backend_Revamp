@@ -29,6 +29,7 @@
  */
 import { PrismaClient, EntryStatus, FolioState, FolioLineType, Stage } from "@prisma/client";
 import { allocateReadableId, allocateFolioLineId } from "../../src/lib/readable-id.js";
+import { deriveCameInAs } from "../../src/lib/inquiry-came-in-as.js";
 
 const COMMIT = process.argv.includes("--commit");
 const LIMIT = (() => {
@@ -281,7 +282,7 @@ async function main() {
         ].filter(Boolean).join(" | ");
         await tx.inquiry.create({
           data: {
-            id: inqId, referenceNumber: inqId, guestProfileId, sourceChannel, defaultCustodianId, notes,
+            id: inqId, referenceNumber: inqId, guestProfileId, sourceChannel, cameInAs: deriveCameInAs({ sourceChannel }), defaultCustodianId, notes,
             travelAgentId: party.type === "TRAVEL_AGENT" ? party.id : null,
             corporateAccountId: party.type === "CORPORATE" ? party.id : null,
             createdAt: resvDate, createdBy: ACTOR_ID,

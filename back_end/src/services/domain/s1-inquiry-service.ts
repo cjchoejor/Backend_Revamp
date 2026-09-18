@@ -7,6 +7,7 @@ import * as auditService from "../infrastructure/audit-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { cascadeParkEntryTx, cascadeUnparkEntryTx } from "./s1-entry-service.js";
+import { resolveInquiryChannel } from "../../lib/inquiry-came-in-as.js";
 import {
   isEntryParkAllowedForStage,
   isEntryStatusParkable,
@@ -18,7 +19,9 @@ export async function createInquiry(
   actorLevel: ActorLevel,
   input: {
     guestProfileId: string;
-    sourceChannel: string;
+    sourceChannel?: string;
+    /** How the guest came in — the channel follows from it (lib/inquiry-came-in-as). */
+    cameInAs?: string;
     notes?: string;
     proposedCheckIn?: string;
     proposedCheckOut?: string;
@@ -36,7 +39,9 @@ export async function createInquiry(
   },
 ) {
   if (!input.guestProfileId?.trim()) throw new ValidationError("guestProfileId is required");
-  if (!input.sourceChannel?.trim()) throw new ValidationError("sourceChannel is required");
+  // The channel and the finer came-in-as, validated together; an old-style caller sending only
+  // the channel (+ the notes marker) still gets the column filled.
+  const channel = resolveInquiryChannel({ cameInAs: input.cameInAs, sourceChannel: input.sourceChannel, notes: input.notes });
 
   const travelAgentId = input.travelAgentId?.trim() || null;
   const corporateAccountId = input.corporateAccountId?.trim() || null;
@@ -83,7 +88,7 @@ export async function createInquiry(
     proposedCheckOut: input.proposedCheckOut,
   });
 
-  const custodian = await resolveInitialCustodianActorId(prisma, { sourceChannel: input.sourceChannel });
+  const custodian = await resolveInitialCustodianActorId(prisma, { sourceChannel: channel.sourceChannel });
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
@@ -93,7 +98,8 @@ export async function createInquiry(
         id,
         referenceNumber: id,
         guestProfileId: input.guestProfileId,
-        sourceChannel: input.sourceChannel,
+        sourceChannel: channel.sourceChannel,
+        cameInAs: channel.cameInAs,
         defaultCustodianId: custodian,
         notes: input.notes?.trim() || null,
         travelAgentId,
@@ -118,7 +124,7 @@ export async function createInquiry(
       operation: "CREATE",
       timestamp: now,
       inquiryId: created.id,
-      payload: { inquiryId: created.id, sourceChannel: created.sourceChannel, guestProfileId: created.guestProfileId },
+      payload: { inquiryId: created.id, sourceChannel: created.sourceChannel, cameInAs: created.cameInAs, guestProfileId: created.guestProfileId },
       createdBy: actorId,
     });
 

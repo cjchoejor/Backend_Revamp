@@ -1,9 +1,13 @@
 import { z } from "zod";
+import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 
 export const createInquiryRequestSchema = z
   .object({
     guestProfileId: z.string().min(1),
-    sourceChannel: z.string().min(1),
+    /** One of the five channels custodian assignment knows. Optional when `cameInAs` is sent — it follows from it. */
+    sourceChannel: z.string().min(1).optional(),
+    /** How the guest came in (2026-09-18): WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE. */
+    cameInAs: z.enum(CAME_IN_AS_VALUES).optional(),
     notes: z.string().optional(),
     /** When both set, Policy 12 runs server-side overlap detection against other inquiries for the same guest profile. */
     proposedCheckIn: z.string().optional(),
@@ -24,6 +28,10 @@ export const createInquiryRequestSchema = z
      * package from another agency would price the wrong rate.
      */
     ratePackageId: z.string().min(1).nullable().optional(),
+  })
+  .refine((v) => !!(v.sourceChannel || v.cameInAs), {
+    message: "Say how the guest came in: cameInAs, or sourceChannel",
+    path: ["cameInAs"],
   })
   .refine((v) => !(v.travelAgentId && v.corporateAccountId), {
     message: "An inquiry can be linked to a travel agent OR a corporate account, not both",

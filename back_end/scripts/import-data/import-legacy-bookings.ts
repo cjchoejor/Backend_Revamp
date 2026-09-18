@@ -26,6 +26,7 @@ import { PrismaClient, EntryStatus, FolioState, FolioLineType, HandoffType, Hand
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { allocateReadableId, allocateFolioLineId } from "../../src/lib/readable-id.js";
+import { deriveCameInAs } from "../../src/lib/inquiry-came-in-as.js";
 
 const COMMIT = process.argv.includes("--commit");
 const ACTOR_ID = "actor-seed-system";
@@ -529,6 +530,7 @@ async function main() {
             referenceNumber: inqId,
             guestProfileId,
             sourceChannel,
+            cameInAs: deriveCameInAs({ sourceChannel }),
             defaultCustodianId,
             notes: noteParts,
             travelAgentId: link.partyType === "TRAVEL_AGENT" ? link.partyId : null,
