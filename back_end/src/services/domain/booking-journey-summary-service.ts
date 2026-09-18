@@ -326,7 +326,10 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   const sel = readOptionSelected(sealedConfig?.optionSelected ?? null);
 
   // Resolve every room id we reference (S1 selection + S3 committed hold) in ONE query.
-  const holdSel = readOptionSelected(entry.committedHold?.perNightBreakdown ?? null);
+  // The hold stores its nights as the bare per-night LIST, not the sealed-selection object —
+  // read raw, every room but the primary vanished (2026-09-18: a two-room booking showed one).
+  const holdBreakdown = entry.committedHold?.perNightBreakdown ?? null;
+  const holdSel = readOptionSelected(Array.isArray(holdBreakdown) ? { perNight: holdBreakdown } : holdBreakdown);
   const holdRoomIds = [
     ...(entry.committedHold?.roomId ? [entry.committedHold.roomId] : []),
     ...holdSel.distinctRoomIds,

@@ -85,6 +85,10 @@ export interface EntryBillingSummary {
     roomNumber: string | null;
     roomTypeName: string | null;
     nights: number | null;
+    /** The room's own per-night rate as priced — two room types carry two rates (2026-09-18;
+     *  `Reservation.frozenRate` is the booking's single headline rate and cannot say so). NET,
+     *  pre-discount on discounted quotes, like the other component figures. */
+    roomRate: number | null;
     isFoc: boolean;
     occupants: { adults: number; children6To10: number; childrenUnder6: number } | null;
     extraBedCount: number;
@@ -336,6 +340,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
         roomNumber: (typeof r.roomNumber === "string" ? r.roomNumber : null) ?? info?.roomNumber ?? null,
         roomTypeName: info?.roomType?.name ?? null,
         nights: roomNights,
+        roomRate,
         isFoc: comp?.isFoc === true,
         occupants: comp
           ? {
