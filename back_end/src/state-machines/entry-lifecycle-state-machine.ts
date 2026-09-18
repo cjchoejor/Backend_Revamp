@@ -579,9 +579,11 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
       },
     });
 
-    // AC-S7-14: if exiting S7 with an unresolved deficient condition, mark it as unresolved-at-checkout.
+    // AC-S7-14: if exiting S7 with an unresolved deficient condition, mark it as unresolved-at-checkout
+    // — in EVERY room of the stay (2026-09-19). Only the first room's faults were carried, so an open
+    // fault in a party's second room stayed a plain open fault through check-out and after.
     await tx.deficientConditionRecord.updateMany({
-      where: { roomId: assignment.roomId, status: "UNRESOLVED" },
+      where: { roomId: { in: distinctAssignmentsForS7.map((a) => a.roomId) }, status: "UNRESOLVED" },
       data: { status: "DEFICIENT_UNRESOLVED_AT_CHECKOUT" },
     });
   });
