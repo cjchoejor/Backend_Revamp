@@ -223,7 +223,7 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
         why="The stay is shortened to today. Here is exactly what happens:"
         consequences={[
           <>
-            The {fig?.unstayedNights ?? "?"} booked night{fig?.unstayedNights === 1 ? "" : "s"} from tonight are <b>not billed</b> — the
+            The {fig?.unstayedNights ?? "?"} booked night{fig?.unstayedNights === 1 ? "" : "s"} from tonight {fig?.unstayedNights === 1 ? "is" : "are"} <b>not billed</b> — the
             slept nights keep their audited charges (the rate is never renegotiated).
           </>,
           waive ? (

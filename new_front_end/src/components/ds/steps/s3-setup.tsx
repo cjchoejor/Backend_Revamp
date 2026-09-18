@@ -66,7 +66,7 @@ import {
   type PaperRef,
 } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
-import { CancellationFiguresLine } from "./cancel-figures";
+import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 
@@ -194,8 +194,14 @@ export function S3SetUp({
   const [cancelOpen, setCancelOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [reentry, setReentry] = useState<null | "S2" | "S1">(null);
+  // The GM may waive the disclosed charge here too, and the desk says how a refund goes back
+  // (2026-09-19) — this dialog offered neither: a GM could not waive a Set-up cancellation from
+  // the desk, and every refund was written down as cash.
+  const [cancelWaive, setCancelWaive] = useState(false);
+  const refundHow = useRefundHow();
   const cancelM = useMutation({
-    mutationFn: (reason: string) => cancelEntryAtS3(session!, entry.id, { reason }),
+    mutationFn: (reason: string) =>
+      cancelEntryAtS3(session!, entry.id, { reason, ...(gm && cancelWaive ? { penaltyWaiverRequested: true } : {}), ...refundHow.body }),
     onSuccess: () => {
       toast.success("Cancelled — the hold is released and the proforma withdrawn");
       refresh(extraKeys);
@@ -331,7 +337,9 @@ export function S3SetUp({
         placeholder="guest changed their plans"
         onConfirm={(r) => cancelM.mutate(r)}
       >
-        <CancellationFiguresLine entryId={entry.id} />
+        <CancellationFiguresLine entryId={entry.id} waive={gm && cancelWaive} />
+        <WaiverTick checked={cancelWaive} onChange={setCancelWaive} gm={gm} />
+        {refundHow.fields}
       </ReasonDialog>
       <ReasonDialog
         open={reentry !== null}

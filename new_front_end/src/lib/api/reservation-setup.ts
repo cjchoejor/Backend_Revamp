@@ -53,7 +53,7 @@ export async function previewCancellation(session: Session, entryId: string, wai
 export async function cancelEntryAtS3(
   session: Session,
   entryId: string,
-  body: { reason?: string; penaltyWaiverRequested?: boolean },
+  body: { reason?: string; penaltyWaiverRequested?: boolean; refundMethod?: string; refundReference?: string },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/cancel-at-s3`, {
     method: "POST",
@@ -67,7 +67,7 @@ export async function cancelEntryAtS3(
 export async function cancelEntryAtS5(
   session: Session,
   entryId: string,
-  body?: { penaltyWaiverRequested?: boolean; reason?: string },
+  body?: { penaltyWaiverRequested?: boolean; reason?: string; refundMethod?: string; refundReference?: string },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/cancel`, { method: "POST", session, body: body ?? {} });
 }

@@ -10,7 +10,7 @@
  *  - Arrival:             cancel (FOM; the GM waives) · no-show after the cut-off (FOM) · backflow to Inquiry (FOM)
  */
 import { reservedThisPass } from "@/lib/desk/workspace";
-import { CancellationFiguresLine } from "./cancel-figures";
+import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { determineNoShow, previewNoShow } from "@/lib/api/no-show";
@@ -144,23 +144,15 @@ function useAfterTerminal(entryId: string) {
   };
 }
 
-function WaiverTick({ checked, onChange, gm }: { checked: boolean; onChange: (v: boolean) => void; gm: boolean }) {
-  if (!gm) return <p className="meta">Only the GM can waive the cancellation charge.</p>;
-  return (
-    <label className="sm" style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      Waive the cancellation charge — your authority as GM
-    </label>
-  );
-}
-
 function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
   const { session } = useSession();
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
+  const refund = useRefundHow();
   const run = useMutation({
-    mutationFn: (reason: string) => cancelEntryAtS3(session!, entry.id, { reason, penaltyWaiverRequested: gm && waive ? true : undefined }),
+    mutationFn: (reason: string) =>
+      cancelEntryAtS3(session!, entry.id, { reason, penaltyWaiverRequested: gm && waive ? true : undefined, ...refund.body }),
     onSuccess: () => {
       toast.success("Cancelled — the hold is released and the booking is closed as cancelled");
       onClose();
@@ -188,6 +180,7 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
     >
       <CancellationFiguresLine entryId={entry.id} waive={gm && waive} />
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />
+      {refund.fields}
     </ReasonDialog>
   );
 }
@@ -199,10 +192,12 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
+  const refund = useRefundHow();
   // The reason is recorded on the cancellation, as at Set up (2026-09-18) — the Arrival cancel
   // used to take none, so a reserved booking could be cancelled with no why on record.
   const run = useMutation({
-    mutationFn: (reason: string) => cancelEntryAtS5(session!, entry.id, { reason, ...(gm && waive ? { penaltyWaiverRequested: true } : {}) }),
+    mutationFn: (reason: string) =>
+      cancelEntryAtS5(session!, entry.id, { reason, ...(gm && waive ? { penaltyWaiverRequested: true } : {}), ...refund.body }),
     onSuccess: () => {
       toast.success(atArrival ? "Cancelled — the rooms are released and the no-show clock is stopped" : "Cancelled — the rooms are released");
       onClose();
@@ -232,6 +227,7 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
     >
       <CancellationFiguresLine entryId={entry.id} waive={gm && waive} />
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />
+      {refund.fields}
     </ReasonDialog>
   );
 }

@@ -6,6 +6,7 @@
  * posted and the rest refunded" without a figure. Every number is the backend's preview — the same
  * computation the cancellation itself runs — so what the desk reads out is what happens.
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { previewCancellation } from "@/lib/api/reservation-setup";
@@ -33,5 +34,53 @@ export function CancellationFiguresLine({ entryId, waive = false, currency }: { 
         refunded <b className="money">{money(f.refund, cur)}</b>
       </span>
     </div>
+  );
+}
+
+// How the money owed back leaves the hotel (2026-09-19). Left alone it goes back the way it came —
+// the backend reads the payments; it used to be recorded as cash whatever the guest had paid by.
+const REFUND_HOW = [
+  ["", "The way it came in"],
+  ["CASH", "Cash"],
+  ["CARD", "Back to the card (POS)"],
+  ["MOBILE_PAYMENT", "Mobile payment (QR)"],
+  ["BANK_TRANSFER", "Bank transfer"],
+] as const;
+
+export function useRefundHow() {
+  const [method, setMethod] = useState("");
+  const [reference, setReference] = useState("");
+  const body = {
+    ...(method ? { refundMethod: method } : {}),
+    ...(reference.trim() ? { refundReference: reference.trim() } : {}),
+  };
+  const fields = (
+    <div className="form2" style={{ marginTop: 8 }}>
+      <div className="field">
+        <label>How any refund goes back</label>
+        <select className="input" value={method} onChange={(e) => setMethod(e.target.value)}>
+          {REFUND_HOW.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label>Refund reference · optional</label>
+        <input className="input" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="transfer or slip number" />
+      </div>
+    </div>
+  );
+  return { body, fields };
+}
+
+export function WaiverTick({ checked, onChange, gm }: { checked: boolean; onChange: (v: boolean) => void; gm: boolean }) {
+  if (!gm) return <p className="meta">Only the GM can waive the cancellation charge.</p>;
+  return (
+    <label className="sm" style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      Waive the cancellation charge — your authority as GM
+    </label>
   );
 }
