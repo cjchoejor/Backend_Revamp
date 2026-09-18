@@ -14,6 +14,14 @@ found was fixed, re-tested, and committed; this file is the record.
   lines, balances, timers, trace, communications) and compared with what the desk showed.
 - **Test data.** Every test guest is named `ZZTest …` so it can be found and removed. The user's own
   booking ENT-20260918-0002 (rooms 501 and 504) was only ever read, never changed.
+- **Removed at the end (19 Sep).** The 43 test bookings, with everything hanging off them (3,628 rows) and their
+  100 queued timers, went through `delete-booking.ts`, and so did the in-house fixture. The 40 test guest profiles
+  went with them, and the one test contact came off its company. The 12 rooms they held are free. A read-back finds
+  no `ZZTest` guest, inquiry or booking left.
+  - **Left in place:** the night-audit records for 12–18 Sep written during the run. They belong to the hotel, not
+    to a booking, so the delete never touches them. A booking that needs one of those nights charged gets it from
+    the Stay step's "run it again".
+  - **Also left:** the stored PDFs of the test documents, because the document store is write-once.
 - **Test scripts fixed on the way.** `seed-in-house-test-booking.ts` dated its stay from the UTC
   date — a day behind the hotel between midnight and 06:00 Bhutan time — and could not clean up
   once its folio had an invoice; it now dates from the hotel's day and removes the invoice lines
