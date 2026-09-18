@@ -128,6 +128,64 @@ export async function issueInvoiceAtS9(
   });
 }
 
+export type InvoiceRecipient = {
+  /** The address the email goes to — null when there is none to use (nothing is emailed). */
+  to: string | null;
+  /** Who the document is made out to, for the email's greeting. */
+  greetName: string;
+  /** Why nothing is emailed, when `to` is null. */
+  skipReason: string | null;
+};
+
+/**
+ * Where a governed invoice email goes (2026-09-18). Every invoice document — the proforma, the
+ * interim bill and the tax invoice — is addressed to the agency or company whenever one booked
+ * ("To: <party> · For guest: <name>"), so its email follows the addressee:
+ *   1. the address the desk typed;
+ *   2. else that party's email on file;
+ *   3. else the guest's email — only when no party is linked.
+ * A party-addressed invoice is never mailed to the traveller by default: it carries the party's
+ * own negotiated rates, and almost no party has an email on file, so a guest fallback would send
+ * nearly every agency's rates to its guests. With no address the invoice is still dispatched
+ * (the desk hands it over) and the skipped email is traced with its reason. The address it went
+ * to is recorded on the invoice, so the desk can say where the bill went.
+ */
+export async function resolveInvoiceRecipient(
+  db: DbClient,
+  entryId: string,
+  typed?: string | null,
+): Promise<InvoiceRecipient> {
+  const entry = await db.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      contactPersonName: true,
+      guestProfile: { select: { firstName: true, lastName: true, email: true } },
+      inquiry: {
+        select: {
+          travelAgent: { select: { displayName: true, contactEmail: true } },
+          corporateAccount: { select: { displayName: true, contactEmail: true } },
+        },
+      },
+    },
+  });
+  const guestName =
+    [entry?.guestProfile?.firstName, entry?.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    entry?.contactPersonName?.trim() ||
+    "Guest";
+  const party = entry?.inquiry?.travelAgent ?? entry?.inquiry?.corporateAccount ?? null;
+  const greetName = party?.displayName ?? guestName;
+  const typedTo = typed?.trim();
+  if (typedTo) return { to: typedTo, greetName, skipReason: null };
+  if (party) {
+    const partyTo = party.contactEmail?.trim();
+    return partyTo
+      ? { to: partyTo, greetName, skipReason: null }
+      : { to: null, greetName, skipReason: "BILLED_PARTY_HAS_NO_EMAIL" };
+  }
+  const guestTo = entry?.guestProfile?.email?.trim();
+  return guestTo ? { to: guestTo, greetName, skipReason: null } : { to: null, greetName, skipReason: "GUEST_HAS_NO_EMAIL" };
+}
+
 export async function dispatchInvoice(
   prisma: PrismaClient,
   invoiceId: string,
@@ -138,6 +196,7 @@ export async function dispatchInvoice(
   if (!invoice) throw new NotFoundError("Invoice");
   if (invoice.state !== InvoiceState.DRAFT) return invoice;
   const now = new Date();
+  const recipient = await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
@@ -145,7 +204,7 @@ export async function dispatchInvoice(
         state: InvoiceState.DISPATCHED,
         dispatchedAt: now,
         dispatchedBy: actorId,
-        dispatchedTo: input?.dispatchedTo?.trim() ? input.dispatchedTo.trim() : invoice.dispatchedTo,
+        dispatchedTo: recipient.to,
         metadata: { ...(invoice.metadata as object | null), dispatchedBy: actorId, dispatchedAt: now.toISOString() } as object,
       },
     });
@@ -380,12 +439,12 @@ export async function dispatchInvoice(
 
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
-  await sendInvoiceEmailBestEffort(prisma, actorId, result.id);
+  await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient);
 
   return result;
 }
 
-async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string, invoiceId: string) {
+async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string, invoiceId: string, recipient: InvoiceRecipient) {
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: {
@@ -405,8 +464,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
   });
   if (!inv?.entry) return;
   const entry = inv.entry;
-  const displayName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  // The greeting follows the document's addressee — the agency or company when one booked.
+  const displayName = recipient.greetName;
   // Decimal-safe sum; guest-facing summary; number at boundary for template consumers.
   const paid = Number(sumMoneyBy(inv.folio?.payments ?? [], "amount").toFixed(2));
   // Prefer the frozen reservation dates + rate (authoritative from S4); fall back to the accepted
@@ -551,7 +610,8 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
       entryId: entry.id,
       actorId,
       inquiryId: entry.inquiryId,
-      guestEmail: entry.guestProfile?.email ?? null,
+      guestEmail: recipient.to,
+      skipReason: recipient.skipReason,
       stage: isPI ? Stage.S3 : isInterim ? Stage.S7 : Stage.S9,
       eventTypePrefix: isPI ? "PROFORMA_INVOICE_EMAIL" : isInterim ? "INTERIM_INVOICE_EMAIL" : "FINAL_INVOICE_EMAIL",
     },
@@ -613,6 +673,22 @@ export async function recordInvoicePaymentEvent(
     throw new ValidationError("amount must be a positive number when provided");
   }
   const amount = amountNumeric == null ? null : toDecimal(input.amount);
+  // Never more than is owed (2026-09-18). The balance floors at zero, so an overpayment was
+  // recorded as received while the excess vanished from every balance — money the hotel holds
+  // for the payer with nothing on the record to say so. The excess is a refund or a credit,
+  // handled on its own.
+  if (amount != null && input.nextState === "PAYMENT_TRACKED") {
+    const folioNow = await prisma.folio.findUnique({ where: { id: invoice.folioId }, select: { outstandingBalance: true } });
+    const owed = toDecimal(folioNow?.outstandingBalance ?? 0);
+    if (owed.lte(0)) {
+      throw new ValidationError("Nothing is owed on this bill — a payment cannot be recorded against it");
+    }
+    if (amount.gt(owed)) {
+      throw new ValidationError(
+        `That is more than the ${owed.toFixed(2)} still owed — record ${owed.toFixed(2)}, and handle the rest as a refund or a credit`,
+      );
+    }
+  }
 
   return prisma.$transaction(async (tx) => {
     // SIG-S9 §8.6: record a payment event (optional in this repo for backwards compatibility).
@@ -922,6 +998,9 @@ async function processNoShowS9IfNeeded(db: DbClient, entryId: string, actorId: s
     if (!existing) {
       await db.invoice.create({
         data: {
+          // Readable INV id like every other invoice (2026-09-18) — the schema's uuid default
+          // is only a backstop.
+          id: await allocateReadableId(db, "INVOICE" as const),
           folioId: entry.folio.id,
           entryId,
           invoiceType: "FINAL",
@@ -945,6 +1024,9 @@ async function processNoShowS9IfNeeded(db: DbClient, entryId: string, actorId: s
     if (!existingRefund) {
       await db.paymentRecord.create({
         data: {
+          // PaymentRecord ids have no default — without one this write threw, so a no-show with a
+          // refund owed could never be closed (2026-09-18).
+          id: await allocateReadableId(db, "PAYMENT" as const),
           folioId: entry.folio.id,
           entryId,
           amount: net as any,

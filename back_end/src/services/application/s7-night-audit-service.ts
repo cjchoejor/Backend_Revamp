@@ -222,16 +222,14 @@ async function postEntryNightPlanTx(
   // assignments are active on operatingDate (pre-check-in / post-checkout / all rooms
   // already posted today), this loop is a no-op.
   if (p.perRoomPosts.length > 0) {
-    // Split billing: room charges inherit the folio's per-line-type default. One resolve
-    // per folio — every room line on this folio settles under the same model.
-    // Split billing resolves per LINE TYPE — a folio can route meals to a different payer
-    // than the room (the agent covers accommodation, the guest covers their own meals).
-    const billingModelByType = new Map<FolioLineType, string | null>();
-    for (const t of new Set(p.perRoomPosts.map((x) => x.lineType))) {
-      billingModelByType.set(t, await resolveBillingModelForNewLine(tx, p.folioId, t));
-    }
+    // Split billing: the night as it was SOLD — the room and the meal plan in the frozen
+    // package — goes to whoever pays the room (the ROOM_CHARGE default). The meal plan was
+    // quoted to, frozen for and agreed by that payer; routing it by the F&B default sent an
+    // agency's package breakfast to the guest's bucket (2026-09-18). Meals the guest orders at
+    // the desk are posted by `postCharge` as F&B and still follow the F&B default.
+    const stayBillingModel = await resolveBillingModelForNewLine(tx, p.folioId, FolioLineType.ROOM_CHARGE);
     for (const post of p.perRoomPosts) {
-      const billingModel = billingModelByType.get(post.lineType) ?? null;
+      const billingModel = stayBillingModel ?? null;
       // Decimal-safe: the stored room amount and the base the tax is computed on are the
       // same rounded figure (a float per-night split would otherwise be rounded by the
       // column and taxed on the unrounded value).

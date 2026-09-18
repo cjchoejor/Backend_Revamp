@@ -138,7 +138,16 @@ export type FolioDocumentEntry = {
   reprintCount: number | null;
   frozenAt: string | null;
   /** Issued tax invoice: the Invoice row to open via `/api/invoices/:id/pdf`. */
-  invoice: { id: string; invoiceNumber: string | null; state: string; pdfReady: boolean; issuedAt: string | null; dispatchedAt: string | null } | null;
+  invoice: {
+    id: string;
+    invoiceNumber: string | null;
+    state: string;
+    pdfReady: boolean;
+    issuedAt: string | null;
+    dispatchedAt: string | null;
+    /** The address the invoice was emailed to — null when it went out with no email (2026-09-18). */
+    dispatchedTo: string | null;
+  } | null;
 };
 
 export type FolioDocumentsIndex = {
@@ -219,6 +228,7 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
           pdfReady: !!finalInvoice.pdfStorageKey,
           issuedAt: finalInvoice.issuedAt?.toISOString() ?? null,
           dispatchedAt: finalInvoice.dispatchedAt?.toISOString() ?? null,
+          dispatchedTo: finalInvoice.dispatchedTo ?? null,
         }
       : null,
   };

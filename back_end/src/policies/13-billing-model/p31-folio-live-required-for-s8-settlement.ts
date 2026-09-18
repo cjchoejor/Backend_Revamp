@@ -1,9 +1,17 @@
 import { FolioState, Stage } from "@prisma/client";
 import { StateTransitionError } from "../../lib/errors.js";
 
-/** Policy 31 — folio must be LIVE before S8 settlement in this slice. */
-export function enforceFolioLiveForS8Settlement(input: { folioState: FolioState }) {
+/**
+ * Policy 31 — folio must be LIVE before S8 settlement in this slice.
+ *
+ * A settlement scoped to ONE payer's share (`bucketScoped` — the guest's own extras, the
+ * agency's package) may also run on an OUTSTANDING folio (2026-09-18): settling the first payer
+ * leaves the folio OUTSTANDING, and refusing that meant the second payer could never settle —
+ * the same trap the room-slice payments were freed from (PMS-237).
+ */
+export function enforceFolioLiveForS8Settlement(input: { folioState: FolioState; bucketScoped?: boolean }) {
   if (input.folioState === FolioState.LIVE) return;
+  if (input.bucketScoped && input.folioState === FolioState.OUTSTANDING) return;
   throw new StateTransitionError("Folio must be LIVE to settle at S8");
 }
 

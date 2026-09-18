@@ -17,6 +17,7 @@ import { loadChildPolicyBundle } from "../../services/domain/child-policy-servic
 import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot } from "../../services/domain/capacity-validation-service.js";
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
 import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { HOTEL_TIMEZONE } from "../../services/infrastructure/pdf-templates/legphel-document-format.js";
 
 export const lookupsRouter = Router();
@@ -57,6 +58,31 @@ lookupsRouter.get("/lookups/child-policy", L1, async (_req, res, next) => {
     const bundle = await loadChildPolicyBundle(prisma);
     res.json(bundle);
   } catch (e) { next(e); }
+});
+
+/**
+ * The payment-milestone templates the hotel has configured (2026-09-18) — a company or conference
+ * booking schedules its payment stages from one of these at Set up. The desk offered a free-text
+ * "DEFAULT" the config never held (it seeds an empty placeholder), so "Schedule the milestones"
+ * could only fail. `templates` is empty until an admin sets `paymentMilestone.scheduleTemplates`.
+ */
+lookupsRouter.get("/lookups/payment-milestone-templates", L1, async (_req, res, next) => {
+  try {
+    const raw = await requireActiveConfigValue<Record<string, unknown> | null>(prisma, "paymentMilestone.scheduleTemplates").catch(() => null);
+    const templates = Object.entries(raw && typeof raw === "object" ? raw : {})
+      .filter(([, v]) => !!v && typeof v === "object" && Array.isArray((v as { milestones?: unknown }).milestones))
+      .map(([key, v]) => {
+        const t = v as { label?: unknown; milestones: Array<{ code?: unknown; milestone?: unknown; offsetDays?: unknown }> };
+        return {
+          key,
+          label: typeof t.label === "string" && t.label.trim() ? t.label : key,
+          milestones: t.milestones.map((m) => ({ code: String(m.code ?? m.milestone ?? ""), offsetDays: Number(m.offsetDays ?? 0) })),
+        };
+      });
+    res.json({ templates, configKey: "paymentMilestone.scheduleTemplates" });
+  } catch (e) {
+    next(e);
+  }
 });
 
 /**

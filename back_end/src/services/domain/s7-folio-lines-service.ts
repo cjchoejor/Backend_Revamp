@@ -160,6 +160,13 @@ export async function postCharge(
      *  charges. Must be a space allocated to this entry. Mutually exclusive with `roomId`;
      *  the companion lines inherit it exactly as they inherit the room. */
     spaceId?: string;
+    /**
+     * Internal only — never from a request body. The payer's share this charge belongs to, when
+     * it is not the line type's default (2026-09-18): the early-departure fee is a term of the stay
+     * as booked, so it follows the room's payer, not the SERVICE default (the guest's share on an
+     * agency or company booking).
+     */
+    billingModelOverride?: string;
   },
 ) {
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
@@ -279,7 +286,8 @@ export async function postCharge(
     // Resolve billing model for the primary line + any auto-generated tax/service lines.
     // Tax + service inherit the primary line's line-type mapping (they're derivative
     // charges on the same billable event).
-    const primaryBillingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType);
+    const primaryBillingModel =
+      input.billingModelOverride?.trim() || (await resolveBillingModelForNewLine(tx, folioId, input.lineType));
     const line = await tx.folioLine.create({
       data: {
         id: await allocateFolioLineId(tx, folioId),

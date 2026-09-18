@@ -186,6 +186,12 @@ export async function initiateSettlement(
     fomAcknowledgementRef?: string;
     nightAuditFomAcknowledgementRef?: string;
     voucherAmount?: number;
+    /**
+     * Where the invoice this settlement issues is emailed — the company's accounts for a direct
+     * bill, the agency for a voucher shortfall (2026-09-18). Omitted → the party's email on file;
+     * with none, the invoice is dispatched without an email (the desk hands it over).
+     */
+    invoiceDispatchedTo?: string;
   },
   /**
    * Verified session context (2026-08-24) — NEVER read from the request body (spoofable).
@@ -200,7 +206,7 @@ export async function initiateSettlement(
 
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
-  enforceFolioLiveForS8Settlement({ folioState: folio.state });
+  enforceFolioLiveForS8Settlement({ folioState: folio.state, bucketScoped: !!input.billingModel?.trim() });
   if (!folio.billingModel?.trim()) throw new MissingConfigurationError("Folio.billingModel");
 
   // Split-billing: resolve the TARGET bucket for this settlement call.
@@ -231,6 +237,11 @@ export async function initiateSettlement(
     : toDecimal(folio.outstandingBalance);
   const outstanding = Number(outstandingDecScoped.toFixed(2));
   if (outstanding < 0) throw new ValidationError("Folio outstandingBalance cannot be negative at settlement");
+  // A payer's share with nothing left on it has been settled already (2026-09-18) — settling it
+  // again would issue a second invoice and re-run the departure for nothing.
+  if (isBucketScoped && outstandingDecScoped.lte(0)) {
+    throw new ValidationError(`Nothing is owed on the ${targetBucket} share — it is settled already`);
+  }
 
   // Early departure (2026-08-22): a shortened stay settles over the nights actually slept -
   // the effective checkout, never the frozen one (which would demand audits for, and room
@@ -420,7 +431,13 @@ export async function initiateSettlement(
   // ledger.
   const bucketTag = isBucketScoped ? targetBucket : null;
 
+  // Invoices this settlement issues to a company or agency. They are created as DRAFTs inside
+  // the transaction and dispatched for real once it commits (2026-09-18) — they used to be
+  // written straight in as DISPATCHED, with no PDF, no email and no answer window, so the desk
+  // said "sent" over a bill that had gone nowhere.
+  const issuedToParty: string[] = [];
   const out = await prisma.$transaction(async (tx) => {
+    issuedToParty.length = 0;
     // Voucher settlement IN (mutually exclusive with generic GUEST_PAY below — same settleAmount must not post twice).
     if (method === "VOUCHER") {
       if (settleAmount > 0) {
@@ -429,22 +446,38 @@ export async function initiateSettlement(
           data: {
             id: paymentId,
             folioId,
+            entryId: folio.entryId,
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,
-            notes: `VOUCHER:${settleAmount}`,
+            // What it is (2026-09-18): the agency's voucher, not cash — it used to take the
+            // column's CASH default, so a cash count included the agency's vouchers.
+            paymentMethod: "VOUCHER",
+            receivedAt: new Date(),
+            recordedBy: actorId,
+            stage: Stage.S8,
+            notes: `VOUCHER:${settleAmount}${input.paymentVerificationRef ? `:${input.paymentVerificationRef}` : ""}`,
             billingModel: bucketTag,
           },
         });
       }
-    } else if (billing === "GUEST_PAY") {
+    } else if (method !== "DIRECT_BILL") {
+      // Money taken at the desk is money received, whatever the folio's billing model
+      // (2026-09-18): this used to record the payment only on a GUEST_PAY folio, so cash a guest
+      // handed over on an agency or government stay never reached the ledger and the bill went
+      // OUTSTANDING for the full amount. A direct bill takes no money here — it is invoiced.
       if (settleAmount > 0) {
         const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
         await tx.paymentRecord.create({
           data: {
             id: paymentId,
             folioId,
+            entryId: folio.entryId,
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,
+            paymentMethod: method,
+            receivedAt: new Date(),
+            recordedBy: actorId,
+            stage: Stage.S8,
             notes: `${method}${input.paymentVerificationRef ? `:${input.paymentVerificationRef}` : ""}`,
             billingModel: bucketTag,
           },
@@ -476,22 +509,23 @@ export async function initiateSettlement(
         outstandingBalance: ledgerAtIssuance.outstandingBalance.toString(),
         ...(isBucketScoped ? { bucketOutstanding: bucketAfter } : {}),
       });
+      const directBillInvoiceId = await allocateReadableId(tx, "INVOICE" as const);
       await tx.invoice.create({
         data: {
+          id: directBillInvoiceId,
           folioId,
           entryId: folio.entryId,
           invoiceType: InvoiceType.FINAL,
-          state: InvoiceState.DISPATCHED,
+          state: InvoiceState.DRAFT,
           templateKey,
           billingModel: bucketTag,
           totalAmount: isBucketScoped ? outstandingDecScoped : undefined,
           issuedAt: new Date(),
           issuedBy: actorId,
-          dispatchedAt: new Date(),
-          dispatchedBy: actorId,
           metadata,
         },
       });
+      issuedToParty.push(directBillInvoiceId);
     }
 
     if (method === "VOUCHER" && bucketAfter > 0) {
@@ -506,22 +540,23 @@ export async function initiateSettlement(
           billingModel: billing,
         },
       );
+      const voucherInvoiceId = await allocateReadableId(tx, "INVOICE" as const);
       await tx.invoice.create({
         data: {
+          id: voucherInvoiceId,
           folioId,
           entryId: folio.entryId,
           invoiceType: InvoiceType.FINAL,
-          state: InvoiceState.DISPATCHED,
+          state: InvoiceState.DRAFT,
           templateKey: voucherTemplateKey,
           billingModel: bucketTag,
           totalAmount: bucketAfterDec,
           issuedAt: new Date(),
           issuedBy: actorId,
-          dispatchedAt: new Date(),
-          dispatchedBy: actorId,
           metadata: voucherMetadata,
         },
       });
+      issuedToParty.push(voucherInvoiceId);
     }
 
     // Folio state transitions:
@@ -560,12 +595,26 @@ export async function initiateSettlement(
     // live: a partial cash settlement left every room OCCUPIED and S9 unreachable; SIG-S9
     // §51 explicitly exits S8 with the folio OUTSTANDING and the rooms released — the
     // remainder is S9's payment follow-up, not a reason to keep the rooms).
-    if (!isBucketScoped || wholeFolioBalanceClosed || isDirectBillPath) {
+    // A share settled at the desk releases the rooms once it was the LAST payer still open here
+    // (2026-09-18): every other share either owes nothing or has gone on an invoice (a voucher
+    // shortfall, a direct bill) — what it still owes is then S9's to collect, not a reason to keep
+    // the guest's room. Without this, settling the agency's voucher short left the room OCCUPIED
+    // and Closed unreachable.
+    let lastPayerAtDesk = false;
+    if (isBucketScoped && !wholeFolioBalanceClosed && !isDirectBillPath) {
+      lastPayerAtDesk = (await otherSettlementBucketsStillOpen(tx, folioId, targetBucket)).length === 0;
+    }
+    if (!isBucketScoped || wholeFolioBalanceClosed || isDirectBillPath || lastPayerAtDesk) {
       await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
     }
 
     // Trace settlement outcome so the audit + entry timeline show what happened.
-    const isPartial = !balanceClosed && (partialDec != null || (method === "VOUCHER" && (voucherDec ?? toDecimal(0)).lt(outstandingDec)));
+    // A direct bill leaves the whole balance owed by design — the company is invoiced; that is
+    // not a part-payment, whatever amount the caller sent (2026-09-18).
+    const isPartial =
+      !balanceClosed &&
+      !isDirectBillPath &&
+      (partialDec != null || (method === "VOUCHER" && (voucherDec ?? toDecimal(0)).lt(outstandingDec)));
     const finalState = updated.state;
     await tx.traceEvent.create({
       data: {
@@ -613,6 +662,105 @@ export async function initiateSettlement(
     return updated;
   });
 
+  // Dispatch what the settlement issued — the real act: PDF, email to the party, answer window.
+  // Best-effort after the commit: the settlement stands either way, and an invoice whose dispatch
+  // failed stays DRAFT, which the desk offers to send again (and S9 closure refuses to pass).
+  if (issuedToParty.length > 0) {
+    const { dispatchInvoice } = await import("./s9-service.js");
+    for (const invoiceId of issuedToParty) {
+      try {
+        await dispatchInvoice(prisma, invoiceId, actorId, { dispatchedTo: input.invoiceDispatchedTo });
+      } catch (e) {
+        await prisma.traceEvent
+          .create({
+            data: {
+              eventType: "INVOICE.SETTLEMENT_DISPATCH_FAILED",
+              actorId,
+              actorLevel,
+              entityType: "Invoice",
+              entityId: invoiceId,
+              operation: "ALERT",
+              timestamp: new Date(),
+              stageContext: Stage.S8,
+              inquiryId: entry.inquiryId,
+              entryId: folio.entryId,
+              payload: { invoiceId, error: (e as Error)?.message ?? String(e) },
+              createdBy: actorId,
+            },
+          })
+          .catch(() => {});
+      }
+    }
+  }
+
   return out;
 }
 
+/**
+ * The payers' shares still open at the desk, other than `except` (2026-09-18): a share owes
+ * something and has no FINAL invoice carrying it. A share that has gone on an invoice (a direct
+ * bill, a voucher shortfall) is the payer's to settle after the stay.
+ */
+async function otherSettlementBucketsStillOpen(tx: Prisma.TransactionClient, folioId: string, except: string): Promise<string[]> {
+  const open: string[] = [];
+  for (const b of await listBillingModelBucketsForFolio(tx, folioId)) {
+    if (b === except) continue;
+    const owed = await computeOutstandingForBillingModel(tx, folioId, b);
+    if (owed.lte(0)) continue;
+    const invoiced = await tx.invoice.findFirst({
+      where: { folioId, invoiceType: InvoiceType.FINAL, billingModel: b, state: { not: InvoiceState.SUPERSEDED } },
+      select: { id: true },
+    });
+    if (!invoiced) open.push(b);
+  }
+  return open;
+}
+
+export type SettlementBucket = {
+  /** The payer's share — the billing model its lines carry. */
+  billingModel: string;
+  /** The folio's primary model — the share the stay's package and the advance belong to. */
+  isPrimary: boolean;
+  /** What the share's lines add up to (charges net of credit notes, taxes included). */
+  charges: number;
+  /** What the share still owes. */
+  outstanding: number;
+  /** A FINAL invoice carrying this share, when it went on one (a direct bill, a voucher shortfall). */
+  invoiceId: string | null;
+};
+
+/**
+ * The folio's shares by payer — the guest's own extras apart from the agency's package or the
+ * company's account (2026-09-18). The desk settles each share on its own when more than one
+ * still owes, so extras never go on the agency's invoice and the package never on the guest.
+ * All figures are Decimal-summed here; the desk only reads them.
+ */
+export async function listSettlementBuckets(prisma: PrismaClient, folioId: string) {
+  const folio = await prisma.folio.findUnique({ where: { id: folioId }, select: { id: true, billingModel: true, state: true } });
+  if (!folio) throw new NotFoundError("Folio");
+  const primary = folio.billingModel?.trim() || null;
+  const buckets: SettlementBucket[] = [];
+  for (const b of await listBillingModelBucketsForFolio(prisma, folioId)) {
+    const isPrimary = b === primary;
+    const lines = await prisma.folioLine.aggregate({
+      where: isPrimary ? { folioId, OR: [{ billingModel: b }, { billingModel: null }] } : { folioId, billingModel: b },
+      _sum: { amount: true },
+    });
+    const outstanding = await computeOutstandingForBillingModel(prisma, folioId, b);
+    const invoice = await prisma.invoice.findFirst({
+      where: { folioId, invoiceType: InvoiceType.FINAL, billingModel: b, state: { not: InvoiceState.SUPERSEDED } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    buckets.push({
+      billingModel: b,
+      isPrimary,
+      charges: Number(toDecimal(lines._sum.amount).toFixed(2)),
+      outstanding: Number(outstanding.toFixed(2)),
+      invoiceId: invoice?.id ?? null,
+    });
+  }
+  // The primary share first — the stay as it was sold — then the others.
+  buckets.sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || a.billingModel.localeCompare(b.billingModel));
+  return { folioId, folioState: folio.state, primary, buckets };
+}

@@ -11,6 +11,7 @@ import { effectiveCheckInDate, hotelTodayUtc, listNightYmdsUtc, nightsBetweenUtc
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { postCharge } from "./s7-folio-lines-service.js";
+import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { progressStageS7ToS8 } from "../../state-machines/entry-lifecycle-state-machine.js";
 import {
   enforceEarlyDepartureAuthority,
@@ -179,6 +180,10 @@ async function loadEntry(prisma: PrismaClient, entryId: string): Promise<LoadedE
   return entry;
 }
 
+function nightsWord(n: number): string {
+  return `${n} night${n === 1 ? "" : "s"}`;
+}
+
 function describeNights(ymds: string[]): string {
   if (ymds.length === 0) return "";
   const fmt = (ymd: string) =>
@@ -315,15 +320,21 @@ export async function computeEarlyDepartureFigures(
   const rule = resolveEarlyDeparturePenaltyRule(cfg, entry.reservation?.frozenRatePlanId ?? null);
   let feeAmount = new Prisma.Decimal(0);
   let explanation: string;
+  // What the fee line says it charges — the guest reads it on the tax invoice (2026-09-18). It
+  // used to name the unstayed SPAN ("2 unstayed nights …") beside a one-night figure, which read
+  // as two nights charged.
+  let charges = "";
   const pct = new Prisma.Decimal(rule.percent).div(100);
   if (unstayedNightsTotal <= 0) {
     explanation = "No unstayed nights — nothing to charge.";
   } else if (rule.basis === "FLAT_AMOUNT") {
     feeAmount = round2(toDecimal(rule.amount));
     explanation = `Flat early-departure fee of ${feeAmount.toFixed(2)} (net).`;
+    charges = `for leaving ${nightsWord(unstayedNightsTotal)} early`;
   } else if (rule.basis === "PERCENT_OF_UNSTAYED") {
     feeAmount = round2(forgoneSub.mul(pct));
     explanation = `${rule.percent}% of the ${unstayedNightsTotal} unstayed night(s) room charges (${forgoneSub.toFixed(2)} net).`;
+    charges = `${rule.percent}% of ${nightsWord(unstayedNightsTotal)} not stayed`;
   } else if (rule.basis === "UNSTAYED_NIGHTS") {
     let sum = new Prisma.Decimal(0);
     let chargedNights = 0;
@@ -334,6 +345,10 @@ export async function computeEarlyDepartureFigures(
       sum = sum.plus(new Prisma.Decimal(r.perNightSubtotal).mul(n));
     }
     feeAmount = round2(sum.mul(pct));
+    charges =
+      rule.percent === 100
+        ? `${nightsWord(chargedNights)} charged for leaving ${nightsWord(unstayedNightsTotal)} early`
+        : `${rule.percent}% of ${nightsWord(chargedNights)} for leaving ${nightsWord(unstayedNightsTotal)} early`;
     explanation =
       rule.percent === 100
         ? `${chargedNights} unstayed night(s) at the frozen per-night room figure (${sum.toFixed(2)} net).`
@@ -342,7 +357,9 @@ export async function computeEarlyDepartureFigures(
     explanation = "The early-departure rule is NONE — nothing is charged for the unstayed nights.";
   }
   const gross = round2(feeAmount.mul(taxFactor));
-  const description = `Early departure fee · ${unstayedNightsTotal} unstayed night${unstayedNightsTotal === 1 ? "" : "s"} ${describeNights(unstayedYmds)} (booked to ${bookedCheckOut ? ymdUtc(bookedCheckOut) : "?"})`;
+  const bookedToWords = bookedCheckOut ? describeNights([ymdUtc(bookedCheckOut)]) : null;
+  const span = [describeNights(unstayedYmds), bookedToWords ? `booked to ${bookedToWords}` : null].filter(Boolean).join("; ");
+  const description = `Early departure fee · ${charges || `for leaving ${nightsWord(unstayedNightsTotal)} early`}${span ? ` (${span})` : ""}`;
 
   return {
     entryId,
@@ -583,6 +600,10 @@ export async function recordEarlyDeparture(
   let feeError: string | null = null;
   if (!waived && feeAmount > 0) {
     try {
+      // The fee is a term of the stay as booked — one unstayed night — so it is owed by whoever
+      // pays the room (the agency's package, the company's account), not charged to the guest's
+      // own share as a SERVICE line would be by default (2026-09-18).
+      const stayPayer = await resolveBillingModelForNewLine(prisma as never, folioId, FolioLineType.ROOM_CHARGE);
       const line = await postCharge(prisma, folioId, actor.actorId, {
         entryId,
         lineType: FolioLineType.SERVICE,
@@ -591,6 +612,7 @@ export async function recordEarlyDeparture(
         currency: "BTN",
         chargeDate: `${figures.departureDate}T00:00:00.000Z`,
         allowSoftGateBypass: true,
+        billingModelOverride: stayPayer,
       });
       feeLineId = (line as { id?: string } | null)?.id ?? null;
       feePosted = true;

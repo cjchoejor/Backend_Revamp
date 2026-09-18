@@ -126,7 +126,7 @@ export async function recordPayment(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; amount: number; notes?: string | null },
+  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null },
   actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
   const amountNum = input.amount;
@@ -182,6 +182,8 @@ export async function recordPayment(
         recordedBy: actorId,
         stage: stageAtPayment,
         notes: input.notes ?? null,
+        // How it came (2026-09-18) — every advance used to be stored as CASH, the column default.
+        ...(input.paymentMethod?.trim() ? { paymentMethod: input.paymentMethod.trim() } : {}),
       },
     });
     await applyInboundPaymentToFolioOutstanding(tx, folioId, amountNum);

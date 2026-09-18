@@ -91,3 +91,36 @@ export async function resolveVerificationPaths(
     priorDocumentExpired,
   };
 }
+
+export type EntryIdentityVerification = {
+  verifiedAt: Date;
+  verifiedBy: string | null;
+  path: VerificationPath | null;
+};
+
+/**
+ * THIS booking's identity verification (2026-09-18) — the latest `GUEST.IDENTITY_VERIFIED` event
+ * recorded for this entry and its guest, or null when none was recorded at this stay.
+ *
+ * SIG-S6 §132 / §618: a verification event is written at check-in on every path — a returning
+ * guest's included ("profile confirmed … verification event written recording confirmation").
+ * The check-in gate read `GuestProfile.identityVerifiedAt`, a stamp that outlives the stay, so a
+ * returning guest arrived already "verified" by their previous check-in and could be checked in
+ * with no one confirming anything; the desk also seeded the old stay's path over the suggested one.
+ * The event IS the verification record the spec asks for, so the gate reads it per booking.
+ */
+export async function findEntryIdentityVerification(
+  db: DbClient,
+  input: { entryId: string; guestProfileId: string | null },
+): Promise<EntryIdentityVerification | null> {
+  if (!input.guestProfileId) return null;
+  const ev = await db.traceEvent.findFirst({
+    where: { entryId: input.entryId, eventType: "GUEST.IDENTITY_VERIFIED", entityId: input.guestProfileId },
+    orderBy: { timestamp: "desc" },
+    select: { timestamp: true, actorId: true, payload: true },
+  });
+  if (!ev) return null;
+  const raw = (ev.payload as { verificationPath?: unknown } | null)?.verificationPath;
+  const path = raw === "FIRST_TIME" || raw === "RETURNING_VALID" || raw === "RETURNING_EXPIRED" || raw === "VIP" ? raw : null;
+  return { verifiedAt: ev.timestamp, verifiedBy: ev.actorId ?? null, path };
+}

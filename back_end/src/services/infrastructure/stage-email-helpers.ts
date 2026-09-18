@@ -26,6 +26,12 @@ export type StageEmailContext = {
   inquiryId: string;
   /** The guest's email on file. When null we skip and trace why. */
   guestEmail: string | null;
+  /**
+   * Why there is no address, when the caller knows better than "the guest has none" — e.g. an
+   * invoice addressed to an agency with no email on file (2026-09-18). Defaults to
+   * GUEST_HAS_NO_EMAIL.
+   */
+  skipReason?: string | null;
   stage: Stage;
   /** Prefix for trace event types — e.g. "QUOTATION_EMAIL", "PROFORMA_INVOICE_EMAIL". */
   eventTypePrefix: string;
@@ -36,7 +42,7 @@ export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, conte
 
   if (!guestEmail) {
     await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SKIPPED`, {
-      reason: "GUEST_HAS_NO_EMAIL",
+      reason: ctx.skipReason ?? "GUEST_HAS_NO_EMAIL",
     });
     return;
   }

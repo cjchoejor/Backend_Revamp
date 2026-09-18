@@ -50,12 +50,12 @@ export const foliosRouter = Router();
 
 foliosRouter.post("/folios/:id/payments", requireActorLevel("L1"), validateBody(recordFolioPaymentRequestSchema), async (req, res, next) => {
   try {
-    const { entryId, amount, notes } = req.body;
+    const { entryId, amount, notes, paymentMethod } = req.body;
     const rec = await s3FolioService.recordPayment(
       prisma,
       req.params.id,
       req.actor!.actorId,
-      { entryId, amount, notes: notes ?? null },
+      { entryId, amount, notes: notes ?? null, paymentMethod: paymentMethod ?? null },
       req.actor!.level,
     );
     res.status(201).json(rec);
@@ -363,6 +363,19 @@ foliosRouter.post(
     }
   },
 );
+
+/**
+ * The folio's shares by payer — what the guest owes for their own extras apart from the agency's
+ * package or the company's account (2026-09-18). The desk settles each share on its own.
+ */
+foliosRouter.get("/folios/:id/settlement-buckets", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await s8SettlementService.listSettlementBuckets(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
 
 foliosRouter.post("/folios/:id/settle", requireActorLevel("L1"), validateBody(initiateSettlementRequestSchema), async (req, res, next) => {
   try {

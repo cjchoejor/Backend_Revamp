@@ -4,6 +4,8 @@ export const recordFolioPaymentRequestSchema = z.object({
   entryId: z.string().min(1),
   amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),
   notes: z.string().optional(),
+  /** How the money came — cash, QR, a transfer (2026-09-18). Omitted keeps the column's CASH default. */
+  paymentMethod: z.string().trim().min(1).max(40).optional(),
 });
 export type RecordFolioPaymentRequestDto = z.infer<typeof recordFolioPaymentRequestSchema>;
 
@@ -236,6 +238,8 @@ export const initiateSettlementRequestSchema = z.object({
   fomAcknowledgementRef: z.string().optional(),
   nightAuditFomAcknowledgementRef: z.string().optional(),
   voucherAmount: z.coerce.number().optional(),
+  /** Where the invoice a direct bill / voucher shortfall issues is emailed (2026-09-18). */
+  invoiceDispatchedTo: z.string().trim().max(320).optional(),
 });
 export type InitiateSettlementRequestDto = z.infer<typeof initiateSettlementRequestSchema>;
 

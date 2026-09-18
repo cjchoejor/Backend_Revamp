@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { findEntryIdentityVerification } from "../../lib/identity-verification-path.js";
 import { HandoffState, HandoffType, InventoryClaimState, Stage } from "@prisma/client";
 import {
   MissingConfigurationError,
@@ -75,7 +76,10 @@ export async function completeCheckInToS7(
     throw new OptimisticLockError();
   }
 
-  enforceIdentityVerifiedBeforeCheckInCompletion({ identityVerifiedAt: entry.guestProfile?.identityVerifiedAt });
+  // Verified AT THIS STAY (2026-09-18): the profile's stamp outlives the stay, so a returning
+  // guest used to pass on their previous check-in's verification.
+  const stayVerification = await findEntryIdentityVerification(prisma, { entryId, guestProfileId: entry.guestProfileId });
+  enforceIdentityVerifiedBeforeCheckInCompletion({ identityVerifiedAt: stayVerification?.verifiedAt ?? null });
 
   // Guest-detail coverage (2026-08-11, operator ruling — wires p15): every party member's
   // details — a typed document number or a stored ID photo — must be on file before check-in.
