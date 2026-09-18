@@ -537,10 +537,17 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
   // Leaving today: the backend raises and fulfils the pre-checkout handoff itself at the move
   // (AC-S7-16), so the desk must not wait for it (2026-09-18).
   const leavingToday = !!hotelToday && !!checkOutIso && checkOutIso.slice(0, 10) === hotelToday;
-  const deficient = entry.roomAssignments?.[0]?.room?.deficientConditionRecords ?? [];
+  // Every room of the stay, not only the first (2026-09-19). An open fault does not hold the move —
+  // it is carried to check-out (AC-S7-14), where the inspection records it — but the line says so.
+  const deficient = Array.from(
+    new Map(
+      (entry.roomAssignments ?? []).flatMap((a) => (a.room?.deficientConditionRecords ?? []).map((d) => [d.id, d] as const)),
+    ).values(),
+  );
   const deficientFinal =
     deficient.length === 0 ||
     deficient.every((d) => ["RESOLVED", "UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"].includes(d.status));
+  const openFaults = deficient.filter((d) => d.status === "UNRESOLVED" || d.status === "DEFICIENT_UNRESOLVED_AT_CHECKOUT").length;
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   return [
     checkoutLine,
@@ -550,7 +557,12 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
       label: !h4Init && leavingToday ? "Pre-checkout handoff — raised at the move (leaving today)" : "Pre-checkout handoff started",
       met: h4Init || leavingToday,
     },
-    { label: "Deficiencies resolved", met: deficientFinal },
+    {
+      label: openFaults
+        ? `${openFaults} open fault${openFaults === 1 ? "" : "s"} — carried to check-out, recorded at the inspection`
+        : "Deficiencies resolved",
+      met: deficientFinal,
+    },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];
 }
