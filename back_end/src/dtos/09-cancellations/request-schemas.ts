@@ -11,6 +11,9 @@ export const cancelS5EntryRequestSchema = z.object({
   penaltyWaiverRequested: z.boolean().optional(),
   /** Why the booking is cancelled — the guest's words (2026-09-18: the Arrival cancel recorded none). */
   reason: z.string().trim().max(2000).optional(),
+  /** How the money owed back leaves the hotel; omitted = the way it came (2026-09-19). */
+  refundMethod: z.string().trim().min(1).max(40).optional(),
+  refundReference: z.string().trim().max(200).optional(),
 });
 export type CancelS5EntryRequestDto = z.infer<typeof cancelS5EntryRequestSchema>;
 
@@ -24,5 +27,8 @@ export type CancelEarlyDepartureRequestDto = z.infer<typeof cancelEarlyDeparture
 export const cancelS3EntryRequestSchema = z.object({
   reason: z.string().trim().min(1).max(500).optional(),
   penaltyWaiverRequested: z.boolean().optional(),
+  /** How the money owed back leaves the hotel; omitted = the way it came (2026-09-19). */
+  refundMethod: z.string().trim().min(1).max(40).optional(),
+  refundReference: z.string().trim().max(200).optional(),
 });
 export type CancelS3EntryRequestDto = z.infer<typeof cancelS3EntryRequestSchema>;

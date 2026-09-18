@@ -23,6 +23,7 @@ import { nightsBetweenUtc, utcDateOnly } from "../../lib/stay-dates.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderNoShowNoticeEmail } from "../infrastructure/stage-email-templates.js";
 import { resolveInvoiceRecipient } from "../domain/s9-service.js";
+import { resolveRefundMethod } from "../../lib/refund-method.js";
 
 type ContactAttempt = { channel: string; attemptedAt: string; outcome: string; response?: string };
 type Tx = Prisma.TransactionClient;
@@ -348,6 +349,8 @@ export async function finaliseNoShowTx(
         entryId,
         amount: figures.refund,
         paymentDirection: "OUT",
+        // Back the way it came (2026-09-19) — it went out as the column's CASH default.
+        paymentMethod: await resolveRefundMethod(tx, folio.id),
         receivedAt: now,
         recordedBy: actorId,
         stage: Stage.S5,

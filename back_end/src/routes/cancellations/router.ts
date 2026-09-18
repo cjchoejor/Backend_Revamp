@@ -38,6 +38,8 @@ cancellationsRouter.post(
         reason: req.body.reason,
         penaltyWaiverRequested: req.body.penaltyWaiverRequested === true,
         actorLevel: req.actor!.level,
+        refundMethod: req.body.refundMethod,
+        refundReference: req.body.refundReference,
       });
       res.json(updated);
     } catch (e) {
@@ -56,6 +58,8 @@ cancellationsRouter.post(
         penaltyWaiverRequested: req.body.penaltyWaiverRequested === true,
         reason: req.body.reason,
         actorLevel: req.actor!.level,
+        refundMethod: req.body.refundMethod,
+        refundReference: req.body.refundReference,
       });
       res.json(updated);
     } catch (e) {

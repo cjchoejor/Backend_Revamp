@@ -23,6 +23,7 @@ import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.j
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { toDecimal } from "../../lib/money.js";
+import { resolveRefundMethod } from "../../lib/refund-method.js";
 
 export type CancellationFigures = {
   /** The step the booking is cancelled at — Set up (S3) or Arrival (S5). */
@@ -164,7 +165,14 @@ export async function cancelEntryAtS3(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  opts?: { reason?: string; penaltyWaiverRequested?: boolean; actorLevel?: RequestActorLevel },
+  opts?: {
+    reason?: string;
+    penaltyWaiverRequested?: boolean;
+    actorLevel?: RequestActorLevel;
+    /** How the money owed back leaves the hotel — defaults to the way it came (2026-09-19). */
+    refundMethod?: string | null;
+    refundReference?: string | null;
+  },
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -261,9 +269,10 @@ export async function cancelEntryAtS3(
           entryId,
           amount: netRefund,
           paymentDirection: "OUT",
+          paymentMethod: await resolveRefundMethod(tx, folio.id, opts?.refundMethod),
           recordedBy: actorId,
           stage: Stage.S3,
-          notes: "Refund obligation after S3 cancellation",
+          notes: `Refund obligation after S3 cancellation${opts?.refundReference?.trim() ? ` · ${opts.refundReference.trim()}` : ""}`,
         },
       });
     }
@@ -404,7 +413,14 @@ export async function cancelEntryAtS5(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  opts?: { penaltyWaiverRequested?: boolean; actorLevel?: RequestActorLevel; reason?: string },
+  opts?: {
+    penaltyWaiverRequested?: boolean;
+    actorLevel?: RequestActorLevel;
+    reason?: string;
+    /** How the money owed back leaves the hotel — defaults to the way it came (2026-09-19). */
+    refundMethod?: string | null;
+    refundReference?: string | null;
+  },
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -494,9 +510,10 @@ export async function cancelEntryAtS5(
           entryId,
           amount: netRefund,
           paymentDirection: "OUT",
+          paymentMethod: await resolveRefundMethod(tx, folio.id, opts?.refundMethod),
           recordedBy: actorId,
           stage: cancelStage,
-          notes: "Refund obligation after pre-arrival cancellation",
+          notes: `Refund obligation after pre-arrival cancellation${opts?.refundReference?.trim() ? ` · ${opts.refundReference.trim()}` : ""}`,
         },
       });
     }
