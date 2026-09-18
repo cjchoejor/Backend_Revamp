@@ -2,8 +2,8 @@ import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
-import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import * as preArrivalService from "../services/domain/pre-arrival-service.js";
+import { armNoShowCutoff, resolveExpectedArrival, resolveNoShowGraceMinutes } from "../lib/expected-arrival.js";
 import { enforceReservationSnapshotPresentForS5Activation } from "../policies/01-availability/p01-reservation-snapshot-required-for-s5-activation.js";
 import { scheduleS5StageDwellWarningMonitor } from "../lib/schedule-s5-dwell-warning-monitor.js";
 
@@ -109,18 +109,13 @@ export async function runPreArrivalWindowActivationWorker(
   }
 
   const s4Dwell = await prisma.stageDwellRecord.findFirst({ where: { entryId, stage: Stage.S4, exitedAt: null }, orderBy: { enteredAt: "desc" } });
-  // Policy registry override: admin-editable `registry.noShow.graceMinutes` row takes precedence
-  // over the legacy `noShow.cutoffWindowMinutes` ConfigurationEntry. Set `enabled: false` on the
-  // registry row to disable the override and revert to the ConfigurationEntry value.
-  const noShowPolicy = await getRegistryPolicy(prisma, "registry.noShow.graceMinutes");
-  const registryGraceMinutes =
-    noShowPolicy && noShowPolicy.enabled !== false && typeof noShowPolicy.graceMinutes === "number"
-      ? (noShowPolicy.graceMinutes as number)
-      : null;
-  const cutoffWindowMinutes =
-    registryGraceMinutes ?? (await requireActiveConfigValue<number>(prisma, "noShow.cutoffWindowMinutes", { now }));
-  const expectedArrival = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
-  const cutoffAt = expectedArrival ? new Date(expectedArrival.getTime() + cutoffWindowMinutes * 60_000) : null;
+  // The no-show cut-off counts from the EXPECTED ARRIVAL — the guest's own time, else the hotel's
+  // standard check-in time, on the check-in day in hotel time (2026-09-18; it counted from the
+  // stored date's UTC midnight, 06:00 in Bhutan, so a guest due that afternoon was a no-show at
+  // 08:00) — plus the grace (registry.noShow.graceMinutes, else noShow.cutoffWindowMinutes).
+  const cutoffWindowMinutes = await resolveNoShowGraceMinutes(prisma);
+  const expectedArrival = await resolveExpectedArrival(prisma, entry);
+  const cutoffAt = expectedArrival.at ? new Date(expectedArrival.at.getTime() + cutoffWindowMinutes * 60_000) : null;
 
   await prisma.$transaction(async (tx) => {
     if (s4Dwell) await tx.stageDwellRecord.update({ where: { id: s4Dwell.id }, data: { exitedAt: now, dwellSeconds: Math.floor((now.getTime() - s4Dwell.enteredAt.getTime()) / 1000) } as any });
@@ -170,7 +165,9 @@ export async function runPreArrivalWindowActivationWorker(
           from: "S4",
           to: "S5",
           noShowCutoffMinutes: cutoffWindowMinutes,
-          noShowGraceSource: registryGraceMinutes !== null ? "policy_registry" : "configuration_entry",
+          expectedArrival: expectedArrival.at?.toISOString() ?? null,
+          expectedArrivalSource: expectedArrival.source,
+          noShowCutoffAt: cutoffAt?.toISOString() ?? null,
         },
         createdBy: "SYSTEM",
       },
@@ -213,31 +210,13 @@ export async function runPreArrivalWindowActivationWorker(
     }
   }
 
-  // Register no-show cutoff timer (idempotent on TimerRecord; schedule is best-effort).
+  // Register the no-show cut-off (one live clock; the job carries its record id so W5 marks it).
   if (cutoffAt) {
     const existing = await prisma.timerRecord.findFirst({
       where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
       orderBy: { createdAt: "desc" },
     });
-    if (!existing) {
-      const jobId = await engine.schedule("NO_SHOW_CUTOFF_W5", { entryId }, { startAfter: cutoffAt });
-      await prisma.timerRecord.create({
-        data: {
-          entryId,
-          entityType: "Entry",
-          entityId: entryId,
-          timerType: "NO_SHOW_CUTOFF_W5",
-          timerCode: "NO_SHOW_CUTOFF_W5",
-          stageContext: Stage.S5,
-          firesAt: cutoffAt,
-          dueAt: cutoffAt,
-          status: "SCHEDULED",
-          payload: { entryId, cutoffAt: cutoffAt.toISOString() },
-          pgBossJobId: jobId,
-          createdBy: "SYSTEM",
-        },
-      });
-    }
+    if (!existing) await armNoShowCutoff(prisma, entryId, cutoffAt, "SYSTEM");
   }
 
   return { skipped: false, entryId } as const;

@@ -102,6 +102,14 @@ export type RecordRoomInspectionRequestDto = z.infer<typeof recordRoomInspection
  * Body is intentionally empty today; validation middleware expects a JSON object.
  */
 export const closeEntryRequestSchema = z.object({}).passthrough();
+
+/** The guest's expected arrival, "HH:MM" hotel-local on the check-in day; null clears it (2026-09-18). */
+export const setExpectedArrivalRequestSchema = z.object({
+  time: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a 24-hour time, HH:MM")
+    .nullable(),
+});
 export type CloseEntryRequestDto = z.infer<typeof closeEntryRequestSchema>;
 
 /** `GET /entries` — query string. */

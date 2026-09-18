@@ -71,6 +71,10 @@ const percentage = (value: unknown): string | null => {
 
 const own = (owner: ConfigOwner, validate?: ConfigKeyMeta["validate"]): ConfigKeyMeta => ({ owner, validate });
 
+/** A time of day, 24-hour "HH:MM". */
+const timeOfDay = (value: unknown): string | null =>
+  typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? null : "Must be a 24-hour time, HH:MM (e.g. 14:00)";
+
 // --- registry -------------------------------------------------------------
 
 export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
@@ -135,6 +139,7 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "nightAudit.scheduleTime": own("OperationalScheduleService", cronString),
   "nightAudit.expectedChargesRules": own("OperationalScheduleService"),
   "checkout.cutoffTime": own("OperationalScheduleService"),
+  "checkIn.standardTime": own("OperationalScheduleService", timeOfDay),
   "room_assignment_priority_rules": own("OperationalScheduleService"),
 
   // OTA (OTAConfigurationService)

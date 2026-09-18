@@ -1017,6 +1017,10 @@ model Entry {
   walkInCompressed               Boolean           @default(false)
   checkInDate                    DateTime?
   checkOutDate                   DateTime?
+  /// The guest's own expected arrival, "HH:MM" hotel-local on the check-in day (2026-09-18).
+  /// Null = the hotel's standard check-in time (`checkIn.standardTime`). The no-show cut-off
+  /// counts from this (SIG-S5 §7.3 "expected arrival time + noShow.cutoffWindowMinutes").
+  expectedArrivalTime            String?
   guestCount                     Int?
   /// Breakdown of the head count. guestCount remains the canonical total (adultCount + childCount when both set).
   /// adultCount/childCount are nullable for backward compatibility with pre-Phase-D inquiries.

@@ -262,6 +262,7 @@ async function main() {
     { configKey: "expiry.s3.committedHoldTtlSeconds", configValue: 3600, notes: "Committed hold TTL seconds (S3)" },
     { configKey: "creditCeiling.clientTier.thresholds", configValue: { standard: 5000, preferred: 10000, caution: 2000, restricted: 0 }, notes: "Credit ceiling thresholds — all four tiers (standard/preferred/caution/restricted) required by required-control-check" },
     { configKey: "checkout.cutoffTime", configValue: "12:00", notes: "Late-checkout escalation cutoff (HH:MM, hotel-local) — W26" },
+    { configKey: "checkIn.standardTime", configValue: "14:00", notes: "The hotel's standard check-in time (HH:MM, hotel-local) — a booking's expected arrival when the guest gave none; the no-show cut-off counts from it (W5)" },
     { configKey: "communication.channels", configValue: { EMAIL: { enabled: true, displayName: "Email", transport: "EMAIL" }, WHATSAPP: { enabled: false, displayName: "WhatsApp", transport: "WHATSAPP" }, PHONE: { enabled: true, displayName: "Phone", transport: "VOICE" }, FRONT_DESK: { enabled: true, displayName: "Front desk", transport: "IN_PERSON" } }, notes: "Communication channels (ACIG §6.2.16) — admin-editable channel map" },
     { configKey: "proformaInvoice.templates", configValue: { DEFAULT: "proforma-v1" }, notes: "PI templates per billing model (minimal)" },
     { configKey: "advancePayment.followUpWindowSeconds", configValue: 3600, notes: "W34 tier-1 follow-up window" },

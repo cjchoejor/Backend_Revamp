@@ -9,6 +9,7 @@ export const OPERATIONAL_CONFIG_KEYS = [
   "nightAudit.expectedChargesRules",
   "nightAudit.expectedDailyFAndBCharge",
   "checkout.cutoffTime",
+  "checkIn.standardTime",
   "roomAssignment.priorityRules",
   "housekeeping.sla.windowMinutes",
   "inspection.postCheckout.windowHours",

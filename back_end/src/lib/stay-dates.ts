@@ -101,6 +101,18 @@ export function hotelDayEndUtc(at: Date): Date {
   return new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0, 0) - hotelOffsetMs(at));
 }
 
+/**
+ * The instant a hotel-local time of day falls on a stored calendar date (2026-09-18) — e.g. the
+ * check-in date at 14:00 in Thimphu. Stay dates are stored at UTC midnight, which is 06:00 in
+ * Bhutan, so "stored date + 14h" would land at 20:00 local; the time goes through the timezone.
+ */
+export function hotelLocalTimeOn(dateUtcMidnight: Date, hhmm: string): Date {
+  const [y, m, d] = ymdUtc(dateUtcMidnight).split("-").map((x) => Number(x));
+  const [hh, mm] = hhmm.split(":").map((x) => Number(x));
+  const asIfUtc = Date.UTC(y, m - 1, d, hh, mm, 0, 0);
+  return new Date(asIfUtc - hotelOffsetMs(new Date(asIfUtc)));
+}
+
 export type StayDateSource = {
   checkInDate?: Date | null;
   checkOutDate?: Date | null;

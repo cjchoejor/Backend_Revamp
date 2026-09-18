@@ -7,6 +7,7 @@ import {
   patchApartmentContextRequestSchema,
   reassignEntryCustodianRequestSchema,
   closeEntryRequestSchema,
+  setExpectedArrivalRequestSchema,
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
   updateEntryRequestSchema,
@@ -50,6 +51,7 @@ import {
   withdrawStayExtension,
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
+import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
 
 export const entriesRouter = Router();
 
@@ -642,6 +644,30 @@ entriesRouter.post("/:id/post-checkout-inspection/expire-window", requireActorLe
     next(e);
   }
 });
+
+/** When the guest is expected, and when the no-show cut-off falls (2026-09-18). */
+entriesRouter.get("/:id/expected-arrival", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await getExpectedArrival(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Record the guest's own expected arrival time (null clears it); at Arrival it re-arms the cut-off. */
+entriesRouter.post(
+  "/:id/expected-arrival",
+  requireActorLevel("L1"),
+  validateBody(setExpectedArrivalRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await setExpectedArrival(prisma, req.params.id, req.actor!.actorId, req.actor!.level, req.body.time));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /** What still stands between the booking and "Close & seal" — the close's own checks, read not run (2026-09-18). */
 entriesRouter.get("/:id/closure-readiness", requireActorLevel("L1"), async (req, res, next) => {

@@ -61,6 +61,12 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     notes: "W26 — time of day (HH:MM, hotel local) after which late-checkout escalation timers fire.",
   },
   {
+    key: "checkIn.standardTime",
+    value: "14:00",
+    notes:
+      "The hotel's standard check-in time (HH:MM, hotel-local) — a booking's expected arrival when the guest gave none; the no-show cut-off (W5) counts from it plus noShow.cutoffWindowMinutes.",
+  },
+  {
     key: "roomAssignment.priorityRules",
     value: [],
     notes:

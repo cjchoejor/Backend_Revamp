@@ -47,9 +47,15 @@ export async function runNoShowCutoffWorker(
           createdBy: "SYSTEM",
         },
       });
-      if (typeof input.timerRecordId === "string") {
-        await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });
-      }
+      // The clock firing is marked FIRED even when the job carries no record id — jobs armed
+      // before 2026-09-18 never did, so the record stayed SCHEDULED and read as overdue.
+      await tx.timerRecord.updateMany({
+        where:
+          typeof input.timerRecordId === "string"
+            ? { id: input.timerRecordId, status: "SCHEDULED" }
+            : { entryId, timerCode: input.timerType, status: "SCHEDULED", dueAt: { lte: new Date(now.getTime() + 60_000) } },
+        data: { status: "FIRED", firedAt: now },
+      });
     });
 
     return { skipped: false, entryId, phase: "CUTOFF_REACHED" } as const;
@@ -146,9 +152,15 @@ export async function runNoShowCutoffWorker(
     // FREE; this closes out the CommittedHold record, which that helper does not touch.
     await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: "SYSTEM", now });
 
-    if (typeof input.timerRecordId === "string") {
-      await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });
-    }
+    // The clock firing is marked FIRED even when the job carries no record id — jobs armed
+    // before 2026-09-18 never did, so the record stayed SCHEDULED and read as overdue.
+    await tx.timerRecord.updateMany({
+      where:
+        typeof input.timerRecordId === "string"
+          ? { id: input.timerRecordId, status: "SCHEDULED" }
+          : { entryId, timerCode: input.timerType, status: "SCHEDULED", dueAt: { lte: new Date(now.getTime() + 60_000) } },
+      data: { status: "FIRED", firedAt: now },
+    });
   });
 
   // Best-effort cancel any scheduled no-show timers after closure.
