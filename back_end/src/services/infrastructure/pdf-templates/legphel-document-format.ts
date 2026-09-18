@@ -32,14 +32,29 @@ export function formatDocDateTimeLocal(d: Date | null | undefined): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: HOTEL_TIMEZONE,
     day: "2-digit",
-    month: "short",
+    month: "numeric",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
   }).formatToParts(d);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  return `${get("day")} ${get("month")} ${get("year")} · ${get("hour")}:${get("minute")}`;
+  // The house's own month names ("Sep") — the runtime's short month reads "Sept".
+  return `${get("day")} ${MONTHS[Number(get("month")) - 1]} ${get("year")} · ${get("hour")}:${get("minute")}`;
+}
+
+/**
+ * "19 Sep 2026" — the property's calendar date of a MOMENT (2026-09-19): an issue date, a
+ * "valid until", a promised payment time, a hold's expiry. `formatDocDate` reads the UTC calendar,
+ * which is right for a stay date (stored at UTC midnight) and wrong for a moment: a quotation
+ * made at 03:35 in Thimphu was dated the day before, and its "valid until 21 Sep, 02:40" printed
+ * as 20 Sep — the desk and the paper disagreed.
+ */
+export function formatDocDateLocal(d: Date | null | undefined): string {
+  if (!d) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: HOTEL_TIMEZONE, day: "2-digit", month: "numeric", year: "numeric" }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("day")} ${MONTHS[Number(get("month")) - 1]} ${get("year")}`;
 }
 
 /** The property's local calendar date ("2026-08-22") for a given instant. */

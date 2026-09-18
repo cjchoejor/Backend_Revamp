@@ -46,7 +46,7 @@ import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelInterimHtml, renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
 import { describeInterimPromise, type InterimFigures } from "./interim-payment-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatDocDateTimeLocal, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatDocDateTimeLocal, formatStayRange, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { renderLegphelTaxInvoiceHtml } from "../infrastructure/pdf-templates/legphel-tax-invoice-template.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import {
@@ -325,7 +325,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   const paymentPlan = inv.folio
     ? resolveAdvancePaymentPlan(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
     : null;
-  const advancePlanLabel = describeAdvancePaymentPlan(paymentPlan, formatDocDate);
+  const advancePlanLabel = describeAdvancePaymentPlan(paymentPlan, formatDocDateLocal);
 
   // The advance deadline — mirrors payment-status `advanceWindow.deadline`: the advance is due
   // between proforma dispatch and CHECK-IN, so the printed date is the check-in date (frozen at
@@ -356,7 +356,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
     masthead: mastheadFromHotelProfile(hotel),
     proformaNo: invoiceRef,
     bookingRef: inv.entryId,
-    date: formatDocDate(docDate),
+    date: formatDocDateLocal(docDate),
     // "Advance due by <check-in date>" — the guest-facing validity of this document (2026-08-07,
     // operator request: the guest must see the deadline on the bill itself, like the quotation's
     // "Valid until" strip). See `advanceDeadline` above for where the date comes from.
@@ -431,12 +431,12 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
   const inPayments = (inv.folio?.payments ?? []).filter((x) => x.paymentDirection === "IN");
   const ext = req.stayExtensionRequest;
   // The guest's promise, when recorded, replaces the plain due-by on the document.
-  const promiseLine = describeInterimPromise(req, formatDocDate);
+  const promiseLine = describeInterimPromise(req, formatDocDateLocal);
   const html = renderLegphelInterimHtml({
     masthead: mastheadFromHotelProfile(hotel),
     invoiceNo: invoiceRef,
     bookingRef: inv.entryId,
-    date: formatDocDate(docDate),
+    date: formatDocDateLocal(docDate),
     kind: req.kind,
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
@@ -450,9 +450,9 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
     askLabel: f.askLabel ?? "interim payment",
     dueNow: formatMoney(f.dueNow ?? 0),
     balanceAtCheckout: formatMoney(f.balanceAtCheckout ?? 0),
-    dueBy: promiseLine ? null : req.dueBy ? formatDocDate(req.dueBy) : null,
+    dueBy: promiseLine ? null : req.dueBy ? formatDocDateLocal(req.dueBy) : null,
     paymentPromise: promiseLine,
-    holdUntil: ext && (ext.state === "REQUESTED" || ext.state === "BILLED") ? formatDocDate(ext.holdExpiresAt) : null,
+    holdUntil: ext && (ext.state === "REQUESTED" || ext.state === "BILLED") ? formatDocDateLocal(ext.holdExpiresAt) : null,
     bank: {
       bankName: null,
       accountName: hotel.accountNumber ? `${hotel.hotelName} · ${hotel.accountNumber}` : null,
@@ -848,7 +848,7 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
     draft,
     draftStrip: draft ? `Draft — not issued · indicative position as at ${formatDocDateTimeLocal(input.asAt)}` : null,
     bookingRef: input.bookingRef,
-    issued: draft ? formatDocDateTimeLocal(input.asAt) : formatDocDate(input.issued!.issuedAt),
+    issued: draft ? formatDocDateTimeLocal(input.asAt) : formatDocDateLocal(input.issued!.issuedAt),
     billedTo: input.parties.billedTo,
     forGuest: input.parties.forGuest,
     customerTpn: input.parties.customerTpn,

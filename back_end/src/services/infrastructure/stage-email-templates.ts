@@ -9,7 +9,7 @@
  * marketing can edit copy without a deploy — same render signatures, just the body source changes.
  */
 
-import { escapeHtml, formatDate, formatMoney, htmlShell, type StageEmailContent } from "./stage-email-helpers.js";
+import { escapeHtml, formatDate, formatMoment, formatMoney, htmlShell, type StageEmailContent } from "./stage-email-helpers.js";
 import type { StayChargeBreakdown } from "./compute-stay-charges.js";
 
 /**
@@ -109,7 +109,7 @@ export function renderQuotationEmail(d: QuotationEmailData): StageEmailContent {
     "",
     ...breakdownLines(d.breakdown, d.currency),
     "",
-    `This quotation is valid until ${formatDate(d.validUntil)}.`,
+    `This quotation is valid until ${formatMoment(d.validUntil)}.`,
     "",
     "To confirm or ask any questions, just reply to this email and our front desk will assist.",
     "",
@@ -131,7 +131,7 @@ ${detailsTable([
   tableRow("Nightly rate", formatMoney(d.nightlyRate, d.currency), !d.ratePlanName),
   ...breakdownRows(d.breakdown, d.currency),
 ])}
-<p style="font-size:13px;color:#555">This quotation is valid until <strong>${escapeHtml(formatDate(d.validUntil))}</strong>.</p>
+<p style="font-size:13px;color:#555">This quotation is valid until <strong>${escapeHtml(formatMoment(d.validUntil))}</strong>.</p>
 <p>To confirm or ask any questions, just reply to this email and our front desk will assist.</p>
 <p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
 `);
@@ -274,9 +274,9 @@ export function renderInterimInvoiceEmail(d: InterimInvoiceEmailData): StageEmai
     "",
     d.paymentPromise ? `Payment promised ${d.paymentPromise}.` : null,
     d.paymentPromise ? "" : null,
-    d.dueBy ? `Please settle this by ${formatDate(d.dueBy)}.` : null,
+    d.dueBy ? `Please settle this by ${formatMoment(d.dueBy)}.` : null,
     d.dueBy ? "" : null,
-    d.holdExpiresAt ? `The extra nights are held for you until ${formatDate(d.holdExpiresAt)}.` : null,
+    d.holdExpiresAt ? `The extra nights are held for you until ${formatMoment(d.holdExpiresAt)}.` : null,
     d.holdExpiresAt ? "" : null,
     "Reply to this email if you need bank details or have any questions.",
     "",
@@ -299,11 +299,11 @@ ${detailsTable([
   tableRow("Already received", formatMoney(d.receivedSoFar, d.currency)),
   tableRow(`Asked now (${d.askLabel})`, formatMoney(d.dueNow, d.currency), true, true),
   tableRow("Balance at checkout", formatMoney(d.balanceAtCheckout, d.currency)),
-  d.dueBy ? tableRow("Payment due by", formatDate(d.dueBy), true) : "",
+  d.dueBy ? tableRow("Payment due by", formatMoment(d.dueBy), true) : "",
   d.paymentPromise ? tableRow("Payment promised", d.paymentPromise, true) : "",
 ])}
-${d.dueBy ? `<p style="font-size:13px;color:#555">Please settle this by <strong>${escapeHtml(formatDate(d.dueBy))}</strong>.</p>` : ""}
-${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are held for you until <strong>${escapeHtml(formatDate(d.holdExpiresAt))}</strong>.</p>` : ""}
+${d.dueBy ? `<p style="font-size:13px;color:#555">Please settle this by <strong>${escapeHtml(formatMoment(d.dueBy))}</strong>.</p>` : ""}
+${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are held for you until <strong>${escapeHtml(formatMoment(d.holdExpiresAt))}</strong>.</p>` : ""}
 <p>Reply to this email if you need bank details or have any questions.</p>
 <p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
 `);

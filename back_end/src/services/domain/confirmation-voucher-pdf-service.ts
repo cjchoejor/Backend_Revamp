@@ -32,7 +32,7 @@ import {
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelConfirmationVoucherHtml } from "../infrastructure/pdf-templates/legphel-confirmation-voucher-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatDocDateTime } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatDocDateTime, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { type ConfirmationVoucherLine } from "../infrastructure/pdf-templates/confirmation-voucher-template.js";
 
 /** Static policy text — matches the reference voucher. Would live in ConfigurationEntry once
@@ -189,7 +189,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
     masthead: mastheadFromHotelProfile(hotel),
     voucherNo: reservation.id,
     bookingRef: entry.inquiryId,
-    date: formatDocDate(reservation.confirmedAt ?? now),
+    date: formatDocDateLocal(reservation.confirmedAt ?? now),
     guest: guestFullName,
     bookedBy: contactPersonName || null,
     checkIn: formatDocDateTime(checkIn, "14:00"),

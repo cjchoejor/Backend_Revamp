@@ -28,7 +28,7 @@ import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-con
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelQuotationHtml } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatStayRange } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatStayRange, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 
 type QuotationTerms = {
@@ -512,9 +512,9 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
     masthead: mastheadFromHotelProfile(hotel),
     quotationNo: q.referenceNumber,
     bookingRef: q.entryId,
-    date: formatDocDate(documentDate),
+    date: formatDocDateLocal(documentDate),
     validityStrip: q.validUntil
-      ? `Valid until ${formatDocDate(q.validUntil)} · Not a booking confirmation`
+      ? `Valid until ${formatDocDateLocal(q.validUntil)} · Not a booking confirmation`
       : "Not a booking confirmation",
     to: toEmail ? `${guestName} · ${toEmail}` : guestName,
     attn: null,

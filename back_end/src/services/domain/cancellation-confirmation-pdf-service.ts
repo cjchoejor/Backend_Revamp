@@ -45,11 +45,7 @@ import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-con
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelCancellationConfirmationHtml } from "../infrastructure/pdf-templates/legphel-cancellation-confirmation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import {
-  formatDocDate,
-  formatNoticeGiven,
-  formatStayRange,
-} from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatNoticeGiven, formatStayRange, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 
 export type CancellationFigures = {
   /** Total advance held against the folio at the moment of cancellation. */
@@ -154,7 +150,7 @@ export async function generateCancellationConfirmationPdf(
     // once that model lands.
     cancellationNo: `${entry.inquiryId}/CX`,
     bookingRef: entry.inquiryId,
-    date: formatDocDate(cancelledAt),
+    date: formatDocDateLocal(cancelledAt),
     guest: guestName,
     cancelledStay: cancelledStay || "—",
     noticeGiven: formatNoticeGiven(cancelledAt, entry.checkInDate),

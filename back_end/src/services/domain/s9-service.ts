@@ -17,7 +17,7 @@ import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFig
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
-import { formatDate as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
+import { formatMoment as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
 import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";

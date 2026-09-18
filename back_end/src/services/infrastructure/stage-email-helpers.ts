@@ -105,9 +105,23 @@ async function writeStageEmailTrace(
 
 // --- Small render utilities reused by every template ---
 
+/**
+ * A STAY date ("Wednesday, 30 Sep 2026") — stored at UTC midnight, so read on the UTC calendar.
+ * It used the host's own timezone (2026-09-19): right on a server set to Bhutan time, a day early
+ * on one west of UTC.
+ */
 export function formatDate(d: Date | null | undefined): string {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric" });
+  return new Date(d).toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** A MOMENT — valid until, due by, held until — on the hotel's clock, with its time. */
+export function formatMoment(d: Date | null | undefined): string {
+  if (!d) return "—";
+  const tz = process.env.HOTEL_TIMEZONE?.trim() || "Asia/Thimphu";
+  const day = new Date(d).toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: tz });
+  const time = new Date(d).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: tz });
+  return `${day}, ${time}`;
 }
 
 export function formatMoney(amount: number | null | undefined, currency: string): string {
