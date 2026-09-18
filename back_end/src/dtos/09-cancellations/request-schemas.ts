@@ -9,6 +9,8 @@ export type RecordCancellationDisclosureRequestDto = z.infer<typeof recordCancel
 /** POST /entries/:id/cancel — optional Policy 35 penalty waiver (requires GM per SIG-S5). */
 export const cancelS5EntryRequestSchema = z.object({
   penaltyWaiverRequested: z.boolean().optional(),
+  /** Why the booking is cancelled — the guest's words (2026-09-18: the Arrival cancel recorded none). */
+  reason: z.string().trim().max(2000).optional(),
 });
 export type CancelS5EntryRequestDto = z.infer<typeof cancelS5EntryRequestSchema>;
 

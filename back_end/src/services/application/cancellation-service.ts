@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { ActorLevel, EntryStatus, FolioLineType, FolioState, HoldState, InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -195,25 +196,9 @@ export async function cancelEntryAtS3(
         }
       }
       for (const roomId of heldRoomIds) {
-        const roomRow = await tx.room.findUnique({ where: { id: roomId } });
-        const fromState = roomRow?.currentClaimState;
-        if (fromState && fromState !== InventoryClaimState.FREE) {
-          await tx.room.update({
-            where: { id: roomId },
-            data: { currentClaimState: InventoryClaimState.FREE },
-          });
-          await tx.roomClaimStateEvent.create({
-            data: {
-              roomId,
-              entryId,
-              fromState,
-              toState: InventoryClaimState.FREE,
-              actorId,
-              reason: "S3_PRE_CONFIRMATION_CANCELLATION",
-              effectiveFrom: now,
-            },
-          });
-        }
+        // Only the flags this booking owns (2026-09-18): cancelling an October booking set a room
+        // FREE while another guest slept in it tonight. See releaseRoomClaimIfOwnedTx.
+        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: "S3_PRE_CONFIRMATION_CANCELLATION", now });
       }
       await tx.committedHold.update({
         where: { id: hold.id },
@@ -315,7 +300,7 @@ export async function cancelEntryAtS5(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  opts?: { penaltyWaiverRequested?: boolean; actorLevel?: RequestActorLevel },
+  opts?: { penaltyWaiverRequested?: boolean; actorLevel?: RequestActorLevel; reason?: string },
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -422,6 +407,8 @@ export async function cancelEntryAtS5(
         inquiryId: entry.inquiryId,
         entryId,
         payload: {
+          // Why it was cancelled, as the S3 cancellation records it (2026-09-18).
+          reason: opts?.reason?.trim() || null,
           penalty,
           cappedPenalty,
           advanceTotal,
@@ -449,25 +436,9 @@ export async function cancelEntryAtS5(
         }
       }
       for (const roomId of heldRoomIds) {
-        const roomRow = await tx.room.findUnique({ where: { id: roomId } });
-        const fromState = roomRow?.currentClaimState;
-        if (fromState && fromState !== InventoryClaimState.FREE) {
-          await tx.room.update({
-            where: { id: roomId },
-            data: { currentClaimState: InventoryClaimState.FREE },
-          });
-          await tx.roomClaimStateEvent.create({
-            data: {
-              roomId,
-              entryId,
-              fromState,
-              toState: InventoryClaimState.FREE,
-              actorId,
-              reason: "S5_PRE_ARRIVAL_CANCELLATION",
-              effectiveFrom: now,
-            },
-          });
-        }
+        // Only the flags this booking owns (2026-09-18): cancelling an October booking set a room
+        // FREE while another guest slept in it tonight. See releaseRoomClaimIfOwnedTx.
+        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: "S5_PRE_ARRIVAL_CANCELLATION", now });
       }
       await tx.committedHold.update({
         where: { id: hold.id },

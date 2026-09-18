@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { EntryStatus, HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { firstRoomId, readOptionSelected } from "../../lib/option-selected-reader.js";
@@ -704,11 +705,9 @@ export async function releaseCommittedHoldForRoomChange(
     const room = await tx.room.findUnique({ where: { id: roomId } });
     // PMS-236: free the flag only when it reads a state THIS hold set. Releasing a
     // future-dated hold must never reset a room someone is sleeping in tonight.
+    // …and only when this booking owns it, or no other live booking claims the room (2026-09-18).
     if (room && committedHoldMayFreeClaimFlag(room.currentClaimState)) {
-      await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
-      await tx.roomClaimStateEvent.create({
-        data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason, effectiveFrom: now },
-      });
+      await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId: actor.actorId, reason, now });
     }
   }
 
@@ -850,18 +849,8 @@ export async function releaseCommittedHoldByAuthority(
       // PMS-236: free the flag only when it reads a state THIS hold set. Releasing a
     // future-dated hold must never reset a room someone is sleeping in tonight.
     if (room && committedHoldMayFreeClaimFlag(room.currentClaimState)) {
-        await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE, updatedAt: now } });
-        await tx.roomClaimStateEvent.create({
-          data: {
-            roomId,
-            entryId,
-            fromState: room.currentClaimState,
-            toState: InventoryClaimState.FREE,
-            actorId: actor.actorId,
-            reason,
-            effectiveFrom: now,
-          },
-        });
+        // …and only when this booking owns it, or no other live booking claims it (2026-09-18).
+        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId: actor.actorId, reason, now });
       }
     }
 
@@ -919,10 +908,8 @@ export async function releaseOnReEntry(
     if (!room) continue;
     // PMS-236: only this hold's own flag is ours to clear (see room-claim-flag.ts).
     if (!committedHoldMayFreeClaimFlag(room.currentClaimState)) continue;
-    await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.FREE } });
-    await tx.roomClaimStateEvent.create({
-      data: { roomId, entryId, fromState: room.currentClaimState, toState: InventoryClaimState.FREE, actorId: actor.actorId, reason: `${reason}_HOLD_RELEASED`, effectiveFrom: now },
-    });
+    // …and only when this booking owns it, or no other live booking claims it (2026-09-18).
+    await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId: actor.actorId, reason: `${reason}_HOLD_RELEASED`, now });
   }
 
   const engine = await getTimerEngine();

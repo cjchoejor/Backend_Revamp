@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { releaseRoomClaimIfOwnedTx } from "./room-claim-state.js";
 import { HoldState, InventoryClaimState } from "@prisma/client";
 
 type CommittedHoldLike = { id: string; state: HoldState; roomId: string | null } | null | undefined;
@@ -23,26 +24,10 @@ export async function releaseRoomOnNoShowTerminalTx(
 
   let released = false;
   if (committedHold.roomId) {
-    const room = await tx.room.findUnique({ where: { id: committedHold.roomId } });
-    const fromState = room?.currentClaimState;
-    if (fromState && fromState !== InventoryClaimState.FREE) {
-      await tx.room.update({
-        where: { id: committedHold.roomId },
-        data: { currentClaimState: InventoryClaimState.FREE },
-      });
-      await tx.roomClaimStateEvent.create({
-        data: {
-          roomId: committedHold.roomId,
-          entryId,
-          fromState,
-          toState: InventoryClaimState.FREE,
-          actorId,
-          reason: "NO_SHOW_RELEASE",
-          effectiveFrom: now,
-        },
-      });
-      released = true;
-    }
+    // Only a flag this booking owns — a no-show never clears a room someone else is in, or
+    // another booking's claim on it (2026-09-18).
+    const r = await releaseRoomClaimIfOwnedTx(tx, { roomId: committedHold.roomId, entryId, actorId, reason: "NO_SHOW_RELEASE", now });
+    released = r.transitioned;
   }
 
   await tx.committedHold.update({

@@ -40,6 +40,7 @@ cancellationsRouter.post(
     try {
       const updated = await cancellationService.cancelEntryAtS5(prisma, req.params.id, req.actor!.actorId, {
         penaltyWaiverRequested: req.body.penaltyWaiverRequested === true,
+        reason: req.body.reason,
         actorLevel: req.actor!.level,
       });
       res.json(updated);

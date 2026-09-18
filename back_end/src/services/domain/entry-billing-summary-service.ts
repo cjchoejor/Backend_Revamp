@@ -560,7 +560,10 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
   // (2026-09-18). The stay total is the room-night contract: after an early departure it shrinks
   // to the nights slept, 0 for a guest who left on the day they arrived, while they still owe for
   // the extras and the fee. The header read "Nu 0.00" beside a balance of Nu 3,696.
-  const stayOver = entry.currentStage === "S8" || entry.currentStage === "S9" || entry.status === "CLOSED";
+  // A cancelled booking too: its header read the dead quote ("Nu 23,866.92 as confirmed") when
+  // what it was billed is the cancellation charge.
+  const stayOver =
+    entry.currentStage === "S8" || entry.currentStage === "S9" || entry.status === "CLOSED" || entry.status === "CANCELLED";
   const headline: EntryBillingSummary["headline"] =
     stayOver && folioBlock?.billedSoFar != null
       ? { amount: folioBlock.billedSoFar, kind: "BILLED_SO_FAR", frozen }

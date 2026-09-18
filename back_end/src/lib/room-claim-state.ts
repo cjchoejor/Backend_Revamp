@@ -1,4 +1,7 @@
 import { InventoryClaimState, Prisma } from "@prisma/client";
+import { claimFlagReportsPhysicalState } from "./room-claim-flag.js";
+import { findRoomBookingConflicts } from "./room-booking-conflicts.js";
+import { hotelTodayUtc } from "./stay-dates.js";
 
 /**
  * Centralised room-claim-state transition helper.
@@ -166,15 +169,66 @@ export async function releaseEntryRoomsToFree(
   const roomIds = await collectRoomsHeldByEntry(tx, input.entryId);
   let transitioned = 0;
   for (const roomId of roomIds) {
-    const result = await transitionRoomClaimState(tx, {
-      roomId,
+    const result = await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId: input.entryId, actorId: input.actorId, reason: input.reason, now });
+    if (result.transitioned) transitioned += 1;
+  }
+  return { inspected: roomIds, transitioned };
+}
+
+/**
+ * Release ONE room's flag for a booking that is letting it go — only when the flag is the
+ * booking's to release (2026-09-18).
+ *
+ * The flag is a NOW snapshot shared by every booking of the room. Releases set it FREE "from any
+ * starting state", so cancelling an October booking of room 205 set the room FREE while a family
+ * was sleeping in it tonight — the board showed an occupied room as free. The rules:
+ *
+ *  - The room's latest claim event says which booking set the flag. A state THIS booking set is
+ *    its own to clear — its hold, its confirmation, or (at closure, the only place that unsticks
+ *    it yet) the "departed, dirty" its own checkout left.
+ *  - A PHYSICAL state set by another booking (someone else occupies the room, or just left it)
+ *    is never cleared: that booking and housekeeping own it.
+ *  - A CLAIM state (held, confirmed) set by another booking is cleared only when no other live
+ *    booking still claims the room from today on, judged by the bookings' own dates — a flag
+ *    left behind by a booking that no longer holds anything.
+ */
+export async function releaseRoomClaimIfOwnedTx(
+  tx: TxClient,
+  input: { roomId: string; entryId: string; actorId: string; reason: string; now?: Date },
+): Promise<ClaimTransitionResult> {
+  const now = input.now ?? new Date();
+  const row = await tx.room.findUnique({ where: { id: input.roomId }, select: { currentClaimState: true } });
+  if (!row) return { transitioned: false, fromState: null, toState: InventoryClaimState.FREE };
+  const fromState = row.currentClaimState;
+  if (fromState === InventoryClaimState.FREE) {
+    return { transitioned: false, fromState, toState: InventoryClaimState.FREE, skippedSameState: true };
+  }
+  const lastEvent = await tx.roomClaimStateEvent.findFirst({
+    where: { roomId: input.roomId },
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+    select: { entryId: true, toState: true },
+  });
+  const setByThisBooking = lastEvent?.entryId === input.entryId && lastEvent.toState === fromState;
+  const release = () =>
+    transitionRoomClaimState(tx, {
+      roomId: input.roomId,
       toState: InventoryClaimState.FREE,
       actorId: input.actorId,
       entryId: input.entryId,
       reason: input.reason,
       now,
     });
-    if (result.transitioned) transitioned += 1;
+  if (claimFlagReportsPhysicalState(fromState)) {
+    // Its own departure (or occupancy) is the booking's to clear; anyone else's never is.
+    return setByThisBooking ? release() : { transitioned: false, fromState, toState: InventoryClaimState.FREE };
   }
-  return { inspected: roomIds, transitioned };
+  const today = hotelTodayUtc(now);
+  const others = await findRoomBookingConflicts(tx, {
+    roomIds: [input.roomId],
+    checkIn: today,
+    checkOut: new Date(Date.UTC(today.getUTCFullYear() + 10, 0, 1)),
+    excludeEntryId: input.entryId,
+  });
+  if (others.length > 0) return { transitioned: false, fromState, toState: InventoryClaimState.FREE };
+  return release();
 }
