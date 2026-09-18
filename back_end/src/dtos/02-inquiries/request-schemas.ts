@@ -18,6 +18,17 @@ export const createInquiryRequestSchema = z
         conflictingInquiryId: z.string().optional(),
       })
       .optional(),
+    /**
+     * The FOM's answer to a confirmed duplicate (SIG-S1 §6.1, Policy 12 — 2026-09-18): go ahead
+     * with a recorded reason (ACKNOWLEDGE), or record that it is not a true duplicate (DISMISS).
+     * FOM or above, read from the verified session. Without it a confirmed duplicate still blocks.
+     */
+    duplicateResolution: z
+      .object({
+        resolution: z.enum(["ACKNOWLEDGE", "DISMISS"]),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .optional(),
     /** Phase C — optional link to a TravelAgent (Phase B model). Mutually exclusive with corporateAccountId. */
     travelAgentId: z.string().min(1).nullable().optional(),
     /** Phase C — optional link to a CorporateAccount (Phase B model). Mutually exclusive with travelAgentId. */

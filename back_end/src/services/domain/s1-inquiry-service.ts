@@ -1,5 +1,5 @@
 import type { ActorLevel, PrismaClient } from "@prisma/client";
-import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { AppError, AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
 import { resolveInitialCustodianActorId } from "../../policies/02-ownership-custodian-assignment/p03-initial-custodian-assignment.js";
 import * as duplicateDetectionService from "./duplicate-detection-service.js";
@@ -27,6 +27,7 @@ export async function createInquiry(
     proposedCheckIn?: string;
     proposedCheckOut?: string;
     duplicateCheck?: { isDuplicate: boolean; conflictingInquiryId?: string };
+    duplicateResolution?: { resolution: "ACKNOWLEDGE" | "DISMISS"; reason: string };
     /** Phase C — optional FK to TravelAgent. Mutually exclusive with corporateAccountId. */
     travelAgentId?: string | null;
     /** Phase C — optional FK to CorporateAccount. Mutually exclusive with travelAgentId. */
@@ -83,11 +84,31 @@ export async function createInquiry(
     }
   }
 
-  await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
-    guestProfileId: input.guestProfileId.trim(),
-    proposedCheckIn: input.proposedCheckIn,
-    proposedCheckOut: input.proposedCheckOut,
-  });
+  // Policy 12 (SIG-S1 §6.1): a confirmed duplicate blocks creation until the FOM resolves it —
+  // the operator sees the conflicting booking, and the FOM either goes ahead with a recorded
+  // reason (a deliberate second booking: another room for the same guest, the tour leader's own
+  // night) or records that it is not a true duplicate. The spec's resolution paths existed only
+  // as a flag nothing could create while the block fired, so a deliberate second booking for a
+  // guest could not be entered at all (2026-09-18). Merging into the existing inquiry is not built.
+  const dup = input.duplicateResolution ?? null;
+  if (dup) {
+    if (!(actorLevel === "L2" || actorLevel === "L3" || actorLevel === "L4")) {
+      throw new AuthorizationError("A confirmed duplicate is the FOM's to resolve");
+    }
+    if (!dup.reason?.trim()) throw new ValidationError("Say why this booking goes ahead");
+  }
+  let resolvedConflict: { conflictingInquiryId: string | null; conflictingEntryId: string | null } | null = null;
+  try {
+    await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
+      guestProfileId: input.guestProfileId.trim(),
+      proposedCheckIn: input.proposedCheckIn,
+      proposedCheckOut: input.proposedCheckOut,
+    });
+  } catch (e) {
+    const body = e instanceof AppError ? (e.body as { blockingCondition?: string; details?: { conflictingInquiryId?: string; conflictingEntryId?: string } }) : null;
+    if (!dup || body?.blockingCondition !== "DUPLICATE_INQUIRY_CONFIRMED") throw e;
+    resolvedConflict = { conflictingInquiryId: body.details?.conflictingInquiryId ?? null, conflictingEntryId: body.details?.conflictingEntryId ?? null };
+  }
 
   const custodian = await resolveInitialCustodianActorId(prisma, { sourceChannel: channel.sourceChannel });
 
@@ -115,6 +136,38 @@ export async function createInquiry(
         inquiryId: created.id,
         actorId,
         conflictingInquiryId: input.duplicateCheck.conflictingInquiryId ?? null,
+      });
+    }
+
+    // The FOM's resolution of the confirmed duplicate, on record: the flag, resolved at once.
+    if (resolvedConflict && dup) {
+      const flag = await tx.duplicateDetectionFlag.create({
+        data: {
+          inquiryId: created.id,
+          status: "RESOLVED",
+          resolutionType: dup.resolution,
+          resolutionReason: dup.reason.trim(),
+          mergedIntoInquiryId: null,
+          createdBy: actorId,
+          resolvedAt: now,
+          resolvedBy: actorId,
+        },
+      });
+      await auditService.emit(tx as any, { actorId, actorLevel }, {
+        eventType: "INQUIRY.DUPLICATE_RESOLVED",
+        entityType: "DuplicateDetectionFlag",
+        entityId: flag.id,
+        operation: "CREATE",
+        timestamp: now,
+        inquiryId: created.id,
+        payload: {
+          resolutionType: dup.resolution,
+          resolutionReason: dup.reason.trim(),
+          conflictingInquiryId: resolvedConflict.conflictingInquiryId,
+          conflictingEntryId: resolvedConflict.conflictingEntryId,
+          atCreation: true,
+        },
+        createdBy: actorId,
       });
     }
 
