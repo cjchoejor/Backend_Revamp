@@ -80,6 +80,16 @@ export async function confirmReservation(
      * question first.
      */
     carryMultiBookingAcknowledgement?: boolean;
+    /**
+     * Internal-only (2026-09-19): the walk's re-freeze does not reopen the advance question. The
+     * money story was settled when the booking was first confirmed — by payment or by the FOM's
+     * credit — and the walk's hold re-placement already skips the same gate (Policy 42, trigger
+     * ROOM_CHANGE) for that reason. Re-asking it here could strand an in-house booking at Set up
+     * after the irreversible re-entry: a credit extension that covered the gate "until check-in"
+     * has lapsed by the time the guest needs a room change. An extension's own money is taken on
+     * its interim invoice before the commit (Policy 80).
+     */
+    carryAdvanceCondition?: boolean;
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -220,7 +230,7 @@ export async function confirmReservation(
   // Reuses the evaluation resolved for the proforma-dispatch gate above — same folio, same
   // thresholds, nothing in between mutates payments.
   const advanceStatus = advanceEvaluation;
-  if (!advanceStatus.satisfied) {
+  if (!advanceStatus.satisfied && !input?.carryAdvanceCondition) {
     throw new PolicyGateBlockedError(
       "ADVANCE_OR_CREDIT_REQUIRED",
       "Advance payment threshold or approved credit extension must be satisfied before confirmation (Policy 42 slice)",

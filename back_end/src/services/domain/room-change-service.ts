@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { HandoffState, HandoffType, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
 import { enforceNoOverbookingForPlannedStay } from "../../policies/17-overbooking/p41-overbooking-requires-gm-mitigation.js";
@@ -2227,6 +2228,9 @@ export async function changeRoomToNewSegment(
       carryHighValueAuthority: sameType,
       // Same dates, same question already answered — only an extension re-asks it (asked above).
       carryMultiBookingAcknowledgement: !isExtension,
+      // The advance was settled at the first freeze (money or the FOM's credit); the walk does
+      // not reopen it — the hold re-placement above skips the same gate for the same reason.
+      carryAdvanceCondition: true,
     });
   } catch (e) {
     return blockedOutcome("RECONFIRMATION", e);
@@ -2342,6 +2346,22 @@ export async function changeRoomToNewSegment(
     // re-entry), and the W4 countdown armed by the re-confirmation is cancelled.
     try {
       const jumpNow = new Date();
+      // The new room's housekeeping and kitchen handoffs carry the same acceptance window
+      // check-in gives them, and the same W25 clock (armed below, after the commit) — minted
+      // bare, nobody was chased when housekeeping never picked up the moved guest's room
+      // (2026-09-19). Best-effort: a missing window leaves the handoff undated, as before.
+      const ackWindows = ((await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "acknowledgement.windowPerType").catch(
+        () => undefined,
+      )) ?? {}) as Record<string, number>;
+      const windowSeconds = (k: "h2" | "h3") => {
+        const v = Number(ackWindows[k] ?? ackWindows[k.toUpperCase()] ?? ackWindows[k === "h2" ? "handoffH2" : "handoffH3"]);
+        return Number.isFinite(v) && v > 0 ? v : null;
+      };
+      const slaFor = (k: "h2" | "h3") => {
+        const sec = windowSeconds(k);
+        return sec ? new Date(jumpNow.getTime() + sec * 1000) : null;
+      };
+      const mintedHandoffIds: string[] = [];
       await prisma.$transaction(async (tx) => {
         const s4Dwell = await tx.stageDwellRecord.findFirst({
           where: { entryId: input.entryId, stage: Stage.S4, exitedAt: null },
@@ -2382,10 +2402,12 @@ export async function changeRoomToNewSegment(
               reason: "ROOM_CHANGE",
               fromRoomNumber: ctx.fromRoom.roomNumber,
             } as Prisma.InputJsonValue,
+            slaDeadlineAt: slaFor("h2"),
             createdBy: actor.actorId,
             stageContext: Stage.S7,
           },
         });
+        mintedHandoffIds.push(h2Id);
         const h3Id = await allocateReadableId(tx, "HANDOFF" as const, jumpNow);
         await tx.handoffRecord.create({
           data: {
@@ -2403,10 +2425,12 @@ export async function changeRoomToNewSegment(
               reason: "ROOM_CHANGE",
               fromRoomNumber: ctx.fromRoom.roomNumber,
             } as Prisma.InputJsonValue,
+            slaDeadlineAt: slaFor("h3"),
             createdBy: actor.actorId,
             stageContext: Stage.S7,
           },
         });
+        mintedHandoffIds.push(h3Id);
         }
 
         await tx.traceEvent.create({
@@ -2434,6 +2458,35 @@ export async function changeRoomToNewSegment(
         });
       });
 
+      // The acceptance clocks for the new room's handoffs — check-in's shape (best-effort).
+      if (mintedHandoffIds.length > 0) {
+        try {
+          const engine = await getTimerEngine();
+          const minted = await prisma.handoffRecord.findMany({ where: { id: { in: mintedHandoffIds } }, select: { id: true, slaDeadlineAt: true } });
+          for (const h of minted) {
+            if (!h.slaDeadlineAt) continue;
+            const jobId = await engine.schedule("H2_H3_ACCEPTANCE_W25", { handoffId: h.id }, { startAfter: h.slaDeadlineAt });
+            await prisma.timerRecord.create({
+              data: {
+                entryId: input.entryId,
+                entityType: "HandoffRecord",
+                entityId: h.id,
+                timerType: "H2_H3_ACCEPTANCE_W25",
+                timerCode: "H2_H3_ACCEPTANCE_W25",
+                stageContext: Stage.S7,
+                firesAt: h.slaDeadlineAt,
+                dueAt: h.slaDeadlineAt,
+                status: "SCHEDULED",
+                payload: { handoffId: h.id, entryId: input.entryId },
+                pgBossJobId: jobId,
+                createdBy: "SYSTEM",
+              },
+            });
+          }
+        } catch {
+          /* a clock that could not be armed never fails the move */
+        }
+      }
       // The re-confirmation armed a W4 pre-arrival countdown that is meaningless in-house.
       await cancelEntryTimersByCode(prisma, {
         entryId: input.entryId,

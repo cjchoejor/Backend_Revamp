@@ -401,6 +401,23 @@ export async function runAvailabilityEngineForEntry(
 
   // Standard (rack) indicative from the hotel's rate plans — used as the fallback and for walk-ins.
   const indicative = await resolveIndicativePricingForS1Availability(prisma, { checkIn, checkOut }, input.roomTypeId);
+  // …resolved per ROOM TYPE (2026-09-19). Resolved once for the whole search, every room of a
+  // walk-in showed the same plan's rate — a Suite that costs Nu 4,500 read Nu 2,100 at Inquiry —
+  // while the quote prices each type at its own plan. Same loader and room-type filter as the S2
+  // draft (`loadEligibleRatePlans`), so the figure the guest hears is the figure they are quoted.
+  const rackChipByRoomType = new Map<string, IndicativeChip | null>();
+  if (!input.roomTypeId) {
+    const types = new Set<string>();
+    for (const r of [...engineRaw.availableRooms, ...engineRaw.deficientRooms] as any[]) {
+      if (r.roomTypeId) types.add(r.roomTypeId as string);
+    }
+    for (const roomTypeId of types) {
+      rackChipByRoomType.set(
+        roomTypeId,
+        (await resolveIndicativePricingForS1Availability(prisma, { checkIn, checkOut }, roomTypeId)) as IndicativeChip | null,
+      );
+    }
+  }
 
   // Contracted-rate override (SIG-S1 §1.6 indicative; Phase B RateCard): if the inquiry is linked to
   // a travel agent or corporate account, surface that party's negotiated per-room-type rate instead
@@ -435,7 +452,9 @@ export async function runAvailabilityEngineForEntry(
 
   // Per-room indicative: contracted rate for the room's type when available, else the rack indicative.
   const chipForRoom = (r: any): IndicativeChip | null =>
-    (r.roomTypeId ? agentChipByRoomType.get(r.roomTypeId) : null) ?? (indicative as IndicativeChip | null);
+    (r.roomTypeId ? agentChipByRoomType.get(r.roomTypeId) : null) ??
+    (r.roomTypeId ? rackChipByRoomType.get(r.roomTypeId) ?? null : null) ??
+    (indicative as IndicativeChip | null);
   const attachPricing = (rooms: any[]) =>
     rooms.map((r) => {
       const chip = chipForRoom(r);

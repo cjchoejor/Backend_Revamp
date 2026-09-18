@@ -144,7 +144,13 @@ export async function listDeskBookings(
 
   return rows.map((r) => {
     const numbers = new Set<string>();
-    for (const a of r.roomAssignments) if (a.room?.roomNumber) numbers.add(a.room.roomNumber);
+    for (const a of r.roomAssignments) {
+      if (!a.room?.roomNumber) continue;
+      // A zero-night row is a room the guest left before sleeping a night in it (a change on the
+      // first night, 2026-09-19) — the booking never used it, so it is not one of its rooms.
+      if (a.startDate && a.endDate && a.startDate.getTime() >= a.endDate.getTime()) continue;
+      numbers.add(a.room.roomNumber);
+    }
     const follow = r.timers.find((t) => t.timerCode === "PARKING_FOLLOW_UP");
     return {
       ...r,
