@@ -184,7 +184,11 @@ async function main() {
     });
     await prisma.room.update({ where: { id: r.id }, data: { currentClaimState: "OCCUPIED" } });
   }
-  await prisma.stageDwellRecord.create({ data: { entryId: entry.id, stage: "S7", enteredAt: checkIn } });
+  // In-house from NOW as far as the hotel's audits know (2026-09-18): the fixture did not exist
+  // when any earlier night was audited, so those nights are exactly a late check-in's — running
+  // the night again catches them up. Stamped with the check-in date, an already-audited night
+  // could never be charged and settlement refused the stay.
+  await prisma.stageDwellRecord.create({ data: { entryId: entry.id, stage: "S7", enteredAt: new Date() } });
   console.log(`created ${entry.id} in room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} — now run the night audit for ${SLEPT > 0 ? `${iso(checkIn)} … ${iso(dayStart(-1))}` : "(no slept nights)"}`);
 }
 
