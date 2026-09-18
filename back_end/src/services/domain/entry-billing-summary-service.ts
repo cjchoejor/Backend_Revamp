@@ -556,8 +556,15 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
   }
 
   const stayTotal = money(stayTotalDec);
+  // Once the guest has left (Check-out, Closed) the headline is the bill as it stands
+  // (2026-09-18). The stay total is the room-night contract: after an early departure it shrinks
+  // to the nights slept, 0 for a guest who left on the day they arrived, while they still owe for
+  // the extras and the fee. The header read "Nu 0.00" beside a balance of Nu 3,696.
+  const stayOver = entry.currentStage === "S8" || entry.currentStage === "S9" || entry.status === "CLOSED";
   const headline: EntryBillingSummary["headline"] =
-    stayTotal != null
+    stayOver && folioBlock?.billedSoFar != null
+      ? { amount: folioBlock.billedSoFar, kind: "BILLED_SO_FAR", frozen }
+      : stayTotal != null
       ? { amount: stayTotal, kind: "STAY_TOTAL", frozen }
       : folioBlock?.billedSoFar != null
         ? { amount: folioBlock.billedSoFar, kind: "BILLED_SO_FAR", frozen }

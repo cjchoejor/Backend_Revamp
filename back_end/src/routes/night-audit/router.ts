@@ -3,7 +3,7 @@ import { prisma } from "../../db.js";
 import { nightAuditOperatingDateParamSchema, runNightAuditRequestSchema } from "../../dtos/15-night-audit/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
-import { ValidationError } from "../../lib/errors.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s7NightAuditService from "../../services/application/s7-night-audit-service.js";
 
 export const nightAuditRouter = Router();
@@ -21,6 +21,48 @@ nightAuditRouter.get(
       }
       const record = await s7NightAuditService.getNightAuditRecordByOperatingDate(prisma, parsed.data.operatingDate);
       res.json(record);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Has this night been audited — the answer alone, for the whole desk (2026-09-18).
+ *
+ * The full record above carries the night's folio lines and anomalies across the whole hotel, so
+ * it is the FOM's. But the Stay and Check-out steps gate on "has the final night been audited",
+ * and a front-desk user's read of the full record was refused, so the gate stayed shut for them
+ * however many times the FOM ran the audit. This answers that question and nothing more.
+ */
+nightAuditRouter.get(
+  "/night-audit/operating-date/:operatingDate/status",
+  requireActorLevel("L1"),
+  async (req, res, next) => {
+    try {
+      const parsed = nightAuditOperatingDateParamSchema.safeParse(req.params);
+      if (!parsed.success) {
+        next(new ValidationError("operatingDate must be YYYY-MM-DD", parsed.error.flatten()));
+        return;
+      }
+      // A night nobody has audited yet is an answer ("not yet"), not a missing resource.
+      const record = await s7NightAuditService
+        .getNightAuditRecordByOperatingDate(prisma, parsed.data.operatingDate)
+        .catch((e) => {
+          if (e instanceof NotFoundError) return null;
+          throw e;
+        });
+      if (!record) {
+        res.json(null);
+        return;
+      }
+      res.json({
+        id: record.id,
+        operatingDate: record.operatingDate,
+        runStatus: record.runStatus,
+        entriesProcessed: record.entriesProcessedCount,
+        createdAt: record.createdAt,
+      });
     } catch (e) {
       next(e);
     }

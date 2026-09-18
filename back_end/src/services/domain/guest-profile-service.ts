@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
-import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { resolveVerificationPaths } from "../../lib/identity-verification-path.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
@@ -118,6 +119,7 @@ export async function recordVerification(
     issuingCountry?: string;
     expiryDate?: string;
   },
+  actorLevel: "L1" | "L2" | "L3" | "L4" = "L1",
 ) {
   const entry = await prisma.entry.findUnique({ where: { id: body.entryId } });
   if (!entry) throw new NotFoundError("Entry");
@@ -136,6 +138,17 @@ export async function recordVerification(
   const retentionMap = (await requireActiveConfigValue<Record<string, number> | undefined>(prisma, "identity.retentionPeriodDays")) ?? {};
 
   const now = new Date();
+
+  // The path must be one the guest's profile allows (SIG-S6 §756) — a first-time guest cannot be
+  // waved through as "returning" with no document, nor anyone through the VIP path without a tier.
+  const standing = await resolveVerificationPaths(prisma, { guestProfileId, entryId: body.entryId, now });
+  if (!standing.allowed.includes(body.verificationPath)) {
+    throw new PolicyGateBlockedError(
+      "VERIFICATION_PATH_NOT_ALLOWED",
+      standing.refused[body.verificationPath] ?? "This verification path does not apply to this guest",
+      { suggested: standing.suggested, allowed: standing.allowed },
+    );
+  }
 
   if (body.verificationPath === "FIRST_TIME" || body.verificationPath === "RETURNING_EXPIRED") {
     if (!body.documentType?.trim()) {
@@ -158,6 +171,8 @@ export async function recordVerification(
         await tx.guestIdentityDocument.create({
           data: {
             guestProfileId,
+            // The booking it was captured for, so a later stay can tell "on file from before".
+            entryId: body.entryId,
             documentType: docType,
             documentNumber: body.documentNumber.trim(),
             issuingCountry: body.issuingCountry ?? null,
@@ -195,7 +210,7 @@ export async function recordVerification(
     data: {
       eventType: "GUEST.IDENTITY_VERIFIED",
       actorId,
-      actorLevel: "L1",
+      actorLevel,
       entityType: "GuestProfile",
       entityId: guestProfileId,
       operation: "UPDATE",

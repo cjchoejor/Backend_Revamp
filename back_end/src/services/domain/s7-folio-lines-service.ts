@@ -175,6 +175,14 @@ export async function postCharge(
   // becomes the hotel day it falls on: its UTC date is still yesterday in Bhutan until 06:00,
   // which dated a 3am posting — and seal-checked it — against the previous night.
   const chargeDate = hotelTodayUtc(parsedChargeDate);
+  // Nothing is consumed tomorrow (2026-09-18). The check-out step dated its last charges on the
+  // BOOKED check-out, so after an early departure they landed days after the guest had left;
+  // any charge dated past the hotel's today is that kind of mistake.
+  if (chargeDate.getTime() > hotelTodayUtc().getTime()) {
+    throw new ValidationError(
+      `A charge cannot be dated after today at the hotel (${hotelTodayUtc().toISOString().slice(0, 10)}) — date it the day it was consumed`,
+    );
+  }
 
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");

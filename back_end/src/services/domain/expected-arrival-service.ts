@@ -4,6 +4,7 @@ import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/
 import {
   armNoShowCutoff,
   isTimeOfDay,
+  noShowCutoffFor,
   resolveExpectedArrival,
   resolveNoShowGraceMinutes,
   resolveStandardCheckInTime,
@@ -34,8 +35,10 @@ export async function getExpectedArrival(prisma: PrismaClient, entryId: string) 
   const entry = await load(prisma, entryId);
   const expected = await resolveExpectedArrival(prisma, entry);
   const graceMinutes = await resolveNoShowGraceMinutes(prisma).catch(() => null);
+  // The clock that is running — or, once the cut-off has been reached, the one that fired, so the
+  // desk states the cut-off that actually applied rather than re-planning it from now.
   const clock = await prisma.timerRecord.findFirst({
-    where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
+    where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: entry.noShowCutoffReachedAt ? { in: ["SCHEDULED", "FIRED"] } : "SCHEDULED" },
     orderBy: { createdAt: "desc" },
     select: { dueAt: true },
   });
@@ -49,9 +52,9 @@ export async function getExpectedArrival(prisma: PrismaClient, entryId: string) 
     standardTime: await resolveStandardCheckInTime(prisma),
     at: expected.at?.toISOString() ?? null,
     graceMinutes,
-    /** When the cut-off will fall on the current expected arrival (planned, whatever the clock). */
-    cutoffAt: expected.at && graceMinutes != null ? new Date(expected.at.getTime() + graceMinutes * 60_000).toISOString() : null,
-    /** The running cut-off clock, if one is armed (Arrival onward). */
+    /** When the cut-off would fall if the clock were set now (planned, whatever the clock). */
+    cutoffAt: expected.at && graceMinutes != null ? noShowCutoffFor(expected.at, graceMinutes).toISOString() : null,
+    /** The cut-off clock (Arrival onward): the running one, or the one that fired once reached. */
     cutoffClockAt: clock?.dueAt.toISOString() ?? null,
     cutoffReachedAt: entry.noShowCutoffReachedAt?.toISOString() ?? null,
     editable: EDITABLE.includes(entry.currentStage) && (entry.status === "ACTIVE" || entry.status === "PARKED"),
@@ -98,7 +101,7 @@ export async function setExpectedArrival(
     const expected = await resolveExpectedArrival(prisma, { ...entry, expectedArrivalTime: time });
     const grace = await resolveNoShowGraceMinutes(prisma);
     if (expected.at) {
-      const cutoffAt = new Date(expected.at.getTime() + grace * 60_000);
+      const cutoffAt = noShowCutoffFor(expected.at, grace);
       await armNoShowCutoff(prisma, entryId, cutoffAt, actorId);
       rearmedAt = cutoffAt.toISOString();
     }

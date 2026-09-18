@@ -3,7 +3,7 @@ import { EntryStatus, Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
 import * as preArrivalService from "../services/domain/pre-arrival-service.js";
-import { armNoShowCutoff, resolveExpectedArrival, resolveNoShowGraceMinutes } from "../lib/expected-arrival.js";
+import { armNoShowCutoff, noShowCutoffFor, resolveExpectedArrival, resolveNoShowGraceMinutes } from "../lib/expected-arrival.js";
 import { enforceReservationSnapshotPresentForS5Activation } from "../policies/01-availability/p01-reservation-snapshot-required-for-s5-activation.js";
 import { scheduleS5StageDwellWarningMonitor } from "../lib/schedule-s5-dwell-warning-monitor.js";
 
@@ -115,7 +115,9 @@ export async function runPreArrivalWindowActivationWorker(
   // 08:00) — plus the grace (registry.noShow.graceMinutes, else noShow.cutoffWindowMinutes).
   const cutoffWindowMinutes = await resolveNoShowGraceMinutes(prisma);
   const expectedArrival = await resolveExpectedArrival(prisma, entry);
-  const cutoffAt = expectedArrival.at ? new Date(expectedArrival.at.getTime() + cutoffWindowMinutes * 60_000) : null;
+  // Never inside the grace of now: a same-day booking opened after its expected arrival gets the
+  // grace from the moment it reaches Arrival, not a cut-off that already passed.
+  const cutoffAt = expectedArrival.at ? noShowCutoffFor(expectedArrival.at, cutoffWindowMinutes, now) : null;
 
   await prisma.$transaction(async (tx) => {
     if (s4Dwell) await tx.stageDwellRecord.update({ where: { id: s4Dwell.id }, data: { exitedAt: now, dwellSeconds: Math.floor((now.getTime() - s4Dwell.enteredAt.getTime()) / 1000) } as any });

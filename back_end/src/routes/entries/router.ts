@@ -333,6 +333,10 @@ entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next)
         id: true,
         timerType: true,
         timerCode: true,
+        // What the clock is on (a handoff, a communication, a hold…) — the desk names the
+        // housekeeping and kitchen handoff clocks apart by it; they share one code.
+        entityType: true,
+        entityId: true,
         stageContext: true,
         firesAt: true,
         warningAt: true,

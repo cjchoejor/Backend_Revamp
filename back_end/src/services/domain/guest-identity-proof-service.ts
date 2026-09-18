@@ -15,6 +15,7 @@ import {
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
+import { resolveVerificationPaths } from "../../lib/identity-verification-path.js";
 
 /**
  * Guest identity PROOF files (2026-08-10, operator request): a photo or scan of the guest's
@@ -810,7 +811,7 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     listIdentityDocumentTypeOptions(prisma),
     guestDetailsCoverageForEntry(prisma, entryId),
   ]);
-  if (!entry.guestProfileId) return { items: [], documentTypes, coverage, returningGuest: null };
+  if (!entry.guestProfileId) return { items: [], documentTypes, coverage, returningGuest: null, verificationPaths: null };
 
   const [items, returningRow] = await Promise.all([
     prisma.guestIdentityDocument.findMany({
@@ -870,12 +871,16 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
         capturedAt: returningRow.capturedAt,
       }
     : null;
+  // Which check-in verification paths this guest's profile allows, and the one it points to — the
+  // desk defaults to `suggested` and locks the rest with `refused` (the route refuses them too).
+  const standing = await resolveVerificationPaths(prisma, { guestProfileId: entry.guestProfileId, entryId: entry.id });
   // The storage key itself is server-internal — expose only whether a file exists.
   return {
     items: items.map(({ storageKey, ...rest }) => ({ ...rest, hasFile: !!storageKey })),
     documentTypes,
     coverage,
     returningGuest,
+    verificationPaths: { suggested: standing.suggested, allowed: standing.allowed, refused: standing.refused },
   };
 }
 

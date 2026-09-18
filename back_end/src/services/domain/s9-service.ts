@@ -704,7 +704,12 @@ async function ensureNoOpenDisputes(db: DbClient, entryId: string) {
 }
 
 async function ensureInvoicesDispatched(db: DbClient, entryId: string, folioId: string) {
-  const bad = await db.invoice.findFirst({ where: { folioId, entryId, state: InvoiceState.DRAFT } });
+  // Only the FINAL invoices — the fiscal documents — must have gone out (2026-09-18). A proforma
+  // is generated to move the booking forward and SENDING it is optional (operator ruling
+  // 2026-07-28), so one that was only generated left the stay unsealable unless the desk emailed
+  // the guest a pre-arrival bill after they had gone; an interim bill never sent was a mid-stay
+  // ask the settlement has overtaken. Neither is owed to anyone at closure.
+  const bad = await db.invoice.findFirst({ where: { folioId, entryId, state: InvoiceState.DRAFT, invoiceType: InvoiceType.FINAL } });
   enforceInvoicesDispatchedForS9Closure({ draftInvoice: bad });
 }
 

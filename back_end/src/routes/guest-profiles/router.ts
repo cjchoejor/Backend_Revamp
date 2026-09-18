@@ -261,7 +261,7 @@ guestProfilesRouter.post(
         documentNumber,
         issuingCountry,
         expiryDate,
-      });
+      }, req.actor!.level as "L1" | "L2" | "L3" | "L4");
       res.json(updated);
     } catch (e) {
       next(e);

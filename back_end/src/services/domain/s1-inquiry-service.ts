@@ -8,6 +8,7 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { cascadeParkEntryTx, cascadeUnparkEntryTx } from "./s1-entry-service.js";
 import { resolveInquiryChannel } from "../../lib/inquiry-came-in-as.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import {
   isEntryParkAllowedForStage,
   isEntryStatusParkable,
@@ -216,8 +217,18 @@ export async function captureCorporateContext(
  * the preference is never duplicated.
  */
 export async function updateInquiryNotes(prisma: PrismaClient, inquiryId: string, actorId: string, notes: string) {
-  const existing = await prisma.inquiry.findUnique({ where: { id: inquiryId }, select: { id: true } });
+  const existing = await prisma.inquiry.findUnique({
+    where: { id: inquiryId },
+    select: { id: true, entries: { select: { status: true } } },
+  });
   if (!existing) throw new NotFoundError("Inquiry");
+  // A sealed record is read-only (2026-09-18): once every booking on the inquiry is closed,
+  // cancelled or expired, the preference that travelled with them is part of the record. An
+  // inquiry with no booking yet, or with one still live, stays editable.
+  const live = existing.entries.filter((e) => e.status === "ACTIVE" || e.status === "PARKED");
+  if (existing.entries.length > 0 && live.length === 0) {
+    enforceEntryNotSealedForWorkingAction({ status: existing.entries[0].status });
+  }
   const trimmed = notes.trim();
   const now = new Date();
   const updated = await prisma.inquiry.update({

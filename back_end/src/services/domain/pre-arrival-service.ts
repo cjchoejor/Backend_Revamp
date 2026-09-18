@@ -364,6 +364,22 @@ export async function sendPreArrivalReminderOutbound(prisma: PrismaClient, entry
   const ackSec = Number(ackWindows.preArrival ?? ackWindows.voucher ?? 86_400);
   const ref = `pre-arrival-${entryId}-${Date.now()}`;
 
+  // No email on file, no message (2026-09-18). The record said DISPATCHED by email and opened a
+  // 24-hour wait for the guest's answer to a message nobody sent; the desk then showed "waiting
+  // for their answer". Email is the only channel this sends on, so without an address nothing is
+  // recorded as sent — the skip is traced, and the desk says the message has not gone out.
+  // OTA bookings keep their auto-acknowledged record (the OTA relays the message).
+  const recipient = entry.guestProfileId
+    ? await prisma.guestProfile.findUnique({ where: { id: entry.guestProfileId }, select: { email: true } })
+    : null;
+  if (!entry.otaSource && !recipient?.email?.trim()) {
+    await dispatchStageEmailBestEffort(
+      { prisma, entryId, actorId, inquiryId: entry.inquiryId, guestEmail: null, stage: Stage.S5, eventTypePrefix: "PRE_ARRIVAL_EMAIL" },
+      { subject: "", html: "", text: "" },
+    );
+    return { sent: false as const, reason: "GUEST_HAS_NO_EMAIL" as const };
+  }
+
   await prisma.$transaction(async (tx) => {
     await dispatchPreArrivalOutboundTx(tx, {
       entryId,

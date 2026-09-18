@@ -68,6 +68,19 @@ export async function resolveExpectedArrival(
 }
 
 /**
+ * When the no-show cut-off falls: the expected arrival plus the grace — but never inside the grace
+ * of `from`, the moment the clock is set (2026-09-18). A same-day booking reserved at 18:30 reached
+ * Arrival after its 14:00 expected arrival, so its cut-off (16:00) had already passed and the
+ * booking was a no-show candidate a second after it existed; a guest cannot be late for a booking
+ * that was only just made, so the grace counts from when it reached Arrival. A booking that
+ * reaches Arrival days ahead, as the pre-arrival window normally opens it, is untouched.
+ */
+export function noShowCutoffFor(expectedAt: Date, graceMinutes: number, from: Date = new Date()): Date {
+  const anchor = expectedAt.getTime() > from.getTime() ? expectedAt : from;
+  return new Date(anchor.getTime() + graceMinutes * 60_000);
+}
+
+/**
  * Arm the no-show cut-off for a booking at `cutoffAt`: any clock still running is stopped (row
  * and job) and one fresh clock is set — exactly one live cut-off per booking. The job carries
  * its TimerRecord id so the worker marks the right record when it fires.
