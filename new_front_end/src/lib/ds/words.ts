@@ -10,6 +10,8 @@ const LEVEL_WORD: Record<string, string> = { L1: "the desk", L2: "the FOM", L3: 
 const PHRASES: Array<[RegExp, string]> = [
   // two-stage arrows first so "S7→S8" reads as one move
   [/\bS([1-9])\s*(?:→|->|to)\s*S([1-9])\b/g, "$STEP$1 → $STEP$2"],
+  // Before the generic "committed hold" → "block": the refusal read "not available for block".
+  [/\bis not available for committed hold\b/gi, "is not free on these dates"],
   [/\bspeculative holds?\b/gi, "provisional block"],
   [/\bcommitted holds?\b/gi, "block"],
   [/\bsegments?\b/gi, "pass"],
