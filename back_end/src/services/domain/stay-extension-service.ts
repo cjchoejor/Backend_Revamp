@@ -5,6 +5,11 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { currentPerNightPicture, resolveCompositionBasis } from "../../lib/party-seating.js";
 import { enforceExtensionPaidBeforeCommit } from "../../policies/35-interim-payment/p80-interim-payment-gates.js";
+import {
+  describeGuestOverlap,
+  findOverlappingBookingOfSameGuest,
+  isMultiBookingAcknowledged,
+} from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import { registerNightAuditTimers } from "./pre-arrival-service.js";
@@ -77,6 +82,11 @@ export type StayExtensionPreview = {
   reminder: { policy: InterimReminderPolicy; defaultDueBy: string | null };
   /** Why the extension cannot be requested as previewed (null = fine). */
   blockedReason: string | null;
+  /**
+   * The guest's OTHER booking over the extended nights (Policy 13, 2026-09-19) — the re-freeze
+   * refuses the extension unless an FOM has acknowledged the overlap on this booking.
+   */
+  guestOverlap: { entryId: string; checkIn: string; checkOut: string; acknowledged: boolean } | null;
 };
 
 function isoDay(d: Date): string {
@@ -304,6 +314,26 @@ export async function previewStayExtension(
     ask: input.ask ?? null,
   });
 
+  // The guest's other booking over the longer stay (Policy 13, 2026-09-19). The re-freeze at the
+  // commit asks it; asked here, the FOM sees it before a night is held or a bill goes out.
+  const overlapRow = await findOverlappingBookingOfSameGuest(prisma, {
+    entryId,
+    guestProfileId: entry.guestProfileId,
+    checkInDate: checkIn,
+    checkOutDate: newCheckOut,
+  });
+  const guestOverlap = overlapRow
+    ? {
+        entryId: overlapRow.entryId,
+        checkIn: isoDay(overlapRow.frozenCheckInDate),
+        checkOut: isoDay(overlapRow.frozenCheckOutDate),
+        acknowledged: await isMultiBookingAcknowledged(prisma, entryId),
+      }
+    : null;
+  if (overlapRow && guestOverlap && !guestOverlap.acknowledged && !blockedReason) {
+    blockedReason = `This guest already holds ${describeGuestOverlap(overlapRow)} over these nights — if both bookings are meant, the FOM acknowledges the overlap before the extension is held`;
+  }
+
   const ttlForPreview = await holdTtlSeconds(prisma);
   const reminderPolicy = await loadInterimReminderPolicy(prisma);
   const previewNow = new Date();
@@ -337,6 +367,7 @@ export async function previewStayExtension(
     holdTtlSeconds: ttlForPreview,
     reminder: { policy: reminderPolicy, defaultDueBy: defaultDueBy?.toISOString() ?? null },
     blockedReason,
+    guestOverlap,
   };
 }
 

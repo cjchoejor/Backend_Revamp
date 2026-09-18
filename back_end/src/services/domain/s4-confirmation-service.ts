@@ -70,6 +70,16 @@ export async function confirmReservation(
      * cross-type change never sets this — its value DID change, so the gate re-tests.
      */
     carryHighValueAuthority?: boolean;
+    /**
+     * Internal-only, like the one above (2026-09-19): a room change, re-price or seating repair
+     * re-freezes the SAME dates, so whether the guest holds another booking over them was already
+     * answered — at this booking's freeze, or at the other booking's (Policy 13 fires on whichever
+     * is confirmed second). Re-asking it here stranded the walk after its irreversible re-entry:
+     * a group whose leader later booked their own room over the same nights could no longer change
+     * a room in-house. A stay extension never sets this — its dates change, and the walk asks the
+     * question first.
+     */
+    carryMultiBookingAcknowledgement?: boolean;
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -173,12 +183,14 @@ export async function confirmReservation(
   enforceCommittedHoldReadyForS4Confirmation({ hold: holdCfg });
   const hold = holdCfg!;
 
-  await enforceMultiBookingAcknowledgedIfOverlappingReservationExists(prisma, {
-    entryId,
-    guestProfileId: entry.guestProfileId,
-    checkInDate: entry.checkInDate ?? new Date(),
-    checkOutDate: entry.checkOutDate ?? new Date(Date.now() + 86400_000),
-  });
+  if (!input?.carryMultiBookingAcknowledgement) {
+    await enforceMultiBookingAcknowledgedIfOverlappingReservationExists(prisma, {
+      entryId,
+      guestProfileId: entry.guestProfileId,
+      checkInDate: entry.checkInDate ?? new Date(),
+      checkOutDate: entry.checkOutDate ?? new Date(Date.now() + 86400_000),
+    });
+  }
 
   await enforceOverbookingRequiresGmMitigationBeforeConfirmation(prisma, { entryId, otaSource: entry.otaSource });
 

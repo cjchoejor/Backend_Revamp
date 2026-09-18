@@ -3,6 +3,8 @@ import { HandoffState, HandoffType, InventoryClaimState, Prisma, Stage } from "@
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
+import { enforceNoOverbookingForPlannedStay } from "../../policies/17-overbooking/p41-overbooking-requires-gm-mitigation.js";
+import { enforceMultiBookingAcknowledgedForNewDates } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import {
   currentPerNightPicture,
   derivePartySlots,
@@ -1696,6 +1698,32 @@ export async function changeRoomToNewSegment(
   const now = new Date();
   let newAssignmentIdForS7: string | null = null;
 
+  // ── 0. Would the new plan overbook a room? (2026-09-19) ─────────────────────────────────────
+  // The re-freeze at the end asks the overbooking gate (Policy 41). Asked only there, a refusal
+  // came AFTER the irreversible re-entry and left the booking — an in-house guest's — at Set up.
+  // Asked here, of exactly the plan the walk is about to commit (every room, night by night), it
+  // refuses with nothing changed.
+  await enforceNoOverbookingForPlannedStay(prisma, {
+    entryId: input.entryId,
+    otaSource: (entry as { otaSource?: boolean | null }).otaSource === true,
+    spans: substitutedPicture.flatMap((n) => {
+      const startDate = new Date(`${String(n.date).slice(0, 10)}T00:00:00.000Z`);
+      const endDate = new Date(startDate);
+      endDate.setUTCDate(endDate.getUTCDate() + 1);
+      return n.roomIds.map((roomId) => ({ roomId, startDate, endDate }));
+    }),
+  });
+  // An extension moves the checkout, so the re-freeze asks again whether the guest holds another
+  // booking over the new nights (Policy 13) — asked here instead, before anything changes.
+  if (isExtension) {
+    await enforceMultiBookingAcknowledgedForNewDates(prisma, {
+      entryId: input.entryId,
+      guestProfileId: (entry as { guestProfileId?: string | null }).guestProfileId ?? null,
+      checkInDate: ctx.checkIn,
+      checkOutDate: ctx.checkOut,
+    });
+  }
+
   // ── 1. The governed re-entry (new segment at S2) with origin-specific side effects ─────────
   const reasonForTrace = isExtension
     ? `STAY_EXTENSION: ${reason}`
@@ -1722,7 +1750,17 @@ export async function changeRoomToNewSegment(
           await tx.entry.update({ where: { id: input.entryId }, data: { checkOutDate: ctx.checkOut } });
           const continuing = new Set(ext.extraNights.map((n) => n.roomId));
           for (const a of entry.roomAssignments) {
-            if (!continuing.has(a.roomId)) continue;
+            if (!continuing.has(a.roomId)) {
+              // A room the guest LEAVES on the old checkout (the extra nights go to another room).
+              // A row with no end date means "to checkout" — and the checkout has just moved, so
+              // left open it would follow it: the room would stay claimed over the extra nights
+              // (on the night another guest holds it — the very reason for the move) and the
+              // night audit would bill it beside the new room (2026-09-19). It stops where it did.
+              if (a.endDate == null) {
+                await tx.roomAssignment.update({ where: { id: a.id }, data: { endDate: ext.priorCheckOutDate } });
+              }
+              continue;
+            }
             const aEnd = a.endDate ?? ext.priorCheckOutDate;
             if (aEnd.getTime() !== ext.priorCheckOutDate.getTime()) continue;
             await tx.roomAssignment.update({ where: { id: a.id }, data: { endDate: ctx.checkOut } });
@@ -2187,6 +2225,8 @@ export async function changeRoomToNewSegment(
     await confirmReservation(prisma, input.entryId, actor.actorId, {
       version: await freshVersion(),
       carryHighValueAuthority: sameType,
+      // Same dates, same question already answered — only an extension re-asks it (asked above).
+      carryMultiBookingAcknowledgement: !isExtension,
     });
   } catch (e) {
     return blockedOutcome("RECONFIRMATION", e);

@@ -23,18 +23,20 @@ import { currentReservationOnly, stillHoldsInventory } from "../../lib/entry-inv
  *     restated, so the two cannot drift. PARKED deliberately still counts: a park is a pause,
  *     and the guest really does hold that booking.
  */
-export async function enforceMultiBookingAcknowledgedIfOverlappingReservationExists(
-  prisma: PrismaClient,
-  input: {
-    entryId: string;
-    guestProfileId: string | null | undefined;
-    checkInDate: Date;
-    checkOutDate: Date;
-  },
-) {
-  if (!input.guestProfileId) return;
+type OverlapInput = {
+  entryId: string;
+  guestProfileId: string | null | undefined;
+  checkInDate: Date;
+  checkOutDate: Date;
+};
 
-  const overlapping = await prisma.reservation.findFirst({
+/** The guest's other live booking over these nights, if any — the one question Policy 13 asks. */
+export async function findOverlappingBookingOfSameGuest(
+  prisma: PrismaClient,
+  input: OverlapInput,
+): Promise<{ entryId: string; frozenCheckInDate: Date; frozenCheckOutDate: Date } | null> {
+  if (!input.guestProfileId) return null;
+  return prisma.reservation.findFirst({
     where: {
       entryId: { not: input.entryId },
       frozenCheckInDate: { lt: input.checkOutDate },
@@ -44,13 +46,46 @@ export async function enforceMultiBookingAcknowledgedIfOverlappingReservationExi
       ...currentReservationOnly,
     } as any,
     orderBy: { confirmedAt: "desc" },
+    select: { entryId: true, frozenCheckInDate: true, frozenCheckOutDate: true },
   });
+}
 
-  if (!overlapping) return;
-
+/** Has an FOM acknowledged, on this booking, that the guest holds another over the same nights? */
+export async function isMultiBookingAcknowledged(prisma: PrismaClient, entryId: string): Promise<boolean> {
   const ack = await prisma.traceEvent.findFirst({
-    where: { entryId: input.entryId, eventType: "MULTI_BOOKING.ACKNOWLEDGED" },
+    where: { entryId, eventType: "MULTI_BOOKING.ACKNOWLEDGED" },
     orderBy: { timestamp: "desc" },
+    select: { id: true },
   });
-  if (!ack) throw new PolicyGateBlockedError("MULTI_BOOKING_ACK_REQUIRED", "Multi-booking overlap detected; FOM acknowledgement required");
+  return !!ack;
+}
+
+const dayMonth = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+
+/** "ENT-… (21–23 Sep)" — the other booking, as the desk names it. */
+export function describeGuestOverlap(o: { entryId: string; frozenCheckInDate: Date; frozenCheckOutDate: Date }): string {
+  return `${o.entryId} (${dayMonth(o.frozenCheckInDate)} – ${dayMonth(o.frozenCheckOutDate)})`;
+}
+
+export async function enforceMultiBookingAcknowledgedIfOverlappingReservationExists(prisma: PrismaClient, input: OverlapInput) {
+  const overlapping = await findOverlappingBookingOfSameGuest(prisma, input);
+  if (!overlapping) return;
+  if (!(await isMultiBookingAcknowledged(prisma, input.entryId))) {
+    throw new PolicyGateBlockedError("MULTI_BOOKING_ACK_REQUIRED", "Multi-booking overlap detected; FOM acknowledgement required");
+  }
+}
+
+/**
+ * The same question asked of an in-house stay whose DATES are about to change (2026-09-19) — a
+ * stay extension. The re-freeze at the end of the walk asks it after an irreversible re-entry, so
+ * it is asked here first (preview, request, and before the walk), in words that fit the Stay step.
+ */
+export async function enforceMultiBookingAcknowledgedForNewDates(prisma: PrismaClient, input: OverlapInput) {
+  const overlapping = await findOverlappingBookingOfSameGuest(prisma, input);
+  if (!overlapping) return;
+  if (await isMultiBookingAcknowledged(prisma, input.entryId)) return;
+  throw new PolicyGateBlockedError(
+    "MULTI_BOOKING_ACK_REQUIRED",
+    `This guest already holds ${describeGuestOverlap(overlapping)} over these nights — if both bookings are meant, the FOM acknowledges the overlap first. Nothing was changed.`,
+  );
 }
