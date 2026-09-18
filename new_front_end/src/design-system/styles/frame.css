@@ -114,3 +114,14 @@
 .ds .chip.count-in .input { height: 24px; width: 48px; }
 .ds .dialog-holder > .dialog { width: 100%; }
 .ds .rule-above { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+
+/* a running timer in the side panel: label and live countdown, then a bar that fills to the due time */
+.ds .side-timer-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ds .side-timer-head .timer { white-space: normal; min-width: 0; }
+.ds .side-timer-eta { font-size: var(--t-meta); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink-2); }
+.ds .side-timer-eta.warn { color: var(--warning); font-weight: 600; }
+.ds .side-timer-eta.crit, .ds .side-timer-eta.due { color: var(--danger); font-weight: 700; }
+.ds .side-timer-bar { height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 2px 0 1px; }
+.ds .side-timer-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--success); transition: width 1s linear; }
+.ds .side-timer-bar > span.warn { background: var(--warning); }
+.ds .side-timer-bar > span.crit, .ds .side-timer-bar > span.due { background: var(--danger); }

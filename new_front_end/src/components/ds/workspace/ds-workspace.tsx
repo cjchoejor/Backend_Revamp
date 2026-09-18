@@ -35,6 +35,7 @@ import {
   unparkEntry,
   type EntryBillingSummary,
   type EntryCommunication,
+  type TimerRecordSummary,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
@@ -78,6 +79,7 @@ import { CaseCards } from "@/components/ds/steps/case-cards";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
 import { SidePapers } from "@/components/ds/workspace/side-papers";
+import { SideTimer } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp } from "@/components/ds/steps/s3-setup";
@@ -927,7 +929,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             timers={timersQuery.data?.items ?? []}
             events={traceQuery.data?.items ?? []}
             communications={communications ?? []}
-            now={clock.now}
             tz={clock.tz}
             onHistory={() => setView("history", viewing)}
           />
@@ -1298,17 +1299,15 @@ function SidePanel({
   timers,
   events,
   communications,
-  now,
   tz,
   onHistory,
 }: {
   entry: EntryDetail;
   sealed: boolean;
   onGo: (step: number) => void;
-  timers: Array<{ id: string; timerCode: string; timerType: string; stageContext: string | null; firesAt: string; status: string }>;
+  timers: TimerRecordSummary[];
   events: import("@/lib/trace/humanize").TraceEvent[];
   communications: EntryCommunication[];
-  now: number;
   tz: string;
   onHistory: () => void;
 }) {
@@ -1325,19 +1324,7 @@ function SidePanel({
         <h4>Timers</h4>
         <div className="list">
           {running.length ? (
-            running.map(({ t, label }) => {
-              const at = new Date(t.firesAt).getTime();
-              const tone = at <= now ? "overdue" : at - now < 6 * 3_600_000 ? "close" : "";
-              return (
-                <div className="row" key={t.id}>
-                  <span className={`timer ${tone}`}>
-                    <Icon name={tone === "overdue" ? "alert" : "clock"} />
-                    {label}
-                  </span>
-                  <span className="meta">{at <= now ? `due since ${fmtDateTime(t.firesAt, tz)}` : fmtDateTime(t.firesAt, tz)}</span>
-                </div>
-              );
-            })
+            running.map(({ t, label }) => <SideTimer key={t.id} timer={t} label={label} />)
           ) : (
             <span className="meta">nothing running</span>
           )}
