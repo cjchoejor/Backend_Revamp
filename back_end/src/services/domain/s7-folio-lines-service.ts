@@ -245,6 +245,17 @@ export async function postCharge(
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
   if (!input.description?.trim()) throw new ValidationError("description is required");
   if (!Number.isFinite(input.amount)) throw new ValidationError("amount must be a number");
+  // A charge adds to the bill; only a credit note takes money off (2026-09-19). A negative
+  // "charge" posted from the desk became an untaxed credit the front desk could give itself —
+  // credit notes are the FOM's act and carry their service charge and GST back — and a zero
+  // one a line with nothing on it.
+  if (input.lineType === FolioLineType.CREDIT_NOTE ? !(input.amount < 0) : !(input.amount > 0)) {
+    throw new ValidationError(
+      input.lineType === FolioLineType.CREDIT_NOTE
+        ? "A credit note takes money off the bill — its amount is below zero"
+        : "A charge is an amount above zero — to take money off the bill, correct the charge or post a credit note (the FOM's)",
+    );
+  }
   if (!input.chargeDate?.trim()) throw new ValidationError("chargeDate is required");
 
   const parsedChargeDate = new Date(input.chargeDate);
