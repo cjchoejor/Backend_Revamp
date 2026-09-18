@@ -477,7 +477,7 @@ function PostChargeDialog({
           </div>
           <div className="field">
             <label>Net amount · Nu.</label>
-            <input className="input money" inputMode="decimal" value={amount} placeholder="1,250.00" onChange={(e) => setAmount(e.target.value.replace(/[^\d.-]/g, ""))} />
+            <input className="input money" inputMode="decimal" value={amount} placeholder="1,250.00" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} />
             <span className="hint">before service charge and GST — they post alongside</span>
           </div>
           <div className="field">
