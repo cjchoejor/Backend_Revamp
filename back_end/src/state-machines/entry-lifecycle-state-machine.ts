@@ -488,8 +488,15 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   enforceH4InitiatedBeforeS7ToS8UnlessSameDayDeparture({ h4Valid, isSameDayDeparture });
 
   const lastNight = new Date(Date.UTC(checkout!.getUTCFullYear(), checkout!.getUTCMonth(), checkout!.getUTCDate() - 1, 0, 0, 0, 0));
-  const audit = await prisma.nightAuditRecord.findUnique({ where: { operatingDate: lastNight } });
-  enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8({ nightAudit: audit });
+  // Only a night the guest SLEPT needs its audit (2026-09-18). A guest who checks in and leaves
+  // the same day slept none, and "the night before check-out" is then a night before the stay
+  // began — a group checked in just after midnight and gone by morning was held at Stay until
+  // the whole hotel's audit of the previous night had run.
+  const stayStart = utcDateOnly(entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? checkout!);
+  if (lastNight.getTime() >= stayStart.getTime()) {
+    const audit = await prisma.nightAuditRecord.findUnique({ where: { operatingDate: lastNight } });
+    enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8({ nightAudit: audit });
+  }
 
   const unresolvedAnomalyCount = await prisma.nightAuditAnomaly.count({
     where: { entryId, resolvedAt: null },
