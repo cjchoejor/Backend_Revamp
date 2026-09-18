@@ -481,6 +481,11 @@ export function PartyContacts({
   const [phone, setPhone] = useState("");
   const contacts = party.coordinators ?? [];
   const noun = kind === "TRAVEL_AGENT" ? "agency" : "company";
+  // Is the booking's contact someone ON FILE, or only the placeholder the pick starts with when
+  // the party has nobody on file — its own name and number (2026-09-19)? A placeholder is not a
+  // choice: the first person filed replaces it, and "Pick another" offers the people on file.
+  const pickedIsOnFile =
+    !!contact && contacts.some((c) => c.name === contact.name && (c.phone ?? "") === (contact.phone ?? ""));
 
   const add = useMutation({
     mutationFn: () =>
@@ -490,17 +495,19 @@ export function PartyContacts({
       }),
     onSuccess: (res) => {
       setParty({ ...party, coordinators: res.coordinators });
-      // Adding with nobody picked IS the pick; with someone picked it only files another person.
-      if (!contact) setContact(res.contact);
+      // Adding with nobody picked IS the pick; with someone on file picked it only files another
+      // person. Over the placeholder (the party's own details), the person filed is the contact.
+      const adopt = !contact || !pickedIsOnFile;
+      if (adopt) setContact(res.contact);
       setAdding(false);
       setName("");
       setPhone("");
       toast.success(
         !res.added
-          ? `${res.contact.name} was already on file`
-          : contact
+          ? `${res.contact.name} was already on file${adopt ? " — now the contact for this booking" : ""}`
+          : !adopt && contact
             ? `${res.contact.name} is filed on ${party.displayName} — ${contact.name} stays the contact for this booking`
-            : `${res.contact.name} is filed on ${party.displayName}`,
+            : `${res.contact.name} is filed on ${party.displayName} and is the contact for this booking`,
       );
     },
     onError: (e) => toastRefusal(e, "The contact person could not be filed"),
@@ -578,10 +585,10 @@ export function PartyContacts({
             </span>
           </div>
         </div>
-        {contacts.length > 1 ? (
+        {contacts.length > 1 || (contacts.length > 0 && !pickedIsOnFile) ? (
           <div className="row-acts">
             <Button kind="quiet" compact onClick={() => setContact(null)}>
-              Pick another from the {noun}
+              Pick {pickedIsOnFile ? "another" : "someone"} from the {noun}
             </Button>
           </div>
         ) : null}
