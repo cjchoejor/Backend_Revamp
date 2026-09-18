@@ -8,6 +8,37 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceDisputeGateOverrideTargetAllowed } from "../../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 
+/**
+ * The dispute's own history on the booking (2026-09-18). Raising, reviewing, resolving and
+ * closing a dispute wrote no event at all — the booking's history never said a guest had queried
+ * a charge, nor what the GM answered. Best-effort: the act has already committed.
+ */
+async function writeDisputeTrace(
+  prisma: PrismaClient,
+  eventType: string,
+  d: { id: string; entryId: string; title: string },
+  actorId: string,
+  actorLevel: string | undefined,
+  extra?: Record<string, unknown>,
+) {
+  await prisma.traceEvent
+    .create({
+      data: {
+        eventType,
+        actorId,
+        actorLevel: (actorLevel ?? "L1") as any,
+        entityType: "DisputeRecord",
+        entityId: d.id,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        entryId: d.entryId,
+        payload: { disputeId: d.id, title: d.title, ...(extra ?? {}) },
+        createdBy: actorId,
+      } as any,
+    })
+    .catch(() => {});
+}
+
 export async function getDispute(prisma: PrismaClient, disputeId: string) {
   const d = await prisma.disputeRecord.findUnique({
     where: { id: disputeId },
@@ -25,6 +56,7 @@ export async function openDispute(
   prisma: PrismaClient,
   actorId: string,
   input: { entryId: string; folioId: string; title: string; description?: string },
+  actorLevel?: string,
 ) {
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
   if (!input.folioId?.trim()) throw new ValidationError("folioId is required");
@@ -45,6 +77,7 @@ export async function openDispute(
       openedBy: actorId,
     },
   });
+  await writeDisputeTrace(prisma, "DISPUTE.OPENED", created, actorId, actorLevel, { description: created.description ?? null });
   // Dispute SLA timers are load-bearing (SIG-S7 governance). Was silently swallowed —
   // a DB or config-store blip left the dispute open with no first-response / resolution clock.
   // Now: log the underlying error to a TraceEvent so the operator sees the SLA is at risk,
@@ -82,6 +115,7 @@ export async function closeDispute(
   disputeId: string,
   actorId: string,
   input: { closureReason: string },
+  actorLevel?: string,
 ) {
   enforceDisputeClosureReasonPresent({ closureReason: input.closureReason });
   const existing = await prisma.disputeRecord.findUnique({ where: { id: disputeId } });
@@ -93,10 +127,12 @@ export async function closeDispute(
   } catch {
     // Timer cancellation is best-effort; dispute close must still commit.
   }
-  return prisma.disputeRecord.update({
+  const closed = await prisma.disputeRecord.update({
     where: { id: disputeId },
     data: { status: "CLOSED", closedAt: now, closedBy: actorId, closureReason: input.closureReason, updatedBy: actorId },
   });
+  await writeDisputeTrace(prisma, "DISPUTE.CLOSED", closed, actorId, actorLevel, { reason: input.closureReason });
+  return closed;
 }
 
 export async function progressDispute(
@@ -104,6 +140,7 @@ export async function progressDispute(
   disputeId: string,
   actorId: string,
   input: { status: "IN_PROGRESS" | "RESOLVED" },
+  actorLevel?: string,
 ) {
   const d = await prisma.disputeRecord.findUnique({ where: { id: disputeId } });
   if (!d) throw new NotFoundError("DisputeRecord");
@@ -113,10 +150,12 @@ export async function progressDispute(
     if (d.status !== "OPEN" && d.status !== "REOPENED") {
       throw new ValidationError("Dispute can only move to IN_PROGRESS from OPEN or REOPENED");
     }
-    return prisma.disputeRecord.update({
+    const reviewing = await prisma.disputeRecord.update({
       where: { id: disputeId },
       data: { status: "IN_PROGRESS", updatedBy: actorId },
     });
+    await writeDisputeTrace(prisma, "DISPUTE.REVIEW_STARTED", reviewing, actorId, actorLevel);
+    return reviewing;
   }
 
   if (d.status === "RESOLVED") return d;
@@ -124,6 +163,7 @@ export async function progressDispute(
     where: { id: disputeId },
     data: { status: "RESOLVED", updatedBy: actorId },
   });
+  await writeDisputeTrace(prisma, "DISPUTE.RESOLVED", updated, actorId, actorLevel);
   try {
     await cancelDisputeSlaW27Timers(prisma, disputeId, actorId, "DISPUTE_RESOLVED");
   } catch (e) {

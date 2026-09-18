@@ -14,6 +14,20 @@ import * as s3DisclosureService from "../../services/domain/s3-cancellation-disc
 
 export const cancellationsRouter = Router();
 
+/** What cancelling now would charge and refund — nothing written (2026-09-18). */
+cancellationsRouter.get("/entries/:id/cancellation-preview", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(
+      await cancellationService.previewCancellation(prisma, req.params.id, {
+        penaltyWaiverRequested: req.query.waive === "true",
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
 cancellationsRouter.post(
   "/entries/:id/cancel-at-s3",
   requireActorLevel("L1"),

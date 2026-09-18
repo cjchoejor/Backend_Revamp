@@ -21,6 +21,110 @@ import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-fr
 import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
+import { toDecimal } from "../../lib/money.js";
+
+export type CancellationFigures = {
+  /** The step the booking is cancelled at — Set up (S3) or Arrival (S5). */
+  stage: "S3" | "S5";
+  /** Money received against the booking (the advance). */
+  advanceReceived: number;
+  /** The charge the disclosed terms put on this cancellation, capped at what was received. */
+  charge: number;
+  /** What goes back to the guest: received − charge. */
+  refund: number;
+  /** The terms' charge before the cap, for the desk to say when the cap applied. */
+  chargeBeforeCap: number;
+  /** The charge after the cap, before any waiver. */
+  chargeCapped: number;
+  hoursUntilCheckIn: number;
+  waived: boolean;
+};
+
+/**
+ * The money a cancellation would move, computed and nothing written (2026-09-18) — shared by the
+ * Set-up and Arrival cancellations and the preview the desk shows before the irreversible click
+ * (the dialog promised "the disclosed charge, if any, is posted and the rest refunded" without a
+ * figure). One computation, so the preview can never disagree with the act.
+ *   - Set up (S3): the terms DISCLOSED to the guest; no reservation is frozen yet.
+ *   - Arrival (S5): the terms FROZEN on the reservation; the configured tiers fill any gap.
+ */
+async function cancellationFigures(
+  prisma: PrismaClient,
+  input: {
+    stage: "S3" | "S5";
+    folioId: string;
+    checkInDate: Date;
+    terms: Record<string, unknown>;
+    waiver: boolean;
+    now: Date;
+  },
+): Promise<CancellationFigures> {
+  const advanceReceived = await sumAdvancePaymentInTotalForFolio(prisma, input.folioId);
+  // Arrival bubbles a config-store failure (never a silent zero charge); Set up falls back to the
+  // disclosed terms alone, as it always has.
+  const policyTiers =
+    input.stage === "S5"
+      ? await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers")
+      : await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
+          () => null as CancellationPolicyTiersConfig | null,
+        );
+  const { rawPenalty, hoursUntilCheckIn } = computeS5PreArrivalCancellationPenalty({
+    now: input.now,
+    checkInDate: input.checkInDate,
+    frozenCancellationTerms: input.terms,
+    policyTiers,
+  });
+  const capped = capCancellationPenaltyAtAdvancePayment(rawPenalty, advanceReceived);
+  const charge = input.waiver ? 0 : capped;
+  // Decimal-safe: the refund is the received total less the charge, to the cent.
+  const refund = Number(toDecimal(advanceReceived).sub(toDecimal(charge)).toFixed(2));
+  return {
+    stage: input.stage,
+    advanceReceived,
+    charge,
+    refund,
+    chargeBeforeCap: rawPenalty,
+    chargeCapped: capped,
+    hoursUntilCheckIn,
+    waived: input.waiver,
+  };
+}
+
+/**
+ * What cancelling this booking now would charge and refund — nothing written (2026-09-18).
+ * Valid at Set up (S3) and Arrival (S5), the two steps a booking is cancelled at.
+ */
+export async function previewCancellation(prisma: PrismaClient, entryId: string, opts?: { penaltyWaiverRequested?: boolean }) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: { folio: true, reservation: true, cancellationDisclosure: true },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== Stage.S3 && entry.currentStage !== Stage.S5) {
+    throw new ValidationError("A booking is cancelled at Set up or at Arrival — this one is at neither");
+  }
+  if (!entry.folio) throw new ValidationError("No folio on the booking — nothing to charge or refund");
+  const now = new Date();
+  if (entry.currentStage === Stage.S3) {
+    return cancellationFigures(prisma, {
+      stage: "S3",
+      folioId: entry.folio.id,
+      checkInDate: entry.checkInDate ?? new Date(now.getTime() + 86400_000),
+      terms: (entry.cancellationDisclosure?.disclosedTerms as Record<string, unknown>) ?? {},
+      waiver: opts?.penaltyWaiverRequested === true,
+      now,
+    });
+  }
+  if (!entry.reservation) throw new ValidationError("No reservation on the booking");
+  return cancellationFigures(prisma, {
+    stage: "S5",
+    folioId: entry.folio.id,
+    checkInDate: entry.reservation.frozenCheckInDate,
+    terms: (entry.reservation.frozenCancellationTerms as Record<string, unknown>) ?? {},
+    waiver: opts?.penaltyWaiverRequested === true,
+    now,
+  });
+}
 
 /**
  * SIG-S3 §6.5 — pre-confirmation cancellation at S3: release the committed hold, cancel timers,
@@ -98,28 +202,26 @@ export async function cancelEntryAtS3(
   }
   const traceActorLevel = (opts?.actorLevel ?? "L1") as ActorLevel;
 
-  const advanceTotal = await sumAdvancePaymentInTotalForFolio(prisma, folio.id);
-
   // S3 source of truth for cancellation terms: the disclosure record signed before the hold was
   // placed (per §6.5 — disclosure is a precondition for hold placement). Falls back to the
-  // configured policy tiers when no disclosure terms are available (defensive).
+  // configured policy tiers when no disclosure terms are available (defensive). Computed by the
+  // same helper the desk's preview reads, so the two never disagree.
   const disclosedTerms =
     (entry.cancellationDisclosure?.disclosedTerms as Record<string, unknown>) ?? {};
-  const policyTiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
-    () => null as CancellationPolicyTiersConfig | null,
-  );
-
-  // The S5 pre-arrival penalty function operates on (now, checkInDate, terms, tiers) — same shape
-  // as S3. Reused intentionally; the math is identical because nothing has been frozen yet.
-  const { rawPenalty, hoursUntilCheckIn } = computeS5PreArrivalCancellationPenalty({
-    now,
+  const fig = await cancellationFigures(prisma, {
+    stage: "S3",
+    folioId: folio.id,
     checkInDate,
-    frozenCancellationTerms: disclosedTerms,
-    policyTiers,
+    terms: disclosedTerms,
+    waiver,
+    now,
   });
-  const cappedPenalty = capCancellationPenaltyAtAdvancePayment(rawPenalty, advanceTotal);
-  const penalty = waiver ? 0 : cappedPenalty;
-  const netRefund = advanceTotal - penalty;
+  const advanceTotal = fig.advanceReceived;
+  const rawPenalty = fig.chargeBeforeCap;
+  const cappedPenalty = fig.chargeCapped;
+  const hoursUntilCheckIn = fig.hoursUntilCheckIn;
+  const penalty = fig.charge;
+  const netRefund = fig.refund;
 
   const timers = await prisma.timerRecord.findMany({
     where: { entryId, status: "SCHEDULED" },
@@ -136,7 +238,8 @@ export async function cancelEntryAtS3(
           id: await allocateFolioLineId(tx, folio.id),
           folioId: folio.id,
           lineType: FolioLineType.SERVICE,
-          description: "S3 pre-confirmation cancellation penalty",
+          // Read on the guest's cancellation papers — no stage code (2026-09-18).
+          description: "Cancellation charge — cancelled before the booking was confirmed",
           amount: penalty,
           currency: "BTN",
           chargeDate: now,
@@ -335,23 +438,24 @@ export async function cancelEntryAtS5(
 
   const traceActorLevel = (opts?.actorLevel ?? "L2") as ActorLevel;
 
-  const advanceTotal = await sumAdvancePaymentInTotalForFolio(prisma, folio.id);
-
   // S5 pre-arrival penalty: never let a config-store hiccup silently null out the penalty policy.
   // Frozen cancellation terms on the reservation are the primary source; the live policyTiers is a
   // fallback for anything not frozen. Bubble errors so the operator sees them instead of processing
-  // a zero-penalty cancellation.
-  const policyTiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers");
-
-  const { rawPenalty, hoursUntilCheckIn } = computeS5PreArrivalCancellationPenalty({
-    now,
+  // a zero-penalty cancellation. The same helper the desk's preview reads.
+  const fig = await cancellationFigures(prisma, {
+    stage: "S5",
+    folioId: folio.id,
     checkInDate: reservation.frozenCheckInDate,
-    frozenCancellationTerms: (reservation.frozenCancellationTerms as Record<string, unknown>) ?? {},
-    policyTiers,
+    terms: (reservation.frozenCancellationTerms as Record<string, unknown>) ?? {},
+    waiver,
+    now,
   });
-  const cappedPenalty = capCancellationPenaltyAtAdvancePayment(rawPenalty, advanceTotal);
-  const penalty = waiver ? 0 : cappedPenalty;
-  const netRefund = advanceTotal - penalty;
+  const advanceTotal = fig.advanceReceived;
+  const rawPenalty = fig.chargeBeforeCap;
+  const cappedPenalty = fig.chargeCapped;
+  const hoursUntilCheckIn = fig.hoursUntilCheckIn;
+  const penalty = fig.charge;
+  const netRefund = fig.refund;
 
   const timers = await prisma.timerRecord.findMany({
     where: { entryId, status: "SCHEDULED" },

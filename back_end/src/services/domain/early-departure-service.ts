@@ -349,10 +349,17 @@ export async function computeEarlyDepartureFigures(
       rule.percent === 100
         ? `${nightsWord(chargedNights)} charged for leaving ${nightsWord(unstayedNightsTotal)} early`
         : `${rule.percent}% of ${nightsWord(chargedNights)} for leaving ${nightsWord(unstayedNightsTotal)} early`;
+    // Said per room when more than one is shortened — the sum is across the rooms, not one
+    // room's nightly figure (2026-09-18).
+    const shortenedRooms = rooms.filter((r) => r.shortened).length;
+    const basis =
+      shortenedRooms > 1
+        ? `${nightsWord(chargedNights)} per room at each room's frozen nightly figure, ${shortenedRooms} rooms`
+        : `${nightsWord(chargedNights)} at the frozen nightly room figure`;
     explanation =
       rule.percent === 100
-        ? `${chargedNights} unstayed night(s) at the frozen per-night room figure (${sum.toFixed(2)} net).`
-        : `${chargedNights} unstayed night(s) at the frozen per-night room figure × ${rule.percent}% (${sum.toFixed(2)} net before the share).`;
+        ? `${basis} (${sum.toFixed(2)} net).`
+        : `${basis} × ${rule.percent}% (${sum.toFixed(2)} net before the share).`;
   } else {
     explanation = "The early-departure rule is NONE — nothing is charged for the unstayed nights.";
   }

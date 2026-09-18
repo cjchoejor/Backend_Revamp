@@ -25,7 +25,7 @@ disputesRouter.get("/disputes/:id", requireActorLevel("L1"), async (req, res, ne
 const openHandler = validateBody(openDisputeRequestSchema);
 disputesRouter.post("/disputes", requireActorLevel("L1"), openHandler, async (req, res, next) => {
   try {
-    const created = await s7DisputeService.openDispute(prisma, req.actor!.actorId, req.body);
+    const created = await s7DisputeService.openDispute(prisma, req.actor!.actorId, req.body, req.actor!.level);
     res.json(created);
   } catch (e) {
     next(e);
@@ -34,16 +34,19 @@ disputesRouter.post("/disputes", requireActorLevel("L1"), openHandler, async (re
 
 disputesRouter.post("/disputes/open", requireActorLevel("L1"), openHandler, async (req, res, next) => {
   try {
-    const created = await s7DisputeService.openDispute(prisma, req.actor!.actorId, req.body);
+    const created = await s7DisputeService.openDispute(prisma, req.actor!.actorId, req.body, req.actor!.level);
     res.json(created);
   } catch (e) {
     next(e);
   }
 });
 
-disputesRouter.patch("/disputes/:id", requireActorLevel("L1"), validateBody(progressDisputeRequestSchema), async (req, res, next) => {
+// Taking a dispute under review and resolving it are the FOM's (SIG-S9 §96, "dispute
+// progression" — L2); the GM closes it. This was L1, so a front-desk call could mark a dispute
+// resolved — which releases the Check-out gate — past both (2026-09-18).
+disputesRouter.patch("/disputes/:id", requireActorLevel("L2"), validateBody(progressDisputeRequestSchema), async (req, res, next) => {
   try {
-    const updated = await s7DisputeService.progressDispute(prisma, req.params.id, req.actor!.actorId, req.body);
+    const updated = await s7DisputeService.progressDispute(prisma, req.params.id, req.actor!.actorId, req.body, req.actor!.level);
     res.json(updated);
   } catch (e) {
     next(e);
@@ -52,7 +55,7 @@ disputesRouter.patch("/disputes/:id", requireActorLevel("L1"), validateBody(prog
 
 disputesRouter.post("/disputes/:id/close", requireActorLevel("L3"), validateBody(closeDisputeRequestSchema), async (req, res, next) => {
   try {
-    const updated = await s7DisputeService.closeDispute(prisma, req.params.id, req.actor!.actorId, req.body);
+    const updated = await s7DisputeService.closeDispute(prisma, req.params.id, req.actor!.actorId, req.body, req.actor!.level);
     res.json(updated);
   } catch (e) {
     next(e);

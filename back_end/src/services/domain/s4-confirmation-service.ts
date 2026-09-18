@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { CommunicationType, InvoiceType, Stage } from "@prisma/client";
+import { toDecimal } from "../../lib/money.js";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -122,9 +123,23 @@ export async function confirmReservation(
   // guest still chooses to pay something up front, and that voluntary payment needs an
   // invoice just the same.
   const advanceEvaluation = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: folio.id });
+  // Only the ADVANCE needs the proforma (2026-09-18): money taken before check-in. A mid-stay
+  // interim payment went out on its own interim invoice (Policy 80 — bill before money), and a
+  // payment against a room's share or a settlement is not an advance. Counting them stranded an
+  // in-house booking at Set up the moment a room change or an extension re-froze it after an
+  // interim payment, whenever its advance had never gone out on a proforma.
+  const advancePaid = await prisma.paymentRecord.aggregate({
+    where: {
+      folioId: folio.id,
+      paymentDirection: "IN",
+      interimPaymentRequestId: null,
+      OR: [{ stage: null }, { stage: { in: [Stage.S3, Stage.S4, Stage.S5, Stage.S6] } }],
+    },
+    _sum: { amount: true },
+  });
   enforceProformaDispatchedWhenAdvancePaid({
     proformaInvoices: proformas.map((i) => ({ state: i.state, dispatchedAt: i.dispatchedAt })),
-    totalAdvanceReceived: advanceEvaluation.totalReceived,
+    totalAdvanceReceived: Number(toDecimal(advancePaid._sum.amount).toFixed(2)),
   });
 
   // …and once the proforma actually went OUT, the guest's answer must be on record before the

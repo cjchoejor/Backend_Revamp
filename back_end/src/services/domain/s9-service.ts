@@ -754,6 +754,12 @@ export async function writeOffOutstandingBalance(
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
   enforceFolioOutstandingForWriteOff({ folioState: folio.state });
+  // Never more than is owed (2026-09-18): the balance floors at zero, so an over-large write-off
+  // was recorded in full while the ledger showed only what had been owed.
+  const owed = toDecimal(folio.outstandingBalance);
+  if (toDecimal(input.amount).gt(owed)) {
+    throw new ValidationError(`That is more than the ${owed.toFixed(2)} still owed — write off at most ${owed.toFixed(2)}`);
+  }
 
   return prisma.$transaction(async (tx) => {
     const rec = await tx.writeOffRecord.create({
@@ -766,7 +772,12 @@ export async function writeOffOutstandingBalance(
       },
     });
     await recomputeFolioOutstandingBalance(tx, folioId);
-    await tx.folio.update({ where: { id: folioId }, data: { state: FolioState.WRITTEN_OFF } });
+    // Written off only when nothing is left (2026-09-18): a part write-off used to mark the bill
+    // WRITTEN_OFF with money still owed, and the rest could then never be collected.
+    const after = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { outstandingBalance: true } });
+    if (toDecimal(after.outstandingBalance).lte(0)) {
+      await tx.folio.update({ where: { id: folioId }, data: { state: FolioState.WRITTEN_OFF } });
+    }
     return rec;
   });
 }
