@@ -608,7 +608,9 @@ entriesRouter.post(
   validateBody(recordRoomInspectionRequestSchema),
   async (req, res, next) => {
     try {
-      const rec = await s8CheckoutService.recordInspection(prisma, req.params.id, req.actor!.actorId, req.body);
+      const rec = await s8CheckoutService.recordInspection(prisma, req.params.id, req.actor!.actorId, req.body, {
+        actorLevel: req.actor!.level,
+      });
       res.status(201).json(rec);
     } catch (e) {
       next(e);
@@ -636,6 +638,17 @@ entriesRouter.post("/:id/post-checkout-inspection/expire-window", requireActorLe
       return;
     }
     res.json(entry);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** What still stands between the booking and "Close & seal" — the close's own checks, read not run (2026-09-18). */
+entriesRouter.get("/:id/closure-readiness", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const readiness = await s9Service.buildS9ClosureReadiness(prisma, req.params.id);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(readiness);
   } catch (e) {
     next(e);
   }

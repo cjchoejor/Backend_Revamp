@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
-import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { readRoomInspectionStanding } from "../../lib/room-inspection-standing.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { randomUUID } from "node:crypto";
@@ -1073,6 +1074,117 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
     });
     return updated;
   });
+}
+
+export type S9ClosureCheck = { code: string; label: string; met: boolean; detail?: string };
+
+/**
+ * What still stands between a booking and "Close & seal" (2026-09-18) — the SAME checks
+ * `closeEntryAtS9` runs, each run on its own and caught instead of thrown, so the desk's
+ * checklist cannot say "ready" while the close refuses (it had: a lapsed inspection window read
+ * as blocked forever, a missing inspection read as ready). Nothing is written.
+ *
+ * Checks that only apply to some bookings (the payment match for account billing, lent equipment,
+ * an apartment deposit, a no-show decision) appear only when they apply. `inspection` carries
+ * where the room inspection stands, so the desk can offer to complete a put-off one.
+ */
+export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: string) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: { folio: true, noShowDetermination: true },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  const folio = entry.folio;
+  const checks: S9ClosureCheck[] = [];
+  const run = async (code: string, label: string, check: () => Promise<unknown> | unknown) => {
+    try {
+      await check();
+      checks.push({ code, label, met: true });
+    } catch (e) {
+      if (e instanceof AppError && e.status === 409) {
+        checks.push({ code, label, met: false, detail: e.body.message });
+        return;
+      }
+      throw e;
+    }
+  };
+
+  await run("DISPUTES", "No dispute left open", () => ensureNoOpenDisputes(prisma, entryId));
+  if (folio) {
+    await run("INVOICES", "Every invoice sent — none left as a draft", () => ensureInvoicesDispatched(prisma, entryId, folio.id));
+    if (folio.billingModel === "GOVERNMENT" || folio.billingModel === "DIRECT_BILL") {
+      await run(
+        "PAYMENTS",
+        folio.billingModel === "GOVERNMENT" ? "The government invoice's payment tracked" : "Every payment matched to an invoice",
+        () => ensurePaymentsMatched(prisma, entryId, folio.id),
+      );
+    }
+    // The close schedules the payment follow-up itself, so an owing folio only fails here when it
+    // reads owing with nothing owed.
+    await run("BILL", "The bill settled, or left owing for follow-up", () =>
+      enforceOutstandingFolioHasW8OrWriteOffForS9Closure({
+        folioState: folio.state,
+        outstandingBalance: num(folio.outstandingBalance),
+        hasScheduledW8: true,
+        hasWriteOff: true,
+      }),
+    );
+    if (folio.state === FolioState.NO_SHOW_CLOSED) {
+      await run("NO_SHOW", "The no-show decision on record", () =>
+        enforceNoShowDeterminationPresentForS9Closure({ folioState: folio.state, noShowDetermination: entry.noShowDetermination }),
+      );
+    }
+  } else {
+    checks.push({ code: "FOLIO", label: "A folio for the booking", met: false });
+  }
+  await run("INSPECTION", "The room inspected, or its inspection window closed", () => ensureInspectionResolved(prisma, entryId));
+  await run("H5", "The after-stay handoff done", () => ensureH5NotOpen(prisma, entryId));
+  if (await prisma.equipmentAllocation.findFirst({ where: { entryId }, select: { id: true } })) {
+    await run("EQUIPMENT", "Lent equipment back", () => ensureEquipmentReturnResolved(prisma, entryId));
+  }
+  if (entry.useType === "APARTMENT" && folio) {
+    await run("DEPOSIT", "The apartment's security deposit returned", () =>
+      ensureApartmentDepositResolved(prisma, { id: entryId, useType: entry.useType }, folio.id),
+    );
+  }
+
+  const standing = await readRoomInspectionStanding(prisma, entryId);
+  const insp = standing.inspection;
+  const room = insp ? await prisma.room.findUnique({ where: { id: insp.roomId }, select: { roomNumber: true } }) : null;
+  const fault =
+    standing.state === "PUT_OFF" && insp
+      ? await prisma.deficientConditionRecord.findFirst({
+          where: { roomId: insp.roomId, status: { in: ["UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"] } as any },
+          orderBy: { detectedAt: "desc" },
+          select: { id: true, category: true, description: true },
+        })
+      : null;
+
+  const atS9 = entry.currentStage === Stage.S9;
+  const closed = entry.status === EntryStatus.CLOSED;
+  return {
+    entryId,
+    currentStage: entry.currentStage,
+    status: entry.status,
+    canClose: atS9 && !closed && checks.every((c) => c.met),
+    notReadyReason: closed ? "The booking is already closed" : atS9 ? null : "A booking is closed from the Closed step",
+    closeRequiresLevel: "L2" as const,
+    checks,
+    inspection: {
+      state: standing.state,
+      inspectionId: insp?.id ?? null,
+      roomId: insp?.roomId ?? null,
+      roomNumber: room?.roomNumber ?? null,
+      inspectedAt: insp?.inspectedAt ?? null,
+      deficientFlagStatus: insp?.deficientFlagStatus ?? null,
+      damageFound: insp?.damageFound ?? false,
+      damageNotes: insp?.damageNotes ?? null,
+      windowEndsAt: standing.state === "PUT_OFF" ? standing.windowEndsAt : null,
+      windowCanBeClosed: standing.state === "PUT_OFF" && standing.windowTimerScheduled,
+      lapsedAt: standing.state === "LAPSED" ? standing.lapsedAt : null,
+      openFault: fault,
+    },
+  };
 }
 
 export async function postStayCharge(

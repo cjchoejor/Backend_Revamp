@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { FolioState, HandoffType, InventoryClaimState, Stage } from "@prisma/client";
+import { FolioState, HandoffType, InventoryClaimState, Stage, type ActorLevel } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { resolvePostCheckoutInspectionWindowMs } from "../../lib/post-checkout-inspection-window.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -13,8 +13,11 @@ import { enforceH4FulfilledOrAutoBeforeS8Exit } from "../../policies/25-handoff/
 import {
   enforceEntryAtS8ForCheckoutCompletion,
   enforceEntryAtS8ForKeyReturn,
-  enforceEntryAtS8ForRoomInspection,
+  enforceEntryStageForRoomInspection,
 } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { readRoomInspectionStanding } from "../../lib/room-inspection-standing.js";
+import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 
@@ -129,6 +132,7 @@ export async function recordInspection(
     damageFound: boolean;
     damageNotes?: string;
   },
+  opts?: { actorLevel?: ActorLevel },
 ) {
   if (typeof input.isDeferred !== "boolean") throw new ValidationError("isDeferred is required");
   if (!input.deficientFlagStatus) throw new ValidationError("deficientFlagStatus is required");
@@ -141,8 +145,21 @@ export async function recordInspection(
     throw new ValidationError("inspectorAssessment is required when deficientFlagStatus = UNRESOLVED_AT_CHECKOUT");
   }
 
-  const { entry, room } = await getEntryWithRoom(prisma, entryId);
-  enforceEntryAtS8ForRoomInspection({ currentStage: entry.currentStage });
+  const { entry, room: latestRoom } = await getEntryWithRoom(prisma, entryId);
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  // At S9 the only inspection taken is the completion of one put off at check-out (2026-09-18).
+  const standing = entry.currentStage === Stage.S9 ? await readRoomInspectionStanding(prisma, entryId) : null;
+  const completing = standing?.state === "PUT_OFF" ? standing.inspection : null;
+  enforceEntryStageForRoomInspection({
+    currentStage: entry.currentStage,
+    isDeferred: input.isDeferred,
+    deferredInspectionOpen: !!completing,
+  });
+  // Completing a put-off inspection inspects the room that was put off, not whichever room the
+  // booking's newest assignment names.
+  const room = completing
+    ? ((await prisma.room.findUnique({ where: { id: completing.roomId } })) ?? latestRoom)
+    : latestRoom;
 
   // If there is any active deficient record for the room, NOT_APPLICABLE is forbidden.
   // AC-S7-14: UNRESOLVED at S7 exit becomes DEFICIENT_UNRESOLVED_AT_CHECKOUT at S8 entry.
@@ -196,6 +213,40 @@ export async function recordInspection(
         pgBossJobId,
         createdBy: actorId,
         payload: { roomId: room.id },
+      },
+    });
+  }
+
+  if (completing) {
+    // The window no longer needs to lapse: stop its clock, and record the completion under the
+    // event name SIG-S8 §595 gives it (the W9 worker also finds the newest record non-deferred
+    // and skips on its own, so the cancel is belt and braces).
+    await cancelEntryTimersByCode(prisma, {
+      entryId,
+      timerCodes: ["POST_CHECKOUT_INSPECTION_W9"],
+      cancelledBy: actorId,
+      cancelledReason: "Post-checkout inspection completed",
+    });
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "POST_CHECKOUT_INSPECTION.INSPECTION_COMPLETED",
+        actorId,
+        actorLevel: opts?.actorLevel ?? "L1",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: Stage.S9,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: {
+          inspectionId: created.id,
+          deferredInspectionId: completing.id,
+          roomId: room.id,
+          deficientFlagStatus: created.deficientFlagStatus,
+          damageFound: created.damageFound,
+        },
+        createdBy: actorId,
       },
     });
   }
