@@ -167,6 +167,8 @@ export type StayExtensionPreview = {
   /** The reminder policy + the due-by a request would default to (before the held nights lapse). */
   reminder: { policy: InterimReminderPolicy; defaultDueBy: string | null };
   blockedReason: string | null;
+  /** The guest's other booking over the extended nights (Policy 13) — the FOM acknowledges it first. */
+  guestOverlap?: { entryId: string; checkIn: string; checkOut: string; acknowledged: boolean } | null;
 };
 
 export type StayExtensionInput = {

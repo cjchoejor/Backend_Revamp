@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { recipientHint, useInvoiceRecipient, type InvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { ApiError } from "@/lib/api/client";
+import { acknowledgeMultiBooking } from "@/lib/api/confirmation";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { openInvoicePdf } from "@/lib/api/documents";
 import {
@@ -897,6 +898,17 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
     onSuccess: (p) => setPreview(p),
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not check the extension"),
   });
+  // The guest holds another booking over the longer stay (Policy 13, 2026-09-19): the FOM says it
+  // is meant — the same acknowledgement the Reserve step records — and the check runs again.
+  const overlapAckM = useMutation({
+    mutationFn: () =>
+      acknowledgeMultiBooking(session!, entryId, `Stay extension to ${newDate} overlaps ${preview?.guestOverlap?.entryId ?? "another booking"} — both meant`),
+    onSuccess: () => {
+      toast.success("Overlap acknowledged — both bookings stand");
+      previewM.mutate({ comps: negotiate ? tableComps : undefined });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not record the acknowledgement"),
+  });
   // Re-project when the ask or the rate table changes (debounced), once a preview exists.
   useEffect(() => {
     if (!preview) return;
@@ -1027,7 +1039,9 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
         summary: roomsSettled
           ? (movesText(preview!.moves, preview!.currentCheckOut) ??
             `${preview!.currentRooms.map((r) => `Room ${r.roomNumber}`).join(", ")} ${preview!.currentRooms.length === 1 ? "stays" : "stay"} on`)
-          : "a room is taken — pick where the guest moves",
+          : preview!.guestOverlap && !preview!.guestOverlap.acknowledged && (!replacedRoom || preview!.moves.length > 0)
+            ? "the guest holds another booking over these nights — see below"
+            : "a room is taken — pick where the guest moves",
         body: (
           <>
             <div style={{ display: "grid", gap: 4 }}>
@@ -1083,6 +1097,20 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
               </div>
             )}
             {preview!.blockedReason && <p style={{ ...hint, color: "var(--warn)" }}>{preview!.blockedReason}</p>}
+            {preview!.guestOverlap && !preview!.guestOverlap.acknowledged && (
+              <div style={{ ...row, alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={!isFom || overlapAckM.isPending}
+                  title={isFom ? undefined : "The FOM acknowledges an overlap"}
+                  onClick={() => overlapAckM.mutate()}
+                >
+                  {overlapAckM.isPending ? "Recording…" : `Acknowledge the overlap with ${preview!.guestOverlap.entryId}`}
+                </button>
+                <span style={hint}>Only when both bookings are meant — a duplicate should be cancelled instead.</span>
+              </div>
+            )}
           </>
         ),
       };
