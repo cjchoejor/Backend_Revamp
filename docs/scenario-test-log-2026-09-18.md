@@ -64,6 +64,7 @@ found was fixed, re-tested, and committed; this file is the record.
 | 39 | **A group cancels a week ahead; the GM waives**: the choir (Arrival, Nu 4,393.62 paid by bank transfer) · the GM's dialog reads charged Nu 100 → the waiver ticked → charged Nu 0, refunded Nu 4,393.62 · cancelled, hold released, bill settled — **but the refund was written down as cash** | **Passes** after fix 111 |
 | 40 | **An advance by transfer, then cancelled at Set up**: a walk-in with no email · 50% asked · the proforma handed over (nothing emailed) · the answer · Nu 2,425.50 by bank transfer, rooms held automatically · cancelled: Nu 100 charged, Nu 2,325.50 refunded **by bank transfer** · the Set-up dialog now carries the GM's waiver and the refund choice | **Passes** after fixes 111–112 |
 | 41 | **Parked at Set up and at Arrival, then resumed**: the company booking (Set up) and a reserved booking at Arrival are parked by the front desk with a reason · "Parked · Resume to continue" in place of the forward move, a 30-day park expiry armed, the stage's own clocks running on (quote validity, the no-show cut-off) · both leave Needs attention for Today's parked list · resumed: the park expiry gone, the booking back where it was | **Passes** after fix 114 |
+| 42 | **A quote renegotiated after it went out**: a walk-in with no email, quoted at the rack rate (Nu 4,851) and handed over — the desk said "sent by email to +97517111042" (fix 115) · the guest wants it cheaper · the FOM puts 10% off in the table and generates the quote again: v2 Nu 4,365.90, approved at generation, v1 kept as replaced · v2 handed over ("recorded as sent — nothing was emailed") · the acceptance in the guest's words · Set up on the new price | **Passes** after fixes 115–116 |
 
 ## Issues found
 
@@ -186,6 +187,8 @@ misleading screen · **Low** = wording / cosmetic.
 | 112 | Medium | Set up (desk) | **A GM could not waive a Set-up cancellation charge from the desk** — Set up's own cancel dialog had no waiver (Reserve's and Arrival's had), though the backend allows it. | The same GM waiver tick, with the figures following it. |
 | 113 | Low | Stay | "The 1 booked night from tonight are not billed" in the early-departure dialog. | "is not billed". |
 | 114 | Low | Arrival (desk) | Opening a **parked** booking at Arrival fired four refused requests: the rooms board asked for room-change candidates, which the backend refuses until the booking is resumed. | The board asks only for an active booking. |
+| 115 | Medium | Negotiation (desk) | **Sending a quote for a guest with no email filled the email box with their phone** and reported "sent by email to +97517111042" — nothing was emailed. | The email box starts with the email the quote will go to (none when there is none) and refuses a non-address; WhatsApp starts with the phone; the toast says what happened ("recorded as sent — nothing was emailed; hand it over"). |
+| 116 | Medium | Negotiation (backend) | **The quote email ignored the address typed at the desk** and always went to the guest — for an agency or company booking that showed the party's rates to the traveller — and a quote recorded as sent on WhatsApp was emailed as well. The quotation twin of issue 41. | The typed address, else the agency or company that booked, else the guest (the invoices' rule); a WhatsApp send is recorded only. |
 
 ### Noted, not changed
 
