@@ -63,6 +63,7 @@ found was fixed, re-tested, and committed; this file is the record.
 | 38 | **A returning guest whose ID has expired**: scenario 1's guest books again · at Arrival the CID on file is pulled into the guest table · at Check-in the desk suggests "Returning — ID valid"; the guest shows a new passport — typed over the old number, "Returning — ID expired" chosen · the verification is recorded on that path, with the passport | **Passes** |
 | 39 | **A group cancels a week ahead; the GM waives**: the choir (Arrival, Nu 4,393.62 paid by bank transfer) · the GM's dialog reads charged Nu 100 → the waiver ticked → charged Nu 0, refunded Nu 4,393.62 · cancelled, hold released, bill settled — **but the refund was written down as cash** | **Passes** after fix 111 |
 | 40 | **An advance by transfer, then cancelled at Set up**: a walk-in with no email · 50% asked · the proforma handed over (nothing emailed) · the answer · Nu 2,425.50 by bank transfer, rooms held automatically · cancelled: Nu 100 charged, Nu 2,325.50 refunded **by bank transfer** · the Set-up dialog now carries the GM's waiver and the refund choice | **Passes** after fixes 111–112 |
+| 41 | **Parked at Set up and at Arrival, then resumed**: the company booking (Set up) and a reserved booking at Arrival are parked by the front desk with a reason · "Parked · Resume to continue" in place of the forward move, a 30-day park expiry armed, the stage's own clocks running on (quote validity, the no-show cut-off) · both leave Needs attention for Today's parked list · resumed: the park expiry gone, the booking back where it was | **Passes** after fix 114 |
 
 ## Issues found
 
@@ -184,6 +185,7 @@ misleading screen · **Low** = wording / cosmetic.
 | 111 | Medium | Cancel · no-show (backend + desk) | **A refund was written down as cash whatever the guest had paid by**: a cancellation or a no-show wrote its money-out row with no method, so the column's CASH default recorded a bank-transfer advance going back over the counter — the day's takings would read the cash drawer short by the whole refund. | The refund goes back the way the money came (the one method used, or the largest payment's); the cancel dialogs ask "How any refund goes back" with an optional reference. |
 | 112 | Medium | Set up (desk) | **A GM could not waive a Set-up cancellation charge from the desk** — Set up's own cancel dialog had no waiver (Reserve's and Arrival's had), though the backend allows it. | The same GM waiver tick, with the figures following it. |
 | 113 | Low | Stay | "The 1 booked night from tonight are not billed" in the early-departure dialog. | "is not billed". |
+| 114 | Low | Arrival (desk) | Opening a **parked** booking at Arrival fired four refused requests: the rooms board asked for room-change candidates, which the backend refuses until the booking is resumed. | The board asks only for an active booking. |
 
 ### Noted, not changed
 
