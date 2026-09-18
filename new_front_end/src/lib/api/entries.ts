@@ -516,6 +516,8 @@ export type EntryBillingSummary = {
     refunded: number | null;
     writtenOff: number | null;
     outstandingBalance: number | null;
+    /** Money paid above the bill — the balance floors at zero, so only this shows it (2026-09-18). */
+    overpaid?: number | null;
     /** Per-room charge subtotals (2026-08-14) — server-summed; null when no line carries a room.
      *  `base` / `serviceCharge` / `gst` (2026-08-21) split the bucket for the per-room tabs;
      *  base + serviceCharge + gst = charges. */

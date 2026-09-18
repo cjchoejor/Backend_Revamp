@@ -46,6 +46,7 @@ import {
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import type { EntryDetail, FolioLineSummary } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
+import { OverpaidCard } from "./refund-card";
 import {
   AnswerLine,
   Choice,
@@ -153,6 +154,7 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
       <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} />
       {live && folio?.state === "LIVE" ? <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} /> : null}
       <HowSettled entry={entry} live={live} tz={clock.tz} />
+      <OverpaidCard entry={entry} live={live} />
       <Invoices entry={entry} live={live} tz={clock.tz} />
       <Departure entry={entry} live={live} />
       <RequestsCard />
@@ -835,7 +837,8 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
 
   const methods = settleMethodsFor(model, booked.kind === "Travel agent", !!booked.party);
   // Cash and QR carry a reference whenever money is taken — the backend refuses them without one.
-  const takesMoney = guestPays && (!Number.isFinite(typed) || typed > 0);
+  // Empty "paid now" means the whole balance — which takes nothing when the balance is zero.
+  const takesMoney = guestPays && (Number.isFinite(typed) ? typed > 0 : balanceNum > 0);
   const settleReason = !folioLive
     ? "the bill must be live to settle"
     : partialLocked

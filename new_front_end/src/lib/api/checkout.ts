@@ -70,6 +70,15 @@ export async function initiateSettlement(
   });
 }
 
+/** Give back money a guest paid above the bill — the FOM's (2026-09-18). */
+export async function recordFolioRefund(
+  session: Session,
+  folioId: string,
+  body: { amount: number; paymentMethod: string; reference?: string; reason: string },
+) {
+  return apiRequest<unknown>(`/api/folios/${folioId}/refunds`, { method: "POST", session, body });
+}
+
 /** One payer's share of the bill, as the backend sums it (2026-09-18). */
 export type SettlementBucket = {
   billingModel: string;

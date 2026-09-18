@@ -36,6 +36,7 @@ import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/wo
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import type { EntryDetail, InvoiceSummary } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
+import { OverpaidCard } from "./refund-card";
 import {
   AnswerLine,
   DocCard,
@@ -114,6 +115,7 @@ export function S9Closed({
     <StepCanvas past={readOnly}>
       <DisputesCard entry={entry} tz={clock.tz} />
       <WhatTheStayWas entry={entry} />
+      {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
       {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} /> : null}
       <OneDoorBackIn />
       <SealedPapers entry={entry} tz={clock.tz} />
