@@ -2126,13 +2126,20 @@ export async function sendQuotation(
     return updatedRow;
   });
 
-  // Phase 3 — outbound quotation email (best-effort, post-tx).
-  await sendQuotationEmailBestEffort(prisma, quotationId);
+  // Phase 3 — outbound quotation email (best-effort, post-tx). It goes where the desk said
+  // (2026-09-19): the address typed on an EMAIL send (an agency's or a company's, or a corrected
+  // one), else the guest's own — it used to go to the guest's address whatever was typed, the
+  // quotation twin of issue 41. A send the desk records as made on WhatsApp is not also emailed.
+  const channel = (input.channel ?? "EMAIL").toUpperCase();
+  if (channel === "EMAIL") {
+    const typed = (input.recipientAddress ?? input.sentTo ?? "").trim();
+    await sendQuotationEmailBestEffort(prisma, quotationId, /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null);
+  }
 
   return updated;
 }
 
-async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: string) {
+async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: string, toAddress: string | null = null) {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
     include: { entry: { include: { guestProfile: true } } },
@@ -2150,11 +2157,14 @@ async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: s
   // pre-multi-room quotations that don't have the field.
   const roomCount = Math.max(1, Number((terms as any).roomCount) || entry.numberOfRooms || 1);
   const breakdown = await computeStayCharges(prisma, nightly, nights, roomCount);
-  const displayName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  // Who the quote goes to — the invoices' rule (2026-09-19): the address typed at the desk, else
+  // the agency or company that booked (the quote carries their rates — it is never sent to the
+  // traveller by default), else the guest. Lazy import: s9-service pulls in half the domain.
+  const { resolveInvoiceRecipient } = await import("./s9-service.js");
+  const recipient = await resolveInvoiceRecipient(prisma, entry.id, toAddress);
 
   const content = renderQuotationEmail({
-    guestDisplayName: displayName,
+    guestDisplayName: recipient.greetName,
     inquiryReadableId: entry.inquiryId,
     quotationRef: q.referenceNumber ?? q.id,
     checkInDate: ci,
@@ -2204,7 +2214,7 @@ async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: s
       entryId: entry.id,
       actorId: q.createdBy ?? "SYSTEM",
       inquiryId: entry.inquiryId,
-      guestEmail: entry.guestProfile?.email ?? null,
+      guestEmail: recipient.to,
       stage: Stage.S2,
       eventTypePrefix: "QUOTATION_EMAIL",
     },
