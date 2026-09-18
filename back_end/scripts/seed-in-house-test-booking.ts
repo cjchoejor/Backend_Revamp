@@ -23,6 +23,7 @@
  *   POST /api/night-audit/run { operatingDate }   or the desk's Night audit block.
  */
 import { PrismaClient, Prisma } from "@prisma/client";
+import { hotelTodayUtc } from "../src/lib/stay-dates.js";
 
 const prisma = new PrismaClient();
 const argv = process.argv.slice(2);
@@ -40,8 +41,8 @@ const ROOM_COUNT = Math.max(1, Number(arg("--rooms", "1")));
 const P = "TEST-ED-";
 
 const dayStart = (offsetDays: number): Date => {
-  const now = new Date();
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  // The HOTEL's day — the UTC date is still yesterday in Bhutan until 06:00.
+  const d = hotelTodayUtc();
   d.setUTCDate(d.getUTCDate() + offsetDays);
   return d;
 };
@@ -60,6 +61,8 @@ async function clean() {
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.keyReturnRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.roomInspectionRecord.deleteMany({ where: { entryId: { in: ids } } });
+  // Invoice lines point at their invoice (FK) — a fixture that reached a tax invoice left them.
+  await prisma.invoiceLine.deleteMany({ where: { invoice: { entryId: { in: ids } } } });
   await prisma.invoice.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.paymentRecord.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.folioLine.deleteMany({ where: { folioId: { in: folioIds } } });

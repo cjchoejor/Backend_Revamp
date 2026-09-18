@@ -183,7 +183,8 @@ export async function postChargeTaxCompanionsTx(
   };
 
   const serviceCharge = serviceChargeRate > 0 ? round2(mulMoney(subTotalDec, serviceChargeRate)) : ZERO;
-  if (serviceCharge.gt(0)) {
+  // A credit note's base is negative, and so are its companions — the tax comes off with it.
+  if (!serviceCharge.isZero()) {
     await tx.folioLine.create({
       data: {
         id: await allocateFolioLineId(tx, input.folioId),
@@ -198,7 +199,7 @@ export async function postChargeTaxCompanionsTx(
   // GST is compound — applied to (subTotal + serviceCharge), kept in Decimal through the base.
   const gstBase = subTotalDec.add(serviceCharge);
   const gst = gstRate > 0 ? round2(mulMoney(gstBase, gstRate)) : ZERO;
-  if (gst.gt(0)) {
+  if (!gst.isZero()) {
     await tx.folioLine.create({
       data: {
         id: await allocateFolioLineId(tx, input.folioId),
@@ -378,7 +379,12 @@ export async function postCharge(
       },
     });
 
-    if (input.lineType !== FolioLineType.CREDIT_NOTE && input.amount > 0) {
+    // A charge carries its service charge and GST; so does a credit note, reversed (2026-09-18):
+    // a credit gives back a taxable amount, so the tax on it comes off too. It used to post bare —
+    // crediting a Nu 600 dinner left the guest paying its Nu 93 of service charge and GST, and the
+    // folio's tax buckets overstated what the hotel collected. The desk has always said "service
+    // charge and GST post beside it" under the credit-note button.
+    if ((input.lineType !== FolioLineType.CREDIT_NOTE && input.amount > 0) || (input.lineType === FolioLineType.CREDIT_NOTE && input.amount < 0)) {
       await postChargeTaxCompanionsTx(tx, {
         folioId,
         baseAmount: input.amount,
@@ -465,6 +471,9 @@ export async function postCreditNote(
     currency: input.currency,
     chargeDate: input.creditDate,
     roomId: input.roomId,
+    // A credit against a hall stays with the hall (2026-09-18) — the space was dropped here, so
+    // it landed under "No room / space".
+    spaceId: input.spaceId,
   });
 }
 

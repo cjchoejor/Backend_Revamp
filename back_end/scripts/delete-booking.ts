@@ -43,7 +43,7 @@ const TARGET_DB = (() => {
   const i = ARGV.indexOf("--db");
   return i >= 0 ? ARGV[i + 1] : "legphel_pms_dev2";
 })();
-const ENTRY_IDS = ARGV.filter((a) => /^ENT-/i.test(a)).map((a) => a.toUpperCase());
+const ENTRY_IDS = ARGV.filter((a) => /^(ENT|TEST)-/i.test(a)).map((a) => a.toUpperCase());
 
 /** The foreign keys that fan a booking out across the schema. */
 const OWNED: Array<{ table: string; column: string; key: string }> = [

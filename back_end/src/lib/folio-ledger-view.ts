@@ -32,12 +32,17 @@ import {
  * Pure: no I/O, Decimal throughout. Callers format.
  */
 
-export type LedgerComponentKey = "ROOM" | "F_AND_B" | "SERVICES";
+export type LedgerComponentKey = "ROOM" | "F_AND_B" | "SERVICES" | "CREDITS";
 
 export const LEDGER_COMPONENTS: ReadonlyArray<{ key: LedgerComponentKey; label: string }> = [
   { key: "ROOM", label: "Room" },
   { key: "F_AND_B", label: "Food & beverage" },
   { key: "SERVICES", label: "Services & other" },
+  // A credit note is its own line (2026-09-19) — DFG-001: "a negotiated discount would render as
+  // its own line here". Folded into Services & other it turned that row negative on a folio with
+  // no services at all ("Services & other −693.00" beside a Food & beverage 693.00 that the
+  // credit had cancelled). It carries its own reversed service charge and GST (they follow it).
+  { key: "CREDITS", label: "Credits & allowances" },
 ];
 
 /** Charge category → component. The reference wants this in configuration; until a vocabulary
@@ -45,7 +50,8 @@ export const LEDGER_COMPONENTS: ReadonlyArray<{ key: LedgerComponentKey; label: 
 export function componentForLineType(lineType: string): LedgerComponentKey {
   if (lineType === "ROOM_CHARGE" || lineType === "STAY") return "ROOM";
   if (lineType === "F_AND_B") return "F_AND_B";
-  return "SERVICES"; // SERVICE · OTHER · CREDIT_NOTE
+  if (lineType === "CREDIT_NOTE") return "CREDITS";
+  return "SERVICES"; // SERVICE · OTHER
 }
 
 export type LedgerLineLike = {
