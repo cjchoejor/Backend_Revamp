@@ -7,7 +7,10 @@ type UnavailableRoom = { inventoryId?: string; roomId?: string; unavailabilityRe
  */
 export function enforcePreferredAvailabilityConfigurationSelectedForS1Exit(input: { preferred: unknown | null | undefined }) {
   if (input.preferred) return;
-  throw new StageGateBlockedError("No preferred AvailabilityConfiguration selected", "NO_PREFERRED_CONFIGURATION");
+  throw new StageGateBlockedError(
+    "No rooms are chosen for this pass — ask the house for the dates and take the rooms (a new pass searches again)",
+    "NO_PREFERRED_CONFIGURATION",
+  );
 }
 
 export function enforcePreferredAvailabilityConfigurationNotStaleForS1Exit(input: { isStale: boolean }) {

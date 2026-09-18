@@ -94,9 +94,17 @@ export async function initialiseTasks(prisma: PrismaClient, entryId: string, act
  * standing right next to it.
  */
 export async function resetTasksForArrivalVerification(prisma: PrismaClient, entryId: string, actorId: string) {
+  // COMPLETE tasks, and tasks a RE-ENTRY waived (2026-09-18). A backflow out of Arrival waives
+  // the open tasks as clean-up ("BACKFLOW_S5_TO_S1: …") — not a judgment that they don't apply —
+  // so without this the next pass reached Arrival with room readiness, bed setup and guest
+  // details already "done", and the new stay was checked in without any of them being looked at.
+  // A waiver the desk recorded itself still carries.
   const completed = await prisma.preArrivalTask.findMany({
-    where: { entryId, status: TaskStatus.COMPLETE },
-    select: { id: true, taskType: true, completedAt: true, completedBy: true },
+    where: {
+      entryId,
+      OR: [{ status: TaskStatus.COMPLETE }, { status: TaskStatus.WAIVED, waivedReason: { startsWith: "BACKFLOW_" } }],
+    },
+    select: { id: true, taskType: true, status: true, completedAt: true, completedBy: true, waivedReason: true },
   });
   if (completed.length === 0) return { reset: 0 } as const;
 
@@ -118,7 +126,7 @@ export async function resetTasksForArrivalVerification(prisma: PrismaClient, ent
   await prisma.$transaction(async (tx) => {
     await tx.preArrivalTask.updateMany({
       where: { id: { in: completed.map((t) => t.id) } },
-      data: { status: TaskStatus.PENDING, completedAt: null, completedBy: null },
+      data: { status: TaskStatus.PENDING, completedAt: null, completedBy: null, waivedReason: null, waivedBy: null },
     });
     await tx.traceEvent.create({
       data: {
@@ -136,8 +144,10 @@ export async function resetTasksForArrivalVerification(prisma: PrismaClient, ent
           reason: "S4 prep does not pre-tick the Arrival checklist",
           reset: completed.map((t) => ({
             taskType: t.taskType,
+            was: t.status,
             completedAt: t.completedAt?.toISOString() ?? null,
             completedBy: t.completedBy,
+            waivedReason: t.waivedReason ?? null,
           })),
         },
         createdBy: actorId,

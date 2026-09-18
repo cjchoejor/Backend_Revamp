@@ -29,6 +29,8 @@ import { scheduleS7StageDwellWarningMonitor } from "../../lib/schedule-s7-dwell-
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { readHandoffChecklistContent } from "../../lib/handoff-checklist.js";
 import { dayOneRoomIds } from "./room-key-service.js";
+import { enforceArrivalNotBeforeBookedCheckIn } from "../../policies/14-cancellation/p36-early-departure.js";
+import { hotelTodayUtc } from "../../lib/stay-dates.js";
 
 export async function completeCheckInToS7(
   prisma: PrismaClient,
@@ -66,6 +68,9 @@ export async function completeCheckInToS7(
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS6ForCheckInCompletionToS7({ currentStage: entry.currentStage });
   enforceEntryActiveForStageTransition({ status: entry.status });
+  // Not before the booked check-in day (2026-09-18) — the same rule as Arrival → Check-in, held
+  // here too because this is the act that occupies the room and opens the folio.
+  enforceArrivalNotBeforeBookedCheckIn({ hotelToday: hotelTodayUtc(), checkIn: entry.reservation?.frozenCheckInDate ?? entry.checkInDate });
   if (clientVersion !== entry.version) {
     throw new OptimisticLockError();
   }

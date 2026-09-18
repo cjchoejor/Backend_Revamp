@@ -30,7 +30,7 @@ import { enforceDeficientRecordsHaveTerminalStatusForS7ToS8 } from "../policies/
 import { enforceCheckoutDatePresentForS7ToS8, enforceOccupiedRoomAssignmentForS7ToS8 } from "../policies/01-availability/p01-s7-exit-room-and-checkout-gates.js";
 import { enforceH4InitiatedBeforeS7ToS8UnlessSameDayDeparture } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8 } from "../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
-import { enforceDepartureNotBeforeBookedCheckout } from "../policies/14-cancellation/p36-early-departure.js";
+import { enforceArrivalNotBeforeBookedCheckIn, enforceDepartureNotBeforeBookedCheckout } from "../policies/14-cancellation/p36-early-departure.js";
 import { effectiveCheckOutDate, hotelTodayUtc, utcDateOnly } from "../lib/stay-dates.js";
 import { enforceNoUnresolvedNightAuditAnomaliesForS7ToS8 } from "../policies/24-night-audit/p60-unresolved-night-audit-anomalies-for-s7-to-s8.js";
 import {
@@ -82,6 +82,8 @@ export async function progressStageS5ToS6(
   }
 
   enforceGuestPhysicallyPresentForS5ToS6({ guestPhysicallyPresent });
+  // Not before the booked check-in day — an earlier arrival is a change of dates (2026-09-18).
+  enforceArrivalNotBeforeBookedCheckIn({ hotelToday: hotelTodayUtc(), checkIn: entry.reservation?.frozenCheckInDate ?? entry.checkInDate });
 
   const awaitingTimer = await prisma.timerRecord.findFirst({
     where: { entryId, timerCode: "AWAITING_WRITTEN_CONFIRMATION_W5", status: "SCHEDULED" },

@@ -584,6 +584,29 @@ export async function autoCompletePaymentReconciliationTaskTx(
     where: { id: pending.id },
     data: { status: TaskStatus.COMPLETE, completedAt: now, completedBy: actor.actorId },
   });
+  // Ticking the task for money paid in full reconciles the advance, exactly as pressing the
+  // task's Done does (2026-09-18). The task went COMPLETE while the folio's reconciled flag stayed
+  // false, so the Arrival gate "Advance reconciled" stayed shut with no Done left to press.
+  if (cause === "ADVANCE_PAID_IN_FULL") {
+    const folio = await tx.folio.findUnique({ where: { entryId }, select: { id: true, advancePaymentReconciliationComplete: true } });
+    if (folio && !folio.advancePaymentReconciliationComplete) {
+      await tx.folio.update({ where: { id: folio.id }, data: { advancePaymentReconciliationComplete: true } });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "ADVANCE_PAYMENT.S5_RECONCILIATION_AUTO",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Folio",
+          entityId: folio.id,
+          operation: "UPDATE",
+          timestamp: now,
+          entryId,
+          payload: { entryId, folioId: folio.id, cause, auto: true },
+          createdBy: actor.actorId,
+        },
+      });
+    }
+  }
   await tx.traceEvent.create({
     data: {
       eventType: "PRE_ARRIVAL_TASK.COMPLETED",

@@ -129,7 +129,12 @@ export async function placeCommittedHold(
   // IN FULL here would refuse exactly the cases those triggers cover.
   if (input.trigger == null) {
     const payment = await paymentService.evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio!.id });
-    enforceAdvancePaymentSatisfiedOrCreditExtensionPresent({ isAdvancePaymentSatisfied: payment.satisfied });
+    // Money already in hand is the same evidence the payment-fired hold relies on (2026-09-18).
+    // A part payment logged BEFORE the terms were disclosed skips the automatic hold (the hold
+    // needs the disclosure), and the manual hold then refused the same booking for not having
+    // the whole advance — a dead end reached purely by the order of clicks. Nothing received at
+    // all still needs the full advance or the FOM's credit extension, as before.
+    enforceAdvancePaymentSatisfiedOrCreditExtensionPresent({ isAdvancePaymentSatisfied: payment.satisfied || payment.totalReceived > 0 });
   }
 
   const useType = String((entry as any).useType ?? "");

@@ -60,6 +60,25 @@ export function enforceDepartureNotBeforeBookedCheckout(input: { hotelToday: Dat
 }
 
 /**
+ * The mirror of the rule above, at the other end of the stay (2026-09-18): a guest cannot be
+ * checked in before the booked check-in day (hotel calendar). Nothing stopped it — a family
+ * booked for 25-29 Sep could be taken through Arrival and checked in on the 18th, the room
+ * occupied for a week that was never priced, claimed or audited (the night audit posts only the
+ * booked nights) and possibly held by another guest. Arriving earlier is a change of dates:
+ * Amend dates re-quotes the extra nights, after which this gate passes on its own.
+ */
+export function enforceArrivalNotBeforeBookedCheckIn(input: { hotelToday: Date; checkIn: Date | null | undefined }) {
+  if (!input.checkIn) return;
+  const today = utcDateOnly(input.hotelToday).getTime();
+  const booked = utcDateOnly(input.checkIn).getTime();
+  if (today >= booked) return;
+  throw new StageGateBlockedError(
+    `The stay starts on ${ymdUtc(input.checkIn)} and today is ${ymdUtc(input.hotelToday)} - a guest arriving before the booked check-in is a change of dates: Amend dates (FOM) re-quotes the extra nights, then check in`,
+    "ARRIVAL_BEFORE_CHECK_IN",
+  );
+}
+
+/**
  * The departure date is bound to the stay: on or after check-in, strictly before the booked
  * checkout (otherwise it is not early), and never ahead of the hotel's today (the guest is
  * leaving now - a future shortening is a date amendment, not a departure).

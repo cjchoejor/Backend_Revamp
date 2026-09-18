@@ -339,10 +339,7 @@ async function prepareQuotationDraft(
     actorMaxDiscountPercent,
   });
   if (requested && !pricing.discountWithinAuthorityBounds) {
-    throw new PolicyGateBlockedError(
-      "DISCOUNT_AUTHORITY",
-      "Requested discount exceeds the acting user's maximum discount authority",
-    );
+    throw await discountAboveBandError(prisma, input.actorLevel, requested.discountPercent ?? null);
   }
 
   // Phase C — if the inquiry is linked to a travel agent or corporate account with an active
@@ -749,10 +746,7 @@ async function prepareQuotationDraft(
           });
         }
         if (actorMaxDiscountPercent != null && effectivePct > actorMaxDiscountPercent) {
-          throw new PolicyGateBlockedError(
-            "DISCOUNT_AUTHORITY",
-            "Requested discount exceeds the acting user's maximum discount authority",
-          );
+          throw await discountAboveBandError(prisma, input.actorLevel, effectivePct);
         }
         compositionTotalsPreDiscount = compositionTotals;
         compositionTotals = applied.totals;
@@ -796,12 +790,7 @@ async function prepareQuotationDraft(
             ? ceilings.l2MaxPercent
             : ceilings.l3MaxPercent;
       if (toDecimal(measuredPercent).gt(toDecimal(cap))) {
-        throw new PolicyGateBlockedError(
-          "DISCOUNT_AUTHORITY",
-          `This discount (${measuredPercent}% of the total) is above your approval band — ${
-            toDecimal(measuredPercent).gt(toDecimal(ceilings.l2MaxPercent)) ? "a GM" : "an FOM"
-          } has to generate this quote`,
-        );
+        throw await discountAboveBandError(prisma, input.actorLevel, measuredPercent);
       }
       discountAuthority = {
         approvedBy: actorId,
@@ -984,6 +973,27 @@ async function prepareQuotationDraft(
     mealTotal,
     extraBedTotal,
   };
+}
+
+/**
+ * The refusal for a discount above the generating actor's approval band — it says who can give it
+ * (2026-09-18). Two of the three checks said only "exceeds the acting user's maximum discount
+ * authority", which leaves the desk guessing whom to call.
+ */
+async function discountAboveBandError(
+  prisma: PrismaClient,
+  actorLevel: "L1" | "L2" | "L3" | "L4" | undefined,
+  measuredPercent: number | null,
+) {
+  const ceilings = await resolveActorDiscountCeilings(prisma);
+  const pct = measuredPercent != null ? ` (${Number(round2(measuredPercent))}% of the total)` : "";
+  const aboveFom = measuredPercent != null && toDecimal(measuredPercent).gt(toDecimal(ceilings.l2MaxPercent));
+  const aboveGm = measuredPercent != null && toDecimal(measuredPercent).gt(toDecimal(ceilings.l3MaxPercent));
+  const who =
+    aboveGm || actorLevel === "L3" || actorLevel === "L4"
+      ? `it is above the highest approval band (${ceilings.l3MaxPercent}%) — lower the discount`
+      : `${aboveFom ? "a GM" : "an FOM"} has to generate this quote`;
+  return new PolicyGateBlockedError("DISCOUNT_AUTHORITY", `This discount${pct} is above your approval band — ${who}`);
 }
 
 /**

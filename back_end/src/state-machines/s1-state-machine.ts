@@ -24,6 +24,29 @@ import { enforceEntryActiveForStageTransition } from "../policies/01-availabilit
 import { scheduleS2StageDwellWarningMonitor } from "../lib/schedule-s2-dwell-warning-monitor.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 
+/**
+ * The room selection of THIS pass (2026-09-18). A new pass opened by a re-entry ("new dates or
+ * rooms") must search again — but the exit gate took the newest selection of ANY pass, so the
+ * previous pass's search and rooms (already released by the re-entry) carried the new pass
+ * straight through Inquiry with nothing checked for it. A selection from an earlier pass is its
+ * history; recalling it is the governed recall (Canon §59), which re-creates it on this pass
+ * after re-validation. Rows written before selections carried a pass count only on a booking
+ * that never had a second pass.
+ */
+async function currentPassPreferredConfig<C extends { optionSelected: unknown; segmentId: string | null }>(
+  prisma: PrismaClient,
+  entryId: string,
+  configs: C[],
+): Promise<C | undefined> {
+  const segments = await prisma.segment.findMany({
+    where: { entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { id: true },
+  });
+  const current = segments[0]?.id ?? null;
+  return configs.find((c) => c.optionSelected != null && (c.segmentId === current || (c.segmentId == null && segments.length <= 1)));
+}
+
 export async function progressS1ToS2(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -63,7 +86,7 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
     apartmentRateTierCode: entry.apartmentRateTierCode,
   });
 
-  const preferredCfg = entry.availabilityConfigs.find((c) => c.optionSelected != null);
+  const preferredCfg = await currentPassPreferredConfig(prisma, entryId, entry.availabilityConfigs);
   enforcePreferredAvailabilityConfigurationSelectedForS1Exit({ preferred: preferredCfg });
   const preferred = preferredCfg!;
   enforcePreferredAvailabilityConfigurationNotStaleForS1Exit({ isStale: preferred.isStale });
@@ -144,14 +167,14 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
 export async function autoFulfilS2ToS3(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    include: { availabilityConfigs: true },
+    include: { availabilityConfigs: { orderBy: { createdAt: "desc" } } },
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS1ForAutoFulfilS2ToS3({ currentStage: entry.currentStage });
   if (clientVersion == null) throw new ValidationError("version is required");
   if (entry.version !== clientVersion) throw new ValidationError("version mismatch");
 
-  const preferredCfg = entry.availabilityConfigs.find((c) => c.optionSelected != null);
+  const preferredCfg = await currentPassPreferredConfig(prisma, entryId, entry.availabilityConfigs);
   enforcePreferredAvailabilityConfigurationSelectedForS1Exit({ preferred: preferredCfg });
   const preferred = preferredCfg!;
   enforcePreferredAvailabilityConfigurationNotStaleForS1Exit({ isStale: preferred.isStale });
