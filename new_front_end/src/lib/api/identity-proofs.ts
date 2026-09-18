@@ -80,6 +80,11 @@ export type IdentityProofsResponse = {
     allowed: VerificationPathCode[];
     refused: Partial<Record<VerificationPathCode, string>>;
   } | null;
+  /**
+   * THIS stay's identity verification — what the check-in gate reads (2026-09-18). Null until
+   * it is recorded at this booking; the guest profile's own stamp may be from an earlier stay.
+   */
+  verification?: { verifiedAt: string; verifiedBy: string | null; path: VerificationPathCode | null } | null;
 };
 
 export type VerificationPathCode = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";

@@ -345,7 +345,12 @@ export function IdentityProofBlock({
   // Identity VERIFICATION (S6 only — `checkInGate`): moved here from its own block.
   const guest = entry.guestProfile;
   const isVip = !!guest?.vipTier?.trim();
-  const identityVerified = !!guest?.identityVerifiedAt;
+  // Verified AT THIS STAY — the server's per-booking record, which the check-in gate reads. The
+  // profile's own stamp outlives the stay: a returning guest arrived already "verified" by their
+  // last check-in, the button showed as done and the old path was seeded over the suggested one
+  // (2026-09-18).
+  const stayVerification = listQuery.data?.verification ?? null;
+  const identityVerified = !!stayVerification;
   // The paths the guest's profile allows, from the server (2026-09-18, SIG-S6 §756). Every guest
   // who was not VIP used to default to "Returning — ID valid", the one path that needs no
   // document, so a first-time guest was verified with nothing on file. Until the answer arrives
@@ -359,8 +364,8 @@ export function IdentityProofBlock({
   useEffect(() => {
     // Seed from the RECORDED path when there is one (2026-08-21 — "Make changes" must show the
     // guest type as it stands, not a default), else the path the guest's profile points to.
-    setVerificationPath((guest?.identityVerificationPath as VerificationPath | null | undefined) ?? suggestedPath);
-  }, [suggestedPath, guest?.id, guest?.identityVerificationPath]);
+    setVerificationPath((stayVerification?.path as VerificationPath | null | undefined) ?? suggestedPath);
+  }, [suggestedPath, guest?.id, stayVerification?.path]);
 
   // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
   // room (never who), so this re-derives the seating with the SAME deterministic algorithm
@@ -495,7 +500,7 @@ export function IdentityProofBlock({
   // guest type (verification path) is part of the same edit mode (2026-08-21, operator request):
   // it stays changeable while the table is open and a different pick re-records the verification.
   const editMode = !allLocked;
-  const recordedPath = (guest?.identityVerificationPath as VerificationPath | null | undefined) ?? null;
+  const recordedPath = (stayVerification?.path as VerificationPath | null | undefined) ?? null;
   const pathChanged = identityVerified && verificationPath !== recordedPath;
   const allCovered = slots.length > 0 && coveredCount === slots.length;
 

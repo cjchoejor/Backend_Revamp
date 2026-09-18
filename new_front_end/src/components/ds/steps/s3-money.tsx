@@ -21,7 +21,9 @@ import { useHotelClock } from "@/hooks/use-hotel-clock";
 import {
   reconcileAdvancePayment,
   recordCreditExtension,
+  ADVANCE_PAYMENT_MODES,
   recordFolioPayment,
+  type AdvancePaymentMode,
   setAdvancePaymentPlan,
   setAdvanceRequirement,
 } from "@/lib/api/reservation-setup";
@@ -58,14 +60,6 @@ function dueWords(plan: AdvancePaymentPlanSummary["plan"], due: AdvancePaymentPl
 }
 
 /** The fixed list of payment modes (BE-13) — shown, not yet recordable. */
-const PAY_MODES = [
-  ["CASH_NU", "Cash — Nu."],
-  ["CASH_INR", "Cash — INR at par"],
-  ["QR", "QR (BoB merchant)"],
-  ["BANK", "Bank transfer"],
-  ["REMIT", "Inward remittance"],
-] as const;
-
 const REQUIREMENT_MODES = [
   ["PERCENT", "A percent of the quotation"],
   ["AMOUNT", "A flat amount"],
@@ -633,8 +627,16 @@ function PaymentDialog({
   // part-payment a refilled box read like a second bill due now.
   const [amount, setAmount] = useState(status && status.shortfall > 0 && status.totalReceived === 0 ? String(status.shortfall) : "");
   const [notes, setNotes] = useState("");
+  // How it came in (2026-09-18) — stored on the payment; every advance used to be recorded as cash.
+  const [mode, setMode] = useState<AdvancePaymentMode | null>(null);
   const pay = useMutation({
-    mutationFn: () => recordFolioPayment(session!, folioId, { entryId: entry.id, amount: Number(amount), notes: notes.trim() || undefined }),
+    mutationFn: () =>
+      recordFolioPayment(session!, folioId, {
+        entryId: entry.id,
+        amount: Number(amount),
+        notes: notes.trim() || undefined,
+        paymentMethod: mode ?? undefined,
+      }),
     onSuccess: (res) => {
       toast.success(`${money(Number(amount), currency)} recorded`);
       const ah = res.autoHold;
@@ -654,7 +656,7 @@ function PaymentDialog({
     },
     onError: (e) => toastRefusal(e, "The payment could not be recorded"),
   });
-  const ok = isAmount(amount);
+  const ok = isAmount(amount) && !!mode;
   const prefilled = !!status && status.shortfall > 0 && amount === String(status.shortfall);
   return (
     <DsDialog
@@ -674,7 +676,12 @@ function PaymentDialog({
           <Button2 kind="quiet" disabled={pay.isPending} onClick={onClose}>
             Not now
           </Button2>
-          <Button2 working={pay.isPending} disabled={!ok} reason={ok ? undefined : "put in the amount received"} onClick={() => pay.mutate()}>
+          <Button2
+            working={pay.isPending}
+            disabled={!ok}
+            reason={ok ? undefined : !isAmount(amount) ? "put in the amount received" : "choose how it was paid"}
+            onClick={() => pay.mutate()}
+          >
             Record the payment
           </Button2>
         </>
@@ -704,10 +711,10 @@ function PaymentDialog({
           </span>
         ) : null}
       </div>
-      <div className="field" title="The payment mode, the slip's reference and the date received are not in the backend yet (BE-13)">
+      <div className="field">
         <label>How it was paid</label>
-        <Choice options={PAY_MODES} value={null} disabled />
-        <span className="hint">the mode, the slip&rsquo;s reference and the date received are BE-13 — put them in the note for now</span>
+        <Choice options={ADVANCE_PAYMENT_MODES} value={mode} onChange={setMode} />
+        <span className="hint">the slip&rsquo;s reference goes in the note; the payment is dated today (a back-dated receipt is BE-13)</span>
       </div>
       <div className="field">
         <label>Note</label>

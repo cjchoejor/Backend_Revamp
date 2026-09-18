@@ -35,6 +35,7 @@ import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import type { EntryDetail, InvoiceSummary } from "@/types/api";
+import { sentWords } from "@/hooks/use-invoice-recipient";
 import {
   AnswerLine,
   DocCard,
@@ -67,8 +68,10 @@ import {
   useBilling,
   useBookedBy,
   useFolioIndex,
+  SendToField,
   useIssueAndSend,
   useSendInvoice,
+  useSendTo,
 } from "./s8-parts";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -231,6 +234,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
   const comms = useCommunications(entry.id);
   const issueSend = useIssueAndSend(entry, "final-v1");
   const send = useSendInvoice(entry);
+  const [sendTo, setSendTo] = useSendTo(entry);
   const ps = pay.data;
   const cur = billing.data?.currency ?? fin.currency;
   const outstanding = fin.outstanding;
@@ -378,7 +382,12 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                 <div key={inv.id} className="row-acts sm">
                   <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
                     {invoiceLabel(inv)} · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)} · {INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}
-                    {inv.dispatchedAt ? <span className="meta"> · sent {fmtInstantDate(inv.dispatchedAt, tz)}</span> : null}
+                    {inv.dispatchedAt ? (
+                      <span className="meta">
+                        {" "}
+                        · sent {fmtInstantDate(inv.dispatchedAt, tz)} · {sentWords(inv.dispatchedTo, entry, booked.party)}
+                      </span>
+                    ) : null}
                   </span>
                   <Button
                     kind="quiet"
@@ -402,7 +411,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                       has already paid and left would only confuse them (2026-09-18). */}
                   {inv.state === "DRAFT" && inv.invoiceType === "FINAL" ? (
                     <Live>
-                      <Button compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate(inv.id)}>
+                      <Button compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: inv.id, to: sendTo })}>
                         Send it
                       </Button>
                     </Live>
@@ -411,6 +420,13 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                   ) : null}
                 </div>
               ))}
+              {finals.some((i) => i.state === "DRAFT") ? (
+                <Live>
+                  <div className="form2" style={{ marginTop: 4 }}>
+                    <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
+                  </div>
+                </Live>
+              ) : null}
             </div>
           ) : (
             "none issued"
@@ -647,7 +663,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
               icon="lock"
               state={issueSend.isPending ? "working" : "default"}
               workingLabel="Issuing…"
-              onClick={() => issueSend.mutate(undefined, { onSettled: () => setIssuing(false) })}
+              onClick={() => issueSend.mutate(sendTo, { onSettled: () => setIssuing(false) })}
             >
               Issue and send
             </Button>
@@ -660,12 +676,22 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
           <li>It is sent in the same act; its answer is awaited like any paper.</li>
           <li>An invoice already sent stays as it was — the guest received that file.</li>
         </ul>
+        <div className="form2" style={{ marginTop: 10 }}>
+          <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
+        </div>
       </DsDialog>
     </StepCard>
   );
 }
 
 /* ------------------------------------------------------------------ record a payment */
+
+/** How money arrives after the stay — the guest has gone, so a transfer is the usual way. */
+const POST_STAY_METHODS = [
+  ["BANK_TRANSFER", "Bank transfer"],
+  ["MOBILE_PAYMENT", "Mobile payment (QR)"],
+  ["CASH", "Cash"],
+] as const;
 
 function RecordPayment({
   entry,
@@ -688,11 +714,15 @@ function RecordPayment({
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
-  const live = invoices.filter((i) => i.state !== "SUPERSEDED");
-  const preferred = live.find((i) => i.invoiceType === "FINAL") ?? live[0] ?? invoices[0] ?? null;
+  // Money is matched only against an invoice that went out — one sent, or one already taking
+  // payments (a second instalment). A superseded or never-sent paper is not offered: the backend
+  // refuses it (2026-09-18).
+  const payable = invoices.filter((i) => i.state === "DISPATCHED" || i.state === "PAYMENT_TRACKED");
+  const preferred = payable.find((i) => i.invoiceType === "FINAL") ?? payable[0] ?? null;
   const [invoiceId, setInvoiceId] = useState("");
   const [amount, setAmount] = useState("");
   const [ref, setRef] = useState("");
+  const [method, setMethod] = useState<(typeof POST_STAY_METHODS)[number][0]>("BANK_TRANSFER");
   // The amount starts at what is still owed (the common case — the rest arriving); edit it down
   // for a part-payment. Latched on the first keystroke so a refetch never overwrites it.
   const touched = useRef(false);
@@ -703,13 +733,27 @@ function RecordPayment({
   useEffect(() => {
     if (open && !invoiceId && preferred) setInvoiceId(preferred.id);
   }, [open, invoiceId, preferred]);
+  // Each opening starts from what is still owed (2026-09-18): the dialog stays mounted, so a
+  // second instalment used to re-send the first one's typed amount and reference.
+  useEffect(() => {
+    if (!open) return;
+    touched.current = false;
+    setRef("");
+    setAmount(outstanding != null && outstanding > 0 ? String(outstanding) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on opening
+  }, [open]);
   const target = invoiceId || preferred?.id || "";
+  const targetState = payable.find((i) => i.id === target)?.state ?? null;
   const n = Number.parseFloat(amount);
 
   const tracked = useMutation({
     mutationFn: () => {
       if (!target) throw new Error("Choose the invoice the money is for");
-      const body: Parameters<typeof recordInvoicePaymentEvent>[2] = { nextState: "PAYMENT_TRACKED", referenceNumber: ref.trim() || undefined };
+      const body: Parameters<typeof recordInvoicePaymentEvent>[2] = {
+        nextState: "PAYMENT_TRACKED",
+        paymentMethod: method,
+        referenceNumber: ref.trim() || undefined,
+      };
       if (Number.isFinite(n) && n > 0) body.amount = n;
       return recordInvoicePaymentEvent(session!, target, body);
     },
@@ -746,7 +790,13 @@ function RecordPayment({
           <Button kind="quiet" state={busy ? "inert" : "default"} onClick={onClose}>
             Not now
           </Button>
-          <Button kind="secondary" state={reconciled.isPending ? "working" : busy || !target ? "inert" : "default"} workingLabel="Working…" onClick={() => reconciled.mutate()}>
+          <Button
+            kind="secondary"
+            state={reconciled.isPending ? "working" : busy || !target || targetState !== "PAYMENT_TRACKED" ? "inert" : "default"}
+            title={target && targetState !== "PAYMENT_TRACKED" ? "record a payment against it first" : undefined}
+            workingLabel="Working…"
+            onClick={() => reconciled.mutate()}
+          >
             Mark it reconciled
           </Button>
           <Button
@@ -766,8 +816,9 @@ function RecordPayment({
       <div className="form2">
         <div className="wide field">
           <label>For the invoice</label>
-          <select className="input" value={target} onChange={(e) => setInvoiceId(e.target.value)} disabled={answerPending}>
-            {invoices.map((inv) => (
+          <select className="input" value={target} onChange={(e) => setInvoiceId(e.target.value)} disabled={answerPending || !payable.length}>
+            {payable.length ? null : <option value="">no invoice has gone out yet — send the tax invoice first</option>}
+            {payable.map((inv) => (
               <option key={inv.id} value={inv.id}>
                 {invoiceLabel(inv)} · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)} · {INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}
               </option>
@@ -787,6 +838,16 @@ function RecordPayment({
             }}
           />
           <span className="hint">what is still owed, unless you type less</span>
+        </div>
+        <div className="field">
+          <label>How it came in</label>
+          <select className="input" value={method} disabled={answerPending} onChange={(e) => setMethod(e.target.value as typeof method)}>
+            {POST_STAY_METHODS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="field">
           <label>Reference</label>

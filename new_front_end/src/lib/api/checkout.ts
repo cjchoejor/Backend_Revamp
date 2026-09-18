@@ -57,6 +57,10 @@ export async function initiateSettlement(
     fomAcknowledgementRef?: string;
     nightAuditFomAcknowledgementRef?: string;
     voucherAmount?: number;
+    /** Where the invoice a direct bill or a voucher shortfall issues is emailed. */
+    invoiceDispatchedTo?: string;
+    /** Settle ONE payer's share — the guest's own extras, the agency's package (2026-09-18). */
+    billingModel?: string;
   },
 ) {
   return apiRequest<unknown>(`/api/folios/${folioId}/settle`, {
@@ -64,6 +68,23 @@ export async function initiateSettlement(
     session,
     body,
   });
+}
+
+/** One payer's share of the bill, as the backend sums it (2026-09-18). */
+export type SettlementBucket = {
+  billingModel: string;
+  isPrimary: boolean;
+  charges: number;
+  outstanding: number;
+  invoiceId: string | null;
+};
+
+/** The bill by payer — the guest's own extras apart from the agency's package or the company's account. */
+export async function listSettlementBuckets(session: Session, folioId: string) {
+  return apiRequest<{ folioId: string; folioState: string; primary: string | null; buckets: SettlementBucket[] }>(
+    `/api/folios/${folioId}/settlement-buckets`,
+    { session },
+  );
 }
 
 export async function issueFinalInvoice(

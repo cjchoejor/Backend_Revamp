@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlarmClock, CalendarPlus, Check, Eye, EyeOff, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { recipientHint, useInvoiceRecipient, type InvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { ApiError } from "@/lib/api/client";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -240,7 +241,7 @@ const miniHeading: CSSProperties = { ...hint, fontWeight: 600, textTransform: "u
 function InterimRequestPanel({
   entryId,
   request,
-  guestEmail,
+  recipient,
   onChanged,
   canWithdraw = true,
   leadSteps = [],
@@ -248,7 +249,8 @@ function InterimRequestPanel({
 }: {
   entryId: string;
   request: InterimPaymentRow;
-  guestEmail: string | null;
+  /** Who the bill goes to by default — the agency or company when one booked (2026-09-18). */
+  recipient: InvoiceRecipient;
   onChanged: () => void;
   canWithdraw?: boolean;
   leadSteps?: StepItem[];
@@ -265,7 +267,16 @@ function InterimRequestPanel({
   useEffect(() => {
     if (dispatched) setPreviewOpen(false);
   }, [dispatched]);
-  const [sendTo, setSendTo] = useState(guestEmail ?? "");
+  // Starts at the backend's own default recipient and follows it until the desk types.
+  const [sendTo, setSendToRaw] = useState(recipient.defaultTo);
+  const sendToTouched = useRef(false);
+  useEffect(() => {
+    if (!sendToTouched.current && !recipient.loading) setSendToRaw(recipient.defaultTo);
+  }, [recipient.defaultTo, recipient.loading]);
+  const setSendTo = (v: string) => {
+    sendToTouched.current = true;
+    setSendToRaw(v);
+  };
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("CASH");
   const [amountTouched, setAmountTouched] = useState(false);
@@ -604,7 +615,8 @@ function InterimRequestPanel({
             <div style={row}>
               <div className="field" style={{ ...fieldTight, flex: 1, minWidth: 220 }}>
                 <label>Send to</label>
-                <input value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
+                <input value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder={recipient.party ? `${recipient.party}'s email` : "guest@example.com"} />
+                {recipientHint(recipient, sendTo) ? <span className="hint">{recipientHint(recipient, sendTo)}</span> : null}
               </div>
               <button type="button" className="btn btn-primary btn-sm" disabled={sendM.isPending || !request.invoiceId} onClick={() => sendM.mutate()}>
                 {sendM.isPending ? "Sending…" : "Send interim invoice"}
@@ -695,6 +707,7 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
   const { session } = useSession();
   const queryClient = useQueryClient();
   const entryId = entry.id;
+  const recipient = useInvoiceRecipient(entry);
   const q = useQuery({
     queryKey: ["interim-payments", entryId],
     queryFn: () => listInterimPayments(session!, entryId),
@@ -810,7 +823,7 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
       )}
       {open && !suggested && (
         <div style={{ marginTop: 8 }}>
-          <InterimRequestPanel entryId={entryId} request={open} guestEmail={entry.guestProfile?.email ?? null} onChanged={() => onChanged?.()} />
+          <InterimRequestPanel entryId={entryId} request={open} recipient={recipient} onChanged={() => onChanged?.()} />
         </div>
       )}
       {history.length > 0 && (
@@ -840,6 +853,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
   const { session } = useSession();
   const queryClient = useQueryClient();
   const entryId = entry.id;
+  const recipient = useInvoiceRecipient(entry);
   const isFom = (LEVEL_RANK[session?.actorLevel ?? "L1"] ?? 0) >= 2;
   const currentCheckOut = (entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? "").slice(0, 10);
 
@@ -1258,7 +1272,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             <InterimRequestPanel
               entryId={entryId}
               request={{ ...(active.interimPayment as unknown as InterimPaymentRow), payments: [] }}
-              guestEmail={entry.guestProfile?.email ?? null}
+              recipient={recipient}
               onChanged={() => onChanged?.()}
               canWithdraw={false}
               leadSteps={heldStep ? [heldStep] : []}

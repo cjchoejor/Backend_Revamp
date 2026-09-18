@@ -9,7 +9,9 @@ import { ApiError } from "@/lib/api/client";
 import {
   getPaymentStatus,
   recordCreditExtension,
+  ADVANCE_PAYMENT_MODES,
   recordFolioPayment,
+  type AdvancePaymentMode,
   reconcileAdvancePayment,
   setAdvancePaymentPlan,
 } from "@/lib/api/reservation-setup";
@@ -473,6 +475,8 @@ export function AdvanceSettlementBlock({
 
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
+  // How it came in (2026-09-18) — stored on the payment; it used to be recorded as cash always.
+  const [mode, setMode] = useState<AdvancePaymentMode | "">("");
   const [ceiling, setCeiling] = useState("");
   const [creditReason, setCreditReason] = useState("");
   const [creditExpiry, setCreditExpiry] = useState<CreditExpiryChoice>({ mode: "NONE", hours: "" });
@@ -522,12 +526,18 @@ export function AdvanceSettlementBlock({
   const paymentM = useMutation({
     mutationFn: () => {
       if (!folio) throw new Error("No folio on this booking");
-      return recordFolioPayment(session!, folio.id, { entryId: entry.id, amount: Number(amount), notes: notes.trim() || undefined });
+      return recordFolioPayment(session!, folio.id, {
+        entryId: entry.id,
+        amount: Number(amount),
+        notes: notes.trim() || undefined,
+        paymentMethod: mode || undefined,
+      });
     },
     onSuccess: () => {
       toast.success("Payment logged against the advance");
       setAmount("");
       setNotes("");
+      setMode("");
       editedRef.current = false;
       ceilingEditedRef.current = false;
       invalidate();
@@ -676,12 +686,28 @@ export function AdvanceSettlementBlock({
               )}
             </div>
             <div className="field">
+              <label>How it was paid</label>
+              <select value={mode} onChange={(e) => setMode(e.target.value as AdvancePaymentMode | "")}>
+                <option value="">choose…</option>
+                {ADVANCE_PAYMENT_MODES.map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
               <label>Notes</label>
-              <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. cash at desk / bank ref" />
+              <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-            <button className="btn btn-primary" disabled={!amount || paymentM.isPending} onClick={() => paymentM.mutate()}>
+            <button
+              className="btn btn-primary"
+              disabled={!amount || !mode || paymentM.isPending}
+              title={!mode ? "choose how it was paid" : undefined}
+              onClick={() => paymentM.mutate()}
+            >
               {paymentM.isPending ? "Logging…" : "Log payment received"}
             </button>
             <button

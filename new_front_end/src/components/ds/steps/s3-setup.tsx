@@ -33,6 +33,7 @@ import {
   placeCommittedHold,
   recordCancellationDisclosure,
   releaseCommittedHold,
+  listPaymentMilestoneTemplates,
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { guestNameOf } from "@/lib/ds/status";
@@ -64,6 +65,7 @@ import {
   words,
   type PaperRef,
 } from "./kit";
+import { SendToField, useSendTo } from "./s8-parts";
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 
@@ -777,11 +779,9 @@ function ProformaCard({
   const passes = passesOf(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
-  const guestEmail = entry.guestProfile?.email ?? entry.inquiry?.guestProfile?.email ?? "";
-  const [to, setTo] = useState(guestEmail);
-  useEffect(() => {
-    if (sendOpen) setTo((p) => p || guestEmail);
-  }, [sendOpen, guestEmail]);
+  // The proforma is made out to the agency or company when one booked, so it goes to their
+  // address, never the traveller's by default (2026-09-18) — the backend applies the same rule.
+  const [to, setTo] = useSendTo(entry);
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
@@ -956,17 +956,7 @@ function ProformaCard({
             </>
           }
         >
-          <div className="field">
-            <label>Email address · optional</label>
-            <input
-              className="input"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              placeholder="the guest's address on file is used when blank"
-              autoFocus
-            />
-            <span className="hint">by email, in the booking&rsquo;s thread</span>
-          </div>
+          <SendToField entry={entry} value={to} onChange={setTo} label="Email address" />
         </DsDialog>
       ) : null}
     </StepCard>
@@ -1110,7 +1100,19 @@ function FocCard({ entry, editable, gm, onChanged }: { entry: EntryDetail; edita
 function MilestonesCard({ entry, editable, onChanged }: { entry: EntryDetail; editable: boolean; onChanged: () => void }) {
   const { session } = useSession();
   const { past } = useStepMode();
-  const [template, setTemplate] = useState("DEFAULT");
+  // The templates the hotel has configured (2026-09-18) — the card offered a free-text "DEFAULT"
+  // the config never held, so scheduling could only fail with "Unknown templateKey".
+  const templatesQuery = useQuery({
+    queryKey: ["payment-milestone-templates"],
+    queryFn: () => listPaymentMilestoneTemplates(session!),
+    enabled: !!session,
+  });
+  const templates = templatesQuery.data?.templates ?? [];
+  const [template, setTemplate] = useState("");
+  useEffect(() => {
+    if (!template && templates[0]) setTemplate(templates[0].key);
+  }, [templates, template]);
+  const noTemplates = templatesQuery.isSuccess && templates.length === 0;
   const schedule = useMutation({
     mutationFn: () => schedulePaymentMilestones(session!, entry.id, { templateKey: template.trim() }),
     onSuccess: () => {
@@ -1130,17 +1132,37 @@ function MilestonesCard({ entry, editable, onChanged }: { entry: EntryDetail; ed
               kind="secondary"
               label="Schedule the milestones"
               note="the dates the company pays, from the template — each one runs on its own clock"
-              onClick={editable && template.trim() && !schedule.isSuccess ? () => schedule.mutate() : undefined}
+              onClick={editable && !noTemplates && template.trim() && !schedule.isSuccess ? () => schedule.mutate() : undefined}
               state={schedule.isPending ? "working" : undefined}
-              reason={!editable ? "not at this step" : !template.trim() ? "name the template" : schedule.isSuccess ? "already scheduled" : undefined}
+              reason={
+                !editable
+                  ? "not at this step"
+                  : noTemplates
+                    ? "no payment-milestone templates are set up yet — an admin adds them in the configuration (paymentMilestone.scheduleTemplates)"
+                    : !template.trim()
+                      ? "choose the template"
+                      : schedule.isSuccess
+                        ? "already scheduled"
+                        : undefined
+              }
             />
           </Live>
         )
       }
     >
-      <div className="field" style={{ maxWidth: 320 }}>
+      <div className="field" style={{ maxWidth: 360 }}>
         <label>Template</label>
-        <input className="input" value={template} readOnly={!editable} onChange={(e) => setTemplate(e.target.value)} />
+        {noTemplates ? (
+          <span className="meta">No templates are set up yet — the admin adds them in the configuration.</span>
+        ) : (
+          <select className="input" value={template} disabled={!editable} onChange={(e) => setTemplate(e.target.value)}>
+            {templates.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label} · {plural(t.milestones.length, "stage")}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="hint">a company or conference booking pays in stages</span>
       </div>
     </StepCard>

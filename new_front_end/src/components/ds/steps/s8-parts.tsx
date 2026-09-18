@@ -8,7 +8,7 @@
  * Every figure here is read from the backend. Nothing is added, multiplied or netted on the desk;
  * a figure the backend does not send reads "—".
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
@@ -19,6 +19,7 @@ import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { getFolioDocuments } from "@/lib/api/documents";
 import { getBillingSummary, type EntryBillingSummary } from "@/lib/api/entries";
 import { getInquiry } from "@/lib/api/inquiries";
+import { recipientHint, sentWords, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { guestName } from "@/lib/desk/model";
 import { channelWord } from "@/lib/ds/status";
 import { refusalText } from "@/lib/ds/translate";
@@ -179,21 +180,23 @@ export function useBookedBy(entry: EntryDetail) {
 export function useIssueAndSend(entry: EntryDetail, templateKey?: string) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  const recipient = useInvoiceRecipient(entry);
   return useMutation({
-    mutationFn: async () => {
+    /** `to` is the "Send to" box — empty lets the backend's rule decide (see useInvoiceRecipient). */
+    mutationFn: async (to?: string) => {
       if (!entry.folio) throw new Error("There is no bill on this booking");
       const inv = (await issueFinalInvoice(session!, entry.folio.id, entry.id, templateKey)) as { id?: string; invoiceNumber?: string | null } | null;
-      if (!inv?.id) return { sent: false, number: null as string | null, error: null as unknown };
+      if (!inv?.id) return { sent: false, number: null as string | null, dispatchedTo: null as string | null, error: null as unknown };
       const number = inv.invoiceNumber ?? inv.id;
       try {
-        await dispatchInvoice(session!, inv.id);
-        return { sent: true, number, error: null as unknown };
+        const out = (await dispatchInvoice(session!, inv.id, { dispatchedTo: to?.trim() || undefined })) as { dispatchedTo?: string | null } | null;
+        return { sent: true, number, dispatchedTo: out?.dispatchedTo ?? null, error: null as unknown };
       } catch (error) {
-        return { sent: false, number, error };
+        return { sent: false, number, dispatchedTo: null as string | null, error };
       }
     },
     onSuccess: (r) => {
-      if (r.sent) toast.success(`Tax invoice ${r.number} issued and sent`);
+      if (r.sent) toast.success(`Tax invoice ${r.number} issued — ${sentWords(r.dispatchedTo, entry, recipient.party)}`);
       else if (r.error) toast.error(`Tax invoice ${r.number} is issued but did not go out — ${refusalText(r.error)}`, { description: "Send it again from its row.", duration: 9000 });
       else toast.warning("The tax invoice is issued — send it from its row");
       refresh([["settlement-targets"]]);
@@ -206,14 +209,51 @@ export function useIssueAndSend(entry: EntryDetail, templateKey?: string) {
 export function useSendInvoice(entry: EntryDetail) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  const recipient = useInvoiceRecipient(entry);
   return useMutation({
-    mutationFn: (invoiceId: string) => dispatchInvoice(session!, invoiceId),
-    onSuccess: () => {
-      toast.success("Sent — the guest's answer is awaited");
+    mutationFn: (v: { invoiceId: string; to?: string }) =>
+      dispatchInvoice(session!, v.invoiceId, { dispatchedTo: v.to?.trim() || undefined }) as Promise<{ dispatchedTo?: string | null } | null>,
+    onSuccess: (out) => {
+      toast.success(`Sent — ${sentWords(out?.dispatchedTo ?? null, entry, recipient.party)}. The answer is awaited.`);
       refresh();
     },
     onError: (e) => toastRefusal(e, "The invoice could not be sent"),
   });
+}
+
+/**
+ * The "Send to" box for an invoice: starts at the backend's own default (the party's email when
+ * an agency or company booked, else the guest's), says whose address it is, and lets the desk
+ * type another. Empty is allowed — the invoice is then dispatched without an email.
+ */
+export function SendToField({ entry, value, onChange, label = "Send to" }: { entry: EntryDetail; value: string; onChange: (v: string) => void; label?: string }) {
+  const recipient = useInvoiceRecipient(entry);
+  const hint = recipientHint(recipient, value);
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <input className="input" type="email" value={value} placeholder={recipient.party ? `${recipient.party}'s email` : "the guest's email"} onChange={(e) => onChange(e.target.value)} />
+      {hint ? <span className={`hint${recipient.party && recipient.guestEmail && value.trim() === recipient.guestEmail ? " warn-ink" : ""}`}>{hint}</span> : null}
+    </div>
+  );
+}
+
+/** Seeds a "Send to" box once, when the default recipient becomes known — never over typing. */
+export function useSendTo(entry: EntryDetail): [string, (v: string) => void] {
+  const recipient = useInvoiceRecipient(entry);
+  const [to, setTo] = useState("");
+  const touched = useRef(false);
+  useEffect(() => {
+    if (touched.current || recipient.loading) return;
+    setTo(recipient.defaultTo);
+  }, [recipient.defaultTo, recipient.loading]);
+  return [
+    to,
+    (v: string) => {
+      touched.current = true;
+      setTo(v);
+    },
+  ];
 }
 
 /* ------------------------------------------------------------------ the bill by part */

@@ -45,6 +45,7 @@ import {
 } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import type { EntryDetail, FolioLineSummary } from "@/types/api";
+import { sentWords } from "@/hooks/use-invoice-recipient";
 import {
   AnswerLine,
   Choice,
@@ -81,9 +82,19 @@ import {
   useBilling,
   useBookedBy,
   useFolioIndex,
+  SendToField,
   useIssueAndSend,
   useSendInvoice,
+  useSendTo,
 } from "./s8-parts";
+import {
+  PayerShares,
+  defaultSettleMethod,
+  settleMethodsFor,
+  sharesToSettle,
+  useSettlementShares,
+  type SettleMethod,
+} from "./s8-shares";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -91,14 +102,6 @@ const CHARGE_TYPES = [
   ["F_AND_B", "Food and drink"],
   ["SERVICE", "Service"],
   ["OTHER", "Other"],
-] as const;
-
-const SETTLE_METHODS = [
-  ["CASH", "Cash"],
-  ["MOBILE_PAYMENT", "Mobile payment (QR)"],
-  ["BANK_TRANSFER", "Bank transfer"],
-  ["DIRECT_BILL", "Charge to the company (direct bill)"],
-  ["VOUCHER", "The agent's voucher"],
 ] as const;
 
 const H4_FLAGS = [
@@ -718,9 +721,32 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const creditExpired = !!ps?.creditExtensionExpired && !creditActive;
   const [byPart, setByPart] = useState(false);
 
-  const [method, setMethod] = useState<(typeof SETTLE_METHODS)[number][0]>("CASH");
+  // More than one payer still to settle → the bill settles share by share (2026-09-18).
+  const sharesQ = useSettlementShares(entry, !!folio);
+  const shares = sharesToSettle(sharesQ.data?.buckets, folio?.state);
+
+  const model0 = folio?.billingModel ?? null;
+  const [method, setMethodRaw] = useState<SettleMethod>(defaultSettleMethod(model0));
+  // The default follows the billing model until the operator picks — never over a choice.
+  const methodTouched = useRef(false);
+  useEffect(() => {
+    if (!methodTouched.current) setMethodRaw(defaultSettleMethod(model0));
+  }, [model0]);
+  const setMethod = (m: SettleMethod) => {
+    methodTouched.current = true;
+    setMethodRaw(m);
+  };
   const [ref, setRef] = useState("");
   const [paidNow, setPaidNow] = useState("");
+  // What the agency's voucher covers — starts at the whole balance (the voucher usually covers
+  // the stay); what it leaves is invoiced to the agency.
+  const [voucherCovers, setVoucherCovers] = useState("");
+  const voucherTouched = useRef(false);
+  useEffect(() => {
+    if (voucherTouched.current) return;
+    if (balance != null && balance > 0) setVoucherCovers(String(balance));
+  }, [balance]);
+  const [invoiceTo, setInvoiceTo] = useSendTo(entry);
   const [fomAck, setFomAck] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   // The amount starts at the whole balance (the common case); typing a smaller figure makes the
@@ -751,14 +777,24 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const creditCovers = partial && creditActive && ps?.ceilingAmount != null && ps.ceilingAmount >= balanceNum - typed;
   const partialLocked = partial && !fom && !creditCovers;
 
+  const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
+  const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
+  const invoicesParty = method === "DIRECT_BILL" || method === "VOUCHER";
+
   const settle = useMutation({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("The bill or its billing model is missing");
       const body: Parameters<typeof initiateSettlement>[2] = { settlementMethod: method, billingModelConfirmation: folio.billingModel };
-      if (ref.trim()) body.paymentVerificationRef = ref.trim();
-      // Zero is a real answer: the guest pays nothing now and the balance leaves on credit.
-      // Empty means the full balance.
-      if (paidNow.trim() !== "" && Number.isFinite(typed) && typed >= 0) body.partialAmount = typed;
+      if (ref.trim() && method !== "DIRECT_BILL") body.paymentVerificationRef = ref.trim();
+      if (method === "VOUCHER") {
+        // The backend requires what the voucher covers; anything it leaves is invoiced to the agency.
+        if (voucherValid) body.voucherAmount = voucherTyped;
+      } else if (guestPays && paidNow.trim() !== "" && Number.isFinite(typed) && typed >= 0) {
+        // Zero is a real answer: the guest pays nothing now and the balance leaves on credit.
+        // Empty means the full balance. A direct bill takes no money at the desk.
+        body.partialAmount = typed;
+      }
+      if (invoicesParty && invoiceTo.trim()) body.invoiceDispatchedTo = invoiceTo.trim();
       if (fomAck.trim()) body.fomAcknowledgementRef = fomAck.trim();
       return initiateSettlement(session!, folio.id, body);
     },
@@ -767,7 +803,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
       toast.success(
         partial
           ? "Settled in part — the rest stays owed and is collected after the stay; the rooms are released"
-          : "Settled — the bill is closed and the rooms go to housekeeping",
+          : method === "DIRECT_BILL"
+            ? `Settled — the balance is invoiced to ${booked.payer}; the tax invoice is below`
+            : method === "VOUCHER"
+              ? `Settled — the voucher is recorded; anything it leaves is invoiced to ${booked.payer}`
+              : "Settled — the bill is closed and the rooms go to housekeeping",
       );
       refresh([["settlement-targets"]]);
     },
@@ -793,13 +833,22 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const chargedToAccount = !!model && ON_ACCOUNT_MODELS.has(model);
   const guest = booked.guest;
 
+  const methods = settleMethodsFor(model, booked.kind === "Travel agent", !!booked.party);
+  // Cash and QR carry a reference whenever money is taken — the backend refuses them without one.
+  const takesMoney = guestPays && (!Number.isFinite(typed) || typed > 0);
   const settleReason = !folioLive
     ? "the bill must be live to settle"
     : partialLocked
       ? "a part-payment needs the FOM or a credit extension"
       : !folio?.billingModel
         ? "the bill has no billing model"
-        : undefined;
+        : method === "VOUCHER" && !voucherValid
+          ? "put in what the voucher covers"
+          : !methods.some(([v]) => v === method)
+            ? "this billing model does not settle that way"
+            : (method === "CASH" || method === "MOBILE_PAYMENT") && takesMoney && !ref.trim()
+              ? "cash and QR need a payment reference"
+              : undefined;
 
   return (
     <StepCard title="How the bill is settled">
@@ -844,6 +893,8 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
         <p className="meta" style={{ marginTop: 10 }}>
           There is no bill on this booking.
         </p>
+      ) : shares ? (
+        <PayerShares entry={entry} shares={shares} live={live} currency={cur} />
       ) : settled ? (
         <div className="bind bound" style={{ marginTop: 12 }}>
           {/* an OUTSTANDING bill with nothing left on it (an import, a later payment) reads as settled */}
@@ -907,34 +958,59 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
               <div className="field">
                 <label>How they pay</label>
                 <select className="input" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
-                  {SETTLE_METHODS.map(([v, l]) => (
+                  {methods.map(([v, l]) => (
                     <option key={v} value={v}>
                       {l}
                     </option>
                   ))}
                 </select>
+                {model === "DIRECT_BILL" ? <span className="hint">a direct-bill stay settles only by invoicing {booked.payer}</span> : null}
               </div>
-              <div className="field">
-                <label>Payment reference</label>
-                <input className="input" value={ref} placeholder="the transaction reference" onChange={(e) => setRef(e.target.value)} />
-                <span className="hint">cash and QR need one</span>
-              </div>
-              <div className="field">
-                <label>Paid now · Nu.</label>
-                <input
-                  className="input money"
-                  inputMode="decimal"
-                  value={paidNow}
-                  placeholder="empty = the full balance"
-                  onChange={(e) => {
-                    paidTouched.current = true;
-                    setPaidNow(e.target.value);
-                  }}
-                />
-                <span className={`hint${partial ? " warn-ink" : ""}`}>
-                  {partial ? `less than the ${money(balance, cur)} balance — the rest stays owed, collected after the stay` : "the whole balance, unless you type less"}
-                </span>
-              </div>
+              {method === "DIRECT_BILL" ? null : (
+                <div className="field">
+                  <label>{method === "VOUCHER" ? "Voucher number" : "Payment reference"}</label>
+                  <input
+                    className="input"
+                    value={ref}
+                    placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
+                    onChange={(e) => setRef(e.target.value)}
+                  />
+                  <span className="hint">{method === "VOUCHER" ? "as printed on the voucher" : "cash and QR need one"}</span>
+                </div>
+              )}
+              {method === "VOUCHER" ? (
+                <div className="field">
+                  <label>The voucher covers · Nu.</label>
+                  <input
+                    className="input money"
+                    inputMode="decimal"
+                    value={voucherCovers}
+                    onChange={(e) => {
+                      voucherTouched.current = true;
+                      setVoucherCovers(e.target.value);
+                    }}
+                  />
+                  <span className="hint">anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}</span>
+                </div>
+              ) : method === "DIRECT_BILL" ? null : (
+                <div className="field">
+                  <label>Paid now · Nu.</label>
+                  <input
+                    className="input money"
+                    inputMode="decimal"
+                    value={paidNow}
+                    placeholder="empty = the full balance"
+                    onChange={(e) => {
+                      paidTouched.current = true;
+                      setPaidNow(e.target.value);
+                    }}
+                  />
+                  <span className={`hint${partial ? " warn-ink" : ""}`}>
+                    {partial ? `less than the ${money(balance, cur)} balance — the rest stays owed, collected after the stay` : "the whole balance, unless you type less"}
+                  </span>
+                </div>
+              )}
+              {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
               {fom ? (
                 <div className="field">
                   <label>FOM acknowledgement · only over the credit ceiling</label>
@@ -1032,9 +1108,24 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                 The guest pays <b className="money">{money(typed, cur)}</b> now — the rest of the {money(balance, cur)} balance stays owed and is collected after the stay.
                 {fom ? " Your authority as FOM covers it." : creditCovers ? " The credit extension on file covers it." : ""}
               </>
-            ) : chargedToAccount && (method === "DIRECT_BILL" || method === "VOUCHER") ? (
+            ) : method === "VOUCHER" ? (
               <>
-                The balance of <b className="money">{money(balance, cur)}</b> is invoiced to {booked.payer}.
+                The agency&rsquo;s voucher covers <b className="money">{money(voucherValid ? voucherTyped : null, cur)}</b> of the{" "}
+                <b className="money">{money(balance, cur)}</b> balance — anything it leaves is invoiced to {booked.payer}
+                {invoiceTo.trim() ? `, sent to ${invoiceTo.trim()}` : " and handed over (no email)"}.
+              </>
+            ) : method === "DIRECT_BILL" ? (
+              <>
+                The balance of <b className="money">{money(balance, cur)}</b> is invoiced to {booked.payer}
+                {invoiceTo.trim() ? (
+                  <>
+                    {" "}
+                    and the invoice is emailed to <b>{invoiceTo.trim()}</b>
+                  </>
+                ) : (
+                  " — no email address, so the invoice is handed over"
+                )}
+                .
               </>
             ) : (
               <>
@@ -1059,6 +1150,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
   const booked = useBookedBy(entry);
   const issueSend = useIssueAndSend(entry);
   const send = useSendInvoice(entry);
+  const [sendTo, setSendTo] = useSendTo(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   if (!entry.folio) return null;
   const tax = index.data?.documents.find((d) => d.kind === "tax-invoice") ?? null;
@@ -1108,7 +1200,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
               </Button>
               {issued.state === "DRAFT" ? (
                 <Live>
-                  <Button icon="send" compact state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate(issued.id)}>
+                  <Button icon="send" compact state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: issued.id, to: sendTo })}>
                     Send it
                   </Button>
                 </Live>
@@ -1127,7 +1219,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
                 Preview draft
               </Button>
               <Live>
-                <Button state={issueSend.isPending ? "working" : issueReason ? "inert" : "default"} reason={issueReason} workingLabel="Issuing…" onClick={() => issueSend.mutate()}>
+                <Button state={issueSend.isPending ? "working" : issueReason ? "inert" : "default"} reason={issueReason} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo)}>
                   Issue and send
                 </Button>
               </Live>
@@ -1170,14 +1262,27 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
       </div>
       {issued && issued.state !== "DRAFT" ? (
         <div style={{ marginTop: 10 }}>
+          <div className="meta">
+            Sent {issued.dispatchedAt ? fmtStamp(issued.dispatchedAt, tz) : ""} · {sentWords(issued.dispatchedTo, entry, booked.party)}
+          </div>
           <AnswerLine entryId={entry.id} type="FINAL_INVOICE" what="the tax invoice" tz={tz} />
         </div>
       ) : issued ? (
-        <p className="sm warn-ink" style={{ marginTop: 8 }}>
-          Issued {issued.issuedAt ? fmtStamp(issued.issuedAt, tz) : ""} and not sent — no invoice may stay undispatched.
-        </p>
+        <>
+          <p className="sm warn-ink" style={{ marginTop: 8 }}>
+            Issued {issued.issuedAt ? fmtStamp(issued.issuedAt, tz) : ""} and not sent — no invoice may stay undispatched.
+          </p>
+          <Live>
+            <div className="form2" style={{ marginTop: 8 }}>
+              <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
+            </div>
+          </Live>
+        </>
       ) : (
         <Live>
+          <div className="form2" style={{ marginTop: 8 }}>
+            <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
+          </div>
           <p className="meta" style={{ marginTop: 8 }}>
             → issues the tax invoice and sends it to {booked.payer} in the same act — no invoice exists unsent
           </p>

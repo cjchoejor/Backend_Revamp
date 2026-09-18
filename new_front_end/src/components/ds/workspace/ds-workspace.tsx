@@ -147,6 +147,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     enabled: !!session && !sessionLoading && entry?.currentStage === "S6",
   });
   const guestDetailsCoverage = identityProofsQuery.data?.coverage ?? null;
+  // Verified at THIS stay — the check-in gate's own reading (2026-09-18).
+  const stayIdentityVerified = !!identityProofsQuery.data?.verification;
 
   const timersQuery = useQuery({
     queryKey: ["entry-timers", entryId],
@@ -481,7 +483,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const moveDayRoomCount = allAssignedRoomIds.length - checkInRoomIds.length;
   const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
   const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
-  const canCheckIn = s6Readiness(entry, { guestDetails: guestDetailsCoverage }).every((c) => c.met) && registrationConfirmed && keysValid;
+  const canCheckIn = s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified }).every((c) => c.met) && registrationConfirmed && keysValid;
 
   const segStart = (entry.segments ?? [])[0]?.startedAt ?? null;
   const voucherAnswerRecorded = (communications ?? []).some(
@@ -512,7 +514,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ? s5Readiness(entry, hotelToday)
             : checkInStepActive
               ? [
-                  ...s6Readiness(entry, { guestDetails: guestDetailsCoverage }),
+                  ...s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified }),
                   { label: "Registration confirmed", met: registrationConfirmed },
                   {
                     label:

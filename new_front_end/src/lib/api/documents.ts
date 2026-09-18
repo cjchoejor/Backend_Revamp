@@ -149,6 +149,8 @@ export type FolioDocumentEntry = {
     pdfReady: boolean;
     issuedAt: string | null;
     dispatchedAt: string | null;
+    /** The address it was emailed to — null when it went out with no email. */
+    dispatchedTo?: string | null;
   } | null;
 };
 

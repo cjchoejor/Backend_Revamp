@@ -84,10 +84,23 @@ export type AdvanceAutoHold =
   | { placed: true; holdId: string; roomId: string; expiresAt: string }
   | { placed: false; reason: string; message: string; holdId?: string };
 
+/**
+ * How advance money came in, and the code the ledger stores for it (2026-09-18) — the same codes
+ * check-out and the post-stay payments use, so a cash count reads one vocabulary.
+ */
+export const ADVANCE_PAYMENT_MODES = [
+  ["CASH", "Cash — Nu."],
+  ["CASH_INR", "Cash — INR at par"],
+  ["MOBILE_PAYMENT", "QR (BoB merchant)"],
+  ["BANK_TRANSFER", "Bank transfer"],
+  ["INWARD_REMITTANCE", "Inward remittance"],
+] as const;
+export type AdvancePaymentMode = (typeof ADVANCE_PAYMENT_MODES)[number][0];
+
 export async function recordFolioPayment(
   session: Session,
   folioId: string,
-  body: { entryId: string; amount: number; notes?: string },
+  body: { entryId: string; amount: number; notes?: string; paymentMethod?: string },
 ) {
   return apiRequest<{ id: string; autoHold?: AdvanceAutoHold | null }>(`/api/folios/${folioId}/payments`, {
     method: "POST",
@@ -261,6 +274,12 @@ export async function confirmCoordinator(
     session,
     body,
   });
+}
+
+/** The payment-milestone templates the hotel has configured — empty until an admin sets them. */
+export type PaymentMilestoneTemplate = { key: string; label: string; milestones: Array<{ code: string; offsetDays: number }> };
+export async function listPaymentMilestoneTemplates(session: Session) {
+  return apiRequest<{ templates: PaymentMilestoneTemplate[]; configKey: string }>("/api/lookups/payment-milestone-templates", { session });
 }
 
 export async function schedulePaymentMilestones(

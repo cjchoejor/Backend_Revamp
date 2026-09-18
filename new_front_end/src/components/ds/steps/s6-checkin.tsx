@@ -77,6 +77,9 @@ type CheckInMove = { onClick: () => void; ready: boolean; reason?: string } | nu
 
 /* ------------------------------------------------------------------ the step */
 
+/** This stay's identity verification, from the identity-proofs feed (2026-09-18). */
+type StayVerification = { verifiedAt: string; verifiedBy: string | null; path: string | null } | null;
+
 export function S6CheckIn({
   entry,
   past,
@@ -105,7 +108,12 @@ export function S6CheckIn({
     enabled: !!session,
   });
   const coverage = proofs.data?.coverage ?? null;
-  const readiness = useMemo(() => s6Readiness(entry, { guestDetails: coverage }), [entry, coverage]);
+  // Verified at THIS stay — never the profile's stamp, which a returning guest carries over (2026-09-18).
+  const verification = proofs.data?.verification ?? null;
+  const readiness = useMemo(
+    () => s6Readiness(entry, { guestDetails: coverage, identityVerified: !!verification }),
+    [entry, coverage, verification],
+  );
   const met = (re: RegExp) => readiness.find((r) => re.test(r.label))?.met ?? false;
 
   const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
@@ -130,6 +138,7 @@ export function S6CheckIn({
     past,
     tz,
     met,
+    verification,
     lead,
     docName,
     coverage,
@@ -155,7 +164,7 @@ export function S6CheckIn({
         ))}
       </StepCard>
 
-      <DocumentCard entry={entry} past={past} lead={lead} docName={docName} tz={tz} />
+      <DocumentCard entry={entry} past={past} lead={lead} verification={verification} docName={docName} tz={tz} />
       <div id={ID.guests}>
         <Tool>
           <IdentityProofBlock entry={entry} checkInGate />
@@ -249,6 +258,7 @@ function useCheckInFacts({
   past,
   tz,
   met,
+  verification,
   lead,
   docName,
   coverage,
@@ -266,6 +276,7 @@ function useCheckInFacts({
   past: boolean;
   tz: string;
   met: (re: RegExp) => boolean;
+  verification: StayVerification;
   lead: IdentityProofSummary | null;
   docName: (code?: string | null) => string | null;
   coverage: { vipExempt: boolean; totalSlots: number; filledSlots: number; missing: { key: string; label: string }[]; satisfied: boolean } | null;
@@ -314,9 +325,9 @@ function useCheckInFacts({
     state: numbers.length ? "on" : "missing",
   });
 
-  // The lead's identity.
-  const verifiedAt = guest?.identityVerifiedAt ?? null;
-  const path = guest?.identityVerificationPath ?? null;
+  // The lead's identity — as verified at THIS stay.
+  const verifiedAt = verification?.verifiedAt ?? null;
+  const path = verification?.path ?? null;
   const doc = [docName(lead?.documentType), lead?.documentNumber].filter(Boolean).join(" ");
   const idOk = met(/^Identity verified/);
   out.push({
@@ -511,18 +522,19 @@ function DocumentCard({
   entry,
   past,
   lead,
+  verification,
   docName,
   tz,
 }: {
   entry: EntryDetail;
   past: boolean;
   lead: IdentityProofSummary | null;
+  verification: StayVerification;
   docName: (code?: string | null) => string | null;
   tz: string;
 }) {
-  const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const verifiedAt = guest?.identityVerifiedAt ?? null;
-  const path = guest?.identityVerificationPath ?? null;
+  const verifiedAt = verification?.verifiedAt ?? null;
+  const path = verification?.path ?? null;
   return (
     <div id={ID.document}>
       <StepCard

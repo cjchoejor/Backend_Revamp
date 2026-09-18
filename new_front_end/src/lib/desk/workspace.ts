@@ -435,11 +435,16 @@ export function canProgressS5(entry: EntryDetail, guestPresent: boolean, hotelTo
  * `opts.guestDetails` is the server-computed coverage from the identity-proofs feed (2026-08-11,
  * operator ruling): every guest needs a document number or ID photo on file before check-in,
  * VIP bookings exempt. Callers without that feed omit it — the line is skipped and the backend
- * gate still enforces. */
+ * gate still enforces.
+ *
+ * `opts.identityVerified` is THIS stay's verification from the same feed (2026-09-18). The guest
+ * profile's stamp outlives the stay, so a returning guest read as verified by their last
+ * check-in; without the feed the line reads not met — the backend asks for this stay's. */
 export function s6Readiness(
   entry: EntryDetail,
   opts?: {
     guestDetails?: { satisfied: boolean; vipExempt: boolean; filledSlots: number; totalSlots: number } | null;
+    identityVerified?: boolean;
   },
 ): Precondition[] {
   const g = entry.guestProfile;
@@ -459,7 +464,7 @@ export function s6Readiness(
   const isVip = !!g?.vipTier?.trim();
   const gd = opts?.guestDetails;
   return [
-    { label: "Identity verified", met: !!g?.identityVerifiedAt },
+    { label: "Identity verified", met: opts?.identityVerified ?? false },
     ...(gd && !gd.vipExempt
       ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied }]
       : []),
