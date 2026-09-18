@@ -121,6 +121,11 @@ export interface EntryBillingSummary {
     writtenOff: number | null;
     /** The stored ledger balance (`Folio.outstandingBalance`). */
     outstandingBalance: number | null;
+    /**
+     * Money paid ABOVE the bill (2026-09-18) — what the hotel holds for the guest. The stored
+     * balance floors at zero, so this is the only place the excess shows. Null when none.
+     */
+    overpaid: number | null;
     /** Per-room charge subtotals (2026-08-14, operator request) — net sum of the folio lines
      *  stamped with each roomId, sealed-selection order preserved by roomNumber sort. Null
      *  when no line carries a room (legacy folios). */
@@ -507,6 +512,11 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       refunded: refundedDec.gt(0) ? money(refundedDec) : null,
       writtenOff: writtenOffDec.gt(0) ? money(writtenOffDec) : null,
       outstandingBalance: money(toDecimal(entry.folio.outstandingBalance)),
+      overpaid: (() => {
+        // The other side of the balance's floor: lines − in + out − write-offs, when below zero.
+        const raw = sumMoneyBy(lines, "amount").sub(toDecimal(inAgg._sum.amount)).add(refundedDec).sub(writtenOffDec);
+        return raw.lt(0) ? money(raw.neg()) : null;
+      })(),
       perRoomCharges,
       perSpaceCharges,
       unassignedCharges:

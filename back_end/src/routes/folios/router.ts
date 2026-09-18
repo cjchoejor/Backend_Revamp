@@ -11,6 +11,7 @@ import {
   correctFolioChargeRequestSchema,
   dispatchInvoiceRequestSchema,
   initiateSettlementRequestSchema,
+  recordFolioRefundRequestSchema,
   issueProformaInvoiceRequestSchema,
   postCreditNoteRequestSchema,
   recordTargetPaymentRequestSchema,
@@ -33,6 +34,7 @@ import * as s7FolioLinesService from "../../services/domain/s7-folio-lines-servi
 import * as s3FolioService from "../../services/domain/s3-folio-service.js";
 import * as s3PaymentService from "../../services/domain/s3-payment-service.js";
 import * as s8SettlementService from "../../services/domain/s8-settlement-service.js";
+import { recordFolioRefund } from "../../services/domain/folio-refund-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import * as splitBillingService from "../../services/domain/split-billing-service.js";
 import {
@@ -372,6 +374,25 @@ foliosRouter.get("/folios/:id/settlement-buckets", requireActorLevel("L1"), asyn
   try {
     res.setHeader("Cache-Control", "no-store");
     res.json(await s8SettlementService.listSettlementBuckets(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Give back money a guest paid above the bill (2026-09-18) — the FOM's. Capped at what was
+ * overpaid; recorded as money out with how and why.
+ */
+foliosRouter.post("/folios/:id/refunds", requireActorLevel("L2"), validateBody(recordFolioRefundRequestSchema), async (req, res, next) => {
+  try {
+    const { amount, paymentMethod, reference, reason } = req.body;
+    const created = await recordFolioRefund(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
+      amount,
+      paymentMethod,
+      reference: reference ?? null,
+      reason,
+    });
+    res.status(201).json(created);
   } catch (e) {
     next(e);
   }

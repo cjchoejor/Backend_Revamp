@@ -278,6 +278,15 @@ export const recordInterimPaymentRequestSchema = z.object({
 });
 export type RecordInterimPaymentRequestDto = z.infer<typeof recordInterimPaymentRequestSchema>;
 
+/** Money a guest paid above the bill, given back (2026-09-18). */
+export const recordFolioRefundRequestSchema = z.object({
+  amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),
+  paymentMethod: z.string().trim().min(1).max(40),
+  reference: z.string().trim().max(120).optional(),
+  reason: z.string().trim().min(1).max(500),
+});
+export type RecordFolioRefundRequestDto = z.infer<typeof recordFolioRefundRequestSchema>;
+
 export const dispatchInvoiceRequestSchema = z.object({
   dispatchedTo: z.string().optional(),
 });
