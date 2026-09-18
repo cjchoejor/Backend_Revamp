@@ -565,6 +565,25 @@ Verified: a fake-clock matrix over the switched services (Bhutan 00:00–05:30 �
 
 SIG-S5 §7.3 fires the cut-off at "expected arrival time + `noShow.cutoffWindowMinutes`". The expected arrival is the guest's own time (`Entry.expectedArrivalTime`, "HH:MM" hotel-local) when the desk recorded one, else the hotel's `checkIn.standardTime` (14:00, operator ruling; Operational settings), on the check-in day **in hotel time** — [lib/expected-arrival.ts](back_end/src/lib/expected-arrival.ts), `hotelLocalTimeOn` in [stay-dates.ts](back_end/src/lib/stay-dates.ts). It used to count from the stored date's UTC midnight (06:00 in Bhutan), so an afternoon arrival was a no-show at 08:00. `GET/POST /api/entries/:id/expected-arrival` (L1, S1–S5) reads and sets it; at Arrival a new time re-arms the cut-off, but once the cut-off has been reached nothing is reopened — that is the FOM's reactivation. Never compute a time of day as "stored date + hours".
 
+### Who an invoice goes to, who pays which share, and whose ID check counts (2026-09-18)
+
+Found running a corporate direct bill and an agency booking through the new desk; the full record is [docs/scenario-test-log-2026-09-18.md](docs/scenario-test-log-2026-09-18.md) (issues 39–53).
+
+- **An invoice goes to whom it is made out to.** Every invoice document (proforma, interim bill, tax invoice) reads "To: <agency or company> · For guest: <name>" whenever a party booked. `resolveInvoiceRecipient` ([s9-service.ts](back_end/src/services/domain/s9-service.ts)) is the one rule `dispatchInvoice` applies:
+  1. the address the desk typed;
+  2. else the party's email;
+  3. else the guest's email, but only when no party is linked.
+
+  The address used is recorded on `Invoice.dispatchedTo`. A party-addressed invoice is **never** mailed to the traveller by default (it carries the party's rates). With no address it is dispatched unemailed and the skip is traced `BILLED_PARTY_HAS_NO_EMAIL`. The desk's "Send to" box (`useInvoiceRecipient` / `SendToField`) starts at the same default and says whose address it is.
+- **Invoices a settlement issues are dispatched for real.** A direct bill or a voucher shortfall mints a readable-id FINAL invoice as a draft, then `initiateSettlement` dispatches it after its commit (PDF, email, answer window). A dispatch failure leaves it a draft for the desk to send again.
+- **Check-out settles payer by payer.** A folio's lines carry a billing model (per-line-type defaults: on an agency or company booking the stay goes to the party, the guest's own extras to `GUEST_PAY`). When more than one share still owes, the desk renders one settle form per share ([s8-shares.tsx](new_front_end/src/components/ds/steps/s8-shares.tsx)), fed by `GET /folios/:id/settlement-buckets`, and settles each with `initiateSettlement({ billingModel })`.
+  - A share can settle on an OUTSTANDING folio. An already-settled share is refused.
+  - The rooms are released when the last share still open at the desk settles. "Open" means it owes something and no FINAL invoice carries it.
+  - The night audit's meal-plan line and the early-departure fee follow the **room charge's** payer: the package stays with whoever bought it.
+- **Money taken at the desk is recorded whatever the folio's model**, with its real `paymentMethod` (VOUCHER, CASH, MOBILE_PAYMENT, BANK_TRANSFER, …). The advance dialogs ask how it was paid; the column's CASH default is only a backstop.
+- **Identity is verified at every stay** (SIG-S6 §132/§618). The check-in gate reads `findEntryIdentityVerification` ([identity-verification-path.ts](back_end/src/lib/identity-verification-path.ts)): the latest `GUEST.IDENTITY_VERIFIED` event for **this entry**. It never reads `GuestProfile.identityVerifiedAt`, which outlives the stay and let a returning guest through on their last check-in. The identity-proofs feed carries it as `verification`, and every desk reader uses that.
+- **Post-stay payments**: further instalments are accepted on a PAYMENT_TRACKED invoice (SIG-S9 §8.6), and a payment above what is owed is refused.
+
 ### Admin services (per ACIG §6.2)
 
 26 admin services in `back_end/src/services/admin/`, one file per service. Each:
