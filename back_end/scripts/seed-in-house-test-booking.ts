@@ -61,10 +61,16 @@ async function clean() {
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.keyReturnRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.roomInspectionRecord.deleteMany({ where: { entryId: { in: ids } } });
+  // Money first, in foreign-key order: a payment can point at an interim request, an interim
+  // request at its invoice and its extension, an advance application at the folio. A fixture that
+  // went through a long stay's mid-stay payment or an extension left them (2026-09-19).
+  await prisma.paymentRecord.deleteMany({ where: { folioId: { in: folioIds } } });
+  await prisma.interimPaymentRequest.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.stayExtensionRequest.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.advanceApplication.deleteMany({ where: { folioId: { in: folioIds } } });
   // Invoice lines point at their invoice (FK) — a fixture that reached a tax invoice left them.
   await prisma.invoiceLine.deleteMany({ where: { invoice: { entryId: { in: ids } } } });
   await prisma.invoice.deleteMany({ where: { entryId: { in: ids } } });
-  await prisma.paymentRecord.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.folioLine.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.folio.deleteMany({ where: { id: { in: folioIds } } });
   await prisma.committedHold.deleteMany({ where: { entryId: { in: ids } } });
