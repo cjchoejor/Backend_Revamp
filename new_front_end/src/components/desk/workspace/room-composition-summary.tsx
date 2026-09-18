@@ -17,9 +17,17 @@ import { money } from "@/lib/desk/workspace";
  * summary instead. Tallies are head-counts only; every money figure is read from the
  * assignment rows (no client-side money arithmetic).
  */
+/** A row that covers at least one night. A room moved out of on the day it was entered keeps a
+ *  zero-night row (start = end) for its history; it is not a room the party is in, and counting
+ *  it double-counted the whole party ("2 rooms · 4 adults · 4 children" for a family of four,
+ *  2026-09-18). Rows without dates cover the whole stay. */
+function coversANight(a: RoomAssignmentSummary): boolean {
+  return !(a.startDate && a.endDate && a.startDate.slice(0, 10) >= a.endDate.slice(0, 10));
+}
+
 /** Whether any assignment carries composition data — callers use it to skip the block heading. */
 export function hasRoomComposition(assignments: RoomAssignmentSummary[] | undefined | null): boolean {
-  return (assignments ?? []).some(
+  return (assignments ?? []).filter(coversANight).some(
     (a) => a.occupantCount != null || a.adultCount != null || (a.mealPlanCpCount ?? 0) > 0 || (a.mealPlanMaplCount ?? 0) > 0,
   );
 }
@@ -37,6 +45,7 @@ export function RoomCompositionSummary({
 
   const withComposition = assignments.filter(
     (a) =>
+      coversANight(a) &&
       !(
         a.occupantCount == null && a.adultCount == null && !a.mealPlanCpCount && !a.mealPlanMaplCount &&
         !a.mealPlanMapdCount && !a.mealPlanApCount && !a.mealPlanOthersCount

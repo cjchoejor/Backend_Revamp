@@ -15,6 +15,8 @@ import {
 } from "@/lib/api/reservation-setup";
 import { money } from "@/lib/desk/workspace";
 import { countdownTo } from "@/lib/desk/timers";
+import { fmtDateTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
+import { hotelLocalToIso, isoToHotelLocal } from "@/components/ds/steps/s2-shared";
 import type { AdvancePaymentPlanSummary, EntryDetail, PaymentStatusSummary } from "@/types/api";
 
 /**
@@ -82,8 +84,10 @@ const STAGE_STEP_LABEL: Record<string, string> = {
   S8: "Check-out",
 };
 
+/** An instant on the HOTEL's clock (2026-09-18) — it printed the UTC time, so a promise made
+ *  for 6 PM in Thimphu read "12:00". */
 function fmtDate(iso: string | null | undefined) {
-  return iso ? iso.slice(0, 16).replace("T", " ") : "—";
+  return iso ? fmtDateTime(iso, HOTEL_TZ_DEFAULT) : "—";
 }
 
 /** Plan chip + promise countdown. Renders nothing when no plan is recorded. */
@@ -291,7 +295,8 @@ export function AdvancePlanCapture({
         balanceDueAt === ""
           ? ({ plan } as const) // FULL, paying now — no timing to record
           : balanceDueAt === "BEFORE_CHECKIN"
-            ? { plan, balanceDueAt, promisedBy: new Date(promisedBy).toISOString() }
+            ? // Typed on the hotel's clock, whatever zone this machine is set to.
+              { plan, balanceDueAt, promisedBy: hotelLocalToIso(promisedBy, HOTEL_TZ_DEFAULT) ?? new Date(promisedBy).toISOString() }
             : { plan, balanceDueAt };
       return setAdvancePaymentPlan(session!, entry.id, { ...body, note: note.trim() || null });
     },
@@ -333,7 +338,9 @@ export function AdvancePlanCapture({
                 setBalanceDueAt(
                   saved.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "",
                 );
-                setPromisedBy(saved.promisedBy ? saved.promisedBy.slice(0, 16) : "");
+                // The saved instant on the hotel's clock — slicing the UTC string put 12:00 in
+                // the box for a 6 PM promise, and saving it unchanged moved the promise (2026-09-18).
+                setPromisedBy(saved.promisedBy ? isoToHotelLocal(saved.promisedBy, HOTEL_TZ_DEFAULT) : "");
                 setNote(saved.note ?? "");
                 setEditing(true);
               }}
@@ -611,7 +618,7 @@ export function AdvanceSettlementBlock({
       <AdvancePlanFacts status={status} />
       <InstallmentHistory status={status} currency={currency} />
 
-      {status?.creditExtensionActive && (
+      {status?.creditExtensionActive && !settled && (
         <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px" }}>
           Credit extension active
           {status.creditExtensionExpiresAt ? ` until ${fmtDate(status.creditExtensionExpiresAt)}` : " (no time limit)"} — the
@@ -702,10 +709,18 @@ export function AdvanceSettlementBlock({
       )}
 
       {settled && (
-        <div className="fact b-bound" style={{ padding: "8px 12px", fontSize: 12.5, marginBottom: 4 }}>
+        <div className="fact b-bound" style={{ padding: "8px 12px", fontSize: 12.5, marginBottom: 4, gap: 8, flexWrap: "wrap" }}>
           <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
           Advance settled in full
           {folio.advancePaymentReconciliationComplete ? " · reconciled" : ""}
+          {/* Paid in full but never signed off (a tick recorded before 2026-09-18 completed the
+              task without reconciling): the Arrival gate still waits for it, so the sign-off stays
+              reachable here instead of vanishing with the payment form. */}
+          {!folio.advancePaymentReconciliationComplete && collectable && canReconcile ? (
+            <button className="btn btn-ghost btn-sm" disabled={reconcileM.isPending} onClick={() => reconcileM.mutate()}>
+              {reconcileM.isPending ? "Reconciling…" : "Mark reconciled"}
+            </button>
+          ) : null}
         </div>
       )}
 

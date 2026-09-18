@@ -163,7 +163,10 @@ export function CaseCards({
   }
 
   const ps = pay.data;
-  if (inHouse && ps && (ps.creditExtensionActive || ps.creditExtensionExpired)) {
+  // Once the advance is paid in full the ceiling no longer polices charges — the backend
+  // discharges it at posting (2026-08-17) — so the card said "postings stop at it" about a limit
+  // that was not in force (2026-09-18). Shown only while it still applies.
+  if (inHouse && ps && !ps.paidInFull && (ps.creditExtensionActive || ps.creditExtensionExpired)) {
     cards.push(
       <StepCard key="credit" title="Credit ceiling">
         <Facts wide>

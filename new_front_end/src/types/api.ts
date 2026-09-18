@@ -148,6 +148,8 @@ export type AvailabilityOptionSelected =
 
 export type AvailabilityConfigSummary = {
   id: string;
+  /** The pass this search belongs to (null on rows written before passes were recorded). */
+  segmentId?: string | null;
   optionSelected: AvailabilityOptionSelected | null;
   isStale: boolean;
   sealedAt: string | null;

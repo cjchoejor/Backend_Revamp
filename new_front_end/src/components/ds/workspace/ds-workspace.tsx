@@ -509,7 +509,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         : quoteStepActive
           ? s2Readiness(entry)
           : arrivalStepActive
-            ? s5Readiness(entry)
+            ? s5Readiness(entry, hotelToday)
             : checkInStepActive
               ? [
                   ...s6Readiness(entry, { guestDetails: guestDetailsCoverage }),
@@ -609,7 +609,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (arrivalStepActive) {
-    const ok = canProgressS5(entry, guestPresent);
+    const ok = canProgressS5(entry, guestPresent, hotelToday);
     forward = (
       <Button
         state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}

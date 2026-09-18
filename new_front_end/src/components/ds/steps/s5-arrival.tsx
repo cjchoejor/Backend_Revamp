@@ -30,7 +30,7 @@ import {
 } from "@/lib/api/pre-arrival";
 import { deriveRoomStatus, ROOM_STATUS } from "@/lib/desk/rooms";
 import { s5Readiness } from "@/lib/desk/workspace";
-import { fmtStamp, fmtTime, money, plural } from "@/lib/ds/format";
+import { fmtStamp, fmtTime, instantYmd, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
@@ -93,8 +93,11 @@ function useArrivalFacts(entry: EntryDetail) {
   // The gate's own reading of "near the frozen ceiling" (p44) — no figure is worked out here.
   const ceilingLine = s5Readiness(entry).find((l) => l.label === "Credit ceiling acknowledged");
   const hasCeiling = entry.reservation?.creditCeilingIfExtended != null;
-  const creditNeedsAck =
-    hasCeiling && !entry.creditCeilingTier2AcknowledgedAt && (pay?.creditExtensionActive === true || ceilingLine?.met === false);
+  // Only when the gate says so (2026-09-18): an ACTIVE credit extension used to be enough, so a
+  // booking whose balance was nowhere near the ceiling — or whose advance had since been paid in
+  // full — showed "the balance is near the credit the FOM extended" as a missing item the gate
+  // (and p44) did not require.
+  const creditNeedsAck = hasCeiling && !entry.creditCeilingTier2AcknowledgedAt && ceilingLine?.met === false;
   return { pay, assignments, latest, readinessConfirmed, reconciled, paymentReconciled, tasks, tasksComplete, creditNeedsAck };
 }
 
@@ -165,7 +168,8 @@ type Facts_ = ReturnType<typeof useArrivalFacts>;
  */
 function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
-  const { tz } = useHotelClock(60_000);
+  const clock = useHotelClock(60_000);
+  const tz = clock.tz;
   const refresh = useRefreshEntry(entry.id);
   const [editing, setEditing] = useState(false);
   const [time, setTime] = useState("");
@@ -191,6 +195,10 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   });
   const d = q.data;
   const cutoff = d?.cutoffClockAt ?? d?.cutoffAt ?? null;
+  // The time alone on the arrival day; with its day on any other (2026-09-18) — a booking opened
+  // a week ahead read "2:00 PM · no-show cut-off 4:00 PM" with nothing saying which day.
+  const today = instantYmd(clock.now, tz);
+  const when = (v: string | null | undefined) => (v && instantYmd(v, tz) !== today ? fmtStamp(v, tz) : fmtTime(v, tz));
   return (
     <Fact k="Expected arrival">
       {!d ? (
@@ -198,10 +206,10 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
       ) : (
         <div style={{ display: "grid", gap: 4 }}>
           <span>
-            {fmtTime(d.at, tz)}{" "}
+            {when(d.at)}{" "}
             <span className="meta">
               · {d.source === "GUEST" ? "the guest's own time" : "the hotel's check-in time"}
-              {cutoff ? ` · no-show cut-off ${fmtTime(cutoff, tz)}` : ""}
+              {cutoff ? ` · no-show cut-off ${when(cutoff)}` : ""}
             </span>
           </span>
           {d.cutoffReachedAt ? (

@@ -201,6 +201,15 @@ export function RoomChangeControl({
   // ── Selection derivations ──────────────────────────────────────────────────────────────────
   const allAssigned = nights.length > 0 && nights.every((d) => !!nightSel[d]);
   const keptNights = nights.filter((d) => nightSel[d] === fromRoomId);
+  // In-house the old room stays in the plan only for nights ALREADY slept in it (2026-09-18) —
+  // the backend's substitution nights are "tonight onward", so any of the room's nights outside
+  // them are slept. On the check-in day there are none: the desk still sent the old room's row
+  // and the move was refused ("Room 204 is not part of the plan").
+  const fromSleptNights = useMemo(
+    () => (atS7 ? (roomNightsByRoom(entry).get(fromRoomId) ?? []).filter((d) => !nights.includes(d)) : []),
+    [atS7, entry, fromRoomId, nights],
+  );
+  const fromSurvives = keptNights.length > 0 || fromSleptNights.length > 0;
   const selectedNewRooms = useMemo(() => {
     const seen: string[] = [];
     for (const d of nights) {
@@ -251,7 +260,7 @@ export function RoomChangeControl({
     const rows: RoomCompositionInput[] = [
       ...untouchedComps,
       ...selectedNewRooms.map((id) => table.get(id) ?? seedComps.find((s) => s.roomId === id)).filter((c): c is RoomCompositionInput => !!c),
-      ...(keptNights.length > 0 || atS7 ? [fromComp] : []),
+      ...(fromSurvives ? [fromComp] : []),
     ];
     const party = (entry.adultCount ?? 0) + (entry.childAges?.length ?? 0) || Math.max(1, entry.guestCount ?? 1);
     const occ = (c?: RoomCompositionInput) => (c ? (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) : 0);
@@ -272,7 +281,7 @@ export function RoomChangeControl({
     });
     const emptyRooms = selectedNewRooms.filter((id) => occ(rows.find((c) => c.roomId === id)) === 0);
     return shortNights.length > 0 || emptyRooms.length > 0 ? { shortNights, emptyRooms } : null;
-  }, [fromComp, selectedNewRooms, repriceComps, untouchedComps, seedComps, keptNights, atS7, entry, fromRoomId, nights, nightSel]);
+  }, [fromComp, selectedNewRooms, repriceComps, untouchedComps, seedComps, fromSurvives, entry, fromRoomId, nights, nightSel]);
   const carriedDiscount = useMemo(() => {
     const quotes = (entry.quotations ?? []).slice().sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
     for (const q of quotes) {
@@ -364,7 +373,6 @@ export function RoomChangeControl({
      * every untouched room, plus the newly selected ones, plus the from-room when it survives
      * (nights the guest keeps at S5/S6, or its already-slept nights in-house).
      */
-    const fromSurvives = keptNights.length > 0 || atS7;
     const table = new Map(repriceComps.map((c) => [c.roomId, c]));
     const composed: RoomCompositionInput[] = [
       ...untouchedComps,

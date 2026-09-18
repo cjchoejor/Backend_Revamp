@@ -34,6 +34,7 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
+import { operativeRoomCompositions } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
 import {
@@ -150,6 +151,12 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   const accepted = quotations.find((q) => q.state === "ACCEPTED");
   const working = draft ?? sent;
   const shown = accepted ?? working ?? quotations[0] ?? null;
+  // The table opens on the terms the live quote was priced on (2026-09-18). Without a seed it
+  // restored only this browser's unsaved edits, so on another terminal — or once the browser's
+  // storage was cleared — it opened with the party auto-distributed and NO meals, and "Generate
+  // the quote again" would have re-priced the stay without the meals the guest was quoted.
+  // After a re-entry it starts from the last terms in force. Read once, at the table's mount.
+  const seedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? undefined, [entry.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
@@ -371,6 +378,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               entryChildAges={entry.childAges ?? null}
               persistKey={entry.id}
               entryId={entry.id}
+              initialCompositions={seedCompositions}
               onChange={setRoomCompositions}
               discountValue={discountValue}
               discountUnit={discountUnit}

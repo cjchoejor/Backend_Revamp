@@ -713,7 +713,14 @@ function PaymentDialog({
         <label>Note</label>
         <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="QR · paid from India · ref 4471…" />
       </div>
-      <p className="meta">A payment — even part of the advance — holds the rooms automatically. The receipt as a paper is BE-43.</p>
+      <p className="meta">
+        {entry.committedHold
+          ? "The rooms are already held."
+          : entry.cancellationDisclosure
+            ? "A payment — even part of the advance — holds the rooms automatically."
+            : "A payment holds the rooms automatically only once the terms are disclosed — record the disclosure first, or place the hold by hand after."}{" "}
+        The receipt as a paper is BE-43.
+      </p>
     </DsDialog>
   );
 }

@@ -39,6 +39,7 @@ import {
 } from "@/components/desk/workspace/room-status-table";
 import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
 import { fmtRange, money, plural } from "@/lib/ds/format";
+import { currentPassConfigs } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
   type AvailabilityOptionSelected,
@@ -956,7 +957,8 @@ function TheHouse({
   const refresh = useRefreshEntry(entry.id);
   const isGm = atLeast(session?.actorLevel, "L3");
 
-  const configs = entry.availabilityConfigs ?? [];
+  // This pass's searches only — a new pass searches its dates again (2026-09-18).
+  const configs = currentPassConfigs(entry);
   const latest = configs[0] ?? null;
   const preferred = configs.find((c) => c.optionSelected != null) ?? null;
   const [result, setResult] = useState<AvailabilityQueryResponse | null>(null);

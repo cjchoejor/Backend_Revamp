@@ -212,9 +212,13 @@ export function s3Readiness(
   // showed all-green (a DRAFT proforma satisfies "on folio") and the freeze then failed with
   // PROFORMA_INVOICE_NOT_DISPATCHED, which is what "everything is done but it won't seal" was.
   const advanceReceived = typeof opts?.totalReceived === "number" ? opts.totalReceived : 0;
-  const proformaDispatched = proformas
-    .filter((i) => i.state !== "SUPERSEDED")
-    .some((i) => i.dispatchedAt != null || i.state !== "DRAFT");
+  // Exactly the backend's reading (2026-09-18): a proforma that WENT OUT counts even after a
+  // re-entry replaced it — the money was documented when it was taken. Ignoring replaced ones
+  // locked Reserve on every re-entered booking that had money in hand, with nothing on the desk
+  // that could satisfy the line.
+  const proformaDispatched = proformas.some(
+    (i) => i.dispatchedAt != null || (i.state !== "DRAFT" && i.state !== "SUPERSEDED"),
+  );
   // The advance-payment condition (SIG-S3 Policy 27 / §115) is satisfied by an actual advance
   // payment OR an FOM credit extension (Policy 42). Prefer the authoritative server payment-status
   // flag (which counts the credit extension); fall back to raw folio payments only when it hasn't
@@ -308,8 +312,20 @@ export function canConfirm(
 }
 
 /** S1 exit readiness (SIG-S1) — the gates before progressing to Negotiation (S2). */
-export function s1Readiness(entry: EntryDetail): Precondition[] {
+/**
+ * The searches of THIS pass (2026-09-18) — mirrors the backend's Inquiry exit gate. A new pass
+ * opened for new dates or rooms searches again; the previous pass's search and rooms are its
+ * history. Rows with no pass recorded count only on a booking that never had a second pass.
+ */
+export function currentPassConfigs(entry: EntryDetail): NonNullable<EntryDetail["availabilityConfigs"]> {
   const configs = entry.availabilityConfigs ?? [];
+  const segments = entry.segments ?? [];
+  const current = segments[0]?.id ?? null;
+  return configs.filter((c) => (c.segmentId ?? null) === current || (c.segmentId == null && segments.length <= 1));
+}
+
+export function s1Readiness(entry: EntryDetail): Precondition[] {
+  const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
   return [
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate) },
@@ -362,8 +378,26 @@ export function canProgressS2(entry: EntryDetail): boolean {
 }
 
 /** S5 exit readiness (SIG-S5 §1.5) — gates before check-in (S6). Guest-present is a UI attestation. */
-export function s5Readiness(entry: EntryDetail): Precondition[] {
+export function s5Readiness(entry: EntryDetail, hotelToday?: string | null): Precondition[] {
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
+  // Not before the booked check-in day (2026-09-18, mirrors the backend's ARRIVAL_BEFORE_CHECK_IN):
+  // an earlier arrival is a change of dates. `undefined` = the caller doesn't ask; `null` = the
+  // hotel's day isn't known yet, so the line holds rather than guess.
+  const checkInYmd = (entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? "").slice(0, 10);
+  const arrivalDay: Precondition[] =
+    hotelToday === undefined || !checkInYmd
+      ? []
+      : [
+          {
+            label:
+              hotelToday === null
+                ? "Checking today's date at the hotel…"
+                : hotelToday >= checkInYmd
+                  ? "Arrival day reached"
+                  : `The stay starts ${checkInYmd} — arriving earlier is a change of dates (Amend dates)`,
+            met: hotelToday !== null && hotelToday >= checkInYmd,
+          },
+        ];
   const tasks = entry.preArrivalTasks ?? [];
   // Mirrors p44 (2026-08-14): the FOM tier-2 acknowledgement is required only when the folio
   // balance is NEAR the extended ceiling (registry `tier2Percent`, default 90%) — NOT merely
@@ -377,6 +411,7 @@ export function s5Readiness(entry: EntryDetail): Precondition[] {
   const outstanding = entry.folio?.outstandingBalance != null ? Number(entry.folio.outstandingBalance) : 0;
   const tier2AckNeeded = ceiling != null && Number.isFinite(ceiling) && ceiling > 0 && outstanding / ceiling >= 0.9;
   return [
+    ...arrivalDay,
     { label: "Handoff to front desk fulfilled", met: h1?.state === "FULFILLED" },
     { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0 },
     {
@@ -391,8 +426,8 @@ export function s5Readiness(entry: EntryDetail): Precondition[] {
   ];
 }
 
-export function canProgressS5(entry: EntryDetail, guestPresent: boolean): boolean {
-  return entry.currentStage === "S5" && guestPresent && s5Readiness(entry).every((c) => c.met);
+export function canProgressS5(entry: EntryDetail, guestPresent: boolean, hotelToday?: string | null): boolean {
+  return entry.currentStage === "S5" && guestPresent && s5Readiness(entry, hotelToday).every((c) => c.met);
 }
 
 /** S6 exit readiness (SIG-S6) — derivable gates before check-in completes (folio goes live → S7).
@@ -583,7 +618,7 @@ export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday:
     case "confirm":
       return [{ label: "Booking confirmed & frozen", met: fin.frozen }];
     case "arrival":
-      return s5Readiness(entry);
+      return s5Readiness(entry, hotelToday);
     case "checkin":
       return fin.folio.state === "Live" || fin.folio.state === "Settled"
         ? [{ label: "Checked in · folio live", met: true }]

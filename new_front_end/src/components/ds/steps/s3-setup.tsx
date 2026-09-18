@@ -535,13 +535,19 @@ function HoldCard({
     onError: (e) => toastRefusal(e, "The hold could not be released"),
   });
 
+  // Mirrors the backend's manual-hold gate (2026-09-18): the advance satisfied, OR any of it
+  // received, OR the FOM's credit extension. With none of the three the click is refused.
+  const payment = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data ?? null;
+  const moneyLock = payment && !payment.satisfied && payment.totalReceived <= 0 && !payment.creditExtensionActive;
   const placeLock = !anchorRoomId
     ? "choose the rooms at Inquiry first"
     : !entry.folio?.billingModel
       ? "set the billing model first"
       : !entry.cancellationDisclosure
         ? "record that the terms were disclosed first"
-        : null;
+        : moneyLock
+          ? "the advance, or part of it, has to come in first — or the FOM extends credit"
+          : null;
   const rooms = roomsWord(roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [], roomNos);
   const count = roomIds.length || 1;
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
