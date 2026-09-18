@@ -283,6 +283,13 @@ async function prepareQuotationDraft(
   // mid-stay is still one committed room-night per room per night — the total room-nights =
   // distinctRooms × nights).
   const roomCount = Math.max(1, sealed.distinctRoomIds.length || (entry.numberOfRooms ?? 1));
+  // A group ("Group / MICE") prices through the per-room table like any booking (2026-09-18) —
+  // the table is where its meals, children, extra beds and negotiated rates are. It used to be
+  // sent down the flat group path, which priced the rooms alone: a group of seven on breakfast
+  // was quoted with no breakfast, no child rate and no service charge or GST. What that path
+  // added is carried here: the volume band for a large group, and the FOC entitlement check.
+  const isGroup = entry.useType === "GROUP";
+  const groupSize = isGroup ? roomCount : undefined;
 
   const tier = entry.guestProfile?.clientTier;
   const isDeficientGuestTier = tier === "CAUTION" || tier === "RESTRICTED";
@@ -335,6 +342,7 @@ async function prepareQuotationDraft(
     isDeficientGuestTier,
     roomTypeId,
     stay,
+    groupSize,
     discountPercentOffRequested: usingCompositions ? undefined : requested?.discountPercent,
     actorMaxDiscountPercent,
   });
@@ -610,6 +618,7 @@ async function prepareQuotationDraft(
           isDeficientGuestTier,
           roomTypeId: tid,
           stay,
+          groupSize,
         });
         ratesByType.set(tid, {
           room: toDecimal(typePricing.effectiveRate ?? typePricing.resolvedNightlyRate ?? 0),
@@ -802,9 +811,17 @@ async function prepareQuotationDraft(
     }
   }
 
+  // A group's complimentary rooms are held to its FOC entitlement, as on the group path.
+  const focRooms = usingCompositions ? input.roomCompositions!.filter((c) => c.isFoc === true).length : 0;
+  if (isGroup && focRooms > 0) {
+    await enforceFocEntitlementForS2GroupQuotation(prisma, { entryId, roomsRequested: roomCount, focRoomsRequested: focRooms });
+  }
+
   const commercialTerms = {
     roomTypeId,
     useType: entry.useType,
+    ...(isGroup ? { groupSize: roomCount, ...(focRooms > 0 ? { focRoomsRequested: focRooms } : {}) } : {}),
+    ...(pricing.appliedGroupBand ? { appliedGroupBand: pricing.appliedGroupBand } : {}),
     resolvedRatePlanId: pricing.resolvedRatePlanId,
     resolvedRatePlanType: pricing.resolvedRatePlanType,
     resolvedNightlyRate,

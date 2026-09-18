@@ -30,8 +30,11 @@ quotationsAndHoldsRouter.post("/entries/:id/quotations", requireActorLevel("L1")
     // discount's authority band is enforced at generation and the quote is born approved
     // (2026-08-07, operator ruling — approving after generation made no sense). The group
     // path keeps its own percent-only handling.
+    // A group goes down the flat group path only when no per-room table is sent (API callers);
+    // the desk always sends the table, which carries the meals, children and taxes (2026-09-18).
+    const hasTable = Array.isArray(req.body.roomCompositions) && req.body.roomCompositions.length > 0;
     const created =
-      entry.useType === "GROUP"
+      entry.useType === "GROUP" && !hasTable
         ? await quotationService.createGroupQuotation(prisma, req.params.id, req.actor!.actorId, req.body)
         : await quotationService.createQuotation(prisma, req.params.id, req.actor!.actorId, {
             ...req.body,

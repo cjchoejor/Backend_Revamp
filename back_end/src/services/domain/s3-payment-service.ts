@@ -344,7 +344,16 @@ export async function setAdvanceRequirement(
     if (!operative) {
       throw new ValidationError("No quotation to base a percentage on — create the quote first, or set a flat amount");
     }
-    const baseTotalDec = toDecimal(operative.totalAmount as unknown as string);
+    // The STAY's total (2026-09-18). A composition quote's total is the stay; a flat quote's is
+    // one night × rooms (the billing summary multiplies it by the nights), so 25% of a flat quote
+    // asked for a quarter of ONE night — a two-night group was asked Nu 1,575 of a Nu 12,600 stay.
+    const opTerms = (operative.commercialTerms ?? null) as Record<string, unknown> | null;
+    const flatQuote = !(Array.isArray(opTerms?.roomCompositions) && (opTerms!.roomCompositions as unknown[]).length > 0) && opTerms?.compositionTotals == null;
+    const flatNights = Number((opTerms?.pricingBreakdown as { nights?: unknown } | null)?.nights) ||
+      (entry?.checkInDate && entry?.checkOutDate ? Math.max(1, Math.round((entry.checkOutDate.getTime() - entry.checkInDate.getTime()) / 86_400_000)) : 1);
+    const baseTotalDec = flatQuote
+      ? toDecimal(operative.totalAmount as unknown as string).mul(flatNights)
+      : toDecimal(operative.totalAmount as unknown as string);
     requiredDec = round2(pctOf(baseTotalDec, input.percent!));
     basis = {
       mode: "PERCENT",
