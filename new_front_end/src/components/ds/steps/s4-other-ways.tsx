@@ -215,8 +215,10 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
+  // The reason is recorded on the cancellation, as at Set up (2026-09-18) — the Arrival cancel
+  // used to take none, so a reserved booking could be cancelled with no why on record.
   const run = useMutation({
-    mutationFn: () => cancelEntryAtS5(session!, entry.id, gm && waive ? { penaltyWaiverRequested: true } : undefined),
+    mutationFn: (reason: string) => cancelEntryAtS5(session!, entry.id, { reason, ...(gm && waive ? { penaltyWaiverRequested: true } : {}) }),
     onSuccess: () => {
       toast.success("Cancelled — the rooms are released and the no-show clock is stopped");
       onClose();
@@ -225,34 +227,26 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
     onError: (e) => toastRefusal(e, "The booking could not be cancelled"),
   });
   return (
-    <DsDialog
+    <ReasonDialog
       open
-      register="danger"
+      danger
       onClose={onClose}
       busy={run.isPending}
       title="They told us they're not coming"
       caseLines={[entry.id]}
-      footer={
+      lead={
         <>
-          <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={onClose}>
-            Keep the booking
-          </Button>
-          <Button kind="danger" solid state={run.isPending ? "working" : "default"} workingLabel="Cancelling…" onClick={() => run.mutate()}>
-            Cancel the booking
-          </Button>
+          This cannot be undone. The held rooms return to the house; the no-show clock and the open pre-arrival tasks stop;
+          the disclosed cancellation charge is posted{waive ? " — waived by the GM" : ""} and the rest of the advance is
+          refunded; the booking closes as cancelled, with its cancellation confirmation under Papers.
         </>
       }
+      confirmLabel="Cancel the booking"
+      placeholder="what the guest or the booker said"
+      onConfirm={(r) => run.mutate(r)}
     >
-      <p className="sm">This cannot be undone. What happens:</p>
-      <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
-        <li>The held rooms return to the house.</li>
-        <li>The no-show clock and the open pre-arrival tasks stop.</li>
-        <li>The disclosed cancellation charge is posted{waive ? " — waived by the GM" : ""}; the rest of the advance is refunded.</li>
-        <li>The booking closes as cancelled; the cancellation confirmation is under Papers.</li>
-      </ul>
-      <p className="meta">The route records who cancelled and when; it takes no written reason yet — put the guest&rsquo;s words in the preference line if they matter.</p>
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />
-    </DsDialog>
+    </ReasonDialog>
   );
 }
 

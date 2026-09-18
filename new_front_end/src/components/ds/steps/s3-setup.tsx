@@ -434,7 +434,11 @@ function BillingModelCard({
   const save = useMutation({
     mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model }),
     onSuccess: () => {
-      toast.success(folio ? "The billing model is changed" : "The provisional bill is open — the proforma is generated with it");
+      // Keyed on a model being SET, not on the folio existing — the folio opens at Set up with no
+      // model, so the first choice read as a change (2026-09-18).
+      toast.success(
+        !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "The billing model is changed" : "The billing model is set",
+      );
       onChanged();
     },
     onError: (e) => toastRefusal(e, "The billing model could not be set"),
@@ -463,7 +467,7 @@ function BillingModelCard({
               workingLabel="Saving…"
               onClick={() => save.mutate()}
             >
-              {folio ? "Change to this model" : "Open the provisional bill"}
+              {!folio ? "Open the provisional bill" : savedModel ? "Change to this model" : "Set this model"}
             </Button>
             {savedModel ? (
               <Button kind="quiet" compact onClick={() => setModel(savedModel)}>

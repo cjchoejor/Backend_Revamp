@@ -51,7 +51,7 @@ export async function cancelEntryAtS3(
 export async function cancelEntryAtS5(
   session: Session,
   entryId: string,
-  body?: { penaltyWaiverRequested?: boolean },
+  body?: { penaltyWaiverRequested?: boolean; reason?: string },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/cancel`, { method: "POST", session, body: body ?? {} });
 }
