@@ -262,6 +262,7 @@ The boss's redesign (`September 14 2026/`, built on `September 11 2026/`) is bei
   - `POST /api/desk/bookings/money` (L1, ≤100 ids, each booking's billing-summary headline and folio)
   - `GET /api/desk/staff` (L1)
   - `GET /api/desk/activity?date=` (**L2**, one hotel day of the trace)
+- **Closed step (2026-09-18)**: an inspection put off at check-out is **completed at S9** (SIG-S9 §334 / AC-S9-020 — "completed OR lapsed"). `recordInspection` was S8-only, so the FOM lapsing the window (which records "nothing found") had been the only way to seal. Now `enforceEntryStageForRoomInspection` takes the completion at S9 (never a new deferral), the W9 timer is cancelled, and `POST_CHECKOUT_INSPECTION.INSPECTION_COMPLETED` is written. The seal checklist and button read **`GET /api/entries/:id/closure-readiness`** (L1) — the close's own checks, run and caught, plus where the inspection stands ([lib/room-inspection-standing.ts](back_end/src/lib/room-inspection-standing.ts)); the desk's `s9CloseReadiness` copy had drifted (a lapsed window read as blocked forever). Sealing needs the FOM.
 - **Known data gap**: every inquiry gets `defaultCustodianId` `staff-frontdesk-1` from the ownership rules, new ones included. No StaffUser has that id (staff ids are `STF-…`), so the custodian shows "—" on every booking. Fixing it means correcting `ownership.assignmentRules` or Policy 3's fallback.
 - **Machine setup**: `npm install` in `new_front_end/` (its postinstall copies the tesseract assets, which are gitignored like front_end's), then `npm run dev`.
 
