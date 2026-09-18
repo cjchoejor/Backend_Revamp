@@ -23,6 +23,7 @@ import {
   enforceEntryAtS7ForH4Initiation,
 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { cancelHandoffAcceptanceTimers } from "../../lib/handoff-acceptance-timers.js";
 
 type ChecklistItem = { code: string; mandatory: boolean };
 
@@ -81,28 +82,15 @@ export async function acceptHandoff(
     return u;
   });
 
-  // SIG-S6: cancel W25 acceptance timer when H2/H3 accepted.
-  // Reorder for atomicity: claim (UPDATE ... WHERE status=SCHEDULED) FIRST so a new W25 scheduled
-  // between the read and update can't slip through — updateMany atomically transitions any row
-  // matching the WHERE. Then cancel the pg-boss jobs for the rows we actually claimed. If
-  // pg-boss cancel fails mid-loop, the surviving jobs fire but the worker's "no matching
-  // SCHEDULED TimerRecord" guard makes them no-ops.
-  if (handoff.handoffType === HandoffType.H2 || handoff.handoffType === HandoffType.H3) {
-    const timers = await prisma.$transaction(async (tx) => {
-      const rows = await tx.timerRecord.findMany({
-        where: { entityType: "HandoffRecord", entityId: handoffId, timerCode: "H2_H3_ACCEPTANCE_W25", status: "SCHEDULED" },
-        select: { id: true, pgBossJobId: true },
-        take: 10,
-      });
-      if (rows.length === 0) return rows;
-      await tx.timerRecord.updateMany({
-        where: { id: { in: rows.map((r) => r.id) }, status: "SCHEDULED" },
-        data: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: actorId, cancelledReason: "Handoff accepted" },
-      });
-      return rows;
-    });
+  // SIG-S6: accepting a handoff ends its acceptance clock — ANY handoff type (2026-09-18; this
+  // was H2/H3 only, so an accepted H4's clock stayed SCHEDULED and later read as overdue). Claimed
+  // at the row first, so a clock scheduled between read and update cannot slip through; then the
+  // pg-boss jobs for the rows actually claimed are cancelled (a job that still fires no-ops on a
+  // clock that is no longer SCHEDULED).
+  const stopped = await cancelHandoffAcceptanceTimers(prisma, [handoffId], { actorId, reason: "Handoff accepted" });
+  if (stopped.length) {
     const engine = await getTimerEngine();
-    for (const t of timers) {
+    for (const t of stopped) {
       if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
     }
   }
@@ -142,6 +130,7 @@ export async function fulfilHandoff(
         fulfilmentEvidence: enforcedEvidence as object,
       },
     });
+    await cancelHandoffAcceptanceTimers(tx, [handoffId], { actorId, reason: "Handoff fulfilled" });
     await tx.traceEvent.create({
       data: {
         eventType: `HANDOFF.${u.handoffType}_FULFILLED`,
@@ -182,6 +171,7 @@ export async function rejectHandoff(prisma: PrismaClient, handoffId: string, act
         rejectionReason: rejectionReason.trim(),
       },
     });
+    await cancelHandoffAcceptanceTimers(tx, [handoffId], { actorId, reason: "Handoff rejected — routed to the FOM" });
     // AC-S6-020: FOM / routing (no silent rejection)
     await tx.traceEvent.create({
       data: {
