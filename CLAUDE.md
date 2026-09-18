@@ -561,6 +561,10 @@ The actor's LEVEL is **authenticated from the login session token**, not a clien
 
 Verified: a fake-clock matrix over the switched services (Bhutan 00:00–05:30 → old code said the 16th, new says the 17th; identical from 06:00), charge-date normalisation (date-only, S8 marker and audit dates unchanged; "now" at 03:00 Bhutan → the hotel's day), and the desk driven by Puppeteer with the browser set to **Pacific/Honolulu** (still the 16th there) on a seeded in-house booking: Bookings range, intake check-in and floor, Stay charge date all 17 Sept, the night-audit cap 16 Sept (the old code would have given the 15th), Leaving-early shown; with the hotel-day request blocked, the audit picker disabled, Continue to Check-out locked and Leaving-early hidden. Fixture removed afterwards.
 
+### When the guest is expected — the no-show cut-off (2026-09-18)
+
+SIG-S5 §7.3 fires the cut-off at "expected arrival time + `noShow.cutoffWindowMinutes`". The expected arrival is the guest's own time (`Entry.expectedArrivalTime`, "HH:MM" hotel-local) when the desk recorded one, else the hotel's `checkIn.standardTime` (14:00, operator ruling; Operational settings), on the check-in day **in hotel time** — [lib/expected-arrival.ts](back_end/src/lib/expected-arrival.ts), `hotelLocalTimeOn` in [stay-dates.ts](back_end/src/lib/stay-dates.ts). It used to count from the stored date's UTC midnight (06:00 in Bhutan), so an afternoon arrival was a no-show at 08:00. `GET/POST /api/entries/:id/expected-arrival` (L1, S1–S5) reads and sets it; at Arrival a new time re-arms the cut-off, but once the cut-off has been reached nothing is reopened — that is the FOM's reactivation. Never compute a time of day as "stored date + hours".
+
 ### Admin services (per ACIG §6.2)
 
 26 admin services in `back_end/src/services/admin/`, one file per service. Each:
