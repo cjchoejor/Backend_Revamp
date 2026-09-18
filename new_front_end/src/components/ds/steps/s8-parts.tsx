@@ -58,7 +58,8 @@ export const INVOICE_TYPE_WORD: Record<string, string> = {
 
 export const BILLING_MODEL_WORD: Record<string, string> = {
   GUEST_PAY: "the guest pays",
-  DIRECT_BILL: "billed to the company",
+  // "on account" — a company, an agency, or a direct group's tour leader (2026-09-18).
+  DIRECT_BILL: "billed on account",
   TOUR_OPERATOR_VOUCHER: "the agent's voucher",
   GOVERNMENT: "billed to the government",
   OTA_PREPAID: "prepaid through the OTA",

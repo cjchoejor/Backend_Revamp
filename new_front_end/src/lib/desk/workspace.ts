@@ -534,6 +534,9 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
       : { label: "Checkout date on file", met: false };
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
   const h4Init = !!h4 && !h4.rejectedAt && ["CREATED", "ACCEPTED", "FULFILLED", "CLOSED"].includes(h4.state);
+  // Leaving today: the backend raises and fulfils the pre-checkout handoff itself at the move
+  // (AC-S7-16), so the desk must not wait for it (2026-09-18).
+  const leavingToday = !!hotelToday && !!checkOutIso && checkOutIso.slice(0, 10) === hotelToday;
   const deficient = entry.roomAssignments?.[0]?.room?.deficientConditionRecords ?? [];
   const deficientFinal =
     deficient.length === 0 ||
@@ -543,7 +546,10 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
     checkoutLine,
     { label: "Folio is live", met: folio?.state === "LIVE" },
     { label: "Charges posted", met: (folio?.lines ?? []).length > 0 },
-    { label: "Pre-checkout handoff started", met: h4Init },
+    {
+      label: !h4Init && leavingToday ? "Pre-checkout handoff — raised at the move (leaving today)" : "Pre-checkout handoff started",
+      met: h4Init || leavingToday,
+    },
     { label: "Deficiencies resolved", met: deficientFinal },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];

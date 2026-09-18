@@ -60,10 +60,11 @@ export function NightsCard({
   const lastNight = checkOutIso ? lastStayNightYmd(checkOutIso) : "";
   const nights = useMemo(() => stayNights(checkIn, checkOutIso), [checkIn, checkOutIso]);
 
-  // The nights worth asking about: every night that has ended, and always the final night (the gate).
+  // The nights worth asking about: every night that has ended, and always the final night (the gate)
+  // — when the stay has one. A guest who checks in and leaves the same day slept no night.
   const asked = useMemo(() => {
     const s = new Set(nights.filter((n) => !!yesterday && n <= yesterday));
-    if (lastNight) s.add(lastNight);
+    if (lastNight && nights.includes(lastNight)) s.add(lastNight);
     return [...s].sort();
   }, [nights, yesterday, lastNight]);
   const records = useQueries({
@@ -78,8 +79,9 @@ export function NightsCard({
     return i < 0 ? undefined : records[i]?.data;
   };
 
-  // The gate: the final night's audit, exactly as the old Stay step reported it.
-  const finalOk = recordOf(lastNight)?.runStatus === "COMPLETE";
+  // The gate: the final night's audit — met outright when no night was slept (2026-09-18), as
+  // the backend's gate is: "the night before check-out" is then a night before the stay began.
+  const finalOk = nights.length === 0 || recordOf(lastNight)?.runStatus === "COMPLETE";
   useEffect(() => {
     setNightAuditOk(finalOk);
   }, [finalOk, setNightAuditOk]);
