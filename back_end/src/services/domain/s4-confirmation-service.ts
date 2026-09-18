@@ -138,12 +138,18 @@ export async function confirmReservation(
   // payment against a room's share or a settlement is not an advance. Counting them stranded an
   // in-house booking at Set up the moment a room change or an extension re-froze it after an
   // interim payment, whenever its advance had never gone out on a proforma.
+  // …and only money taken at SET UP, before the booking was first frozen (2026-09-19). Money taken
+  // after it (Reserve, Arrival, Check-in) is documented by the confirmation voucher — the desk
+  // takes it with no proforma sent, by design (bill-before-money applies at Set up only). Counting
+  // it stranded any later room change or re-price at Set up: the walk re-freezes after its
+  // irreversible re-entry, and a booking reserved on an FOM credit extension whose guest paid at
+  // check-in had no dispatched proforma to show. The first freeze only ever sees Set-up money.
   const advancePaid = await prisma.paymentRecord.aggregate({
     where: {
       folioId: folio.id,
       paymentDirection: "IN",
       interimPaymentRequestId: null,
-      OR: [{ stage: null }, { stage: { in: [Stage.S3, Stage.S4, Stage.S5, Stage.S6] } }],
+      OR: [{ stage: null }, { stage: Stage.S3 }],
     },
     _sum: { amount: true },
   });
