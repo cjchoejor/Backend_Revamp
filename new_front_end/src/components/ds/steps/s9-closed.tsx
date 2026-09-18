@@ -31,6 +31,7 @@ import {
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
 import { fmtDateTime, fmtDay, fmtInstantDate, fmtRange, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
+import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import type { EntryDetail, InvoiceSummary } from "@/types/api";
@@ -169,7 +170,7 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
         <div>
           <div className="meta">Rate</div>
           <div>
-            <b className="money">{entry.reservation ? `${money(entry.reservation.frozenRate, cur)} / night` : "—"}</b>
+            <b className="money">{entry.reservation ? rateWords(billing.data, entry.reservation.frozenRate, cur) : "—"}</b>
           </div>
           <div className="meta">
             {entry.reservation ? "as confirmed" : "never confirmed"}

@@ -652,7 +652,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             entry={entry}
             past={viewingPast}
             onPark={parkable ? openPark : undefined}
-            goToStep={viewingPast ? NOOP : gotoStep}
+            goToStep={gotoStep}
             reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
             onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
           />

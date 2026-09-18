@@ -61,6 +61,7 @@ export function PreArrivalTasksCard({
   actionable,
   guestDetailsHint,
   id,
+  movedOn,
 }: {
   entry: EntryDetail;
   title: string;
@@ -70,6 +71,8 @@ export function PreArrivalTasksCard({
   /** Arrival: the guest-details task says how far the guest table has got. */
   guestDetailsHint?: boolean;
   id?: string;
+  /** Reserve's copy once the booking has moved to Arrival: the tasks are worked there now. */
+  movedOn?: { onGo: () => void } | null;
 }) {
   const { session } = useSession();
   const { past } = useStepMode();
@@ -111,6 +114,16 @@ export function PreArrivalTasksCard({
       right={tasks.length ? <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip> : undefined}
     >
       {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+      {movedOn && open > 0 ? (
+        <div className="row-acts" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+          <span className="sm warn-ink">
+            The booking is at Arrival now — the {plural(open, "open task")} are done or waived there, not here.
+          </span>
+          <Button kind="secondary" compact onClick={movedOn.onGo}>
+            Go to Arrival
+          </Button>
+        </div>
+      ) : null}
       {tasks.length === 0 ? (
         <p className="meta">
           No tasks on record yet — Reserve opens them; a booking reserved before the list existed gets them when Arrival opens.
@@ -144,7 +157,9 @@ export function PreArrivalTasksCard({
                 <td>{stateChip(t)}</td>
                 {past ? null : (
                   <td className="nowrap" style={{ textAlign: "right" }}>
-                    {canAct(t) ? (
+                    {!canAct(t) && t.status === "PENDING" && actionable !== "all" ? (
+                      <span className="meta">done at Arrival</span>
+                    ) : canAct(t) ? (
                       <span className="row-acts" style={{ justifyContent: "flex-end" }}>
                         <Button
                           kind="secondary"

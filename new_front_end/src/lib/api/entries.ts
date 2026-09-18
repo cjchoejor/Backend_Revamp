@@ -488,6 +488,8 @@ export type EntryBillingSummary = {
     roomNumber: string | null;
     roomTypeName: string | null;
     nights: number | null;
+    /** The room's own per-night rate as priced (NET; pre-discount on discounted quotes). */
+    roomRate: number | null;
     isFoc: boolean;
     occupants: { adults: number; children6To10: number; childrenUnder6: number } | null;
     extraBedCount: number;

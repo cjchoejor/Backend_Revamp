@@ -24,6 +24,7 @@ import { acknowledgeMultiBooking, resendConfirmationVoucher, verifyConference } 
 import { getBillingSummary, getEntryTrace, getJourneySummary, type EntryCommunication } from "@/lib/api/entries";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
 import { fmtDate, fmtDateTime, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
+import { roomRatesOf } from "@/lib/ds/rates";
 import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary";
 import { AdvanceSettlementBlock, PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
@@ -177,8 +178,9 @@ export function S4Reserve({
           <PreArrivalTasksCard
             entry={entry}
             title="Pre-arrival · opened by Reserve, worked at Arrival"
-            meta="The desk's own preparation can be ticked here; when Arrival opens, completed tasks re-open so the arrival desk confirms them fresh."
+            meta="Four of these are the desk's own preparation and can be ticked here; the rest are done at Arrival. When Arrival opens, completed tasks re-open so the arrival desk confirms them fresh."
             actionable={RESERVE_PREP_TASKS}
+            movedOn={past && entry.currentStage === "S5" ? { onGo: () => goToStep(5) } : null}
           />
           <StepCard>
             <Tool>
@@ -898,12 +900,18 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
   const quoteRef = journey?.s2Quote.reference ?? null;
   const since = currentPassStart(entry);
   const quoteAnswer = answerWords(latestDispatched(comms, "QUOTATION", since));
+  // Every room the booking holds: the priced rooms, the assigned rooms and the hold's rooms.
+  const roomRates = roomRatesOf(billing);
+  const preDiscount = (billing?.rooms ?? []).some((r) => r.componentsPreDiscount);
   const rooms = Array.from(
     new Set([
+      ...(billing?.rooms ?? []).map((r) => r.roomNumber),
       ...(entry.roomAssignments ?? []).map((a) => a.room?.roomNumber),
       ...(journey?.s3Setup.committedHold?.rooms ?? []).map((r) => r.roomNumber),
     ]),
-  ).filter((x): x is string => !!x);
+  )
+    .filter((x): x is string => !!x)
+    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   const tasks = entry.preArrivalTasks ?? [];
   const emailEvents = trace.filter((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL"));
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
@@ -912,8 +920,23 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
     <StepCard title={`What Reserve decided · ${fmtDateTime(res.confirmedAt, tz)}${by ? ` · ${by}` : ""}`}>
       <Facts wide>
         <Fact k="Reservation">
-          <b>{res.id}</b> · rate frozen at {money(res.frozenRate, cur)} / night · dates frozen {fmtRange(res.frozenCheckInDate, res.frozenCheckOutDate)}
+          <b>{res.id}</b> · dates frozen {fmtRange(res.frozenCheckInDate, res.frozenCheckOutDate)}
           {nights ? ` · ${plural(nights, "night")}` : ""}
+        </Fact>
+        <Fact k={roomRates && roomRates.length > 1 ? "Rates frozen" : "Rate frozen"} meta={preDiscount ? "before the booking discount — the price below is after it" : undefined}>
+          {roomRates ? (
+            <div style={{ display: "grid", gap: 2 }}>
+              {roomRates.map((r) => (
+                <span key={r.roomNumber ?? r.roomTypeName ?? String(r.rate)}>
+                  Room {r.roomNumber ?? "—"}
+                  {r.roomTypeName ? <span className="meta"> · {r.roomTypeName}</span> : null} ·{" "}
+                  <span className="money">{money(r.rate, cur)}</span> / night
+                </span>
+              ))}
+            </div>
+          ) : (
+            `${money(res.frozenRate, cur)} / night`
+          )}
         </Fact>
         <Fact k="The price" meta={billing?.stayTotal.frozen ? "as confirmed" : billing ? "indicative" : undefined}>
           {billing?.stayTotal.amount != null ? money(billing.stayTotal.amount, cur) : null}
@@ -924,7 +947,9 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
         <Fact k="Billing model">{billingWord(res.frozenBillingModel) || null}</Fact>
         <Fact k="Rooms" meta={held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined}>
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
-          {rooms.length ? `${rooms.join(", ")}` : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
+          {rooms.length
+            ? `${rooms.join(", ")}`
+            : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
         </Fact>
         <Fact k="Terms disclosed" meta={disc ? fmtStamp(disc.disclosedAt, tz) : undefined}>
           {disc ? "cancellation and no-show, as told to the guest" : null}

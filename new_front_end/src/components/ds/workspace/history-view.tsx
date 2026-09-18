@@ -18,6 +18,7 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { getEntryTrace, type EntryBillingSummary } from "@/lib/api/entries";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { fmtInstantDate, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
+import { rateWords } from "@/lib/ds/rates";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceDetail, traceWords } from "@/lib/ds/trace-words";
 import { reservedThisPass } from "@/lib/desk/workspace";
@@ -118,7 +119,7 @@ export function HistoryView({
     },
     {
       k: "Rate",
-      v: res ? `${money(res.frozenRate, cur)} / night` : billing?.stayTotal?.amount != null ? money(billing.stayTotal.amount, cur) : "—",
+      v: res ? rateWords(billing, res.frozenRate, cur) ?? "—" : billing?.stayTotal?.amount != null ? money(billing.stayTotal.amount, cur) : "—",
       meta: res ? "as reserved" : billing?.stayTotal?.amount != null ? "the stay, as quoted" : "no quotation yet",
     },
     {

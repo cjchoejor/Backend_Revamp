@@ -14,6 +14,7 @@ import type { EntryBillingSummary } from "@/lib/api/entries";
 import { JourneySummaryBlock } from "@/components/desk/workspace/journey-summary";
 import { channelWord } from "@/lib/ds/status";
 import { fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
+import { rateWords } from "@/lib/ds/rates";
 import { guestName } from "@/lib/desk/model";
 import { liveQuotesThisPass, reservedThisPass } from "@/lib/desk/workspace";
 import { Fact, FactBox, Facts, PapersCard, StepCard } from "@/components/ds/steps/kit";
@@ -116,7 +117,7 @@ export function DetailsView({
             </Fact>
             <Fact k="Guests">{party}</Fact>
             <Fact k="Rate" meta={res ? "as reserved" : quote ? "as quoted" : undefined}>
-              {res ? `${money(res.frozenRate, cur)} / night` : null}
+              {res ? rateWords(billing, res.frozenRate, cur) : null}
             </Fact>
             <Fact k="Total" meta={billing?.headline.frozen ? "as confirmed" : billing?.headline.kind === "BILLED_SO_FAR" ? "billed so far" : billing ? "indicative" : undefined}>
               {billing?.headline.amount != null ? money(billing.headline.amount, cur) : null}
