@@ -15,6 +15,8 @@ import {
   throwVipArrivalNotificationMutationForbidden,
 } from "./policies/01-availability/p01-prisma-extension-blocking-guards.js";
 
+import { stampRequestActorLevel } from "./lib/request-actor-context.js";
+
 const _base = new PrismaClient();
 
 // SIG-S6/S7: Guard irreversible / immutable records at Prisma layer (delegates to `policies/**`).
@@ -143,6 +145,19 @@ const _ext = _base.$extends({
     room: {
       async update({ args, query }) {
         await enforceRoomOccupiedToDepartedCleanPath(_base, args.where, args.data as { currentClaimState?: string } | undefined);
+        return query(args);
+      },
+    },
+    // The audit trail records who acted at their REAL level (2026-09-18): a trace naming the
+    // request's own actor takes the verified level — many writers hard-coded "L1".
+    traceEvent: {
+      async create({ args, query }) {
+        stampRequestActorLevel(args.data as { actorId?: unknown; actorLevel?: unknown });
+        return query(args);
+      },
+      async createMany({ args, query }) {
+        const rows = Array.isArray(args.data) ? args.data : [args.data];
+        for (const r of rows) stampRequestActorLevel(r as { actorId?: unknown; actorLevel?: unknown });
         return query(args);
       },
     },

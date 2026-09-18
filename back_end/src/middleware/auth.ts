@@ -1,4 +1,5 @@
 import type { RequestHandler } from "express";
+import { runWithRequestActor } from "../lib/request-actor-context.js";
 import { AuthorizationError, ValidationError } from "../lib/errors.js";
 import { verifySessionJwt } from "../services/infrastructure/session-service.js";
 import { prisma } from "../db.js";
@@ -66,7 +67,8 @@ export function parseActorHeaders(): RequestHandler {
         req.actor = { actorId: session.user.id, level: session.user.actorLevel as ActorLevel };
         // Fire-and-forget lastActive touch; the caller shouldn't wait on it.
         void touchSessionLastActive(session.id, new Date());
-        next();
+        // The rest of the request runs knowing its verified actor (request-actor-context).
+        runWithRequestActor(req.actor, () => next());
         return;
       }
 
@@ -80,7 +82,7 @@ export function parseActorHeaders(): RequestHandler {
           return;
         }
         req.actor = parsed;
-        next();
+        runWithRequestActor(parsed, () => next());
         return;
       }
 
