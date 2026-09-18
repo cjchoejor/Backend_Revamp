@@ -144,7 +144,19 @@ export function S3SetUp({
 
   /* ---- the billing model the desk is choosing ---- */
   const isAgentBooking = !!inq.travelAgentId || inq.sourceChannel === "TRAVEL_AGENT" || inq.sourceChannel === "AGENT";
-  const defaultModel = isAgentBooking ? "TOUR_OPERATOR_VOUCHER" : "GUEST_PAY";
+  // A company's booking, or a group on one master bill, starts on "everything to the account"
+  // (2026-09-18): it started on the guest paying, which the group rules then refuse — the
+  // operator had to work out which model a group may use.
+  const isCompanyBooking = !isAgentBooking && (!!inq.corporateAccountId || inq.sourceChannel === "CORPORATE");
+  const isGroupMaster = entry.groupBillingMode === "GROUP_MASTER";
+  const defaultModel = isAgentBooking ? "TOUR_OPERATOR_VOUCHER" : isCompanyBooking || isGroupMaster ? "DIRECT_BILL" : "GUEST_PAY";
+  const preselectedWhy = isAgentBooking
+    ? "this booking came through a travel agent"
+    : isCompanyBooking
+      ? "a company made this booking"
+      : isGroupMaster
+        ? "a group bills to one master bill"
+        : null;
   const savedModel = folio?.billingModel ?? null;
   const [model, setModel] = useState<string>(savedModel ?? defaultModel);
   useEffect(() => {
@@ -217,7 +229,7 @@ export function S3SetUp({
         model={model}
         setModel={setModel}
         savedModel={savedModel}
-        preselected={!savedModel && isAgentBooking && model === "TOUR_OPERATOR_VOUCHER"}
+        preselectedWhy={!savedModel && preselectedWhy && model === defaultModel ? preselectedWhy : null}
         onChanged={changed}
       />
 
@@ -384,7 +396,7 @@ function PartiesCard({
       <div className="grid3">
         <FactBox
           k="Guest"
-          v={g?.id && g ? <Link href={`/guests/${g.id}`}>{guest}</Link> : <i>to come from the agent</i>}
+          v={g?.id && g ? <Link href={`/guests/${g.id}`}>{guest}</Link> : <i>{inq.travelAgentId ? "to come from the agent" : inq.corporateAccountId ? "to come from the company" : "to be named"}</i>}
           meta={
             contact.contactPersonName
               ? `contact · ${contact.contactPersonName}${contact.contactPersonPhone ? ` · ${contact.contactPersonPhone}` : ""}`
@@ -416,7 +428,7 @@ function BillingModelCard({
   model,
   setModel,
   savedModel,
-  preselected,
+  preselectedWhy,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -425,7 +437,8 @@ function BillingModelCard({
   model: string;
   setModel: (m: string) => void;
   savedModel: string | null;
-  preselected: boolean;
+  /** Why the model shown was chosen for the desk — null when the desk chose it. */
+  preselectedWhy: string | null;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -456,7 +469,7 @@ function BillingModelCard({
       <Choice options={options} value={model} onChange={editable ? setModel : undefined} disabled={!editable} />
       <div className="meta" style={{ marginTop: 6 }}>
         Set here, before the bill goes live; a change afterwards is a recorded transition.{" "}
-        {preselected ? "Pre-selected — this booking came through a travel agent; change it if they settle differently. " : ""}
+        {preselectedWhy ? `Pre-selected — ${preselectedWhy}; change it if they settle differently. ` : ""}
         {group ? "A group bills to one master folio. " : ""}
         {folio
           ? (FOLIO_WORD[folio.state] ?? `The bill is ${words(folio.state).toLowerCase()}.`)
@@ -1175,6 +1188,10 @@ function MilestonesCard({ entry, editable, onChanged }: { entry: EntryDetail; ed
 /** The Party block — drawn in full, not yet recordable (BE-34, BE-35). */
 function PartyBlock({ entry }: { entry: EntryDetail }) {
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
+  // Who names the rest of the party — the agent's tour, a company's delegates, or the guest.
+  const inqIds = (entry.inquiry ?? {}) as { travelAgentId?: string | null; corporateAccountId?: string | null };
+  const fromWhom = inqIds.travelAgentId ? "to come from the agent" : inqIds.corporateAccountId ? "to come from the company" : "to be named";
+  const leadRole = inqIds.travelAgentId ? "tour leader" : "lead";
   const rows = Math.max(1, Math.min(entry.guestCount ?? (entry.numberOfRooms ?? 1) * 2, 12));
   return (
     <div
@@ -1196,8 +1213,8 @@ function PartyBlock({ entry }: { entry: EntryDetail }) {
             <tbody>
               {Array.from({ length: rows }, (_, i) => (
                 <tr key={i} className="static">
-                  <td>{i === 0 && g ? guestNameOf(g) : <i>to come from the agent</i>}</td>
-                  <td>{i === 0 ? "tour leader" : "guest"}</td>
+                  <td>{i === 0 && g ? guestNameOf(g) : <i>{fromWhom}</i>}</td>
+                  <td>{i === 0 ? leadRole : "guest"}</td>
                   <td className="dash">—</td>
                   <td className="dash">—</td>
                 </tr>

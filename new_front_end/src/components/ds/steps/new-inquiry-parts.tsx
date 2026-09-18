@@ -49,7 +49,9 @@ export const CHANNELS: ReadonlyArray<ChannelDef> = [
   { key: "DIRECT_ONLINE", label: "Direct online", channel: "DIRECT", cameInAs: "DIRECT_ONLINE", party: null, useType: "LEISURE" },
   { key: "OTA", label: "OTA", channel: "OTA", cameInAs: "OTA", party: null, useType: "LEISURE" },
   { key: "AGENT", label: "Travel agent", channel: "AGENT", cameInAs: "TRAVEL_AGENT", party: "TRAVEL_AGENT", useType: "LEISURE" },
-  { key: "CORPORATE", label: "Corporation", channel: "CORPORATE", cameInAs: "CORPORATE", party: "CORPORATE", useType: "LEISURE" },
+  // A company's booking is a corporate stay unless the desk says otherwise (2026-09-18) — it
+  // defaulted to leisure, which hid the payment milestones a company booking is scheduled on.
+  { key: "CORPORATE", label: "Corporation", channel: "CORPORATE", cameInAs: "CORPORATE", party: "CORPORATE", useType: "CORPORATE" },
   { key: "GROUP", label: "Group / MICE", channel: "DIRECT", cameInAs: "GROUP_MICE", party: null, useType: "GROUP" },
 ];
 
