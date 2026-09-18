@@ -48,6 +48,17 @@ export default function BillingPage() {
   const ids = useMemo(() => [...open, ...after].map((r) => r.id), [open, after]);
   const m = useDeskMoney(ids);
   const get = (id: string): DeskMoneyRow | undefined => m.byId.get(id);
+  // What is actually owed, by the server's balance (2026-09-18): a bill can read "owing" with
+  // nothing owed — 53 imported folios do — and the list showed them all as owing Nu 0.00. A row
+  // stays while its balance is still loading.
+  const owing = useMemo(
+    () =>
+      after.filter((r) => {
+        const b = m.byId.get(r.id)?.folio?.outstandingBalance;
+        return b == null || b > 0;
+      }),
+    [after, m.byId],
+  );
 
   return (
     <div className="page">
@@ -55,7 +66,7 @@ export default function BillingPage() {
         <div>
           <h2>Billing</h2>
           <div className="meta">
-            {plural(open.length, "open bill")} · {plural(after.length, "booking")} still owing after the stay
+            {plural(open.length, "open bill")} · {plural(owing.length, "booking")} still owing after the stay
           </div>
         </div>
       </div>
@@ -114,7 +125,7 @@ export default function BillingPage() {
               <h3>Still owed after the stay</h3>
               <span className="meta">by who pays · each booking&apos;s own balance</span>
             </div>
-            {after.length ? (
+            {owing.length ? (
               <table className="table">
                 <thead>
                   <tr>
@@ -125,10 +136,10 @@ export default function BillingPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {after.map((r, i) => {
+                  {owing.map((r, i) => {
                     const x = get(r.id);
                     const acct = accountOf(r);
-                    const first = i === 0 || accountOf(after[i - 1]) !== acct;
+                    const first = i === 0 || accountOf(owing[i - 1]) !== acct;
                     return (
                       <OpenRow key={r.id} entryId={r.id}>
                         <td>{first ? <b>{acct}</b> : null}</td>
