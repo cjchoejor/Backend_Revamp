@@ -492,7 +492,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               </BindingBox>
             ) : lastHold ? (
               <div className="meta" style={{ marginTop: 8 }}>
-                The last marker {lastHold.state === "EXPIRED" ? "ran out" : "was released"}
+                The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
                 {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
               </div>
             ) : null}

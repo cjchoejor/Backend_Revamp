@@ -87,6 +87,19 @@ export async function closeEntryAtS9(session: Session, entryId: string) {
   });
 }
 
+/** What a post-stay charge booked, as the backend reports it (2026-09-18). */
+export type PostStayChargeResult = FolioLineSummary & {
+  serviceCharge?: string;
+  gst?: string;
+  /** The charge with its service charge and GST. */
+  total?: string;
+  /** What the bill owes after it. */
+  balanceNow?: string;
+  folioState?: string;
+  /** Whether the notice was emailed, and where — or why not. */
+  notice?: { sent: boolean; to: string | null; reason: string | null };
+};
+
 export async function postStayCharge(
   session: Session,
   folioId: string,
@@ -100,7 +113,7 @@ export async function postStayCharge(
     isPostStay: true;
   },
 ) {
-  return apiRequest<FolioLineSummary>(`/api/folios/${folioId}/post-stay-charges`, {
+  return apiRequest<PostStayChargeResult>(`/api/folios/${folioId}/post-stay-charges`, {
     method: "POST",
     session,
     body,

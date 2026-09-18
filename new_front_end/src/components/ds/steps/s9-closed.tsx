@@ -77,12 +77,17 @@ import {
 
 /* ------------------------------------------------------------------ vocabulary */
 
+/**
+ * What a charge after departure is — each maps to a line type the backend stores, the finer kind
+ * leading the description (2026-09-18). Minibar, Laundry and Damage used to be sent AS line types,
+ * which the folio does not have, so choosing any of them failed with a server error.
+ */
 const LATE_CHARGE_TYPES = [
-  ["OTHER", "Other"],
-  ["F_AND_B", "Food and drink"],
-  ["MINIBAR", "Minibar"],
-  ["LAUNDRY", "Laundry"],
-  ["DAMAGE", "Damage"],
+  ["OTHER", "Other", "OTHER", null],
+  ["F_AND_B", "Food and drink", "F_AND_B", null],
+  ["MINIBAR", "Minibar", "F_AND_B", "Minibar"],
+  ["LAUNDRY", "Laundry", "SERVICE", "Laundry"],
+  ["DAMAGE", "Damage", "OTHER", "Damage"],
 ] as const;
 
 const COMMISSION_WORD: Record<string, string> = {
@@ -145,8 +150,10 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
     () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
     [entry.roomAssignments],
   );
+  // A no-show never stayed — the card says what was booked instead (2026-09-18).
+  const noShow = entry.folio?.state === "NO_SHOW_CLOSED";
   return (
-    <StepCard title="What the stay was">
+    <StepCard title={noShow ? "What was booked" : "What the stay was"}>
       <div className="grid4" style={{ gap: "12px 24px" }}>
         <div>
           <div className="meta">Stay</div>
@@ -156,7 +163,15 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
               {nights ? ` · ${plural(nights, "night")}` : ""}
             </b>
           </div>
-          <div className="meta">{entry.earlyDeparture ? `left early · booked to ${fmtDay(entry.earlyDeparture.originalCheckOutDate)}` : passes > 1 ? `${plural(passes, "pass", "passes")} — changed along the way` : "as booked"}</div>
+          <div className="meta">
+            {noShow
+              ? "a no-show — the guest never arrived"
+              : entry.earlyDeparture
+                ? `left early · booked to ${fmtDay(entry.earlyDeparture.originalCheckOutDate)}`
+                : passes > 1
+                  ? `${plural(passes, "pass", "passes")} — changed along the way`
+                  : "as booked"}
+          </div>
         </div>
         <div>
           <div className="meta">Rooms</div>
@@ -241,6 +256,8 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
   const cur = billing.data?.currency ?? fin.currency;
   const outstanding = fin.outstanding;
   const sealed = entry.status === "CLOSED";
+  // A no-show's folio closed at the decision with its charge on it (2026-09-18).
+  const noShow = folio.state === "NO_SHOW_CLOSED";
   const writtenOff = folio.state === "WRITTEN_OFF";
   const owed = outstanding != null && outstanding > 0 && !writtenOff;
 
@@ -251,6 +268,10 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
   const sentYmd = lastSent?.dispatchedAt ? instantYmd(lastSent.dispatchedAt, tz) : null;
   const ageDays = sentYmd && day ? nightsOf(sentYmd, day.today) : null;
   const writeOff = (folio.writeOffRecords ?? [])[0] ?? null;
+  // A charge found after departure, posted after the last tax invoice went out — that invoice
+  // does not carry it, so "sent · not yet paid" would point at the wrong paper (2026-09-18).
+  const lateSinceInvoice =
+    !!lastSent?.dispatchedAt && (folio.lines ?? []).some((l) => l.isPostStay && (l.postedAt ?? "") > (lastSent.dispatchedAt ?? ""));
 
   // Answer before money (the backend refuses a payment while the tax invoice's answer is open).
   const finalComm = latestDispatched(comms.data?.items, "FINAL_INVOICE");
@@ -332,7 +353,13 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
     "settled"
   ) : folio.state === "OUTSTANDING" ? (
     <>
-      {lastSent ? `tax invoice sent ${fmtInstantDate(lastSent.dispatchedAt, tz)} · not yet paid` : finals.length ? "tax invoice issued, not yet sent" : "not yet invoiced"}
+      {lateSinceInvoice
+        ? `a charge after departure is not on the tax invoice sent ${fmtInstantDate(lastSent!.dispatchedAt, tz)} — issue one for the bill as it stands`
+        : lastSent
+          ? `tax invoice sent ${fmtInstantDate(lastSent.dispatchedAt, tz)} · not yet paid`
+          : finals.length
+            ? "tax invoice issued, not yet sent"
+            : "not yet invoiced"}
       {ageDays ? ` · ${plural(ageDays, "day")}` : ""}
       {ps?.creditExtensionExpiresAt ? (
         <span className={ps.creditExtensionExpired && !ps.creditExtensionActive ? "warn-ink" : "meta"}>
@@ -387,7 +414,9 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                     {inv.dispatchedAt ? (
                       <span className="meta">
                         {" "}
-                        · sent {fmtInstantDate(inv.dispatchedAt, tz)} · {sentWords(inv.dispatchedTo, entry, booked.party)}
+                        · {inv.metadata?.issuedAtNoShowClosure
+                          ? `issued at the seal for the no-show charge ${fmtInstantDate(inv.dispatchedAt, tz)} · not emailed — the no-show notice told them`
+                          : `sent ${fmtInstantDate(inv.dispatchedAt, tz)} · ${sentWords(inv.dispatchedTo, entry, booked.party)}`}
                       </span>
                     ) : null}
                   </span>
@@ -468,9 +497,13 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
           </Fact>
         ) : null}
         <Fact k="Set off by the close">
-          {sealed
-            ? "the record sealed read-only · the rooms released to housekeeping · feedback, payment follow-up and retention handed to the system"
-            : "closing seals the record read-only and hands feedback, payment follow-up and retention to the system"}
+          {noShow
+            ? sealed
+              ? "the record sealed read-only · the no-show charge invoiced · retention handed to the system — a no-show is not asked for feedback"
+              : "closing seals the record read-only and invoices the no-show charge, unless a tax invoice was issued and sent first — issue and send one below to email it"
+            : sealed
+              ? "the record sealed read-only · the rooms released to housekeeping · feedback, payment follow-up and retention handed to the system"
+              : "closing seals the record read-only and hands feedback, payment follow-up and retention to the system"}
         </Fact>
         {commissions.length || followUps.length ? (
           <Fact k="Follow-up">
@@ -618,8 +651,8 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
           <SeeRow
             label="A charge found after departure…"
             note="the post-stay charge: it posts to the bill and the guest is told — no re-entry"
-            onClick={fom ? () => setLate(true) : undefined}
-            reason={fom ? undefined : "A charge after departure needs the FOM"}
+            onClick={fom && !noShow ? () => setLate(true) : undefined}
+            reason={noShow ? "A no-show never stayed — its bill closed with the no-show charge" : fom ? undefined : "A charge after departure needs the FOM"}
           />
           <SeeRow
             label="Issue and send a tax invoice…"
@@ -938,22 +971,28 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
     }
   }, [open]);
   const n = Number.parseFloat(amount);
-  const ok = amount.trim() !== "" && Number.isFinite(n) && desc.trim() !== "";
+  // A charge is a positive amount — a credit on a settled bill is an adjustment note (2026-09-18).
+  const amountOk = amount.trim() !== "" && Number.isFinite(n) && n > 0;
+  const ok = amountOk && desc.trim() !== "";
+  const kind = LATE_CHARGE_TYPES.find((t) => t[0] === type) ?? LATE_CHARGE_TYPES[0];
   const run = useMutation({
     mutationFn: () =>
       postStayCharge(session!, entry.folio!.id, {
         entryId: entry.id,
-        lineType: type,
-        description: desc.trim(),
+        lineType: kind[2],
+        description: kind[3] ? `${kind[3]} · ${desc.trim()}` : desc.trim(),
         amount: n,
         // The instant it was found; the backend dates the line on the hotel's calendar.
         postedAt: new Date().toISOString(),
         isPostStay: true,
       }),
-    onSuccess: () => {
-      toast.success("The charge is posted and the guest is told");
+    onSuccess: (r) => {
+      const total = r?.total != null ? ` — ${money(Number(r.total), "Nu.")} with service charge and GST` : "";
+      toast.success(`The charge is posted${total}`);
+      if (r?.notice?.sent) toast.success(`The notice was emailed to ${r.notice.to}`);
+      else toast.warning("The notice could not be emailed — there is no address on file. Tell them another way.");
       onClose();
-      refresh([["settlement-targets"]]);
+      refresh([["settlement-targets"], ["entry-communications", entry.id]]);
     },
     onError: (e) => toastRefusal(e, "The charge could not be posted"),
   });
@@ -969,13 +1008,21 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
           <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={onClose}>
             Not now
           </Button>
-          <Button state={run.isPending ? "working" : ok ? "default" : "inert"} title={ok ? undefined : "what it was and the amount first"} workingLabel="Posting…" onClick={() => run.mutate()}>
+          <Button
+            state={run.isPending ? "working" : ok ? "default" : "inert"}
+            title={ok ? undefined : amount.trim() !== "" && !amountOk ? "a charge is a positive amount — a credit here is an adjustment note" : "what it was and the amount first"}
+            workingLabel="Posting…"
+            onClick={() => run.mutate()}
+          >
             Post the charge
           </Button>
         </>
       }
     >
-      <p className="sm">A late chit, a minibar count, damage found after the room was turned. It posts to the bill and a notice goes to the guest; the record is not re-opened.</p>
+      <p className="sm">
+        A late chit, a minibar count, damage found after the room was turned. It posts to the bill with its service charge and GST, and a notice is
+        emailed to whoever pays it; the record is not re-opened.
+      </p>
       <div className="form2">
         <div className="field">
           <label>What it is</label>

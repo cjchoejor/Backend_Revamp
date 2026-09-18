@@ -90,6 +90,10 @@ const WORDS: Record<string, string> = {
   "PRE_ARRIVAL_TASK.RESET_FOR_ARRIVAL_VERIFICATION": "Arrival tasks reopened for checking",
   "PRE_ARRIVAL.ACTIVATION_FIRED": "Arrival opened",
   "NO_SHOW_CUTOFF.FIRED": "No-show time passed",
+  "NO_SHOW.DETERMINED": "Recorded as a no-show",
+  "NO_SHOW.AUTO_FINALISED": "Recorded as a no-show — the wait for their written word ran out",
+  "NO_SHOW.DEFERRAL_AWAITING_WRITTEN_CONFIRMATION": "No-show put off — waiting for their written word",
+  "NO_SHOW.REACTIVATED": "No-show set aside — they are still coming",
   "HANDOFF.H1_ACCEPTED": "Front-desk handoff accepted",
   "HANDOFF.H1_FULFILLED": "Front-desk handoff done",
   "HANDOFF.H1_CLOSED": "Front-desk handoff closed",
@@ -101,6 +105,8 @@ const WORDS: Record<string, string> = {
   "STAGE_DWELL.FOM_ESCALATED": "Raised with the FOM for sitting too long",
   "COMMITTED_HOLD.EXPIRY_TRIGGERED": "Block ran out",
   "ENTRY.S3.CANCELLED": "Cancelled",
+  "ENTRY.S4.CANCELLED": "Cancelled",
+  "ENTRY.S5.CANCELLED": "Cancelled",
   "ROOM.DEFICIENCY_REPORTED": "Room fault reported",
   "SPACE.DEFICIENCY_REPORTED": "Hall fault reported",
   "DEFICIENCY.VERIFIED": "Fault confirmed",
@@ -188,6 +194,7 @@ export function traceDetail(ev: TraceEvent): string | null {
   if (amount) bits.push(amount);
   if (typeof p.penalty === "number") bits.push(`charge ${money(p.penalty)}`);
   if (typeof p.netRefund === "number" && p.netRefund > 0) bits.push(`refund ${money(p.netRefund)}`);
+  if (typeof p.refund === "number" && p.refund > 0) bits.push(`owed back ${money(p.refund)}`);
   const how = readableCode(p.acknowledgementMethod ?? p.acceptanceMethod);
   if (how) bits.push(how);
   const said = str("verbatimNote");

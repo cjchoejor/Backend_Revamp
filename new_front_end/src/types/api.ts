@@ -125,6 +125,8 @@ export type SpeculativeHoldSummary = {
   expiresAt: string;
   ttlSeconds: number;
   releasedAt?: string | null;
+  /** Why it ended — `EXPIRY` when it ran out on its own. */
+  releaseReason?: string | null;
   room?: { id: string; roomNumber: string } | null;
 };
 
@@ -256,6 +258,8 @@ export type FolioLineSummary = {
   chargeDate: string;
   stage: string;
   postedAt: string;
+  /** Posted after departure (S9) — a charge the guest's last invoice may not carry. */
+  isPostStay?: boolean;
   nightAuditRecordId?: string | null;
   /** Which room this charge belongs to (2026-08-14, per-room folio breakdown). Null = booking-wide. */
   roomId?: string | null;

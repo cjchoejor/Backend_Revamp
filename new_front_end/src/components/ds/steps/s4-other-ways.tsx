@@ -6,37 +6,24 @@
  * stage the booking is at, otherwise shown inert with the reason.
  *
  *  - Set up (reserving):  cancel-at-s3 (L1; the GM waives) · re-entry to Inquiry (FOM)
- *  - Reserve (frozen):    no cancel route at this step · backflow to Inquiry (FOM)
+ *  - Reserve (frozen):    cancel (FOM; the GM waives) · backflow to Inquiry (FOM)
  *  - Arrival:             cancel (FOM; the GM waives) · no-show after the cut-off (FOM) · backflow to Inquiry (FOM)
  */
 import { reservedThisPass } from "@/lib/desk/workspace";
 import { CancellationFiguresLine } from "./cancel-figures";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { determineNoShow, previewNoShow } from "@/lib/api/no-show";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { apiRequest } from "@/lib/api/client";
 import { backflows } from "@/lib/api/backflows";
 import { cancelEntryAtS3, cancelEntryAtS5, initiateS3ReEntryToS1 } from "@/lib/api/reservation-setup";
-import { fmtDay, fmtStamp } from "@/lib/ds/format";
+import { fmtDay, fmtStamp, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import type { Session } from "@/types/session";
 import { DsDialog, OtherWays, ReasonDialog, SeeRow, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 
-/** `POST /api/entries/:id/no-show` (FOM) — there is no client function for it in lib/api yet. */
-function determineNoShow(
-  session: Session,
-  entryId: string,
-  body: {
-    determinationPath: "SUB_PATH_1";
-    contactAttemptLog: Array<{ channel: string; attemptedAt: string; outcome: string; response?: string }>;
-    decisionReason: string;
-  },
-) {
-  return apiRequest<unknown>(`/api/entries/${entryId}/no-show`, { method: "POST", session, body });
-}
 
 type EntryScalars = { noShowCutoffReachedAt?: string | null };
 
@@ -68,16 +55,9 @@ export function BookingOtherWays({
       rows.push(
         <SeeRow key="cancel" label="Cancel…" note="records the reason; the charge follows the disclosed terms — the rooms and the hold are released" onClick={() => setOpen("cancel")} />,
       );
-    } else if (stage === "S4") {
-      rows.push(
-        <SeeRow
-          key="cancel"
-          label="Cancel…"
-          note="a reserved booking is cancelled at Arrival — the charge follows the disclosed terms"
-          reason="Not at this step — the backend takes the cancellation of a reserved booking once it is at Arrival"
-        />,
-      );
     } else {
+      // A reserved booking is cancelled at Reserve or at Arrival (2026-09-18) — it used to be
+      // Arrival only, a day before the stay, so a booking further out could not be cancelled.
       rows.push(
         <SeeRow
           key="cancel"
@@ -146,7 +126,7 @@ export function BookingOtherWays({
     <>
       <OtherWays>{rows}</OtherWays>
       {open === "cancel" && stage === "S3" ? <CancelAtSetupDialog entry={entry} onClose={() => setOpen(null)} /> : null}
-      {open === "cancel" && stage === "S5" ? <CancelAtArrivalDialog entry={entry} onClose={() => setOpen(null)} /> : null}
+      {open === "cancel" && (stage === "S4" || stage === "S5") ? <CancelAtArrivalDialog entry={entry} onClose={() => setOpen(null)} /> : null}
       {open === "noshow" ? <NoShowDialog entry={entry} cutoffAt={cutoffAt} onClose={() => setOpen(null)} /> : null}
       {open === "amend" ? <AmendDatesDialog entry={entry} onClose={() => setOpen(null)} /> : null}
     </>
@@ -214,6 +194,8 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
 
 function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
   const { session } = useSession();
+  // Reserve (S4) or Arrival (S5): the no-show clock and the arrival tasks exist only at Arrival.
+  const atArrival = entry.currentStage === "S5";
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
@@ -222,7 +204,7 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
   const run = useMutation({
     mutationFn: (reason: string) => cancelEntryAtS5(session!, entry.id, { reason, ...(gm && waive ? { penaltyWaiverRequested: true } : {}) }),
     onSuccess: () => {
-      toast.success("Cancelled — the rooms are released and the no-show clock is stopped");
+      toast.success(atArrival ? "Cancelled — the rooms are released and the no-show clock is stopped" : "Cancelled — the rooms are released");
       onClose();
       after();
     },
@@ -238,7 +220,8 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
       caseLines={[entry.id]}
       lead={
         <>
-          This cannot be undone. The held rooms return to the house; the no-show clock and the open pre-arrival tasks stop;
+          This cannot be undone. The held rooms return to the house;{" "}
+          {atArrival ? "the no-show clock and the open pre-arrival tasks stop;" : "the booking's clocks stop;"}{" "}
           the disclosed cancellation charge is posted{waive ? " — waived by the GM" : ""} and the rest of the advance is
           refunded; the booking closes as cancelled, with its cancellation confirmation under Papers.
         </>
@@ -279,6 +262,13 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
   const [outcome, setOutcome] = useState<string>("NO_ANSWER");
   const [response, setResponse] = useState("");
   const [reason, setReason] = useState("");
+  // What the no-show will charge and give back — the backend's own figures, read before the click.
+  const figures = useQuery({
+    queryKey: ["no-show-preview", entry.id],
+    queryFn: () => previewNoShow(session!, entry.id),
+    enabled: !!session,
+    staleTime: 0,
+  });
   const run = useMutation({
     mutationFn: () =>
       determineNoShow(session!, entry.id, {
@@ -292,7 +282,12 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
         decisionReason: reason.trim(),
       }),
     onSuccess: () => {
-      toast.success("No-show on record — the rooms are released and the no-show charge follows the terms");
+      const f = figures.data;
+      toast.success(
+        f
+          ? `No-show on record — ${money(f.penalty, "Nu.")} kept${f.refund > 0 ? `, ${money(f.refund, "Nu.")} owed back to the guest` : ""}. The rooms are free; the booking waits at Closed to be sealed.`
+          : "No-show on record — the rooms are free; the booking waits at Closed to be sealed",
+      );
       onClose();
       after();
     },
@@ -331,9 +326,23 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
       }
     >
       <p className="sm">
-        The booking closes as a no-show, the rooms go back to the house, and the charge the guest was told for a no-show is
-        taken from the advance. The rule asks for at least one attempt to reach them.
+        The rooms go back to the house at once, the no-show charge is taken from the advance and the rest is owed back.
+        The booking then waits at Closed to be sealed. The rule asks for at least one attempt to reach them.
       </p>
+      {figures.isLoading ? (
+        <p className="meta">Reading what the no-show would charge…</p>
+      ) : figures.data ? (
+        <div className="notice inert" style={{ margin: "8px 0" }}>
+          <span className="sm">
+            Received <b className="money">{money(figures.data.advanceReceived, "Nu.")}</b> · kept{" "}
+            <b className="money">{money(figures.data.penalty, "Nu.")}</b> — {figures.data.explanation}
+            {figures.data.capped ? ` (the rule asks ${money(figures.data.penaltyBeforeCap, "Nu.")} — never more than was received)` : ""} ·
+            owed back <b className="money">{money(figures.data.refund, "Nu.")}</b>
+          </span>
+        </div>
+      ) : (
+        <p className="meta warn-ink">The charge could not be read — the no-show still applies the hotel&rsquo;s rule.</p>
+      )}
       <div className="field">
         <label>Attempts to reach them</label>
         {attempts.length === 0 ? (

@@ -496,8 +496,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
 
   const ready = readyToConfirm && reserveExtras.length === 0;
+  // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
   const sealedOutcome =
-    entry.status === "CANCELLED" ? "Cancelled — a read-only record" : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL" ? "Expired — a read-only record" : "Closed and sealed — a read-only record";
+    entry.status === "CANCELLED"
+      ? "Cancelled — a read-only record"
+      : entry.folio?.state === "NO_SHOW_CLOSED"
+        ? entry.status === "CLOSED"
+          ? "A no-show, closed and sealed — a read-only record"
+          : "A no-show — a read-only record"
+        : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL"
+          ? "Expired — a read-only record"
+          : "Closed and sealed — a read-only record";
 
   const preconds: Precondition[] = sealed
     ? []

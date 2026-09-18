@@ -28,7 +28,7 @@ export const STEP_NEEDS: Record<StepNo, string> = {
   6: "keys & live folio",
   7: "daily charges",
   8: "settle up",
-  9: "sealed",
+  9: "seal the record",
 };
 
 /** The four phases the rail groups the steps under. */
