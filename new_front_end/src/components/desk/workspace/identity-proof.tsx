@@ -345,15 +345,21 @@ export function IdentityProofBlock({
   const guest = entry.guestProfile;
   const isVip = !!guest?.vipTier?.trim();
   const identityVerified = !!guest?.identityVerifiedAt;
-  const [verificationPath, setVerificationPath] = useState<VerificationPath>(isVip ? "VIP" : "RETURNING_VALID");
+  // The paths the guest's profile allows, from the server (2026-09-18, SIG-S6 §756). Every guest
+  // who was not VIP used to default to "Returning — ID valid", the one path that needs no
+  // document, so a first-time guest was verified with nothing on file. Until the answer arrives
+  // the default is the strictest path.
+  const paths = listQuery.data?.verificationPaths ?? null;
+  const suggestedPath: VerificationPath = paths?.suggested ?? (isVip ? "VIP" : "FIRST_TIME");
+  const [verificationPath, setVerificationPath] = useState<VerificationPath>(suggestedPath);
   const [pulledFromFile, setPulledFromFile] = useState(false);
   const autoPullRef = useRef(false);
 
   useEffect(() => {
     // Seed from the RECORDED path when there is one (2026-08-21 — "Make changes" must show the
-    // guest type as it stands, not a default), else VIP for VIP profiles, else returning-valid.
-    setVerificationPath((guest?.identityVerificationPath as VerificationPath | null | undefined) ?? (isVip ? "VIP" : "RETURNING_VALID"));
-  }, [isVip, guest?.id, guest?.identityVerificationPath]);
+    // guest type as it stands, not a default), else the path the guest's profile points to.
+    setVerificationPath((guest?.identityVerificationPath as VerificationPath | null | undefined) ?? suggestedPath);
+  }, [suggestedPath, guest?.id, guest?.identityVerificationPath]);
 
   // Which room each guest sits in per the S2 composition. The composition stores COUNTS per
   // room (never who), so this re-derives the seating with the SAME deterministic algorithm
@@ -927,14 +933,31 @@ export function IdentityProofBlock({
                   </span>
                 )}
               </label>
-              {/* Defaults to the VIP path for VIP profiles but is never locked (operator
-                  ruling 2026-08-11 — the dropdown stays freely selectable). */}
+              {/* Defaults to the path the guest's profile points to. A path the profile does
+                  not allow is listed but locked, with the server's reason — a first-time guest
+                  cannot be "returning", nor anyone VIP without a tier (2026-09-18). */}
               <select value={verificationPath} onChange={(e) => setVerificationPath(e.target.value as VerificationPath)}>
-                <option value="FIRST_TIME">First-time guest</option>
-                <option value="RETURNING_VALID">Returning — ID valid</option>
-                <option value="RETURNING_EXPIRED">Returning — ID expired</option>
-                <option value="VIP">VIP path</option>
+                {(
+                  [
+                    ["FIRST_TIME", "First-time guest"],
+                    ["RETURNING_VALID", "Returning — ID valid"],
+                    ["RETURNING_EXPIRED", "Returning — ID expired"],
+                    ["VIP", "VIP path"],
+                  ] as Array<[VerificationPath, string]>
+                ).map(([code, word]) => {
+                  const refusedWhy = paths && !paths.allowed.includes(code) ? (paths.refused[code] ?? "does not apply to this guest") : null;
+                  return (
+                    <option key={code} value={code} disabled={!!refusedWhy && code !== verificationPath} title={refusedWhy ?? undefined}>
+                      {refusedWhy ? `${word} — not for this guest` : word}
+                    </option>
+                  );
+                })}
               </select>
+              {paths && !paths.allowed.includes(verificationPath) && (
+                <div className="sm" style={{ color: "var(--warn)", marginTop: 4 }}>
+                  {paths.refused[verificationPath] ?? "This path does not apply to this guest"}
+                </div>
+              )}
             </div>
           ) : (
             <span />

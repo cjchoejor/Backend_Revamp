@@ -994,7 +994,11 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const last = emailEvents[0];
   const lastPayload = (last?.payload ?? null) as { actualRecipient?: string; intendedRecipient?: string; redirected?: boolean; reason?: string; message?: string } | null;
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
-  const failed = !sent && emailEvents.length > 0;
+  // A guest with no email on file is not a failed send — there was nobody to send to, and the
+  // voucher is shared at the desk or by phone. It read as "could not be sent — have the email
+  // settings fixed" beside the raw code GUEST_HAS_NO_EMAIL (2026-09-18).
+  const noAddress = (t: TraceItem) => (t.payload as { reason?: string } | null)?.reason === "GUEST_HAS_NO_EMAIL";
+  const failed = !sent && emailEvents.some((t) => !noAddress(t));
   const voucherComm = latestDispatched(comms, "CONFIRMATION_VOUCHER", since);
   const answered = voucherComm?.acknowledgementStatus === "RECEIVED";
   const afterReserve = !["S3", "S4"].includes(entry.currentStage);
@@ -1019,8 +1023,12 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
       Emailed to {lastPayload?.actualRecipient ?? lastPayload?.intendedRecipient ?? guestEmail} · {fmtStamp(last.timestamp, tz)}
       {lastPayload?.redirected ? <span className="meta"> · a test redirect{lastPayload.intendedRecipient ? `, meant for ${lastPayload.intendedRecipient}` : ""}</span> : null}
     </span>
+  ) : last?.eventType.endsWith(".SKIPPED") && lastPayload?.reason === "GUEST_HAS_NO_EMAIL" ? (
+    <span className="meta">No email on file — share the voucher at the desk or by phone (Preview → PDF), then record their answer below</span>
   ) : last?.eventType.endsWith(".SKIPPED") ? (
-    <span className="warn-ink">Not emailed — {lastPayload?.reason ?? "no reason recorded"}</span>
+    <span className="warn-ink">
+      Not emailed — {lastPayload?.reason === "EMAIL_DISABLE" ? "email sending is turned off on this system" : (lastPayload?.reason ?? "no reason recorded")}
+    </span>
   ) : last ? (
     <span className="warn-ink">The email failed — {lastPayload?.message ?? "no message recorded"}</span>
   ) : guestEmail ? (

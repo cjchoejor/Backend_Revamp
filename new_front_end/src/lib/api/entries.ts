@@ -128,6 +128,9 @@ export type TimerRecordSummary = {
   id: string;
   timerType: string;
   timerCode: string;
+  /** What the clock is on — e.g. "HandoffRecord" + the handoff's id. */
+  entityType?: string | null;
+  entityId?: string | null;
   stageContext: string | null;
   firesAt: string;
   warningAt: string | null;

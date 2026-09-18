@@ -448,8 +448,10 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
   const fom = atLeast(session?.actorLevel, "L2");
   const folio = entry.folio!;
   // Last-morning charges belong to the check-out day — never a stay night, so never sealed by the
-  // night audit. The server normalises the date to the hotel's calendar.
-  const checkoutDate = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
+  // night audit. The server normalises the date to the hotel's calendar. The EFFECTIVE check-out:
+  // after an early departure the guest left on that day, and dating their last charges on the
+  // booked check-out put them days after the stay ended (2026-09-18).
+  const checkoutDate = effectiveCheckOutIso(entry);
   const dateForPosting = checkoutDate ?? hotelDay?.today ?? null;
   const rooms = useMemo(() => distinctRooms(entry), [entry]);
   const spaces = useMemo(() => chargeTargetSpaces(entry.spaceAllocations), [entry.spaceAllocations]);

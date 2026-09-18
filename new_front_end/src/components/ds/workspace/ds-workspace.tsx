@@ -89,7 +89,7 @@ import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay } from "@/components/ds/steps/s7-stay";
 import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
-import { atLeast } from "@/components/ds/steps/kit";
+import { atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
@@ -107,6 +107,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const pathname = usePathname() ?? "";
   const params = useSearchParams();
   const queryClient = useQueryClient();
+  const refreshEntry = useRefreshEntry(entryId);
   const hotelToday = useHotelDay()?.today ?? null;
   const clock = useHotelClock(30_000);
 
@@ -199,7 +200,29 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [closeOpen, setCloseOpen] = useState(false);
   const [moneyOpen, setMoneyOpen] = useState(false);
   const [guestPresent, setGuestPresent] = useState(false);
-  const [registrationConfirmed, setRegistrationConfirmed] = useState(false);
+  // The registration tick survives a refresh until check-in records it, like the key checklist
+  // (2026-09-18) — a reload mid check-in used to clear it silently and lock "Check in" again.
+  const registrationStoreKey = `desk:registration:${entryId}`;
+  const [registrationConfirmed, setRegistrationConfirmedState] = useState(false);
+  useEffect(() => {
+    try {
+      setRegistrationConfirmedState(localStorage.getItem(registrationStoreKey) === "1");
+    } catch {
+      /* non-fatal */
+    }
+  }, [registrationStoreKey]);
+  const setRegistrationConfirmed = useMemo(
+    () => (v: boolean) => {
+      setRegistrationConfirmedState(v);
+      try {
+        if (v) localStorage.setItem(registrationStoreKey, "1");
+        else localStorage.removeItem(registrationStoreKey);
+      } catch {
+        /* non-fatal */
+      }
+    },
+    [registrationStoreKey],
+  );
   const [nightAuditOk, setNightAuditOk] = useState(false);
   const [parkOpen, setParkOpen] = useState(false);
   const [parkReason, setParkReason] = useState("");
@@ -263,11 +286,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   }, [keyStoreKey, issuedKeyRooms]);
 
   /* ---- the moves ---- */
+  // A move starts and stops clocks, opens handoffs and sends papers, so everything the steps
+  // read is refreshed — the side timers kept showing the last step's clocks (e.g. "Arrival window
+  // opens · overdue" after Arrival had opened) until their 30-second poll.
   const afterMove = (updated: EntryDetail) => {
     queryClient.setQueryData(["entry", updated.id], updated);
-    void queryClient.invalidateQueries({ queryKey: ["entry", updated.id] });
-    void queryClient.invalidateQueries({ queryKey: ["entries"] });
-    void queryClient.invalidateQueries({ queryKey: ["desk-bookings"] });
+    refreshEntry([["expected-arrival", updated.id], ["competing-claims", updated.id], ["identity-proofs", updated.id]]);
   };
   const fail = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
 
@@ -322,6 +346,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setSelected(7);
       try {
         localStorage.removeItem(keyStoreKey);
+        localStorage.removeItem(registrationStoreKey);
       } catch {
         /* non-fatal */
       }
@@ -1226,6 +1251,7 @@ function PrefStrip({ entry, onDetails }: { entry: EntryDetail; onDetails: () => 
   const { session } = useSession();
   const queryClient = useQueryClient();
   const current = entry.inquiry?.notes?.trim() ?? "";
+  const sealed = entry.status !== "ACTIVE" && entry.status !== "PARKED";
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(current);
   const save = useMutation({
@@ -1270,18 +1296,21 @@ function PrefStrip({ entry, onDetails }: { entry: EntryDetail; onDetails: () => 
               Preference · <b>{current}</b>
             </span>
           ) : (
-            <span className="meta">No preference recorded yet</span>
+            <span className="meta">{sealed ? "No preference was recorded" : "No preference recorded yet"}</span>
           )}
-          <Button
-            kind="quiet"
-            compact
-            onClick={() => {
-              setDraft(current);
-              setEditing(true);
-            }}
-          >
-            Edit
-          </Button>
+          {/* A sealed booking's preference is part of the record (2026-09-18). */}
+          {sealed ? null : (
+            <Button
+              kind="quiet"
+              compact
+              onClick={() => {
+                setDraft(current);
+                setEditing(true);
+              }}
+            >
+              Edit
+            </Button>
+          )}
           <span style={{ flex: 1 }} />
           <Button kind="secondary" compact onClick={onDetails}>
             Booking details
@@ -1311,9 +1340,20 @@ function SidePanel({
   tz: string;
   onHistory: () => void;
 }) {
+  // The housekeeping (H2) and kitchen (H3) handoffs share one clock code; name them apart by
+  // the handoff each clock is on, or both read "Housekeeping to accept".
+  const handoffTypeById = new Map((entry.handoffs ?? []).map((h) => [h.id, h.handoffType]));
+  const labelOf = (t: TimerRecordSummary) => {
+    if (t.timerCode === "H2_H3_ACCEPTANCE_W25" && t.entityId) {
+      const kind = handoffTypeById.get(t.entityId);
+      if (kind === "H3") return "Kitchen to accept";
+      if (kind === "H2") return "Housekeeping to accept";
+    }
+    return timerLabel(t);
+  };
   const running = timers
     .filter((t) => t.status === "SCHEDULED")
-    .map((t) => ({ t, label: timerLabel(t) }))
+    .map((t) => ({ t, label: labelOf(t) }))
     .filter((x): x is { t: (typeof timers)[number]; label: string } => !!x.label)
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
     .slice(0, 8);

@@ -107,9 +107,11 @@ export async function runNightAudit(session: Session, operatingDate: string) {
   });
 }
 
+/** Has the night been audited — the status alone, readable by the whole desk (the full record,
+ *  with the hotel's lines for the night, is the FOM's). Null when the night has no audit yet. */
 export async function getNightAuditRecord(session: Session, operatingDateYmd: string) {
   return apiRequest<NightAuditRecord | null>(
-    `/api/night-audit/operating-date/${encodeURIComponent(operatingDateYmd)}`,
+    `/api/night-audit/operating-date/${encodeURIComponent(operatingDateYmd)}/status`,
     { session },
   ).catch((e) => {
     if (e instanceof ApiError && e.status === 404) return null;

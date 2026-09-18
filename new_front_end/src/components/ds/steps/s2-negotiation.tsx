@@ -204,7 +204,11 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   /* ---- validity: whole days from now, capped at 30 and at check-in (the server re-checks) ---- */
   const [validDays, setValidDays] = useState("2");
   const checkInMs = entry.checkInDate ? new Date(entry.checkInDate).getTime() : Number.NaN;
-  const maxValidDays = Number.isFinite(checkInMs) ? Math.max(1, Math.min(30, Math.floor((checkInMs - clock.now) / DAY_MS))) : 30;
+  // Mirrors resolveQuotationValidity: the check-in caps the window only while it is still ahead.
+  // A same-day booking's check-in (stored at the day's start) has already passed, and capping at
+  // it showed a validity that had ended before the quote existed (2026-09-18).
+  const checkInAhead = Number.isFinite(checkInMs) && checkInMs > clock.now;
+  const maxValidDays = checkInAhead ? Math.max(1, Math.min(30, Math.floor((checkInMs - clock.now) / DAY_MS))) : 30;
   useEffect(() => {
     const n = Number(validDays);
     if (Number.isFinite(n) && n > maxValidDays) setValidDays(String(maxValidDays));
@@ -217,7 +221,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   const validityEnd =
     validDaysNumber == null
       ? null
-      : Number.isFinite(checkInMs)
+      : checkInAhead
         ? Math.min(clock.now + validDaysNumber * DAY_MS, checkInMs)
         : clock.now + validDaysNumber * DAY_MS;
 
@@ -419,7 +423,8 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
                 `1 to ${maxValidDays} days`
               ) : (
                 <>
-                  at most {plural(maxValidDays, "day")} · ends before check-in → <b>{fmtDateTime(validityEnd, tz)}</b>
+                  at most {plural(maxValidDays, "day")}
+                  {checkInAhead ? " · ends before check-in" : ""} → <b>{fmtDateTime(validityEnd, tz)}</b>
                 </>
               )}
               {working ? ` · used when the quote is generated again` : ""}

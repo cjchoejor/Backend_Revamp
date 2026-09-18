@@ -73,7 +73,16 @@ export type IdentityProofsResponse = {
   returningGuest: ReturningGuestDocument | null;
   /** OCR/QR suggestions per photo (2026-08-18) — see OcrSuggestion; unapplied READY ones render under the row. */
   suggestions?: OcrSuggestion[];
+  /** Which check-in verification paths the guest's profile allows (2026-09-18, SIG-S6 §756): the
+   *  one it points to, every one it allows, and why the others are refused. Null without a profile. */
+  verificationPaths?: {
+    suggested: VerificationPathCode;
+    allowed: VerificationPathCode[];
+    refused: Partial<Record<VerificationPathCode, string>>;
+  } | null;
 };
+
+export type VerificationPathCode = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";
 
 /** Upsert one party member's typed details (document type + number, name, DOB, gender). */
 export async function saveGuestIdentityDetail(

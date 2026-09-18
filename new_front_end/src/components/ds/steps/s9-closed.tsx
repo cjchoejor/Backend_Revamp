@@ -397,12 +397,17 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                   <Button kind="quiet" compact icon="file" onClick={() => session && openInvoicePdf(session, inv.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}>
                     PDF
                   </Button>
-                  {inv.state === "DRAFT" ? (
+                  {/* Only a tax invoice is sent after the stay. A proforma or an interim bill
+                      that never went out is history — sending a pre-arrival bill to a guest who
+                      has already paid and left would only confuse them (2026-09-18). */}
+                  {inv.state === "DRAFT" && inv.invoiceType === "FINAL" ? (
                     <Live>
                       <Button compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate(inv.id)}>
                         Send it
                       </Button>
                     </Live>
+                  ) : inv.state === "DRAFT" ? (
+                    <span className="meta">never sent — not needed after the stay</span>
                   ) : null}
                 </div>
               ))}
