@@ -32,10 +32,63 @@ export const INVENTORY_RELEASED_STATUSES: EntryStatus[] = [
   EntryStatus.CLOSED,
 ];
 
-/** Prisma `where` fragment restricting to entries that still hold their rooms. */
+/**
+ * Prisma `where` fragment restricting to entries that still hold their rooms.
+ *
+ * A recorded no-show lets go too (2026-09-18): the booking waits at the Closed step, still open,
+ * for its money to be closed — but the guest never came, so its rooms are sellable for the nights
+ * it had booked from the moment the no-show is determined (SIG-S5 §543). By status alone it read
+ * as a live reservation and kept blocking tonight's room from a walk-in.
+ */
 export const stillHoldsInventory = {
   status: { notIn: INVENTORY_RELEASED_STATUSES },
+  noShowDetermination: { is: null },
 } satisfies Prisma.EntryWhereInput;
+
+/**
+ * Prisma `where` fragment for a Reservation that still speaks for its booking (2026-09-18): the
+ * booking's CURRENT one.
+ *
+ * A reservation is one immutable row per pass, and a re-entry leaves the old pass's row in place
+ * as history. The availability queries matched every row whose dates overlapped, so a booking
+ * that changed its dates kept blocking its rooms on the OLD dates for ever — found live: a family
+ * that moved its stay from 25–29 Sep to arrive at once still held room 204 for 25–29 Sep, long
+ * after that pass was replaced. Pair with `keepStandingReservations` for the window between a
+ * re-entry and the next confirmation.
+ */
+export const currentReservationOnly = {
+  currentForEntry: { isNot: null },
+} satisfies Prisma.ReservationWhereInput;
+
+/**
+ * Of the booking's current reservations, keep those that still stand (2026-09-18).
+ *
+ * Between a re-entry and the next confirmation, the current reservation belongs to the pass the
+ * re-entry closed. Whether its rooms stay blocked depends on what the re-entry did with the hold:
+ * a new-dates re-entry (to Inquiry) releases it — the old dates and rooms are given up — while a
+ * rate or billing-model revision after confirmation retains it, and those rooms stay committed.
+ * So a reservation from a closed pass blocks only while the booking's hold is still live.
+ * Segments are sealed only by re-entries, so an open pass's reservation always stands.
+ */
+export async function keepStandingReservations<T extends { entryId: string; segmentId: string }>(
+  db: PrismaClient | Prisma.TransactionClient,
+  rows: T[],
+): Promise<T[]> {
+  if (rows.length === 0) return rows;
+  const sealed = await db.segment.findMany({
+    where: { id: { in: Array.from(new Set(rows.map((r) => r.segmentId))) }, sealedAt: { not: null } },
+    select: { id: true },
+  });
+  if (sealed.length === 0) return rows;
+  const sealedIds = new Set(sealed.map((s) => s.id));
+  const askEntries = Array.from(new Set(rows.filter((r) => sealedIds.has(r.segmentId)).map((r) => r.entryId)));
+  const liveHolds = await db.committedHold.findMany({
+    where: { entryId: { in: askEntries }, state: { in: ["PLACED", "CONFIRMED"] } },
+    select: { entryId: true },
+  });
+  const holdLive = new Set(liveHolds.map((h) => h.entryId));
+  return rows.filter((r) => !sealedIds.has(r.segmentId) || holdLive.has(r.entryId));
+}
 
 /** The select needed by `reservedEntrySpans` / `roomsClaimedByReservedEntry`. */
 export const reservedEntryRoomsSelect = {

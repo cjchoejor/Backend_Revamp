@@ -5,6 +5,8 @@ import {
   reservedEntryRoomsSelect,
   reservedEntrySpans,
   stillHoldsInventory,
+  currentReservationOnly,
+  keepStandingReservations,
   reservedClaimEndDate,
 } from "./entry-inventory-claim.js";
 
@@ -81,9 +83,12 @@ export async function findRoomBookingConflicts(
         // S4 has none until pre-arrival, and its rooms live on the committed hold until then.
         // `roomsClaimedByReservedEntry` resolves both, and the room filter happens below.
         entry: { ...stillHoldsInventory },
+        // Only the booking's current reservation — an older pass's row is history (2026-09-18).
+        ...currentReservationOnly,
       },
       select: {
         entryId: true,
+        segmentId: true,
         frozenCheckInDate: true,
         frozenCheckOutDate: true,
         entry: {
@@ -160,7 +165,7 @@ export async function findRoomBookingConflicts(
   // A reservation blocks every room its entry claims — but only the ones we asked about.
   const reservedKeys = new Set<string>();
   const heldKeys = new Set<string>();
-  for (const r of reservations) {
+  for (const r of await keepStandingReservations(db, reservations)) {
     // Early departure (2026-08-22): the claim ends the day the guest actually left, so a shortened
     // stay frees its unstayed nights at once. A claim that ends before the asked window is no
     // conflict at all (the where-clause above still selects it by the frozen dates).

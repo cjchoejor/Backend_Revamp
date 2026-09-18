@@ -121,7 +121,7 @@ export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actor
   // windows (quote / proforma / voucher / pre-arrival) are moot there.
   await cancelEntryTimersByCode(prisma, {
     entryId,
-    timerCodes: ["CHECKOUT_TIME_W26", "ACKNOWLEDGEMENT_WINDOW_W22"],
+    timerCodes: ["CHECKOUT_TIME_W26", "ACKNOWLEDGEMENT_WINDOW_W22", "QUOTATION_VALIDITY_W15"],
     cancelledBy: actorId,
     cancelledReason: "REENTRY_S8_TO_S2",
   });

@@ -94,7 +94,7 @@ export async function roomChangeReEntryToS1(
   // same pattern as runBackflow.
   await cancelEntryTimersByCode(prisma, {
     entryId: input.entryId,
-    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22"],
+    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22", "QUOTATION_VALIDITY_W15"],
     cancelledBy: actorId,
     cancelledReason: "REENTRY_S7_ROOM_CHANGE",
   });

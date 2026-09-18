@@ -1,11 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
-import { EntryStatus, FolioState, Stage } from "@prisma/client";
+import { Stage } from "@prisma/client";
 import type { TimerEngine } from "../lib/timer-engine.js";
 import { NotFoundError } from "../lib/errors.js";
-import { allocateReadableId } from "../lib/readable-id.js";
-import { releaseRoomOnNoShowTerminalTx } from "../lib/release-room-on-no-show.js";
-import { toDecimal } from "../lib/money.js";
-import { releaseEntryRoomsToFree } from "../lib/room-claim-state.js";
+import { cancelTimerJobsBestEffort, computeNoShowFigures, finaliseNoShowTx, sendNoShowNoticeBestEffort } from "../services/application/no-show-service.js";
 
 export async function runNoShowCutoffWorker(
   prisma: PrismaClient,
@@ -61,99 +58,17 @@ export async function runNoShowCutoffWorker(
     return { skipped: false, entryId, phase: "CUTOFF_REACHED" } as const;
   }
 
-  // AWAITING_WRITTEN_CONFIRMATION expiry (Sub-path 2b auto-finalisation). This is governed by prior FOM deferral.
-  const folio = entry.folio;
-  if (!folio) throw new NotFoundError("Folio");
+  // AWAITING_WRITTEN_CONFIRMATION expiry (Sub-path 2b auto-finalisation). This is governed by prior
+  // FOM deferral. Booked by the SAME finalisation as the FOM's determination (2026-09-18) — the
+  // two used to close a no-show differently, and neither posted the charge or reached the Closed
+  // step.
+  if (!entry.folio) throw new NotFoundError("Folio");
+  if (!entry.reservation) return { skipped: true, reason: "NO_RESERVATION" } as const;
+  const figures = await computeNoShowFigures(prisma, entryId);
 
-  const terms = (entry.reservation?.frozenCancellationTerms as { sameDayPenaltyAmount?: number } | null) ?? {};
-  const penaltyRaw = terms.sameDayPenaltyAmount ?? 0;
-
-  const agg = await prisma.paymentRecord.aggregate({
-    where: { folioId: folio.id, paymentDirection: "IN" },
-    _sum: { amount: true },
-  });
-  // Decimal-safe: aggregate → Decimal, min/sub in Decimal, coerce to number at boundary. Prevents
-  // wrongly firing / suppressing no-show at boundary sums where float drift crossed the threshold.
-  const advanceTotalDec = toDecimal(agg._sum.amount);
-  const penaltyRawDec = toDecimal(penaltyRaw);
-  const penaltyDec = penaltyRawDec.lte(advanceTotalDec) ? penaltyRawDec : advanceTotalDec;
-  const netDec = advanceTotalDec.sub(penaltyDec);
-  const advanceTotal = Number(advanceTotalDec.toFixed(2));
-  const penalty = Number(penaltyDec.toFixed(2));
-  const net = Number(netDec.toFixed(2));
-
-  await prisma.$transaction(async (tx) => {
-    const noShowId = await allocateReadableId(tx, "NO_SHOW" as const);
-    await tx.noShowDeterminationRecord.create({
-      data: {
-        id: noShowId,
-        entryId,
-        determinationPath: "SUB_PATH_2B_AUTO",
-        fomActorId: "SYSTEM",
-        contactAttemptLog: [],
-        decisionReason: "AWAITING_WRITTEN_CONFIRMATION timer expired — auto-finalised",
-        otaNotificationRequired: entry.otaSource,
-        otaNotificationStatus: entry.otaSource ? "OPEN" : null,
-        createdBy: "SYSTEM",
-      },
-    });
-    await tx.folio.update({
-      where: { id: folio.id },
-      data: {
-        state: FolioState.NO_SHOW_CLOSED,
-        noShowPenaltyAmount: penalty,
-        noShowAdvancePaymentAmount: advanceTotal,
-        noShowNetPosition: net,
-        noShowFomDetermination: "SYSTEM",
-        closedAt: now,
-        closedBy: "SYSTEM",
-      },
-    });
-    await tx.entry.update({
-      where: { id: entryId },
-      data: {
-        currentStage: Stage.TERMINAL,
-        status: EntryStatus.ACTIVE,
-        closedAt: now,
-        closedBy: "SYSTEM",
-        awaitingWrittenConfirmationActive: false,
-        version: { increment: 1 },
-      },
-    });
-
-    // Release every room this booking held. Prior to 2026-07-25 the auto-finalise path
-    // left assigned rooms stuck in CONFIRMED/OCCUPIED long after the entry went TERMINAL —
-    // Policy 26 (committed-hold placement) then refused any future booking on those rooms.
-    await releaseEntryRoomsToFree(tx, {
-      entryId,
-      actorId: "SYSTEM",
-      reason: "NO_SHOW_AUTO_FINALISED",
-      now,
-    });
-
-    await tx.traceEvent.create({
-      data: {
-        eventType: "NO_SHOW.AUTO_FINALISED",
-        actorId: "SYSTEM",
-        actorLevel: "SYSTEM",
-        entityType: "Entry",
-        entityId: entryId,
-        operation: "TRANSITION",
-        timestamp: now,
-        stageContext: Stage.S5,
-        inquiryId: entry.inquiryId,
-        entryId,
-        payload: { entryId, penalty, advanceTotal, net },
-        createdBy: "SYSTEM",
-      },
-    });
-
-    // SIG-S5 §1.5 (no-show #5) — `releaseEntryRoomsToFree` above already returned the rooms to
-    // FREE; this closes out the CommittedHold record, which that helper does not touch.
-    await releaseRoomOnNoShowTerminalTx(tx, { entryId, committedHold: entry.committedHold, actorId: "SYSTEM", now });
-
-    // The clock firing is marked FIRED even when the job carries no record id — jobs armed
-    // before 2026-09-18 never did, so the record stayed SCHEDULED and read as overdue.
+  const { timerJobIds } = await prisma.$transaction(async (tx) => {
+    // The clock firing is marked FIRED first — the finalisation cancels whatever is still
+    // SCHEDULED, and this one did fire.
     await tx.timerRecord.updateMany({
       where:
         typeof input.timerRecordId === "string"
@@ -161,19 +76,18 @@ export async function runNoShowCutoffWorker(
           : { entryId, timerCode: input.timerType, status: "SCHEDULED", dueAt: { lte: new Date(now.getTime() + 60_000) } },
       data: { status: "FIRED", firedAt: now },
     });
+    return finaliseNoShowTx(tx, {
+      entryId,
+      actorId: "SYSTEM",
+      path: "SUB_PATH_2B_AUTO",
+      contactAttemptLog: [],
+      decisionReason: "The wait for written confirmation ran out — no-show finalised automatically",
+      figures,
+      now,
+    });
   });
-
-  // Best-effort cancel any scheduled no-show timers after closure.
-  const timers = await prisma.timerRecord.findMany({
-    where: { entryId, status: "SCHEDULED", timerCode: { in: ["NO_SHOW_CUTOFF_W5", "AWAITING_WRITTEN_CONFIRMATION_W5"] } },
-  });
-  for (const t of timers) {
-    if (t.pgBossJobId) await engine.cancel(t.pgBossJobId);
-  }
-  await prisma.timerRecord.updateMany({
-    where: { id: { in: timers.map((t) => t.id) }, status: "SCHEDULED" },
-    data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "No-show finalised" },
-  });
+  await cancelTimerJobsBestEffort(timerJobIds);
+  await sendNoShowNoticeBestEffort(prisma, entryId, "SYSTEM", figures);
 
   return { skipped: false, entryId, phase: "AUTO_FINALISED" } as const;
 }

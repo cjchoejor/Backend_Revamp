@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { PolicyGateBlockedError } from "../../lib/errors.js";
-import { stillHoldsInventory } from "../../lib/entry-inventory-claim.js";
+import { currentReservationOnly, stillHoldsInventory } from "../../lib/entry-inventory-claim.js";
 
 /**
  * Atlas Cat 06 group 04 (§5.2.4) — P13 multi-booking acknowledgement.
@@ -40,6 +40,8 @@ export async function enforceMultiBookingAcknowledgedIfOverlappingReservationExi
       frozenCheckInDate: { lt: input.checkOutDate },
       frozenCheckOutDate: { gt: input.checkInDate },
       entry: { guestProfileId: input.guestProfileId, ...stillHoldsInventory },
+      // The guest's other booking as it stands, not a pass it replaced (2026-09-18).
+      ...currentReservationOnly,
     } as any,
     orderBy: { confirmedAt: "desc" },
   });

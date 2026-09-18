@@ -140,6 +140,78 @@ export async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryI
   if (ratio >= 1) await write(100);
 }
 
+/**
+ * The service charge and GST a charge carries, posted as its two companion lines (2026-09-18) —
+ * shared by the in-stay charge and the post-stay charge, so a minibar found after departure is
+ * taxed exactly as the same minibar during the stay. The post-stay one had carried no tax at all.
+ *
+ * Service charge first, THEN GST on (charge + service charge) — the hotel-wide compound rule in
+ * compute-stay-charges.ts and on every guest-facing email (S2 quote, S3 PI, S4 confirmation, S8
+ * final invoice). Both rates come from ConfigurationEntry (admin-editable on /admin/financial).
+ * Decimal-safe: `Math.round(x*100)/100` on floats compounds through (subTotal + serviceCharge) ×
+ * gstRate and mismatches guest-facing quotes vs the invoice.
+ */
+export async function postChargeTaxCompanionsTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    folioId: string;
+    baseAmount: number;
+    description: string;
+    currency: string;
+    chargeDate: Date;
+    stage: Stage;
+    actorId: string;
+    billingModel: string;
+    roomId?: string | null;
+    spaceId?: string | null;
+    /** A charge posted after the stay (S9): its companions carry the same flag and instant. */
+    postStay?: { postedAt: Date };
+  },
+): Promise<{ serviceCharge: Prisma.Decimal; gst: Prisma.Decimal; serviceChargeRate: number; gstRate: number }> {
+  const { gstRate, serviceChargeRate } = await resolveChargeRates(tx as unknown as PrismaClient);
+  const subTotalDec = toDecimal(input.baseAmount);
+  const common = {
+    folioId: input.folioId,
+    currency: input.currency,
+    chargeDate: input.chargeDate,
+    stage: input.stage,
+    postedBy: input.actorId,
+    billingModel: input.billingModel,
+    roomId: input.roomId ?? null,
+    spaceId: input.spaceId ?? null,
+    ...(input.postStay ? { isPostStay: true, postedAt: input.postStay.postedAt } : {}),
+  };
+
+  const serviceCharge = serviceChargeRate > 0 ? round2(mulMoney(subTotalDec, serviceChargeRate)) : ZERO;
+  if (serviceCharge.gt(0)) {
+    await tx.folioLine.create({
+      data: {
+        id: await allocateFolioLineId(tx, input.folioId),
+        ...common,
+        lineType: FolioLineType.SERVICE,
+        description: serviceChargeLineDescription(serviceChargeRate, input.description),
+        amount: serviceCharge,
+      },
+    });
+  }
+
+  // GST is compound — applied to (subTotal + serviceCharge), kept in Decimal through the base.
+  const gstBase = subTotalDec.add(serviceCharge);
+  const gst = gstRate > 0 ? round2(mulMoney(gstBase, gstRate)) : ZERO;
+  if (gst.gt(0)) {
+    await tx.folioLine.create({
+      data: {
+        id: await allocateFolioLineId(tx, input.folioId),
+        ...common,
+        lineType: FolioLineType.OTHER,
+        description: gstLineDescription(gstRate, input.description),
+        amount: gst,
+      },
+    });
+  }
+  return { serviceCharge, gst, serviceChargeRate, gstRate };
+}
+
 export async function postCharge(
   prisma: PrismaClient,
   folioId: string,
@@ -307,63 +379,19 @@ export async function postCharge(
     });
 
     if (input.lineType !== FolioLineType.CREDIT_NOTE && input.amount > 0) {
-      // Apply service charge first, THEN GST on (charge + service charge). Matches the
-      // hotel-wide breakdown rule encoded in compute-stay-charges.ts and the breakdown shown
-      // on every guest-facing email (S2 quote, S3 PI, S4 confirmation, S8 final invoice).
-      // Both rates come from ConfigurationEntry so the L4 admin can change them on /admin/financial.
-      const { gstRate, serviceChargeRate } = await resolveChargeRates(tx as unknown as PrismaClient);
-      const lineCurrency = resolvedLineCurrency;
-      // Decimal-safe tax math. `Math.round(x*100)/100` on floats compounds through
-      // (subTotal + serviceCharge) * gstRate and mismatches guest-facing quotes vs invoice.
-      const subTotalDec = toDecimal(input.amount);
-
-      const serviceCharge = serviceChargeRate > 0
-        ? round2(mulMoney(subTotalDec, serviceChargeRate))
-        : ZERO;
-      if (serviceCharge.gt(0)) {
-        await tx.folioLine.create({
-          data: {
-            id: await allocateFolioLineId(tx, folioId),
-            folioId,
-            lineType: FolioLineType.SERVICE,
-            description: serviceChargeLineDescription(serviceChargeRate, input.description),
-            amount: serviceCharge,
-            currency: lineCurrency,
-            chargeDate,
-            stage: Stage.S7,
-            postedBy: actorId,
-            // Service charge inherits the primary line's billing model — same guest event.
-            billingModel: primaryBillingModel,
-            roomId: chargeRoomId,
-
-            spaceId: chargeSpaceId,
-          },
-        });
-      }
-
-      // GST is compound — applied to (subTotal + serviceCharge). Kept in Decimal to preserve
-      // precision through the compound base.
-      const gstBase = subTotalDec.add(serviceCharge);
-      const gst = gstRate > 0 ? round2(mulMoney(gstBase, gstRate)) : ZERO;
-      if (gst.gt(0)) {
-        await tx.folioLine.create({
-          data: {
-            id: await allocateFolioLineId(tx, folioId),
-            folioId,
-            lineType: FolioLineType.OTHER,
-            description: gstLineDescription(gstRate, input.description),
-            amount: gst,
-            currency: lineCurrency,
-            chargeDate,
-            stage: Stage.S7,
-            postedBy: actorId,
-            billingModel: primaryBillingModel,
-            roomId: chargeRoomId,
-
-            spaceId: chargeSpaceId,
-          },
-        });
-      }
+      await postChargeTaxCompanionsTx(tx, {
+        folioId,
+        baseAmount: input.amount,
+        description: input.description,
+        currency: resolvedLineCurrency,
+        chargeDate,
+        stage: Stage.S7,
+        actorId,
+        // Service charge and GST inherit the primary line's billing model — same guest event.
+        billingModel: primaryBillingModel,
+        roomId: chargeRoomId,
+        spaceId: chargeSpaceId,
+      });
     }
 
     await recomputeFolioOutstandingBalance(tx, folioId);

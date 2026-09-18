@@ -132,8 +132,11 @@ async function runBackflow(
   // ADVANCE_PROMISE_DEADLINE_W38 likewise (2026-08-07): the guest's payment promise answered
   // THIS segment's proforma — the plan is segment-scoped by setAt, so its clock dies with the
   // segment (the W38 worker also skips stale-segment fires as defence in depth).
+  // QUOTATION_VALIDITY_W15 likewise (2026-09-18): the sealed pass's quotes are history, and their
+  // validity kept counting down on the desk beside the new pass's quote — two "Quote valid" clocks
+  // on one booking. A re-quote in the new pass arms its own.
   const timerCodesToCancel = Array.from(
-    new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22", "ADVANCE_PROMISE_DEADLINE_W38"]),
+    new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22", "ADVANCE_PROMISE_DEADLINE_W38", "QUOTATION_VALIDITY_W15"]),
   );
   await cancelEntryTimersByCode(prisma, {
     entryId: entry.id,

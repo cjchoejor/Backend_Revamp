@@ -7,6 +7,7 @@ import { requireActiveMode } from "../../lib/mode-registry-runtime.js";
 import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 import { round2, toDecimal } from "../../lib/money.js";
+import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
 import { effectiveCheckInDate, hotelTodayUtc, listNightYmdsUtc, nightsBetweenUtc, utcDateOnly, ymdUtc } from "../../lib/stay-dates.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -85,6 +86,11 @@ export interface EarlyDepartureRoomFigure {
   unstayedNights: number;
   /** NET per-night room figure the audit posts for this row (frozenSubtotal ÷ nights, or the legacy frozenRate). */
   perNightSubtotal: number;
+  /**
+   * The ROOM part of that figure — room and extra bed, the row's meal plan taken out (2026-09-18).
+   * The fee is priced on this: a guest who leaves early is not charged for dinners never served.
+   */
+  perNightRoomSubtotal: number;
   /** NET room charges the unstayed nights would have posted. */
   forgoneSubtotal: number;
   /** Tax-inclusive counterpart. */
@@ -255,9 +261,12 @@ export async function computeEarlyDepartureFigures(
   const { gstRate, serviceChargeRate } = await resolveChargeRates(prisma);
   const taxFactor = new Prisma.Decimal(1).plus(serviceChargeRate).mul(new Prisma.Decimal(1).plus(gstRate));
   const fallbackRate = toDecimal(entry.reservation?.frozenRate ?? 0);
+  // Each row's meals, in the proportion the frozen terms priced them — the fee leaves them out.
+  const composition = frozenCompositionByRoom([entry.reservation?.frozenCommercialTerms ?? null]);
   const rooms: EarlyDepartureRoomFigure[] = [];
   let forgoneSub = new Prisma.Decimal(0);
   let forgoneTot = new Prisma.Decimal(0);
+  let forgoneRoomOnlySub = new Prisma.Decimal(0);
   for (const a of entry.roomAssignments) {
     const rowStart = a.startDate ?? checkIn;
     const rowEnd = a.endDate ?? bookedCheckOut;
@@ -269,6 +278,7 @@ export async function computeEarlyDepartureFigures(
     const shortened = rowEnd.getTime() > departure.getTime() && totalNights > 0;
     const legacyFlatRate = a.frozenSubtotal == null;
     let perNightSubtotal: Prisma.Decimal;
+    let perNightRoomSubtotal: Prisma.Decimal;
     let newFrozenSubtotal: Prisma.Decimal | null = null;
     let newFrozenTotal: Prisma.Decimal | null = null;
     let rowForgoneSub: Prisma.Decimal;
@@ -277,6 +287,8 @@ export async function computeEarlyDepartureFigures(
       const sub = toDecimal(a.frozenSubtotal);
       const tot = a.frozenTotal != null ? toDecimal(a.frozenTotal) : round2(sub.mul(taxFactor));
       perNightSubtotal = sub.div(totalNights);
+      const split = splitFrozenRow({ roomId: a.roomId, rowSubtotal: a.frozenSubtotal, rowNights: totalNights, composition: composition.get(a.roomId) });
+      perNightRoomSubtotal = split ? split.accommodation.div(totalNights) : perNightSubtotal;
       const scale = new Prisma.Decimal(sleptNights).div(totalNights);
       newFrozenSubtotal = round2(sub.mul(scale));
       newFrozenTotal = round2(tot.mul(scale));
@@ -284,12 +296,15 @@ export async function computeEarlyDepartureFigures(
       rowForgoneTot = round2(tot.minus(newFrozenTotal));
     } else {
       perNightSubtotal = a.isFoc ? new Prisma.Decimal(0) : fallbackRate;
+      // The legacy flat rate is the room rate alone — there is no meal in it to take out.
+      perNightRoomSubtotal = perNightSubtotal;
       rowForgoneSub = round2(perNightSubtotal.mul(unstayedNights));
       rowForgoneTot = a.isFoc ? new Prisma.Decimal(0) : round2(rowForgoneSub.mul(taxFactor));
     }
     if (shortened) {
       forgoneSub = forgoneSub.plus(rowForgoneSub);
       forgoneTot = forgoneTot.plus(rowForgoneTot);
+      forgoneRoomOnlySub = forgoneRoomOnlySub.plus(round2(perNightRoomSubtotal.mul(unstayedNights)));
     }
     rooms.push({
       assignmentId: a.id,
@@ -301,6 +316,7 @@ export async function computeEarlyDepartureFigures(
       sleptNights,
       unstayedNights: shortened ? unstayedNights : 0,
       perNightSubtotal: money(perNightSubtotal),
+      perNightRoomSubtotal: money(perNightRoomSubtotal),
       forgoneSubtotal: shortened ? money(rowForgoneSub) : 0,
       forgoneTotal: shortened ? money(rowForgoneTot) : 0,
       newFrozenSubtotal: shortened && newFrozenSubtotal ? money(newFrozenSubtotal) : null,
@@ -332,8 +348,9 @@ export async function computeEarlyDepartureFigures(
     explanation = `Flat early-departure fee of ${feeAmount.toFixed(2)} (net).`;
     charges = `for leaving ${nightsWord(unstayedNightsTotal)} early`;
   } else if (rule.basis === "PERCENT_OF_UNSTAYED") {
-    feeAmount = round2(forgoneSub.mul(pct));
-    explanation = `${rule.percent}% of the ${unstayedNightsTotal} unstayed night(s) room charges (${forgoneSub.toFixed(2)} net).`;
+    // The rooms the stay gives up, not their meals (2026-09-18).
+    feeAmount = round2(forgoneRoomOnlySub.mul(pct));
+    explanation = `${rule.percent}% of the ${unstayedNightsTotal} unstayed night(s) room charges (${forgoneRoomOnlySub.toFixed(2)} net, meals left out).`;
     charges = `${rule.percent}% of ${nightsWord(unstayedNightsTotal)} not stayed`;
   } else if (rule.basis === "UNSTAYED_NIGHTS") {
     let sum = new Prisma.Decimal(0);
@@ -342,7 +359,9 @@ export async function computeEarlyDepartureFigures(
       if (!r.shortened) continue;
       const n = Math.min(rule.nights, r.unstayedNights);
       chargedNights = Math.max(chargedNights, n);
-      sum = sum.plus(new Prisma.Decimal(r.perNightSubtotal).mul(n));
+      // The room's night, not its meal plan (2026-09-18) — the family on dinner-inclusive rates was
+      // charged a dinner nobody would eat.
+      sum = sum.plus(new Prisma.Decimal(r.perNightRoomSubtotal).mul(n));
     }
     feeAmount = round2(sum.mul(pct));
     charges =

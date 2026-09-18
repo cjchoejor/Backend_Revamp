@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { CommissionDueStatus, EntryStatus, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
+import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readRoomInspectionStanding } from "../../lib/room-inspection-standing.js";
@@ -11,7 +11,8 @@ import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-fr
 import { schedulePaymentFollowUpW8IfOutstanding } from "../../lib/schedule-payment-followup-w8.js";
 import { enforceWriteOffConstraints } from "../../policies/13-billing-model/write-off-policy-constraints.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
-import { renderFinalInvoiceEmail, renderInterimInvoiceEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
+import { renderFinalInvoiceEmail, renderInterimInvoiceEmail, renderPostStayChargeEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
+import { postChargeTaxCompanionsTx } from "./s7-folio-lines-service.js";
 import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
@@ -1007,21 +1008,26 @@ async function processNoShowS9IfNeeded(db: DbClient, entryId: string, actorId: s
       orderBy: { createdAt: "desc" },
     });
     if (!existing) {
+      // Issued at the seal when the desk did not issue and send one first. It prints the ledger —
+      // the no-show charge posted at the decision — and is recorded as handed over, not emailed
+      // (`dispatchedTo` stays empty, which is what the desk reads as "not emailed").
+      const invoiceId = await allocateReadableId(db, "INVOICE" as const);
       await db.invoice.create({
         data: {
           // Readable INV id like every other invoice (2026-09-18) — the schema's uuid default
           // is only a backstop.
-          id: await allocateReadableId(db, "INVOICE" as const),
+          id: invoiceId,
           folioId: entry.folio.id,
           entryId,
           invoiceType: "FINAL",
           state: "DISPATCHED",
           templateKey: "final-v1",
+          totalAmount: penalty,
           issuedAt: new Date(),
           issuedBy: actorId,
           dispatchedAt: new Date(),
           dispatchedBy: actorId,
-          metadata: { noShowDeterminationId: determinationId, penaltyAmount: penalty } as any,
+          metadata: { noShowDeterminationId: determinationId, penaltyAmount: penalty, issuedAtNoShowClosure: true } as any,
         },
       });
     }
@@ -1061,10 +1067,14 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
   enforceEntryAtS9ForS9Closure({ currentStage: entry.currentStage });
   if (!entry.folio) throw new NotFoundError("Folio");
 
+  // A no-show never stayed (2026-09-18): there is no room to inspect, and its money is closed by
+  // the no-show disposition below (SIG-S9 Route 2 — penalty invoice, refund on record) rather
+  // than matched against a stay's invoices. Both checks refused every no-show outright.
+  const noShow = entry.folio.state === FolioState.NO_SHOW_CLOSED;
   await ensureNoOpenDisputes(prisma, entryId);
   await ensureInvoicesDispatched(prisma, entryId, entry.folio.id);
-  await ensurePaymentsMatched(prisma, entryId, entry.folio.id);
-  await ensureInspectionResolved(prisma, entryId);
+  if (!noShow) await ensurePaymentsMatched(prisma, entryId, entry.folio.id);
+  if (!noShow) await ensureInspectionResolved(prisma, entryId);
   await ensureH5NotOpen(prisma, entryId);
   await ensureEquipmentReturnResolved(prisma, entryId);
   await ensureApartmentDepositResolved(prisma, { id: entryId, useType: entry.useType }, entry.folio.id);
@@ -1207,10 +1217,13 @@ export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: str
     }
   };
 
+  // A no-show never stayed — no inspection, and its money closes through the no-show
+  // disposition, not a payment match (mirrors closeEntryAtS9).
+  const noShow = folio?.state === FolioState.NO_SHOW_CLOSED;
   await run("DISPUTES", "No dispute left open", () => ensureNoOpenDisputes(prisma, entryId));
   if (folio) {
     await run("INVOICES", "Every invoice sent — none left as a draft", () => ensureInvoicesDispatched(prisma, entryId, folio.id));
-    if (folio.billingModel === "GOVERNMENT" || folio.billingModel === "DIRECT_BILL") {
+    if (!noShow && (folio.billingModel === "GOVERNMENT" || folio.billingModel === "DIRECT_BILL")) {
       await run(
         "PAYMENTS",
         folio.billingModel === "GOVERNMENT" ? "The government invoice's payment tracked" : "Every payment matched to an invoice",
@@ -1235,7 +1248,9 @@ export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: str
   } else {
     checks.push({ code: "FOLIO", label: "A folio for the booking", met: false });
   }
-  await run("INSPECTION", "The room inspected, or its inspection window closed", () => ensureInspectionResolved(prisma, entryId));
+  if (!noShow) {
+    await run("INSPECTION", "The room inspected, or its inspection window closed", () => ensureInspectionResolved(prisma, entryId));
+  }
   await run("H5", "The after-stay handoff done", () => ensureH5NotOpen(prisma, entryId));
   if (await prisma.equipmentAllocation.findFirst({ where: { entryId }, select: { id: true } })) {
     await run("EQUIPMENT", "Lent equipment back", () => ensureEquipmentReturnResolved(prisma, entryId));
@@ -1285,6 +1300,26 @@ export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: str
   };
 }
 
+/** What a charge found after departure can be (2026-09-18) — the folio line types a guest's own
+ *  purchase or damage takes. A credit is an adjustment note (not built), never a negative charge. */
+const POST_STAY_LINE_TYPES = new Set<string>([FolioLineType.F_AND_B, FolioLineType.SERVICE, FolioLineType.OTHER]);
+
+/**
+ * A charge found after the guest left (SIG-S9 §6 / §8.3) — FOM. Additive: the record is not
+ * re-opened. Four things it used to get wrong (2026-09-18, found by posting one from the desk):
+ *
+ *  - **A negative amount was accepted** and quietly credited a settled bill. Refused: a credit
+ *    after settlement is an adjustment note.
+ *  - **It carried no service charge or GST.** It now posts the same companions an in-stay charge
+ *    does (`postChargeTaxCompanionsTx`), so a minibar is taxed the same whichever side of
+ *    check-out it is found.
+ *  - **A settled bill stayed "settled" with money owing.** A charge that leaves money owed moves
+ *    the folio to OUTSTANDING — and on a booking already sealed, arms the payment follow-up the
+ *    seal would have armed (W8).
+ *  - **"The guest is told" told no one.** The notice is emailed now, to whoever pays this kind of
+ *    charge (the guest for their own purchases; the agency or company when it pays), and the
+ *    notice record says whether it went.
+ */
 export async function postStayCharge(
   prisma: PrismaClient,
   folioId: string,
@@ -1294,6 +1329,14 @@ export async function postStayCharge(
   if (input.isPostStay !== true) throw new ValidationError("isPostStay must be true for S9 post-stay charge");
   const postedAt = new Date(input.postedAt);
   if (Number.isNaN(postedAt.getTime())) throw new ValidationError("postedAt must be a valid ISO date");
+  if (!input.description?.trim()) throw new ValidationError("Say what the charge was");
+  const amount = toDecimal(input.amount);
+  if (!Number.isFinite(Number(input.amount)) || !amount.gt(0)) {
+    throw new ValidationError("A charge after the stay is a positive amount — a credit on a settled bill is an adjustment note");
+  }
+  if (!POST_STAY_LINE_TYPES.has(input.lineType)) {
+    throw new ValidationError("A charge after the stay is food and drink, a service, or other — not a room night or a credit");
+  }
 
   const entry = await prisma.entry.findUnique({ where: { id: input.entryId } });
   if (!entry) throw new NotFoundError("Entry");
@@ -1307,20 +1350,28 @@ export async function postStayCharge(
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
   if (folio.entryId !== input.entryId) throw new ValidationError("Folio does not belong to this entry");
+  // A no-show's folio closed at the decision, its charge set there (2026-09-18) — the guest never
+  // stayed, so there is nothing after the stay to charge for.
+  if (folio.state === FolioState.NO_SHOW_CLOSED) {
+    throw new ValidationError("This booking is a no-show — its folio closed with the no-show charge, and nothing more is posted to it");
+  }
 
-  const created = await prisma.$transaction(async (tx) => {
-    const billingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType as any);
+  const currency = input.currency?.trim() ? input.currency.trim() : "BTN";
+  const description = input.description.trim();
+  const chargeDate = hotelTodayUtc(postedAt);
+  const result = await prisma.$transaction(async (tx) => {
+    const billingModel = await resolveBillingModelForNewLine(tx, folioId, input.lineType as FolioLineType);
     const line = await tx.folioLine.create({
       data: {
         id: await allocateFolioLineId(tx, folioId),
         folioId,
-        lineType: input.lineType as any,
-        description: input.description,
-        amount: input.amount,
-        currency: input.currency?.trim() ? input.currency.trim() : "BTN",
+        lineType: input.lineType as FolioLineType,
+        description,
+        amount,
+        currency,
         // The posting INSTANT stays on postedAt; the day it belongs to is the hotel's (a
         // 3am post-stay charge is today's, though its UTC date is still yesterday).
-        chargeDate: hotelTodayUtc(postedAt),
+        chargeDate,
         stage: Stage.S9,
         postedBy: actorId,
         isPostStay: true,
@@ -1328,6 +1379,30 @@ export async function postStayCharge(
         billingModel,
       },
     });
+    const taxes = await postChargeTaxCompanionsTx(tx, {
+      folioId,
+      baseAmount: Number(amount.toFixed(2)),
+      description,
+      currency,
+      chargeDate,
+      stage: Stage.S9,
+      actorId,
+      billingModel,
+      postStay: { postedAt },
+    });
+    await recomputeFolioOutstandingBalance(tx, folioId);
+    const after = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { state: true, outstandingBalance: true } });
+    // Money owed again: the bill is open for follow-up, whatever it read before.
+    let folioState = after.state;
+    if (toDecimal(after.outstandingBalance).gt(0) && (after.state === FolioState.SETTLED || after.state === FolioState.WRITTEN_OFF)) {
+      await tx.folio.update({ where: { id: folioId }, data: { state: FolioState.OUTSTANDING } });
+      folioState = FolioState.OUTSTANDING;
+    }
+    // A booking already sealed will not pass the seal again — arm its follow-up here.
+    if (entry.status === EntryStatus.CLOSED) {
+      await schedulePaymentFollowUpW8IfOutstanding(tx, { entryId: input.entryId, folioId, folioState, outstandingBalance: after.outstandingBalance });
+    }
+    const total = round2(amount.add(taxes.serviceCharge).add(taxes.gst));
     const noticeCommId = await allocateReadableId(tx, "COMMUNICATION" as const, postedAt);
     await tx.communicationRecord.create({
       data: {
@@ -1335,13 +1410,148 @@ export async function postStayCharge(
         entryId: input.entryId,
         channel: "EMAIL",
         commType: "POST_STAY_CHARGE_NOTICE",
-        payload: { folioId, folioLineId: line.id, amount: input.amount, currency: input.currency ?? "BTN" },
+        payload: {
+          folioId,
+          folioLineId: line.id,
+          description,
+          amount: amount.toFixed(2),
+          serviceCharge: taxes.serviceCharge.toFixed(2),
+          gst: taxes.gst.toFixed(2),
+          total: total.toFixed(2),
+          currency,
+        },
         createdBy: actorId,
       },
     });
-    await recomputeFolioOutstandingBalance(tx, folioId);
-    return line;
+    return {
+      line,
+      billingModel,
+      noticeCommId,
+      taxes,
+      total,
+      balanceNow: toDecimal(after.outstandingBalance),
+      folioState,
+    };
   });
-  return created;
+
+  // The notice goes out after the commit — an SMTP failure never undoes the charge.
+  const notice = await sendPostStayChargeNoticeBestEffort(prisma, {
+    entryId: input.entryId,
+    actorId,
+    commId: result.noticeCommId,
+    billingModel: result.billingModel,
+    description,
+    currency,
+    charge: Number(amount.toFixed(2)),
+    serviceCharge: Number(result.taxes.serviceCharge.toFixed(2)),
+    serviceChargeRate: result.taxes.serviceChargeRate,
+    gst: Number(result.taxes.gst.toFixed(2)),
+    gstRate: result.taxes.gstRate,
+    total: Number(result.total.toFixed(2)),
+    balanceNow: Number(result.balanceNow.toFixed(2)),
+  });
+
+  return {
+    ...result.line,
+    serviceCharge: result.taxes.serviceCharge.toFixed(2),
+    gst: result.taxes.gst.toFixed(2),
+    total: result.total.toFixed(2),
+    balanceNow: result.balanceNow.toFixed(2),
+    folioState: result.folioState,
+    notice,
+  };
+}
+
+/**
+ * Email the post-stay charge notice and record whether it went (2026-09-18). The guest pays their
+ * own purchases; on an agency or company booking a line the party pays goes to the party (the
+ * invoice-recipient rule).
+ */
+async function sendPostStayChargeNoticeBestEffort(
+  prisma: PrismaClient,
+  d: {
+    entryId: string;
+    actorId: string;
+    commId: string;
+    billingModel: string;
+    description: string;
+    currency: string;
+    charge: number;
+    serviceCharge: number;
+    serviceChargeRate: number;
+    gst: number;
+    gstRate: number;
+    total: number;
+    balanceNow: number;
+  },
+): Promise<{ sent: boolean; to: string | null; reason: string | null }> {
+  try {
+    const entry = await prisma.entry.findUnique({
+      where: { id: d.entryId },
+      select: {
+        id: true,
+        inquiryId: true,
+        checkInDate: true,
+        checkOutDate: true,
+        actualCheckOutDate: true,
+        contactPersonName: true,
+        guestProfile: { select: { firstName: true, lastName: true, email: true } },
+      },
+    });
+    if (!entry) return { sent: false, to: null, reason: "ENTRY_NOT_FOUND" };
+    const guestName =
+      [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() || entry.contactPersonName?.trim() || "Guest";
+    const guestPays = d.billingModel === "GUEST_PAY";
+    const recipient = guestPays
+      ? entry.guestProfile?.email?.trim()
+        ? { to: entry.guestProfile.email.trim(), greetName: guestName, skipReason: null }
+        : { to: null, greetName: guestName, skipReason: "GUEST_HAS_NO_EMAIL" }
+      : await resolveInvoiceRecipient(prisma, d.entryId);
+    const content = renderPostStayChargeEmail({
+      recipientName: recipient.greetName,
+      bookingRef: entry.id,
+      checkInDate: entry.checkInDate ?? new Date(),
+      checkOutDate: entry.actualCheckOutDate ?? entry.checkOutDate ?? new Date(),
+      description: d.description,
+      currency: d.currency,
+      charge: d.charge,
+      serviceCharge: d.serviceCharge,
+      serviceChargeRate: d.serviceChargeRate,
+      gst: d.gst,
+      gstRate: d.gstRate,
+      total: d.total,
+      balanceNow: d.balanceNow,
+    });
+    await dispatchStageEmailBestEffort(
+      {
+        prisma,
+        entryId: d.entryId,
+        actorId: d.actorId,
+        inquiryId: entry.inquiryId,
+        guestEmail: recipient.to,
+        skipReason: recipient.skipReason,
+        stage: Stage.S9,
+        eventTypePrefix: "POST_STAY_CHARGE_EMAIL",
+      },
+      content,
+    );
+    const sentTrace = await prisma.traceEvent.findFirst({
+      where: { entryId: d.entryId, eventType: { startsWith: "POST_STAY_CHARGE_EMAIL." } },
+      orderBy: { timestamp: "desc" },
+      select: { eventType: true, payload: true },
+    });
+    const sent = sentTrace?.eventType === "POST_STAY_CHARGE_EMAIL.SENT";
+    const reason = sent ? null : ((sentTrace?.payload as { reason?: string; message?: string } | null)?.reason ?? (sentTrace?.payload as { message?: string } | null)?.message ?? recipient.skipReason ?? "NOT_SENT");
+    await prisma.communicationRecord.update({
+      where: { id: d.commId },
+      data: {
+        sendStatus: sent ? "DISPATCHED" : "NOT_SENT",
+        contentSummary: sent ? `Post-stay charge notice emailed to ${recipient.to}` : `Post-stay charge notice not emailed (${reason})`,
+      },
+    });
+    return { sent, to: recipient.to, reason };
+  } catch (e) {
+    return { sent: false, to: null, reason: e instanceof Error ? e.message : String(e) };
+  }
 }
 

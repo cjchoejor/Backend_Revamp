@@ -13,6 +13,8 @@ import {
   reservedEntryRoomsSelect,
   reservedEntrySpans,
   stillHoldsInventory,
+  currentReservationOnly,
+  keepStandingReservations,
   reservedClaimEndDate,
 } from "../../lib/entry-inventory-claim.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
@@ -118,11 +120,15 @@ export async function runAvailabilityEngineForEntry(
         NOT: { entryId: entry.id },
         // A cancelled / expired / checked-out booking has let its rooms go.
         entry: { ...stillHoldsInventory },
+        // Only the booking's current reservation — an older pass's row is history (2026-09-18).
+        // Mirrors room-booking-conflicts; keep the two in step.
+        ...currentReservationOnly,
       },
       select: {
         frozenCheckInDate: true,
         frozenCheckOutDate: true,
         entryId: true,
+        segmentId: true,
         entry: {
           select: {
             ...contactSelect,
@@ -276,7 +282,7 @@ export async function runAvailabilityEngineForEntry(
   // Per-ROOM nights since 2026-09-11 (`reservedEntrySpans`): each room blocks the nights its
   // own assignment row covers, so a room released mid-stay becomes sellable for the rest of the
   // booking. A room whose row carries no dates still claims the whole stay — see the helper.
-  const reservedBlockages = reservations.flatMap((r) =>
+  const reservedBlockages = (await keepStandingReservations(prisma, reservations)).flatMap((r) =>
     reservedEntrySpans(r.entry, {
       checkIn: r.frozenCheckInDate,
       checkOut: reservedClaimEndDate(r.frozenCheckOutDate, r.entry),

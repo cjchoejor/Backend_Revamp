@@ -30,9 +30,15 @@ export async function runCommittedHoldExpiryWorker(prisma: PrismaClient, input: 
       now,
     });
 
-    if (typeof input.timerRecordId === "string") {
-      await tx.timerRecord.updateMany({ where: { id: input.timerRecordId, status: "SCHEDULED" }, data: { status: "FIRED", firedAt: now } });
-    }
+    // The clock that fired is marked FIRED (2026-09-18). The hold's job never carried the record's
+    // id, so the record stayed SCHEDULED after the hold ran out and the rail read it as overdue.
+    await tx.timerRecord.updateMany({
+      where:
+        typeof input.timerRecordId === "string"
+          ? { id: input.timerRecordId, status: "SCHEDULED" }
+          : { timerCode: "COMMITTED_HOLD_EXPIRY_W3", entityType: "CommittedHold", entityId: committedHoldId, status: "SCHEDULED" },
+      data: { status: "FIRED", firedAt: now },
+    });
 
     await tx.traceEvent.create({
       data: {

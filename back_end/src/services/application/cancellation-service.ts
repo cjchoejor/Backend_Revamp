@@ -3,7 +3,8 @@ import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { ActorLevel, EntryStatus, FolioLineType, FolioState, HoldState, InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
-import { enforceEntryAtS3ForS3CancellationRoute, enforceEntryAtS5ForS5CancellationRoute, enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { enforceEntryAtS3ForS3CancellationRoute, enforceEntryAtS5ForS5CancellationRoute,
+  enforceEntryConfirmedForPreArrivalCancellation, enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import {
   capCancellationPenaltyAtAdvancePayment,
   computePostCheckInEarlyDeparturePenalty,
@@ -100,8 +101,8 @@ export async function previewCancellation(prisma: PrismaClient, entryId: string,
     include: { folio: true, reservation: true, cancellationDisclosure: true },
   });
   if (!entry) throw new NotFoundError("Entry");
-  if (entry.currentStage !== Stage.S3 && entry.currentStage !== Stage.S5) {
-    throw new ValidationError("A booking is cancelled at Set up or at Arrival — this one is at neither");
+  if (entry.currentStage !== Stage.S3 && entry.currentStage !== Stage.S4 && entry.currentStage !== Stage.S5) {
+    throw new ValidationError("A booking is cancelled at Set up, Reserve or Arrival — this one is at none of them");
   }
   if (!entry.folio) throw new ValidationError("No folio on the booking — nothing to charge or refund");
   const now = new Date();
@@ -417,8 +418,10 @@ export async function cancelEntryAtS5(
     throw new StateTransitionError("Cancellation is only supported for ACTIVE entries");
   }
 
-  enforceEntryAtS5ForS5CancellationRoute({ currentStage: entry.currentStage });
+  enforceEntryConfirmedForPreArrivalCancellation({ currentStage: entry.currentStage });
   enforceReservationPresentForS5CancellationPolicy35({ reservation: entry.reservation });
+  // Reserve (S4) or Arrival (S5) — the step the booking is cancelled at, for its lines and trace.
+  const cancelStage = entry.currentStage === Stage.S4 ? Stage.S4 : Stage.S5;
   enforceFolioPresentForS5CancellationPolicy35({ folio: entry.folio });
 
   const folio = entry.folio!;
@@ -475,7 +478,7 @@ export async function cancelEntryAtS5(
           amount: penalty,
           currency: "BTN",
           chargeDate: now,
-          stage: Stage.S5,
+          stage: cancelStage,
           postedBy: actorId,
           billingModel: penaltyBillingModel,
         },
@@ -492,7 +495,7 @@ export async function cancelEntryAtS5(
           amount: netRefund,
           paymentDirection: "OUT",
           recordedBy: actorId,
-          stage: Stage.S5,
+          stage: cancelStage,
           notes: "Refund obligation after pre-arrival cancellation",
         },
       });
@@ -500,14 +503,14 @@ export async function cancelEntryAtS5(
 
     await tx.traceEvent.create({
       data: {
-        eventType: "ENTRY.S5.CANCELLED",
+        eventType: `ENTRY.${cancelStage}.CANCELLED`,
         actorId,
         actorLevel: traceActorLevel,
         entityType: "Entry",
         entityId: entryId,
         operation: "UPDATE",
         timestamp: now,
-        stageContext: Stage.S5,
+        stageContext: cancelStage,
         inquiryId: entry.inquiryId,
         entryId,
         payload: {
@@ -542,7 +545,7 @@ export async function cancelEntryAtS5(
       for (const roomId of heldRoomIds) {
         // Only the flags this booking owns (2026-09-18): cancelling an October booking set a room
         // FREE while another guest slept in it tonight. See releaseRoomClaimIfOwnedTx.
-        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: "S5_PRE_ARRIVAL_CANCELLATION", now });
+        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: `${cancelStage}_PRE_ARRIVAL_CANCELLATION`, now });
       }
       await tx.committedHold.update({
         where: { id: hold.id },
@@ -550,7 +553,7 @@ export async function cancelEntryAtS5(
           state: HoldState.RELEASED,
           releasedAt: now,
           releasedBy: actorId,
-          releaseReason: "S5_PRE_ARRIVAL_CANCELLATION",
+          releaseReason: `${cancelStage}_PRE_ARRIVAL_CANCELLATION`,
         },
       });
     }
@@ -558,7 +561,7 @@ export async function cancelEntryAtS5(
     if (timers.length > 0) {
       await tx.timerRecord.updateMany({
         where: { id: { in: timers.map((t) => t.id) }, status: "SCHEDULED" },
-        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "S5 entry cancelled" } as any,
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: `${cancelStage} entry cancelled` } as any,
       });
     }
 

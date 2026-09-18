@@ -26,7 +26,7 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
   // acknowledgement) — cancel before the tx, same pattern as runBackflow.
   await cancelEntryTimersByCode(prisma, {
     entryId,
-    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22"],
+    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22", "QUOTATION_VALIDITY_W15"],
     cancelledBy: actor.actorId,
     cancelledReason: "REENTRY_S3_TO_S2",
   });
@@ -113,7 +113,7 @@ export async function initiateS3ToS1Backflow(prisma: PrismaClient, entryId: stri
   // Prior-segment reply windows are moot in the new segment (2026-08-02) — see S3→S2 above.
   await cancelEntryTimersByCode(prisma, {
     entryId,
-    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22"],
+    timerCodes: ["ACKNOWLEDGEMENT_WINDOW_W22", "QUOTATION_VALIDITY_W15"],
     cancelledBy: actor.actorId,
     cancelledReason: "REENTRY_S3_TO_S1",
   });

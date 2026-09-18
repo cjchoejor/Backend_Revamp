@@ -78,12 +78,20 @@ export function frozenCompositionByRoom(
       const roomId = typeof r.roomId === "string" ? r.roomId : null;
       if (!roomId || out.has(roomId)) continue;
       const nights = Math.max(1, Math.round(n(r.nights) || 1));
-      const meals = n(r.mealsSubtotal);
+      const mealsRaw = n(r.mealsSubtotal);
       // `roomSubtotal` is the modern field; older rows carry only `roomRate` (per night).
       const room = r.roomSubtotal != null ? n(r.roomSubtotal) : n(r.roomRate) * nights;
       const bed = n(r.extraBedSubtotal);
-      const subtotal = r.subtotal != null ? n(r.subtotal) : room + bed + meals;
-      out.set(roomId, { nights, subtotal, accommodation: room + bed, meals });
+      const parts = room + bed + mealsRaw;
+      const subtotal = r.subtotal != null ? n(r.subtotal) : parts;
+      // A discounted quote stores its per-room `subtotal` AFTER the booking discount but the
+      // component figures BEFORE it (the document prints the negotiated rates and shows the
+      // concession once). Read raw, the whole discount landed on the room and the meal plan kept
+      // its full price: a family on dinner-inclusive rates with 10% off was split 1,741.50 room +
+      // 1,485 meals a night instead of 1,890 + 1,336.50 (2026-09-18). The discount falls on every
+      // part alike, so the parts are scaled to the subtotal — exactly 1 when there was none.
+      const ratio = r.subtotal != null && parts > 0 ? subtotal / parts : 1;
+      out.set(roomId, { nights, subtotal, accommodation: (room + bed) * ratio, meals: mealsRaw * ratio });
     }
   }
   return out;

@@ -20,6 +20,7 @@ import type { CancellationFigures } from "./cancellation-confirmation-pdf-servic
 /** The three cancellation traces, newest-first preference order is by timestamp. */
 const CANCELLATION_EVENT_TYPES = [
   "ENTRY.S3.CANCELLED",
+  "ENTRY.S4.CANCELLED",
   "ENTRY.S5.CANCELLED",
   "ENTRY.S7.EARLY_DEPARTURE_CANCELLED",
 ];

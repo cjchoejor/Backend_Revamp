@@ -533,6 +533,149 @@ ${detailsTable([
 }
 
 // =============================================================================
+// S5 — Recorded as a no-show (2026-09-18)
+// =============================================================================
+
+export type NoShowNoticeEmailData = {
+  recipientName: string;
+  /** The traveller, named when the notice goes to the agency or company that booked. */
+  guestName: string | null;
+  bookingRef: string;
+  checkInDate: Date;
+  checkOutDate: Date;
+  currency: string;
+  advanceReceived: number;
+  kept: number;
+  /** What the kept amount is, in words — "one night's room, taxes included". */
+  keptWhat: string;
+  owedBack: number;
+};
+
+/**
+ * The no-show notice (SIG-S5 §6.5 step 5: "dispatch no-show notification to guest/agent"). It
+ * was never sent — the booking closed as a no-show and the guest learnt of it, and of the money
+ * kept from their advance, only if someone at the desk thought to write.
+ */
+export function renderNoShowNoticeEmail(d: NoShowNoticeEmailData): StageEmailContent {
+  const subject = COMMON_SUBJECT;
+  const stay = `${formatDate(d.checkInDate)} to ${formatDate(d.checkOutDate)}`;
+  const forGuest = d.guestName ? ` for ${d.guestName}` : "";
+  const keptLine =
+    d.kept > 0
+      ? `As set out in the terms given at booking, we keep ${formatMoney(d.kept, d.currency)} — ${d.keptWhat} — from the advance of ${formatMoney(d.advanceReceived, d.currency)}.`
+      : "Nothing is kept from the advance.";
+  const backLine =
+    d.owedBack > 0
+      ? `The rest, ${formatMoney(d.owedBack, d.currency)}, will be returned — reply to tell us how you would like it paid back.`
+      : "";
+  const text = [
+    "Booking recorded as a no-show",
+    "",
+    `Dear ${d.recipientName},`,
+    "",
+    `We held the booking${forGuest} (${d.bookingRef}, ${stay}) for the arrival day, but no one arrived and we could not reach you, so it has been recorded as a no-show and the rooms released.`,
+    "",
+    keptLine,
+    ...(backLine ? [backLine] : []),
+    "",
+    "If this is a mistake, please reply straight away.",
+    "",
+    "— The Legphel Hotel team",
+  ].join("\n");
+  const rows = [
+    tableRow("Booking", d.bookingRef),
+    tableRow("Stay booked", stay, true),
+    ...(d.guestName ? [tableRow("Guest", d.guestName)] : []),
+    tableRow("Advance received", formatMoney(d.advanceReceived, d.currency), true),
+    tableRow("Kept", `${formatMoney(d.kept, d.currency)}${d.kept > 0 ? ` — ${d.keptWhat}` : ""}`),
+    tableRow("To be returned", formatMoney(d.owedBack, d.currency), true, true),
+  ];
+  const html = htmlShell(`
+${emailHeading("Booking recorded as a no-show")}
+<p>Dear ${escapeHtml(d.recipientName)},</p>
+<p>We held the booking${escapeHtml(forGuest)} for the arrival day, but no one arrived and we could not reach you, so it has been recorded as a no-show and the rooms released.</p>
+${detailsTable(rows)}
+<p>${escapeHtml(keptLine)}${backLine ? ` ${escapeHtml(backLine)}` : ""}</p>
+<p>If this is a mistake, please reply straight away.</p>
+<p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
+`);
+  return { subject, text, html };
+}
+
+// =============================================================================
+// S9 — A charge found after the stay (2026-09-18)
+// =============================================================================
+
+export type PostStayChargeEmailData = {
+  recipientName: string;
+  bookingRef: string;
+  checkInDate: Date;
+  checkOutDate: Date;
+  description: string;
+  currency: string;
+  charge: number;
+  serviceCharge: number;
+  serviceChargeRate: number;
+  gst: number;
+  gstRate: number;
+  total: number;
+  /** What the bill owes now, after this charge. */
+  balanceNow: number;
+};
+
+/**
+ * The notice a post-stay charge sends (SIG-S9 §6: "guest notification is a mandatory consequence
+ * of post-stay charge posting"). It used to be a record with nothing sent — the desk told the
+ * operator "the guest is told" while no one was.
+ */
+export function renderPostStayChargeEmail(d: PostStayChargeEmailData): StageEmailContent {
+  const subject = COMMON_SUBJECT;
+  const stay = `${formatDate(d.checkInDate)} to ${formatDate(d.checkOutDate)}`;
+  const text = [
+    "A charge after your stay",
+    "",
+    `Dear ${d.recipientName},`,
+    "",
+    `After your stay with us (${stay}, booking ${d.bookingRef}) we found a charge that was not on your bill when you left:`,
+    "",
+    `  ${d.description}`,
+    `  Charge:                 ${formatMoney(d.charge, d.currency)}`,
+    ...(d.serviceCharge > 0 ? [`  Service charge (${percentLabel(d.serviceChargeRate)}):  ${formatMoney(d.serviceCharge, d.currency)}`] : []),
+    ...(d.gst > 0 ? [`  GST (${percentLabel(d.gstRate)}):              ${formatMoney(d.gst, d.currency)}`] : []),
+    `  Total:                  ${formatMoney(d.total, d.currency)}`,
+    "",
+    d.balanceNow > 0
+      ? `Your bill now shows ${formatMoney(d.balanceNow, d.currency)} to pay. We will send the tax invoice for it; if anything here is not right, simply reply to this email.`
+      : "Your bill is still settled — money already received covers it. If anything here is not right, simply reply to this email.",
+    "",
+    "— The Legphel Hotel team",
+  ].join("\n");
+
+  const rows = [
+    tableRow("Booking", d.bookingRef),
+    tableRow("What it was", d.description, true),
+    tableRow("Charge", formatMoney(d.charge, d.currency)),
+    ...(d.serviceCharge > 0 ? [tableRow(`Service charge (${percentLabel(d.serviceChargeRate)})`, formatMoney(d.serviceCharge, d.currency), true)] : []),
+    ...(d.gst > 0 ? [tableRow(`GST (${percentLabel(d.gstRate)})`, formatMoney(d.gst, d.currency))] : []),
+    tableRow("Total", formatMoney(d.total, d.currency), true, true),
+    tableRow(d.balanceNow > 0 ? "Now to pay" : "To pay", formatMoney(Math.max(0, d.balanceNow), d.currency), false, true),
+  ];
+  const html = htmlShell(`
+${emailHeading("A charge after your stay")}
+<p>Dear ${escapeHtml(d.recipientName)},</p>
+<p>After your stay with us (<strong>${escapeHtml(stay)}</strong>) we found a charge that was not on your bill when you left.</p>
+${detailsTable(rows)}
+<p>${
+    d.balanceNow > 0
+      ? "We will send the tax invoice for it. If anything here is not right, simply reply to this email."
+      : "Your bill is still settled &mdash; money already received covers it. If anything here is not right, simply reply to this email."
+  }</p>
+<p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
+`);
+  return { subject, text, html };
+}
+
+// =============================================================================
 // S8 / S9 — Final invoice (post-checkout)
 // =============================================================================
 

@@ -25,6 +25,24 @@ export function enforceEntryAtS7ForS7ToS8Progression(input: { currentStage: Stag
   throw new StageGateBlockedError("Entry is not at S7", "NOT_AT_S7");
 }
 
+/**
+ * Policy 1 / Policy 35 — cancelling a CONFIRMED booking before arrival: at Reserve (S4) or at
+ * Arrival (S5) (`CancellationService.cancelEntryAtS5`, 2026-09-18).
+ *
+ * The route was S5-only, and a booking reaches S5 only a day before arrival
+ * (`preArrival.windowDays`), so every confirmed booking further out — the ordinary "we can't come
+ * next month" call — had no way to be cancelled at all. SIG-S4 has Policy 35 active at S4 and
+ * forbids releasing confirmed inventory without a governed cancellation; this is that cancellation,
+ * priced on the terms frozen at confirmation exactly as at Arrival.
+ */
+export function enforceEntryConfirmedForPreArrivalCancellation(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S4 || input.currentStage === Stage.S5) return;
+  throw new StageGateBlockedError(
+    "A confirmed booking is cancelled at Reserve or at Arrival — this one is at neither",
+    "NOT_AT_S4_OR_S5",
+  );
+}
+
 /** Policy 1 — S5-only cancellation route (`CancellationService.cancelEntryAtS5`). */
 export function enforceEntryAtS5ForS5CancellationRoute(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S5) return;
