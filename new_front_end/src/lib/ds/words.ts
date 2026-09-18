@@ -12,6 +12,11 @@ const PHRASES: Array<[RegExp, string]> = [
   [/\bS([1-9])\s*(?:→|->|to)\s*S([1-9])\b/g, "$STEP$1 → $STEP$2"],
   // Before the generic "committed hold" → "block": the refusal read "not available for block".
   [/\bis not available for committed hold\b/gi, "is not free on these dates"],
+  // Reserve refused for an overlapping booking of the same guest — say what to do (2026-09-18).
+  [
+    /Multi-booking overlap detected; FOM acknowledgement required/g,
+    "This guest already holds a booking over these nights — the FOM acknowledges it (Acknowledge an overlap… on this step), then Reserve again",
+  ],
   [/\bspeculative holds?\b/gi, "provisional block"],
   [/\bcommitted holds?\b/gi, "block"],
   [/\bsegments?\b/gi, "pass"],

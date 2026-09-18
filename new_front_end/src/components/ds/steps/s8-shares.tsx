@@ -27,7 +27,9 @@ export const SETTLE_METHODS = [
   ["CASH", "Cash"],
   ["MOBILE_PAYMENT", "Mobile payment (QR)"],
   ["BANK_TRANSFER", "Bank transfer"],
-  ["DIRECT_BILL", "Charge to the company (direct bill)"],
+  // "On account" fits every account holder — a company, an agency, a government office, or a
+  // group's tour leader (a direct group has no company; 2026-09-18).
+  ["DIRECT_BILL", "On account — invoiced (direct bill)"],
   ["VOUCHER", "The agent's voucher"],
 ] as const;
 export type SettleMethod = (typeof SETTLE_METHODS)[number][0];

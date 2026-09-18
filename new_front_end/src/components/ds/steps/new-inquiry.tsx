@@ -42,7 +42,8 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, StepCanvas, StepCard, toastRefusal } from "./kit";
+import { Choice, StepCanvas, StepCard, atLeast, toastRefusal } from "./kit";
+import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
   CHANNEL_OPTIONS,
@@ -554,6 +555,13 @@ export function NewInquiryCanvas() {
   // A retry after a refused entry reuses the inquiry already made, so a refusal never leaves
   // a second lead behind for the same guest and the same request.
   const madeInquiry = useRef<{ key: string; id: string } | null>(null);
+  // A confirmed duplicate (Policy 12): the booking it clashes with, and the FOM's way through —
+  // a deliberate second booking goes ahead with a reason on record (2026-09-18).
+  const [dupe, setDupe] = useState<{ entryId: string | null } | null>(null);
+  const [dupeKind, setDupeKind] = useState<"ACKNOWLEDGE" | "DISMISS">("ACKNOWLEDGE");
+  const [dupeReason, setDupeReason] = useState("");
+  const dupeResolution = useRef<{ resolution: "ACKNOWLEDGE" | "DISMISS"; reason: string } | null>(null);
+  const fomHere = atLeast(session?.actorLevel, "L2");
 
   const run = useMutation({
     mutationFn: async (ask: boolean): Promise<Outcome> => {
@@ -607,6 +615,7 @@ export function NewInquiryCanvas() {
           travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
           corporateAccountId: partyKind === "CORPORATE" ? (party?.id ?? null) : null,
           ratePackageId: party?.id ? ratePackageId : null,
+          ...(dupeResolution.current ? { duplicateResolution: dupeResolution.current } : {}),
         };
         const key = JSON.stringify(inquiryBody);
         let inquiryId = madeInquiry.current?.key === key ? madeInquiry.current.id : null;
@@ -675,7 +684,16 @@ export function NewInquiryCanvas() {
       setNavigating(true);
       router.push(ask || isEdit ? bookingHref(id, 1) : bookingHref(id));
     },
-    onError: (e) => toastRefusal(e, isEdit ? "The changes could not be saved" : "The inquiry could not be started"),
+    onError: (e) => {
+      const body = e instanceof ApiError ? e.body : undefined;
+      if (!isEdit && body?.blockingCondition === "DUPLICATE_INQUIRY_CONFIRMED") {
+        const det = (body.details ?? {}) as { conflictingEntryId?: string };
+        setDupe({ entryId: det.conflictingEntryId ?? null });
+        dupeResolution.current = null;
+        return;
+      }
+      toastRefusal(e, isEdit ? "The changes could not be saved" : "The inquiry could not be started");
+    },
   });
   const busy = run.isPending || navigating;
   const askingNow = busy && run.variables === true;
@@ -1452,6 +1470,43 @@ export function NewInquiryCanvas() {
           </div>
         </aside>
       </div>
+
+      {dupe ? (
+        <section className="card" style={{ margin: "0 20px 12px" }}>
+          <h4>This guest already holds a booking over these nights</h4>
+          <p className="sm" style={{ marginTop: 6 }}>
+            {dupe.entryId ? <Link href={`/bookings/${dupe.entryId}`}>{dupe.entryId}</Link> : "Another booking"} overlaps these dates for the
+            same guest. If it is the same stay, open that booking instead. If this is a deliberate second booking — another room for
+            them, the tour leader&rsquo;s own night — the FOM goes ahead with a reason, kept on the record.
+          </p>
+          <div className="form2" style={{ marginTop: 8 }}>
+            <div className="field">
+              <label>What it is</label>
+              <select className="input" value={dupeKind} onChange={(e) => setDupeKind(e.target.value as "ACKNOWLEDGE" | "DISMISS")}>
+                <option value="ACKNOWLEDGE">A deliberate second booking</option>
+                <option value="DISMISS">Not a duplicate — a different stay</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Why it goes ahead</label>
+              <input className="input" value={dupeReason} placeholder="the tour leader's own room for the last night" onChange={(e) => setDupeReason(e.target.value)} />
+            </div>
+          </div>
+          <div className="row-acts" style={{ marginTop: 8 }}>
+            <Button
+              state={busy ? "working" : fomHere && dupeReason.trim() ? "default" : "inert"}
+              reason={!fomHere ? "Needs the FOM — a confirmed duplicate is theirs to resolve" : !dupeReason.trim() ? "say why it goes ahead" : undefined}
+              workingLabel="Keeping the lead…"
+              onClick={() => {
+                dupeResolution.current = { resolution: dupeKind, reason: dupeReason.trim() };
+                run.mutate(false);
+              }}
+            >
+              Go ahead with this booking
+            </Button>
+          </div>
+        </section>
+      ) : null}
 
       <div className="gatebar">
         <GateList items={gate} />

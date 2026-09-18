@@ -29,6 +29,8 @@ export async function createInquiry(
      * default package, then the hotel's common one.
      */
     ratePackageId?: string | null;
+    /** The FOM's answer to a confirmed duplicate — go ahead with a reason (2026-09-18). */
+    duplicateResolution?: { resolution: "ACKNOWLEDGE" | "DISMISS"; reason: string };
   },
 ) {
   return apiRequest<InquiryListItem>("/api/inquiries", {

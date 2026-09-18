@@ -305,7 +305,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setSelected(4);
       toast.success("Reserved — the booking is frozen.");
     },
-    onError: fail("Reserving failed"),
+    // A refusal closes the dialog (2026-09-18): it stayed open over the page, hiding the very
+    // control the refusal points to (Acknowledge an overlap…, the missing line to fix).
+    onError: (e) => {
+      setConfirmOpen(false);
+      fail("Reserving failed")(e);
+    },
   });
   const closeMutation = useMutation({
     mutationFn: () => closeEntryAtS9(session!, entry!.id),

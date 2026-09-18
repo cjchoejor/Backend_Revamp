@@ -130,6 +130,8 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
       push(r, { need: "Settle the bill and close the stay", band: "soon", since: new Date(r.updatedAt).getTime() });
     } else if (step === 9) {
       if (r.folio?.state === "OUTSTANDING") push(r, { need: "Money still owed after the stay", band: "waiting", since: new Date(r.updatedAt).getTime() });
+      // A no-show waits at Closed for its seal (2026-09-18) — nothing else would bring it back.
+      else if (r.folio?.state === "NO_SHOW_CLOSED" && r.status === "ACTIVE") push(r, { need: "A no-show to seal", band: "waiting", since: new Date(r.updatedAt).getTime() });
     }
     void tz;
   }
