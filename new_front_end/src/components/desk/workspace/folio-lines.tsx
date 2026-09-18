@@ -5,6 +5,16 @@ import { Lock, Maximize2, Minimize2 } from "lucide-react";
 import type { FolioLineSummary } from "@/types/api";
 import { money, moneyOrDash } from "@/lib/desk/workspace";
 
+/** The line's kind in desk words — the backend's enum code never reaches the screen (2026-09-19). */
+const LINE_TYPE_WORD: Record<string, string> = {
+  ROOM_CHARGE: "Room",
+  F_AND_B: "Food and beverage",
+  SERVICE: "Service",
+  OTHER: "Other",
+  CREDIT_NOTE: "Credit note",
+};
+const lineTypeWord = (t: string) => LINE_TYPE_WORD[t] ?? t.replace(/_/g, " ").toLowerCase();
+
 /**
  * Compact tabular folio (2026-08-21, operator report: "the folio display is looking a bit too
  * elongated and not clear to look at — make it tabular or think of some other way").
@@ -655,7 +665,7 @@ export function FolioLinesTable({
                         {sys ? "⚙" : "✎"}
                       </span>
                       {describeLine(l.description)}
-                      <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{l.lineType}</span>
+                      <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{lineTypeWord(l.lineType)}</span>
                     </td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                       {ownKind ? <span style={{ color: "var(--ink-4)" }}>—</span> : money(l.amount, l.currency)}
@@ -676,8 +686,9 @@ export function FolioLinesTable({
                       <td style={{ ...td, color: "var(--ink-4)" }}>{c.line.chargeDate?.slice(0, 10) ?? "—"}</td>
                       {anyRoom && <td style={{ ...td, color: "var(--ink-4)" }}>{targetOf(c.line) ?? "—"}</td>}
                       <td style={{ ...td, whiteSpace: "normal", color: "var(--ink-3)", paddingLeft: 26 }}>
+                        {/* A companion's own description already says what it is ("GST (5%) on: …"),
+                            and its ledger kind (SERVICE / OTHER) would only muddle that. */}
                         {describeLine(c.line.description)}
-                        <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-4)" }}>{c.line.lineType}</span>
                       </td>
                       {/* Expanded: the companion's own row, its amount under the column it IS —
                           so the three money columns line up whether the taxes are folded or not. */}

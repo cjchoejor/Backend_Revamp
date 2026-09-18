@@ -760,7 +760,8 @@ function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
       }
     >
       <p className="sm" style={{ marginTop: 0 }}>
-        A credit reduces what the guest owes and stays on the folio as its own line. The FOM&rsquo;s act.
+        A credit reduces what the guest owes and stays on the folio as its own line — its service charge and GST come off beside it,
+        on their own lines. The FOM&rsquo;s act.
       </p>
       <div className="form2">
         <div className="wide field">
@@ -768,7 +769,7 @@ function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
           <input className="input" value={what} placeholder="goodwill for the late room" onChange={(e) => setWhat(e.target.value)} />
         </div>
         <div className="field">
-          <label>Amount · Nu.</label>
+          <label>Amount · Nu. · before service charge and GST</label>
           <input className="input money" inputMode="decimal" value={amount} placeholder="500.00" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} />
         </div>
         <div className="field">
