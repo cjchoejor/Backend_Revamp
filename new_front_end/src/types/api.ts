@@ -586,6 +586,8 @@ export type EntryDetail = EntryListItem & {
     notes?: string | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;
+    /** How the guest came in (WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE). */
+    cameInAs?: string | null;
     travelAgentId?: string | null;
     corporateAccountId?: string | null;
     agentProfile?: AgentProfileSummary | null;

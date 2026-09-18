@@ -60,6 +60,7 @@ import {
   words,
 } from "./kit";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
+import { cameInAsOf } from "./new-inquiry-parts";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -72,7 +73,6 @@ const CAME_IN_AS = [
   ["CORPORATE", "Corporation"],
   ["GROUP", "Group / MICE"],
 ] as const;
-type CameInAs = (typeof CAME_IN_AS)[number][0];
 
 const KINDS_OF_STAY = [
   ["LEISURE", "Leisure"],
@@ -89,25 +89,6 @@ const BED_WORD: Record<string, string> = {
   SINGLE: "Single",
 };
 
-/** The stored channel read back as the words the operator chose (DIRECT was several choices). */
-function cameInAsOf(
-  channel: string | null | undefined,
-  notes: string | null | undefined,
-  useType: string | null | undefined,
-): CameInAs | null {
-  if (!channel) return null;
-  if (channel === "WALK_IN") return "WALK_IN";
-  if (channel === "OTA") return "OTA";
-  if (channel === "AGENT" || channel === "TRAVEL_AGENT") return "AGENT";
-  if (channel === "CORPORATE") return "CORPORATE";
-  if (channel === "DIRECT") {
-    if (useType === "GROUP" || /group \/ mice/i.test(notes ?? ""))
-      return "GROUP";
-    if (/direct \(online\)/i.test(notes ?? "")) return "DIRECT_ONLINE";
-    return "DIRECT_VOICE";
-  }
-  return null;
-}
 
 type IndicativePricing = {
   rateAmount?: number;
@@ -127,6 +108,7 @@ function readPricing(p: unknown): IndicativePricing | null {
 type InquiryScalars = {
   notes?: string | null;
   sourceChannel?: string | null;
+  cameInAs?: string | null;
   travelAgentId?: string | null;
   corporateAccountId?: string | null;
   ratePackageId?: string | null;
@@ -247,7 +229,7 @@ function WhoIsAsking({
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
-  const came = cameInAsOf(inq.sourceChannel, inq.notes, entry.useType);
+  const came = cameInAsOf(inq.sourceChannel, inq.notes, entry.useType, inq.cameInAs);
   const isAcct = came === "AGENT" || came === "CORPORATE" || came === "OTA";
   const setUse = useMutation({
     mutationFn: (useType: string) =>

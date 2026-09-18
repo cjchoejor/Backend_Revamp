@@ -165,7 +165,7 @@ export default function GuestRecordPage({ params }: { params: Promise<{ id: stri
                     <td>
                       <GuestLink row={r} />
                       <div className="meta">
-                        {r.id} · {channelWord(r.inquiry?.sourceChannel)}
+                        {r.id} · {channelWord(r.inquiry?.sourceChannel, r.inquiry?.cameInAs)}
                         {booker && (booker.kind === "agent" || booker.kind === "company") ? ` · ${booker.name}` : ""}
                       </div>
                     </td>

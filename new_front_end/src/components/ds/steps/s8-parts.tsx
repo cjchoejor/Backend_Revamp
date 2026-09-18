@@ -163,7 +163,7 @@ export function useBookedBy(entry: EntryDetail) {
   });
   const rec = (q.data ?? null) as InquiryParty | null;
   const party = rec?.travelAgent?.displayName ?? rec?.corporateAccount?.displayName ?? null;
-  const kind = rec?.travelAgent ? "Travel agent" : rec?.corporateAccount ? "Company" : channelWord(entry.inquiry?.sourceChannel);
+  const kind = rec?.travelAgent ? "Travel agent" : rec?.corporateAccount ? "Company" : channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs);
   const g = guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null);
   const guest = g === "Guest" ? "the guest" : g;
   return { party, kind, guest, payer: party ?? guest };

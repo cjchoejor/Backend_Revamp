@@ -15,6 +15,8 @@ export async function createInquiry(
   body: {
     guestProfileId: string;
     sourceChannel: string;
+    /** How the guest came in; the backend checks it belongs to `sourceChannel`. */
+    cameInAs?: string;
     notes?: string;
     proposedCheckIn?: string;
     proposedCheckOut?: string;

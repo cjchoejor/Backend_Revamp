@@ -184,7 +184,19 @@ const CHANNEL_WORD: Record<string, string> = {
 };
 
 /** "Travel agent", "Walk-in" — how the booking came in, in the desk's words. */
-export function channelWord(channel?: string | null): string {
+const CAME_IN_AS_WORD: Record<string, string> = {
+  WALK_IN: "Walk-in",
+  DIRECT_VOICE: "Direct voice",
+  DIRECT_ONLINE: "Direct online",
+  OTA: "OTA",
+  TRAVEL_AGENT: "Travel agent",
+  CORPORATE: "Corporate",
+  GROUP_MICE: "Group / MICE",
+};
+
+/** How the booking came in, in words — the finer choice when it is on record, else the channel. */
+export function channelWord(channel?: string | null, cameInAs?: string | null): string {
+  if (cameInAs && CAME_IN_AS_WORD[cameInAs]) return CAME_IN_AS_WORD[cameInAs];
   if (!channel) return "—";
   return CHANNEL_WORD[channel] ?? channel.charAt(0) + channel.slice(1).toLowerCase().replace(/_/g, " ");
 }

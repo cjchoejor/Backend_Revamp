@@ -98,7 +98,7 @@ export function DetailsView({
               v={g?.id ? <Link href={`/guests/${g.id}`}>{guestName(g)}</Link> : <span className="name-i">to come from the agent</span>}
               meta={[g?.phone, g?.email].filter(Boolean).join(" · ") || "no contact of their own on file"}
             />
-            <FactBox k="Booked by" v={booker ?? channelWord(entry.inquiry?.sourceChannel)} meta={booker ? channelWord(entry.inquiry?.sourceChannel) : undefined} />
+            <FactBox k="Booked by" v={booker ?? channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs)} meta={booker ? channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs) : undefined} />
             <FactBox k="Billed to" v={model ? BILLING_WORD[model] ?? model : "not set yet"} meta={model ? undefined : "chosen at Set up"} />
           </div>
           <Facts wide style={{ marginTop: 10 }}>

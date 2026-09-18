@@ -83,6 +83,7 @@ const GUEST_CARD_ID = "new-inquiry-guest";
 type InquiryScalars = {
   notes?: string | null;
   sourceChannel?: string | null;
+  cameInAs?: string | null;
   corporateClientRef?: string | null;
   corporateCoordinator?: string | null;
 };
@@ -174,7 +175,7 @@ export function NewInquiryCanvas() {
     editInited.current = true;
     const ci = editEntry.checkInDate?.slice(0, 10) ?? "";
     const co = editEntry.checkOutDate?.slice(0, 10) ?? "";
-    setChannelKey(cameInAsOf(editInq?.sourceChannel, editInq?.notes, editEntry.useType));
+    setChannelKey(cameInAsOf(editInq?.sourceChannel, editInq?.notes, editEntry.useType, editInq?.cameInAs));
     setUseType(editEntry.useType ?? "LEISURE");
     setAdults(String(editEntry.adultCount ?? editEntry.guestCount ?? 1));
     setChildren(String(editEntry.childCount ?? 0));
@@ -596,11 +597,11 @@ export function NewInquiryCanvas() {
           // Adopted at once, so a retry after a later refusal reuses this record.
           setSelectedGuest(profile);
         }
-        const composedNotes = [notes.trim() || null, channel.note || null].filter(Boolean).join(" · ");
         const inquiryBody = {
           guestProfileId,
           sourceChannel: channel.channel,
-          notes: composedNotes || undefined,
+          cameInAs: channel.cameInAs,
+          notes: notes.trim() || undefined,
           proposedCheckIn: checkIn || undefined,
           proposedCheckOut: checkOut || undefined,
           travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,

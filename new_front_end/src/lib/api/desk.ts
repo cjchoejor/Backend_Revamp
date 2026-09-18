@@ -40,6 +40,7 @@ export type DeskListRow = {
     id: string;
     referenceNumber: string;
     sourceChannel: string;
+    cameInAs: string | null;
     defaultCustodianId: string;
     notes: string | null;
     travelAgent: { id: string; displayName: string } | null;

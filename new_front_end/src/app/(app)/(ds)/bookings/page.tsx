@@ -59,7 +59,7 @@ function haystack(r: DeskListRow, statusWord: string): string {
     r.contactPersonName,
     r.contactPersonPhone,
     booker?.name,
-    channelWord(r.inquiry?.sourceChannel),
+    channelWord(r.inquiry?.sourceChannel, r.inquiry?.cameInAs),
     statusWord,
     ...r.roomNumbers,
     ...r.quotations.map((q) => q.referenceNumber),
@@ -73,7 +73,7 @@ function subline(r: DeskListRow): string {
   const booker = bookerOfRow(r);
   return [
     r.id,
-    channelWord(r.inquiry?.sourceChannel),
+    channelWord(r.inquiry?.sourceChannel, r.inquiry?.cameInAs),
     booker && (booker.kind === "agent" || booker.kind === "company") ? booker.name : null,
     r.groupBillingMode === "GROUP_MASTER" ? "group" : null,
     r.walkInCompressed ? "walk-in" : null,
@@ -426,7 +426,7 @@ function Preview({ row, money: m, today, onClose }: { row: DeskListRow; money?: 
         <dd>{party || (row.guestCount ? plural(row.guestCount, "guest") : "—")}</dd>
         <dt>Came in as</dt>
         <dd>
-          {channelWord(row.inquiry?.sourceChannel)}
+          {channelWord(row.inquiry?.sourceChannel, row.inquiry?.cameInAs)}
           {booker && (booker.kind === "agent" || booker.kind === "company") ? ` · ${booker.name}` : ""}
         </dd>
         <dt>Contact</dt>

@@ -35,8 +35,8 @@ export type ChannelDef = {
   label: string;
   /** One of the five sourceChannel values the backend accepts (custodian Policy 3 refuses others). */
   channel: "WALK_IN" | "DIRECT" | "OTA" | "AGENT" | "CORPORATE";
-  /** The finer distinction DIRECT cannot carry, kept in the inquiry's notes. */
-  note: string;
+  /** How the guest came in, as stored in Inquiry.cameInAs (2026-09-18 — it used to ride in the notes). */
+  cameInAs: "WALK_IN" | "DIRECT_VOICE" | "DIRECT_ONLINE" | "OTA" | "TRAVEL_AGENT" | "CORPORATE" | "GROUP_MICE";
   party: PartyKind | null;
   /** The kind of stay the channel starts with. */
   useType: string;
@@ -44,13 +44,13 @@ export type ChannelDef = {
 
 /** "Came in as", in the prototype's order. */
 export const CHANNELS: ReadonlyArray<ChannelDef> = [
-  { key: "WALK_IN", label: "Walk-in", channel: "WALK_IN", note: "", party: null, useType: "LEISURE" },
-  { key: "DIRECT_VOICE", label: "Direct voice", channel: "DIRECT", note: "Direct (voice)", party: null, useType: "LEISURE" },
-  { key: "DIRECT_ONLINE", label: "Direct online", channel: "DIRECT", note: "Direct (online)", party: null, useType: "LEISURE" },
-  { key: "OTA", label: "OTA", channel: "OTA", note: "", party: null, useType: "LEISURE" },
-  { key: "AGENT", label: "Travel agent", channel: "AGENT", note: "", party: "TRAVEL_AGENT", useType: "LEISURE" },
-  { key: "CORPORATE", label: "Corporation", channel: "CORPORATE", note: "", party: "CORPORATE", useType: "LEISURE" },
-  { key: "GROUP", label: "Group / MICE", channel: "DIRECT", note: "Group / MICE", party: null, useType: "GROUP" },
+  { key: "WALK_IN", label: "Walk-in", channel: "WALK_IN", cameInAs: "WALK_IN", party: null, useType: "LEISURE" },
+  { key: "DIRECT_VOICE", label: "Direct voice", channel: "DIRECT", cameInAs: "DIRECT_VOICE", party: null, useType: "LEISURE" },
+  { key: "DIRECT_ONLINE", label: "Direct online", channel: "DIRECT", cameInAs: "DIRECT_ONLINE", party: null, useType: "LEISURE" },
+  { key: "OTA", label: "OTA", channel: "OTA", cameInAs: "OTA", party: null, useType: "LEISURE" },
+  { key: "AGENT", label: "Travel agent", channel: "AGENT", cameInAs: "TRAVEL_AGENT", party: "TRAVEL_AGENT", useType: "LEISURE" },
+  { key: "CORPORATE", label: "Corporation", channel: "CORPORATE", cameInAs: "CORPORATE", party: "CORPORATE", useType: "LEISURE" },
+  { key: "GROUP", label: "Group / MICE", channel: "DIRECT", cameInAs: "GROUP_MICE", party: null, useType: "GROUP" },
 ];
 
 export const CHANNEL_OPTIONS = CHANNELS.map((c) => [c.key, c.label] as const);
@@ -59,8 +59,19 @@ export function channelDef(key: ChannelKey | null | undefined): ChannelDef | nul
   return CHANNELS.find((c) => c.key === key) ?? null;
 }
 
-/** A saved inquiry's channel read back as the words the operator chose (DIRECT was three choices). */
-export function cameInAsOf(channel?: string | null, notes?: string | null, useType?: string | null): ChannelKey | null {
+/**
+ * How a saved inquiry came in, as the operator chose it. The stored column decides (2026-09-18);
+ * the old reading — the channel plus the words the desk used to add to the notes — is kept only
+ * for an inquiry the column could not be filled for (a plain DIRECT from an API caller).
+ */
+export function cameInAsOf(
+  channel?: string | null,
+  notes?: string | null,
+  useType?: string | null,
+  stored?: string | null,
+): ChannelKey | null {
+  const byColumn = stored ? CHANNELS.find((c) => c.cameInAs === stored) : null;
+  if (byColumn) return byColumn.key;
   if (!channel) return null;
   if (channel === "WALK_IN") return "WALK_IN";
   if (channel === "OTA") return "OTA";
