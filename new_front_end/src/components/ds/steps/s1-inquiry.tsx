@@ -1091,6 +1091,13 @@ function TheHouse({
       ? savedTypes[0]!
       : (byType.find((t) => t.full.length >= numberOfRooms)?.name ?? null));
   const chosenRow = byType.find((t) => t.name === chosenType) ?? null;
+  // The MARKED type's own indicative figure (2026-09-19): every room carries its type's chip, while
+  // the search-wide one is a single plan's rate — it read the same for a Suite and a Standard Single.
+  const chosenPricing = useMemo(() => {
+    if (!chosenType) return pricing;
+    const room = [...available, ...deficient].find((r) => r.roomTypeName === chosenType);
+    return readPricing(room?.pricingIndicative) ?? pricing;
+  }, [chosenType, available, deficient, pricing]);
 
   const ask = useMutation({
     mutationFn: async () => {
@@ -1291,21 +1298,21 @@ function TheHouse({
                 ))}
               </tbody>
             </table>
-            {pricing ? (
+            {chosenPricing ? (
               <div style={{ marginTop: 10 }}>
                 <b className="money">
                   {money(
-                    pricing.lineTotalIndicative ?? pricing.rateAmount ?? null,
-                    pricing.currency,
+                    chosenPricing.lineTotalIndicative ?? chosenPricing.rateAmount ?? null,
+                    chosenPricing.currency,
                   )}
                 </b>{" "}
                 <span className="meta">
-                  indicative · a room
-                  {pricing.stayNights
-                    ? ` for ${plural(pricing.stayNights, "night")}`
+                  indicative · {chosenType ? `${/^[aeiou]/i.test(chosenType) ? "an" : "a"} ${chosenType}` : "a room"}
+                  {chosenPricing.stayNights
+                    ? ` for ${plural(chosenPricing.stayNights, "night")}`
                     : ""}
-                  {pricing.rateAmount != null
-                    ? ` at ${money(pricing.rateAmount, pricing.currency)} a night`
+                  {chosenPricing.rateAmount != null
+                    ? ` at ${money(chosenPricing.rateAmount, chosenPricing.currency)} a night`
                     : ""}{" "}
                   · not a quote
                 </span>

@@ -448,7 +448,10 @@ export function RoomChangeControl({
       setSetups({});
       setReason("");
       void queryClient.invalidateQueries({ queryKey: ["rooms-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["room-change-candidates", entry.id] });
+      // Stale, not refetched (2026-09-19): this panel is closing, and its query — still enabled in
+      // this tick — would ask for candidates for the room the guest just left, which is no longer
+      // in the plan (a 400 on every swap). The next panel opened fetches fresh ones.
+      void queryClient.invalidateQueries({ queryKey: ["room-change-candidates", entry.id], refetchType: "none" });
       void queryClient.invalidateQueries({ queryKey: ["room-plan-history", entry.id] });
       onChanged();
     },

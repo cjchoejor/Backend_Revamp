@@ -12,6 +12,7 @@ import { Button, Dialog, EmptyState, RoomTile, type RoomPhysical, type RoomStand
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
 import { listSpaces, type RoomListItem, type SpaceListItem } from "@/lib/api/rooms";
 import { guestNameOf } from "@/lib/ds/status";
@@ -74,17 +75,35 @@ export default function RoomsPage() {
   );
 
   // Who is in each room tonight, and who holds it next — names only, from the bookings list.
+  // Judged by each room's own nights against the hotel's day (2026-09-19): the last booking read
+  // used to win, so a booking stuck at Check-in since 2 Sep named room 202 over tonight's guest.
+  // Tonight's holder first (the furthest step), then the next to arrive, then the latest to leave.
+  const hotelToday = useHotelDay()?.today ?? null;
   const occupant = useMemo(() => {
-    const m = new Map<string, string>();
+    const best = new Map<string, { name: string; rank: number; step: number; start: string; end: string }>();
     for (const b of bookings.data?.items ?? []) {
       const step = stepNoOfStage(b.currentStage);
       if (b.status !== "ACTIVE" || step < 4 || step > 8) continue;
-      for (const n of b.roomNumbers) {
-        if (step >= 6 || !m.has(n)) m.set(n, guestNameOf(b.guestProfile));
+      const ci = b.checkInDate?.slice(0, 10) ?? "";
+      const co = b.checkOutDate?.slice(0, 10) ?? "";
+      const spans = b.roomAssignments.length
+        ? b.roomAssignments
+            .filter((a) => !!a.room?.roomNumber)
+            .map((a) => ({ room: a.room!.roomNumber, start: a.startDate?.slice(0, 10) ?? ci, end: a.endDate?.slice(0, 10) ?? co }))
+        : b.roomNumbers.map((n) => ({ room: n, start: ci, end: co }));
+      for (const sp of spans) {
+        const rank = !hotelToday ? 0 : sp.start <= hotelToday && hotelToday < sp.end ? 3 : sp.start > hotelToday ? 2 : 1;
+        const cur = best.get(sp.room);
+        const better =
+          !cur ||
+          rank > cur.rank ||
+          (rank === cur.rank &&
+            (rank === 3 ? step > cur.step : rank === 2 ? sp.start < cur.start : rank === 1 ? sp.end > cur.end : step >= 6));
+        if (better) best.set(sp.room, { name: guestNameOf(b.guestProfile), rank, step, start: sp.start, end: sp.end });
       }
     }
-    return m;
-  }, [bookings.data]);
+    return new Map([...best].map(([room, v]) => [room, v.name]));
+  }, [bookings.data, hotelToday]);
 
   const count = (pred: (r: RoomListItem) => boolean) => items.filter(pred).length;
   const occupied = count((r) => standingOfRoom(r) === "occupied");
