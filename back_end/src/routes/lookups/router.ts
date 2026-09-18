@@ -18,6 +18,7 @@ import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventor
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
 import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { DeficientConditionCategory } from "@prisma/client";
 import { HOTEL_TIMEZONE } from "../../services/infrastructure/pdf-templates/legphel-document-format.js";
 
 export const lookupsRouter = Router();
@@ -58,6 +59,33 @@ lookupsRouter.get("/lookups/child-policy", L1, async (_req, res, next) => {
     const bundle = await loadChildPolicyBundle(prisma);
     res.json(bundle);
   } catch (e) { next(e); }
+});
+
+/**
+ * The fault categories a room or space can be reported under (2026-09-18) — the admin's active
+ * list (`deficientCondition.categories`), limited to what the report accepts. The desk carried its
+ * own list (Cleanliness, Equipment, Safety…) that the backend refused, so three of its five
+ * categories could never be reported.
+ */
+lookupsRouter.get("/lookups/deficient-categories", L1, async (_req, res, next) => {
+  try {
+    const accepted = Object.values(DeficientConditionCategory) as string[];
+    const raw = await requireActiveConfigValue<Array<{ code?: unknown; label?: unknown; isActive?: unknown }> | null>(
+      prisma,
+      "deficientCondition.categories",
+    ).catch(() => null);
+    const configured = Array.isArray(raw)
+      ? raw
+          .filter((c) => c && c.isActive !== false && typeof c.code === "string" && accepted.includes(c.code))
+          .map((c) => ({ code: c.code as string, label: typeof c.label === "string" && c.label.trim() ? c.label : (c.code as string) }))
+      : [];
+    const items = configured.length
+      ? configured
+      : accepted.map((code) => ({ code, label: code.charAt(0) + code.slice(1).toLowerCase().replace(/_/g, " ") }));
+    res.json({ items });
+  } catch (e) {
+    next(e);
+  }
 });
 
 /**
