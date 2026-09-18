@@ -240,7 +240,7 @@ The boss's redesign (`September 14 2026/`, built on `September 11 2026/`) is bei
     - [case-cards.tsx](new_front_end/src/components/ds/steps/case-cards.tsx), the cards shown above any step when they apply: parked, cancelled, no-show, passes and amendments, credit ceiling.
     - [history-view.tsx](new_front_end/src/components/ds/workspace/history-view.tsx) ("As it stands", chapters by step, lenses) and [details-view.tsx](new_front_end/src/components/ds/workspace/details-view.tsx).
     - [side-papers.tsx](new_front_end/src/components/ds/workspace/side-papers.tsx): each sent paper with its answer, Record, and Send again.
-  - **Files:** `s1-inquiry.tsx` … `s9-closed.tsx` with their `sN-*.tsx` parts, built from the prototype's cards and the storyboards. The workspace renders only these; the old step components in `components/desk/workspace/` are no longer mounted.
+  - **Files:** `s1-inquiry.tsx` … `s9-closed.tsx` with their `sN-*.tsx` parts, built from the prototype's cards and the storyboards. The workspace renders only these. The old step components, the old intake form and the pieces only they used were **deleted from `new_front_end` on 2026-09-18** (`front_end/` keeps its copies); the old tools still shown inside cards stay in `components/desk/workspace/`.
   - **The shared kit** is [kit.tsx](new_front_end/src/components/ds/steps/kit.tsx):
     - `StepCanvas` (past mode), `StepCard`, `Facts`/`Fact`, `FactLine`, `Choice`
     - `SeeRow`/`OtherWays`, `RequestsCard`, `PapersCard` + `PaperDrawer`, `AnswerLine`
