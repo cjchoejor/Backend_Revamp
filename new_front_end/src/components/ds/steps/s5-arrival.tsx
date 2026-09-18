@@ -23,12 +23,14 @@ import {
   acknowledgeCreditCeilingTier2,
   buildH1FulfilmentEvidence,
   fulfilHandoff,
+  getExpectedArrival,
   getHandoffChecklist,
+  setExpectedArrival,
   type HandoffChecklistItem,
 } from "@/lib/api/pre-arrival";
 import { deriveRoomStatus, ROOM_STATUS } from "@/lib/desk/rooms";
 import { s5Readiness } from "@/lib/desk/workspace";
-import { fmtStamp, money, plural } from "@/lib/ds/format";
+import { fmtStamp, fmtTime, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
@@ -155,6 +157,102 @@ type Facts_ = ReturnType<typeof useArrivalFacts>;
 
 /* ------------------------------------------------------------------ ready the room */
 
+/**
+ * When the guest is expected, and when they become a no-show (2026-09-18). The hotel's check-in
+ * time unless the guest gave their own; the desk records theirs here and the cut-off follows it.
+ * Once the cut-off has passed, a later time is recorded but nothing is reopened — that is the
+ * FOM's reactivation. Every time shown is the server's own.
+ */
+function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
+  const { session } = useSession();
+  const { tz } = useHotelClock(60_000);
+  const refresh = useRefreshEntry(entry.id);
+  const [editing, setEditing] = useState(false);
+  const [time, setTime] = useState("");
+  const q = useQuery({
+    queryKey: ["expected-arrival", entry.id],
+    queryFn: () => getExpectedArrival(session!, entry.id),
+    enabled: !!session,
+  });
+  const save = useMutation({
+    mutationFn: (t: string | null) => setExpectedArrival(session!, entry.id, t),
+    onSuccess: (r) => {
+      toast.success(
+        r.cutoffAlreadyReached
+          ? "Arrival time recorded — the no-show cut-off had already passed; reopening the booking is the FOM's reactivation"
+          : r.rearmedAt
+            ? `Expected at ${fmtTime(r.at, tz)} — the no-show cut-off is now ${fmtTime(r.rearmedAt, tz)}`
+            : `Expected at ${fmtTime(r.at, tz)}`,
+      );
+      setEditing(false);
+      refresh([["expected-arrival", entry.id]]);
+    },
+    onError: (e) => toastRefusal(e, "The arrival time could not be saved"),
+  });
+  const d = q.data;
+  const cutoff = d?.cutoffClockAt ?? d?.cutoffAt ?? null;
+  return (
+    <Fact k="Expected arrival">
+      {!d ? (
+        <span className="meta">reading…</span>
+      ) : (
+        <div style={{ display: "grid", gap: 4 }}>
+          <span>
+            {fmtTime(d.at, tz)}{" "}
+            <span className="meta">
+              · {d.source === "GUEST" ? "the guest's own time" : "the hotel's check-in time"}
+              {cutoff ? ` · no-show cut-off ${fmtTime(cutoff, tz)}` : ""}
+            </span>
+          </span>
+          {d.cutoffReachedAt ? (
+            <span className="sm warn-ink">
+              The no-show cut-off has passed (recorded {fmtTime(d.cutoffReachedAt, tz)}) — the guest can still check in; a no-show is the FOM&rsquo;s decision.
+            </span>
+          ) : null}
+          <Live>
+            {editing ? (
+              <div className="row-acts">
+                <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} style={{ width: 140 }} />
+                <Button
+                  kind="secondary"
+                  compact
+                  state={save.isPending ? "working" : /^\d\d:\d\d$/.test(time) ? "default" : "inert"}
+                  title={/^\d\d:\d\d$/.test(time) ? undefined : "put in the time the guest gave"}
+                  workingLabel="Saving…"
+                  onClick={() => save.mutate(time)}
+                >
+                  Save
+                </Button>
+                {d.guestTime ? (
+                  <Button kind="quiet" compact onClick={() => save.mutate(null)}>
+                    Use the hotel&rsquo;s time
+                  </Button>
+                ) : null}
+                <Button kind="quiet" compact onClick={() => setEditing(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : d.editable ? (
+              <div>
+                <Button
+                  kind="quiet"
+                  compact
+                  onClick={() => {
+                    setTime(d.guestTime ?? d.time);
+                    setEditing(true);
+                  }}
+                >
+                  {d.guestTime ? "Change the time" : "The guest gave a time…"}
+                </Button>
+              </div>
+            ) : null}
+          </Live>
+        </div>
+      )}
+    </Fact>
+  );
+}
+
 function ReadyTheRoom({
   entry,
   facts,
@@ -278,6 +376,7 @@ function ReadyTheRoom({
             </>
           )}
         </Fact>
+        <ExpectedArrivalFact entry={entry} />
         <Fact k="Front-desk handoff">
           {h1 ? (
             h1.state === "FULFILLED" ? (

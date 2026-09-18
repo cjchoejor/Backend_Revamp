@@ -14,6 +14,7 @@ const OPERATIONAL_LABELS: Record<string, string> = {
   "nightAudit.expectedChargesRules": "Expected charges rules",
   "nightAudit.expectedDailyFAndBCharge": "Expected daily F&B charge",
   "checkout.cutoffTime": "Checkout cutoff time",
+  "checkIn.standardTime": "Standard check-in time",
   "roomAssignment.priorityRules": "Room assignment priority",
   "housekeeping.sla.windowMinutes": "Housekeeping SLA (minutes)",
   "inspection.postCheckout.windowHours": "Post-checkout inspection window (hours)",

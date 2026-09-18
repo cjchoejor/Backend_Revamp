@@ -222,6 +222,17 @@ export const OPERATIONAL_CONFIG_SCHEMAS: ConfigKeyMeta[] = [
     schema: { kind: "seconds", label: "Hold (seconds)", help: "86400 = 24 hours." },
   },
   {
+    key: "checkIn.standardTime",
+    title: "Standard check-in time",
+    description:
+      "The hotel's check-in time (24-hour, hotel-local). A booking is expected at this time on its arrival day unless the guest gave their own; the no-show cut-off counts from it, plus the no-show grace.",
+    schema: {
+      kind: "text",
+      label: "Check-in time (HH:MM)",
+      help: "Example: 14:00 = 2 PM hotel-local. Use 24-hour format.",
+    },
+  },
+  {
     key: "checkout.cutoffTime",
     title: "Checkout cutoff time",
     description: "Time of day (24-hour, hotel-local) after which the late-checkout escalation timer fires.",
