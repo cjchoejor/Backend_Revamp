@@ -47,6 +47,38 @@ export async function expirePostCheckoutInspectionWindow(session: Session, entry
   });
 }
 
+/**
+ * What still stands between the booking and "Close & seal" — the backend's own seal checks,
+ * read without sealing, and where the room inspection stands.
+ */
+export type ClosureReadiness = {
+  entryId: string;
+  currentStage: string;
+  status: string;
+  canClose: boolean;
+  notReadyReason: string | null;
+  closeRequiresLevel: "L2";
+  checks: Array<{ code: string; label: string; met: boolean; detail?: string }>;
+  inspection: {
+    state: "NOT_RECORDED" | "DONE" | "PUT_OFF" | "LAPSED";
+    inspectionId: string | null;
+    roomId: string | null;
+    roomNumber: string | null;
+    inspectedAt: string | null;
+    deficientFlagStatus: string | null;
+    damageFound: boolean;
+    damageNotes: string | null;
+    windowEndsAt: string | null;
+    windowCanBeClosed: boolean;
+    lapsedAt: string | null;
+    openFault: { id: string; category: string; description: string } | null;
+  };
+};
+
+export async function getClosureReadiness(session: Session, entryId: string) {
+  return apiRequest<ClosureReadiness>(`/api/entries/${entryId}/closure-readiness`, { session });
+}
+
 export async function closeEntryAtS9(session: Session, entryId: string) {
   return apiRequest<EntryDetail>(`/api/entries/${entryId}/close`, {
     method: "POST",

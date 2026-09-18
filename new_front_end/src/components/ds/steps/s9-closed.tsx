@@ -19,6 +19,8 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
+import { useClosureReadiness } from "@/hooks/use-closure-readiness";
+import { recordRoomInspection } from "@/lib/api/checkout";
 import {
   expirePostCheckoutInspectionWindow,
   fulfilHandoff,
@@ -249,8 +251,10 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
 
   const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
   const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
-  const inspections = entry.roomInspectionRecords ?? [];
-  const inspectionPutOff = !!inspections[0]?.isDeferred && !inspections.some((i) => !i.isDeferred);
+  // Where the room inspection stands, read from the backend's closure checks (2026-09-18).
+  const closure = useClosureReadiness(entry.id, !sealed && entry.currentStage === "S9");
+  const insp = closure.data?.inspection ?? null;
+  const wasPutOff = (entry.roomInspectionRecords ?? []).some((i) => i.isDeferred);
   const commissions = entry.commissionDueRecords ?? [];
   const followUps = entry.followUpTasks ?? [];
 
@@ -269,6 +273,32 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
       refresh();
     },
     onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
+  });
+  const [faultFlag, setFaultFlag] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT">("UNRESOLVED_AT_CHECKOUT");
+  const [assessment, setAssessment] = useState("");
+  const [damage, setDamage] = useState(false);
+  const [damageNotes, setDamageNotes] = useState("");
+  const fault = insp?.openFault ?? null;
+  const inspectionMissing = fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" && !assessment.trim()
+    ? "write what the inspector found"
+    : damage && !damageNotes.trim()
+      ? "say what is damaged"
+      : null;
+  const completeInspection = useMutation({
+    mutationFn: () =>
+      recordRoomInspection(session!, entry.id, {
+        isDeferred: false,
+        deficientFlagStatus: fault ? faultFlag : "NOT_APPLICABLE",
+        deficientConditionId: fault ? fault.id : undefined,
+        inspectorAssessment: fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" ? assessment.trim() : undefined,
+        damageFound: damage,
+        damageNotes: damage ? damageNotes.trim() : undefined,
+      }),
+    onSuccess: () => {
+      toast.success(damage ? "The inspection is on record — post the damage as a late charge below" : "The inspection is on record");
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The inspection could not be recorded"),
   });
   const expireInspection = useMutation({
     mutationFn: () => expirePostCheckoutInspectionWindow(session!, entry.id),
@@ -464,19 +494,79 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
             )}
           </Fact>
         ) : null}
-        {inspectionPutOff ? (
+        {insp?.state === "PUT_OFF" ? (
           <Fact k="The inspection">
-            <div style={{ display: "grid", gap: 6 }}>
-              <span>put off to after departure, and not yet done</span>
+            <div style={{ display: "grid", gap: 8 }}>
+              <span>
+                {insp.roomNumber ? `Room ${insp.roomNumber} · ` : ""}put off at check-out, not yet done
+                {insp.windowEndsAt ? <span className="meta"> · the window closes {fmtDateTime(insp.windowEndsAt, tz)}</span> : null}
+              </span>
               <Live>
-                <SeeRow
-                  label="Close the inspection window"
-                  note="when the window lapsed with nothing found — clears the close; the FOM's"
-                  onClick={fom && !expireInspection.isPending ? () => expireInspection.mutate() : undefined}
-                  reason={fom ? undefined : "Closing the inspection window needs the FOM"}
-                />
+                <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
+                  {fault ? (
+                    <span className="sm warn-ink">
+                      The room has an open fault — {words(fault.category)}: {fault.description}. Say how the inspection leaves it.
+                    </span>
+                  ) : null}
+                  <div className="form2">
+                    {fault ? (
+                      <div className="field">
+                        <label>The room&rsquo;s fault</label>
+                        <select className="input" value={faultFlag} onChange={(e) => setFaultFlag(e.target.value as typeof faultFlag)}>
+                          <option value="RESOLVED">Put right at inspection</option>
+                          <option value="UNRESOLVED_AT_CHECKOUT">Still there</option>
+                        </select>
+                      </div>
+                    ) : null}
+                    {fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" ? (
+                      <div className="field">
+                        <label>What the inspector found</label>
+                        <input className="input" value={assessment} onChange={(e) => setAssessment(e.target.value)} />
+                      </div>
+                    ) : null}
+                    <div className="wide field">
+                      <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <input type="checkbox" checked={damage} onChange={(e) => setDamage(e.target.checked)} />
+                        Damage found
+                      </label>
+                      {damage ? <input className="input" value={damageNotes} placeholder="what is damaged" onChange={(e) => setDamageNotes(e.target.value)} /> : null}
+                    </div>
+                  </div>
+                  <div className="row-acts">
+                    <Button
+                      kind="secondary"
+                      compact
+                      state={completeInspection.isPending ? "working" : inspectionMissing ? "inert" : "default"}
+                      title={inspectionMissing ?? undefined}
+                      workingLabel="Recording…"
+                      onClick={() => completeInspection.mutate()}
+                    >
+                      Record the inspection
+                    </Button>
+                  </div>
+                </div>
+                {insp.windowCanBeClosed ? (
+                  <SeeRow
+                    label="Close the inspection window"
+                    note="only when nobody inspected the room in time — it records that nothing was found; the FOM's"
+                    onClick={fom && !expireInspection.isPending ? () => expireInspection.mutate() : undefined}
+                    reason={fom ? undefined : "Closing the inspection window needs the FOM"}
+                  />
+                ) : null}
               </Live>
             </div>
+          </Fact>
+        ) : insp?.state === "LAPSED" ? (
+          <Fact k="The inspection">
+            put off at check-out · the window closed{insp.lapsedAt ? ` ${fmtDateTime(insp.lapsedAt, tz)}` : ""} with nothing recorded
+          </Fact>
+        ) : insp?.state === "DONE" && wasPutOff ? (
+          <Fact k="The inspection">
+            inspected after departure
+            <span className="meta">
+              {insp.inspectedAt ? ` · ${fmtDateTime(insp.inspectedAt, tz)}` : ""}
+              {insp.damageFound ? ` · damage noted${insp.damageNotes ? `: ${insp.damageNotes}` : ""}` : " · no damage"}
+            </span>
           </Fact>
         ) : null}
       </Facts>

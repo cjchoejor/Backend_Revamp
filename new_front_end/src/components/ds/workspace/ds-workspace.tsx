@@ -37,6 +37,7 @@ import {
   type EntryCommunication,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
+import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
@@ -45,7 +46,6 @@ import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
-  canCloseS9,
   canConfirm,
   canProgressS1,
   canProgressS2,
@@ -63,7 +63,6 @@ import {
   s6Readiness,
   s7Readiness,
   s8Readiness,
-  s9CloseReadiness,
   type Precondition,
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds } from "@/lib/desk/party-rooms";
@@ -157,6 +156,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     queryFn: () => getEntryTrace(session!, entryId, 100),
     enabled: !!session && !sessionLoading && !!entry,
   });
+
+  // The seal's own checks, from the backend (2026-09-18) — the desk's copy had drifted from them.
+  const closureQuery = useClosureReadiness(entryId, entry?.currentStage === "S9" && entry?.status !== "CLOSED");
+  const closure = closureQuery.data ?? null;
 
   const parked = entry?.status === "PARKED";
   const parkTimer = findParkTimer(timersQuery.data?.items);
@@ -497,7 +500,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 : checkOutStepActive
                   ? s8Readiness(entry)
                   : closedStepActive
-                    ? s9CloseReadiness(entry)
+                    ? closure
+                      ? closure.checks.map((c) => ({ label: c.label, met: c.met }))
+                      : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
                       ? [{ label: "The guest's answer to the confirmation voucher recorded", met: voucherAnswerRecorded }]
                       : viewing < currentOrder
@@ -609,7 +614,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (closedStepActive) {
-    const ok = canCloseS9(entry, session?.actorLevel);
+    const ok = !!closure?.canClose && atLeastFom(session?.actorLevel);
     forward = (
       <Button icon="lock" state={closeMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Sealing…" onClick={() => setCloseOpen(true)}>
         Close &amp; seal the record
@@ -678,7 +683,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       case "checkout":
         return <S8CheckOut entry={entry} past={viewingPast} goToStep={viewingPast ? NOOP : stableSetSelected} />;
       case "closed": {
-        const canClose = canCloseS9(entry, session?.actorLevel);
+        const canClose = !!closure?.canClose && atLeastFom(session?.actorLevel);
         const closeReason = canClose ? undefined : !atLeastFom(session?.actorLevel) ? "closing needs the FOM" : firstNote;
         return (
           <S9Closed

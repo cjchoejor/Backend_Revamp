@@ -721,6 +721,7 @@ export function useRefreshEntry(entryId: string) {
       ["payment-status", entryId],
       ["folio-documents", entryId],
       ["journey-summary", entryId],
+      ["closure-readiness", entryId],
       ...extra,
     ];
     for (const k of keys) void qc.invalidateQueries({ queryKey: k as unknown[] });
