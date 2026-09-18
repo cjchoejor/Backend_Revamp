@@ -601,7 +601,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
       <RequestsCard />
       <OtherWays>
         {onPark && entry.status === "ACTIVE" ? (
-          <SeeRow key="park" label="Park…" note="a reason and a follow-up date; it returns to Today on that date" onClick={onPark} />
+          <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
         ) : null}
       </OtherWays>
       <PapersCard entry={entry} />

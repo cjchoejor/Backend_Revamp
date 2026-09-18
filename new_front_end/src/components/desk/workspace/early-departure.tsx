@@ -117,8 +117,11 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
       </div>
       <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 0, lineHeight: 1.5 }}>
         The booked checkout is <b>{shortDay(fig?.bookedCheckOut ?? entry.reservation?.frozenCheckOutDate)}</b>. Leaving today shortens
-        the stay: the {fig ? fig.sleptNights : "…"} night{fig?.sleptNights === 1 ? "" : "s"} slept stay billed exactly as audited, the{" "}
-        {fig ? fig.unstayedNights : "…"} unstayed night{fig?.unstayedNights === 1 ? "" : "s"} are not billed, and the booking moves to
+        the stay:{" "}
+        {fig && fig.sleptNights === 0
+          ? "no night has been slept yet, so no room night is billed"
+          : `the ${fig ? fig.sleptNights : "…"} night${fig?.sleptNights === 1 ? "" : "s"} slept stay${fig?.sleptNights === 1 ? "s" : ""} billed exactly as audited`}
+        , the {fig ? fig.unstayedNights : "…"} unstayed night{fig?.unstayedNights === 1 ? " is" : "s are"} not billed, and the booking moves to
         Check-out for settlement. The rate is never renegotiated (Policy 36).
       </p>
 

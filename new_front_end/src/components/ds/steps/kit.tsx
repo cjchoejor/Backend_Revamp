@@ -396,6 +396,7 @@ export function ReasonDialog({
   placeholder,
   children,
   extraValid = true,
+  extraReason,
   reasonLabel = "Reason",
   minLength = 1,
 }: {
@@ -411,6 +412,8 @@ export function ReasonDialog({
   placeholder?: string;
   children?: ReactNode;
   extraValid?: boolean;
+  /** What is missing when `extraValid` is false — said on the locked button instead of the reason. */
+  extraReason?: string;
   reasonLabel?: string;
   minLength?: number;
 }) {
@@ -437,7 +440,7 @@ export function ReasonDialog({
             solid={danger}
             state={busy ? "working" : ok ? "default" : "inert"}
             workingLabel="Working…"
-            title={ok ? undefined : "write the reason first"}
+            title={ok ? undefined : reason.trim().length < minLength ? "write the reason first" : extraReason ?? "fill in the rest first"}
             onClick={() => onConfirm(reason.trim())}
           >
             {confirmLabel}

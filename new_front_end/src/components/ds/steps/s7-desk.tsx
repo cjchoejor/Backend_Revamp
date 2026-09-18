@@ -22,9 +22,10 @@ import {
   progressDispute,
 } from "@/lib/api/in-stay";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
+import { closeDispute } from "@/lib/api/checkout";
 import { fmtStamp } from "@/lib/ds/format";
-import type { DeficientConditionSummary, EntryDetail, HandoffSummary } from "@/types/api";
-import { Choice, DsDialog, Fact, Facts, Live, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words } from "./kit";
+import type { DeficientConditionSummary, DisputeSummary, EntryDetail, HandoffSummary } from "@/types/api";
+import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words } from "./kit";
 import { BILLING_WORD } from "./s7-folio";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -190,6 +191,8 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
   const refresh = useRefreshEntry(entry.id);
   const disputes = entry.disputes ?? [];
   const elevated = atLeast(session?.actorLevel, "L2");
+  const gm = atLeast(session?.actorLevel, "L3");
+  const [closing, setClosing] = useState<DisputeSummary | null>(null);
   const review = useMutation({
     mutationFn: (id: string) => progressDispute(session!, id, "IN_PROGRESS"),
     onSuccess: () => {
@@ -197,6 +200,18 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
       refresh();
     },
     onError: (e) => toastRefusal(e, "The review could not be started"),
+  });
+  // The GM closes a dispute here too (2026-09-18): an open dispute holds the move to Check-out,
+  // and the only Close was on the Check-out step — a dispute raised in-house could never be
+  // answered from the desk.
+  const close = useMutation({
+    mutationFn: (v: { id: string; reason: string }) => closeDispute(session!, v.id, v.reason),
+    onSuccess: () => {
+      toast.success("The dispute is closed — it no longer holds the booking");
+      setClosing(null);
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The dispute could not be closed"),
   });
   if (disputes.length === 0) return null;
   return (
@@ -222,7 +237,7 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
             </span>
             <span className="row-acts" style={{ alignItems: "center" }}>
               <Chip tone={d.status === "RESOLVED" ? "success" : "warning"}>{DISPUTE_WORD[d.status] ?? words(d.status).toLowerCase()}</Chip>
-              {d.status === "OPEN" ? (
+              {d.status === "OPEN" || d.status === "REOPENED" ? (
                 <Live>
                   <Button
                     kind="quiet"
@@ -235,9 +250,34 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
                   </Button>
                 </Live>
               ) : null}
+              {d.status !== "CLOSED" ? (
+                <Live>
+                  <Button
+                    kind="secondary"
+                    compact
+                    state={gm ? "default" : "inert"}
+                    unlockRole={gm ? undefined : "GM"}
+                    onClick={() => setClosing(d)}
+                  >
+                    Close…
+                  </Button>
+                </Live>
+              ) : null}
             </span>
           </div>
         ))}
+        <ReasonDialog
+          open={!!closing}
+          onClose={() => setClosing(null)}
+          title="Close the dispute"
+          caseLines={closing ? [<b key="t">{closing.title}</b>, closing.id] : undefined}
+          lead="The GM's answer to the guest's query. It is recorded with your name; the dispute no longer holds the booking."
+          reasonLabel="The answer · recorded on the dispute"
+          placeholder="credited in full — the minibar was charged twice"
+          confirmLabel="Close the dispute"
+          busy={close.isPending}
+          onConfirm={(reason) => closing && close.mutate({ id: closing.id, reason })}
+        />
       </StepCard>
     </div>
   );

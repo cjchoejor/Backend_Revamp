@@ -10,6 +10,7 @@
  *  - Arrival:             cancel (FOM; the GM waives) · no-show after the cut-off (FOM) · backflow to Inquiry (FOM)
  */
 import { reservedThisPass } from "@/lib/desk/workspace";
+import { CancellationFiguresLine } from "./cancel-figures";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -205,6 +206,7 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
       placeholder="what the guest or the booker said"
       onConfirm={(r) => run.mutate(r)}
     >
+      <CancellationFiguresLine entryId={entry.id} waive={gm && waive} />
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />
     </ReasonDialog>
   );
@@ -245,6 +247,7 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
       placeholder="what the guest or the booker said"
       onConfirm={(r) => run.mutate(r)}
     >
+      <CancellationFiguresLine entryId={entry.id} waive={gm && waive} />
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />
     </ReasonDialog>
   );

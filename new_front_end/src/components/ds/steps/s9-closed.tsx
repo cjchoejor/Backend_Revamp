@@ -879,8 +879,11 @@ function WriteOff({
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const [amount, setAmount] = useState("");
+  // Starts at what is still owed — writing off the rest is the usual case; type less for a part
+  // (2026-09-18: it opened empty and the lock blamed the reason).
   useEffect(() => {
-    if (open) setAmount("");
+    if (open) setAmount(outstanding != null && outstanding > 0 ? String(outstanding) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on opening
   }, [open]);
   const n = Number.parseFloat(amount);
   const ok = amount.trim() !== "" && Number.isFinite(n) && n > 0;
@@ -905,6 +908,7 @@ function WriteOff({
       placeholder="the agency ceased trading"
       confirmLabel="Write off"
       extraValid={ok}
+      extraReason="put in the amount to write off"
       busy={run.isPending}
       onConfirm={(reason) => run.mutate(reason)}
     >

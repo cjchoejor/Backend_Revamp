@@ -32,6 +32,22 @@ export async function recordCancellationDisclosure(
   });
 }
 
+/** What cancelling now would charge and refund — the backend's own figures, nothing written. */
+export type CancellationPreview = {
+  stage: "S3" | "S5";
+  advanceReceived: number;
+  charge: number;
+  refund: number;
+  chargeBeforeCap: number;
+  chargeCapped: number;
+  hoursUntilCheckIn: number;
+  waived: boolean;
+};
+
+export async function previewCancellation(session: Session, entryId: string, waive = false) {
+  return apiRequest<CancellationPreview>(`/api/entries/${entryId}/cancellation-preview${waive ? "?waive=true" : ""}`, { session });
+}
+
 /** SIG-S3 §6.5 — pre-confirmation cancellation. Releases hold, cancels timers, supersedes invoices,
  *  posts penalty, terminates entry. */
 export async function cancelEntryAtS3(

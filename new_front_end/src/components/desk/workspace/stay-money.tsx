@@ -1253,9 +1253,9 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
         <div style={{ display: "grid", gap: 8 }}>
           <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <span>
-              Checkout <b>{fmtDay(active.priorCheckOutDate)}</b> → <b>{fmtDay(active.newCheckOutDate)}</b> ({plural(active.extraNights.length, "more night")})
+              Checkout <b>{fmtDay(active.priorCheckOutDate)}</b> → <b>{fmtDay(active.newCheckOutDate)}</b> ({plural(new Set(active.extraNights.map((n) => n.date)).size, "more night")})
             </span>
-            <span>{movesText(active.pricingPreview?.moves, active.priorCheckOutDate) ?? `Same room${active.extraNights.length > 1 ? "s" : ""} — the guest stays put`}</span>
+            <span>{movesText(active.pricingPreview?.moves, active.priorCheckOutDate) ?? `Same room${new Set(active.extraNights.map((n) => n.roomId)).size > 1 ? "s" : ""} — the guest stays put`}</span>
             {active.pricingPreview?.pricing && (
               <span>
                 Stay total {money(active.pricingPreview.pricing.priorStayTotal ?? 0, currency)} → <b>{money(active.pricingPreview.pricing.projectedStayTotal, currency)}</b>

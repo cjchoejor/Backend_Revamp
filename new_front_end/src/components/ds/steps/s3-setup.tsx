@@ -66,6 +66,7 @@ import {
   type PaperRef,
 } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
+import { CancellationFiguresLine } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 
@@ -277,7 +278,7 @@ export function S3SetUp({
           />
         ) : null}
         {onPark && entry.status === "ACTIVE" ? (
-          <SeeRow key="park" label="Park…" note="a reason and a follow-up date; it returns to Today on that date" onClick={onPark} />
+          <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
         ) : null}
         {editable ? (
           <SeeRow
@@ -317,7 +318,9 @@ export function S3SetUp({
         confirmLabel="Cancel the booking"
         placeholder="guest changed their plans"
         onConfirm={(r) => cancelM.mutate(r)}
-      />
+      >
+        <CancellationFiguresLine entryId={entry.id} />
+      </ReasonDialog>
       <ReasonDialog
         open={reentry !== null}
         onClose={() => setReentry(null)}

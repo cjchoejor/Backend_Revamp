@@ -206,7 +206,7 @@ export function S1Inquiry({
           <SeeRow
             key="park"
             label="Park…"
-            note="a reason and a follow-up date; it returns to Today on that date"
+            note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own"
             onClick={onPark}
           />
         ) : null}
