@@ -1466,6 +1466,12 @@ model Room {
   /// type's list (and an empty type list = every setup). `bedType` above is how the room is made
   /// up NOW — what the desk changes when a guest asks for a King.
   allowedBedTypes   String[]            @default([])
+  /// This room's own USUAL setup (2026-09-19) — two rooms of one type can be made up differently.
+  /// Null = follow `RoomType.defaultBedType`. When a guest leaves, the room goes back to it.
+  defaultBedType    String?
+  /// The booking a desk bed change was made for, so the reset on departure only undoes that
+  /// booking's change — never one already made for the next guest. Null = no booking's change.
+  bedTypeSetForEntryId String?
   currentClaimState InventoryClaimState @default(FREE)
   physicalState     RoomPhysicalState   @default(AVAILABLE_CLEAN)
   expectedReadyAt   DateTime?

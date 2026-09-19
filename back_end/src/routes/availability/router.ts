@@ -9,7 +9,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
-import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType } from "../../services/domain/room-bed-type-service.js";
+import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
 
@@ -47,6 +47,8 @@ availabilityRouter.post("/rooms/:id/bed-type", requireActorLevel("L1"), async (r
       {
         bedType: String(req.body?.bedType ?? ""),
         bedCount: req.body?.bedCount != null ? Number(req.body.bedCount) : null,
+        // The booking the change is for — its departure puts the room back to its usual setup.
+        entryId: typeof req.body?.entryId === "string" && req.body.entryId.trim() ? req.body.entryId.trim() : null,
       },
     );
     res.json(out);
@@ -68,6 +70,7 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
         bedType: true,
         bedCount: true,
         allowedBedTypes: true,
+        defaultBedType: true,
         currentClaimState: true,
         isBlocked: true,
         blockedReason: true,
@@ -99,7 +102,8 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
       ownAllowedBedTypes: r.allowedBedTypes,
       allowedBedTypes: effectiveAllowedBedTypes(r.allowedBedTypes, r.roomType.allowedBedTypes),
       allowedBedTypesSource: allowedBedTypesSource(r.allowedBedTypes, r.roomType.allowedBedTypes),
-      defaultBedType: r.roomType.defaultBedType ?? null,
+      // The room's usual setup: its own, else its type's.
+      defaultBedType: usualBedTypeFor(r.defaultBedType, r.roomType.defaultBedType),
     }));
     // `bedTypes` is the full vocabulary; a room's dropdown reads its own `allowedBedTypes`.
     res.json({ items: withAllowed, count: items.length, bedTypes: ROOM_BED_TYPES });

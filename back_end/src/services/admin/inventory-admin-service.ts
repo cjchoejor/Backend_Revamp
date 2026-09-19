@@ -14,8 +14,21 @@ import {
   effectiveAllowedBedTypes,
   normaliseBedType,
   normaliseBedTypeList,
+  usualBedTypeFor,
   type RoomBedType,
 } from "../domain/room-bed-type-service.js";
+
+/** A guest is in the room — its beds are theirs until they leave (the reset follows then). */
+const GUEST_IN_ROOM = new Set<string>([InventoryClaimState.OCCUPIED]);
+
+/** A room's usual setup must be one it can be made up in. */
+function assertUsualWithinAllowed(roomNumber: string, usual: string, allowed: readonly string[]) {
+  if (!allowed.includes(usual)) {
+    throw new ValidationError(
+      `Room ${roomNumber}'s usual setup (${bedWord(usual)}) must be one it can be made up in (${allowed.map(bedWord).join(", ")})`,
+    );
+  }
+}
 
 /**
  * A room type's usual bed setup must be one its rooms can take (2026-09-19). An empty allowed
@@ -190,13 +203,35 @@ export async function updateRoomType(
         ...(allowedBedTypes !== undefined ? { allowedBedTypes } : {}),
       },
     });
+    // A new usual setup is how this type's rooms are made up from now on: every room that
+    // follows the type, sits in the OLD usual setup and holds no guest's change moves with it.
+    // A room made up for a guest keeps it; the reset on departure takes it to the new usual.
+    let roomsMoved = 0;
+    if (defaultBedType !== undefined && defaultBedType !== existing.defaultBedType && defaultBedType) {
+      const followers = await tx.room.findMany({
+        where: { roomTypeId: id, defaultBedType: null, bedTypeSetForEntryId: null },
+        select: { id: true, bedType: true, currentClaimState: true },
+      });
+      for (const r of followers) {
+        if (GUEST_IN_ROOM.has(r.currentClaimState)) continue;
+        if (r.bedType && r.bedType !== existing.defaultBedType) continue;
+        await tx.room.update({
+          where: { id: r.id },
+          data: { bedType: defaultBedType, bedCount: defaultBedCountForBedType(defaultBedType) },
+        });
+        roomsMoved += 1;
+      }
+    }
     await writeAdminAuditEvent(tx, {
       actorId,
       eventType: "ADMIN.ROOM_TYPE_UPDATED",
       entityType: "RoomType",
       entityId: id,
       operation: "UPDATE",
-      payload: { fieldsChanged: Object.keys(input).filter((k) => (input as Record<string, unknown>)[k] !== undefined) },
+      payload: {
+        fieldsChanged: Object.keys(input).filter((k) => (input as Record<string, unknown>)[k] !== undefined),
+        ...(roomsMoved > 0 ? { roomsMadeUpInNewUsualSetup: roomsMoved } : {}),
+      },
     });
     return updated;
   });
@@ -215,7 +250,8 @@ export async function listRooms(prisma: PrismaClient) {
     ...r,
     effectiveAllowedBedTypes: effectiveAllowedBedTypes(r.allowedBedTypes, r.roomType.allowedBedTypes),
     allowedBedTypesSource: allowedBedTypesSource(r.allowedBedTypes, r.roomType.allowedBedTypes),
-    usualBedType: r.roomType.defaultBedType ?? null,
+    usualBedType: usualBedTypeFor(r.defaultBedType, r.roomType.defaultBedType),
+    usualBedTypeSource: r.defaultBedType ? ("ROOM" as const) : r.roomType.defaultBedType ? ("ROOM_TYPE" as const) : null,
   }));
 }
 
@@ -264,6 +300,8 @@ export async function createRoom(
     bedType?: string | null;
     bedCount?: number | null;
     allowedBedTypes?: string[];
+    /** This room's own usual setup; null/omitted = follow its room type. */
+    defaultBedType?: string | null;
     isShadowInventory?: boolean;
   },
   actorId: string,
@@ -278,10 +316,12 @@ export async function createRoom(
   // (2026-09-07). A new room with no setup stated starts in its type's USUAL setup
   // (2026-09-19) and must be one it is allowed to take.
   const allowedBedTypes = normaliseBedTypeList(input.allowedBedTypes);
-  const bedType = normaliseBedType(input.bedType) ?? normaliseBedType(roomType.defaultBedType);
-  if (bedType) {
-    assertBedTypeAllowedForRoom(roomNumber, bedType, effectiveAllowedBedTypes(allowedBedTypes, roomType.allowedBedTypes));
-  }
+  const ownUsual = normaliseBedType(input.defaultBedType);
+  const allowedForRoom = effectiveAllowedBedTypes(allowedBedTypes, roomType.allowedBedTypes);
+  const usual = usualBedTypeFor(ownUsual, roomType.defaultBedType);
+  if (usual) assertUsualWithinAllowed(roomNumber, usual, allowedForRoom);
+  const bedType = normaliseBedType(input.bedType) ?? usual;
+  if (bedType) assertBedTypeAllowedForRoom(roomNumber, bedType, allowedForRoom);
   const bedCount = bedType ? (input.bedCount ?? defaultBedCountForBedType(bedType)) : null;
   if (bedCount != null) assertValidBedCount(bedCount);
 
@@ -304,6 +344,7 @@ export async function createRoom(
           bedType,
           bedCount,
           allowedBedTypes,
+          defaultBedType: ownUsual,
           currentClaimState: InventoryClaimState.FREE,
           physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
           isShadowInventory: input.isShadowInventory ?? false,
@@ -319,7 +360,7 @@ export async function createRoom(
         entityType: "Room",
         entityId: created.id,
         operation: "CREATE",
-        payload: { roomNumber, roomTypeId: input.roomTypeId, bedType, bedCount, allowedBedTypes },
+        payload: { roomNumber, roomTypeId: input.roomTypeId, bedType, bedCount, allowedBedTypes, defaultBedType: ownUsual },
       });
       return created;
     });
@@ -388,7 +429,7 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
 export async function updateRoom(
   prisma: PrismaClient,
   id: string,
-  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; bedType: string | null; bedCount: number | null; allowedBedTypes: string[]; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
+  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; bedType: string | null; bedCount: number | null; allowedBedTypes: string[]; defaultBedType: string | null; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
   actorId: string,
 ) {
   const existing = await prisma.room.findUnique({ where: { id }, include: { roomType: true } });
@@ -418,6 +459,7 @@ export async function updateRoom(
   }
   const allowedBedTypes =
     input.allowedBedTypes === undefined ? undefined : normaliseBedTypeList(input.allowedBedTypes);
+  const ownUsual = input.defaultBedType === undefined ? undefined : normaliseBedType(input.defaultBedType);
 
   // Bed setup (2026-09-07). `undefined` leaves it alone; explicit null clears it. A changed
   // bed type re-derives the count when the caller didn't state one, so an admin switching a
@@ -433,10 +475,30 @@ export async function updateRoom(
     if (bedType === null) bedCount = null;
   }
   if (bedCount != null) assertValidBedCount(bedCount);
+  const allowedAfter = effectiveAllowedBedTypes(allowedBedTypes ?? existing.allowedBedTypes, nextType.allowedBedTypes);
+  const usualBefore = usualBedTypeFor(existing.defaultBedType, existing.roomType.defaultBedType);
+  const usualAfter = usualBedTypeFor(ownUsual === undefined ? existing.defaultBedType : ownUsual, nextType.defaultBedType);
+  const touchesUsual = ownUsual !== undefined || nextType.id !== existing.roomTypeId || allowedBedTypes !== undefined;
+  if (touchesUsual && usualAfter) {
+    assertUsualWithinAllowed(newRoomNumber ?? existing.roomNumber, usualAfter, allowedAfter);
+  }
+  // A changed usual setup is how the room is made up from now on — unless a guest is in it; the
+  // reset on their departure takes it there. It also retires any guest's change still recorded.
+  let resetToUsual = false;
+  if (
+    usualAfter &&
+    usualAfter !== usualBefore &&
+    input.bedType === undefined &&
+    !GUEST_IN_ROOM.has(existing.currentClaimState)
+  ) {
+    bedType = usualAfter;
+    bedCount = defaultBedCountForBedType(usualAfter);
+    resetToUsual = true;
+  }
   // The setup the room will be in must be one it can take — checked only when the setup, the
   // room's own list or its type is what changed, so an unrelated edit never trips on an
   // existing room the admin narrowed earlier.
-  const touchesBeds = input.bedType !== undefined || allowedBedTypes !== undefined || nextType.id !== existing.roomTypeId;
+  const touchesBeds = input.bedType !== undefined || allowedBedTypes !== undefined || nextType.id !== existing.roomTypeId || resetToUsual;
   const finalBedType = bedType === undefined ? existing.bedType : bedType;
   if (touchesBeds && finalBedType) {
     assertBedTypeAllowedForRoom(
@@ -457,6 +519,8 @@ export async function updateRoom(
           bedType,
           bedCount,
           allowedBedTypes,
+          ...(ownUsual !== undefined ? { defaultBedType: ownUsual } : {}),
+          ...(resetToUsual ? { bedTypeSetForEntryId: null } : {}),
           isShadowInventory: input.isShadowInventory,
           isBlocked: input.isBlocked,
           blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason?.trim() || null,

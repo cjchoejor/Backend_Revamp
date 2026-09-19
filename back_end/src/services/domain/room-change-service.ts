@@ -1931,7 +1931,7 @@ export async function changeRoomToNewSegment(
     let applied = bedType;
     if (bedType !== ((room as { bedType?: string | null }).bedType ?? null)) {
       try {
-        const updated = await setRoomBedType(prisma, roomId, actor, { bedType });
+        const updated = await setRoomBedType(prisma, roomId, actor, { bedType, entryId: input.entryId });
         applied = updated.bedType ?? bedType;
       } catch {
         /* reported as requested — the dropdown is the retry path */

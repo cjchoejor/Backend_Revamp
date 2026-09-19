@@ -6,13 +6,16 @@
  * unless the admin console narrows it. A guest who asks for a King gets a King set up in the
  * room; afterwards the room is usually returned to its type's normal setup.
  *
- * Three facts, three places:
+ * Four facts:
  *  - `RoomType.defaultBedType` — the usual setup for rooms of that type (Standard: Twin,
  *    Suite: King). Set in the admin console.
+ *  - `Room.defaultBedType` — a room's OWN usual setup, when it differs from its type's (two
+ *    rooms of one type can be made up differently). Null = follow the type. `usualBedTypeFor`.
  *  - `RoomType.allowedBedTypes` / `Room.allowedBedTypes` — which setups a room can take. The
  *    room's own list wins, else its type's, else every setup (empty = all).
  *  - `Room.bedType` — how the room is made up NOW. The desk changes it (L1) — a bed setup is a
  *    housekeeping fact decided with a guest standing there; the room's other fields stay L4.
+ *    When the guest leaves, the room goes back to its usual setup (`resetRoomBedToUsualTx`).
  *
  * Every consumer — `GET /api/rooms`, the S1 bed request, the room change, both write paths —
  * reads these through the functions below, so the desk and the console cannot disagree.
@@ -67,6 +70,14 @@ export function effectiveAllowedBedTypes(
   const fromType = normaliseBedTypeList(typeAllowed);
   if (fromType.length > 0) return fromType;
   return [...ROOM_BED_TYPES];
+}
+
+/** A room's usual setup: its own, else its type's. Null when neither is stated. */
+export function usualBedTypeFor(
+  roomDefault: string | null | undefined,
+  typeDefault: string | null | undefined,
+): RoomBedType | null {
+  return normaliseBedType(roomDefault) ?? normaliseBedType(typeDefault);
 }
 
 /** Where the effective list came from — so a screen can say "follows its type" honestly. */
@@ -210,7 +221,7 @@ export async function setRoomBedType(
   prisma: PrismaClient,
   roomId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-  input: { bedType: string; bedCount?: number | null },
+  input: { bedType: string; bedCount?: number | null; entryId?: string | null },
 ) {
   const bedType = normaliseBedType(input.bedType);
   if (!bedType) throw new ValidationError(`bedType must be one of: ${ROOM_BED_TYPES.join(", ")}`);
@@ -222,7 +233,8 @@ export async function setRoomBedType(
       bedType: true,
       bedCount: true,
       allowedBedTypes: true,
-      roomType: { select: { allowedBedTypes: true } },
+      defaultBedType: true,
+      roomType: { select: { allowedBedTypes: true, defaultBedType: true } },
     },
   });
   if (!room) throw new NotFoundError("Room");
@@ -235,11 +247,20 @@ export async function setRoomBedType(
   const bedCount = input.bedCount ?? defaultBedCountForBedType(bedType);
   assertValidBedCount(bedCount);
 
+  if (input.entryId) {
+    const entry = await prisma.entry.findUnique({ where: { id: input.entryId }, select: { id: true } });
+    if (!entry) throw new NotFoundError("Entry");
+  }
+  // A change made for a booking is remembered, so that booking's departure can undo it. Back
+  // to the usual setup means there is nothing left to undo.
+  const usual = usualBedTypeFor(room.defaultBedType, room.roomType.defaultBedType);
+  const setFor = bedType === usual ? null : (input.entryId?.trim() || null);
+
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const updated = await tx.room.update({
       where: { id: roomId },
-      data: { bedType, bedCount, updatedAt: now },
+      data: { bedType, bedCount, bedTypeSetForEntryId: setFor, updatedAt: now },
       select: { id: true, roomNumber: true, bedType: true, bedCount: true },
     });
     await tx.traceEvent.create({
@@ -259,10 +280,76 @@ export async function setRoomBedType(
           fromCount: room.bedCount,
           to: bedType,
           toCount: bedCount,
+          forEntryId: setFor,
+          usual,
         },
         createdBy: actor.actorId,
+        ...(input.entryId ? { entryId: input.entryId } : {}),
       },
     });
     return updated;
   });
+}
+
+/* ------------------------------------------------------------------ back to usual */
+
+type BedResetClient = Pick<PrismaClient, "room" | "traceEvent" | "entry">;
+
+/**
+ * Put a room back to its usual bed setup as a guest leaves it (2026-09-19, operator ruling —
+ * "reset automatically"). Called wherever a booking lets go of a room: checkout, one room
+ * leaving early, the room left behind in a mid-stay move, and cancellations / no-shows /
+ * expiry releasing it.
+ *
+ * It only undoes what THIS booking changed. A room whose setup was changed for another booking
+ * (the next guest's King, set that morning) is left alone. On a departure (`leaving: true`) a
+ * change made before bookings were recorded counts as this guest's; on a plain release (a
+ * cancellation — the guest never slept there) only a change recorded for this booking is undone.
+ */
+export async function resetRoomBedToUsualTx(
+  tx: BedResetClient,
+  input: { roomId: string; entryId: string; actorId: string; reason: string; leaving: boolean; now?: Date },
+): Promise<{ reset: boolean; from?: string | null; to?: string }> {
+  const room = await tx.room.findUnique({
+    where: { id: input.roomId },
+    select: {
+      id: true,
+      roomNumber: true,
+      bedType: true,
+      defaultBedType: true,
+      bedTypeSetForEntryId: true,
+      roomType: { select: { defaultBedType: true } },
+    },
+  });
+  if (!room) return { reset: false };
+  const usual = usualBedTypeFor(room.defaultBedType, room.roomType.defaultBedType);
+  if (!usual || room.bedType === usual) {
+    if (room.bedTypeSetForEntryId === input.entryId) {
+      await tx.room.update({ where: { id: room.id }, data: { bedTypeSetForEntryId: null } });
+    }
+    return { reset: false };
+  }
+  const setForThis = room.bedTypeSetForEntryId === input.entryId;
+  const setForNobody = room.bedTypeSetForEntryId == null;
+  if (!setForThis && !(setForNobody && input.leaving)) return { reset: false };
+
+  const now = input.now ?? new Date();
+  await tx.room.update({
+    where: { id: room.id },
+    data: { bedType: usual, bedCount: defaultBedCountForBedType(usual), bedTypeSetForEntryId: null, updatedAt: now },
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "ROOM.BED_TYPE_RESET_TO_USUAL",
+      actorId: input.actorId,
+      entityType: "Room",
+      entityId: room.id,
+      operation: "UPDATE",
+      timestamp: now,
+      entryId: input.entryId,
+      payload: { roomId: room.id, roomNumber: room.roomNumber, from: room.bedType, to: usual, reason: input.reason },
+      createdBy: input.actorId,
+    },
+  });
+  return { reset: true, from: room.bedType, to: usual };
 }

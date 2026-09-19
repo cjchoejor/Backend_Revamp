@@ -156,6 +156,8 @@ export const createRoomRequestSchema = z.object({
   bedCount: z.coerce.number().int().positive().optional().nullable(),
   /** This room's own list of setups; empty/omitted = follow its room type. */
   allowedBedTypes: z.array(z.string().max(24)).max(8).optional(),
+  /** This room's own usual setup; null/omitted = follow its room type. */
+  defaultBedType: z.string().max(24).optional().nullable(),
   isShadowInventory: z.boolean().optional(),
 });
 
@@ -166,6 +168,8 @@ export const updateRoomRequestSchema = z.object({
   bedType: z.string().max(24).optional().nullable(),
   bedCount: z.coerce.number().int().positive().optional().nullable(),
   allowedBedTypes: z.array(z.string().max(24)).max(8).optional(),
+  /** Null = follow the room type's usual setup; omit to leave it. */
+  defaultBedType: z.string().max(24).optional().nullable(),
   isShadowInventory: z.boolean().optional(),
   isBlocked: z.boolean().optional(),
   blockedReason: z.string().optional().nullable(),

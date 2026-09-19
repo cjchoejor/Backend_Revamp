@@ -5,6 +5,7 @@ import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/er
 import { round2, toDecimal } from "../../lib/money.js";
 import { hotelTodayUtc, nightsBetweenUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
@@ -184,6 +185,13 @@ export async function departRoomEarly(
         actorId: input.actorId,
         reason: input.reason?.trim() || "Guest of this room left; the rest of the booking stays",
       },
+    });
+    await resetRoomBedToUsualTx(tx, {
+      roomId: room.id,
+      entryId: entry.id,
+      actorId: input.actorId,
+      reason: "Guest of this room left",
+      leaving: true,
     });
 
     await tx.traceEvent.create({

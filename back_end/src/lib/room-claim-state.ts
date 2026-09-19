@@ -2,6 +2,7 @@ import { InventoryClaimState, Prisma } from "@prisma/client";
 import { claimFlagReportsPhysicalState } from "./room-claim-flag.js";
 import { findRoomBookingConflicts } from "./room-booking-conflicts.js";
 import { hotelTodayUtc } from "./stay-dates.js";
+import { resetRoomBedToUsualTx } from "../services/domain/room-bed-type-service.js";
 
 /**
  * Centralised room-claim-state transition helper.
@@ -103,6 +104,25 @@ export async function transitionRoomClaimState(tx: TxClient, input: TransitionIn
       effectiveFrom: now,
     },
   });
+  // A booking letting go of the room puts its beds back to the usual setup (2026-09-19) — only
+  // undoing a change made for THIS booking; see `resetRoomBedToUsualTx`.
+  if (
+    input.entryId &&
+    (input.toState === InventoryClaimState.DEPARTED_DIRTY || input.toState === InventoryClaimState.FREE)
+  ) {
+    await resetRoomBedToUsualTx(tx, {
+      roomId: input.roomId,
+      entryId: input.entryId,
+      actorId: input.actorId,
+      reason: input.reason,
+      leaving:
+        input.toState === InventoryClaimState.DEPARTED_DIRTY ||
+        fromState === InventoryClaimState.OCCUPIED ||
+        fromState === InventoryClaimState.DEPARTED_DIRTY ||
+        fromState === InventoryClaimState.DEPARTED_CLEAN,
+      now,
+    });
+  }
   return { transitioned: true, fromState, toState: input.toState };
 }
 

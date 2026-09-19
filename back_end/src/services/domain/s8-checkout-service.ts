@@ -20,6 +20,7 @@ import { readRoomInspectionStanding } from "../../lib/room-inspection-standing.j
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
 import { countOutstandingKeys } from "./room-key-service.js";
+import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -323,6 +324,15 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
           actorId,
           reason: "S8 checkout completion",
         },
+      });
+      // The guest has left: the room goes back to its usual bed setup (2026-09-19).
+      await resetRoomBedToUsualTx(tx, {
+        roomId: a.room.id,
+        entryId,
+        actorId,
+        reason: "Checked out",
+        leaving: true,
+        now,
       });
       ids.push(a.room.id);
     }
