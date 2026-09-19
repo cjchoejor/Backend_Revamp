@@ -1429,6 +1429,14 @@ model RoomType {
   requiredAccompanyingAdults Int @default(1)
   /// Max extra beds available for a room of this type (0 = no extra bed possible).
   maxExtraBeds               Int @default(0)
+  /// The bed setup a room of this type is normally made up in (2026-09-19, operator ruling):
+  /// Standard rooms twin, suites king. A guest can ask for another setup; the desk then changes
+  /// the room's own `Room.bedType`. Null = no usual setup stated.
+  defaultBedType             String?
+  /// The setups a room of this type CAN be made up in. Empty = all of them (the hotel's rule:
+  /// any room can take any bed setup unless the admin console narrows it). A room can narrow
+  /// its own list further with `Room.allowedBedTypes`.
+  allowedBedTypes            String[] @default([])
 
   rooms          Room[]
   committedHolds CommittedHold[]
@@ -1454,6 +1462,10 @@ model Room {
   /// (Twin) rooms. Backfilled from legacy-bookings/room.csv (`bed_size` + `no_of_beds`).
   bedType           String?
   bedCount          Int?
+  /// This room's own list of setups it can be made up in (2026-09-19). Empty = follow its room
+  /// type's list (and an empty type list = every setup). `bedType` above is how the room is made
+  /// up NOW — what the desk changes when a guest asks for a King.
+  allowedBedTypes   String[]            @default([])
   currentClaimState InventoryClaimState @default(FREE)
   physicalState     RoomPhysicalState   @default(AVAILABLE_CLEAN)
   expectedReadyAt   DateTime?

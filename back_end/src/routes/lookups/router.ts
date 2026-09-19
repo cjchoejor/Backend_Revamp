@@ -20,6 +20,7 @@ import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { DeficientConditionCategory } from "@prisma/client";
 import { HOTEL_TIMEZONE } from "../../services/infrastructure/pdf-templates/legphel-document-format.js";
+import { checkBedRequestAgainstRooms, loadRoomBedOptions } from "../../services/domain/room-bed-type-service.js";
 
 export const lookupsRouter = Router();
 const L1 = requireActorLevel("L1");
@@ -132,6 +133,32 @@ lookupsRouter.get("/lookups/payment-milestone-templates", L1, async (_req, res, 
  * allowedRoomCounts: { min, max }, bandBreakdown: { young, child, adult }, maxCapacityUsed,
  * hotelRoomCount, hotelMaxOccupants, exceedsHotelCapacity }`.
  */
+/**
+ * Can this bed request be met? (2026-09-19) — the SAME check intake applies on save, so the
+ * desk never re-derives it. Body `{ request: { KING: 3, TWIN: 2 }, roomIds? }`: without
+ * `roomIds` it is judged against every room in the hotel (intake); with them, against those
+ * rooms only (the rooms picked at Inquiry). Answers `stock` too — how many rooms can take each
+ * setup — which the intake form prints as its "up to N" ceilings.
+ */
+const bedRequestCheckSchema = z.object({
+  request: z.record(z.string(), z.coerce.number().int().min(0).max(200)).default({}),
+  roomIds: z.array(z.string().min(1)).max(500).optional(),
+});
+lookupsRouter.post("/lookups/bed-request-check", L1, validateBody(bedRequestCheckSchema), async (req, res, next) => {
+  try {
+    const body = req.body as z.infer<typeof bedRequestCheckSchema>;
+    const request: Record<string, number> = {};
+    for (const [k, v] of Object.entries(body.request)) {
+      const t = k.trim().toUpperCase();
+      if (v > 0) request[t] = (request[t] ?? 0) + v;
+    }
+    const rooms = await loadRoomBedOptions(prisma, body.roomIds);
+    res.json(checkBedRequestAgainstRooms(request, rooms));
+  } catch (e) {
+    next(e);
+  }
+});
+
 lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) => {
   try {
     const body = req.body ?? {};

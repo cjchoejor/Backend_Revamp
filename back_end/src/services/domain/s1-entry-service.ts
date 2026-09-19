@@ -24,7 +24,7 @@ import {
 } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
-import { ROOM_BED_TYPES, bedTypeConversionGroup } from "./room-bed-type-service.js";
+import { ROOM_BED_TYPES, checkBedRequestAgainstRooms, loadRoomBedOptions } from "./room-bed-type-service.js";
 
 /** "5 King + 2 Twin" — the human wording every bed-request error uses. */
 function describeBedTypeRequest(req: Record<string, number>): string {
@@ -43,11 +43,11 @@ function describeBedTypeRequest(req: Record<string, number>): string {
  *  - setups must be in the ROOM_BED_TYPES vocabulary, counts whole numbers;
  *  - the breakdown must not ask for more rooms than `numberOfRooms` (fewer is fine — a
  *    partial preference like "at least 2 King" is legal);
- *  - each bed CONVERSION GROUP's total must fit the rooms whose own stock can be arranged
- *    into it — King⇄Twin share convertible stock (two singles join into a King), so
- *    "5 King + 9 Twin" is judged against the King/Twin pool together, while Queen and
- *    Single stand alone. A request the hotel physically cannot set up is refused at intake
- *    rather than discovered at arrival.
+ *  - the hotel must be able to give every asked setup its own room at once, each room
+ *    taking only the setups the admin console allows it (2026-09-19 — any room can take any
+ *    setup unless narrowed). `checkBedRequestAgainstRooms` decides it as a matching, the same
+ *    check the desk's `POST /api/lookups/bed-request-check` runs. A request the hotel cannot
+ *    set up is refused at intake rather than discovered at arrival.
  */
 async function normalizeAndValidateBedTypeRequest(
   prisma: PrismaClient,
@@ -75,36 +75,10 @@ async function normalizeAndValidateBedTypeRequest(
     );
   }
 
-  // Achievability, pooled by conversion group against the live Room registry.
-  const rooms = await prisma.room.findMany({ where: { isShadowInventory: false }, select: { bedType: true } });
-  const groupOf = (t: string) => {
-    const group = bedTypeConversionGroup(t);
-    return (group.length > 0 ? group : [t]).slice().sort().join("/");
-  };
-  const stockByGroup = new Map<string, number>();
-  for (const r of rooms) {
-    const bedType = (r as { bedType?: string | null }).bedType;
-    if (!bedType) continue;
-    const g = groupOf(bedType);
-    stockByGroup.set(g, (stockByGroup.get(g) ?? 0) + 1);
-  }
-  const askByGroup = new Map<string, { count: number; types: string[] }>();
-  for (const [type, count] of Object.entries(clean)) {
-    const g = groupOf(type);
-    const cur = askByGroup.get(g) ?? { count: 0, types: [] };
-    cur.count += count;
-    cur.types.push(type);
-    askByGroup.set(g, cur);
-  }
-  for (const [g, ask] of askByGroup) {
-    const stock = stockByGroup.get(g) ?? 0;
-    if (ask.count > stock) {
-      const label = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
-      const pooledNote = g.includes("/") ? ` (${g.split("/").map(label).join(" and ")} rooms share the same convertible bed stock)` : "";
-      throw new ValidationError(
-        `The hotel cannot set up ${ask.count} ${ask.types.map(label).join(" + ")} room${ask.count === 1 ? "" : "s"} — its bed stock supports at most ${stock}${pooledNote}`,
-      );
-    }
+  // Achievability against the live registry: one setup per room, each room within its list.
+  const check = checkBedRequestAgainstRooms(clean, await loadRoomBedOptions(prisma));
+  if (!check.satisfiable) {
+    throw new ValidationError(`The hotel cannot set up ${describeBedTypeRequest(clean)} — ${check.message}`);
   }
   return clean;
 }

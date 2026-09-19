@@ -39,7 +39,7 @@ import { backflowRoomChangeToS2 } from "../../state-machines/backflows-state-mac
 import { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 import { progressStageS5ToS6 } from "../../state-machines/entry-lifecycle-state-machine.js";
 import * as s3HoldService from "./s3-hold-service.js";
-import { ROOM_BED_TYPES, bedTypeConversionGroup, setRoomBedType, type RoomBedType } from "./room-bed-type-service.js";
+import { ROOM_BED_TYPES, assertBedTypeAllowedForRoom, effectiveAllowedBedTypes, setRoomBedType, type RoomBedType } from "./room-bed-type-service.js";
 import {
   createQuotation,
   enforceRoomCompositionsPriceable,
@@ -1515,12 +1515,11 @@ export async function changeRoomToNewSegment(
       if (!ROOM_BED_TYPES.includes(bedType as RoomBedType)) {
         throw new ValidationError(`bedType must be one of: ${ROOM_BED_TYPES.join(", ")}`);
       }
-      const achievable = bedTypeConversionGroup((room as { bedType?: string | null }).bedType);
-      if (achievable.length > 0 && !achievable.includes(bedType)) {
-        throw new ValidationError(
-          `Room ${room.roomNumber}'s beds can be set up as ${achievable.join(" or ")} — not ${bedType}`,
-        );
-      }
+      assertBedTypeAllowedForRoom(
+        room.roomNumber,
+        bedType,
+        effectiveAllowedBedTypes(room.allowedBedTypes, room.roomType?.allowedBedTypes),
+      );
       requestedBedTypes.set(roomId, bedType);
     }
     if (!wantsCompositionChange) {

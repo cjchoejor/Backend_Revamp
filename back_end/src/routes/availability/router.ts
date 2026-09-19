@@ -9,7 +9,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
-import { ROOM_BED_TYPES, bedTypeConversionGroup, setRoomBedType } from "../../services/domain/room-bed-type-service.js";
+import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
 
@@ -67,6 +67,7 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
         floorNumber: true,
         bedType: true,
         bedCount: true,
+        allowedBedTypes: true,
         currentClaimState: true,
         isBlocked: true,
         blockedReason: true,
@@ -82,20 +83,25 @@ availabilityRouter.get("/rooms", requireActorLevel("L1"), async (_req, res, next
             maxChildren: true,
             requiredAccompanyingAdults: true,
             maxExtraBeds: true,
+            defaultBedType: true,
+            allowedBedTypes: true,
           },
         },
       },
     });
-    // Per-room ALLOWED bed types (2026-08-12, operator ruling): every setup THIS room's own
-    // bed stock can be arranged into — King ⇄ Twin are the same beds arranged differently,
-    // so a Twin room offers both; 301's Queen converts into nothing, so 301 offers Queen
-    // alone and no other room ever shows it. The convertibility fact lives in
-    // `bedTypeConversionGroup` (room-bed-type-service); everything here derives from each
-    // room's live registry row, so adding a room or changing a bed moves every dropdown
-    // automatically — nothing hardcoded, no config key.
-    const withAllowed = items.map((r) => ({ ...r, allowedBedTypes: bedTypeConversionGroup(r.bedType).sort() }));
-    // `bedTypes` stays the full vocabulary the write endpoint accepts (API-level truth);
-    // the desk's dropdowns read the per-room `allowedBedTypes` above.
+    // Per room (2026-09-19, operator ruling): the setups it can be made up in — its own list,
+    // else its type's, else every setup — and its type's USUAL setup. `bedType` is how the
+    // room is made up now. All three come from room-bed-type-service, so the desk and the
+    // admin console read one rule. `allowedBedTypes` is REPLACED here by the effective list;
+    // the room's own configured list is `ownAllowedBedTypes`.
+    const withAllowed = items.map((r) => ({
+      ...r,
+      ownAllowedBedTypes: r.allowedBedTypes,
+      allowedBedTypes: effectiveAllowedBedTypes(r.allowedBedTypes, r.roomType.allowedBedTypes),
+      allowedBedTypesSource: allowedBedTypesSource(r.allowedBedTypes, r.roomType.allowedBedTypes),
+      defaultBedType: r.roomType.defaultBedType ?? null,
+    }));
+    // `bedTypes` is the full vocabulary; a room's dropdown reads its own `allowedBedTypes`.
     res.json({ items: withAllowed, count: items.length, bedTypes: ROOM_BED_TYPES });
   } catch (e) {
     next(e);

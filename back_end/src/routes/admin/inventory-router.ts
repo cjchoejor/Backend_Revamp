@@ -20,7 +20,7 @@ export const adminInventoryRouter = Router();
 adminInventoryRouter.get("/room-types", requireActorLevel("L4"), async (_req, res, next) => {
   try {
     const items = await inventoryAdminService.listRoomTypes(prisma);
-    res.json({ items, count: items.length });
+    res.json({ items, count: items.length, bedTypes: ROOM_BED_TYPES });
   } catch (e) {
     next(e);
   }
@@ -66,11 +66,9 @@ adminInventoryRouter.delete("/room-types/:id", requireActorLevel("L4"), async (r
 adminInventoryRouter.get("/rooms", requireActorLevel("L4"), async (_req, res, next) => {
   try {
     const items = await inventoryAdminService.listRooms(prisma);
-    // The FULL vocabulary, deliberately — unlike the desk's `/api/rooms`, which narrows each
-    // room to the setups its own bed stock converts into (`allowedBedTypes`). The console is
-    // the registry authority: it is where a room's beds are declared in the first place, and
-    // where a wrongly-registered one is corrected. Narrowing here would be circular — a room
-    // mis-entered as QUEEN could never be set back to KING.
+    // `bedTypes` is the full vocabulary: the console is where a room's allowed setups are
+    // declared, so it must offer all of them. Each item carries its effective list and its
+    // type's usual setup, computed by the service (never re-derived on the page).
     res.json({ items, count: items.length, bedTypes: ROOM_BED_TYPES });
   } catch (e) {
     next(e);

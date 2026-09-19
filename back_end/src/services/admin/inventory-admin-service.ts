@@ -6,11 +6,28 @@ import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import {
+  allowedBedTypesSource,
+  assertBedTypeAllowedForRoom,
   assertValidBedCount,
+  bedWord,
   defaultBedCountForBedType,
+  effectiveAllowedBedTypes,
   normaliseBedType,
+  normaliseBedTypeList,
   type RoomBedType,
 } from "../domain/room-bed-type-service.js";
+
+/**
+ * A room type's usual bed setup must be one its rooms can take (2026-09-19). An empty allowed
+ * list means every setup, so any usual setup is fine against it.
+ */
+function assertDefaultWithinAllowed(defaultBedType: string | null, allowed: readonly string[]) {
+  if (defaultBedType && allowed.length > 0 && !allowed.includes(defaultBedType)) {
+    throw new ValidationError(
+      `The usual setup (${bedWord(defaultBedType)}) must be one of the setups this type's rooms can take (${allowed.map(bedWord).join(", ")})`,
+    );
+  }
+}
 
 export async function listRoomTypes(prisma: PrismaClient) {
   return prisma.roomType.findMany({
@@ -43,9 +60,14 @@ export async function createRoomType(
     maxChildren?: number;
     requiredAccompanyingAdults?: number;
     maxExtraBeds?: number;
+    defaultBedType?: string | null;
+    allowedBedTypes?: string[];
   },
   actorId: string,
 ) {
+  const defaultBedType = normaliseBedType(input.defaultBedType);
+  const allowedBedTypes = normaliseBedTypeList(input.allowedBedTypes);
+  assertDefaultWithinAllowed(defaultBedType, allowedBedTypes);
   const code = input.code.trim();
   const name = input.name.trim();
   if (!code || !name) throw new ValidationError("code and name are required");
@@ -65,6 +87,8 @@ export async function createRoomType(
         ...(input.maxChildren != null ? { maxChildren: input.maxChildren } : {}),
         ...(input.requiredAccompanyingAdults != null ? { requiredAccompanyingAdults: input.requiredAccompanyingAdults } : {}),
         ...(input.maxExtraBeds != null ? { maxExtraBeds: input.maxExtraBeds } : {}),
+        defaultBedType,
+        allowedBedTypes,
       },
     });
     await writeAdminAuditEvent(tx, {
@@ -83,6 +107,7 @@ export async function createRoomType(
           requiredAccompanyingAdults: created.requiredAccompanyingAdults,
           maxExtraBeds: created.maxExtraBeds,
         },
+        beds: { defaultBedType, allowedBedTypes },
       },
     });
     return created;
@@ -126,11 +151,22 @@ export async function updateRoomType(
     maxChildren?: number;
     requiredAccompanyingAdults?: number;
     maxExtraBeds?: number;
+    defaultBedType?: string | null;
+    allowedBedTypes?: string[];
   },
   actorId: string,
 ) {
   const existing = await prisma.roomType.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError("RoomType");
+  // `undefined` leaves a bed field alone; the check runs on what the type will hold afterwards.
+  const defaultBedType =
+    input.defaultBedType === undefined ? undefined : normaliseBedType(input.defaultBedType);
+  const allowedBedTypes =
+    input.allowedBedTypes === undefined ? undefined : normaliseBedTypeList(input.allowedBedTypes);
+  assertDefaultWithinAllowed(
+    defaultBedType === undefined ? existing.defaultBedType : defaultBedType,
+    allowedBedTypes === undefined ? existing.allowedBedTypes : allowedBedTypes,
+  );
   const name = input.name?.trim();
   if (name !== undefined && !name) throw new ValidationError("name cannot be empty");
   // Enforce standard <= max even when only one of the two is being changed.
@@ -150,6 +186,8 @@ export async function updateRoomType(
         ...(input.maxChildren != null ? { maxChildren: input.maxChildren } : {}),
         ...(input.requiredAccompanyingAdults != null ? { requiredAccompanyingAdults: input.requiredAccompanyingAdults } : {}),
         ...(input.maxExtraBeds != null ? { maxExtraBeds: input.maxExtraBeds } : {}),
+        ...(defaultBedType !== undefined ? { defaultBedType } : {}),
+        ...(allowedBedTypes !== undefined ? { allowedBedTypes } : {}),
       },
     });
     await writeAdminAuditEvent(tx, {
@@ -165,10 +203,20 @@ export async function updateRoomType(
 }
 
 export async function listRooms(prisma: PrismaClient) {
-  return prisma.room.findMany({
+  const rooms = await prisma.room.findMany({
     orderBy: [{ floorNumber: "asc" }, { roomNumber: "asc" }],
-    include: { roomType: { select: { id: true, code: true, name: true } } },
+    include: {
+      roomType: { select: { id: true, code: true, name: true, defaultBedType: true, allowedBedTypes: true } },
+    },
   });
+  // What each room can be made up as, and whether that is its own list or its type's — the
+  // console prints this rather than re-deriving the rule (2026-09-19).
+  return rooms.map((r) => ({
+    ...r,
+    effectiveAllowedBedTypes: effectiveAllowedBedTypes(r.allowedBedTypes, r.roomType.allowedBedTypes),
+    allowedBedTypesSource: allowedBedTypesSource(r.allowedBedTypes, r.roomType.allowedBedTypes),
+    usualBedType: r.roomType.defaultBedType ?? null,
+  }));
 }
 
 export async function getDeficientCategories(prisma: PrismaClient) {
@@ -215,6 +263,7 @@ export async function createRoom(
     /** Physical bed setup — one of ROOM_BED_TYPES; validated, not free-form. */
     bedType?: string | null;
     bedCount?: number | null;
+    allowedBedTypes?: string[];
     isShadowInventory?: boolean;
   },
   actorId: string,
@@ -222,15 +271,19 @@ export async function createRoom(
   const roomNumber = input.roomNumber.trim();
   if (!roomNumber) throw new ValidationError("roomNumber is required");
 
-  // Same vocabulary and same "TWIN = 2 beds" default as the desk's own bed-type endpoint
-  // (2026-09-07) — a room registered here and a room reconfigured at the desk must end up
-  // describing their beds identically, or the two surfaces disagree about one fact.
-  const bedType = normaliseBedType(input.bedType);
-  const bedCount = bedType ? (input.bedCount ?? defaultBedCountForBedType(bedType)) : null;
-  if (bedCount != null) assertValidBedCount(bedCount);
-
   const roomType = await prisma.roomType.findUnique({ where: { id: input.roomTypeId } });
   if (!roomType) throw new NotFoundError("RoomType");
+
+  // Same vocabulary and same "TWIN = 2 beds" default as the desk's own bed-type endpoint
+  // (2026-09-07). A new room with no setup stated starts in its type's USUAL setup
+  // (2026-09-19) and must be one it is allowed to take.
+  const allowedBedTypes = normaliseBedTypeList(input.allowedBedTypes);
+  const bedType = normaliseBedType(input.bedType) ?? normaliseBedType(roomType.defaultBedType);
+  if (bedType) {
+    assertBedTypeAllowedForRoom(roomNumber, bedType, effectiveAllowedBedTypes(allowedBedTypes, roomType.allowedBedTypes));
+  }
+  const bedCount = bedType ? (input.bedCount ?? defaultBedCountForBedType(bedType)) : null;
+  if (bedCount != null) assertValidBedCount(bedCount);
 
   // Friendly pre-check so the operator sees "Room 201 already exists" instead of a
   // Prisma P2002 unique-constraint violation surfacing as "Internal server error".
@@ -250,6 +303,7 @@ export async function createRoom(
           floorNumber: input.floorNumber ?? null,
           bedType,
           bedCount,
+          allowedBedTypes,
           currentClaimState: InventoryClaimState.FREE,
           physicalState: RoomPhysicalState.AVAILABLE_CLEAN,
           isShadowInventory: input.isShadowInventory ?? false,
@@ -265,7 +319,7 @@ export async function createRoom(
         entityType: "Room",
         entityId: created.id,
         operation: "CREATE",
-        payload: { roomNumber, roomTypeId: input.roomTypeId, bedType, bedCount },
+        payload: { roomNumber, roomTypeId: input.roomTypeId, bedType, bedCount, allowedBedTypes },
       });
       return created;
     });
@@ -334,10 +388,10 @@ export async function deleteRoom(prisma: PrismaClient, id: string, actorId: stri
 export async function updateRoom(
   prisma: PrismaClient,
   id: string,
-  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; bedType: string | null; bedCount: number | null; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
+  input: Partial<{ roomNumber: string; roomTypeId: string; floorNumber: number | null; bedType: string | null; bedCount: number | null; allowedBedTypes: string[]; isShadowInventory: boolean; isBlocked: boolean; blockedReason: string | null }>,
   actorId: string,
 ) {
-  const existing = await prisma.room.findUnique({ where: { id } });
+  const existing = await prisma.room.findUnique({ where: { id }, include: { roomType: true } });
   if (!existing) throw new NotFoundError("Room");
 
   // Validate roomNumber change — must be non-empty and not collide with another room.
@@ -356,10 +410,14 @@ export async function updateRoom(
   }
 
   // Validate roomTypeId change.
+  let nextType = existing.roomType;
   if (input.roomTypeId !== undefined && input.roomTypeId !== existing.roomTypeId) {
     const roomType = await prisma.roomType.findUnique({ where: { id: input.roomTypeId } });
     if (!roomType) throw new NotFoundError("RoomType");
+    nextType = roomType;
   }
+  const allowedBedTypes =
+    input.allowedBedTypes === undefined ? undefined : normaliseBedTypeList(input.allowedBedTypes);
 
   // Bed setup (2026-09-07). `undefined` leaves it alone; explicit null clears it. A changed
   // bed type re-derives the count when the caller didn't state one, so an admin switching a
@@ -375,6 +433,18 @@ export async function updateRoom(
     if (bedType === null) bedCount = null;
   }
   if (bedCount != null) assertValidBedCount(bedCount);
+  // The setup the room will be in must be one it can take — checked only when the setup, the
+  // room's own list or its type is what changed, so an unrelated edit never trips on an
+  // existing room the admin narrowed earlier.
+  const touchesBeds = input.bedType !== undefined || allowedBedTypes !== undefined || nextType.id !== existing.roomTypeId;
+  const finalBedType = bedType === undefined ? existing.bedType : bedType;
+  if (touchesBeds && finalBedType) {
+    assertBedTypeAllowedForRoom(
+      newRoomNumber ?? existing.roomNumber,
+      finalBedType,
+      effectiveAllowedBedTypes(allowedBedTypes ?? existing.allowedBedTypes, nextType.allowedBedTypes),
+    );
+  }
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -386,6 +456,7 @@ export async function updateRoom(
           floorNumber: input.floorNumber,
           bedType,
           bedCount,
+          allowedBedTypes,
           isShadowInventory: input.isShadowInventory,
           isBlocked: input.isBlocked,
           blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason?.trim() || null,

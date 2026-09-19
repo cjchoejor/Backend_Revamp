@@ -131,6 +131,10 @@ export const createRoomTypeRequestSchema = z.object({
   maxChildren: z.coerce.number().int().min(0).optional(),
   requiredAccompanyingAdults: z.coerce.number().int().min(0).optional(),
   maxExtraBeds: z.coerce.number().int().min(0).optional(),
+  /** The usual bed setup for rooms of this type (null = none stated). */
+  defaultBedType: z.string().max(24).optional().nullable(),
+  /** The setups rooms of this type can take; empty = every setup. */
+  allowedBedTypes: z.array(z.string().max(24)).max(8).optional(),
 });
 
 export const updateRoomTypeRequestSchema = z.object({
@@ -140,6 +144,8 @@ export const updateRoomTypeRequestSchema = z.object({
   maxChildren: z.coerce.number().int().min(0).optional(),
   requiredAccompanyingAdults: z.coerce.number().int().min(0).optional(),
   maxExtraBeds: z.coerce.number().int().min(0).optional(),
+  defaultBedType: z.string().max(24).optional().nullable(),
+  allowedBedTypes: z.array(z.string().max(24)).max(8).optional(),
 });
 
 export const createRoomRequestSchema = z.object({
@@ -148,6 +154,8 @@ export const createRoomRequestSchema = z.object({
   floorNumber: z.coerce.number().int().optional().nullable(),
   bedType: z.string().max(24).optional().nullable(),
   bedCount: z.coerce.number().int().positive().optional().nullable(),
+  /** This room's own list of setups; empty/omitted = follow its room type. */
+  allowedBedTypes: z.array(z.string().max(24)).max(8).optional(),
   isShadowInventory: z.boolean().optional(),
 });
 
@@ -157,6 +165,7 @@ export const updateRoomRequestSchema = z.object({
   floorNumber: z.coerce.number().int().optional().nullable(),
   bedType: z.string().max(24).optional().nullable(),
   bedCount: z.coerce.number().int().positive().optional().nullable(),
+  allowedBedTypes: z.array(z.string().max(24)).max(8).optional(),
   isShadowInventory: z.boolean().optional(),
   isBlocked: z.boolean().optional(),
   blockedReason: z.string().optional().nullable(),
