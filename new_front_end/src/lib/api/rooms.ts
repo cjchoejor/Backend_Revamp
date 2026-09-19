@@ -15,7 +15,8 @@ export type RoomListItem = {
   allowedBedTypes?: string[];
   /** Where that list comes from: the room's own, its type's, or no limit set. */
   allowedBedTypesSource?: "ROOM" | "ROOM_TYPE" | "ALL";
-  /** The room type's usual setup (Standard: Twin, Suite: King) — null when none is stated. */
+  /** The room's usual setup — its own, else its type's (Standard: Twin, Suite: King). The room
+   *  goes back to it when the guest leaves. Null when none is stated. */
   defaultBedType?: string | null;
   currentClaimState?: string;
   isBlocked?: boolean;
@@ -74,11 +75,14 @@ export async function checkBedRequest(session: Session, request: Record<string, 
   });
 }
 
-/** Change a room's physical bed setup (L1 — a housekeeping fact; traced with the prior value). */
-export async function setRoomBedType(session: Session, roomId: string, bedType: string) {
+/**
+ * Change how a room is made up (L1 — a housekeeping fact; traced with the prior value). Pass the
+ * booking the change is for: when that guest leaves, the room goes back to its usual setup.
+ */
+export async function setRoomBedType(session: Session, roomId: string, bedType: string, entryId?: string) {
   return apiRequest<{ id: string; roomNumber: string; bedType: string | null; bedCount: number | null }>(
     `/api/rooms/${roomId}/bed-type`,
-    { method: "POST", session, body: { bedType } },
+    { method: "POST", session, body: { bedType, ...(entryId ? { entryId } : {}) } },
   );
 }
 

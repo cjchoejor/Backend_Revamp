@@ -842,7 +842,7 @@ function RoomRow({
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <InlineTool>
             <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
-            <BedTypeEditor roomId={a.roomId} />
+            <BedTypeEditor roomId={a.roomId} entryId={entry.id} />
             <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={onChanged} />
           </InlineTool>
           <Button kind="quiet" compact onClick={onToggleOpen}>

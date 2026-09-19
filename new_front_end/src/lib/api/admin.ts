@@ -273,8 +273,12 @@ export async function listAdminRooms(session: Session) {
       /** What the room can actually be made up as (server-computed). */
       effectiveAllowedBedTypes: string[];
       allowedBedTypesSource: "ROOM" | "ROOM_TYPE" | "ALL";
-      /** Its type's usual setup. */
+      /** The room's usual setup — its own, else its type's. It goes back to it when a guest leaves. */
       usualBedType: string | null;
+      /** Where the usual setup comes from. */
+      usualBedTypeSource: "ROOM" | "ROOM_TYPE" | null;
+      /** The room's OWN usual setup — null when it follows its room type. */
+      defaultBedType: string | null;
       roomType: { id: string; code: string; name: string; defaultBedType: string | null; allowedBedTypes: string[] };
     }>;
     count: number;
@@ -430,6 +434,8 @@ export async function createAdminRoom(
     bedCount?: number | null;
     /** This room's own list of setups; empty/omitted = follow its room type. */
     allowedBedTypes?: string[];
+    /** This room's own usual setup; null/omitted = follow its room type. */
+    defaultBedType?: string | null;
     isShadowInventory?: boolean;
   },
 ) {
@@ -448,6 +454,9 @@ export async function updateAdminRoom(
     bedCount?: number | null;
     /** Empty array = follow the room type; omit to leave it untouched. */
     allowedBedTypes?: string[];
+    /** Null = follow the room type's usual setup; omit to leave it. A new usual setup also makes
+     *  the room up that way now, unless a guest is in it. */
+    defaultBedType?: string | null;
     isShadowInventory?: boolean;
     isBlocked?: boolean;
     blockedReason?: string | null;

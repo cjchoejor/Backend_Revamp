@@ -1056,7 +1056,7 @@ export function InitialSelectionCell({ entryId, roomId }: { entryId: string; roo
  * who asks for a King gets the room changed to King here; the type's usual setup is marked so
  * the desk can see what to put it back to.
  */
-export function BedTypeEditor({ roomId }: { roomId: string }) {
+export function BedTypeEditor({ roomId, entryId }: { roomId: string; entryId?: string }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
 
@@ -1073,7 +1073,7 @@ export function BedTypeEditor({ roomId }: { roomId: string }) {
   const vocabulary = roomsCatalogQuery.data?.bedTypes ?? [];
 
   const bedTypeM = useMutation({
-    mutationFn: (bedType: string) => setRoomBedType(session!, roomId, bedType),
+    mutationFn: (bedType: string) => setRoomBedType(session!, roomId, bedType, entryId),
     onSuccess: (r) => {
       toast.success(`Room ${r.roomNumber} set to ${r.bedType === "TWIN" ? "Twin beds" : `${bedLabel(r.bedType)} bed`}`);
       void queryClient.invalidateQueries({ queryKey: ["rooms-catalog"] });
@@ -1094,7 +1094,7 @@ export function BedTypeEditor({ roomId }: { roomId: string }) {
       onChange={(e) => {
         if (e.target.value) bedTypeM.mutate(e.target.value);
       }}
-      title={`How this room is made up now — change it when the guest asks for another setup (recorded).${
+      title={`How this room is made up now — change it when the guest asks for another setup (recorded). It goes back to its usual setup when the guest leaves.${
         room.defaultBedType ? ` Usually ${room.defaultBedType === "TWIN" ? "Twin beds" : `${bedLabel(room.defaultBedType)} bed`}.` : ""
       }`}
       style={{ width: 128, fontSize: 11.5, padding: "3px 6px" }}

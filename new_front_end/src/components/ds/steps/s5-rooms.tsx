@@ -695,13 +695,13 @@ function RoomLine({
         {past ? (
           <div inert style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <InitialSelectionCell entryId={entry.id} roomId={roomId} />
-            <BedTypeEditor roomId={roomId} />
+            <BedTypeEditor roomId={roomId} entryId={entry.id} />
             <ExtraBedEditor entry={entry} roomId={roomId} onChanged={onChanged} />
           </div>
         ) : (
           <>
             <InitialSelectionCell entryId={entry.id} roomId={roomId} />
-            <BedTypeEditor roomId={roomId} />
+            <BedTypeEditor roomId={roomId} entryId={entry.id} />
             <ExtraBedEditor entry={entry} roomId={roomId} onChanged={onChanged} />
           </>
         )}
