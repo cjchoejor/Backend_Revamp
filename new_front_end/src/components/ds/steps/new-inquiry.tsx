@@ -37,7 +37,7 @@ import {
   type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
-import { listRooms } from "@/lib/api/rooms";
+import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
@@ -375,7 +375,8 @@ export function NewInquiryCanvas() {
   const roomsN = parseInt(rooms || "0", 10) || 0;
 
   /* ---------------------------------------------------------------- beds */
-  // The setups and their ceilings come from the live room registry (King ⇄ Twin share stock).
+  // The setups and their ceilings come from the live room registry: how many rooms can be made
+  // up in each setup (any room can take any setup unless the admin console narrows it).
   const catalogQuery = useQuery({ queryKey: ["rooms"], queryFn: () => listRooms(session!), enabled: !!session });
   const catalog = catalogQuery.data?.items;
   const bedOptions = useMemo(() => {
@@ -401,32 +402,17 @@ export function NewInquiryCanvas() {
     return out;
   }, [beds]);
   const bedSum = Object.values(bedRequest).reduce((a, b) => a + b, 0);
-  // Setups that share convertible stock are judged together, the way the server judges them.
-  const bedShortfall = useMemo(() => {
-    if (bedSum === 0) return null;
-    const stockByGroup = new Map<string, number>();
-    const groupOf = new Map<string, string>();
-    for (const r of catalog ?? []) {
-      const setups = (r.allowedBedTypes?.length ? r.allowedBedTypes : r.bedType ? [r.bedType] : []).slice().sort();
-      if (setups.length === 0) continue;
-      const g = setups.join("/");
-      stockByGroup.set(g, (stockByGroup.get(g) ?? 0) + 1);
-      for (const t of setups) groupOf.set(t, g);
-    }
-    const askByGroup = new Map<string, { count: number; types: string[] }>();
-    for (const [t, n] of Object.entries(bedRequest)) {
-      const g = groupOf.get(t) ?? t;
-      const cur = askByGroup.get(g) ?? { count: 0, types: [] };
-      cur.count += n;
-      cur.types.push(t);
-      askByGroup.set(g, cur);
-    }
-    for (const [g, ask] of askByGroup) {
-      const stock = stockByGroup.get(g) ?? 0;
-      if (ask.count > stock) return { asked: ask.count, stock, types: ask.types.map(bedWord).join(" + "), pooled: g.includes("/") };
-    }
-    return null;
-  }, [bedRequest, bedSum, catalog]);
+  // Whether the hotel can give every asked setup its own room is the SERVER's check — the same
+  // one the booking is refused by on save — so the form never re-derives the rule.
+  const bedRequestKey = JSON.stringify(bedRequest);
+  const bedCheck = useQuery({
+    queryKey: ["bed-request-check", bedRequestKey],
+    queryFn: () => checkBedRequest(session!, bedRequest),
+    enabled: !!session && bedSum > 0,
+    placeholderData: (prev) => prev,
+  });
+  const bedShortfall =
+    bedSum > 0 && bedCheck.data && !bedCheck.data.satisfiable ? { message: bedCheck.data.message ?? "" } : null;
   const bedsOverRooms = bedSum > 0 && bedSum > roomsN;
   const bedsOk = bedSum === 0 || (!bedsOverRooms && !bedShortfall);
   // The bed setup only ever RAISES the room count; a smaller sum is a partial preference.
@@ -1302,8 +1288,7 @@ export function NewInquiryCanvas() {
                         {bedShortfall ? (
                           <span className="error">
                             <Icon name="alert" />
-                            The hotel cannot set up {plural(bedShortfall.asked, `${bedShortfall.types} room`)} — its beds allow at most {bedShortfall.stock}
-                            {bedShortfall.pooled ? " (King and Twin rooms share the same beds)" : ""}.
+                            The hotel cannot set up these beds — {bedShortfall.message}.
                           </span>
                         ) : bedsOverRooms ? (
                           <span className="error">

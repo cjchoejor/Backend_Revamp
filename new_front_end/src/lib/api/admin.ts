@@ -265,9 +265,17 @@ export async function listAdminRooms(session: Session) {
       physicalState: string;
       isDeficient: boolean;
       isBlocked: boolean;
+      /** How the room is made up now. */
       bedType: string | null;
       bedCount: number | null;
-      roomType: { id: string; code: string; name: string };
+      /** This room's own list of setups — empty means it follows its room type. */
+      allowedBedTypes: string[];
+      /** What the room can actually be made up as (server-computed). */
+      effectiveAllowedBedTypes: string[];
+      allowedBedTypesSource: "ROOM" | "ROOM_TYPE" | "ALL";
+      /** Its type's usual setup. */
+      usualBedType: string | null;
+      roomType: { id: string; code: string; name: string; defaultBedType: string | null; allowedBedTypes: string[] };
     }>;
     count: number;
     /** The bed vocabulary the write endpoints accept — never hardcode it in a dropdown. */
@@ -370,6 +378,10 @@ export type RoomTypeAdmin = {
   maxChildren?: number;
   requiredAccompanyingAdults?: number;
   maxExtraBeds?: number;
+  /** The setup rooms of this type are usually made up in. */
+  defaultBedType?: string | null;
+  /** The setups rooms of this type can take — empty means every setup. */
+  allowedBedTypes?: string[];
   _count?: { rooms: number };
 };
 
@@ -379,10 +391,13 @@ export type RoomTypeCapacityFields = {
   maxChildren?: number;
   requiredAccompanyingAdults?: number;
   maxExtraBeds?: number;
+  defaultBedType?: string | null;
+  allowedBedTypes?: string[];
 };
 
 export async function listRoomTypes(session: Session) {
-  return apiRequest<{ items: RoomTypeAdmin[]; count: number }>("/api/admin/room-types", { session });
+  // `bedTypes` = the bed vocabulary, for the usual-setup and allowed-setups controls.
+  return apiRequest<{ items: RoomTypeAdmin[]; count: number; bedTypes?: string[] }>("/api/admin/room-types", { session });
 }
 
 export async function createRoomType(
@@ -413,6 +428,8 @@ export async function createAdminRoom(
     bedType?: string | null;
     /** Omit and the backend derives it from the setup (TWIN = 2 beds, everything else 1). */
     bedCount?: number | null;
+    /** This room's own list of setups; empty/omitted = follow its room type. */
+    allowedBedTypes?: string[];
     isShadowInventory?: boolean;
   },
 ) {
@@ -429,6 +446,8 @@ export async function updateAdminRoom(
     /** Explicit null clears the recorded setup; omit to leave it untouched. */
     bedType?: string | null;
     bedCount?: number | null;
+    /** Empty array = follow the room type; omit to leave it untouched. */
+    allowedBedTypes?: string[];
     isShadowInventory?: boolean;
     isBlocked?: boolean;
     blockedReason?: string | null;

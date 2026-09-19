@@ -7,9 +7,10 @@ import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCate
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
+import { AllowedBedSetups, bedSetupListWords, bedSetupWord } from "@/components/admin/bed-setup-fields";
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
-type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string; bedType: string; bedCount: string };
+type EditDraft = { roomNumber: string; roomTypeId: string; floorNumber: string; bedType: string; bedCount: string; allowedBedTypes: string[] };
 
 /**
  * "KING" → "King". The vocabulary itself comes from the API (`bedTypes` on the rooms
@@ -30,12 +31,14 @@ export default function AdminRoomsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const prompt = usePrompt();
-  const [form, setForm] = useState({ roomNumber: "", roomTypeId: "", floorNumber: "", bedType: "" });
+  const [form, setForm] = useState<{ roomNumber: string; roomTypeId: string; floorNumber: string; bedType: string; allowedBedTypes: string[] }>(
+    { roomNumber: "", roomTypeId: "", floorNumber: "", bedType: "", allowedBedTypes: [] },
+  );
   const [defForm, setDefForm] = useState<DeficientForm | null>(null);
 
   // Edit-in-place: when not null, the row with this roomId renders as editable inputs.
   const [editId, setEditId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "", bedType: "", bedCount: "" });
+  const [editDraft, setEditDraft] = useState<EditDraft>({ roomNumber: "", roomTypeId: "", floorNumber: "", bedType: "", bedCount: "", allowedBedTypes: [] });
 
   // Filters
   const [filterRoomTypeId, setFilterRoomTypeId] = useState<string>("ALL");
@@ -61,11 +64,13 @@ export default function AdminRoomsPage() {
         floorNumber: form.floorNumber ? Number.parseInt(form.floorNumber, 10) : null,
         // bedCount is deliberately not sent — the backend derives it from the setup, so the
         // console and the desk's bed-type endpoint agree on what a TWIN means.
+        // Blank = the room starts in its type's usual setup (the backend fills it in).
         bedType: form.bedType || null,
+        allowedBedTypes: form.allowedBedTypes,
       }),
     onSuccess: () => {
       toast.success("Room created");
-      setForm({ roomNumber: "", roomTypeId: form.roomTypeId, floorNumber: "", bedType: form.bedType });
+      setForm({ roomNumber: "", roomTypeId: form.roomTypeId, floorNumber: "", bedType: form.bedType, allowedBedTypes: form.allowedBedTypes });
       void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Create failed"),
@@ -85,6 +90,8 @@ export default function AdminRoomsPage() {
         // Omitted on a changed setup with a blank count, so the backend re-derives it rather
         // than carrying "1 bed" onto a room that just became a Twin.
         bedCount,
+        // Empty = follow the room type's list.
+        allowedBedTypes: editDraft.allowedBedTypes,
       });
     },
     onSuccess: () => {
@@ -184,6 +191,7 @@ export default function AdminRoomsPage() {
     floorNumber: number | null;
     bedType: string | null;
     bedCount: number | null;
+    allowedBedTypes: string[];
   }) {
     setEditId(r.id);
     setEditDraft({
@@ -192,6 +200,7 @@ export default function AdminRoomsPage() {
       floorNumber: r.floorNumber == null ? "" : String(r.floorNumber),
       bedType: r.bedType ?? "",
       bedCount: r.bedCount == null ? "" : String(r.bedCount),
+      allowedBedTypes: r.allowedBedTypes ?? [],
     });
   }
   function cancelEdit() {
@@ -221,17 +230,32 @@ export default function AdminRoomsPage() {
         </select>
         <input className="admin-input" placeholder="Floor" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
         <select className="admin-select" value={form.bedType} onChange={(e) => setForm({ ...form, bedType: e.target.value })}>
-          <option value="">Bed setup — not recorded</option>
+          <option value="">
+            {(() => {
+              const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
+              return usual ? `Bed setup — its type's usual (${bedSetupWord(usual)})` : "Bed setup — not recorded";
+            })()}
+          </option>
           {bedTypes.map((b) => (
             <option key={b} value={b}>
               {bedLabel(b)}
             </option>
           ))}
         </select>
+        <div className="col-span-full">
+          <div className="text-[11px] font-medium text-muted-foreground">This room can be made up as</div>
+          <AllowedBedSetups
+            vocabulary={bedTypes}
+            value={form.allowedBedTypes}
+            onChange={(v) => setForm({ ...form, allowedBedTypes: v })}
+            emptyLabel="Follows its room type"
+          />
+        </div>
         <p className="admin-muted col-span-full text-xs">
-          The bed setup is per room, not per room type — the same Family Apartment exists as a King and as a Twin. The
-          number of beds follows the setup (a Twin is two singles); the desk can re-record it when a room is physically
-          reconfigured, and that change comes back here.
+          Any room can be made up in any bed setup unless its room type — or the room itself, here — narrows it. The
+          room&apos;s <em>bed now</em> is how it is made up today: it starts in its type&apos;s usual setup, and the desk
+          changes it when a guest asks for another (a King in a Standard room). The number of beds follows the setup (a
+          Twin is two singles).
         </p>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create room
@@ -357,7 +381,8 @@ export default function AdminRoomsPage() {
               <th>Room</th>
               <th>Type</th>
               <th>Floor</th>
-              <th>Bed</th>
+              <th>Bed now</th>
+              <th>Can be made up as</th>
               <th>Claim</th>
               <th>Physical</th>
               <th>Deficient</th>
@@ -434,6 +459,14 @@ export default function AdminRoomsPage() {
                         )}
                       </div>
                     </td>
+                    <td>
+                      <AllowedBedSetups
+                        vocabulary={bedTypes}
+                        value={editDraft.allowedBedTypes}
+                        onChange={(v) => setEditDraft({ ...editDraft, allowedBedTypes: v })}
+                        emptyLabel="Follows its room type"
+                      />
+                    </td>
                     <td>{r.currentClaimState}</td>
                     <td>{r.physicalState}</td>
                     <td>{r.isDeficient ? "Yes" : "—"}</td>
@@ -465,7 +498,18 @@ export default function AdminRoomsPage() {
                   {r.roomType.name} <span className="text-xs opacity-60">({r.roomType.code})</span>
                 </td>
                 <td>{r.floorNumber ?? "—"}</td>
-                <td>{bedSummary(r.bedType, r.bedCount) ?? <span className="opacity-50">—</span>}</td>
+                <td>
+                  {bedSummary(r.bedType, r.bedCount) ?? <span className="opacity-50">—</span>}
+                  {r.usualBedType && r.bedType !== r.usualBedType && (
+                    <div className="text-[10px] opacity-60">usually {bedSetupWord(r.usualBedType)}</div>
+                  )}
+                </td>
+                <td className="text-xs">
+                  {bedSetupListWords(r.allowedBedTypesSource === "ALL" ? [] : r.effectiveAllowedBedTypes)}
+                  <div className="text-[10px] opacity-60">
+                    {r.allowedBedTypesSource === "ROOM" ? "this room's own list" : r.allowedBedTypesSource === "ROOM_TYPE" ? "from its room type" : "no limit set"}
+                  </div>
+                </td>
                 <td>{r.currentClaimState}</td>
                 <td>{r.physicalState}</td>
                 <td>{r.isDeficient ? "Yes" : "—"}</td>

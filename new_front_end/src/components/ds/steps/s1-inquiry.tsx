@@ -29,7 +29,7 @@ import {
   listRatePackagesLookup,
   updateInquiryNotes,
 } from "@/lib/api/inquiries";
-import { listRooms, releaseRoomBlock } from "@/lib/api/rooms";
+import { checkBedRequest, listRooms, releaseRoomBlock } from "@/lib/api/rooms";
 import { releaseCommittedHold } from "@/lib/api/reservation-setup";
 import { releaseSpeculativeHold } from "@/lib/api/quotations";
 import {
@@ -1495,43 +1495,24 @@ function WhichRooms({
     (sel.savedCanon === sel.currentCanon ||
       (justSaved && sel.submittedRef.current === sel.currentCanon));
 
-  const tally = useMemo(() => {
-    const req = (entry.bedTypeRequest as Record<string, number> | null) ?? null;
-    if (!req || Object.keys(req).length === 0) return [];
-    const setupsOf = new Map<string, string[]>();
-    for (const r of catalog) {
-      const s = (
-        r.allowedBedTypes?.length
-          ? r.allowedBedTypes
-          : r.bedType
-            ? [r.bedType]
-            : []
-      )
-        .slice()
-        .sort();
-      if (s.length) setupsOf.set(r.id, s);
-    }
-    const groupOf = new Map<string, string>();
-    for (const s of setupsOf.values())
-      for (const t of s) groupOf.set(t, s.join("/"));
-    const groups = new Map<
-      string,
-      { asked: number; parts: string[]; picked: number }
-    >();
-    for (const [t, n] of Object.entries(req)) {
-      if (!n) continue;
-      const key = groupOf.get(t) ?? t;
-      const cur = groups.get(key) ?? { asked: 0, parts: [], picked: 0 };
-      cur.asked += n;
-      cur.parts.push(`${n} ${BED_WORD[t] ?? words(t)}`);
-      groups.set(key, cur);
-    }
-    for (const id of sel.allPicked) {
-      const gr = groups.get((setupsOf.get(id) ?? []).join("/"));
-      if (gr) gr.picked += 1;
-    }
-    return [...groups.values()];
-  }, [entry.bedTypeRequest, catalog, sel.allPicked]);
+  // How much of the guest's bed request the picked rooms can cover, one setup per room — the
+  // server's own check (2026-09-19; any room can take any setup the admin console allows it).
+  const { session: tallySession } = useSession();
+  const bedAsk = (entry.bedTypeRequest as Record<string, number> | null) ?? null;
+  const hasBedAsk = !!bedAsk && Object.values(bedAsk).some((n) => n > 0);
+  const tallyQuery = useQuery({
+    queryKey: ["bed-request-check", entry.id, JSON.stringify(bedAsk), [...sel.allPicked].sort().join(",")],
+    queryFn: () => checkBedRequest(tallySession!, bedAsk ?? {}, [...sel.allPicked]),
+    enabled: !!tallySession && hasBedAsk,
+    placeholderData: (prev) => prev,
+  });
+  const tally = hasBedAsk
+    ? (tallyQuery.data?.perType ?? []).map((t) => ({
+        parts: [`${t.asked} ${BED_WORD[t.bedType] ?? words(t.bedType)}`],
+        asked: t.asked,
+        picked: t.covered,
+      }))
+    : [];
 
   const held = useMemo(() => {
     const m = new Map<

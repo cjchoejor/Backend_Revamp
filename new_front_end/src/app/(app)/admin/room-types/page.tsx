@@ -7,6 +7,7 @@ import { createRoomType, deleteRoomType, listRoomTypes, updateRoomType, type Roo
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
+import { AllowedBedSetups, UsualBedSetup, bedSetupListWords, bedSetupWord } from "@/components/admin/bed-setup-fields";
 
 type CreateForm = {
   code: string;
@@ -16,6 +17,8 @@ type CreateForm = {
   maxChildren: string;
   requiredAccompanyingAdults: string;
   maxExtraBeds: string;
+  defaultBedType: string | null;
+  allowedBedTypes: string[];
 };
 
 const EMPTY_CREATE: CreateForm = {
@@ -26,6 +29,8 @@ const EMPTY_CREATE: CreateForm = {
   maxChildren: "2",
   requiredAccompanyingAdults: "1",
   maxExtraBeds: "0",
+  defaultBedType: null,
+  allowedBedTypes: [],
 };
 
 export default function AdminRoomTypesPage() {
@@ -51,6 +56,8 @@ export default function AdminRoomTypesPage() {
         maxChildren: numOr(form.maxChildren, 2),
         requiredAccompanyingAdults: numOr(form.requiredAccompanyingAdults, 1),
         maxExtraBeds: numOr(form.maxExtraBeds, 0),
+        defaultBedType: form.defaultBedType,
+        allowedBedTypes: form.allowedBedTypes,
       }),
     onSuccess: () => {
       toast.success("Room type created");
@@ -80,6 +87,7 @@ export default function AdminRoomTypesPage() {
   });
 
   const items = query.data?.items ?? [];
+  const bedTypes = query.data?.bedTypes ?? [];
 
   async function handleDelete(id: string, code: string, roomCount: number) {
     if (roomCount > 0) {
@@ -104,6 +112,12 @@ export default function AdminRoomTypesPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Per-type physical capacity limits. The booking flow enforces these at S1 intake (over-capacity =
           block) and the calendar grid respects them for filtering.
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          <strong>Beds:</strong> any room can be made up in any bed setup unless you narrow it here. The{" "}
+          <em>usual setup</em> is how rooms of this type are normally made up; when a guest asks for another
+          (a King in a Standard room), the desk changes that room&apos;s setup for the stay. A single room can
+          narrow its own list on the Rooms page.
         </p>
       </div>
 
@@ -134,6 +148,23 @@ export default function AdminRoomTypesPage() {
             <input className="admin-input" type="number" min={0} value={form.maxExtraBeds} onChange={(e) => setForm({ ...form, maxExtraBeds: e.target.value })} />
           </Field>
         </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Usual bed setup" hint="How rooms of this type are normally made up">
+            <UsualBedSetup
+              vocabulary={bedTypes}
+              allowed={form.allowedBedTypes}
+              value={form.defaultBedType}
+              onChange={(v) => setForm({ ...form, defaultBedType: v })}
+            />
+          </Field>
+          <Field label="Can be made up as" hint="Every box ticked = any setup">
+            <AllowedBedSetups
+              vocabulary={bedTypes}
+              value={form.allowedBedTypes}
+              onChange={(v) => setForm({ ...form, allowedBedTypes: v })}
+            />
+          </Field>
+        </div>
         <button type="button" className="admin-btn w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create room type
         </button>
@@ -150,6 +181,8 @@ export default function AdminRoomTypesPage() {
               <th>Max children</th>
               <th>Req. adults</th>
               <th>Max extra beds</th>
+              <th>Usual bed</th>
+              <th>Can be made up as</th>
               <th>Rooms</th>
               <th />
             </tr>
@@ -173,6 +206,29 @@ export default function AdminRoomTypesPage() {
                   <CapacityCell value={isEditing ? ed.maxChildren ?? r.maxChildren : r.maxChildren} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], maxChildren: v } }))} />
                   <CapacityCell value={isEditing ? ed.requiredAccompanyingAdults ?? r.requiredAccompanyingAdults : r.requiredAccompanyingAdults} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], requiredAccompanyingAdults: v } }))} />
                   <CapacityCell value={isEditing ? ed.maxExtraBeds ?? r.maxExtraBeds : r.maxExtraBeds} editing={isEditing} onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], maxExtraBeds: v } }))} />
+                  <td>
+                    {isEditing ? (
+                      <UsualBedSetup
+                        vocabulary={bedTypes}
+                        allowed={ed.allowedBedTypes ?? []}
+                        value={ed.defaultBedType ?? null}
+                        onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], defaultBedType: v } }))}
+                      />
+                    ) : (
+                      <span className="text-xs">{bedSetupWord(r.defaultBedType)}</span>
+                    )}
+                  </td>
+                  <td>
+                    {isEditing ? (
+                      <AllowedBedSetups
+                        vocabulary={bedTypes}
+                        value={ed.allowedBedTypes ?? []}
+                        onChange={(v) => setEditing((p) => ({ ...p, [r.id]: { ...p[r.id], allowedBedTypes: v } }))}
+                      />
+                    ) : (
+                      <span className="text-xs">{bedSetupListWords(r.allowedBedTypes)}</span>
+                    )}
+                  </td>
                   <td>{r._count?.rooms ?? 0}</td>
                   <td className="text-right space-x-1">
                     {isEditing ? (
@@ -190,6 +246,8 @@ export default function AdminRoomTypesPage() {
                               maxChildren: ed.maxChildren,
                               requiredAccompanyingAdults: ed.requiredAccompanyingAdults,
                               maxExtraBeds: ed.maxExtraBeds,
+                              defaultBedType: ed.defaultBedType ?? null,
+                              allowedBedTypes: ed.allowedBedTypes ?? [],
                             },
                           })}
                         >

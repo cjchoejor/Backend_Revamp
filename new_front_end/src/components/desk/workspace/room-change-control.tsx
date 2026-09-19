@@ -893,13 +893,14 @@ export function RoomChangeControl({
                       <select
                         value={d?.bed ?? ""}
                         onChange={(e) => setSetups((prev) => ({ ...prev, [id]: { ...prev[id], bed: e.target.value } }))}
-                        title="Physical bed setup for this room — only the setups its own beds can be arranged into"
-                        style={{ width: 104, fontSize: 11.5, padding: "3px 6px" }}
+                        title="How this room will be made up — the setups the admin console allows for it"
+                        style={{ width: 124, fontSize: 11.5, padding: "3px 6px" }}
                       >
                         {!d?.bed && <option value="">Keep as is</option>}
                         {bedOptions.map((t) => (
                           <option key={t} value={t}>
                             {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
+                            {cat?.defaultBedType === t ? " (usual)" : ""}
                           </option>
                         ))}
                         {d?.bed && !bedOptions.includes(d.bed) && <option value={d.bed}>{bedPhrase(d.bed)}</option>}
@@ -1048,8 +1049,12 @@ export function InitialSelectionCell({ entryId, roomId }: { entryId: string; roo
 /**
  * Bed-type dropdown, extracted from the S5 pattern so S6/S7 room rows carry it too
  * (2026-08-12, operator request: bed type editable S5–S7). Self-contained: reads the shared
- * rooms catalog (same query key app-wide) and writes through the L1 bed-type endpoint; each
- * room offers only the setups its own type carries (`allowedBedTypes`, server-derived).
+ * rooms catalog (same query key app-wide) and writes through the L1 bed-type endpoint.
+ *
+ * Since 2026-09-19 any room can be made up in any setup the admin console allows it
+ * (`allowedBedTypes`, server-computed: the room's own list, else its type's, else all). A guest
+ * who asks for a King gets the room changed to King here; the type's usual setup is marked so
+ * the desk can see what to put it back to.
  */
 export function BedTypeEditor({ roomId }: { roomId: string }) {
   const { session } = useSession();
@@ -1065,11 +1070,7 @@ export function BedTypeEditor({ roomId }: { roomId: string }) {
     () => (roomsCatalogQuery.data?.items ?? []).find((r) => r.id === roomId) ?? null,
     [roomsCatalogQuery.data, roomId],
   );
-  const vocabulary = useMemo(() => {
-    const all = new Set<string>();
-    for (const r of roomsCatalogQuery.data?.items ?? []) if (r.bedType) all.add(r.bedType);
-    return [...all].sort();
-  }, [roomsCatalogQuery.data]);
+  const vocabulary = roomsCatalogQuery.data?.bedTypes ?? [];
 
   const bedTypeM = useMutation({
     mutationFn: (bedType: string) => setRoomBedType(session!, roomId, bedType),
@@ -1093,13 +1094,16 @@ export function BedTypeEditor({ roomId }: { roomId: string }) {
       onChange={(e) => {
         if (e.target.value) bedTypeM.mutate(e.target.value);
       }}
-      title="Physical bed setup of this room — the options are the setups this room's type carries; changing it updates the room registry (recorded)"
-      style={{ width: 108, fontSize: 11.5, padding: "3px 6px" }}
+      title={`How this room is made up now — change it when the guest asks for another setup (recorded).${
+        room.defaultBedType ? ` Usually ${room.defaultBedType === "TWIN" ? "Twin beds" : `${bedLabel(room.defaultBedType)} bed`}.` : ""
+      }`}
+      style={{ width: 128, fontSize: 11.5, padding: "3px 6px" }}
     >
       {!current && <option value="">Set beds…</option>}
       {options.map((t) => (
         <option key={t} value={t}>
           {t === "TWIN" ? "Twin beds" : `${bedLabel(t)} bed`}
+          {room.defaultBedType === t ? " (usual)" : ""}
         </option>
       ))}
       {current && !options.includes(current) && (

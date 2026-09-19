@@ -7,13 +7,16 @@ export type RoomListItem = {
   physicalState?: string;
   roomTypeId?: string;
   floorNumber?: number | null;
-  /** Physical bed setup — "KING" / "TWIN" / "QUEEN" / "SINGLE" (from the room registry). */
+  /** How the room is made up NOW — "KING" / "TWIN" / "QUEEN" / "SINGLE". The desk changes it. */
   bedType?: string | null;
   bedCount?: number | null;
-  /** Bed setups THIS room may take — the types present among rooms of its own room type,
-   *  server-derived live from the registry (2026-08-12: a Standard Double never offers
-   *  Queen; only 301's type carries one). The edit dropdowns read this, never a fixed list. */
+  /** The setups THIS room can be made up in — its own list, else its type's, else all of them
+   *  (2026-09-19; set in the admin console). The edit dropdowns read this, never a fixed list. */
   allowedBedTypes?: string[];
+  /** Where that list comes from: the room's own, its type's, or no limit set. */
+  allowedBedTypesSource?: "ROOM" | "ROOM_TYPE" | "ALL";
+  /** The room type's usual setup (Standard: Twin, Suite: King) — null when none is stated. */
+  defaultBedType?: string | null;
   currentClaimState?: string;
   isBlocked?: boolean;
   blockedReason?: string | null;
@@ -47,6 +50,28 @@ export async function listRooms(session: Session) {
   // `bedTypes` = the backend's allowed bed vocabulary (KING/QUEEN/TWIN/SINGLE) — the source
   // for any bed-type dropdown, never hardcoded client-side.
   return apiRequest<{ items: RoomListItem[]; count: number; bedTypes?: string[] }>("/api/rooms", { session });
+}
+
+export type BedRequestCheck = {
+  /** Every asked setup can have its own room at once. */
+  satisfiable: boolean;
+  perType: { bedType: string; asked: number; roomsThatCanTake: number; covered: number }[];
+  /** How many rooms can take each setup — the "up to N" ceilings. */
+  stock: Record<string, number>;
+  /** Why it cannot be met, in desk words. */
+  message: string | null;
+};
+
+/**
+ * Can this bed request be met? The server's own check (the one intake applies on save).
+ * Without `roomIds` it is judged against every room; with them, against those rooms only.
+ */
+export async function checkBedRequest(session: Session, request: Record<string, number>, roomIds?: string[]) {
+  return apiRequest<BedRequestCheck>("/api/lookups/bed-request-check", {
+    method: "POST",
+    session,
+    body: { request, ...(roomIds ? { roomIds } : {}) },
+  });
 }
 
 /** Change a room's physical bed setup (L1 — a housekeeping fact; traced with the prior value). */
