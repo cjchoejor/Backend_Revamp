@@ -21,3 +21,8 @@ new_front_end/public/tesseract-core/
 
 # macOS archive metadata that came with the design handover
 __MACOSX/
+
+# Windows service wrappers (ops/) — logs and the installed node-windows/WinSW binaries
+ops/node_modules/
+back_end/scripts/daemon/
+new_front_end/scripts/daemon/

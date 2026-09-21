@@ -1,0 +1,14 @@
+{
+  "name": "legphel-pms-ops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows service definitions for the LEGPHEL PMS backend and desk — so both come back on their own after a power cut.",
+  "scripts": {
+    "install-services": "node install-services.cjs",
+    "uninstall-services": "node uninstall-services.cjs",
+    "status": "node status.cjs"
+  },
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  }
+}
