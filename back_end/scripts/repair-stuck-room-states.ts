@@ -40,7 +40,15 @@ async function main() {
       where: {
         frozenCheckInDate: { lte: now },
         frozenCheckOutDate: { gt: now },
-        entry: { roomAssignments: { some: { roomId: room.id } } },
+        // A finished booking does not hold a room. The original query asked only whether SOME
+        // reservation spanned now, so a CLOSED entry whose stay dates happen to cover today kept
+        // its rooms pinned forever — five rooms were stuck behind one closed booking (2026-09-19).
+        // Same rule as `stillHoldsInventory` in lib/entry-inventory-claim.ts: CANCELLED / EXPIRED
+        // / CLOSED release their claim, PARKED deliberately still blocks (a pause, not a release).
+        entry: {
+          status: { notIn: ["CANCELLED", "EXPIRED", "CLOSED"] },
+          roomAssignments: { some: { roomId: room.id } },
+        },
       },
       select: { entryId: true },
     });
