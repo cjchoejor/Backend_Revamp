@@ -1320,7 +1320,12 @@ export function NewInquiryCanvas() {
                     <Button kind="quiet" compact state="inert" title="Separate bills for each guest are not in the backend yet">
                       One bill each
                     </Button>
-                    <Button kind="quiet" compact state="inert" title="A linked return stay is not in the backend yet">
+                    <Button
+                      kind="quiet"
+                      compact
+                      state="inert"
+                      title="Keep this stay first, then add the return stay from the booking — it goes on the same enquiry"
+                    >
                       Add a return stay
                     </Button>
                   </div>

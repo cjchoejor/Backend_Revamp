@@ -60,6 +60,7 @@ import {
   useRefreshEntry,
   words,
 } from "./kit";
+import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { cameInAsOf } from "./new-inquiry-parts";
 
@@ -741,6 +742,17 @@ function TheStay({
           </div>
         ) : null}
       </div>
+      {(entry.inquiry?.entries ?? []).length > 1 ? (
+        <div className="rule-above">
+          <span className="meta">
+            The guest comes back — {(entry.inquiry?.entries ?? []).length} stays on enquiry{" "}
+            {entry.inquiry?.id ?? "—"}, each with its own rooms and its own bill.
+          </span>
+          <div style={{ marginTop: 8 }}>
+            <TripStays entry={entry} />
+          </div>
+        </div>
+      ) : null}
       <div className="row-acts" style={{ marginTop: 10 }}>
         <Chip
           tone={group ? "accent" : "default"}
@@ -757,14 +769,7 @@ function TheStay({
           >
             One bill each
           </Button>
-          <Button
-            kind="quiet"
-            compact
-            state="inert"
-            title="A linked return stay is not in the backend yet"
-          >
-            Add a return stay
-          </Button>
+          <AddReturnStay entry={entry} />
         </Live>
       </div>
       {editable && dirty ? (

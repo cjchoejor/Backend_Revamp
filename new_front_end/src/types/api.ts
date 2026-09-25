@@ -589,7 +589,14 @@ export type EntryDetail = EntryListItem & {
   followUpTasks?: FollowUpTaskSummary[];
   noShowDetermination?: NoShowDeterminationSummary | null;
   inquiry?: {
+    /** The enquiry's own number — the trip's file number when it holds more than one stay. */
+    id?: string;
     notes?: string | null;
+    /**
+     * Every stay of this trip (2026-09-25), oldest first. A return stay is a second booking under
+     * the same enquiry, so this is how each booking knows about the other.
+     */
+    entries?: TripStaySummary[] | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;
     /** How the guest came in (WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE). */
@@ -607,6 +614,16 @@ export type EntryDetail = EntryListItem & {
   /** Early departure (2026-08-22, Policy 36): the day the guest actually left when the stay was shortened. */
   actualCheckOutDate?: string | null;
   earlyDeparture?: EarlyDepartureSummary | null;
+};
+
+/** One stay of a trip — the enquiry's other bookings, carried on every booking's payload. */
+export type TripStaySummary = {
+  id: string;
+  checkInDate?: string | null;
+  checkOutDate?: string | null;
+  currentStage?: string | null;
+  status?: string | null;
+  numberOfRooms?: number | null;
 };
 
 /** The one record of a stay shortened at the desk (2026-08-22) — rides on the entry payload. */
