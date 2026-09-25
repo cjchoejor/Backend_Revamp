@@ -538,6 +538,7 @@ function DocumentCard({
   return (
     <div id={ID.document}>
       <StepCard
+        flow="identity"
         title="The document, at the desk"
         acts={
           past ? null : (
@@ -589,7 +590,7 @@ function RegistrationCard({
   const name = guestName(guest);
   return (
     <div id={ID.registration}>
-      <StepCard title="Registration card">
+      <StepCard flow="registration" flowAfter="identity" title="Registration card">
         <Facts wide>
           <Fact k="State">
             {completedAt ? (
@@ -641,7 +642,7 @@ function RegistrationCard({
 function VipCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const notes = entry.vipArrivalNotifications ?? [];
   return (
-    <StepCard title="VIP arrival" icon="bell">
+    <StepCard flow="vip" title="VIP arrival" icon="bell">
       {notes.length === 0 ? (
         <span className="sm warn-ink">No VIP notice on record — it goes out when Arrival moves on with the guest present.</span>
       ) : (
@@ -736,6 +737,7 @@ function RoomsCard({
   return (
     <div id={ID.rooms}>
       <StepCard
+        flow="rooms"
         title={rooms.length > 1 ? `Rooms · ${rooms.length}` : "Room"}
         icon="bed"
         right={rooms.length > 1 ? <Chip tone="quiet">check-in covers all{entry.numberOfRooms ? ` · ${entry.numberOfRooms} asked for` : ""}</Chip> : null}

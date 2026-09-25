@@ -111,8 +111,10 @@ export function NewInquiryCanvas() {
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
   const [channelKey, setChannelKey] = useState<ChannelKey | null>(null);
-  const [useType, setUseType] = useState<string>("LEISURE");
-  const useTypeTouched = useRef(false);
+  // No default (2026-09-25, operator): the kind of stay is the desk's to pick, like how the
+  // booking came in. It used to open on Leisure and a channel then re-filled it, so the field
+  // read as answered before anyone had answered it. The intake gate already holds the submit.
+  const [useType, setUseType] = useState<string>("");
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
   // The agency / company person handling this booking — the booking's contact unless overridden.
   const [partyContact, setPartyContact] = useState<CoordinatorContact | null>(null);
@@ -177,7 +179,7 @@ export function NewInquiryCanvas() {
     const ci = editEntry.checkInDate?.slice(0, 10) ?? "";
     const co = editEntry.checkOutDate?.slice(0, 10) ?? "";
     setChannelKey(cameInAsOf(editInq?.sourceChannel, editInq?.notes, editEntry.useType, editInq?.cameInAs));
-    setUseType(editEntry.useType ?? "LEISURE");
+    setUseType(editEntry.useType ?? "");
     setAdults(String(editEntry.adultCount ?? editEntry.guestCount ?? 1));
     setChildren(String(editEntry.childCount ?? 0));
     setAges((editEntry.childAges ?? []).map(String));
@@ -211,7 +213,6 @@ export function NewInquiryCanvas() {
   const pickChannel = (k: ChannelKey) => {
     if (isEdit || k === channelKey) return;
     setChannelKey(k);
-    if (!useTypeTouched.current) setUseType(channelDef(k)?.useType ?? "LEISURE");
     focusNext.current = "who";
   };
 
@@ -906,10 +907,7 @@ export function NewInquiryCanvas() {
                         options={USE_TYPES}
                         value={useType as UseTypeKey}
                         disabled={isEdit && !editable}
-                        onChange={(v) => {
-                          useTypeTouched.current = true;
-                          setUseType(v);
-                        }}
+                        onChange={(v) => setUseType(v)}
                       />
                       {useType === "APARTMENT" ? (
                         <span className="hint warn-ink">an apartment needs its nights and rate tier before Negotiation — those are not on the desk yet</span>
@@ -1125,18 +1123,6 @@ export function NewInquiryCanvas() {
                       </span>
                     </div>
                     <div className="field">
-                      <label>Nights</label>
-                      <input
-                        className="input"
-                        inputMode="numeric"
-                        value={nights}
-                        placeholder="1"
-                        readOnly={isEdit && !editable}
-                        onChange={(e) => setNights(digits(e.target.value))}
-                      />
-                      <span className="hint">the check-out follows</span>
-                    </div>
-                    <div className="field">
                       <label>Check-out</label>
                       <input
                         className="input"
@@ -1150,6 +1136,40 @@ export function NewInquiryCanvas() {
                         }}
                       />
                       {datesSet ? <span className="hint">{`${fmtRange(checkIn, checkOut)} · ${plural(stayNights, "night")}`}</span> : null}
+                    </div>
+                    <div className="field">
+                      <label>Nights</label>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={nights}
+                        placeholder="1"
+                        readOnly={isEdit && !editable}
+                        onChange={(e) => setNights(digits(e.target.value))}
+                      />
+                      <span className="hint">the check-out follows</span>
+                    </div>
+                    <div className="field">
+                      <label>Adults</label>
+                      <input
+                        className={`input${adultsN < 1 ? " invalid" : ""}`}
+                        inputMode="numeric"
+                        value={adults}
+                        readOnly={isEdit && !editable}
+                        onChange={(e) => setAdults(digits(e.target.value))}
+                      />
+                      {adultsN < 1 ? <span className="error">at least one adult</span> : null}
+                    </div>
+                    <div className="field">
+                      <label>Children</label>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={children}
+                        readOnly={isEdit && !editable}
+                        onChange={(e) => setChildren(digits(e.target.value, 2))}
+                      />
+                      <span className="hint">under {policy ? minAdult : "the adult age"}</span>
                     </div>
                     <div className="field">
                       <label>Rooms</label>
@@ -1186,28 +1206,6 @@ export function NewInquiryCanvas() {
                                 : "a count · the category is ours to pick"}
                         </span>
                       )}
-                    </div>
-                    <div className="field">
-                      <label>Adults</label>
-                      <input
-                        className={`input${adultsN < 1 ? " invalid" : ""}`}
-                        inputMode="numeric"
-                        value={adults}
-                        readOnly={isEdit && !editable}
-                        onChange={(e) => setAdults(digits(e.target.value))}
-                      />
-                      {adultsN < 1 ? <span className="error">at least one adult</span> : null}
-                    </div>
-                    <div className="field">
-                      <label>Children</label>
-                      <input
-                        className="input"
-                        inputMode="numeric"
-                        value={children}
-                        readOnly={isEdit && !editable}
-                        onChange={(e) => setChildren(digits(e.target.value, 2))}
-                      />
-                      <span className="hint">under {policy ? minAdult : "the adult age"}</span>
                     </div>
                     {childN > 0 ? (
                       <div className="wide field">

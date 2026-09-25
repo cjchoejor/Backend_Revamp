@@ -10,6 +10,7 @@
  * the generated components.css and frame.css style it without anything added per screen.
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, Icon, type ButtonProps, type DialogRegister, type IconName } from "@/design-system";
@@ -60,6 +61,65 @@ export function Live({ children }: { children: ReactNode }) {
 
 /* ------------------------------------------------------------------ cards */
 
+/**
+ * The step as a sequence of things to do (2026-09-25, operator report: "everything is shown at
+ * once as soon as the page loads, so the user doesn't know where to start").
+ *
+ * One list serves both ends: the side panel prints it as the numbered to-do, and each card
+ * carries its own number from it. A card whose turn has not come renders as its heading and the
+ * one thing it waits for — the rest is out of the way until it can actually be done, which is
+ * also why the committed hold no longer sits at the top of Set up asking to be placed before the
+ * terms are even disclosed. Nothing becomes unreachable: "Show it anyway" opens a waiting card.
+ */
+export type FlowItem = { n: number; label: string; met: boolean; card?: string };
+
+const FlowCtx = createContext<{ items: FlowItem[]; on: boolean }>({ items: [], on: false });
+
+/** The card-bearing items of a step's checklist, numbered in the order they are worked. */
+export function numberFlow(items: ReadonlyArray<{ label: string; met: boolean; card?: string }>): FlowItem[] {
+  let n = 0;
+  return items.filter((p) => !!p.card).map((p) => ({ n: ++n, label: p.label, met: p.met, card: p.card }));
+}
+
+export function StepFlow({ items, on, children }: { items: FlowItem[]; on: boolean; children: ReactNode }) {
+  // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
+  // a card only re-renders when its own number or standing moves.
+  const key = `${on}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const value = useMemo(() => ({ items, on }), [key]);
+  return <FlowCtx.Provider value={value}>{children}</FlowCtx.Provider>;
+}
+
+/**
+ * Where this card sits in the step: its number, whether it is done, and what it still waits for.
+ *
+ * `flow` only NUMBERS a card — it takes the number the side panel's to-do gives the same key, and
+ * a tick once that item is done. Waiting is declared separately with `after`, naming the card
+ * this one depends on, because the dependency is a matter of fact and differs step by step: at
+ * Set up the rooms cannot be held until the terms and the bill are done, while in-house the desk
+ * posts charges, hands over keys and runs the audit in whatever order the day takes. A card waits
+ * until everything up to and including the named card's last item is done.
+ */
+export function useFlowCard(card?: string, after?: string): { n?: number; met?: boolean; waitsFor?: FlowItem } {
+  const { items, on } = useContext(FlowCtx);
+  if (!on) return {};
+  const i = card ? items.findIndex((x) => x.card === card) : -1;
+  const mine = i >= 0 ? items[i] : null;
+  let waitsFor: FlowItem | undefined;
+  if (after) {
+    let last = -1;
+    items.forEach((x, k) => {
+      if (x.card === after) last = k;
+    });
+    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met);
+  }
+  return { n: mine?.n, met: mine?.met, waitsFor };
+}
+
+export function anchorFor(card: string) {
+  return `card-${card}`;
+}
+
 export function StepCard({
   title,
   icon,
@@ -71,6 +131,8 @@ export function StepCard({
   children,
   id,
   style,
+  flow,
+  flowAfter,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -83,25 +145,52 @@ export function StepCard({
   children?: ReactNode;
   id?: string;
   style?: React.CSSProperties;
+  /** This card's place in the step's flow — the same key the to-do list carries. */
+  flow?: string;
+  /** This card opens once the named card's items are done — the step's real dependencies. */
+  flowAfter?: string;
 }) {
+  const { n, met, waitsFor } = useFlowCard(flow, flowAfter);
+  const [anyway, setAnyway] = useState(false);
+  const waiting = !!waitsFor && !anyway;
   return (
-    <div className={["card", sealed ? "sealed" : "", quiet ? "quiet" : ""].filter(Boolean).join(" ")} id={id} style={style}>
+    <div
+      className={["card", sealed ? "sealed" : "", quiet ? "quiet" : "", n ? "flowed" : "", met ? "flow-done" : "", waiting ? "flow-waiting" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      id={flow ? anchorFor(flow) : id}
+      style={style}
+    >
       {title ? (
         <div className="card-top">
           <h4>
+            {n ? <span className={`cardno${met ? " done" : ""}`}>{met ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
           </h4>
-          {right ? <div className="row-acts">{right}</div> : null}
+          {waiting ? null : right ? <div className="row-acts">{right}</div> : null}
         </div>
       ) : null}
-      {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
-      {children}
-      {acts ? (
-        <div className="row-acts" style={{ marginTop: 12 }}>
-          {acts}
+      {waiting ? (
+        <div className="flow-wait">
+          <span className="meta">
+            after <b>{waitsFor!.n}</b> · {waitsFor!.label}
+          </span>
+          <Button kind="quiet" compact onClick={() => setAnyway(true)}>
+            Show it anyway
+          </Button>
         </div>
-      ) : null}
+      ) : (
+        <>
+          {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+          {children}
+          {acts ? (
+            <div className="row-acts" style={{ marginTop: 12 }}>
+              {acts}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -255,17 +344,35 @@ export function SeeRow({
   );
 }
 
+/**
+ * Where the step's OTHER ways go (2026-09-25, operator: "the things that don't have to be done
+ * shouldn't sit in This step — give them a tab of their own").
+ *
+ * The workspace hands this a place to render into, so cancelling, parking and re-entering live
+ * behind their own tab while the step itself only shows what has to be done. The actions stay
+ * where they were written — each canvas keeps its own dialogs and state; only where they appear
+ * moves. With no slot (a past step, or a canvas rendered on its own) the card renders in place,
+ * exactly as before.
+ */
+const OtherWaysSlotCtx = createContext<HTMLElement | null>(null);
+
+export function OtherWaysSlot({ node, children }: { node: HTMLElement | null; children: ReactNode }) {
+  return <OtherWaysSlotCtx.Provider value={node}>{children}</OtherWaysSlotCtx.Provider>;
+}
+
 export function OtherWays({ children }: { children: ReactNode }) {
   const { past } = useStepMode();
+  const slot = useContext(OtherWaysSlotCtx);
   const kids = (Array.isArray(children) ? children : [children]).filter(Boolean);
   if (past || kids.length === 0) return null;
-  return (
+  const card = (
     <StepCard title="Other ways this booking can go" quiet>
       <div className="stack sm" style={{ display: "grid", gap: 4 }}>
         {kids}
       </div>
     </StepCard>
   );
+  return slot ? createPortal(card, slot) : card;
 }
 
 /** Requests at any step (R2) — the list and its kinds are backend item BE-64. */

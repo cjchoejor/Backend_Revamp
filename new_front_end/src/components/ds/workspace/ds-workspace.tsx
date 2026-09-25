@@ -46,6 +46,7 @@ import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
+import { OtherWaysSlot, StepFlow, anchorFor, numberFlow, type FlowItem } from "@/components/ds/steps/kit";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
@@ -97,7 +98,7 @@ const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 const NOOP = () => {};
 
-type View = "step" | "details" | "history";
+type View = "step" | "other" | "details" | "history";
 
 
 /* ------------------------------------------------------------------ */
@@ -180,7 +181,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // The step being looked at lives in the address (?step=N), so a link can open a booking at the
   // step that needs attention and Back returns to it.
   const stepParam = Number(params.get("step"));
-  const view: View = params.get("view") === "details" ? "details" : params.get("view") === "history" ? "history" : "step";
+  const viewParam = params.get("view");
+  const view: View =
+    viewParam === "details" ? "details" : viewParam === "history" ? "history" : viewParam === "other" ? "other" : "step";
   const [selected, setSelectedState] = useState<number | null>(stepParam >= 1 && stepParam <= 9 ? stepParam : null);
   const setView = (v: View, step?: number) => {
     const p = new URLSearchParams(params.toString());
@@ -240,6 +243,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [exitLeaving, setExitLeaving] = useState<"park" | "plain" | null>(null);
   const pendingExitRef = useRef<string | null>(null);
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
+  // Where the step's "other ways" render — the tab beside This step (2026-09-25).
+  const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
 
   /* ---- the per-room key checklist (survives a refresh until check-in stamps it) ---- */
   const [reserveExtras, setReserveExtras] = useState<string[]>([]);
@@ -547,7 +552,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   },
                 ]
               : stayStepActive
-                ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk }]
+                ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk, card: "nights" }]
                 : checkOutStepActive
                   ? s8Readiness(entry)
                   : closedStepActive
@@ -560,6 +565,18 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                         ? []
                         : preconditionsFor(entry, step, hotelToday);
   const unmet = preconds.filter((p) => !p.met).length;
+  // The step's numbered to-do: the items that have a section on this page, in the order they are
+  // done. The rail prints it, and each card takes its own number from it (2026-09-25).
+  const flowItems: FlowItem[] = numberFlow(preconds);
+  const inherited = preconds.filter((p) => !p.card);
+  const nextUp = flowItems.find((i) => !i.met) ?? null;
+  const goToCard = (card?: string) => {
+    if (!card) return;
+    if (view !== "step") setView("step", viewing);
+    window.requestAnimationFrame(() => {
+      document.getElementById(anchorFor(card))?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
 
   const viewingPast = view === "step" && (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
 
@@ -934,6 +951,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               <button type="button" className="tab" role="tab" aria-selected={view === "step"} onClick={() => setView("step", viewing)}>
                 This step
               </button>
+              {viewingPast || sealed ? null : (
+                <button type="button" className="tab" role="tab" aria-selected={view === "other"} onClick={() => setView("other", viewing)}>
+                  Other ways
+                </button>
+              )}
               <button type="button" className="tab" role="tab" aria-selected={view === "details"} onClick={() => setView("details", viewing)}>
                 Booking details
               </button>
@@ -961,9 +983,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ) : view === "history" ? (
               <HistoryView entry={entry} billing={billing ?? null} tz={clock.tz} onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))} />
             ) : (
+              // This step and Other ways are the same canvas: the step's own cards here, its
+              // other ways portalled into the pane below (2026-09-25). Both stay mounted, so
+              // switching tabs never loses what the operator has half-typed.
               <>
                 <h3>
-                  {STEP_NAMES[viewing - 1]} <span className="need">{STEP_NEEDS[viewing as StepNo]}</span>
+                  {STEP_NAMES[viewing - 1]}{" "}
+                  <span className="need">{view === "other" ? "what else it can do" : STEP_NEEDS[viewing as StepNo]}</span>
                 </h3>
                 {viewingPast ? (
                   <div className="notice inert">
@@ -984,7 +1010,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
-                {native}
+                <StepFlow items={flowItems} on={!viewingPast && !sealed}>
+                  <OtherWaysSlot node={otherSlot}>
+                    <div hidden={view !== "step"}>{native}</div>
+                  </OtherWaysSlot>
+                </StepFlow>
+                <div hidden={view !== "other"}>
+                  <div ref={setOtherSlot} />
+                  {view === "other" ? (
+                    <p className="meta">
+                      What else this booking can do from {STEP_NAMES[viewing - 1]} — none of it is needed to move on.
+                    </p>
+                  ) : null}
+                </div>
               </>
             )}
             {/* the old side column's "what runs here" target — kept mounted, not shown */}
@@ -995,6 +1033,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             entry={entry}
             sealed={sealed}
             onGo={(n) => gotoStep(n)}
+            todo={view === "step" && !viewingPast && !sealed ? flowItems : []}
+            todoInherited={view === "step" && !viewingPast && !sealed ? inherited : []}
+            onGoToCard={goToCard}
             timers={timersQuery.data?.items ?? []}
             events={traceQuery.data?.items ?? []}
             communications={communications ?? []}
@@ -1011,13 +1052,27 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ) : sealed ? (
             <div className="sm ink-2">{sealedOutcome}</div>
           ) : preconds.length ? (
+            // The full list lives in the side panel, numbered (2026-09-25) — the bar says what is
+            // next and takes you to it, so the move and the reason for waiting sit together.
             <div className="gate">
-              {preconds.map((p) => (
-                <div key={p.label} className={`item ${p.met ? "met" : "unmet"}`}>
-                  <Icon name={p.met ? "check" : "circle"} />
-                  <span>{p.label}</span>
+              {nextUp ? (
+                <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
+                  <Icon name="circle" />
+                  <span>
+                    Next · <b>{nextUp.n}</b> {nextUp.label}
+                  </span>
+                </button>
+              ) : unmet > 0 ? (
+                <div className="item unmet">
+                  <Icon name="circle" />
+                  <span>{preconds.find((p) => !p.met)?.label}</span>
                 </div>
-              ))}
+              ) : (
+                <div className="item met">
+                  <Icon name="check" />
+                  <span>everything this step needs is done</span>
+                </div>
+              )}
             </div>
           ) : viewing < currentOrder ? (
             <span className="meta">a step already passed · the booking is at {STEP_NAMES[currentOrder - 1]}</span>
@@ -1369,6 +1424,9 @@ function SidePanel({
   entry,
   sealed,
   onGo,
+  todo,
+  todoInherited,
+  onGoToCard,
   timers,
   events,
   communications,
@@ -1378,6 +1436,9 @@ function SidePanel({
   entry: EntryDetail;
   sealed: boolean;
   onGo: (step: number) => void;
+  todo: FlowItem[];
+  todoInherited: Precondition[];
+  onGoToCard: (card?: string) => void;
   timers: TimerRecordSummary[];
   events: import("@/lib/trace/humanize").TraceEvent[];
   communications: EntryCommunication[];
@@ -1414,6 +1475,35 @@ function SidePanel({
           )}
         </div>
       </div>
+      {todo.length || todoInherited.length ? (
+        <div>
+          <h4>To do here</h4>
+          <div className="todo">
+            {todo.map((i) => (
+              <button
+                key={`${i.n}-${i.card}`}
+                type="button"
+                className={`row-todo${i.met ? " done" : ""}`}
+                onClick={() => onGoToCard(i.card)}
+                title={`Go to ${i.label}`}
+              >
+                <span className="n">{i.met ? <Icon name="check" /> : i.n}</span>
+                <span className="t">{i.label}</span>
+              </button>
+            ))}
+            {todoInherited.length ? (
+              <div className="also">
+                {todoInherited.map((p) => (
+                  <div key={p.label} className={`row-todo${p.met ? " done" : ""}`} style={{ cursor: "default" }}>
+                    <span className="n">{p.met ? <Icon name="check" /> : "!"}</span>
+                    <span className="t">{p.label}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div>
         <h4>Recent</h4>
         <div className="list">

@@ -140,6 +140,8 @@ export function S5Arrival({
         meta="Opened by Reserve. The desk completes or waives its tasks here; the guest-details task ticks itself when the guest table is full."
         actionable="all"
         guestDetailsHint
+        flow="tasks"
+        flowAfter="rooms"
       />
       <AdvanceAndCredit entry={entry} facts={facts} />
       <StepCard title="Pre-arrival message · what they said">
@@ -499,6 +501,8 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
 
   return (
     <StepCard
+      flow="handoff"
+      flowAfter="advance"
       title="The front-desk handoff"
       right={
         h1.state === "FULFILLED" ? (
@@ -599,7 +603,7 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   });
   const acked = entry.creditCeilingTier2AcknowledgedAt ?? null;
   return (
-    <StepCard>
+    <StepCard flow="advance">
       <Tool>
         <AdvanceSettlementBlock
           entry={entry}

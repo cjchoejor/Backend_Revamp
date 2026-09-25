@@ -241,16 +241,18 @@ export function S3SetUp({
         onChanged={changed}
       />
 
-      <HoldCard
+      {/* The order the desk works in (2026-09-25): the payer, then the terms, the bill and
+          the money — and the rooms last, the only order the backend accepts them in. */}
+      <TermsCard entry={entry} editable={editable} tz={tz} onChanged={changed} />
+
+      <ProformaCard
         entry={entry}
         editable={editable}
-        gm={gm}
         tz={tz}
-        nowMs={clock.now}
-        roomIds={sealedRoomIds}
-        roomNos={roomNos}
-        anchorRoomId={anchorRoomId}
-        defaultWhy={acceptedQuote ? `Quotation ${acceptedQuote.referenceNumber} accepted` : "Reservation set-up — the rooms held for this booking"}
+        proformas={proformas}
+        current={currentProforma}
+        status={status}
+        passStart={passStart}
         onChanged={changed}
       />
 
@@ -267,16 +269,16 @@ export function S3SetUp({
         onChanged={changed}
       />
 
-      <TermsCard entry={entry} editable={editable} tz={tz} onChanged={changed} />
-
-      <ProformaCard
+      <HoldCard
         entry={entry}
         editable={editable}
+        gm={gm}
         tz={tz}
-        proformas={proformas}
-        current={currentProforma}
-        status={status}
-        passStart={passStart}
+        nowMs={clock.now}
+        roomIds={sealedRoomIds}
+        roomNos={roomNos}
+        anchorRoomId={anchorRoomId}
+        defaultWhy={acceptedQuote ? `Quotation ${acceptedQuote.referenceNumber} accepted` : "Reservation set-up — the rooms held for this booking"}
         onChanged={changed}
       />
 
@@ -402,7 +404,7 @@ function PartiesCard({
   const billedTo =
     model === "GUEST_PAY" ? guest : model === "DIRECT_BILL" || model === "TOUR_OPERATOR_VOUCHER" ? (account ?? "the account") : words(model);
   return (
-    <StepCard title="The three parties">
+    <StepCard flow="parties" title="The three parties">
       <div className="grid3">
         <FactBox
           k="Guest"
@@ -475,7 +477,7 @@ function BillingModelCard({
   const groupLock =
     group && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the voucher — anything else is the GM's call" : null;
   return (
-    <StepCard title="Billing model" right={savedModel && !dirty ? <OnRecord /> : null}>
+    <StepCard flow="billing-model" title="Billing model" right={savedModel && !dirty ? <OnRecord /> : null}>
       <Choice options={options} value={model} onChange={editable ? setModel : undefined} disabled={!editable} />
       <div className="meta" style={{ marginTop: 6 }}>
         Set here, before the bill goes live; a change afterwards is a recorded transition.{" "}
@@ -603,6 +605,8 @@ function HoldCard({
 
   return (
     <StepCard
+      flow="hold"
+      flowAfter="proforma"
       title="The committed hold"
       acts={
         past ? undefined : (
@@ -867,6 +871,8 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
   });
   return (
     <StepCard
+      flow="terms"
+      flowAfter="billing-model"
       title="Terms disclosed"
       acts={
         d || past ? undefined : (
@@ -982,7 +988,7 @@ function ProformaCard({
 
   if (proformas.length === 0) {
     return (
-      <StepCard title="Proforma" icon="file">
+      <StepCard flow="proforma" flowAfter="terms" title="Proforma" icon="file">
         <span className="meta">
           Generated together with the provisional bill — set the billing model above. Not a tax invoice; the tax invoice is issued at check-out.
         </span>

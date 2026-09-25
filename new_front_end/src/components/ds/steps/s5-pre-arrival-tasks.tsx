@@ -61,6 +61,8 @@ export function PreArrivalTasksCard({
   actionable,
   guestDetailsHint,
   id,
+  flow,
+  flowAfter,
   movedOn,
 }: {
   entry: EntryDetail;
@@ -71,6 +73,9 @@ export function PreArrivalTasksCard({
   /** Arrival: the guest-details task says how far the guest table has got. */
   guestDetailsHint?: boolean;
   id?: string;
+  /** Arrival numbers this card in its flow; Reserve's copy of it is not part of one. */
+  flow?: string;
+  flowAfter?: string;
   /** Reserve's copy once the booking has moved to Arrival: the tasks are worked there now. */
   movedOn?: { onGo: () => void } | null;
 }) {
@@ -109,6 +114,8 @@ export function PreArrivalTasksCard({
 
   return (
     <StepCard
+      flow={flow}
+      flowAfter={flowAfter}
       title={title}
       id={id}
       right={tasks.length ? <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip> : undefined}

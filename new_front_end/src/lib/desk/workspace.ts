@@ -232,13 +232,22 @@ export function s3Readiness(
       label: "Quote generated",
       met: liveQuotesThisPass(entry).length > 0,
     },
-    { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL" },
-    { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure },
+    // The order below is the order the desk works in (2026-09-25), because the side panel numbers
+    // it and each card waits for the one before: the guest's contact, then the payer, the terms,
+    // the bill, the money — and only then the rooms, which the backend refuses to hold until the
+    // folio, the disclosure and the money are all in place.
+    {
+      label: "Guest contact on file",
+      met: !!(entry.guestProfile?.email || entry.guestProfile?.phone),
+      card: "parties",
+    },
+    { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
+    { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure, card: "terms" },
     // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
     // advance is demanded or the guest asks). So "generated" is the standing item, and the
     // dispatch/settlement items below appear only when they actually apply — a vacuously-true
     // green line ("sent ✓" when nothing was ever sent or owed) misreads as work done.
-    { label: "Proforma invoice generated", met: proforma },
+    { label: "Proforma invoice generated", met: proforma, card: "proforma" },
     // Money was received → the bill it was paid against must have gone out (backend p40 +
     // the bill-before-money guard). Hidden when nothing has been received: nothing to document.
     ...(advanceReceived > 0
@@ -246,6 +255,7 @@ export function s3Readiness(
           {
             label: "Proforma sent to guest (advance was received)",
             met: proformaDispatched,
+            card: "proforma",
           },
         ]
       : []),
@@ -267,6 +277,7 @@ export function s3Readiness(
       return [
         {
           label: "Guest's answer to the proforma recorded",
+          card: "proforma",
           met:
             (opts?.communications ?? []).find(
               (c) =>
@@ -283,16 +294,12 @@ export function s3Readiness(
     // is unknown (status not fetched — conservative). With required = 0 the hotel asks for
     // nothing, and a green "settled ✓" over zero activity misreads as a payment having happened.
     ...(typeof opts?.requiredAmount !== "number" || opts.requiredAmount > 0 || advanceReceived > 0
-      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied }]
+      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied, card: "money" }]
       : []),
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
-    { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED" },
-    {
-      label: "Guest contact on file",
-      met: !!(entry.guestProfile?.email || entry.guestProfile?.phone),
-    },
+    { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
   ];
 }
 
@@ -328,14 +335,12 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
   return [
-    { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate) },
-    { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1 },
-    {
-      label: "Guest contact on file",
-      met: !!(entry.guestProfile?.email || entry.guestProfile?.phone),
-    },
-    { label: "Availability searched", met: configs.length > 0 },
-    { label: "Preferred room selected", met: !!preferred },
+    // In the order the page reads (2026-09-25): the guest, the stay, then the house's answer.
+    { label: "Guest contact on file", met: !!(entry.guestProfile?.email || entry.guestProfile?.phone), card: "guest" },
+    { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
+    { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
+    { label: "Availability searched", met: configs.length > 0, card: "house" },
+    { label: "Preferred room selected", met: !!preferred, card: "house" },
   ];
 }
 
@@ -367,9 +372,9 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
   const validOk = !operative?.validUntil || new Date(operative.validUntil).getTime() > now;
   return [
     { label: "Availability sealed from Inquiry", met: sealed },
-    { label: "Quote generated", met: live.length > 0 },
-    { label: "Quote still valid", met: !operative || validOk },
-    { label: "Any holds still healthy", met: holdsOk },
+    { label: "Quote generated", met: live.length > 0, card: "quote" },
+    { label: "Quote still valid", met: !operative || validOk, card: "quote" },
+    { label: "Any holds still healthy", met: holdsOk, card: "quote" },
   ];
 }
 
@@ -412,17 +417,21 @@ export function s5Readiness(entry: EntryDetail, hotelToday?: string | null): Pre
   const tier2AckNeeded = ceiling != null && Number.isFinite(ceiling) && ceiling > 0 && outstanding / ceiling >= 0.9;
   return [
     ...arrivalDay,
-    { label: "Handoff to front desk fulfilled", met: h1?.state === "FULFILLED" },
-    { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0 },
+    // The handoff records itself once the room, the tasks and the money are done, so it is
+    // listed last — the order the desk works and the order the page reads (2026-09-25).
+    { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0, card: "rooms" },
     {
+      card: "tasks",
       label: "Pre-arrival tasks done",
       met: tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED"),
     },
-    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true },
+    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
     {
+      card: "advance",
       label: "Credit ceiling acknowledged",
       met: !tier2AckNeeded || !!entry.creditCeilingTier2AcknowledgedAt,
     },
+    { label: "Handoff to front desk fulfilled", met: h1?.state === "FULFILLED", card: "handoff" },
   ];
 }
 
@@ -464,17 +473,18 @@ export function s6Readiness(
   const isVip = !!g?.vipTier?.trim();
   const gd = opts?.guestDetails;
   return [
-    { label: "Identity verified", met: opts?.identityVerified ?? false },
+    { label: "Identity verified", met: opts?.identityVerified ?? false, card: "identity" },
     ...(gd && !gd.vipExempt
-      ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied }]
+      ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied, card: "identity" }]
       : []),
     {
+      card: "rooms",
       label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",
       met: roomReady,
     },
-    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true },
+    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
     { label: "Handoff fulfilled", met: h1Ok },
-    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0 },
+    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" },
   ];
 }
 
@@ -551,19 +561,21 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   return [
     checkoutLine,
-    { label: "Folio is live", met: folio?.state === "LIVE" },
-    { label: "Charges posted", met: (folio?.lines ?? []).length > 0 },
+    { label: "Folio is live", met: folio?.state === "LIVE", card: "folio" },
+    { label: "Charges posted", met: (folio?.lines ?? []).length > 0, card: "folio" },
     {
+      card: "departments",
       label: !h4Init && leavingToday ? "Pre-checkout handoff — raised at the move (leaving today)" : "Pre-checkout handoff started",
       met: h4Init || leavingToday,
     },
     {
+      card: "faults",
       label: openFaults
         ? `${openFaults} open fault${openFaults === 1 ? "" : "s"} — carried to check-out, recorded at the inspection`
         : "Deficiencies resolved",
       met: deficientFinal,
     },
-    { label: "No open disputes", met: openDisputes.length === 0 },
+    { label: "No open disputes", met: openDisputes.length === 0, card: "disputes" },
   ];
 }
 
@@ -591,8 +603,9 @@ export function s8Readiness(entry: EntryDetail): Precondition[] {
       (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
     );
   return [
-    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" },
+    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING", card: "settle" },
     {
+      card: "departure",
       label: "Keys returned",
       met: !!keyReturn && (keyReturn.countReconciled || !!keyReturn.reconciliationNote),
     },
@@ -601,7 +614,7 @@ export function s8Readiness(entry: EntryDetail): Precondition[] {
         distinctRooms.length > 1 ? "Rooms released to housekeeping" : "Room released to housekeeping",
       met: roomsReleased,
     },
-    { label: "Room inspection recorded", met: !!inspection },
+    { label: "Room inspection recorded", met: !!inspection, card: "departure" },
     { label: "Pre-checkout handoff fulfilled", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true) },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];
@@ -619,7 +632,15 @@ export function stepStateFor(order: number, currentOrder: number): StepState {
   return "future";
 }
 
-export type Precondition = { label: string; met: boolean };
+/**
+ * One thing a step still needs before the booking can move on.
+ *
+ * `card` names the section on screen where it is done (2026-09-25) — the side panel numbers the
+ * list, each card carries its number, and a card whose turn has not come says which item it is
+ * waiting for. An item with no card is one the step inherits from an earlier step; it is listed
+ * apart rather than numbered, since there is nothing here to press.
+ */
+export type Precondition = { label: string; met: boolean; card?: string };
 
 /** Real-state preconditions surfaced in the gate bar for each step. */
 export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday: string | null = null): Precondition[] {

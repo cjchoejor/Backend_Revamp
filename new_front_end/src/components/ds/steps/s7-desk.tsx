@@ -126,7 +126,7 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
   });
 
   return (
-    <StepCard title="The departments" icon="broom">
+    <StepCard flow="departments" title="The departments" icon="broom">
       <Facts>
         <Fact k="Housekeeping">{housekeeping.length ? tally(housekeeping) : null}</Fact>
         <Fact k="Kitchen and bar">{kitchen.length ? tally(kitchen) : null}</Fact>
@@ -217,6 +217,7 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
   return (
     <div id="s7-disputes">
       <StepCard
+        flow="disputes"
         title="Disputes"
         icon="alert"
         meta="An open dispute holds the move to Check-out."
@@ -372,6 +373,7 @@ export function FaultsCard({ entry, tz, onFlag }: { entry: EntryDetail; tz: stri
   if (records.length === 0) return null;
   return (
     <StepCard
+      flow="faults"
       title="Faults in the room"
       icon="wrench"
       meta="Each fault is fixed, or recorded as still open, before check-out."

@@ -299,6 +299,7 @@ export function AssignRoomsCard({
 
   return (
     <StepCard
+      flow="rooms"
       id={ROOMS_CARD_ID}
       title={assigned ? "Rooms" : "Assign the rooms"}
       right={
