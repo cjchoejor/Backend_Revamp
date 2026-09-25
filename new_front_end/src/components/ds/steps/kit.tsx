@@ -356,6 +356,11 @@ export function SeeRow({
  */
 const OtherWaysSlotCtx = createContext<HTMLElement | null>(null);
 
+/** Render a card into the step's "other ways" pane when there is one, else in place. */
+function beside(card: ReactNode, slot: HTMLElement | null) {
+  return slot ? createPortal(card, slot) : card;
+}
+
 export function OtherWaysSlot({ node, children }: { node: HTMLElement | null; children: ReactNode }) {
   return <OtherWaysSlotCtx.Provider value={node}>{children}</OtherWaysSlotCtx.Provider>;
 }
@@ -365,19 +370,20 @@ export function OtherWays({ children }: { children: ReactNode }) {
   const slot = useContext(OtherWaysSlotCtx);
   const kids = (Array.isArray(children) ? children : [children]).filter(Boolean);
   if (past || kids.length === 0) return null;
-  const card = (
+  return beside(
     <StepCard title="Other ways this booking can go" quiet>
       <div className="stack sm" style={{ display: "grid", gap: 4 }}>
         {kids}
       </div>
-    </StepCard>
+    </StepCard>,
+    slot,
   );
-  return slot ? createPortal(card, slot) : card;
 }
 
 /** Requests at any step (R2) — the list and its kinds are backend item BE-64. */
 export function RequestsCard() {
-  return (
+  const slot = useContext(OtherWaysSlotCtx);
+  return beside(
     <StepCard title="Requests">
       <p className="meta">Nothing asked yet — a request can be added at any step, and the form asks the questions that kind needs.</p>
       <Live>
@@ -392,7 +398,8 @@ export function RequestsCard() {
           </Button>
         </div>
       </Live>
-    </StepCard>
+    </StepCard>,
+    slot,
   );
 }
 
@@ -653,6 +660,7 @@ const INVOICE_WORD: Record<string, string> = {
 /** Every paper this booking has, as buttons that open it (P1 — a draft is never sent). */
 export function PapersCard({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
+  const slot = useContext(OtherWaysSlotCtx);
   const [open, setOpen] = useState<PaperRef | null>(null);
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
   const folioDocs = useQuery({
@@ -680,7 +688,7 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
     return out;
   }, [entry, folioDocs.data]);
   if (papers.length === 0) return null;
-  return (
+  return beside(
     <StepCard title="Papers">
       <div className="row-acts">
         {papers.map((p) => (
@@ -693,7 +701,8 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
         Preview opens the paper as the backend composes it · a draft is never sent
       </div>
       <PaperDrawer paper={open} onClose={() => setOpen(null)} />
-    </StepCard>
+    </StepCard>,
+    slot,
   );
 }
 

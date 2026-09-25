@@ -1000,6 +1000,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </span>
                   </div>
                 ) : null}
+                <div hidden={view !== "step"}>
                 <CaseCards
                     entry={entry}
                     step={viewing}
@@ -1010,6 +1011,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
+                </div>
                 <StepFlow items={flowItems} on={!viewingPast && !sealed}>
                   <OtherWaysSlot node={otherSlot}>
                     <div hidden={view !== "step"}>{native}</div>
