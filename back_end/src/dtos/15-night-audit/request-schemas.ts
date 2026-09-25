@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const runNightAuditRequestSchema = z.object({
   operatingDate: z.string().min(1),
+  /** Named: post this ONE booking's night (may be tonight). Omitted: the hotel-wide run. */
+  entryId: z.string().trim().min(1).optional(),
 });
 export type RunNightAuditRequestDto = z.infer<typeof runNightAuditRequestSchema>;
 

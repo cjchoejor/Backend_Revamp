@@ -71,8 +71,13 @@ nightAuditRouter.get(
 
 nightAuditRouter.post("/night-audit/run", requireActorLevel("L2"), validateBody(runNightAuditRequestSchema), async (req, res, next) => {
   try {
-    const record = await s7NightAuditService.runNightAudit(prisma, req.actor!.actorId, req.body);
-    res.json(record);
+    const body = req.body as { operatingDate: string; entryId?: string };
+    // From a booking's Stay step the run is that booking's alone (2026-09-25); the hotel-wide
+    // run is the 08:00 schedule's, or a call with no booking named.
+    const out = body.entryId
+      ? await s7NightAuditService.runNightAuditForEntry(prisma, req.actor!.actorId, { operatingDate: body.operatingDate, entryId: body.entryId })
+      : await s7NightAuditService.runNightAudit(prisma, req.actor!.actorId, { operatingDate: body.operatingDate });
+    res.json(out);
   } catch (e) {
     next(e);
   }

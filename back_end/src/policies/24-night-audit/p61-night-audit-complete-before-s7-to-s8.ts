@@ -8,9 +8,33 @@ import { utcDateOnly, ymdUtc } from "../../lib/stay-dates.js";
  */
 export function enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8(input: {
   nightAudit: { runStatus: NightAuditRunStatus | string } | null | undefined;
+  /**
+   * The booking's own final night is posted — every room it held that night carries its room
+   * charge (2026-09-25). A manual run from the desk audits one booking, not the hotel, and
+   * leaves no hotel-wide record; the guest it was run for must still be able to check out.
+   */
+  bookingNightPosted?: boolean;
 }) {
   if (input.nightAudit?.runStatus === NightAuditRunStatus.COMPLETE) return;
+  if (input.bookingNightPosted === true) return;
   throw new StageGateBlockedError("Night audit must be COMPLETE for last operating date before checkout", "NIGHT_AUDIT_NOT_COMPLETE");
+}
+
+/**
+ * A manual run for ONE booking may post tonight (2026-09-25, operator ruling): the guest who
+ * settles in the evening and leaves before the morning run needs tonight on the bill. What it
+ * may not do is reach ahead of the calendar — a night after today is refused. The hotel-wide run
+ * keeps the stricter rule above: it seals the day for everyone, so the day must be over.
+ */
+export function enforceNightAuditOperatingDateNotAhead(input: { operatingDate: Date; hotelToday: Date }) {
+  const op = utcDateOnly(input.operatingDate).getTime();
+  const today = utcDateOnly(input.hotelToday).getTime();
+  if (op <= today) return;
+  throw new PolicyGateBlockedError(
+    "NIGHT_AUDIT_DATE_AHEAD",
+    `Night audit for ${ymdUtc(input.operatingDate)} is ahead of the hotel day (${ymdUtc(input.hotelToday)}) — tonight can be posted, a later night cannot`,
+    { operatingDate: ymdUtc(input.operatingDate), hotelToday: ymdUtc(input.hotelToday) },
+  );
 }
 
 /**

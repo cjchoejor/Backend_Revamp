@@ -30,6 +30,7 @@ import { enforceDeficientRecordsHaveTerminalStatusForS7ToS8 } from "../policies/
 import { enforceCheckoutDatePresentForS7ToS8, enforceOccupiedRoomAssignmentForS7ToS8 } from "../policies/01-availability/p01-s7-exit-room-and-checkout-gates.js";
 import { enforceH4InitiatedBeforeS7ToS8UnlessSameDayDeparture } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8 } from "../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
+import { isBookingNightPosted } from "../services/application/s7-night-audit-service.js";
 import { enforceArrivalNotBeforeBookedCheckIn, enforceDepartureNotBeforeBookedCheckout } from "../policies/14-cancellation/p36-early-departure.js";
 import { effectiveCheckOutDate, hotelTodayUtc, utcDateOnly } from "../lib/stay-dates.js";
 import { enforceNoUnresolvedNightAuditAnomaliesForS7ToS8 } from "../policies/24-night-audit/p60-unresolved-night-audit-anomalies-for-s7-to-s8.js";
@@ -495,7 +496,9 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   const stayStart = utcDateOnly(entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? checkout!);
   if (lastNight.getTime() >= stayStart.getTime()) {
     const audit = await prisma.nightAuditRecord.findUnique({ where: { operatingDate: lastNight } });
-    enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8({ nightAudit: audit });
+    // …or this booking's own final night posted by a manual run, which leaves no hotel record.
+    const bookingNightPosted = audit?.runStatus === "COMPLETE" ? true : await isBookingNightPosted(prisma, entryId, lastNight);
+    enforceNightAuditCompleteForLastOperatingDateBeforeS7ToS8({ nightAudit: audit, bookingNightPosted });
   }
 
   const unresolvedAnomalyCount = await prisma.nightAuditAnomaly.count({
