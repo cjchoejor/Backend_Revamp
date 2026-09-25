@@ -24,9 +24,14 @@ const LEVEL_RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
 
 // Complaint resolution is stage-agnostic (any active stage except S2/S9 per the backend). It isn't
 // in BACKFLOWS_BY_STAGE because it isn't keyed to one source stage — surface it separately.
+//
+// It sits LAST in the list (2026-09-25): at Set up it used to be the only item, so an ordinary
+// renegotiation went on the record as a complaint resolution — and that mode deliberately keeps
+// the hold and the pending proforma, which is why Set up then had nothing left to do. The label
+// says what it is for.
 const COMPLAINT_DESCRIPTOR: BackflowDescriptor = {
   key: "complaintToS2",
-  label: "Complaint resolution → re-quote",
+  label: "Put a complaint right (fresh quote)",
   toStage: "S2",
   minLevel: "L2",
 };
@@ -58,6 +63,12 @@ function runBackflow(
       return backflows.s7ToS4(session, entryId, reason, newCheckOutDate);
     case "complaintToS2":
       return backflows.complaintToS2(session, entryId, reason);
+    // Set up's own routes: the S3 re-entry machine, which frees the rooms and replaces the
+    // pending proforma so the next pass starts its paperwork afresh.
+    case "s3ToS2":
+      return backflows.s3ToS2(session, entryId, reason);
+    case "s3ToS1":
+      return backflows.s3ToS1(session, entryId, reason);
     default:
       throw new Error(`Unknown backflow: ${d.key}`);
   }
