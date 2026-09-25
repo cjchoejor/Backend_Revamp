@@ -12,8 +12,6 @@
  */
 import { useState } from "react";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { useHotelDay } from "@/hooks/use-hotel-day";
-import { departureWouldBeEarly } from "@/lib/desk/workspace";
 import { EarlyDepartureBlock, EarlyDepartureFacts } from "@/components/desk/workspace/early-departure";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
@@ -69,7 +67,6 @@ export function S7Stay({
 }) {
   const { tz } = useHotelClock(60_000);
   const refresh = useRefreshEntry(entry.id);
-  const hotelToday = useHotelDay()?.today ?? null;
   // An open room tab on the folio becomes the default "Room" of the next charge.
   const [chargeTarget, setChargeTarget] = useState("");
   const [disputeOpen, setDisputeOpen] = useState(false);
@@ -77,7 +74,6 @@ export function S7Stay({
 
   const folioId = entry.folio?.id ?? null;
   const inHouse = entry.status === "ACTIVE" && entry.currentStage === "S7";
-  const early = departureWouldBeEarly(entry, hotelToday);
   const onMoney = () => refresh([["interim-payments", entry.id], ["stay-extensions", entry.id]]);
 
   // A pane is hidden, never unmounted — see S7_PANES.
@@ -162,35 +158,12 @@ export function S7Stay({
 
       <RequestsCard />
       <OtherWays>
+        {/* Only what has no tab and no card of its own until it exists (2026-09-25): a dispute
+            and a fault are raised from here because their cards render only once there is one.
+            Extending, leaving early, a room change and an interim payment are tabs beside This
+            step, so they are not repeated here. */}
         {inHouse
           ? [
-              <SeeRow
-                key="extend"
-                label="Extend stay…"
-                note="checks the rooms are free for the extra nights, prices them, takes the payment first, then re-freezes the booking"
-                onClick={() => go("extend")}
-              />,
-              <SeeRow
-                key="early"
-                label="Early departure…"
-                note={
-                  entry.earlyDeparture
-                    ? "already recorded — the stay is shortened"
-                    : early === true
-                      ? "shortens the stay; the nights slept stay billed, the rest fall away; the fee follows the setting — the GM's"
-                      : early === null
-                        ? "checking today's date at the hotel…"
-                        : "the booked check-out day is here — this is an ordinary check-out"
-                }
-                onClick={early === true && !entry.earlyDeparture ? () => go("early") : undefined}
-                reason={early === true && !entry.earlyDeparture ? undefined : "nothing to shorten today"}
-              />,
-              <SeeRow
-                key="category"
-                label="Change category…"
-                note="a room of another type, from the room's own Change room — the FOM's; the stay is re-priced from tonight"
-                onClick={() => go("rooms")}
-              />,
               <SeeRow
                 key="dispute"
                 label="Raise a dispute…"
@@ -203,12 +176,6 @@ export function S7Stay({
                 label="Flag room deficient…"
                 note="the room leaves sale at once; the guest is offered a move; settled or acknowledged before check-out"
                 onClick={() => setFaultOpen(true)}
-              />,
-              <SeeRow
-                key="interim"
-                label="Interim payment"
-                note="the bill goes out first, then the money; it reduces the balance and nothing more"
-                onClick={() => go("interim")}
               />,
             ]
           : null}
