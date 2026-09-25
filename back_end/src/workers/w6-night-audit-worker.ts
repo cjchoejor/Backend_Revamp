@@ -1,6 +1,17 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { runNightAudit } from "../services/application/s7-night-audit-service.js";
+import { addUtcDays, hotelTodayUtc } from "../lib/stay-dates.js";
+
+/**
+ * Which night a scheduled run audits: today on the HOTEL's calendar, shifted by the offset — so
+ * `-1` is the night that has just ended, whatever hour the schedule fires (2026-09-25). It used
+ * to shift the UTC date, which is a day behind Bhutan until 06:00: a run set for five in the
+ * morning would have audited the night before last.
+ */
+export function operatingDateForRun(now: Date, offsetDays: number): Date {
+  return addUtcDays(hotelTodayUtc(now), offsetDays);
+}
 
 export async function runNightAuditWorker(
   prisma: PrismaClient,
@@ -8,17 +19,15 @@ export async function runNightAuditWorker(
 ) {
   const actorId = typeof input.actorId === "string" ? input.actorId : "SYSTEM";
   // An explicit operatingDate (e.g. the manual POST /night-audit/run path) always wins. Otherwise
-  // derive it from now shifted by operatingDateOffsetDays (UTC): offset 0 = the run date (bare
-  // default, unchanged); the recurring 02:00 schedule passes -1 so the nightly audit closes the
-  // day that just ended (Convention B) rather than the freshly-started calendar day.
+  // derive it from the hotel's day shifted by operatingDateOffsetDays: offset 0 = the run date;
+  // the recurring schedule passes -1 so the nightly audit closes the night that just ended
+  // (Convention B) rather than the freshly-started calendar day.
   let operatingDate: string;
   if (typeof input.operatingDate === "string") {
     operatingDate = input.operatingDate;
   } else {
     const offsetDays = typeof input.operatingDateOffsetDays === "number" ? input.operatingDateOffsetDays : 0;
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() + offsetDays);
-    operatingDate = d.toISOString();
+    operatingDate = operatingDateForRun(new Date(), offsetDays).toISOString();
   }
 
   const record = await runNightAudit(prisma, actorId, { operatingDate });

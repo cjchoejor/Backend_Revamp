@@ -5,6 +5,8 @@ export type ConfigSchema =
   | { kind: "percentage"; label: string; min?: number; max?: number; step?: number; help?: string }
   | { kind: "text"; label: string; help?: string }
   | { kind: "cron"; label: string; help?: string }
+  /** A time of day on the HOTEL's clock, stored "HH:MM" (2026-09-25) — the admin never sees UTC or a cron. */
+  | { kind: "hotel-time"; label: string; help?: string }
   | { kind: "seconds"; label: string; help?: string }
   | { kind: "hours"; label: string; help?: string }
   | { kind: "days"; label: string; help?: string }
@@ -188,10 +190,10 @@ export const DOMAIN_OWNED_TYPED_SCHEMAS: ConfigKeyMeta[] = [
   },
   {
     key: "nightAudit.scheduleTime",
-    title: "Night audit cron",
-    description: "When the nightly audit job runs (cron expression, UTC).",
+    title: "Night audit runs at",
+    description: "The time of day the hotel's night audit runs, on the hotel's clock. It audits the night that has just ended.",
     worker: "Night audit",
-    schema: { kind: "cron", label: "Cron schedule", help: "Example: 0 2 * * * = 02:00 UTC daily" },
+    schema: { kind: "hotel-time", label: "Every day at", help: "the hotel's clock · the night that has just ended is audited · takes effect at once" },
   },
   {
     key: "nightAudit.schedule",

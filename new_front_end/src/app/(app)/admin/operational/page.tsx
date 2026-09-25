@@ -9,7 +9,7 @@ import { getConfigSchema } from "@/lib/admin/config-schemas";
 import { useSelectionParam } from "@/hooks/use-selection-param";
 
 const OPERATIONAL_LABELS: Record<string, string> = {
-  "nightAudit.scheduleTime": "Night audit schedule (cron)",
+  "nightAudit.scheduleTime": "Night audit runs at",
   "nightAudit.schedule": "Stay-night reminder hour",
   "nightAudit.expectedChargesRules": "Expected charges rules",
   "nightAudit.expectedDailyFAndBCharge": "Expected daily F&B charge",
