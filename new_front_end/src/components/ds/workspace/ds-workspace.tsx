@@ -526,7 +526,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ? "Expired — a read-only record"
           : "Closed and sealed — a read-only record";
 
-  const preconds: Precondition[] = sealed
+  const preconds0: Precondition[] = sealed
     ? []
     : confirmStepActive || setupStepActive
       ? [
@@ -564,6 +564,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);
+  // Reserve shows Set up's checklist, but Set up's cards are not on this page — so the items are
+  // listed plainly there rather than numbered onto sections that cannot be scrolled to.
+  const preconds: Precondition[] = confirmStepActive ? preconds0.map((p) => ({ label: p.label, met: p.met })) : preconds0;
   const unmet = preconds.filter((p) => !p.met).length;
   // The step's numbered to-do: the items that have a section on this page, in the order they are
   // done. The rail prints it, and each card takes its own number from it (2026-09-25).
