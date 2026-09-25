@@ -175,6 +175,47 @@ export type DeskMoneyRow = {
  * billing summary, trimmed to what a list shows. Runs a few at a time so a page of fifty does not
  * open fifty transactions together.
  */
+/**
+ * The clocks running on a booking, for the list (2026-09-25, operator: "show the most important
+ * timer running for that reservation in the table as well").
+ *
+ * The soonest few, not just one: the desk names a clock by its code and has no name for every
+ * code the engine arms, so it takes the first it can name. `running` is the whole count, so the
+ * row can say there is more than the one it shows.
+ */
+export type DeskTimerRow = {
+  entryId: string;
+  running: number;
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string }>;
+};
+
+export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<DeskTimerRow[]> {
+  const ids = [...new Set(entryIds)].slice(0, 100);
+  if (ids.length === 0) return [];
+  const rows = await prisma.timerRecord.findMany({
+    where: { entryId: { in: ids }, status: "SCHEDULED" },
+    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true },
+    orderBy: { firesAt: "asc" },
+  });
+  const byEntry = new Map<string, DeskTimerRow>();
+  for (const id of ids) byEntry.set(id, { entryId: id, running: 0, next: [] });
+  for (const r of rows) {
+    if (!r.entryId) continue;
+    const row = byEntry.get(r.entryId);
+    if (!row) continue;
+    row.running += 1;
+    if (row.next.length < 8) {
+      row.next.push({
+        timerCode: r.timerCode,
+        timerType: r.timerType,
+        stageContext: r.stageContext ?? null,
+        firesAt: r.firesAt.toISOString(),
+      });
+    }
+  }
+  return [...byEntry.values()].filter((r) => r.running > 0);
+}
+
 export async function deskMoneyFor(prisma: Db, entryIds: string[]): Promise<DeskMoneyRow[]> {
   const ids = [...new Set(entryIds)].slice(0, 100);
   const out: DeskMoneyRow[] = [];
