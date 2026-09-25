@@ -46,7 +46,7 @@ import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
-import { OtherWaysSlot, StepFlow, anchorFor, numberFlow, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
+import { FlowTodo, OtherWaysSlot, StepFlow, anchorFor, numberFlow, revealCard, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
@@ -599,12 +599,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         if (tries++ < 20) window.setTimeout(attempt, 60);
         return;
       }
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      // …and say which one it was: the card lights for a moment, then settles (2026-09-25).
-      el.classList.remove("flash");
-      void el.offsetWidth;
-      el.classList.add("flash");
-      window.setTimeout(() => el.classList.remove("flash"), 1900);
+      revealCard(el);
     };
     window.requestAnimationFrame(attempt);
   };
@@ -1527,35 +1522,7 @@ function SidePanel({
           )}
         </div>
       </div>
-      {todo.length || todoInherited.length ? (
-        <div>
-          <h4>To do here</h4>
-          <div className="todo">
-            {todo.map((i) => (
-              <button
-                key={`${i.n}-${i.card}`}
-                type="button"
-                className={`row-todo${i.met ? " done" : ""}`}
-                onClick={() => onGoToCard(i.card)}
-                title={`Go to ${i.label}`}
-              >
-                <span className="n">{i.met ? <Icon name="check" /> : i.n}</span>
-                <span className="t">{i.label}</span>
-              </button>
-            ))}
-            {todoInherited.length ? (
-              <div className="also">
-                {todoInherited.map((p) => (
-                  <div key={p.label} className={`row-todo${p.met ? " done" : ""}`} style={{ cursor: "default" }}>
-                    <span className="n">{p.met ? <Icon name="check" /> : "!"}</span>
-                    <span className="t">{p.label}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
+      <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />
       <div>
         <h4>Recent</h4>
         <div className="list">
