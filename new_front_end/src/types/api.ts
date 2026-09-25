@@ -576,6 +576,13 @@ export type EntryDetail = EntryListItem & {
   holdExpiryOverrideSetBy?: string | null;
   holdExpiryOverrideSetAt?: string | null;
   reservation?: ReservationSummary | null;
+  /**
+   * The confirmation vouchers actually dispatched to the guest, newest first. This — not
+   * `reservation.confirmationVoucherSent` — says whether the guest has their confirmation:
+   * that flag is written once inside the create of an immutable row, so it means "confirmed
+   * by this system" and never moves again.
+   */
+  communications?: { id: string; createdAt: string; acknowledgementStatus: string | null }[];
   folio?: FolioDetail | null;
   cancellationDisclosure?: CancellationDisclosureSummary | null;
   committedHold?: CommittedHoldSummary | null;

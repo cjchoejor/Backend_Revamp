@@ -47,6 +47,9 @@ export type DeskListRow = {
     corporateAccount: { id: string; displayName: string } | null;
   } | null;
   reservation: { id: string; confirmedAt: string; confirmationVoucherSent: boolean } | null;
+  /** The guest has actually been sent their confirmation — read from the communications,
+   *  not from the reservation's write-once flag. See desk-read-service. */
+  voucherSent: boolean;
   folio: { id: string; state: string; billingModel: string | null } | null;
   committedHold: { state: string; expiresAt: string } | null;
   speculativeHolds: Array<{ expiresAt: string }>;

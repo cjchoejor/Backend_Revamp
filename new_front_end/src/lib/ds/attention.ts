@@ -123,7 +123,7 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
         push(r, { need: "Not yet blocked", band: "waiting", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 4) {
-      if (r.reservation && !r.reservation.confirmationVoucherSent) push(r, { need: "Reserved · voucher not sent", band: "soon" });
+      if (r.reservation && !r.voucherSent) push(r, { need: "Reserved · voucher not sent", band: "soon" });
     } else if (step === 7) {
       if (co && co < hotelToday) push(r, { need: "Check-out date passed", band: "overdue", deadline: { label: "Check-out was", at: ymdStart(co) } });
     } else if (step === 8) {
