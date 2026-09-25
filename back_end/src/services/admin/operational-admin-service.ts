@@ -46,7 +46,7 @@ export async function setOperationalConfig(
   actorId: string,
   notes?: string | null,
 ) {
-  return prisma.$transaction((tx) =>
+  const saved = await prisma.$transaction((tx) =>
     supersedeConfigurationEntry(tx, {
       configKey,
       configValue,
@@ -54,4 +54,20 @@ export async function setOperationalConfig(
       notes,
     }),
   );
+  // The night audit's time is read once, when the schedule is registered — re-register it now so
+  // the new time counts from this save, not from the next restart (2026-09-25). Best-effort: the
+  // save stands either way, and the next boot reads the row.
+  if (configKey === "nightAudit.scheduleTime") {
+    try {
+      const [{ registerNightAuditSchedule }, { getTimerEngine }] = await Promise.all([
+        import("../../workers/runner.js"),
+        import("../infrastructure/timer-management-service.js"),
+      ]);
+      await registerNightAuditSchedule(prisma, await getTimerEngine());
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[admin] Night audit schedule saved but not re-registered — it applies on the next start:", e);
+    }
+  }
+  return saved;
 }

@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { createTimerEngine } from "../lib/timer-engine.js";
 import { getActiveConfigEntry } from "../lib/config-store.js";
+import { HOTEL_TIMEZONE } from "../services/infrastructure/pdf-templates/legphel-document-format.js";
 import { runStageDwellMonitor } from "./w1-stage-dwell-monitor.js";
 import { runProcessingLockExpiryWorker } from "./w16-processing-lock-expiry-worker.js";
 import { runEntryExpiryWorker } from "./w20-entry-expiry-worker.js";
@@ -118,17 +119,44 @@ export async function startWorkers() {
   // day that just ended (Convention B — the traditional hotel night-audit boundary) rather than
   // the freshly-started calendar day; runNightAudit stays idempotent per operatingDate.
   try {
-    const cronRow = await getActiveConfigEntry(prisma, "nightAudit.scheduleTime");
-    const cron =
-      typeof cronRow?.configValue === "string" && cronRow.configValue.trim() ? cronRow.configValue.trim() : "0 2 * * *";
-    await (engine.boss as any).schedule("NIGHT_AUDIT_W6", cron, { actorId: "SYSTEM", operatingDateOffsetDays: -1 }, { tz: "UTC" });
-    // eslint-disable-next-line no-console
-    console.log(`[workers] Night audit recurring schedule registered (NIGHT_AUDIT_W6, cron="${cron}", tz=UTC, operatingDate=previous-day).`);
+    await registerNightAuditSchedule(prisma, engine);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[workers] Failed to register night audit recurring schedule:", e);
   }
 
   return engine;
+}
+
+/**
+ * The night audit's daily time, as the admin console stores it (2026-09-25): `"HH:MM"` on the
+ * HOTEL's clock — "08:00" means eight in the morning in Thimphu, whatever UTC says. An older row
+ * may still hold a cron expression in UTC; it is honoured as it was. Either way the job carries
+ * `operatingDateOffsetDays: -1`, and the worker reads that on the hotel's calendar, so the night
+ * that has just ended is the one audited at any time of day.
+ *
+ * pg-boss upserts a schedule by queue name, so this is safe to call again — the admin console
+ * does, right after a save, so a new time takes effect without a restart.
+ */
+export async function registerNightAuditSchedule(db: typeof prisma, engine: { boss: unknown }) {
+  const row = await getActiveConfigEntry(db, "nightAudit.scheduleTime");
+  const raw = typeof row?.configValue === "string" && row.configValue.trim() ? row.configValue.trim() : "08:00";
+  const { cron, tz } = nightAuditCron(raw);
+  await (engine.boss as { schedule: (q: string, c: string, d: unknown, o: unknown) => Promise<unknown> }).schedule(
+    "NIGHT_AUDIT_W6",
+    cron,
+    { actorId: "SYSTEM", operatingDateOffsetDays: -1 },
+    { tz },
+  );
+  // eslint-disable-next-line no-console
+  console.log(`[workers] Night audit recurring schedule registered (NIGHT_AUDIT_W6, ${raw} → cron="${cron}", tz=${tz}, operatingDate=the night just ended on the hotel calendar).`);
+  return { raw, cron, tz };
+}
+
+/** "08:00" → `0 8 * * *` in the hotel's zone; a cron string is kept, in UTC, as before. */
+export function nightAuditCron(value: string): { cron: string; tz: string } {
+  const m = /^(\d{2}):(\d{2})$/.exec(value.trim());
+  if (m) return { cron: `${Number(m[2])} ${Number(m[1])} * * *`, tz: HOTEL_TIMEZONE };
+  return { cron: value.trim(), tz: "UTC" };
 }
 

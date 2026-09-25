@@ -63,6 +63,12 @@ const cronString = (value: unknown): string | null => {
   if (parts.length < 5 || parts.length > 6) return "must be a 5- or 6-field cron expression";
   return null;
 };
+/** A time of day on the hotel's clock ("08:00"), or — an older row — a cron expression (2026-09-25). */
+const hotelTimeOrCron = (value: unknown): string | null => {
+  if (typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim())) return null;
+  const c = cronString(value);
+  return c ? "must be a time of day (HH:MM, the hotel's clock) or a cron expression" : null;
+};
 const percentage = (value: unknown): string | null => {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0 || n > 100) return "must be a percentage between 0 and 100";
@@ -136,7 +142,7 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "billing.serviceChargeRate": own("FinancialConfigurationService"),
 
   // Operational schedule (OperationalScheduleService)
-  "nightAudit.scheduleTime": own("OperationalScheduleService", cronString),
+  "nightAudit.scheduleTime": own("OperationalScheduleService", hotelTimeOrCron),
   "nightAudit.expectedChargesRules": own("OperationalScheduleService"),
   "checkout.cutoffTime": own("OperationalScheduleService"),
   "checkIn.standardTime": own("OperationalScheduleService", timeOfDay),

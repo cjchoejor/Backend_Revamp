@@ -332,7 +332,7 @@ async function main() {
       notes: "W27 — offsets from dispute openedAt; second timer only if resolutionReminderMinutes > firstResponseDueMinutes",
     },
     { configKey: "nightAudit.schedule", configValue: { stayNightReminderHourUtc: 14 }, notes: "SIG-S5 Policy 59 — UTC hour for per stay-night W37 countdown jobs" },
-    { configKey: "nightAudit.scheduleTime", configValue: "0 2 * * *", notes: "Admin readiness — cron for night audit run" },
+    { configKey: "nightAudit.scheduleTime", configValue: "08:00", notes: "When the night audit runs, on the hotel's clock (HH:MM); the night just ended is audited" },
     { configKey: "payment.followUp.intervals", configValue: [1, 3, 7], notes: "S9 readiness — days after checkout for payment follow-up" },
     {
       configKey: "invoice.templates",
