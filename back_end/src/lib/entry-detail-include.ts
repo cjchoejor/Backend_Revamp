@@ -3,6 +3,22 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 /** Shared include for entry workspace GET / activation responses. */
 export const entryDetailInclude = {
   reservation: true,
+  /**
+   * The confirmation vouchers actually dispatched to the guest. The desk reads these rather than
+   * `Reservation.confirmationVoucherSent`, which is set true once inside the create of an
+   * immutable row and so means "confirmed by this system", not "the voucher went out" — see the
+   * note in desk-read-service. Newest first, capped: the desk only asks whether there is one.
+   */
+  communications: {
+    where: {
+      commType: "CONFIRMATION_VOUCHER" as const,
+      direction: "OUTBOUND",
+      sendStatus: "DISPATCHED",
+    },
+    orderBy: { createdAt: "desc" as const },
+    take: 5,
+    select: { id: true, createdAt: true, acknowledgementStatus: true },
+  },
   folio: {
     include: {
       lines: { orderBy: { postedAt: "desc" as const }, take: 100 },

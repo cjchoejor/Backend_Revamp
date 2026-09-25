@@ -58,6 +58,20 @@ const listSelect = {
     },
   },
   reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true } },
+  /**
+   * Whether the guest has actually been sent their confirmation — see `voucherSent` below.
+   * One row is enough; the desk only asks yes or no.
+   */
+  communications: {
+    where: {
+      commType: "CONFIRMATION_VOUCHER" as const,
+      direction: "OUTBOUND",
+      sendStatus: "DISPATCHED",
+    },
+    orderBy: { createdAt: "desc" as const },
+    take: 1,
+    select: { createdAt: true },
+  },
   folio: { select: { id: true, state: true, billingModel: true } },
   committedHold: { select: { state: true, expiresAt: true } },
   speculativeHolds: {
@@ -154,6 +168,20 @@ export async function listDeskBookings(
     const follow = r.timers.find((t) => t.timerCode === "PARKING_FOLLOW_UP");
     return {
       ...r,
+      /**
+       * Has the guest been sent their confirmation? Answered from the communications, not from
+       * `Reservation.confirmationVoucherSent` — which is written `true` once, inside the
+       * `reservation.create` at confirmation, on a row that is then immutable. That flag means
+       * "confirmed by this system", not "the voucher went out": a booking whose send FAILED
+       * reads sent, and a booking brought across from the old PMS reads unsent forever, however
+       * many times the desk sends it (found on ENT-20260510-0006, 2026-09-25 — four sends, four
+       * answers, still "voucher not sent").
+       *
+       * A dispatched voucher is exactly what the W4 gate keys on, so the desk now stops asking
+       * for the one thing that no longer holds the booking up. Confirmation always writes one,
+       * so nothing that read sent before reads unsent now.
+       */
+      voucherSent: r.communications.length > 0,
       custodianName: r.inquiry?.defaultCustodianId ? nameOf.get(r.inquiry.defaultCustodianId) ?? null : null,
       parkReason: reasonOf.get(r.id) ?? null,
       parkFollowUpAt: r.status === "PARKED" && follow ? follow.firesAt.toISOString() : null,
