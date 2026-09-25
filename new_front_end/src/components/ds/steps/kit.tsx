@@ -73,6 +73,14 @@ export function Live({ children }: { children: ReactNode }) {
  */
 export type FlowItem = { n: number; label: string; met: boolean; card?: string };
 
+/**
+ * A pane of a step — its own tab beside "This step" (2026-09-25, operator, for Stay: "this step
+ * can have folio and handoffs; night audit, room change, interim payment, extend the stay, bills
+ * and statements, early departure can each be different"). `cards` names the flow cards that
+ * live in it, so the to-do can open the pane before scrolling to one.
+ */
+export type StepPane = { key: string; label: string; cards: string[] };
+
 const FlowCtx = createContext<{ items: FlowItem[]; on: boolean }>({ items: [], on: false });
 
 /** The card-bearing items of a step's checklist, numbered in the order they are worked. */
@@ -103,8 +111,12 @@ export function StepFlow({ items, on, children }: { items: FlowItem[]; on: boole
 export function useFlowCard(card?: string, after?: string): { n?: number; met?: boolean; waitsFor?: FlowItem } {
   const { items, on } = useContext(FlowCtx);
   if (!on) return {};
-  const i = card ? items.findIndex((x) => x.card === card) : -1;
-  const mine = i >= 0 ? items[i] : null;
+  // A card may hold several items (Check-in's room card: assigned & ready, then the key). It
+  // carries the number of the first still open, and ticks only once every one of them is done —
+  // ticking on the first alone read as finished with the key still in the drawer.
+  const own = card ? items.filter((x) => x.card === card) : [];
+  const mine = own.length ? (own.find((x) => !x.met) ?? own[0]) : null;
+  const allMet = own.length > 0 && own.every((x) => x.met);
   let waitsFor: FlowItem | undefined;
   if (after) {
     let last = -1;
@@ -113,7 +125,7 @@ export function useFlowCard(card?: string, after?: string): { n?: number; met?: 
     });
     if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met);
   }
-  return { n: mine?.n, met: mine?.met, waitsFor };
+  return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
 }
 
 export function anchorFor(card: string) {

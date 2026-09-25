@@ -140,7 +140,10 @@
    keep their own treatment. An inert one is dashed — visibly a control, visibly not available. */
 .ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { border-color: var(--line); color: var(--ink); }
 .ds .btn-quiet:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-3); border-color: var(--ink-3); }
-.ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-3); border-style: dashed; border-color: var(--line); background: transparent; }
+.ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); }
+/* The list's end-of-table bar sits ABOVE the sticky first column, or the column paints through
+   it and the bar reads as a grey block eating the last rows (operator, image 4). */
+.ds .table-foot:not(.desk-root *) { z-index: 5; }
 /* the row of "what else this step can do": the control leads, its note follows */
 .ds .seerow:not(.desk-root *) { align-items: baseline; }
 
@@ -185,3 +188,9 @@
 .ds .row-timer-eta { font-size: var(--t-meta); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .ds .row-timer-eta.warn { color: var(--warning); font-weight: 600; }
 .ds .row-timer-eta.crit, .ds .row-timer-eta.due { color: var(--danger); font-weight: 700; }
+
+.ds .row-timer-list { display: grid; gap: 6px; }
+
+/* A pane of a step: its cards stack like the canvas, and a hidden one is really hidden. */
+.ds .steps-canvas > .pane { display: grid; gap: var(--s4); }
+.ds .steps-canvas > .pane[hidden] { display: none; }

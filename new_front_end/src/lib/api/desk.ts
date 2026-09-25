@@ -101,7 +101,7 @@ export async function deskMoneyFor(session: Session, entryIds: string[]) {
 export type DeskTimerRow = {
   entryId: string;
   running: number;
-  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string }>;
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; handoffType?: string | null }>;
 };
 
 export async function deskTimersFor(session: Session, entryIds: string[]) {

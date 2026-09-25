@@ -75,6 +75,73 @@ function tally(list: HandoffSummary[]) {
   return [...counts].map(([w, n]) => (list.length > 1 ? `${n} ${w}` : w)).join(" · ");
 }
 
+/**
+ * Housekeeping's and the kitchen's own handoffs (H2 · H3), accepted from the desk (2026-09-25,
+ * operator: "for kitchen to accept and housekeeping to accept we have nowhere to record that").
+ * The departments have no terminal of their own yet, so the desk records the acceptance on
+ * their word — the same checklist the backend demands, ticked here. Acceptance is all there is
+ * to record: the code fulfils H1, H4 and H5 only.
+ */
+function AcceptDepartmentHandoff({ entry, handoff, tz }: { entry: EntryDetail; handoff: HandoffSummary; tz: string }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
+  const dept = handoff.handoffType === "H3" ? "Kitchen and bar" : "Housekeeping";
+  const roomId = (handoff as HandoffSummary & { roomAssignmentId?: string | null }).roomAssignmentId ?? null;
+  const roomNo = roomId ? ((entry.roomAssignments ?? []).find((a) => a.id === roomId)?.room?.roomNumber ?? null) : null;
+  const checklist = useQuery({
+    queryKey: ["handoff-checklist", handoff.handoffType],
+    queryFn: () => getHandoffChecklist(session!, handoff.handoffType),
+    enabled: !!session,
+  });
+  const items = (checklist.data?.items ?? []) as HandoffChecklistItem[];
+  const [ticks, setTicks] = useState<Record<string, boolean>>({});
+  const allTicked = items.filter((i) => i.mandatory).every((i) => ticks[i.code] === true);
+  const accept = useMutation({
+    mutationFn: () => {
+      const c: Record<string, boolean> = {};
+      for (const i of items) c[i.code] = ticks[i.code] === true;
+      return acceptHandoff(session!, handoff.id, c);
+    },
+    onSuccess: () => {
+      toast.success(`${dept} accepted${roomNo ? ` · Room ${roomNo}` : ""}`);
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The handoff could not be accepted"),
+  });
+  return (
+    <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 6 }}>
+      <span className="sm">
+        <b>{dept}</b>
+        {roomNo ? ` · Room ${roomNo}` : ""} · told {handoff.assignedAt ? fmtStamp(handoff.assignedAt, tz) : "—"} · waiting to be accepted
+      </span>
+      {items.length === 0 ? (
+        <span className="meta">{checklist.isLoading ? "Reading the checklist…" : "No checklist for this handoff."}</span>
+      ) : (
+        items.map((i) => (
+          <label key={i.code} className="sm" style={{ display: "flex", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={ticks[i.code] === true} onChange={(e) => setTicks((p) => ({ ...p, [i.code]: e.target.checked }))} />
+            <span>
+              {i.description ?? words(i.code)}
+              {i.mandatory ? null : <span className="meta"> · optional</span>}
+            </span>
+          </label>
+        ))
+      )}
+      <div className="row-acts">
+        <Button
+          compact
+          state={accept.isPending ? "working" : allTicked ? "default" : "inert"}
+          title={allTicked ? undefined : "tick every item that is required first"}
+          workingLabel="Accepting…"
+          onClick={() => accept.mutate()}
+        >
+          Accept for {dept.toLowerCase()}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ the departments */
 
 export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
@@ -130,6 +197,11 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
       <Facts>
         <Fact k="Housekeeping">{housekeeping.length ? tally(housekeeping) : null}</Fact>
         <Fact k="Kitchen and bar">{kitchen.length ? tally(kitchen) : null}</Fact>
+        {past
+          ? null
+          : [...housekeeping, ...kitchen]
+              .filter((h) => h.state === "CREATED")
+              .map((h) => <AcceptDepartmentHandoff key={h.id} entry={entry} handoff={h} tz={tz} />)}
         <Fact k="Before check-out" meta={before?.acceptedAt ? `accepted ${fmtStamp(before.acceptedAt, tz)}` : undefined}>
           {before ? handoffWord(before) : <span className="warn-ink">not started — the move to Check-out waits for it</span>}
         </Fact>

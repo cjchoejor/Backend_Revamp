@@ -383,7 +383,12 @@ export function canProgressS2(entry: EntryDetail): boolean {
 }
 
 /** S5 exit readiness (SIG-S5 §1.5) — gates before check-in (S6). Guest-present is a UI attestation. */
-export function s5Readiness(entry: EntryDetail, hotelToday?: string | null): Precondition[] {
+export function s5Readiness(
+  entry: EntryDetail,
+  hotelToday?: string | null,
+  /** The desk's own attestation that the guest is here — the last thing before Check-in. */
+  opts?: { guestPresent?: boolean },
+): Precondition[] {
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1");
   // Not before the booked check-in day (2026-09-18, mirrors the backend's ARRIVAL_BEFORE_CHECK_IN):
   // an earlier arrival is a change of dates. `undefined` = the caller doesn't ask; `null` = the
@@ -432,6 +437,9 @@ export function s5Readiness(entry: EntryDetail, hotelToday?: string | null): Pre
       met: !tier2AckNeeded || !!entry.creditCeilingTier2AcknowledgedAt,
     },
     { label: "Handoff to front desk fulfilled", met: h1?.state === "FULFILLED", card: "handoff" },
+    // The move to Check-in waits for it, so it is on the list (2026-09-25, operator: the button
+    // had to be pressed but nothing said so). Listed when the caller can say either way.
+    ...(opts && "guestPresent" in opts ? [{ label: "Guest is present at the desk", met: !!opts.guestPresent, card: "present" }] : []),
   ];
 }
 
@@ -454,6 +462,9 @@ export function s6Readiness(
   opts?: {
     guestDetails?: { satisfied: boolean; vipExempt: boolean; filledSlots: number; totalSlots: number } | null;
     identityVerified?: boolean;
+    /** The desk's two attestations at the counter (2026-09-25) — listed when the caller has them. */
+    registrationConfirmed?: boolean;
+    keys?: { label: string; met: boolean } | null;
   },
 ): Precondition[] {
   const g = entry.guestProfile;
@@ -472,19 +483,26 @@ export function s6Readiness(
   const h1Ok = entry.walkInCompressed === true || !h1 || h1.state === "FULFILLED" || h1.state === "CLOSED";
   const isVip = !!g?.vipTier?.trim();
   const gd = opts?.guestDetails;
+  // In the order the page reads (2026-09-25): the document and the guests, the registration
+  // card, the money, the VIP notice, then the rooms and their keys. The handoff is Arrival's and
+  // has no section here.
   return [
     { label: "Identity verified", met: opts?.identityVerified ?? false, card: "identity" },
     ...(gd && !gd.vipExempt
       ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied, card: "identity" }]
       : []),
+    ...(opts && "registrationConfirmed" in opts
+      ? [{ label: "Registration confirmed", met: !!opts.registrationConfirmed, card: "registration" }]
+      : []),
+    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
+    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" },
     {
       card: "rooms",
       label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",
       met: roomReady,
     },
-    { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
+    ...(opts?.keys ? [{ label: opts.keys.label, met: opts.keys.met, card: "rooms" }] : []),
     { label: "Handoff fulfilled", met: h1Ok },
-    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" },
   ];
 }
 

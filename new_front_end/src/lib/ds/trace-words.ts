@@ -97,6 +97,8 @@ const WORDS: Record<string, string> = {
   "NO_SHOW.DEFERRAL_AWAITING_WRITTEN_CONFIRMATION": "No-show put off — waiting for their written word",
   "NO_SHOW.REACTIVATED": "No-show set aside — they are still coming",
   "HANDOFF.H1_ACCEPTED": "Front-desk handoff accepted",
+  "HANDOFF.H2_ACCEPTED": "Housekeeping accepted the room",
+  "HANDOFF.H3_ACCEPTED": "Kitchen and bar accepted the guest",
   "HANDOFF.H1_FULFILLED": "Front-desk handoff done",
   "HANDOFF.H1_CLOSED": "Front-desk handoff closed",
   "HANDOFF.ACCEPTANCE_WINDOW_EXPIRED": "A handoff was not accepted in time",

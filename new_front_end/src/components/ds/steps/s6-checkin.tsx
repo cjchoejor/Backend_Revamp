@@ -179,13 +179,15 @@ export function S6CheckIn({
       />
 
       <div id={ID.advance}>
-        <Tool>
-          <AdvanceSettlementBlock
-            entry={entry}
-            title="Collect the remaining advance"
-            intro="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs the FOM's credit extension instead."
-          />
-        </Tool>
+        <StepCard flow="advance">
+          <Tool>
+            <AdvanceSettlementBlock
+              entry={entry}
+              title="Collect the remaining advance"
+              intro="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs the FOM's credit extension instead."
+            />
+          </Tool>
+        </StepCard>
       </div>
 
       {isVip ? <VipCard entry={entry} tz={tz} /> : null}

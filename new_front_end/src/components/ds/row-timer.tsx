@@ -18,6 +18,15 @@ import type { DeskTimerRow } from "@/lib/api/desk";
 
 const HOUR = 3_600_000;
 
+/** The label, with the department named on an acceptance clock — the rail does the same. */
+function labelOf(t: DeskTimerRow["next"][number]): string | null {
+  if (t.timerCode === "H2_H3_ACCEPTANCE_W25") {
+    if (t.handoffType === "H3") return "Kitchen to accept";
+    if (t.handoffType === "H2") return "Housekeeping to accept";
+  }
+  return timerLabel(t);
+}
+
 /** "in 2d 4h" · "in 3h 05m" · "in 12:07" · "overdue 1h 05m" — the two units that matter. */
 export function countdownWords(ms: number): string {
   const abs = Math.abs(ms);
@@ -31,12 +40,36 @@ export function countdownWords(ms: number): string {
   return ms <= 0 ? `overdue ${core}` : `in ${core}`;
 }
 
+/** Every clock the desk can name on this booking, for the list's preview panel. */
+export function RowTimerList({ row }: { row: DeskTimerRow | undefined }) {
+  const { now, tz } = useHotelClock(1000);
+  const named = (row?.next ?? []).map((t) => ({ t, label: labelOf(t) })).filter((x): x is { t: NonNullable<typeof row>["next"][number]; label: string } => !!x.label);
+  if (named.length === 0) return <span className="dash">—</span>;
+  return (
+    <div className="row-timer-list">
+      {named.map(({ t, label }, i) => {
+        const ms = new Date(t.firesAt).getTime() - now;
+        const level = ms <= 0 ? "due" : ms <= HOUR ? "crit" : ms <= 6 * HOUR ? "warn" : "ok";
+        return (
+          <div key={`${t.timerCode}-${i}`} className="row-timer" title={fmtDateTime(t.firesAt, tz)}>
+            <span className={`timer ${level === "due" ? "overdue" : level === "ok" ? "" : "close"}`}>
+              <Icon name={level === "due" ? "alert" : "clock"} />
+              {label}
+            </span>
+            <span className={`row-timer-eta ${level}`}>{countdownWords(ms)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RowTimer({ row }: { row: DeskTimerRow | undefined }) {
   const { now, tz } = useHotelClock(1000);
   if (!row || row.running === 0) return <span className="dash">—</span>;
   // Only the clocks the desk has words for: the dwell monitor and the retention purge run on
   // every booking and are the system's business, not the front desk's.
-  const named = row.next.map((t) => ({ t, label: timerLabel(t) })).filter((x): x is { t: (typeof row.next)[number]; label: string } => !!x.label);
+  const named = row.next.map((t) => ({ t, label: labelOf(t) })).filter((x): x is { t: (typeof row.next)[number]; label: string } => !!x.label);
   const first = named[0];
   if (!first) return <span className="dash">—</span>;
   const fires = new Date(first.t.firesAt).getTime();

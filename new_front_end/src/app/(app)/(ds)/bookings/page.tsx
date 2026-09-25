@@ -13,9 +13,9 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Chip, EmptyState, Icon, Input } from "@/design-system";
 import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StepChip, bookingHref } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney, useDeskTimers } from "@/hooks/use-desk-data";
-import { RowTimer } from "@/components/ds/row-timer";
+import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
-import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
+import type { DeskListRow, DeskMoneyRow, DeskTimerRow } from "@/lib/api/desk";
 import { fmtDate, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
 import { bookerOfRow, channelWord, factsFromRow, guestNameOf, standingOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
@@ -379,12 +379,26 @@ function BookingsScreen() {
         )}
       </div>
 
-      {preview ? <Preview row={preview} money={moneyOf.byId.get(preview.id)} today={today} onClose={() => setPreviewId(null)} /> : null}
+      {preview ? (
+        <Preview row={preview} money={moneyOf.byId.get(preview.id)} timers={timersOf.byId.get(preview.id)} today={today} onClose={() => setPreviewId(null)} />
+      ) : null}
     </div>
   );
 }
 
-function Preview({ row, money: m, today, onClose }: { row: DeskListRow; money?: DeskMoneyRow; today: string | null; onClose: () => void }) {
+function Preview({
+  row,
+  money: m,
+  timers,
+  today,
+  onClose,
+}: {
+  row: DeskListRow;
+  money?: DeskMoneyRow;
+  timers?: DeskTimerRow;
+  today: string | null;
+  onClose: () => void;
+}) {
   const router = useRouter();
   const g = row.guestProfile;
   const booker = bookerOfRow(row);
@@ -397,7 +411,9 @@ function Preview({ row, money: m, today, onClose }: { row: DeskListRow; money?: 
       <div className="pv-head">
         <div>
           <h3 className={g && guestNameOf(g) !== "to come from the agent" ? "" : "name-i"}>{guestNameOf(g)}</h3>
-          <div className="meta">{row.id}</div>
+          <div className="meta">
+            {row.id} · Enquiry <b>{row.inquiryId}</b>
+          </div>
         </div>
         <Button kind="quiet" compact onClick={onClose} aria-label="Close the preview">
           ×
@@ -438,6 +454,10 @@ function Preview({ row, money: m, today, onClose }: { row: DeskListRow; money?: 
         </dd>
         <dt>Contact</dt>
         <dd>{[row.contactPersonName, row.contactPersonPhone ?? g?.phone, g?.email].filter(Boolean).join(" · ") || "—"}</dd>
+        <dt>Clocks</dt>
+        <dd>
+          <RowTimerList row={timers} />
+        </dd>
         <dt>Total</dt>
         <dd>
           {t.amount ? <span className="money">{t.amount}</span> : <span className="dash">—</span>} <span className="meta">{t.kind}</span>

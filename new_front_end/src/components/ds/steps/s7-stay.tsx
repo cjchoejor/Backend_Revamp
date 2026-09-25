@@ -20,8 +20,7 @@ import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import { InterimPaymentBlock, StayExtensionBlock } from "@/components/desk/workspace/stay-money";
 import type { EntryDetail } from "@/types/api";
-import { OtherWays, PapersCard, RequestsCard, SeeRow, StepCanvas, Tool, useRefreshEntry } from "./kit";
-import { revealBlock } from "./s6-shared";
+import { OtherWays, PapersCard, RequestsCard, SeeRow, StepCanvas, Tool, useRefreshEntry, type StepPane } from "./kit";
 import { BillingModelCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
 import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
@@ -37,16 +36,36 @@ const ID = {
   guests: "s7-guests",
 };
 
+/**
+ * Stay's panes (2026-09-25). "This step" keeps the folio, the charges, the keys and the
+ * departments — the day's work; each of the long-stay matters gets a tab of its own. Every pane
+ * stays mounted (hidden, not unmounted): the nights card reports the final audit up to the gate
+ * whichever pane is open, and a half-typed extension survives a look at the bills.
+ */
+export const S7_PANES: StepPane[] = [
+  { key: "nights", label: "Night audit", cards: ["nights"] },
+  { key: "rooms", label: "Room change", cards: [] },
+  { key: "interim", label: "Interim payment", cards: [] },
+  { key: "extend", label: "Extend the stay", cards: [] },
+  { key: "bills", label: "Bills & statements", cards: [] },
+  { key: "early", label: "Leaving early", cards: [] },
+];
+
 export function S7Stay({
   entry,
   past,
   setNightAuditOk,
   goToStep,
+  pane = null,
+  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
   setNightAuditOk: (v: boolean) => void;
   goToStep: (n: number) => void;
+  /** Which pane is open — null is This step. */
+  pane?: string | null;
+  openPane?: (key: string | null) => void;
 }) {
   const { tz } = useHotelClock(60_000);
   const refresh = useRefreshEntry(entry.id);
@@ -61,62 +80,84 @@ export function S7Stay({
   const early = departureWouldBeEarly(entry, hotelToday);
   const onMoney = () => refresh([["interim-payments", entry.id], ["stay-extensions", entry.id]]);
 
+  // A pane is hidden, never unmounted — see S7_PANES.
+  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
+  const go = (k: string) => openPane?.(k);
+
   return (
     <StepCanvas past={past}>
-      {entry.earlyDeparture ? (
-        <Tool inert={false}>
-          <EarlyDepartureFacts entry={entry} />
-        </Tool>
-      ) : null}
-
-      <FolioCard entry={entry} onTab={setChargeTarget} onInterimPayment={() => revealBlock(ID.interim)} />
-      <PostChargeCard entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
-      <ChitsWaitingCard />
-      <NightsCard entry={entry} setNightAuditOk={setNightAuditOk} onMoveRoom={() => revealBlock(ID.rooms, false)} />
-
-      <RoomsInUseCard entry={entry} id={ID.rooms} />
-      <KeysCard entry={entry} />
-
-      <div id={ID.interim}>
-        <Tool>
-          <InterimPaymentBlock entry={entry} onChanged={onMoney} />
-        </Tool>
-      </div>
-      <div id={ID.extend}>
-        <Tool>
-          <StayExtensionBlock entry={entry} onChanged={onMoney} />
-        </Tool>
-      </div>
-      {folioId ? (
-        <div id={ID.split}>
+      <div className="pane" hidden={at(null)}>
+        {entry.earlyDeparture ? (
+          <Tool inert={false}>
+            <EarlyDepartureFacts entry={entry} />
+          </Tool>
+        ) : null}
+        <FolioCard entry={entry} onTab={setChargeTarget} onInterimPayment={() => go("interim")} />
+        <PostChargeCard entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
+        <ChitsWaitingCard />
+        <KeysCard entry={entry} />
+        <HandoffsCard entry={entry} tz={tz} />
+        <DisputesCard entry={entry} tz={tz} onRaise={() => setDisputeOpen(true)} />
+        <FaultsCard entry={entry} tz={tz} onFlag={() => setFaultOpen(true)} />
+        <TermsChangeCard entry={entry} />
+        <BillingModelCard entry={entry} tz={tz} />
+        <div id={ID.guests}>
           <Tool>
-            <SplitSettlementBlock entry={entry} folioId={folioId} />
+            <IdentityProofBlock entry={entry} collapsible />
           </Tool>
         </div>
-      ) : null}
-      <div id={ID.bills}>
-        <Tool inert={false}>
-          <FolioDocumentsBlock entry={entry} stage="S7" />
-        </Tool>
       </div>
 
-      <HandoffsCard entry={entry} tz={tz} />
-      <DisputesCard entry={entry} tz={tz} onRaise={() => setDisputeOpen(true)} />
-      <FaultsCard entry={entry} tz={tz} onFlag={() => setFaultOpen(true)} />
-      <TermsChangeCard entry={entry} />
-
-      <div id={ID.early}>
-        <Tool>
-          <EarlyDepartureBlock entry={entry} setSelected={goToStep} />
-        </Tool>
+      <div className="pane" hidden={at("nights")}>
+        <NightsCard entry={entry} setNightAuditOk={setNightAuditOk} onMoveRoom={() => go("rooms")} />
       </div>
 
-      <BillingModelCard entry={entry} tz={tz} />
+      <div className="pane" hidden={at("rooms")}>
+        <RoomsInUseCard entry={entry} id={ID.rooms} />
+      </div>
 
-      <div id={ID.guests}>
-        <Tool>
-          <IdentityProofBlock entry={entry} collapsible />
-        </Tool>
+      <div className="pane" hidden={at("interim")}>
+        <div id={ID.interim}>
+          <Tool>
+            <InterimPaymentBlock entry={entry} onChanged={onMoney} />
+          </Tool>
+        </div>
+        {folioId ? (
+          <div id={ID.split}>
+            <Tool>
+              <SplitSettlementBlock entry={entry} folioId={folioId} />
+            </Tool>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="pane" hidden={at("extend")}>
+        <div id={ID.extend}>
+          <Tool>
+            <StayExtensionBlock entry={entry} onChanged={onMoney} />
+          </Tool>
+        </div>
+      </div>
+
+      <div className="pane" hidden={at("bills")}>
+        <div id={ID.bills}>
+          <Tool inert={false}>
+            <FolioDocumentsBlock entry={entry} stage="S7" />
+          </Tool>
+        </div>
+      </div>
+
+      <div className="pane" hidden={at("early")}>
+        {entry.earlyDeparture ? (
+          <Tool inert={false}>
+            <EarlyDepartureFacts entry={entry} />
+          </Tool>
+        ) : null}
+        <div id={ID.early}>
+          <Tool>
+            <EarlyDepartureBlock entry={entry} setSelected={goToStep} />
+          </Tool>
+        </div>
       </div>
 
       <RequestsCard />
@@ -127,7 +168,7 @@ export function S7Stay({
                 key="extend"
                 label="Extend stay…"
                 note="checks the rooms are free for the extra nights, prices them, takes the payment first, then re-freezes the booking"
-                onClick={() => revealBlock(ID.extend)}
+                onClick={() => go("extend")}
               />,
               <SeeRow
                 key="early"
@@ -141,14 +182,14 @@ export function S7Stay({
                         ? "checking today's date at the hotel…"
                         : "the booked check-out day is here — this is an ordinary check-out"
                 }
-                onClick={early === true && !entry.earlyDeparture ? () => revealBlock(ID.early, false) : undefined}
+                onClick={early === true && !entry.earlyDeparture ? () => go("early") : undefined}
                 reason={early === true && !entry.earlyDeparture ? undefined : "nothing to shorten today"}
               />,
               <SeeRow
                 key="category"
                 label="Change category…"
                 note="a room of another type, from the room's own Change room — the FOM's; the stay is re-priced from tonight"
-                onClick={() => revealBlock(ID.rooms, false)}
+                onClick={() => go("rooms")}
               />,
               <SeeRow
                 key="dispute"
@@ -167,7 +208,7 @@ export function S7Stay({
                 key="interim"
                 label="Interim payment"
                 note="the bill goes out first, then the money; it reduces the balance and nothing more"
-                onClick={() => revealBlock(ID.interim)}
+                onClick={() => go("interim")}
               />,
             ]
           : null}
