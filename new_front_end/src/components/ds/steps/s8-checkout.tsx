@@ -854,7 +854,7 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
               : undefined;
 
   return (
-    <StepCard title="How the bill is settled">
+    <StepCard flow="settle" title="How the bill is settled">
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
@@ -1413,7 +1413,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
 
   return (
-    <StepCard title="The departure">
+    <StepCard flow="departure" title="The departure">
       <Facts wide>
         <Fact k="Keys">
           {keyReturn ? (

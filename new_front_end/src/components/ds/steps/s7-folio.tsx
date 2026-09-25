@@ -186,6 +186,7 @@ export function FolioCard({
 
   return (
     <StepCard
+      flow="folio"
       title={`The folio · ${FOLIO_WORD[folio?.state ?? ""] ?? "not open"}`}
       right={f ? <Chip tone="quiet">{plural(f.lineCount, "line")}</Chip> : null}
     >

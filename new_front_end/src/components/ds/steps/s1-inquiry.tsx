@@ -312,9 +312,7 @@ function WhoIsAsking({
           <label>What kind of stay</label>
           <Choice
             options={KINDS_OF_STAY}
-            value={
-              (entry.useType ?? "LEISURE") as (typeof KINDS_OF_STAY)[number][0]
-            }
+            value={entry.useType as (typeof KINDS_OF_STAY)[number][0] | null}
             disabled={!editable || setUse.isPending}
             onChange={(v) => v !== entry.useType && setUse.mutate(v)}
           />
@@ -361,7 +359,7 @@ function TheGuest({
   });
   const noContact = !g?.email && !g?.phone;
   return (
-    <StepCard title="The guest">
+    <StepCard flow="guest" title="The guest">
       <div className="form2">
         <div className="field">
           <label>Phone</label>
@@ -596,7 +594,7 @@ function TheStay({
   const group = entry.groupBillingMode === "GROUP_MASTER";
 
   return (
-    <StepCard title="The stay">
+    <StepCard flow="stay" title="The stay">
       <div className="form2">
         <div className="field">
           <label>Check-in</label>
@@ -606,16 +604,6 @@ function TheStay({
             value={f.checkIn}
             readOnly={ro}
             onChange={(e) => set({ checkIn: e.target.value })}
-          />
-        </div>
-        <div className="field">
-          <label>Nights</label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.nights}
-            readOnly={ro}
-            onChange={(e) => set({ nights: e.target.value.replace(/\D/g, "") })}
           />
         </div>
         <div className="field">
@@ -633,23 +621,14 @@ function TheStay({
           />
         </div>
         <div className="field">
-          <label>Rooms</label>
+          <label>Nights</label>
           <input
             className="input"
             inputMode="numeric"
-            value={f.rooms}
+            value={f.nights}
             readOnly={ro}
-            onChange={(e) => set({ rooms: e.target.value.replace(/\D/g, "") })}
+            onChange={(e) => set({ nights: e.target.value.replace(/\D/g, "") })}
           />
-          <span
-            className={`hint${env && roomsN < env.allowedRoomCounts.min ? " warn-ink" : ""}`}
-          >
-            {env
-              ? env.exceedsHotelCapacity
-                ? `${plural(env.chargeableOccupants, "chargeable guest")} — more than the hotel can sleep`
-                : `a count · at least ${env.allowedRoomCounts.min}, at most ${env.allowedRoomCounts.max} for ${plural(env.chargeableOccupants, "chargeable guest")}`
-              : "a count · the category is ours to pick"}
-          </span>
         </div>
         <div className="field">
           <label>Adults</label>
@@ -672,6 +651,25 @@ function TheStay({
               set({ children: e.target.value.replace(/\D/g, "") })
             }
           />
+        </div>
+        <div className="field">
+          <label>Rooms</label>
+          <input
+            className="input"
+            inputMode="numeric"
+            value={f.rooms}
+            readOnly={ro}
+            onChange={(e) => set({ rooms: e.target.value.replace(/\D/g, "") })}
+          />
+          <span
+            className={`hint${env && roomsN < env.allowedRoomCounts.min ? " warn-ink" : ""}`}
+          >
+            {env
+              ? env.exceedsHotelCapacity
+                ? `${plural(env.chargeableOccupants, "chargeable guest")} — more than the hotel can sleep`
+                : `a count · at least ${env.allowedRoomCounts.min}, at most ${env.allowedRoomCounts.max} for ${plural(env.chargeableOccupants, "chargeable guest")}`
+              : "a count · the category is ours to pick"}
+          </span>
         </div>
         {childN > 0 ? (
           <div className="wide field">
@@ -1204,6 +1202,8 @@ function TheHouse({
   return (
     <>
       <StepCard
+        flow="house"
+        flowAfter="stay"
         title={
           hasResults || entry.checkInDate ? `The house · ${range}` : "The house"
         }

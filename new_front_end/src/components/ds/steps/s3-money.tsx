@@ -163,7 +163,7 @@ export function PaymentPlanCard({
     !!status && !status.paidInFull && received > 0 && !!plan && (plan.plan !== "FULL" || !!plan.balanceDueAt) && !status.creditExtensionActive;
 
   return (
-    <StepCard title="The payment plan" right={stateChip}>
+    <StepCard flow="money" flowAfter="proforma" title="The payment plan" right={stateChip}>
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
       ) : !status ? (

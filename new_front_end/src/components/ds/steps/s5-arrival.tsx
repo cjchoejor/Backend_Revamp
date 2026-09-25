@@ -126,22 +126,27 @@ export function S5Arrival({
   };
   return (
     <StepCanvas past={past}>
-      <ReadyTheRoom entry={entry} facts={facts} guestPresent={guestPresent} setGuestPresent={setGuestPresent} onAssign={openRooms} />
+      <ReadyTheRoom entry={entry} facts={facts} onAssign={openRooms} />
       <AssignRoomsCard entry={entry} boardOpen={boardOpen} setBoardOpen={setBoardOpen} />
       <StepCard>
         <Tool>
           <IdentityProofBlock entry={entry} collapsible />
         </Tool>
       </StepCard>
-      <FrontDeskHandoff entry={entry} facts={facts} />
       <PreArrivalTasksCard
         entry={entry}
         title="Pre-arrival tasks"
         meta="Opened by Reserve. The desk completes or waives its tasks here; the guest-details task ticks itself when the guest table is full."
         actionable="all"
         guestDetailsHint
+        flow="tasks"
+        flowAfter="rooms"
       />
       <AdvanceAndCredit entry={entry} facts={facts} />
+      {/* The handoff records itself once the room, the tasks and the money are done — so it sits
+          after them, where the list has it (2026-09-25). */}
+      <FrontDeskHandoff entry={entry} facts={facts} />
+      <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
       <StepCard title="Pre-arrival message · what they said">
         <AnswerLine entryId={entry.id} type="PRE_ARRIVAL_REMINDER" sinceIso={since} what="the pre-arrival message" tz={clock.tz} />
         <div className="meta" style={{ marginTop: 6 }}>
@@ -261,17 +266,47 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   );
 }
 
+/**
+ * The last thing at Arrival: the guest is standing at the desk (2026-09-25). It was a button on
+ * the overview card at the top, which is where nobody looks last — and the move to Check-in
+ * waits for it, so it is a numbered item with a card of its own, after the handoff.
+ */
+function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolean; setGuestPresent: (v: boolean) => void }) {
+  return (
+    <StepCard
+      flow="present"
+      flowAfter="handoff"
+      title="The guest is here"
+      meta="Say so when they are at the desk — Check-in opens on it. This is the desk's word, recorded with the check-in."
+      acts={
+        <Live>
+          {guestPresent ? (
+            <>
+              <Chip tone="success" icon="check">
+                Guest is at the desk
+              </Chip>
+              <Button kind="quiet" compact onClick={() => setGuestPresent(false)}>
+                Not yet
+              </Button>
+            </>
+          ) : (
+            <Button compact onClick={() => setGuestPresent(true)}>
+              Guest is present
+            </Button>
+          )}
+        </Live>
+      }
+    />
+  );
+}
+
 function ReadyTheRoom({
   entry,
   facts,
-  guestPresent,
-  setGuestPresent,
   onAssign,
 }: {
   entry: EntryDetail;
   facts: Facts_;
-  guestPresent: boolean;
-  setGuestPresent: (v: boolean) => void;
   onAssign: () => void;
 }) {
   const catalog = useRoomsCatalog().data?.items ?? [];
@@ -309,20 +344,6 @@ function ReadyTheRoom({
           <Button kind="secondary" compact onClick={onAssign}>
             Assign rooms
           </Button>
-          {guestPresent ? (
-            <>
-              <Chip tone="success" icon="check">
-                Guest is at the desk
-              </Chip>
-              <Button kind="quiet" compact onClick={() => setGuestPresent(false)}>
-                Not yet
-              </Button>
-            </>
-          ) : (
-            <Button compact onClick={() => setGuestPresent(true)}>
-              Guest is present
-            </Button>
-          )}
         </Live>
       }
     >
@@ -499,6 +520,8 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
 
   return (
     <StepCard
+      flow="handoff"
+      flowAfter="advance"
       title="The front-desk handoff"
       right={
         h1.state === "FULFILLED" ? (
@@ -599,7 +622,7 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   });
   const acked = entry.creditCeilingTier2AcknowledgedAt ?? null;
   return (
-    <StepCard>
+    <StepCard flow="advance">
       <Tool>
         <AdvanceSettlementBlock
           entry={entry}

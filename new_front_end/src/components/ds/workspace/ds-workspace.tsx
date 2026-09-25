@@ -46,6 +46,7 @@ import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
+import { OtherWaysSlot, StepFlow, anchorFor, numberFlow, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
@@ -87,7 +88,7 @@ import { S3SetUp } from "@/components/ds/steps/s3-setup";
 import { S4Reserve } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
-import { S7Stay } from "@/components/ds/steps/s7-stay";
+import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
 import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
 import { atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
@@ -97,7 +98,7 @@ const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 const NOOP = () => {};
 
-type View = "step" | "details" | "history";
+type View = "step" | "other" | "details" | "history";
 
 
 /* ------------------------------------------------------------------ */
@@ -180,13 +181,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // The step being looked at lives in the address (?step=N), so a link can open a booking at the
   // step that needs attention and Back returns to it.
   const stepParam = Number(params.get("step"));
-  const view: View = params.get("view") === "details" ? "details" : params.get("view") === "history" ? "history" : "step";
+  const viewParam = params.get("view");
+  const view: View =
+    viewParam === "details" ? "details" : viewParam === "history" ? "history" : viewParam === "other" ? "other" : "step";
   const [selected, setSelectedState] = useState<number | null>(stepParam >= 1 && stepParam <= 9 ? stepParam : null);
   const setView = (v: View, step?: number) => {
     const p = new URLSearchParams(params.toString());
     if (v === "step") p.delete("view");
     else p.set("view", v);
     if (step) p.set("step", String(step));
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  // A step's own pane — Stay's Night audit, Room change, … (2026-09-25). Null is This step.
+  const paneParam = params.get("pane");
+  const setPane = (key: string | null) => {
+    const p = new URLSearchParams(params.toString());
+    p.delete("view");
+    if (key) p.set("pane", key);
+    else p.delete("pane");
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   };
   const setSelected = (n: number) => {
@@ -240,6 +252,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [exitLeaving, setExitLeaving] = useState<"park" | "plain" | null>(null);
   const pendingExitRef = useRef<string | null>(null);
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
+  // Where the step's "other ways" render — the tab beside This step (2026-09-25).
+  const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
 
   /* ---- the per-room key checklist (survives a refresh until check-in stamps it) ---- */
   const [reserveExtras, setReserveExtras] = useState<string[]>([]);
@@ -521,7 +535,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ? "Expired — a read-only record"
           : "Closed and sealed — a read-only record";
 
-  const preconds: Precondition[] = sealed
+  const preconds0: Precondition[] = sealed
     ? []
     : confirmStepActive || setupStepActive
       ? [
@@ -533,35 +547,72 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         : quoteStepActive
           ? s2Readiness(entry)
           : arrivalStepActive
-            ? s5Readiness(entry, hotelToday)
+            ? s5Readiness(entry, hotelToday, { guestPresent })
             : checkInStepActive
-              ? [
-                  ...s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified }),
-                  { label: "Registration confirmed", met: registrationConfirmed },
-                  {
+              ? s6Readiness(entry, {
+                  guestDetails: guestDetailsCoverage,
+                  identityVerified: stayIdentityVerified,
+                  registrationConfirmed,
+                  keys: {
                     label:
                       checkInRoomIds.length > 1 || moveDayRoomCount > 0
                         ? `Every arrival-night key marked (${issuedKeyCount} of ${checkInRoomIds.length})${moveDayRoomCount > 0 ? ` · ${moveDayRoomCount} on the move day` : ""}`
                         : "Room key marked",
                     met: keysValid,
                   },
-                ]
+                })
               : stayStepActive
-                ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk }]
+                ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk, card: "nights" }]
                 : checkOutStepActive
                   ? s8Readiness(entry)
                   : closedStepActive
                     ? closure
-                      ? closure.checks.map((c) => ({ label: c.label, met: c.met }))
+                      ? [...closure.checks.map((c) => ({ label: c.label, met: c.met })), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }]
                       : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
                       ? [{ label: "The guest's answer to the confirmation voucher recorded", met: voucherAnswerRecorded }]
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);
+  // Reserve shows Set up's checklist, but Set up's cards are not on this page — so the items are
+  // listed plainly there rather than numbered onto sections that cannot be scrolled to.
+  const preconds: Precondition[] = confirmStepActive ? preconds0.map((p) => ({ label: p.label, met: p.met })) : preconds0;
   const unmet = preconds.filter((p) => !p.met).length;
+  // The step's numbered to-do: the items that have a section on this page, in the order they are
+  // done. The rail prints it, and each card takes its own number from it (2026-09-25).
+  const flowItems: FlowItem[] = numberFlow(preconds);
+  const inherited = preconds.filter((p) => !p.card);
+  const nextUp = flowItems.find((i) => !i.met) ?? null;
+  const goToCard = (card?: string) => {
+    if (!card) return;
+    // The card may live in one of the step's panes: open that pane first, then scroll once the
+    // card is actually on screen (the pane arrives with the next render).
+    const owner = panes.find((p) => p.cards.includes(card))?.key ?? null;
+    if (view !== "step" || owner !== pane) {
+      if (owner !== pane) setPane(owner);
+      else setView("step", viewing);
+    }
+    let tries = 0;
+    const attempt = () => {
+      const el = document.getElementById(anchorFor(card));
+      if (!el || el.closest("[hidden]")) {
+        if (tries++ < 20) window.setTimeout(attempt, 60);
+        return;
+      }
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      // …and say which one it was: the card lights for a moment, then settles (2026-09-25).
+      el.classList.remove("flash");
+      void el.offsetWidth;
+      el.classList.add("flash");
+      window.setTimeout(() => el.classList.remove("flash"), 1900);
+    };
+    window.requestAnimationFrame(attempt);
+  };
 
   const viewingPast = view === "step" && (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
+  // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
+  const panes: StepPane[] = step.key === "stay" && !viewingPast && !sealed ? S7_PANES : [];
+  const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
 
   const gotoStep = (n: number) => {
     if (n > maxReach) {
@@ -730,7 +781,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           />
         );
       case "stay":
-        return <S7Stay entry={entry} past={viewingPast} setNightAuditOk={stayStepActive ? setNightAuditOk : NOOP} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+        return (
+          <S7Stay
+            entry={entry}
+            past={viewingPast}
+            setNightAuditOk={stayStepActive ? setNightAuditOk : NOOP}
+            goToStep={viewingPast ? NOOP : stableSetSelected}
+            pane={pane}
+            openPane={setPane}
+          />
+        );
       case "checkout":
         return <S8CheckOut entry={entry} past={viewingPast} goToStep={viewingPast ? NOOP : stableSetSelected} />;
       case "closed": {
@@ -931,9 +991,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
           <div className="canvas">
             <div className="canvas-tabs" role="tablist">
-              <button type="button" className="tab" role="tab" aria-selected={view === "step"} onClick={() => setView("step", viewing)}>
+              <button type="button" className="tab" role="tab" aria-selected={view === "step" && !pane} onClick={() => (pane ? setPane(null) : setView("step", viewing))}>
                 This step
               </button>
+              {panes.map((p) => (
+                <button key={p.key} type="button" className="tab" role="tab" aria-selected={view === "step" && pane === p.key} onClick={() => setPane(p.key)}>
+                  {p.label}
+                </button>
+              ))}
+              {viewingPast || sealed ? null : (
+                <button type="button" className="tab" role="tab" aria-selected={view === "other"} onClick={() => setView("other", viewing)}>
+                  Other ways
+                </button>
+              )}
               <button type="button" className="tab" role="tab" aria-selected={view === "details"} onClick={() => setView("details", viewing)}>
                 Booking details
               </button>
@@ -961,9 +1031,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ) : view === "history" ? (
               <HistoryView entry={entry} billing={billing ?? null} tz={clock.tz} onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))} />
             ) : (
+              // This step and Other ways are the same canvas: the step's own cards here, its
+              // other ways portalled into the pane below (2026-09-25). Both stay mounted, so
+              // switching tabs never loses what the operator has half-typed.
               <>
                 <h3>
-                  {STEP_NAMES[viewing - 1]} <span className="need">{STEP_NEEDS[viewing as StepNo]}</span>
+                  {STEP_NAMES[viewing - 1]}{" "}
+                  <span className="need">
+                    {view === "other" ? "what else it can do" : pane ? panes.find((p) => p.key === pane)?.label.toLowerCase() : STEP_NEEDS[viewing as StepNo]}
+                  </span>
                 </h3>
                 {viewingPast ? (
                   <div className="notice inert">
@@ -974,6 +1050,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </span>
                   </div>
                 ) : null}
+                <div hidden={view !== "step"}>
                 <CaseCards
                     entry={entry}
                     step={viewing}
@@ -984,7 +1061,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
-                {native}
+                </div>
+                <StepFlow items={flowItems} on={!viewingPast && !sealed}>
+                  <OtherWaysSlot node={otherSlot}>
+                    <div hidden={view !== "step"}>{native}</div>
+                  </OtherWaysSlot>
+                </StepFlow>
+                <div hidden={view !== "other"}>
+                  <div ref={setOtherSlot} />
+                  {view === "other" ? (
+                    <p className="meta">
+                      What else this booking can do from {STEP_NAMES[viewing - 1]} — none of it is needed to move on.
+                    </p>
+                  ) : null}
+                </div>
               </>
             )}
             {/* the old side column's "what runs here" target — kept mounted, not shown */}
@@ -995,6 +1085,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             entry={entry}
             sealed={sealed}
             onGo={(n) => gotoStep(n)}
+            todo={view === "step" && !viewingPast && !sealed ? flowItems : []}
+            todoInherited={view === "step" && !viewingPast && !sealed ? inherited : []}
+            onGoToCard={goToCard}
             timers={timersQuery.data?.items ?? []}
             events={traceQuery.data?.items ?? []}
             communications={communications ?? []}
@@ -1011,13 +1104,27 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ) : sealed ? (
             <div className="sm ink-2">{sealedOutcome}</div>
           ) : preconds.length ? (
+            // The full list lives in the side panel, numbered (2026-09-25) — the bar says what is
+            // next and takes you to it, so the move and the reason for waiting sit together.
             <div className="gate">
-              {preconds.map((p) => (
-                <div key={p.label} className={`item ${p.met ? "met" : "unmet"}`}>
-                  <Icon name={p.met ? "check" : "circle"} />
-                  <span>{p.label}</span>
+              {nextUp ? (
+                <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
+                  <Icon name="circle" />
+                  <span>
+                    Next · <b>{nextUp.n}</b> {nextUp.label}
+                  </span>
+                </button>
+              ) : unmet > 0 ? (
+                <div className="item unmet">
+                  <Icon name="circle" />
+                  <span>{preconds.find((p) => !p.met)?.label}</span>
                 </div>
-              ))}
+              ) : (
+                <div className="item met">
+                  <Icon name="check" />
+                  <span>everything this step needs is done</span>
+                </div>
+              )}
             </div>
           ) : viewing < currentOrder ? (
             <span className="meta">a step already passed · the booking is at {STEP_NAMES[currentOrder - 1]}</span>
@@ -1369,6 +1476,9 @@ function SidePanel({
   entry,
   sealed,
   onGo,
+  todo,
+  todoInherited,
+  onGoToCard,
   timers,
   events,
   communications,
@@ -1378,6 +1488,9 @@ function SidePanel({
   entry: EntryDetail;
   sealed: boolean;
   onGo: (step: number) => void;
+  todo: FlowItem[];
+  todoInherited: Precondition[];
+  onGoToCard: (card?: string) => void;
   timers: TimerRecordSummary[];
   events: import("@/lib/trace/humanize").TraceEvent[];
   communications: EntryCommunication[];
@@ -1414,6 +1527,35 @@ function SidePanel({
           )}
         </div>
       </div>
+      {todo.length || todoInherited.length ? (
+        <div>
+          <h4>To do here</h4>
+          <div className="todo">
+            {todo.map((i) => (
+              <button
+                key={`${i.n}-${i.card}`}
+                type="button"
+                className={`row-todo${i.met ? " done" : ""}`}
+                onClick={() => onGoToCard(i.card)}
+                title={`Go to ${i.label}`}
+              >
+                <span className="n">{i.met ? <Icon name="check" /> : i.n}</span>
+                <span className="t">{i.label}</span>
+              </button>
+            ))}
+            {todoInherited.length ? (
+              <div className="also">
+                {todoInherited.map((p) => (
+                  <div key={p.label} className={`row-todo${p.met ? " done" : ""}`} style={{ cursor: "default" }}>
+                    <span className="n">{p.met ? <Icon name="check" /> : "!"}</span>
+                    <span className="t">{p.label}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div>
         <h4>Recent</h4>
         <div className="list">

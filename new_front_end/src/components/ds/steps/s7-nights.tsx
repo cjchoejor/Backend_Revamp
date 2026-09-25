@@ -161,7 +161,7 @@ export function NightsCard({
   };
 
   return (
-    <StepCard title="The nights" icon="clock">
+    <StepCard flow="nights" title="The nights" icon="clock">
       {nights.length === 0 ? (
         <span className="meta">No stay dates on record.</span>
       ) : (

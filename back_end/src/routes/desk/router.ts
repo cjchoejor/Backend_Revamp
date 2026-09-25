@@ -14,6 +14,7 @@ import {
   DESK_ACTIVITY_MAX,
   DESK_LIST_MAX,
   deskMoneyFor,
+  deskTimersFor,
   listDeskActivity,
   listDeskBookings,
   listStaffNames,
@@ -47,6 +48,18 @@ const moneyBody = z.object({ entryIds: z.array(z.string().min(1)).min(1).max(100
 deskRouter.post("/bookings/money", L1, validateBody(moneyBody), async (req, res, next) => {
   try {
     const items = await deskMoneyFor(prisma, (req.body as z.infer<typeof moneyBody>).entryIds);
+    res.set("Cache-Control", "no-store").json({ items, count: items.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const timersBody = z.object({ entryIds: z.array(z.string().min(1)).min(1).max(100) });
+
+/** The clocks running on many bookings at once — what the list shows against each row. */
+deskRouter.post("/bookings/timers", L1, validateBody(timersBody), async (req, res, next) => {
+  try {
+    const items = await deskTimersFor(prisma, (req.body as z.infer<typeof timersBody>).entryIds);
     res.set("Cache-Control", "no-store").json({ items, count: items.length });
   } catch (e) {
     next(e);

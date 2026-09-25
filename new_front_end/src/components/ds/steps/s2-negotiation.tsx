@@ -412,7 +412,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         <ChildrenAges entry={entry} />
       </StepCard>
 
-      <StepCard title="Provisional block, or send the quote">
+      <StepCard flow="quote" title="Provisional block, or send the quote">
         <div className="form2" style={{ marginBottom: 10 }}>
           <div className="field">
             <label>Valid for · days</label>
