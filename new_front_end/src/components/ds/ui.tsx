@@ -6,8 +6,8 @@
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
-import { Chip, Icon } from "@/design-system";
+import { useState, type ReactNode } from "react";
+import { Button, Chip, Icon } from "@/design-system";
 import type { DeskListRow } from "@/lib/api/desk";
 import type { WaitingText } from "@/lib/ds/attention";
 import { bookerOfRow, factsFromRow, guestNameOf, isNamed, standingOf, type Standing } from "@/lib/ds/status";
@@ -82,16 +82,50 @@ export function OpenRow({ entryId, step, locked, selected, onSelect, children }:
 }
 
 /** Shows at most twelve rows, then a line pointing at the full list (SS01 §3.3). */
-export function foldTo<T>(rows: T[], n = 12): { shown: T[]; more: number } {
+/** A list shows its first page (2026-09-25: fifteen, the operator's number) and says how many more there are. */
+export const PAGE = 15;
+
+export function foldTo<T>(rows: T[], n = PAGE): { shown: T[]; more: number } {
   return rows.length <= n ? { shown: rows, more: 0 } : { shown: rows.slice(0, n), more: rows.length - n };
 }
 
-export function MoreRow({ more, href, colSpan = 9 }: { more: number; href: string; colSpan?: number }) {
+/** The rows a list shows: the first page, and a page more each time the reader asks. */
+export function usePaged<T>(rows: T[], per = PAGE): { shown: T[]; more: number; showMore: () => void } {
+  const [pages, setPages] = useState(1);
+  const shown = rows.slice(0, per * pages);
+  return { shown, more: rows.length - shown.length, showMore: () => setPages((p) => p + 1) };
+}
+
+/**
+ * The row under a list that is longer than the page. With `onMore` it shows the next page in
+ * place (2026-09-25 — the desk asked for "the first 15, then 15 more", not a jump to the full
+ * list); the link to the full list stays beside it when there is one.
+ */
+export function MoreRow({ more, href, colSpan = 9, onMore, step = PAGE }: { more: number; href?: string; colSpan?: number; onMore?: () => void; step?: number }) {
   if (!more) return null;
   return (
     <tr className="static">
       <td colSpan={colSpan} className="meta">
-        and {more} more · <Link className="row-link" href={href}>open the list</Link>
+        {onMore ? (
+          <>
+            <Button kind="quiet" compact onClick={onMore}>
+              Show {Math.min(step, more)} more
+            </Button>{" "}
+            <span>· {more} more in all</span>
+            {href ? (
+              <>
+                {" · "}
+                <Link className="row-link" href={href}>
+                  open the list
+                </Link>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>
+            and {more} more{href ? <> · <Link className="row-link" href={href}>open the list</Link></> : null}
+          </>
+        )}
       </td>
     </tr>
   );

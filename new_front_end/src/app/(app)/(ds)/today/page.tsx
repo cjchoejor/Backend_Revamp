@@ -21,7 +21,7 @@ import {
   StepChip,
   TimerText,
   bookingMeta,
-  foldTo,
+  usePaged,
 } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney, useRoomsList } from "@/hooks/use-desk-data";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -55,6 +55,8 @@ function roomsWord(r: DeskListRow): string {
 }
 
 function AttentionTable({ rows, now, tz }: { rows: Array<AttentionItem | Fold>; now: number; tz: string }) {
+  // The first fifteen, then fifteen more at a time (2026-09-25) — not the whole table at once.
+  const paged = usePaged(rows);
   return (
     <table className="table">
       <thead>
@@ -66,7 +68,7 @@ function AttentionTable({ rows, now, tz }: { rows: Array<AttentionItem | Fold>; 
         </tr>
       </thead>
       <tbody>
-        {rows.map((it) =>
+        {paged.shown.map((it) =>
           isFold(it) ? (
             <tr key={`fold:${it.key}`} className="static">
               <td>
@@ -101,6 +103,7 @@ function AttentionTable({ rows, now, tz }: { rows: Array<AttentionItem | Fold>; 
             </OpenRow>
           ),
         )}
+        <MoreRow more={paged.more} onMore={paged.showMore} colSpan={4} />
       </tbody>
     </table>
   );
@@ -348,36 +351,7 @@ export default function TodayPage() {
               </span>
             </div>
             {week.length ? (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Booking</th>
-                    <th>Stay</th>
-                    <th>Rooms</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {foldTo(week).shown.map((r) => (
-                    <OpenRow key={r.id} entryId={r.id}>
-                      <td>
-                        <GuestLink row={r} />
-                        <div className="meta">{bookingMeta(r)}</div>
-                      </td>
-                      <td>
-                        <span className="stay-range">
-                          <b>{fmtRange(r.checkInDate, r.checkOutDate)}</b>
-                        </span>
-                      </td>
-                      <td>{r.roomNumbers.length || r.numberOfRooms || "—"}</td>
-                      <td>
-                        <RowStanding row={r} hotelToday={today} />
-                      </td>
-                    </OpenRow>
-                  ))}
-                  <MoreRow more={foldTo(week).more} href={`/bookings?group=Upcoming&from=${tomorrow}&to=${endOfWeek}`} />
-                </tbody>
-              </table>
+              <WeekTable rows={week} today={today} href={`/bookings?group=Upcoming&from=${tomorrow}&to=${endOfWeek}`} />
             ) : (
               <EmptyState title="Nothing arriving this week" />
             )}
@@ -385,6 +359,42 @@ export default function TodayPage() {
         </>
       )}
     </div>
+  );
+}
+
+function WeekTable({ rows, today, href }: { rows: DeskListRow[]; today: string | null; href: string }) {
+  const paged = usePaged(rows);
+  return (
+    <table className="table">
+      <thead>
+        <tr>
+          <th>Booking</th>
+          <th>Stay</th>
+          <th>Rooms</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {paged.shown.map((r) => (
+          <OpenRow key={r.id} entryId={r.id}>
+            <td>
+              <GuestLink row={r} />
+              <div className="meta">{bookingMeta(r)}</div>
+            </td>
+            <td>
+              <span className="stay-range">
+                <b>{fmtRange(r.checkInDate, r.checkOutDate)}</b>
+              </span>
+            </td>
+            <td>{r.roomNumbers.length || r.numberOfRooms || "—"}</td>
+            <td>
+              <RowStanding row={r} hotelToday={today} />
+            </td>
+          </OpenRow>
+        ))}
+        <MoreRow more={paged.more} onMore={paged.showMore} href={href} />
+      </tbody>
+    </table>
   );
 }
 
@@ -403,7 +413,7 @@ function DayList({
   foot?: string;
   children: (r: DeskListRow) => React.ReactNode;
 }) {
-  const { shown, more: extra } = foldTo(rows);
+  const paged = usePaged(rows);
   return (
     <div className="day-list">
       <h4>
@@ -412,8 +422,8 @@ function DayList({
       {rows.length ? (
         <table className="table compact">
           <tbody>
-            {shown.map(children)}
-            <MoreRow more={extra} href={more} colSpan={2} />
+            {paged.shown.map(children)}
+            <MoreRow more={paged.more} onMore={paged.showMore} href={more} colSpan={2} />
           </tbody>
         </table>
       ) : (
