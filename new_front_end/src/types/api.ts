@@ -567,6 +567,14 @@ export type NoShowDeterminationSummary = {
 };
 
 export type EntryDetail = EntryListItem & {
+  /**
+   * How long THIS booking's committed hold runs, when the desk set it itself (2026-09-25).
+   * Null = the house window from the admin console. Remembered on the booking, so a hold placed
+   * again later runs to the same moment.
+   */
+  holdExpiresAtOverride?: string | null;
+  holdExpiryOverrideSetBy?: string | null;
+  holdExpiryOverrideSetAt?: string | null;
   reservation?: ReservationSummary | null;
   folio?: FolioDetail | null;
   cancellationDisclosure?: CancellationDisclosureSummary | null;

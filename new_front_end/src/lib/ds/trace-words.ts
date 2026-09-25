@@ -34,6 +34,8 @@ const WORDS: Record<string, string> = {
   "COMMITTED_HOLD.RELEASED": "Block released",
   "COMMITTED_HOLD.EXPIRED": "Block ran out",
   "COMMITTED_HOLD.CONFIRMED": "Block confirmed on reserving",
+  "COMMITTED_HOLD.EXPIRY_SET": "Hold time set for this booking",
+  "COMMITTED_HOLD.EXPIRY_CLEARED": "Hold time back to the house window",
   "RESERVATION.CONFIRMED": "Reserved",
   "RESERVATION.CONFIRMATION_VOUCHER_RESENT": "Confirmation voucher sent again",
   "RESERVATION_CONFIRMATION_EMAIL.SENT": "Confirmation voucher emailed",
