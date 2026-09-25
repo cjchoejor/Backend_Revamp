@@ -125,3 +125,9 @@
 .ds .side-timer-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--success); transition: width 1s linear; }
 .ds .side-timer-bar > span.warn { background: var(--warning); }
 .ds .side-timer-bar > span.crit, .ds .side-timer-bar > span.due { background: var(--danger); }
+
+/* the trip: one line per stay of the enquiry, this one marked (2026-09-25) */
+.ds .trip-stays { display: grid; gap: 6px; }
+.ds .trip-stay { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ds .trip-stay > .meta { min-width: 52px; }
+.ds .trip-stay > :last-child { margin-left: auto; }

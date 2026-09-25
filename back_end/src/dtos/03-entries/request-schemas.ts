@@ -1,6 +1,21 @@
 import { EntryStatus, Stage } from "@prisma/client";
 import { z } from "zod";
 
+/**
+ * Add the guest's return stay to the same enquiry (2026-09-25) — "we'll stay again on the way
+ * back". Counts omitted mean the same party comes back; the service carries them from the first
+ * stay and refuses dates that overlap a stay already on the enquiry.
+ */
+export const addReturnStayRequestSchema = z.object({
+  checkInDate: z.string().trim().min(10).max(40),
+  checkOutDate: z.string().trim().min(10).max(40),
+  numberOfRooms: z.coerce.number().int().min(1).max(50).optional(),
+  adultCount: z.coerce.number().int().min(0).max(200).optional(),
+  childCount: z.coerce.number().int().min(0).max(200).optional(),
+  childAges: z.array(z.coerce.number().int().min(0).max(150)).max(200).optional(),
+});
+export type AddReturnStayRequestDto = z.infer<typeof addReturnStayRequestSchema>;
+
 export const createEntryRequestSchema = z.object({
   inquiryId: z.string().min(1),
   guestProfileId: z.string().optional(),

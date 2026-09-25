@@ -13,9 +13,19 @@ export async function computeReEntryConsequences(
   const consequences: string[] = [];
 
   if (input.fromStage === Stage.S3 && input.toStage === Stage.S2) {
-    // HOLD_RELEASED since 2026-08-02 (operator ruling — was HOLD_RETAINED): a new segment
+    // Two deliberate deviations from SIG-S3, both operator rulings, both recorded here so the
+    // computed payload states what actually happens rather than what the spec expected:
+    //
+    // HOLD_RELEASED since 2026-08-02 (was HOLD_RETAINED, SIG-S3 §484 / AC-S3-015): a new segment
     // places its own commitments; the sealed segment's hold must not carry forward.
-    consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_NOT_SUPERSEDED");
+    //
+    // INVOICES_SUPERSEDED since 2026-09-25 (was INVOICES_NOT_SUPERSEDED, SIG-S3 §534). The spec
+    // keeps the proforma because "dates and room type are unchanged" — but on THIS route the
+    // price is precisely what changes, and the proforma prints the advance as a share of the
+    // quotation, so the bill left standing quotes the figure being renegotiated. The superseded
+    // version keeps its own figures (it is frozen first); the next pass mints its own bill when
+    // it arrives at Set up. S3→S1 is unchanged and still supersedes for its own reason.
+    consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_SUPERSEDED");
   }
   if (input.fromStage === Stage.S3 && input.toStage === Stage.S1) {
     consequences.push("HOLD_RELEASED", "FOLIO_CONTINUES", "INVOICES_SUPERSEDED", "CANCEL_W22_W34_TIMERS");

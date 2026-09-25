@@ -28,16 +28,18 @@ import {
   confirmCoordinator,
   dispatchInvoice,
   ensureProvisionalFolio,
+  getHoldWindow,
   initiateS3ReEntryToS1,
   initiateS3ReEntryToS2,
   placeCommittedHold,
   recordCancellationDisclosure,
   releaseCommittedHold,
+  setCommittedHoldExpiry,
   listPaymentMilestoneTemplates,
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { guestNameOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtRange, fmtStamp, money, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtRange, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import {
   AnswerLine,
@@ -539,9 +541,19 @@ function HoldCard({
   const [placeOpen, setPlaceOpen] = useState(false);
   const [why, setWhy] = useState(defaultWhy);
   const [releaseOpen, setReleaseOpen] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
   useEffect(() => {
     if (placeOpen) setWhy(defaultWhy);
   }, [placeOpen, defaultWhy]);
+
+  // The house's own window, so the card can say what it gives beside a time set for one booking.
+  const house = useQuery({
+    queryKey: ["hold-window"],
+    queryFn: () => getHoldWindow(session!),
+    enabled: !!session,
+    staleTime: 600_000,
+  }).data ?? null;
+  const ownTime = entry.holdExpiresAtOverride ?? null;
 
   const place = useMutation({
     mutationFn: () => {
@@ -579,6 +591,7 @@ function HoldCard({
           ? "the advance, or part of it, has to come in first — or the FOM extends credit"
           : null;
   const rooms = roomsWord(roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [], roomNos);
+  const houseWords = house ? (house.minutes % 60 === 0 && house.minutes >= 60 ? plural(house.minutes / 60, "hour") : plural(house.minutes, "minute")) : null;
   const count = roomIds.length || 1;
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
   const why_ = hold?.commercialJustification ?? "";
@@ -594,6 +607,16 @@ function HoldCard({
       acts={
         past ? undefined : (
           <Live>
+            <SeeRow
+              label={hold ? "Hold time…" : "Set the hold time…"}
+              note={
+                ownTime
+                  ? `runs to ${fmtDateTime(ownTime, tz)} — set for this booking`
+                  : `the house gives ${houseWords ?? "its own window"} — set this booking's own time`
+              }
+              onClick={editable ? () => setTimeOpen(true) : undefined}
+              reason={editable ? undefined : "not at this step"}
+            />
             {hold ? (
               <SeeRow
                 label="Release…"
@@ -626,6 +649,12 @@ function HoldCard({
               {why_ || <span className="warn-ink">no reason recorded</span>}
             </Fact>
             <Fact k="Placed">{fmtStamp(hold.placedAt, tz)}</Fact>
+            <Fact
+              k="Hold time"
+              meta={ownTime ? `set for this booking${houseWords ? ` · the house gives ${houseWords}` : ""}` : undefined}
+            >
+              {ownTime ? `runs to ${fmtDateTime(ownTime, tz)}` : houseWords ? `the house's ${houseWords}` : null}
+            </Fact>
           </Facts>
           {lapsing ? (
             <div className="sm warn-ink" style={{ marginTop: 6 }}>
@@ -634,11 +663,19 @@ function HoldCard({
           ) : null}
         </>
       ) : (
-        <span className="meta">
-          {raw
-            ? `The last hold ${raw.state === "EXPIRED" ? "ran out" : "was released"} — place it again before Reserve.`
-            : `Not placed yet. Recording an advance payment — even part of it — holds ${count === 1 ? "the room" : `all ${count} rooms`} automatically; place it by hand when the rooms should be pinned before any money arrives.`}
-        </span>
+        <>
+          <span className="meta">
+            {raw
+              ? `The last hold ${raw.state === "EXPIRED" ? "ran out" : "was released"} — place it again before Reserve.`
+              : `Not placed yet. Recording an advance payment — even part of it — holds ${count === 1 ? "the room" : `all ${count} rooms`} automatically; place it by hand when the rooms should be pinned before any money arrives.`}
+          </span>
+          {ownTime ? (
+            <div className="sm" style={{ marginTop: 6 }}>
+              When it is placed it will run to <b>{fmtDateTime(ownTime, tz)}</b> — set for this booking
+              {houseWords ? `, not the house's ${houseWords}` : ""}.
+            </div>
+          ) : null}
+        </>
       )}
 
       {placeOpen ? (
@@ -675,6 +712,18 @@ function HoldCard({
           </div>
         </DsDialog>
       ) : null}
+      {timeOpen ? (
+        <HoldTimeDialog
+          entry={entry}
+          tz={tz}
+          houseWords={houseWords}
+          currentIso={hold?.expiresAt ?? ownTime ?? null}
+          hasOwnTime={!!ownTime}
+          holdLive={!!hold}
+          onClose={() => setTimeOpen(false)}
+          onChanged={onChanged}
+        />
+      ) : null}
       <ReasonDialog
         open={releaseOpen}
         danger
@@ -688,6 +737,110 @@ function HoldCard({
         onConfirm={(r) => release.mutate(r)}
       />
     </StepCard>
+  );
+}
+
+/**
+ * "Hold the rooms until six" — this booking's own hold time (2026-09-25, operator request).
+ *
+ * The day and time are the HOTEL's wall clock: what is typed here is what the hotel's clock will
+ * read, whatever the desk machine's timezone is set to, because the server reads it in the
+ * hotel's zone. The moment is kept on the booking, so a hold placed again later — after a
+ * re-entry, or after one lapsed — runs to it instead of the house window.
+ */
+function HoldTimeDialog({
+  entry,
+  tz,
+  houseWords,
+  currentIso,
+  hasOwnTime,
+  holdLive,
+  onClose,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  tz: string;
+  houseWords: string | null;
+  currentIso: string | null;
+  hasOwnTime: boolean;
+  holdLive: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const seed = hotelFormParts(currentIso ?? new Date(Date.now() + 60 * 60_000).toISOString(), tz);
+  const [date, setDate] = useState(seed.date);
+  const [time, setTime] = useState(seed.time);
+  const [why, setWhy] = useState("");
+
+  const save = useMutation({
+    mutationFn: (clear: boolean) =>
+      setCommittedHoldExpiry(session!, entry.id, clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined }),
+    onSuccess: (out) => {
+      toast.success(
+        out.source === "BOOKING"
+          ? `The rooms are held until ${fmtDateTime(out.heldUntil, tz)}${out.holdUpdated ? "" : " — from the moment the hold is placed"}`
+          : "Back to the house window",
+        out.note ? { description: out.note, duration: 8000 } : undefined,
+      );
+      onClose();
+      onChanged();
+    },
+    onError: (e) => toastRefusal(e, "The hold time was not changed"),
+  });
+
+  const typed = date && time;
+  return (
+    <DsDialog
+      open
+      onClose={onClose}
+      busy={save.isPending}
+      width={560}
+      title="How long the rooms are held"
+      caseLines={[entry.id, houseWords ? `the house gives ${houseWords}` : "the house's own window"]}
+      footer={
+        <>
+          <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
+            Not now
+          </Button>
+          {hasOwnTime ? (
+            <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={() => save.mutate(true)}>
+              Back to the house window
+            </Button>
+          ) : null}
+          <Button
+            icon="clock"
+            state={save.isPending ? "working" : typed ? "default" : "inert"}
+            title={typed ? undefined : "give the day and the time"}
+            workingLabel="Setting…"
+            onClick={() => save.mutate(false)}
+          >
+            Hold until this time
+          </Button>
+        </>
+      }
+    >
+      <p className="sm">
+        The guest who says they will confirm by six gets until six. This booking remembers the time, so a hold placed
+        again later runs to it{holdLive ? " — and the hold standing now moves to it" : ""}. It cannot run past the day
+        they arrive.
+      </p>
+      <div className="form2" style={{ marginTop: 10 }}>
+        <div className="field">
+          <label>Held until · day</label>
+          <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Held until · time</label>
+          <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <span className="hint">the hotel&rsquo;s clock</span>
+        </div>
+        <div className="wide field">
+          <label>Why, if it is worth saying · optional</label>
+          <input className="input" value={why} onChange={(e) => setWhy(e.target.value)} placeholder="the guest rang — they confirm after their flight lands" />
+        </div>
+      </div>
+    </DsDialog>
   );
 }
 

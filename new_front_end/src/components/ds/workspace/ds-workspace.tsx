@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
+import { tripOf } from "@/components/ds/workspace/return-stay";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -753,6 +754,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const standing = standingOf(factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null), hotelToday);
   const co = entry.actualCheckOutDate ?? entry.checkOutDate;
   const nights = nightsOf(entry.checkInDate, co);
+  // The trip: this enquiry's other stays, when the guest left and came back (2026-09-25).
+  const trip = tripOf(entry);
   const roomNumbers = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }),
   );
@@ -795,7 +798,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               {entry.groupBillingMode === "GROUP_MASTER" ? <Chip>Group</Chip> : null}
             </div>
             <div className="facts">
-              <span>{entry.id}</span>
+              <span>
+                {entry.id}
+                {trip.stays.length > 1 ? ` · stay ${trip.position} of ${trip.stays.length}` : ""}
+              </span>
+              <span>
+                Enquiry <b>{entry.inquiry?.id ?? "—"}</b>
+              </span>
+              {trip.others.length ? (
+                <span>
+                  Also this trip{" "}
+                  {trip.others.slice(0, 2).map((s, i) => (
+                    <span key={s.id}>
+                      {i ? ", " : ""}
+                      <Link href={bookingHref(s.id)}>{fmtRange(s.checkInDate, s.checkOutDate)}</Link>
+                    </span>
+                  ))}
+                  {trip.others.length > 2 ? ` and ${trip.others.length - 2} more` : ""}
+                </span>
+              ) : null}
               <span>
                 <b>{fmtRange(entry.checkInDate, co)}</b>
                 {nights ? ` · ${plural(nights, "night")}` : ""}

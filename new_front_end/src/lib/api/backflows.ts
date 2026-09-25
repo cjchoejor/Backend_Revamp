@@ -36,6 +36,17 @@ export const backflows = {
     post(`/api/entries/${entryId}/backflow/s7-to-s4`, session, { reason, newCheckOutDate }),
   complaintToS2: (session: Session, entryId: string, reason: string) =>
     post(`/api/entries/${entryId}/backflow/complaint-to-s2`, session, { reason }),
+  /**
+   * Set up's own two ways back (2026-09-25). These are the S3 re-entry machine's routes, not the
+   * `/backflow/*` family — they release the committed hold and supersede the pending proforma, so
+   * the next pass starts its paperwork afresh. Same endpoints the Set up card's "Other ways this
+   * booking can go" calls; the rail's menu offered neither, which left complaint resolution as the
+   * only door out of Set up and put every ordinary renegotiation on the record as a complaint.
+   */
+  s3ToS2: (session: Session, entryId: string, reason: string) =>
+    post(`/api/entries/${entryId}/re-entry/s2`, session, { reason }),
+  s3ToS1: (session: Session, entryId: string, reason: string) =>
+    post(`/api/entries/${entryId}/re-entry/s1`, session, { reason }),
 };
 
 /** Metadata for the UI — what's applicable at each source stage, and the required actor level. */
@@ -51,6 +62,10 @@ export type BackflowDescriptor = {
 export const BACKFLOWS_BY_STAGE: Record<string, BackflowDescriptor[]> = {
   S2: [
     { key: "s2ToS1", label: "Re-search availability (date / room-type change)", toStage: "S1", minLevel: "L1" },
+  ],
+  S3: [
+    { key: "s3ToS2", label: "Renegotiate the price (fresh quote)", toStage: "S2", minLevel: "L2" },
+    { key: "s3ToS1", label: "Change dates / rooms (re-search)", toStage: "S1", minLevel: "L2", destructive: true },
   ],
   S4: [
     { key: "s4ToS3", label: "Change billing model", toStage: "S3", minLevel: "L2" },

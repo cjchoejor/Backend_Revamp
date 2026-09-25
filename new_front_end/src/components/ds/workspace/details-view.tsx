@@ -18,6 +18,7 @@ import { rateWords } from "@/lib/ds/rates";
 import { guestName } from "@/lib/desk/model";
 import { liveQuotesThisPass, reservedThisPass } from "@/lib/desk/workspace";
 import { Fact, FactBox, Facts, PapersCard, StepCard } from "@/components/ds/steps/kit";
+import { TripCard } from "@/components/ds/workspace/return-stay";
 import type { EntryDetail } from "@/types/api";
 
 const BILLING_WORD: Record<string, string> = {
@@ -129,8 +130,11 @@ export function DetailsView({
           </Facts>
         </StepCard>
 
+        <TripCard entry={entry} />
+
         <StepCard title="Numbers">
           <Facts wide>
+            <Fact k="Enquiry">{entry.inquiry?.id}</Fact>
             <Fact k="Booking">{entry.id}</Fact>
             <Fact k="Quotation">{quote?.referenceNumber}</Fact>
             <Fact k="Proforma">{proforma?.invoiceNumber ?? proforma?.id}</Fact>

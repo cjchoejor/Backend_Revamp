@@ -545,6 +545,36 @@ async function reissueProformaTx(
   return { newInvoiceId: created.id, supersededIds, versionNumber: nextVersion };
 }
 
+/**
+ * A pass arriving at Set up has a bill of its own (2026-09-25).
+ *
+ * A re-entry supersedes the proforma of the pass it seals, and the folio is a singleton — so
+ * nothing mints a starter a second time and the next pass reached Set up with no live proforma
+ * at all. This mints one, and ONLY when there is none: it never replaces a bill that stands.
+ *
+ * Deliberately called on ARRIVAL at Set up, not at the re-entry itself: a proforma belonging to
+ * the new pass locks that pass's negotiation table (the 2026-08-06 "the PI finalises the
+ * quotation" rule), so minting it while the booking is at Negotiation would forbid the very
+ * re-pricing the re-entry was for. Caught by driving the desk.
+ */
+export async function ensureLiveProformaForPassTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; basis?: string; now?: Date },
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+) {
+  return reissueProformaTx(
+    tx,
+    {
+      entryId: input.entryId,
+      folioId: input.folioId,
+      changed: false,
+      basisWhenChanged: input.basis ?? "REISSUED_AFTER_REENTRY",
+      now: input.now ?? new Date(),
+    },
+    actor,
+  );
+}
+
 /** Stages where the advance can still be planned/collected — S3 (setup) through S6 (check-in);
  *  from S7 the folio is LIVE and money flows through in-stay charges / S8 settlement. */
 const ADVANCE_COLLECTION_STAGES: ReadonlySet<Stage> = new Set([Stage.S3, Stage.S4, Stage.S5, Stage.S6]);

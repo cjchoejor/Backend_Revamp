@@ -24,6 +24,7 @@ import {
 } from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
 
 /**
  * SIG-S3 §6.3 — `FolioService.getOrCreate` slice: single provisional folio per entry; trace on create vs continuation.
@@ -72,6 +73,10 @@ export async function getOrCreateProvisionalFolioTx(
         createdBy: actorId,
       },
     });
+    // The folio carries across passes, so only the FIRST pass ever got a starter proforma —
+    // a re-entered booking reached Set up with its old bill superseded and nothing in its
+    // place (2026-09-25). Mints one only when none stands; never touches a live bill.
+    await ensureLiveProformaForPassTx(tx, { entryId, folioId: existing.id, now }, { actorId, actorLevel: "L1" });
     return existing;
   }
 

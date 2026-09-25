@@ -95,6 +95,25 @@ export async function acknowledgeCommunication(
   });
 }
 
+/**
+ * Add the guest's return stay to the same enquiry (2026-09-25) — "they come back on the 29th".
+ * Counts left out mean the same party returns. Each stay keeps its own folio and bill.
+ */
+export async function addReturnStay(
+  session: Session,
+  entryId: string,
+  body: {
+    checkInDate: string;
+    checkOutDate: string;
+    numberOfRooms?: number;
+    adultCount?: number;
+    childCount?: number;
+    childAges?: number[];
+  },
+) {
+  return apiRequest<EntryDetail>(`/api/entries/${entryId}/return-stay`, { method: "POST", session, body });
+}
+
 export async function createEntry(
   session: Session,
   body: {

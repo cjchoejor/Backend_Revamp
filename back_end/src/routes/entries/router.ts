@@ -1,15 +1,16 @@
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
+  addReturnStayRequestSchema,
+  closeEntryRequestSchema,
   createEntryRequestSchema,
   listEntriesQuerySchema,
   parkEntryRequestSchema,
   patchApartmentContextRequestSchema,
   reassignEntryCustodianRequestSchema,
-  closeEntryRequestSchema,
-  setExpectedArrivalRequestSchema,
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
+  setExpectedArrivalRequestSchema,
   updateEntryRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
@@ -21,6 +22,7 @@ import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
+import { addReturnStay } from "../../services/domain/return-stay-service.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
@@ -535,6 +537,30 @@ entriesRouter.post("/", requireActorLevel("L1"), validateBody(createEntryRequest
     next(e);
   }
 });
+
+/**
+ * The guest's return stay — a second booking under the SAME enquiry (2026-09-25). The desk adds
+ * it from the first booking, so the guest is never searched for twice and the trip keeps one
+ * enquiry number. Each stay still carries its own folio and bill (operator's ruling).
+ */
+entriesRouter.post(
+  "/:id/return-stay",
+  requireActorLevel("L1"),
+  validateBody(addReturnStayRequestSchema),
+  async (req, res, next) => {
+    try {
+      const created = await addReturnStay(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /**
  * L3+ manual override of the group billing mode. Used when Policy 64's auto-classification

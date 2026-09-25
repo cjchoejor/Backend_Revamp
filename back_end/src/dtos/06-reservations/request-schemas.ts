@@ -79,6 +79,24 @@ export const placeCommittedHoldRequestSchema = z.object({
 });
 export type PlaceCommittedHoldRequestDto = z.infer<typeof placeCommittedHoldRequestSchema>;
 
+/**
+ * Set (or clear) how long THIS booking's committed hold runs (2026-09-25). The day and time are
+ * the HOTEL's wall clock — the desk sends what the operator typed and the server reads it in the
+ * hotel's timezone, the same way the expected-arrival time works, so the card prints back exactly
+ * what was typed. `clear` gives the booking back to the house window set in the admin console.
+ */
+export const setCommittedHoldExpiryRequestSchema = z
+  .object({
+    date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional(),
+    time: z.string().trim().regex(/^\d{2}:\d{2}$/, "time must be HH:MM").optional(),
+    clear: z.boolean().optional(),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => (v.clear === true ? !v.date && !v.time : !!v.date && !!v.time), {
+    message: "Give the day and the time the hold should run to, or clear it back to the house window",
+  });
+export type SetCommittedHoldExpiryRequestDto = z.infer<typeof setCommittedHoldExpiryRequestSchema>;
+
 export const s3ReEntryRequestSchema = z.object({
   reason: z.string().optional(),
 });

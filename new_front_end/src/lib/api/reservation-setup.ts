@@ -245,6 +245,31 @@ export async function releaseCommittedHold(
   });
 }
 
+/** The house's hold window — what a committed hold runs for when nobody has said otherwise. */
+export async function getHoldWindow(session: Session) {
+  return apiRequest<{ minutes: number; seconds: number; source: "POLICY" | "CONFIG" }>("/api/lookups/hold-window", { session });
+}
+
+/**
+ * Set — or clear — how long THIS booking's committed hold runs (2026-09-25): "they will confirm
+ * by six". The day and time are the HOTEL's wall clock, sent as typed; the server reads them in
+ * the hotel's timezone. The moment is remembered on the booking, so a hold placed again later
+ * runs to it rather than to the house window. `clear` hands it back to the house.
+ */
+export async function setCommittedHoldExpiry(
+  session: Session,
+  entryId: string,
+  body: { date?: string; time?: string; clear?: boolean; reason?: string },
+) {
+  return apiRequest<{
+    heldUntil: string | null;
+    source: "BOOKING" | "HOUSE";
+    holdUpdated: boolean;
+    houseWindowMinutes: number;
+    note?: string;
+  }>(`/api/entries/${entryId}/holds/committed/expiry`, { method: "POST", session, body });
+}
+
 export async function issueProformaInvoice(
   session: Session,
   folioId: string,

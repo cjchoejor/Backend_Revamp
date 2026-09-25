@@ -139,6 +139,18 @@ export function fmtStamp(value?: string | number | Date | null, tz = HOTEL_TZ_DE
   return `${fmtInstantDay(d, tz)} ${fmtTime(d, tz)}`;
 }
 
+/**
+ * An instant as the hotel's clock reads it, in the shapes a form takes: `2026-09-26` and `18:00`
+ * (2026-09-25). `clockParts` beside it is for DISPLAY — its strings are words, not field values,
+ * and putting them in a date input silently empties it.
+ */
+export function hotelFormParts(value?: string | number | Date | null, tz = HOTEL_TZ_DEFAULT): { date: string; time: string } {
+  const d = toDate(value) ?? new Date();
+  const p = partsIn(d, tz);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return { date: `${p.y}-${pad(p.m)}-${pad(p.d)}`, time: `${pad(p.hour)}:${pad(p.minute)}` };
+}
+
 /** `Sat 12 Sep 2026` and `2:32 PM` — the clock in the bar. */
 export function clockParts(value: string | number | Date, tz = HOTEL_TZ_DEFAULT): { date: string; time: string } {
   const d = toDate(value) ?? new Date();

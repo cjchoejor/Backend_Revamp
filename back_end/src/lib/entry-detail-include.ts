@@ -60,7 +60,27 @@ export const entryDetailInclude = {
   // Early departure (2026-08-22): the one record of a shortened stay - the desk prints its facts
   // on every step from Stay onward.
   earlyDeparture: true,
-  inquiry: { include: { agentProfile: { select: { id: true, displayName: true, commissionRate: true, commissionBasis: true } } } },
+  inquiry: {
+    include: {
+      agentProfile: { select: { id: true, displayName: true, commissionRate: true, commissionBasis: true } },
+      /**
+       * Every booking on this enquiry — the trip (2026-09-25). A return stay is a second booking
+       * under the same enquiry, so the desk reads the other stays from here: no second call, and
+       * the enquiry number is the trip's file number.
+       */
+      entries: {
+        select: {
+          id: true,
+          checkInDate: true,
+          checkOutDate: true,
+          currentStage: true,
+          status: true,
+          numberOfRooms: true,
+        },
+        orderBy: { checkInDate: "asc" as const },
+      },
+    },
+  },
 } satisfies Prisma.EntryInclude;
 
 type Db = PrismaClient | Prisma.TransactionClient;

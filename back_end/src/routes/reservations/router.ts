@@ -11,6 +11,7 @@ import {
   multiBookingAckRequestSchema,
   patchPreArrivalTaskRequestSchema,
   placeCommittedHoldRequestSchema,
+  setCommittedHoldExpiryRequestSchema,
   progressStageRequestSchema,
   s3ReEntryRequestSchema,
   s6RoomChangeReEnterS1RequestSchema,
@@ -448,6 +449,32 @@ reservationsRouter.post("/entries/:id/holds/committed", requireActorLevel("L1"),
     next(e);
   }
 });
+
+/**
+ * How long THIS booking's hold runs — "they will confirm by six" (2026-09-25, operator request).
+ *
+ * L1, like placing the hold: naming the moment the rooms stop being held for this guest is the
+ * same desk act as holding them. The moment is remembered on the booking, so a hold placed again
+ * later runs to it rather than to the house window; `clear` hands it back to the house.
+ */
+reservationsRouter.post(
+  "/entries/:id/holds/committed/expiry",
+  requireActorLevel("L1"),
+  validateBody(setCommittedHoldExpiryRequestSchema),
+  async (req, res, next) => {
+    try {
+      const out = await s3HoldService.setCommittedHoldExpiry(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /**
  * Release another booking's committed hold, freeing its rooms — GM and above.

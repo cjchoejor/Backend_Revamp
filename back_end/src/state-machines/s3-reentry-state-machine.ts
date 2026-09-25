@@ -31,6 +31,10 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
     cancelledReason: "REENTRY_S3_TO_S2",
   });
 
+  // The proforma is superseded below — freeze the never-rendered ones first so their stored PDFs
+  // keep this pass's figures (2026-08-02 ruling), exactly as the S3→S1 route does.
+  await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId);
+
   const updatedEntry = await prisma.$transaction(async (tx) => {
     await computeReEntryConsequences(tx as any, { entryId, fromStage: Stage.S3, toStage: Stage.S2, reason: input?.reason ?? "S3_TO_S2", actorId: actor.actorId });
     await tx.segment.update({ where: { id: currentSeg.id }, data: { sealedAt: now, sealedBy: actor.actorId, notes: "REENTRY_S3_TO_S2" } });
@@ -40,6 +44,13 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
     // must not surface as the new segment's. The room re-opens to other bookings while the
     // quote is renegotiated; re-placing the hold at S3 re-runs the date-conflict checks.
     await s3HoldService.releaseOnReEntry(tx as any, entryId, actor as any, "REENTRY_S3_TO_S2");
+
+    // …and the standing proforma goes with it (2026-09-25). Renegotiating the price makes the
+    // bill on the table wrong, exactly as changing the dates does — S3→S1 has superseded its
+    // proformas since it was written, and this route quietly did not, so Set up read "proforma
+    // generated ✓" off a bill quoting the price being renegotiated. The next pass mints its own
+    // when it ARRIVES at Set up; minting one here would lock its negotiation table at once.
+    await supersedePendingInvoicesTx(tx as any, entryId, actor.actorId);
 
     await tx.segment.create({ data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S2, startedAt: now, createdBy: actor.actorId, notes: input?.reason ?? "REENTRY_S3_TO_S2" } });
 

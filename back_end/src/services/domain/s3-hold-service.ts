@@ -48,12 +48,60 @@ import {
   enforceCommittedHoldReleaseOnReEntryAuthority,
 } from "../../policies/11-committed-hold/p26-committed-hold-release-on-reentry-requires-fom.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
+import {
+  enforceEntryNotSealedForWorkingAction,
+  enforceEntryStageForHoldExpiryChange,
+} from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { hotelLocalTimeOn, ymdUtc } from "../../lib/stay-dates.js";
 import { enforceFolioPresentBeforeCommittedHoldS3 } from "../../policies/13-billing-model/p31-folio-required-before-committed-hold-s3.js";
 import {
   claimFlagReportsPhysicalState,
   committedHoldMayFreeClaimFlag,
   committedHoldMayPinClaimFlag,
 } from "../../lib/room-claim-flag.js";
+
+/**
+ * How long a committed hold runs when nobody has said otherwise — the HOUSE window.
+ *
+ * The policy registry row `registry.holdExpiry.minutes` decides it (admin → Policies); setting
+ * its `enabled` to false falls back to the older `expiry.s3.committedHoldTtlSeconds`
+ * ConfigurationEntry (admin → Timers & workers). One reader so the desk can state the same
+ * number the placement uses.
+ */
+export async function resolveHouseHoldWindow(
+  prisma: PrismaClient | Prisma.TransactionClient,
+): Promise<{ seconds: number; source: "POLICY" | "CONFIG" }> {
+  const holdPolicy = await getRegistryPolicy(prisma as PrismaClient, "registry.holdExpiry.minutes");
+  if (holdPolicy && holdPolicy.enabled !== false && typeof holdPolicy.minutes === "number") {
+    return { seconds: (holdPolicy.minutes as number) * 60, source: "POLICY" };
+  }
+  const seconds = await requireActiveConfigValue<number>(prisma as PrismaClient, "expiry.s3.committedHoldTtlSeconds").catch(() => {
+    throw new MissingConfigurationError("expiry.s3.committedHoldTtlSeconds");
+  });
+  return { seconds: Number(seconds), source: "CONFIG" };
+}
+
+/**
+ * When this booking's hold should run out: the desk's own time when it set one and that moment
+ * is still ahead, else the house window from now (2026-09-25, operator request).
+ *
+ * The override is remembered on the ENTRY, not on the hold row, so it survives the hold being
+ * released and placed again — after a re-entry, or after the first one lapsed. A remembered time
+ * that has already passed is ignored rather than honoured: placing a hold that is already expired
+ * would free the rooms on the next sweep, which is not what "hold until six" asked for.
+ */
+export async function resolveHoldExpiry(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  entry: { holdExpiresAtOverride?: Date | null },
+  now: Date,
+): Promise<{ expiresAt: Date; ttlSeconds: number; source: "BOOKING" | "HOUSE" }> {
+  const own = entry.holdExpiresAtOverride ?? null;
+  if (own && own.getTime() > now.getTime()) {
+    return { expiresAt: own, ttlSeconds: Math.round((own.getTime() - now.getTime()) / 1000), source: "BOOKING" };
+  }
+  const house = await resolveHouseHoldWindow(prisma);
+  return { expiresAt: new Date(now.getTime() + house.seconds * 1000), ttlSeconds: house.seconds, source: "HOUSE" };
+}
 
 export async function placeCommittedHold(
   prisma: PrismaClient,
@@ -147,25 +195,13 @@ export async function placeCommittedHold(
     focRoomsRequested: Number(input.focRoomsRequested ?? 1),
   });
 
-  // Policy registry override: `registry.holdExpiry.minutes` (when enabled) replaces the
-  // legacy `expiry.s3.committedHoldTtlSeconds` ConfigurationEntry. Set `enabled: false` to
-  // revert to the ConfigurationEntry value.
-  const holdPolicy = await getRegistryPolicy(prisma, "registry.holdExpiry.minutes");
-  const registryTtlSeconds =
-    holdPolicy && holdPolicy.enabled !== false && typeof holdPolicy.minutes === "number"
-      ? (holdPolicy.minutes as number) * 60
-      : null;
-  const ttlSeconds =
-    registryTtlSeconds ??
-    (await requireActiveConfigValue<number>(prisma, "expiry.s3.committedHoldTtlSeconds").catch(() => {
-      throw new MissingConfigurationError("expiry.s3.committedHoldTtlSeconds");
-    }));
-
   const room = await prisma.room.findUnique({ where: { id: input.roomId } });
   if (!room) throw new NotFoundError("Room");
 
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + Number(ttlSeconds) * 1000);
+  // The desk's own hold time for this booking when it set one, else the house window.
+  const window = await resolveHoldExpiry(prisma, entry, now);
+  const { expiresAt, ttlSeconds } = window;
 
   // Multi-room support: the sealed AvailabilityConfiguration is the source of truth for
   // "which rooms this booking is holding". Beyond input.roomId (the primary room the hold
@@ -398,6 +434,7 @@ export async function placeCommittedHold(
           roomId: input.roomId,
           expiresAt: expiresAt.toISOString(),
           upgradedFromSpeculative: !!spec,
+          expirySource: window.source,
           trigger: input.trigger ?? "MANUAL",
           ...(input.triggerPaymentId ? { triggerPaymentId: input.triggerPaymentId } : {}),
         },
@@ -684,6 +721,175 @@ export async function confirmHeldRoomsAfterFullPaymentTx(
  * Frees the held room, cancels W3 expiry timers, and writes a trace event. Idempotent: a hold
  * already RELEASED/EXPIRED is left untouched. Runs inside the caller's transaction.
  */
+/**
+ * Set — or clear — how long THIS booking's committed hold runs (2026-09-25, operator request:
+ * "by default pull the set value from the admin console, but also overwrite it in the S3 section,
+ * and remember that set time for that specific reservation").
+ *
+ * The time is given as the hotel's own wall clock (`date` + `time`), never as an instant off the
+ * desk machine's timezone — the same rule the expected-arrival time follows, and the reason the
+ * card can print back exactly what was typed.
+ *
+ * Two things happen, and both matter: the moment is remembered ON THE BOOKING (so a hold placed
+ * again later runs to it instead of the house hour), and a hold that is live right now is moved
+ * to it, with its expiry timer cancelled and re-armed. Clearing gives the booking back to the
+ * house window; a live hold then runs the house window from when it was PLACED, and when that
+ * moment has already passed the hold keeps the time it has (shortening it to the past would free
+ * the rooms on the next sweep, which nobody asked for) — the outcome says which happened.
+ */
+export async function setCommittedHoldExpiry(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  input: { date?: string; time?: string; clear?: boolean; reason?: string },
+): Promise<{
+  heldUntil: string | null;
+  source: "BOOKING" | "HOUSE";
+  holdUpdated: boolean;
+  houseWindowMinutes: number;
+  note?: string;
+}> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      status: true,
+      currentStage: true,
+      inquiryId: true,
+      checkInDate: true,
+      holdExpiresAtOverride: true,
+      committedHold: { select: { id: true, state: true, placedAt: true } },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  enforceEntryStageForHoldExpiryChange({ currentStage: entry.currentStage });
+
+  const now = new Date();
+  const house = await resolveHouseHoldWindow(prisma);
+  const houseWindowMinutes = Math.round(house.seconds / 60);
+  const liveHold =
+    entry.committedHold && entry.committedHold.state !== HoldState.RELEASED && entry.committedHold.state !== HoldState.EXPIRED
+      ? entry.committedHold
+      : null;
+
+  let target: Date | null = null;
+  if (!input.clear) {
+    if (!input.date?.trim() || !input.time?.trim()) {
+      throw new ValidationError("Give the day and the time the hold should run to, or clear it back to the house window");
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date.trim())) throw new ValidationError("date must be YYYY-MM-DD");
+    if (!/^\d{2}:\d{2}$/.test(input.time.trim())) throw new ValidationError("time must be HH:MM");
+    target = hotelLocalTimeOn(new Date(`${input.date.trim()}T00:00:00.000Z`), input.time.trim());
+    if (Number.isNaN(target.getTime())) throw new ValidationError("That is not a real date and time");
+    if (target.getTime() <= now.getTime() + 60_000) {
+      throw new ValidationError("The hold has to run to a time still ahead — at least a minute from now");
+    }
+    // Holding rooms past the arrival means nothing: by then the booking is either reserved or gone.
+    if (entry.checkInDate && target.getTime() > entry.checkInDate.getTime() + 24 * 60 * 60 * 1000) {
+      throw new ValidationError(
+        `The hold cannot run past the day the guest arrives (${ymdUtc(entry.checkInDate)}) — reserve the booking instead`,
+      );
+    }
+  }
+
+  let holdUpdated = false;
+  let note: string | undefined;
+  let effective: Date | null = target;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.entry.update({
+      where: { id: entryId },
+      data: {
+        holdExpiresAtOverride: target,
+        holdExpiryOverrideSetBy: target ? actor.actorId : null,
+        holdExpiryOverrideSetAt: target ? now : null,
+      },
+    });
+
+    if (liveHold) {
+      let moveTo = target;
+      if (!moveTo) {
+        const fromPlacement = new Date(liveHold.placedAt.getTime() + house.seconds * 1000);
+        if (fromPlacement.getTime() > now.getTime()) {
+          moveTo = fromPlacement;
+        } else {
+          note = "The house window has already passed for this hold, so it keeps the time it has — place it again to run the house hour afresh.";
+        }
+      }
+      if (moveTo) {
+        const engine = await getTimerEngine();
+        const timers = await tx.timerRecord.findMany({
+          where: { entityType: "CommittedHold", entityId: liveHold.id, status: "SCHEDULED" },
+          select: { id: true, pgBossJobId: true },
+        });
+        await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+        await tx.timerRecord.updateMany({
+          where: { id: { in: timers.map((t) => t.id) } },
+          data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: "HOLD_EXPIRY_CHANGED" },
+        });
+        const jobId = await engine.schedule("COMMITTED_HOLD_EXPIRY_W3", { committedHoldId: liveHold.id }, { startAfter: moveTo });
+        await tx.timerRecord.create({
+          data: {
+            entryId,
+            entityType: "CommittedHold",
+            entityId: liveHold.id,
+            timerType: "COMMITTED_HOLD_EXPIRY_W3",
+            timerCode: "COMMITTED_HOLD_EXPIRY_W3",
+            stageContext: Stage.S3,
+            firesAt: moveTo,
+            dueAt: moveTo,
+            status: "SCHEDULED",
+            pgBossJobId: jobId,
+            payload: { committedHoldId: liveHold.id },
+            createdBy: actor.actorId,
+          },
+        });
+        const updated = await tx.committedHold.update({
+          where: { id: liveHold.id },
+          data: { expiresAt: moveTo, ttlSeconds: Math.round((moveTo.getTime() - liveHold.placedAt.getTime()) / 1000) },
+          select: { expiresAt: true },
+        });
+        holdUpdated = true;
+        effective = updated.expiresAt;
+      } else {
+        effective = null;
+      }
+    }
+
+    await tx.traceEvent.create({
+      data: {
+        eventType: target ? "COMMITTED_HOLD.EXPIRY_SET" : "COMMITTED_HOLD.EXPIRY_CLEARED",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel,
+        entityType: liveHold ? "CommittedHold" : "Entry",
+        entityId: liveHold?.id ?? entryId,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: {
+          heldUntil: target?.toISOString() ?? null,
+          priorHeldUntil: entry.holdExpiresAtOverride?.toISOString() ?? null,
+          houseWindowMinutes,
+          holdUpdated,
+          ...(input.reason?.trim() ? { reason: input.reason.trim() } : {}),
+        },
+        createdBy: actor.actorId,
+      },
+    });
+  });
+
+  return {
+    heldUntil: (effective ?? target)?.toISOString() ?? null,
+    source: target ? "BOOKING" : "HOUSE",
+    holdUpdated,
+    houseWindowMinutes,
+    ...(note ? { note } : {}),
+  };
+}
+
 export async function releaseCommittedHoldForRoomChange(
   tx: Prisma.TransactionClient,
   entryId: string,
