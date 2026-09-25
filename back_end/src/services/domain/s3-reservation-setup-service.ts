@@ -7,6 +7,7 @@ import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billin
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-billing/p66-group-foc-and-billing-split.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
 
 export { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
@@ -96,21 +97,12 @@ export async function ensureProvisionalFolioAndBillingModel(
       },
     });
 
-    const invoiceId = await allocateReadableId(tx, "INVOICE" as const);
-    // Create a proforma invoice as S3 exit evidence starter.
-    await tx.invoice.create({
-      data: {
-        id: invoiceId,
-        folioId: folio.id,
-        entryId,
-        invoiceType: InvoiceType.PROFORMA,
-        state: InvoiceState.DRAFT,
-        templateKey: "proforma-v1",
-        issuedAt: new Date(),
-        issuedBy: actorId,
-        metadata: { basis: "S3 setup" },
-      },
-    });
+    // The proforma is Set up's exit evidence — one per pass, not one per press (2026-09-25).
+    // This ran unconditionally, so a second thought about the billing model minted a second live
+    // bill; and on a re-entered booking it was the only thing that ever minted one at all, which
+    // is why a pass arriving with its old bill superseded had none. The shared helper mints only
+    // when no live proforma stands, and never replaces one that does.
+    await ensureLiveProformaForPassTx(tx, { entryId, folioId: folio.id, basis: "S3 setup" }, { actorId, actorLevel: "L1" });
 
     return tx.folio.findUniqueOrThrow({ where: { id: folio.id }, include: { invoices: true } });
   });
