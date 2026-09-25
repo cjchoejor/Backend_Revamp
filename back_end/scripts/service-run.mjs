@@ -26,7 +26,7 @@
  * identically from a terminal, which is how it should be tested.
  */
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -82,6 +82,38 @@ async function waitForDatabase(connectionString) {
   }
 }
 
+/**
+ * Where Puppeteer's browser actually lives — the service cannot find it on its own.
+ *
+ * Every PDF this system produces (confirmation voucher, quotation, proforma, tax invoice) is
+ * rendered by `chrome-headless-shell`, which `npm install` downloads into the INSTALLING USER's
+ * cache (`C:\Users\<name>\.cache\puppeteer`). A Windows service runs as LocalSystem, whose home
+ * is `C:\WINDOWS\system32\config\systemprofile` — an empty cache. So under the service every
+ * render failed with "Could not find chrome-headless-shell", the mails went out with no
+ * attachment, and the only trace of it was `…_PDF_RENDER_FAILED` on the booking.
+ *
+ * The browser is 525 MB, so it is found rather than copied: an explicit `PUPPETEER_CACHE_DIR`
+ * wins, then a cache kept beside the repo, then the first user profile that actually holds the
+ * browser. Returns null when there is none, and the server starts anyway — a hotel that cannot
+ * print a voucher still has to take bookings.
+ */
+function puppeteerCacheDir() {
+  if (process.env.PUPPETEER_CACHE_DIR) return process.env.PUPPETEER_CACHE_DIR;
+  const holdsBrowser = (dir) => { try { return existsSync(path.join(dir, "chrome-headless-shell")); } catch { return false; } };
+
+  const beside = path.join(BACK_END, ".puppeteer");
+  if (holdsBrowser(beside)) return beside;
+
+  const users = path.join(process.env.SystemDrive ?? "C:", "\\", "Users");
+  try {
+    for (const name of readdirSync(users)) {
+      const cache = path.join(users, name, ".cache", "puppeteer");
+      if (holdsBrowser(cache)) return cache;
+    }
+  } catch { /* unreadable — fall through */ }
+  return null;
+}
+
 /** `tsx src/index.ts`, with workers on. See the note above about dist. */
 const RUNNER = {
   command: process.execPath,
@@ -96,10 +128,19 @@ async function main() {
 
   await waitForDatabase(connectionString);
 
+  const browserCache = puppeteerCacheDir();
+  if (browserCache) log(`pdf browser cache: ${browserCache}`);
+  else log(`pdf browser NOT found — PDFs will fail to render; run: npx puppeteer browsers install chrome-headless-shell`);
+
   const child = spawn(RUNNER.command, RUNNER.args, {
     cwd: BACK_END,
     stdio: "inherit",
-    env: { ...process.env, RUN_WORKERS: "true", NODE_ENV: process.env.NODE_ENV ?? "production" },
+    env: {
+      ...process.env,
+      RUN_WORKERS: "true",
+      NODE_ENV: process.env.NODE_ENV ?? "production",
+      ...(browserCache ? { PUPPETEER_CACHE_DIR: browserCache } : {}),
+    },
   });
 
   // The wrapper stops the service by signalling THIS process; pass it on so the server closes
