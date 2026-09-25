@@ -42,13 +42,12 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, StepCanvas, StepCard, atLeast, toastRefusal } from "./kit";
+import { Choice, FlowTodo, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
 import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
   CHANNEL_OPTIONS,
   ChildChargeNote,
-  GateList,
   GuestLine,
   NATIONALITIES,
   PHONE_CODES,
@@ -79,7 +78,8 @@ import {
  */
 const WITH_RAIL = false;
 
-const GUEST_CARD_ID = "new-inquiry-guest";
+// The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
+const GUEST_CARD_ID = anchorFor("guest");
 
 type InquiryScalars = {
   notes?: string | null;
@@ -701,27 +701,30 @@ export function NewInquiryCanvas() {
         ? { label: "Use-type requirements · the hall is added on the booking", whose: "desk", met: true }
         : { label: "Use-type requirements · none", whose: "desk", met: true };
   const guestLineLabel = isEdit || selectedGuest ? "Guest on file" : "Guest, or the booker's contact standing in";
-  const gate: GateLine[] = [
-    { label: "Source channel", whose: "desk", met: !!channelKey, how: "say how they came in" },
-    { label: "Dates set", whose: "desk", met: datesSet && !dateProblem, how: dateProblem ?? "check-in and check-out, or check-in and nights" },
-    { label: "Rooms and guests set", whose: "desk", met: roomsGuestsSet, how: partyHow ?? "a room count for the party" },
-    {
-      label: guestLineLabel,
-      whose: "desk",
-      met: guestOk,
-      how: mode === "NEW" ? "a first and last name with a phone and a nationality — or the guest the phone found" : "pick the returning guest",
-    },
-    { label: "Use type", whose: "desk", met: !!useType },
-    {
-      label: "The house asked · a configuration selected",
-      whose: "system",
-      met: houseAsked,
-      how: datesSet ? "Ask the house keeps the lead and asks; the rooms are taken on the booking" : "enter the dates",
-    },
-    useTypeReq,
-    { label: "Custodian assigned", whose: "system", met: true },
-    { label: "No duplicate found · runs on save", whose: "system", met: true },
+  // The checklist, in the order the page is worked; the side panel numbers it onto the cards
+  // (2026-09-25 — it sat at the foot of the page as a bare list). On a new inquiry the house is
+  // asked on the booking, once the lead is kept, so that item belongs to the booking's own list;
+  // an edit can ask the house from here, so it is listed.
+  const flowItems = numberFlow([
+    { label: "Source channel", met: !!channelKey, card: "asking" },
+    { label: "Use type", met: !!useType, card: "asking" },
+    { label: guestLineLabel, met: guestOk, card: "guest" },
+    { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
+    { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
+    ...(isEdit ? [{ label: "The house asked · a configuration selected", met: houseAsked, card: "house" }] : []),
+  ]);
+  // What the system does on save — no card to go to, so listed apart.
+  const flowAlso = [
+    { label: useTypeReq.label, met: useTypeReq.met },
+    { label: "Custodian assigned · on save", met: true },
+    { label: "No duplicate found · runs on save", met: true },
   ];
+  const nextUp = flowItems.find((i) => !i.met) ?? null;
+  const goToCard = (card?: string) => {
+    if (!card) return;
+    const el = document.getElementById(anchorFor(card));
+    if (el) revealCard(el);
+  };
 
   const primaryLabel = isEdit ? "Save the changes" : "Start the inquiry · keep the lead";
   const saveReason = saveBlockers.length ? `first: ${saveBlockers.join(" · ")}` : null;
@@ -809,10 +812,11 @@ export function NewInquiryCanvas() {
             </div>
           ) : null}
           <StepCanvas past={false}>
+            <StepFlow items={flowItems} on={!isEdit || editable}>
             <div className="intake">
               <div className="stack" ref={leftRef}>
                 {/* ------------------------------------------------ who is asking */}
-                <StepCard title="Who is asking">
+                <StepCard title="Who is asking" flow="asking">
                   <div className="form2">
                     <div className="wide field">
                       <label>Came in as</label>
@@ -920,7 +924,7 @@ export function NewInquiryCanvas() {
 
                 {/* ------------------------------------------------ the guest */}
                 <StepCard
-                  id={GUEST_CARD_ID}
+                  flow="guest"
                   title="The guest"
                   right={
                     !isEdit && !selectedGuest ? (
@@ -1103,7 +1107,7 @@ export function NewInquiryCanvas() {
                 </StepCard>
 
                 {/* ------------------------------------------------ the stay */}
-                <StepCard title="The stay">
+                <StepCard title="The stay" flow="stay">
                   <div className="form2">
                     <div className="field">
                       <label>Check-in</label>
@@ -1412,7 +1416,16 @@ export function NewInquiryCanvas() {
               {/* ------------------------------------------------ the house */}
               <div className="stack intake-right">
                 <StepCard
+                  flow="house"
                   title={datesSet ? `The house · ${fmtRange(checkIn, checkOut)}` : "The house"}
+                  heldFor={
+                    isEdit ? undefined : (
+                      <>
+                        <b>{primaryLabel}</b> — the house is asked on the booking, where the free rooms for these dates appear while you are
+                        still on the phone.
+                      </>
+                    )
+                  }
                   acts={
                     <Button
                       state={askingNow ? "working" : askReason || busy ? "inert" : "default"}
@@ -1440,6 +1453,7 @@ export function NewInquiryCanvas() {
                 </StepCard>
               </div>
             </div>
+            </StepFlow>
           </StepCanvas>
         </div>
 
@@ -1450,6 +1464,7 @@ export function NewInquiryCanvas() {
               <span className="meta">nothing running</span>
             </div>
           </div>
+          {!isEdit || editable ? <FlowTodo items={flowItems} also={flowAlso} onGo={goToCard} /> : null}
           <div>
             <h4>What we told the guest, and what they said</h4>
             <div className="list">
@@ -1497,7 +1512,27 @@ export function NewInquiryCanvas() {
       ) : null}
 
       <div className="gatebar">
-        <GateList items={gate} />
+        {/* The list is in the side panel, numbered; the bar says what is next and takes you to it. */}
+        <div className="gate">
+          {nextUp ? (
+            <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
+              <Icon name="circle" />
+              <span>
+                Next · <b>{nextUp.n}</b> {nextUp.label}
+              </span>
+            </button>
+          ) : flowAlso.some((p) => !p.met) ? (
+            <div className="item unmet">
+              <Icon name="circle" />
+              <span>{flowAlso.find((p) => !p.met)?.label}</span>
+            </div>
+          ) : (
+            <div className="item met">
+              <Icon name="check" />
+              <span>{isEdit ? "everything the inquiry needs is here" : "everything the inquiry needs is here — start it"}</span>
+            </div>
+          )}
+        </div>
         <div className="acts">
           <Button
             state={savingNow ? "working" : saveReason || busy ? "inert" : "default"}

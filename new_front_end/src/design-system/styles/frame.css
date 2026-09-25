@@ -171,6 +171,10 @@
    them, since the numbered to-do is read against the page it scrolls. Each gets its own scroll
    when it outgrows the screen; 53px is the sticky topbar's height. */
 .ds .ws-body > .rail, .ds .ws-body > .side { position: sticky; top: 53px; align-self: start; max-height: calc(100vh - 53px); overflow: auto; }
+/* The intake's house card sticks too — below the topbar, not under it: the generated sheet pins
+   it at 16px from the top of the window, so its heading slid beneath the 53px topbar and the box
+   read as cut off while it followed the scroll (2026-09-25, operator). */
+.ds .intake-right:not(.desk-root *) { top: calc(53px + var(--s4)); }
 
 /* Taken to a section from the to-do: it says so for a moment, then settles. */
 @keyframes ds-card-flash {

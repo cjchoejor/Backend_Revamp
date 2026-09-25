@@ -132,6 +132,59 @@ export function anchorFor(card: string) {
   return `card-${card}`;
 }
 
+/**
+ * Take the operator to a card: scroll it into view and light it for a moment, so the section
+ * says it is the one they asked for (2026-09-25 — scrolling alone left them hunting for which
+ * box had moved).
+ */
+export function revealCard(el: HTMLElement) {
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+  window.setTimeout(() => el.classList.remove("flash"), 1900);
+}
+
+/**
+ * The side panel's "To do here": the numbered items, each a way to its card, and beneath them
+ * the items that have no card on this screen — listed apart, never numbered. One component for
+ * the workspace and the intake screen, so the two lists cannot read differently.
+ */
+export function FlowTodo({
+  items,
+  also,
+  onGo,
+}: {
+  items: FlowItem[];
+  also: ReadonlyArray<{ label: string; met: boolean }>;
+  onGo: (card?: string) => void;
+}) {
+  if (!items.length && !also.length) return null;
+  return (
+    <div>
+      <h4>To do here</h4>
+      <div className="todo">
+        {items.map((i) => (
+          <button key={`${i.n}-${i.card}`} type="button" className={`row-todo${i.met ? " done" : ""}`} onClick={() => onGo(i.card)} title={`Go to ${i.label}`}>
+            <span className="n">{i.met ? <Icon name="check" /> : i.n}</span>
+            <span className="t">{i.label}</span>
+          </button>
+        ))}
+        {also.length ? (
+          <div className="also">
+            {also.map((p) => (
+              <div key={p.label} className={`row-todo${p.met ? " done" : ""}`} style={{ cursor: "default" }}>
+                <span className="n">{p.met ? <Icon name="check" /> : "!"}</span>
+                <span className="t">{p.label}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function StepCard({
   title,
   icon,
@@ -145,6 +198,7 @@ export function StepCard({
   style,
   flow,
   flowAfter,
+  heldFor,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -161,10 +215,17 @@ export function StepCard({
   flow?: string;
   /** This card opens once the named card's items are done — the step's real dependencies. */
   flowAfter?: string;
+  /**
+   * This card waits for something that is not on this screen — the intake's house card waits for
+   * the inquiry to be started, which is the gate bar's button. It is drawn as a waiting card that
+   * says so, with no "Show it anyway": what it waits for cannot be done from inside it.
+   */
+  heldFor?: ReactNode;
 }) {
   const { n, met, waitsFor } = useFlowCard(flow, flowAfter);
   const [anyway, setAnyway] = useState(false);
-  const waiting = !!waitsFor && !anyway;
+  const held = !!heldFor;
+  const waiting = held || (!!waitsFor && !anyway);
   return (
     <div
       className={["card", sealed ? "sealed" : "", quiet ? "quiet" : "", n ? "flowed" : "", met ? "flow-done" : "", waiting ? "flow-waiting" : ""]
@@ -185,12 +246,18 @@ export function StepCard({
       ) : null}
       {waiting ? (
         <div className="flow-wait">
-          <span className="meta">
-            after <b>{waitsFor!.n}</b> · {waitsFor!.label}
-          </span>
-          <Button kind="quiet" compact onClick={() => setAnyway(true)}>
-            Show it anyway
-          </Button>
+          {held ? (
+            <span className="meta">after · {heldFor}</span>
+          ) : (
+            <>
+              <span className="meta">
+                after <b>{waitsFor!.n}</b> · {waitsFor!.label}
+              </span>
+              <Button kind="quiet" compact onClick={() => setAnyway(true)}>
+                Show it anyway
+              </Button>
+            </>
+          )}
         </div>
       ) : (
         <>
