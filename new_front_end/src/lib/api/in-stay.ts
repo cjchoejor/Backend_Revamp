@@ -101,11 +101,14 @@ export function buildH4FulfilmentEvidence(deficientFlagFinalStatus: string) {
   };
 }
 
-export async function runNightAudit(session: Session, operatingDate: string) {
-  return apiRequest<NightAuditRecord>("/api/night-audit/run", {
+/** The manual run for ONE booking (2026-09-25) — posts that booking's night, tonight included. */
+export type BookingNightPosted = { entryId: string; operatingDate: string; posted: number; lines: string[]; hotelRecordId: string | null };
+
+export async function runNightAudit(session: Session, operatingDate: string, entryId: string) {
+  return apiRequest<BookingNightPosted>("/api/night-audit/run", {
     method: "POST",
     session,
-    body: { operatingDate },
+    body: { operatingDate, entryId },
   });
 }
 

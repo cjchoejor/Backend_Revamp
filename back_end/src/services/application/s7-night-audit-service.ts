@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { enforceNightAuditOperatingDateEnded } from "../../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
-import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
+import { enforceNightAuditOperatingDateEnded, enforceNightAuditOperatingDateNotAhead } from "../../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
+import { effectiveCheckOutDate, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -59,6 +59,144 @@ type EntryNightPlan = {
  * keeps a second pass over the same night from posting twice. Worked out before any write so the
  * audit record can be created in its final (immutable) form.
  */
+/**
+ * The rooms a booking holds on a night: within the ENTRY's stay window first, then each row's
+ * own dates (a row with none is the legacy whole-stay row). The plan posts for these; the
+ * check-out gate asks whether each of them carries its room charge.
+ */
+function assignmentsActiveOn<A extends { startDate: Date | null; endDate: Date | null }>(
+  entry: {
+    reservation: { frozenCheckInDate: Date; frozenCheckOutDate: Date } | null;
+    checkInDate: Date | null;
+    checkOutDate: Date | null;
+    actualCheckOutDate?: Date | null;
+    roomAssignments?: A[] | null;
+  },
+  opTime: number,
+): A[] {
+  const stayStart = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
+  const stayEnd = effectiveCheckOutDate(entry);
+  const withinStay =
+    (stayStart == null || operatingDateUtc(stayStart).getTime() <= opTime) &&
+    (stayEnd == null || opTime < operatingDateUtc(stayEnd).getTime());
+  return !withinStay
+    ? []
+    : (entry.roomAssignments ?? []).filter((a) => {
+        if (a.startDate == null || a.endDate == null) return true; // legacy whole-stay
+        return a.startDate.getTime() <= opTime && opTime < a.endDate.getTime();
+      });
+}
+
+/**
+ * Whether a booking's own night is posted — every room it held that night carries its room
+ * charge (2026-09-25). This is what a manual run for one booking leaves behind, since it writes
+ * no hotel-wide record; the check-out gate and the early-departure preview read it beside the
+ * hotel's record. A night on which the booking held no room reads as posted — nothing to post.
+ */
+export async function isBookingNightPosted(prisma: PrismaClient, entryId: string, operatingDate: Date): Promise<boolean> {
+  const op = operatingDateUtc(operatingDate);
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: { reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } }, folio: { select: { id: true } }, roomAssignments: true },
+  });
+  if (!entry || !entry.folio) return false;
+  const active = assignmentsActiveOn(entry, op.getTime());
+  if (active.length === 0) return true;
+  const lines = await prisma.folioLine.findMany({
+    where: { folioId: entry.folio.id, lineType: FolioLineType.ROOM_CHARGE, chargeDate: op, roomId: { in: active.map((a) => a.roomId) } },
+    select: { roomId: true },
+  });
+  const posted = new Set(lines.map((l) => l.roomId));
+  return active.every((a) => posted.has(a.roomId));
+}
+
+/**
+ * The manual run, for ONE booking (2026-09-25, operator ruling: "night audit should only run
+ * for the specific booking if done manually").
+ *
+ * The hotel-wide run at 08:00 stays what it was: it seals the day for everyone and is not
+ * touched here. This posts one booking's night — the same per-room lines, the same companions,
+ * the same idempotent lookup, so the hotel's run finds them already there and posts nothing
+ * twice — and writes NO hotel-wide record: the record is what once made the morning run a no-op
+ * for every other guest (Policy 61's history). What it leaves behind is the booking's own lines,
+ * which the check-out gate reads as this booking's night being done.
+ *
+ * It may post TONIGHT — the guest settling in the evening and leaving before the morning run —
+ * but never a night ahead of today, and never a night outside the stay. A night posted ahead and
+ * then not slept (an early departure recorded the same evening) is corrected on the folio like
+ * any other wrong line; it is not undone here.
+ */
+export async function runNightAuditForEntry(
+  prisma: PrismaClient,
+  actorId: string,
+  input: { operatingDate: string; entryId: string },
+): Promise<{ entryId: string; operatingDate: string; posted: number; lines: string[]; hotelRecordId: string | null }> {
+  if (!input.operatingDate?.trim()) throw new ValidationError("operatingDate is required");
+  const d = new Date(input.operatingDate);
+  if (Number.isNaN(d.getTime())) throw new ValidationError("operatingDate must be a valid ISO date");
+  const operatingDate = operatingDateUtc(d);
+  enforceNightAuditOperatingDateNotAhead({ operatingDate, hotelToday: hotelTodayUtc() });
+
+  const entry = await prisma.entry.findUnique({
+    where: { id: input.entryId },
+    include: { reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } }, roomAssignments: { select: { id: true } } },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== Stage.S7 || entry.status !== "ACTIVE") {
+    throw new ValidationError("A night is posted for a booking that is in-house — this one is not");
+  }
+  const stayStart = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
+  const stayEnd = effectiveCheckOutDate(entry);
+  const op = operatingDate.getTime();
+  if ((stayStart && op < operatingDateUtc(stayStart).getTime()) || (stayEnd && op >= operatingDateUtc(stayEnd).getTime())) {
+    throw new ValidationError(`${ymdUtc(operatingDate)} is not a night of this stay`);
+  }
+
+  const { plan, notProcessed } = await planNightForEntries(prisma, operatingDate, { id: input.entryId });
+  if (notProcessed.includes(input.entryId) || plan.length === 0) {
+    throw new ValidationError("This booking's night could not be posted — its bill is not live");
+  }
+  const p = plan[0];
+  // If the hotel's run already sealed this date, stamp the lines with its record so the invoice
+  // pairs the companions with their room line exactly as it does for the hotel's own posting.
+  const hotelRecord = await prisma.nightAuditRecord.findUnique({ where: { operatingDate }, select: { id: true } });
+  if (p.perRoomPosts.length === 0) {
+    return { entryId: input.entryId, operatingDate: ymdUtc(operatingDate), posted: 0, lines: [], hotelRecordId: hotelRecord?.id ?? null };
+  }
+  const { gstRate, serviceChargeRate } = await resolveChargeRates(prisma);
+  await prisma.$transaction(async (tx) => {
+    await postEntryNightPlanTx(tx, p, { recordId: hotelRecord?.id ?? null, operatingDate, actorId, gstRate, serviceChargeRate });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "NIGHT_AUDIT.BOOKING_NIGHT_POSTED",
+        actorId,
+        actorLevel: "L2",
+        entityType: "Entry",
+        entityId: input.entryId,
+        operation: "CREATE",
+        timestamp: new Date(),
+        stageContext: Stage.S7,
+        inquiryId: entry.inquiryId ?? undefined,
+        entryId: input.entryId,
+        payload: {
+          operatingDate: operatingDate.toISOString(),
+          lines: p.perRoomPosts.map((x) => x.description),
+          hotelRecordId: hotelRecord?.id ?? null,
+          aheadOfHotelRun: !hotelRecord,
+        },
+        createdBy: actorId,
+      },
+    });
+  });
+  return {
+    entryId: input.entryId,
+    operatingDate: ymdUtc(operatingDate),
+    posted: p.perRoomPosts.length,
+    lines: p.perRoomPosts.map((x) => x.description),
+    hotelRecordId: hotelRecord?.id ?? null,
+  };
+}
+
 async function planNightForEntries(
   prisma: PrismaClient,
   operatingDate: Date,
@@ -98,17 +236,7 @@ async function planNightForEntries(
       // stay that began days later, because its extension-run assignment row carries a null
       // startDate, which the legacy whole-stay rule below reads as "active on every date".
       // The stay window clamps first; the per-row ranges refine within it.
-      const stayStart = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
-      const stayEnd = effectiveCheckOutDate(entry);
-      const withinStay =
-        (stayStart == null || operatingDateUtc(stayStart).getTime() <= opTime) &&
-        (stayEnd == null || opTime < operatingDateUtc(stayEnd).getTime());
-      const activeAssignments = !withinStay
-        ? []
-        : (entry.roomAssignments ?? []).filter((a) => {
-            if (a.startDate == null || a.endDate == null) return true; // legacy whole-stay
-            return a.startDate.getTime() <= opTime && opTime < a.endDate.getTime();
-          });
+      const activeAssignments = assignmentsActiveOn(entry, opTime);
 
       // Build per-room post plan. For each active assignment:
       //   - Preferred: use its `frozenSubtotal` (stay-total from composition) divided by
@@ -215,7 +343,7 @@ async function planNightForEntries(
 async function postEntryNightPlanTx(
   tx: Prisma.TransactionClient,
   p: EntryNightPlan,
-  ctx: { recordId: string; operatingDate: Date; actorId: string; gstRate: number; serviceChargeRate: number },
+  ctx: { recordId: string | null; operatingDate: Date; actorId: string; gstRate: number; serviceChargeRate: number },
 ) {
   const { recordId, operatingDate, actorId, gstRate, serviceChargeRate } = ctx;
   // Post one FolioLine per active room assignment (Phase C, 2026-07-27). When no
@@ -319,7 +447,9 @@ async function postEntryNightPlanTx(
   // proof default; the desk can always ask earlier by hand. Best-effort: a prompt that
   // can't be written must not fail the audit.
   await maybePromptInterimPaymentTx(tx, { entryId: p.entryId, folioId: p.folioId, operatingDate, actorId }).catch(() => {});
-  if (p.shouldWriteFnbMissingAnomaly) {
+  // The anomaly hangs off the hotel's record; a run for one booking has none to hang it on,
+  // and the missing-F&B question is the hotel's run's to raise.
+  if (p.shouldWriteFnbMissingAnomaly && recordId) {
     await tx.nightAuditAnomaly.create({
       data: {
         nightAuditRecordId: recordId,

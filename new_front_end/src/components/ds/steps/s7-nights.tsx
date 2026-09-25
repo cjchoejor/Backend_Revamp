@@ -52,7 +52,6 @@ export function NightsCard({
   const refresh = useRefreshEntry(entry.id);
   const hotel = useHotelDay();
   const today = hotel?.today ?? null;
-  const yesterday = hotel?.yesterday ?? null;
   const elevated = atLeast(session?.actorLevel, "L2");
 
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
@@ -62,11 +61,13 @@ export function NightsCard({
 
   // The nights worth asking about: every night that has ended, and always the final night (the gate)
   // — when the stay has one. A guest who checks in and leaves the same day slept no night.
+  // Every night up to and including tonight (2026-09-25: the desk may post tonight for this
+  // booking), and always the final night (the gate) — when the stay has one.
   const asked = useMemo(() => {
-    const s = new Set(nights.filter((n) => !!yesterday && n <= yesterday));
+    const s = new Set(nights.filter((n) => !!today && n <= today));
     if (lastNight && nights.includes(lastNight)) s.add(lastNight);
     return [...s].sort();
-  }, [nights, yesterday, lastNight]);
+  }, [nights, today, lastNight]);
   const records = useQueries({
     queries: asked.map((ymd) => ({
       queryKey: ["night-audit", ymd],
@@ -79,46 +80,48 @@ export function NightsCard({
     return i < 0 ? undefined : records[i]?.data;
   };
 
-  // The gate: the final night's audit — met outright when no night was slept (2026-09-18), as
-  // the backend's gate is: "the night before check-out" is then a night before the stay began.
-  const finalOk = nights.length === 0 || recordOf(lastNight)?.runStatus === "COMPLETE";
-  useEffect(() => {
-    setNightAuditOk(finalOk);
-  }, [finalOk, setNightAuditOk]);
-
   const roomNo = useMemo(
     () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
     [entry.roomAssignments],
   );
   const roomLines = (ymd: string) => (entry.folio?.lines ?? []).filter((l) => l.lineType === "ROOM_CHARGE" && l.chargeDate?.slice(0, 10) === ymd);
+  // This booking's night is on its folio — what the manual run leaves behind; the backend's gate
+  // reads the same thing beside the hotel's record.
+  const postedHere = (ymd: string) => roomLines(ymd).length > 0;
+
+  // The gate: the final night's audit — met outright when no night was slept (2026-09-18), as
+  // the backend's gate is: "the night before check-out" is then a night before the stay began.
+  const finalOk = nights.length === 0 || recordOf(lastNight)?.runStatus === "COMPLETE" || postedHere(lastNight);
+  useEffect(() => {
+    setNightAuditOk(finalOk);
+  }, [finalOk, setNightAuditOk]);
 
   // A night the hotel's audit ran BEFORE this booking was in-house (a check-in completed after
   // the run) carries no charge for it; running the night again charges it (the backend catches up
   // only the bookings the run missed). "Audited" alone read as done while the room was never
   // billed, and settlement then refused the stay (2026-09-18).
   const hasRooms = (entry.roomAssignments ?? []).length > 0;
-  const notChargedHere = (n: string) =>
-    hasRooms && !!yesterday && n <= yesterday && recordOf(n)?.runStatus === "COMPLETE" && roomLines(n).length === 0;
+  const notChargedHere = (n: string) => hasRooms && !!today && n <= today && recordOf(n)?.runStatus === "COMPLETE" && !postedHere(n);
 
-  // Which night to run: the one picked, else the earliest ended night not yet complete — or
-  // audited without this booking's charge.
-  const firstOpen =
-    asked.find((n) => !!yesterday && n <= yesterday && (recordOf(n)?.runStatus !== "COMPLETE" || notChargedHere(n))) ?? "";
+  // Which night to run: the one picked, else the earliest night up to tonight not yet on this
+  // booking's folio.
+  const firstOpen = asked.find((n) => !!today && n <= today && hasRooms && !postedHere(n)) ?? "";
   const [picked, setPicked] = useState<string | null>(null);
   const runDate = picked ?? firstOpen;
-  const runFuture = !yesterday || (!!runDate && runDate > yesterday);
-  const runDone = !!runDate && recordOf(runDate)?.runStatus === "COMPLETE" && !notChargedHere(runDate);
+  const runFuture = !today || (!!runDate && runDate > today);
+  const runDone = !!runDate && postedHere(runDate);
 
+  // The run is THIS booking's alone (2026-09-25, operator ruling): it posts the night's lines for
+  // this stay and nothing for anyone else; the hotel's own run at 08:00 covers the house.
   const run = useMutation({
-    mutationFn: (ymd: string) => runNightAudit(session!, `${ymd}T00:00:00.000Z`),
-    onSuccess: (rec, ymd) => {
-      if (rec?.caughtUp == null) toast.success(`The night audit has run for ${fmtDate(ymd)}`);
-      else if (rec.caughtUp > 0) toast.success(`${fmtDate(ymd)} was audited already — the charges it missed are posted now`);
-      else toast.message(`${fmtDate(ymd)} was audited already — nothing it can charge is missing`);
+    mutationFn: (ymd: string) => runNightAudit(session!, `${ymd}T00:00:00.000Z`, entry.id),
+    onSuccess: (out, ymd) => {
+      if (out.posted > 0) toast.success(`${fmtDate(ymd)} is on this booking's bill — ${out.posted === 1 ? "one line" : `${out.posted} lines`} posted`);
+      else toast.message(`${fmtDate(ymd)} was already on this booking's bill — nothing to post`);
       setPicked(null);
       refresh([["night-audit"], ["early-departure-preview", entry.id]]);
     },
-    onError: (e) => toastRefusal(e, "The night audit could not run"),
+    onError: (e) => toastRefusal(e, "The night could not be posted"),
   });
 
   const audit = (n: string) => {
@@ -126,15 +129,21 @@ export function NightsCard({
     if (notChargedHere(n))
       return (
         <span className="row-acts" style={{ alignItems: "center" }}>
-          <Chip tone="warning">audited · not charged here</Chip>
+          <Chip tone="warning">hotel audited · not on this bill</Chip>
           {elevated ? (
             <Live>
-              <Button kind="quiet" compact state={run.isPending ? "working" : "default"} workingLabel="Running…" onClick={() => run.mutate(n)}>
-                Run it again
+              <Button kind="quiet" compact state={run.isPending ? "working" : "default"} workingLabel="Posting…" onClick={() => run.mutate(n)}>
+                Post it
               </Button>
             </Live>
           ) : null}
         </span>
+      );
+    if (postedHere(n))
+      return (
+        <Chip tone="success" icon="check">
+          {rec?.runStatus === "COMPLETE" ? "audited" : n === today ? "posted tonight, ahead of the hotel's run" : "posted for this booking"}
+        </Chip>
       );
     if (rec?.runStatus === "COMPLETE")
       return (
@@ -142,21 +151,20 @@ export function NightsCard({
           audited
         </Chip>
       );
-    if (!today || !yesterday) return <Chip tone="quiet">…</Chip>;
-    if (n <= yesterday)
+    if (!today) return <Chip tone="quiet">…</Chip>;
+    if (n <= today)
       return (
         <span className="row-acts" style={{ alignItems: "center" }}>
-          <Chip tone="warning">{rec?.runStatus ? words(rec.runStatus) : "not yet audited"}</Chip>
+          <Chip tone={n === today ? "quiet" : "warning"}>{n === today ? "tonight" : rec?.runStatus ? words(rec.runStatus) : "not yet audited"}</Chip>
           {elevated ? (
             <Live>
-              <Button kind="quiet" compact state={run.isPending ? "working" : "default"} workingLabel="Running…" onClick={() => run.mutate(n)}>
-                Run it
+              <Button kind="quiet" compact state={run.isPending ? "working" : "default"} workingLabel="Posting…" onClick={() => run.mutate(n)}>
+                {n === today ? "Post tonight" : "Post it"}
               </Button>
             </Live>
           ) : null}
         </span>
       );
-    if (n === today) return <Chip tone="quiet">tonight</Chip>;
     return <Chip tone="quiet">ahead</Chip>;
   };
 
@@ -203,22 +211,24 @@ export function NightsCard({
         </table>
       )}
       <div className="meta" style={{ marginTop: 6 }}>
-        A night&rsquo;s charge is posted and its date sealed by the night audit · every night must be audited before check-out · a night is audited once it has ended · the run covers the whole hotel · a night audited before this booking was in-house is run again to charge it
+        The hotel&rsquo;s night audit runs on its own at 08:00 and posts every guest&rsquo;s night. From here the FOM posts a night for{" "}
+        <b>this booking only</b> — a night the hotel&rsquo;s run missed, or tonight, for a guest settling before the morning run. Every night of
+        the stay must be on the bill before check-out.
       </div>
       <Live>
         <div className="row-acts" style={{ marginTop: 12, alignItems: "flex-end" }}>
           {elevated ? (
             <>
               <div className="field" style={{ width: 180 }}>
-                <label>Night to audit</label>
+                <label>Night to post</label>
                 <input
                   className="input"
                   type="date"
                   value={runDate}
-                  max={yesterday ?? undefined}
+                  max={today && lastNight && lastNight < today ? lastNight : (today ?? undefined)}
                   min={nights[0]}
-                  disabled={!yesterday}
-                  title={yesterday ? undefined : "checking today's date at the hotel…"}
+                  disabled={!today}
+                  title={today ? undefined : "checking today's date at the hotel…"}
                   onChange={(e) => setPicked(e.target.value)}
                 />
               </div>
@@ -227,25 +237,25 @@ export function NightsCard({
                 compact
                 state={run.isPending ? "working" : !runDate || runFuture || runDone ? "inert" : "default"}
                 title={
-                  !yesterday
+                  !today
                     ? "checking today's date at the hotel…"
                     : !runDate
-                      ? "every ended night is audited — pick one to run it again"
+                      ? "every night up to tonight is on the bill"
                       : runFuture
-                        ? "a night can be audited only once it has ended — a guest leaving early is an early departure, below"
+                        ? "a night ahead of today cannot be posted"
                         : runDone
-                          ? "this night is already audited"
+                          ? "this night is already on the bill"
                           : undefined
                 }
-                workingLabel="Running…"
+                workingLabel="Posting…"
                 onClick={() => runDate && run.mutate(runDate)}
               >
-                {runDate ? `Run the night audit · ${fmtDay(runDate)}` : "Run the night audit"}
+                {runDate ? `Post the night · ${fmtDay(runDate)}` : "Post the night"}
               </Button>
             </>
           ) : (
-            <Button kind="secondary" compact state="inert" unlockRole="FOM" reason="Running the night audit">
-              Run the night audit
+            <Button kind="secondary" compact state="inert" unlockRole="FOM" reason="Posting a night for this booking">
+              Post the night
             </Button>
           )}
           {hasRooms ? (

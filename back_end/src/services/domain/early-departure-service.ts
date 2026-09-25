@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, FolioLineType, FolioState, InventoryClaimState, NightAuditRunStatus, Prisma, Stage } from "@prisma/client";
+import { isBookingNightPosted } from "../application/s7-night-audit-service.js";
 import { AppError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -246,9 +247,11 @@ export async function computeEarlyDepartureFigures(
   const missingNightYmds: string[] = [];
   for (const ymd of sleptYmds) {
     const rec = await prisma.nightAuditRecord.findUnique({ where: { operatingDate: new Date(`${ymd}T00:00:00.000Z`) } });
-    const status = rec ? String(rec.runStatus) : "MISSING";
+    // A night posted for this booking alone (a manual run) leaves no hotel record; it counts.
+    const postedHere = rec?.runStatus === NightAuditRunStatus.COMPLETE ? true : await isBookingNightPosted(prisma, entryId, new Date(`${ymd}T00:00:00.000Z`));
+    const status = rec ? String(rec.runStatus) : postedHere ? "POSTED_FOR_BOOKING" : "MISSING";
     sleptNightAudits.push({ date: ymd, status });
-    if (!rec || rec.runStatus !== NightAuditRunStatus.COMPLETE) missingNightYmds.push(ymd);
+    if (!postedHere) missingNightYmds.push(ymd);
   }
   if (missingNightYmds.length > 0) {
     push(
