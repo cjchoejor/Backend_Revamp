@@ -381,6 +381,24 @@ export function ConfigFormEditor({ schema, value, onChange }: Props) {
           {schema.help && <span className="admin-muted text-[10px]">{schema.help}</span>}
         </label>
       );
+    case "hotel-time": {
+      // Stored "HH:MM" on the hotel's clock. An older row may still hold a cron in UTC; it is shown
+      // for what it is and replaced by the first time picked.
+      const str = typeof value === "string" ? value : "";
+      const isTime = /^\d{2}:\d{2}$/.test(str);
+      return (
+        <label className="block space-y-1">
+          <span className="admin-muted text-xs">{schema.label}</span>
+          <input type="time" className="admin-input" value={isTime ? str : ""} onChange={(e) => onChange(e.target.value)} />
+          {!isTime && str ? (
+            <span className="admin-muted text-[10px]">
+              Currently a cron expression in UTC: <code>{str}</code> — pick a time to replace it.
+            </span>
+          ) : null}
+          {schema.help && <span className="admin-muted text-[10px]">{schema.help}</span>}
+        </label>
+      );
+    }
     case "seconds":
     case "hours":
     case "days": {
