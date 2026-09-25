@@ -64,9 +64,10 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
   };
 
   const auditM = useMutation({
-    mutationFn: (ymd: string) => runNightAudit(session!, `${ymd}T00:00:00.000Z`),
+    // This booking's night only (2026-09-25) — the hotel's run is the schedule's.
+    mutationFn: (ymd: string) => runNightAudit(session!, `${ymd}T00:00:00.000Z`, entry.id),
     onSuccess: (_d, ymd) => {
-      toast.success(`Night audit run for ${ymd}.`);
+      toast.success(`The night of ${ymd} is on this booking's bill.`);
       void queryClient.invalidateQueries({ queryKey: ["night-audit"] });
       invalidate();
     },
