@@ -1062,6 +1062,14 @@ model Entry {
   /// the confidence label differs. Cleared (and rooms upgraded to Reserved) the moment the
   /// advance reaches full payment; an AT_CHECKOUT plan confirms straight to Reserved.
   reservationPaymentPending      Boolean           @default(false)
+  /// How long THIS booking's committed hold runs, when the desk set it itself (2026-09-25,
+  /// operator request). The house window comes from `registry.holdExpiry.minutes` (else the
+  /// `expiry.s3.committedHoldTtlSeconds` config); this is the guest's own "I'll confirm by
+  /// six", remembered on the booking so a hold placed again later runs to the same moment
+  /// rather than falling back to the house's hour. Ignored once it is in the past.
+  holdExpiresAtOverride          DateTime?
+  holdExpiryOverrideSetBy        String?
+  holdExpiryOverrideSetAt        DateTime?
   parkedAt                       DateTime?
   parkedBy                       String?
   parkedIndividually             Boolean           @default(false)

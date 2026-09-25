@@ -150,6 +150,21 @@ export function enforceEntryNotSealedForWorkingAction(input: { status: EntryStat
   );
 }
 
+/**
+ * The desk may set this booking's own hold time from Inquiry to Set up (2026-09-25).
+ *
+ * Before Set up there is no hold yet, but the guest's "I'll confirm by six" is already known and
+ * the booking remembers it for the placement to come. From Reserve onward the rooms are confirmed
+ * and the hold's clock no longer holds them, so changing it would say nothing.
+ */
+export function enforceEntryStageForHoldExpiryChange(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S1 || input.currentStage === Stage.S2 || input.currentStage === Stage.S3) return;
+  throw new StateTransitionError(
+    "The hold time is set before the booking is reserved — from Reserve onward the rooms are held by the reservation itself",
+    "HOLD_EXPIRY_STAGE",
+  );
+}
+
 /** Policy 1 — S2→S3 progression requires entry at S2 (StateTransitionError matches prior service). */
 export function enforceEntryAtS2ForS2ToS3Progression(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S2) return;

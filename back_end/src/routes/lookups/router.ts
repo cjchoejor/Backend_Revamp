@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../db.js";
+import { resolveHouseHoldWindow } from "../../services/domain/s3-hold-service.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
@@ -48,6 +49,24 @@ lookupsRouter.get("/lookups/hotel-day", L1, (_req, res) => {
     tomorrow: ymdUtc(addUtcDays(today, 1)),
     now: now.toISOString(),
   });
+});
+
+/**
+ * How long a committed hold runs when nobody has said otherwise (2026-09-25) — so the desk can
+ * state the house's own number ("the house gives 60 minutes") beside a hold time the operator
+ * set for one booking, instead of printing a figure of its own.
+ */
+lookupsRouter.get("/lookups/hold-window", L1, async (_req, res, next) => {
+  try {
+    const house = await resolveHouseHoldWindow(prisma);
+    res.set("Cache-Control", "no-store").json({
+      minutes: Math.round(house.seconds / 60),
+      seconds: house.seconds,
+      source: house.source,
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
 /**
