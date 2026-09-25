@@ -186,7 +186,7 @@ export type DeskMoneyRow = {
 export type DeskTimerRow = {
   entryId: string;
   running: number;
-  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string }>;
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; handoffType?: string | null }>;
 };
 
 export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<DeskTimerRow[]> {
@@ -194,9 +194,17 @@ export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<Des
   if (ids.length === 0) return [];
   const rows = await prisma.timerRecord.findMany({
     where: { entryId: { in: ids }, status: "SCHEDULED" },
-    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true },
+    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true, entityType: true, entityId: true },
     orderBy: { firesAt: "asc" },
   });
+  // The acceptance clock is one code for housekeeping and the kitchen alike; the handoff behind
+  // it says which. One query for the lot, so the row can name the department.
+  const handoffIds = rows.filter((r) => r.entityType === "HandoffRecord" && r.entityId).map((r) => r.entityId as string);
+  const handoffTypeById = new Map<string, string>(
+    handoffIds.length
+      ? (await prisma.handoffRecord.findMany({ where: { id: { in: handoffIds } }, select: { id: true, handoffType: true } })).map((h) => [h.id, h.handoffType])
+      : [],
+  );
   const byEntry = new Map<string, DeskTimerRow>();
   for (const id of ids) byEntry.set(id, { entryId: id, running: 0, next: [] });
   for (const r of rows) {
@@ -210,6 +218,7 @@ export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<Des
         timerType: r.timerType,
         stageContext: r.stageContext ?? null,
         firesAt: r.firesAt.toISOString(),
+        handoffType: r.entityType === "HandoffRecord" && r.entityId ? (handoffTypeById.get(r.entityId) ?? null) : null,
       });
     }
   }
