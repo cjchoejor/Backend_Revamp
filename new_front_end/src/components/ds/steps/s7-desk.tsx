@@ -86,7 +86,9 @@ function AcceptDepartmentHandoff({ entry, handoff, tz }: { entry: EntryDetail; h
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const dept = handoff.handoffType === "H3" ? "Kitchen and bar" : "Housekeeping";
-  const roomId = (handoff as HandoffSummary & { roomAssignmentId?: string | null }).roomAssignmentId ?? null;
+  const raw = handoff as HandoffSummary & { roomAssignmentId?: string | null; createdAt?: string | null };
+  const roomId = raw.roomAssignmentId ?? null;
+  const toldAt = handoff.assignedAt ?? raw.createdAt ?? null;
   const roomNo = roomId ? ((entry.roomAssignments ?? []).find((a) => a.id === roomId)?.room?.roomNumber ?? null) : null;
   const checklist = useQuery({
     queryKey: ["handoff-checklist", handoff.handoffType],
@@ -109,10 +111,10 @@ function AcceptDepartmentHandoff({ entry, handoff, tz }: { entry: EntryDetail; h
     onError: (e) => toastRefusal(e, "The handoff could not be accepted"),
   });
   return (
-    <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 6 }}>
+    <div className="bind provisional" style={{ display: "grid", gap: 6 }}>
       <span className="sm">
         <b>{dept}</b>
-        {roomNo ? ` · Room ${roomNo}` : ""} · told {handoff.assignedAt ? fmtStamp(handoff.assignedAt, tz) : "—"} · waiting to be accepted
+        {roomNo ? ` · Room ${roomNo}` : ""} · told {toldAt ? fmtStamp(toldAt, tz) : "—"} · waiting to be accepted
       </span>
       {items.length === 0 ? (
         <span className="meta">{checklist.isLoading ? "Reading the checklist…" : "No checklist for this handoff."}</span>
@@ -197,15 +199,20 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
       <Facts>
         <Fact k="Housekeeping">{housekeeping.length ? tally(housekeeping) : null}</Fact>
         <Fact k="Kitchen and bar">{kitchen.length ? tally(kitchen) : null}</Fact>
-        {past
-          ? null
-          : [...housekeeping, ...kitchen]
-              .filter((h) => h.state === "CREATED")
-              .map((h) => <AcceptDepartmentHandoff key={h.id} entry={entry} handoff={h} tz={tz} />)}
         <Fact k="Before check-out" meta={before?.acceptedAt ? `accepted ${fmtStamp(before.acceptedAt, tz)}` : undefined}>
           {before ? handoffWord(before) : <span className="warn-ink">not started — the move to Check-out waits for it</span>}
         </Fact>
       </Facts>
+      {/* The departments' own handoffs waiting to be accepted — below the facts, one row each. */}
+      {past ? null : (
+        <div className="stack" style={{ marginTop: 10 }}>
+          {[...housekeeping, ...kitchen]
+            .filter((h) => h.state === "CREATED")
+            .map((h) => (
+              <AcceptDepartmentHandoff key={h.id} entry={entry} handoff={h} tz={tz} />
+            ))}
+        </div>
+      )}
       {past ? null : !before ? (
         <div className="row-acts" style={{ marginTop: 10 }}>
           <Button kind="secondary" compact state={start.isPending ? "working" : "default"} workingLabel="Telling them…" onClick={() => start.mutate()}>
