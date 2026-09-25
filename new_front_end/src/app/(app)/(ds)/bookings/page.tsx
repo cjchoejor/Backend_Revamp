@@ -12,7 +12,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Chip, EmptyState, Icon, Input } from "@/design-system";
 import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StepChip, bookingHref } from "@/components/ds/ui";
-import { useDeskBookings, useDeskMoney } from "@/hooks/use-desk-data";
+import { useDeskBookings, useDeskMoney, useDeskTimers } from "@/hooks/use-desk-data";
+import { RowTimer } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
 import { fmtDate, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
@@ -170,6 +171,8 @@ function BookingsScreen() {
     return ids;
   }, [shown, previewId]);
   const moneyOf = useDeskMoney(moneyIds);
+  // What each booking is waiting on — the soonest clock it is running (2026-09-25).
+  const timersOf = useDeskTimers(moneyIds);
   const preview = previewId ? all.find((r) => r.id === previewId) ?? null : null;
 
   const active: Array<[string, () => void]> = [];
@@ -300,6 +303,7 @@ function BookingsScreen() {
                   <th>Rooms</th>
                   <th>Step</th>
                   <th>Status</th>
+                  <th>Clock</th>
                   <th className="num">Total</th>
                 </tr>
               </thead>
@@ -343,6 +347,9 @@ function BookingsScreen() {
                       </td>
                       <td>
                         <RowStanding row={r} hotelToday={today} balance={m?.folio?.outstandingBalance ?? null} />
+                      </td>
+                      <td>
+                        <RowTimer row={timersOf.byId.get(r.id)} />
                       </td>
                       <td className={`num ${t.amount ? "money" : "dash"}`} title={t.kind}>
                         {t.amount ?? "—"}

@@ -3,7 +3,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useSession } from "@/hooks/use-session";
-import { deskMoneyFor, listDeskBookings, listStaffNames, type DeskMoneyRow } from "@/lib/api/desk";
+import { deskMoneyFor, deskTimersFor, listDeskBookings, listStaffNames, type DeskMoneyRow } from "@/lib/api/desk";
 import { listRooms } from "@/lib/api/rooms";
 
 /** Every booking, as the list screens read it — re-read every minute without a spinner (SS01 §5). */
@@ -53,6 +53,24 @@ export function useDeskMoney(entryIds: string[]) {
 }
 
 /** Staff names by id — for "who recorded it" lines. */
+/**
+ * The clock running on each booking on screen (2026-09-25). One call for the page, like the money
+ * line; refetched every half-minute so a countdown on the list does not drift from the rail's.
+ */
+export function useDeskTimers(entryIds: string[]) {
+  const { session } = useSession();
+  const ids = useMemo(() => [...new Set(entryIds)].slice(0, 100).sort(), [entryIds]);
+  const q = useQuery({
+    queryKey: ["desk-timers", ids],
+    queryFn: () => deskTimersFor(session!, ids),
+    enabled: !!session && ids.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  const byId = useMemo(() => new Map((q.data?.items ?? []).map((r) => [r.entryId, r])), [q.data]);
+  return { ...q, byId };
+}
+
 export function useStaffNames() {
   const { session, isLoading } = useSession();
   const q = useQuery({

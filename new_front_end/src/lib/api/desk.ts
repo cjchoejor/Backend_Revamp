@@ -97,6 +97,21 @@ export async function deskMoneyFor(session: Session, entryIds: string[]) {
   });
 }
 
+/** The clocks running on a booking, for the list — `POST /api/desk/bookings/timers` (L1). */
+export type DeskTimerRow = {
+  entryId: string;
+  running: number;
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string }>;
+};
+
+export async function deskTimersFor(session: Session, entryIds: string[]) {
+  return apiRequest<{ items: DeskTimerRow[]; count: number }>("/api/desk/bookings/timers", {
+    method: "POST",
+    session,
+    body: { entryIds: entryIds.slice(0, 100) },
+  });
+}
+
 export type StaffName = { id: string; fullName: string; actorLevel: "L1" | "L2" | "L3" | "L4"; role: string; isActive: boolean };
 
 export async function listStaffNames(session: Session) {

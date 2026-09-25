@@ -577,7 +577,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     if (!card) return;
     if (view !== "step") setView("step", viewing);
     window.requestAnimationFrame(() => {
-      document.getElementById(anchorFor(card))?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const el = document.getElementById(anchorFor(card));
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      // …and say which one it was: the card lights for a moment, then settles (2026-09-25).
+      el.classList.remove("flash");
+      void el.offsetWidth;
+      el.classList.add("flash");
+      window.setTimeout(() => el.classList.remove("flash"), 1900);
     });
   };
 

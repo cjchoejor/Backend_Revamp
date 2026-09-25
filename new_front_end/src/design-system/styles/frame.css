@@ -163,3 +163,25 @@
 .ds .side .todo .done .t { color: var(--ink-2); }
 .ds .side .todo .t { font-size: var(--t-sm); line-height: 1.3; }
 .ds .side .todo .also { margin-top: 6px; }
+
+/* The steps stay put while the middle scrolls (2026-09-25, operator). The side panel goes with
+   them, since the numbered to-do is read against the page it scrolls. Each gets its own scroll
+   when it outgrows the screen; 53px is the sticky topbar's height. */
+.ds .ws-body > .rail, .ds .ws-body > .side { position: sticky; top: 53px; align-self: start; max-height: calc(100vh - 53px); overflow: auto; }
+
+/* Taken to a section from the to-do: it says so for a moment, then settles. */
+@keyframes ds-card-flash {
+  0%   { box-shadow: 0 0 0 0 var(--accent-line); background: var(--surface-2); }
+  12%  { box-shadow: 0 0 0 3px var(--accent-line); background: var(--accent-soft); }
+  70%  { box-shadow: 0 0 0 3px var(--accent-line); background: var(--accent-soft); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.ds .card.flash { animation: ds-card-flash 1.8s ease-out 1; }
+@media (prefers-reduced-motion: reduce) { .ds .card.flash { animation: none; box-shadow: 0 0 0 3px var(--accent-line); } }
+
+/* The clock a booking is on, in a list row: what runs out, and how long is left. */
+.ds .row-timer { display: inline-grid; gap: 1px; }
+.ds .row-timer .timer { white-space: normal; }
+.ds .row-timer-eta { font-size: var(--t-meta); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.ds .row-timer-eta.warn { color: var(--warning); font-weight: 600; }
+.ds .row-timer-eta.crit, .ds .row-timer-eta.due { color: var(--danger); font-weight: 700; }
