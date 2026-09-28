@@ -368,7 +368,12 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
   const operative = accepted ?? live[0];
   const sealed = (entry.availabilityConfigs ?? []).some((c) => c.sealedAt && c.optionSelected);
   const holds = entry.speculativeHolds ?? [];
-  const holdsOk = holds.length === 0 || holds.every((h) => h.state === "PLACED" || h.state === "UPGRADED");
+  // A hold that was released or has lapsed is history — the rooms went back to free, which is
+  // where a booking that never held anything stands, and that passes. Mirrors Policy 25; keep the
+  // two in step or the desk will lock a step the backend would allow (2026-09-28).
+  const holdsOk = holds.every(
+    (h) => h.state === "PLACED" || h.state === "UPGRADED" || h.state === "RELEASED" || h.state === "EXPIRED",
+  );
   const validOk = !operative?.validUntil || new Date(operative.validUntil).getTime() > now;
   return [
     { label: "Availability sealed from Inquiry", met: sealed },
