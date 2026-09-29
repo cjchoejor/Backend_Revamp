@@ -2816,6 +2816,7 @@
   & .rct-t tfoot td.money {
     font-size: 10.5px;
     color: var(--green-d);
+    white-space: nowrap;
   }
   /* Per-room stay total (incl. SC + GST) in the trailing corner column; the footer's carries
      the grand total. */
@@ -2853,8 +2854,18 @@
     text-transform: uppercase;
     color: var(--green-d);
   }
+  /* The working figures are read too, not skimmed — they carry the same weight as the total,
+     one size down (2026-09-29, operator). Their labels stay quiet so the money leads. */
+  & .rct-live .parts {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
   & .rct-live .parts i {
     font-style: normal;
+    font-size: 12px;
+    font-weight: 600;
     color: var(--ink-3);
   }
   & .rct-live b {

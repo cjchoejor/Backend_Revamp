@@ -1365,7 +1365,22 @@ export function RoomCompositionsTable({
                       : "—"}
                   </td>
                 ))}
-              <td colSpan={3} />
+              {/* What the service charge and the GST come to, under the columns that switch them
+                  on (2026-09-29, operator) — the same server figures the live total prints, never
+                  summed here. FOC has nothing to total. */}
+              {preview ? (
+                <>
+                  <td className="money" title="Service charge across every room — whole stay">
+                    {fmtNu(preview.serviceCharge)}
+                  </td>
+                  <td className="money" title="GST across every room — whole stay">
+                    {fmtNu(preview.gst)}
+                  </td>
+                  <td />
+                </>
+              ) : (
+                <td colSpan={3} />
+              )}
               {ratesOpen && preview ? (
                 <td className="rowtot" title="Grand total including service charge & GST">
                   {fmtNu(preview.grandTotal)}
@@ -1384,7 +1399,7 @@ export function RoomCompositionsTable({
         <div className="rct-live">
           <span className="k">Live total</span>
           <span className="parts">
-            Net {fmtNu(preview.subtotal)} <i>+ SC</i> {fmtNu(preview.serviceCharge)} <i>+ GST</i> {fmtNu(preview.gst)}
+            <i>Net</i> {fmtNu(preview.subtotal)} <i>+ SC</i> {fmtNu(preview.serviceCharge)} <i>+ GST</i> {fmtNu(preview.gst)}
           </span>
           {/* What the booking costs — the one figure the whole table is for, so it is read at a
               glance and never mistaken for another number in the row (2026-09-29, "UIappeal"). */}
