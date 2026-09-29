@@ -860,6 +860,69 @@ export function NewInquiryCanvas() {
                       </>
                     ) : null}
 
+                    {/* Which of their rates was agreed belongs WITH the party, not four cards down
+                        (2026-09-29, operator: the packages "never show" — they were at the foot of
+                        the page, in Rate and notes, long after the agency was picked). An agency
+                        like Bhutan INC carries Season · Off season · Premium, and the rate differs
+                        between them, so the choice is made where the eye already is. */}
+                    {!isEdit ? (
+                      <>
+                      <div className="field">
+                        <label>Rate package</label>
+                        {!party ? (
+                          <input className="input" readOnly value="Published rates" />
+                        ) : packagesQuery.isLoading ? (
+                          <input className="input" readOnly value="Reading their packages…" />
+                        ) : !packages || packages.length === 0 ? (
+                          <input className="input" readOnly value="The hotel's common package" />
+                        ) : (
+                          <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
+                            {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
+                            {packages.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                                {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <span className="hint">
+                          {!party
+                            ? partyKind
+                              ? "pick the agency or company and its packages follow"
+                              : "carries the meal plan and the rate"
+                            : !packages || packages.length === 0
+                              ? `no package on file for ${party.displayName}`
+                              : packages.length === 1
+                                ? "the only package on file for them"
+                                : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
+                        </span>
+                      </div>
+                      <div className="field">
+                        <label>Meal plans priced</label>
+                        <input
+                          className="input"
+                          readOnly
+                          value={
+                            chosenPackage
+                              ? [
+                                  chosenPackage.cpRate ? "CP" : null,
+                                  chosenPackage.mapLunchRate ? "MAP + lunch" : null,
+                                  chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
+                                  chosenPackage.apRate ? "AP" : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ") || "none in the package"
+                              : party
+                                ? "from their package"
+                                : "from the house tariff"
+                          }
+                        />
+                        <span className="hint">each room&rsquo;s plan is chosen at Negotiation</span>
+                      </div>
+                      </>
+                    ) : null}
+
                     {!isEdit && needsCorp ? (
                       <>
                         <div className="field">
@@ -1334,64 +1397,11 @@ export function NewInquiryCanvas() {
                 </StepCard>
 
                 {/* ------------------------------------------------ rate and notes */}
-                <StepCard title="Rate and notes">
+                <StepCard title="Notes">
                   {isEdit ? (
-                    <span className="meta">The rate package and the notes are changed on the booking itself, under Rate and notes.</span>
+                    <span className="meta">The notes are changed on the booking itself, under Rate and notes.</span>
                   ) : (
                     <div className="form2">
-                      <div className="field">
-                        <label>Rate package</label>
-                        {!party ? (
-                          <input className="input" readOnly value="Published rates" />
-                        ) : packagesQuery.isLoading ? (
-                          <input className="input" readOnly value="Reading their packages…" />
-                        ) : !packages || packages.length === 0 ? (
-                          <input className="input" readOnly value="The hotel's common package" />
-                        ) : (
-                          <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
-                            {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
-                            {packages.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                                {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                        <span className="hint">
-                          {!party
-                            ? partyKind
-                              ? "pick the agency or company and its packages follow"
-                              : "carries the meal plan and the rate"
-                            : !packages || packages.length === 0
-                              ? `no package on file for ${party.displayName}`
-                              : packages.length === 1
-                                ? "the only package on file for them"
-                                : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
-                        </span>
-                      </div>
-                      <div className="field">
-                        <label>Meal plans priced</label>
-                        <input
-                          className="input"
-                          readOnly
-                          value={
-                            chosenPackage
-                              ? [
-                                  chosenPackage.cpRate ? "CP" : null,
-                                  chosenPackage.mapLunchRate ? "MAP + lunch" : null,
-                                  chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
-                                  chosenPackage.apRate ? "AP" : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ") || "none in the package"
-                              : party
-                                ? "from their package"
-                                : "from the house tariff"
-                          }
-                        />
-                        <span className="hint">each room&rsquo;s plan is chosen at Negotiation</span>
-                      </div>
                       <div className="wide field">
                         <label>Notes</label>
                         <textarea
