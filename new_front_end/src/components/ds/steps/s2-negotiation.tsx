@@ -412,16 +412,15 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         <ChildrenAges entry={entry} />
       </StepCard>
 
-      {/* Three acts, not a sequence (2026-09-29, operator: "this looks like it's all clubbed
-          together"). Each field now sits with the act that uses it: the two that describe the
-          QUOTATION lead the card, because every act below writes them; the two that describe the
-          room MARKER moved inside the Provisional-block column, beside the button that reads
-          them. Before this they alternated in one four-field grid and nothing said which fed
-          which. */}
+      {/* Two cards, not one (2026-09-29, operator: "separate them into two sections"). They were
+          one card with four fields that alternated between two subjects and three acts sharing a
+          grid — nothing said which field fed which button. Now each card is one subject with its
+          own fields: THE QUOTE (its validity and note; send it, or just record it) and, below,
+          the optional PROVISIONAL BLOCK (why and for how long the rooms are marked). */}
       <StepCard
         flow="quote"
-        title="Provisional block, or send the quote"
-        meta="Three ways out of Negotiation — mark the rooms while the guest decides, send them the paper, or just put the price on record. Each generates the same quotation."
+        title="The quote"
+        meta="How long the offer stands, and your own note. Then send it to the guest, or just put the price on record — either satisfies the move to Set up."
       >
         <div className="form2" style={{ marginBottom: 12 }}>
           <div className="field">
@@ -455,96 +454,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
           </div>
         </div>
 
-        <div className="grid2">
-          <div>
-            <b>Provisional block</b>
-            <div className="meta">Generates the quotation, sends nothing, marks the rooms.</div>
-            {/* These two settings are the MARKER's — nothing else on this card reads them. */}
-            <div style={{ display: "grid", gap: 10, margin: "10px 0 4px" }}>
-              <div className="field">
-                <label>Why hold these rooms · optional</label>
-                <input
-                  className="input"
-                  value={holdWhy}
-                  readOnly={!editable}
-                  placeholder="agent needs two days to confirm with the client"
-                  onChange={(e) => setHoldWhy(e.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label>Mark the rooms for</label>
-                <Choice options={MARK_FOR} value={markFor} onChange={setMarkFor} disabled={!editable} />
-                {markFor === "CUSTOM" ? (
-                  <div className="row-acts" style={{ marginTop: 6 }}>
-                    {(["d", "h", "m"] as const).map((k) => (
-                      <span key={k} className="count-in sm">
-                        <input
-                          className="input"
-                          inputMode="numeric"
-                          value={mark[k]}
-                          readOnly={!editable}
-                          aria-label={k === "d" ? "Days" : k === "h" ? "Hours" : "Minutes"}
-                          onChange={(e) => setMark((p) => ({ ...p, [k]: e.target.value.replace(/\D/g, "") }))}
-                        />
-                        {k === "d" ? "days" : k === "h" ? "hours" : "minutes"}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                <span className="hint">only this column reads them — sending or generating ignores both</span>
-              </div>
-            </div>
-            {activeHold ? (
-              <BindingBox
-                family="provisional"
-                stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"}
-                style={{ marginTop: 8 }}
-              >
-                <div className="sm" style={{ paddingRight: 80 }}>
-                  {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
-                  if someone commits first
-                </div>
-              </BindingBox>
-            ) : lastHold ? (
-              <div className="meta" style={{ marginTop: 8 }}>
-                The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
-                {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
-              </div>
-            ) : null}
-            {otherMarkers.length ? (
-              <div className="meta" style={{ marginTop: 6 }}>
-                also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}
-              </div>
-            ) : null}
-            <Live>
-              <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
-                {activeHold ? (
-                  <SeeRow
-                    label="Release…"
-                    note="frees the rooms with a reason; the quotation stands"
-                    onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
-                    reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
-                  />
-                ) : (
-                  <SeeRow
-                    kind="secondary"
-                    label="Provisional block"
-                    note={`${working || accepted ? "" : "generates the quotation and "}marks ${plural(markedCount || 1, "room")} ${markLength} · sends nothing`}
-                    onClick={editable ? () => blockM.mutate() : undefined}
-                    state={blockM.isPending ? "working" : editable && !blockReason ? "default" : "inert"}
-                    reason={!editable ? "not at this step" : (blockReason ?? undefined)}
-                  />
-                )}
-                <SeeRow
-                  label="Extend"
-                  note="once for the desk, then the FOM · never a re-quote"
-                  state="inert"
-                  reason="Extending a marker or a quotation's validity is not in the backend yet (BE-59)"
-                />
-              </div>
-            </Live>
-          </div>
-          <div>
+        <div>
             <b>Send the quote</b>
             <div className="meta">Generates and sends. Same quote, same validity — sending doesn&rsquo;t restart the clock.</div>
             {sent ? (
@@ -569,7 +479,6 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
                 />
               </div>
             </Live>
-          </div>
         </div>
 
         <Live>
@@ -602,6 +511,98 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               )}
             </div>
           ) : null}
+        </Live>
+      </StepCard>
+
+      {/* The optional act: it marks the rooms, and generates the quotation too when there is
+          none — on the validity and note from the card above. */}
+      <StepCard
+        title="Provisional block"
+        meta="Optional — marks the rooms so nobody else sells them while the guest decides. Nothing is sent. It generates the quotation too when there isn't one, on the validity above."
+      >
+        {/* The marker's own two settings — no other act on the step reads them. */}
+        <div style={{ display: "grid", gap: 10, marginBottom: 4 }}>
+          <div className="field">
+            <label>Why hold these rooms · optional</label>
+            <input
+              className="input"
+              value={holdWhy}
+              readOnly={!editable}
+              placeholder="agent needs two days to confirm with the client"
+              onChange={(e) => setHoldWhy(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>Mark the rooms for</label>
+            <Choice options={MARK_FOR} value={markFor} onChange={setMarkFor} disabled={!editable} />
+            {markFor === "CUSTOM" ? (
+              <div className="row-acts" style={{ marginTop: 6 }}>
+                {(["d", "h", "m"] as const).map((k) => (
+                  <span key={k} className="count-in sm">
+                    <input
+                      className="input"
+                      inputMode="numeric"
+                      value={mark[k]}
+                      readOnly={!editable}
+                      aria-label={k === "d" ? "Days" : k === "h" ? "Hours" : "Minutes"}
+                      onChange={(e) => setMark((p) => ({ ...p, [k]: e.target.value.replace(/\D/g, "") }))}
+                    />
+                    {k === "d" ? "days" : k === "h" ? "hours" : "minutes"}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <span className="hint">only this card reads the two settings above — sending or recording the price ignores both</span>
+          </div>
+        </div>
+        {activeHold ? (
+          <BindingBox
+            family="provisional"
+            stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"}
+            style={{ marginTop: 8 }}
+          >
+            <div className="sm" style={{ paddingRight: 80 }}>
+              {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
+              if someone commits first
+            </div>
+          </BindingBox>
+        ) : lastHold ? (
+          <div className="meta" style={{ marginTop: 8 }}>
+            The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
+            {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
+          </div>
+        ) : null}
+        {otherMarkers.length ? (
+          <div className="meta" style={{ marginTop: 6 }}>
+            also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}
+          </div>
+        ) : null}
+        <Live>
+          <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+            {activeHold ? (
+              <SeeRow
+                label="Release…"
+                note="frees the rooms with a reason; the quotation stands"
+                onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
+                reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
+              />
+            ) : (
+              <SeeRow
+                kind="secondary"
+                label="Provisional block"
+                note={`${working || accepted ? "" : "generates the quotation and "}marks ${plural(markedCount || 1, "room")} ${markLength} · sends nothing`}
+                onClick={editable ? () => blockM.mutate() : undefined}
+                state={blockM.isPending ? "working" : editable && !blockReason ? "default" : "inert"}
+                reason={!editable ? "not at this step" : (blockReason ?? undefined)}
+              />
+            )}
+            <SeeRow
+              label="Extend"
+              note="once for the desk, then the FOM · never a re-quote"
+              state="inert"
+              reason="Extending a marker or a quotation's validity is not in the backend yet (BE-59)"
+            />
+          </div>
         </Live>
       </StepCard>
 
