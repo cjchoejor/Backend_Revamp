@@ -356,6 +356,22 @@ export function RoomCompositionsTable({
     () => new Map((rateRef?.roomTypes ?? []).map((t) => [t.roomTypeId, t])),
     [rateRef],
   );
+  /**
+   * The MSR floor for a room's type — the house's minimum sellable rate (2026-09-29). It applies
+   * only where the rate came from the standard plan: a party's own rate package is negotiated, so
+   * the pricing pipeline exempts it (`belowMsr: agentRate ? false : …`).
+   */
+  const floorOf = (roomId: string): number | null => {
+    const t = refByRoomType.get(roomById.get(roomId)?.roomType?.id ?? "");
+    return t?.roomRateSource === "STANDARD_RATE_PLAN" ? (t.msrValue ?? null) : null;
+  };
+  /** A typed room rate under that floor — a breach the operator must see, so the cell reads red. */
+  const belowFloor = (roomId: string, col: NumCol): boolean => {
+    if (col !== "rRoom") return false;
+    const floor = floorOf(roomId);
+    const typed = parseFloat(rows[roomId]?.rRoom ?? "");
+    return floor != null && Number.isFinite(typed) && typed > 0 && typed < floor;
+  };
   /** The reference figure a given rate cell would fall back to — null when nothing is on file. */
   const refFor = (roomId: string, col: NumCol): number | null => {
     const typeId = roomById.get(roomId)?.roomType?.id;
@@ -896,6 +912,8 @@ export function RoomCompositionsTable({
     col: NumCol,
     opts?: {
       warn?: boolean;
+      /** A breach, not a caution — the cell reads in the stop colour ("UIappeal", 2026-09-29). */
+      stop?: boolean;
       decimal?: boolean;
       wide?: boolean;
       placeholder?: string;
@@ -907,7 +925,7 @@ export function RoomCompositionsTable({
   ) => {
     const raw = rows[roomId]?.[col] ?? "";
     return (
-      <td key={col} className={opts?.warn ? "warn" : undefined} title={opts?.title}>
+      <td key={col} className={opts?.stop ? "stop" : opts?.warn ? "warn" : undefined} title={opts?.title}>
         <input
           type="text"
           inputMode={opts?.decimal ? "decimal" : "numeric"}
@@ -1286,9 +1304,12 @@ export function RoomCompositionsTable({
                         decimal: true,
                         wide: true,
                         readOnly: lockCommercial,
+                        stop: belowFloor(id, col),
                         placeholder: ref != null ? String(ref) : "—",
                         sub,
-                        title: lockCommercial
+                        title: belowFloor(id, col)
+                          ? `Below the floor for this room type — ${floorOf(id)} ${rateRef?.currency ?? ""} is the house's minimum sellable rate. A booking priced under it needs the GM's waiver.`
+                          : lockCommercial
                           ? "The guest is in-house — a rate change mid-stay is a GM re-price, not a desk edit. The figures here are what the booking is priced at."
                           : (ref != null
                             ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
@@ -1419,6 +1440,23 @@ export function RoomCompositionsTable({
         </div>
       )}
 
+      {/* Rates under the house floor, named — the grid's red cells say WHICH, this says what it
+          means for the quote ("UIappeal", 2026-09-29). */}
+      {sealedRoomIds.some((id) => belowFloor(id, "rRoom")) && (
+        <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>
+            {sealedRoomIds
+              .filter((id) => belowFloor(id, "rRoom"))
+              .map((id) => `Room ${roomNoOf(id)} (floor ${floorOf(id)})`)
+              .join(" · ")}{" "}
+            — priced below the house&rsquo;s minimum sellable rate. A booking under the floor needs the GM&rsquo;s waiver
+            before the quote can be generated.
+          </span>
+        </p>
+      )}
       {sealedRoomIds.some((id) => {
         const r = rows[id] ?? EMPTY_ROW;
         return MEAL_COLS.reduce((s, c) => s + cnt(r[c]), 0) > cnt(r.ad) + cnt(r.c6) + cnt(r.u6);

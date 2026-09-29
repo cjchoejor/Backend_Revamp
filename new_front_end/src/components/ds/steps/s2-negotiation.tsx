@@ -672,7 +672,13 @@ function RateCard({ entry }: { entry: EntryDetail }) {
                   </Chip>
                 ) : null}
                 {t.packageName ? <Chip>Package {t.packageName}</Chip> : null}
-                {t.msrValue != null ? <Chip tone="quiet">floor {money(t.msrValue, r?.currency)}</Chip> : null}
+                {/* The floor is a LIMIT, and it reads as one on both surfaces — the same fact in
+                    the reference strip below carries the same mark ("UIappeal", 2026-09-29). */}
+                {t.msrValue != null ? (
+                  <Chip tone="danger" title="Minimum sellable rate for this room type — a booking priced below it needs the GM's waiver">
+                    floor {money(t.msrValue, r?.currency)}
+                  </Chip>
+                ) : null}
               </div>
             </div>
           ))}

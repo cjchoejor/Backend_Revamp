@@ -2767,6 +2767,19 @@
     color: var(--warn);
     font-weight: 700;
   }
+  /* A breach, not a caution: a rate typed below the room type's MSR floor ("UIappeal",
+     2026-09-29). The cell reads in the stop colour and keeps its own outline on a busy grid. */
+  & .rct-t td.stop {
+    background: var(--stop-t);
+    box-shadow: inset 0 0 0 1.5px var(--stop);
+  }
+  & .rct-t td.stop input {
+    color: var(--stop);
+    font-weight: 800;
+  }
+  & .rct-t td.stop .rct-sub {
+    color: var(--stop);
+  }
   & .rct-t td.ck {
     padding: 0 6px;
   }
