@@ -412,8 +412,18 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         <ChildrenAges entry={entry} />
       </StepCard>
 
-      <StepCard flow="quote" title="Provisional block, or send the quote">
-        <div className="form2" style={{ marginBottom: 10 }}>
+      {/* Three acts, not a sequence (2026-09-29, operator: "this looks like it's all clubbed
+          together"). Each field now sits with the act that uses it: the two that describe the
+          QUOTATION lead the card, because every act below writes them; the two that describe the
+          room MARKER moved inside the Provisional-block column, beside the button that reads
+          them. Before this they alternated in one four-field grid and nothing said which fed
+          which. */}
+      <StepCard
+        flow="quote"
+        title="Provisional block, or send the quote"
+        meta="Three ways out of Negotiation — mark the rooms while the guest decides, send them the paper, or just put the price on record. Each generates the same quotation."
+      >
+        <div className="form2" style={{ marginBottom: 12 }}>
           <div className="field">
             <label>Valid for · days</label>
             <input
@@ -440,37 +450,6 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
             </span>
           </div>
           <div className="field">
-            <label>Why hold these rooms · optional</label>
-            <input
-              className="input"
-              value={holdWhy}
-              readOnly={!editable}
-              placeholder="agent needs two days to confirm with the client"
-              onChange={(e) => setHoldWhy(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>Mark the rooms for</label>
-            <Choice options={MARK_FOR} value={markFor} onChange={setMarkFor} disabled={!editable} />
-            {markFor === "CUSTOM" ? (
-              <div className="row-acts" style={{ marginTop: 6 }}>
-                {(["d", "h", "m"] as const).map((k) => (
-                  <span key={k} className="count-in sm">
-                    <input
-                      className="input"
-                      inputMode="numeric"
-                      value={mark[k]}
-                      readOnly={!editable}
-                      aria-label={k === "d" ? "Days" : k === "h" ? "Hours" : "Minutes"}
-                      onChange={(e) => setMark((p) => ({ ...p, [k]: e.target.value.replace(/\D/g, "") }))}
-                    />
-                    {k === "d" ? "days" : k === "h" ? "hours" : "minutes"}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="field">
             <label>Internal note · not shown to the guest</label>
             <input className="input" value={notes} readOnly={!editable} placeholder="optional" onChange={(e) => setNotes(e.target.value)} />
           </div>
@@ -480,6 +459,41 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
           <div>
             <b>Provisional block</b>
             <div className="meta">Generates the quotation, sends nothing, marks the rooms.</div>
+            {/* These two settings are the MARKER's — nothing else on this card reads them. */}
+            <div style={{ display: "grid", gap: 10, margin: "10px 0 4px" }}>
+              <div className="field">
+                <label>Why hold these rooms · optional</label>
+                <input
+                  className="input"
+                  value={holdWhy}
+                  readOnly={!editable}
+                  placeholder="agent needs two days to confirm with the client"
+                  onChange={(e) => setHoldWhy(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Mark the rooms for</label>
+                <Choice options={MARK_FOR} value={markFor} onChange={setMarkFor} disabled={!editable} />
+                {markFor === "CUSTOM" ? (
+                  <div className="row-acts" style={{ marginTop: 6 }}>
+                    {(["d", "h", "m"] as const).map((k) => (
+                      <span key={k} className="count-in sm">
+                        <input
+                          className="input"
+                          inputMode="numeric"
+                          value={mark[k]}
+                          readOnly={!editable}
+                          aria-label={k === "d" ? "Days" : k === "h" ? "Hours" : "Minutes"}
+                          onChange={(e) => setMark((p) => ({ ...p, [k]: e.target.value.replace(/\D/g, "") }))}
+                        />
+                        {k === "d" ? "days" : k === "h" ? "hours" : "minutes"}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <span className="hint">only this column reads them — sending or generating ignores both</span>
+              </div>
+            </div>
             {activeHold ? (
               <BindingBox
                 family="provisional"
@@ -561,6 +575,14 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         <Live>
           {editable && !accepted && !proformaLocked ? (
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+              {/* The third act, named like the two above it (2026-09-29): it belongs to neither
+                  column — nothing is sent and no room is marked. */}
+              <b>{working ? "Price it again" : "Just record the price"}</b>
+              <div className="meta" style={{ marginBottom: 2 }}>
+                {working
+                  ? "A new version from the table above. Nothing is sent and no rooms are marked."
+                  : "Neither sent nor marked — a quotation on file is all the move to Set up needs."}
+              </div>
               {working ? (
                 <SeeRow
                   label="Generate the quote again"
