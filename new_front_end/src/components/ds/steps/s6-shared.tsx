@@ -7,7 +7,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Icon, type DialogRegister } from "@/design-system";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
-import { useStepMode } from "./kit";
+import { Overlay, useStepMode } from "./kit";
 
 /** A room's commercial standing, as the desk says it (never the stored code). */
 const CLAIM_WORD: Record<string, string> = {
@@ -120,24 +120,26 @@ export function WideDialog({
   if (!open) return null;
   const icon = register === "commit" ? "lock" : register === "danger" ? "alert" : "check";
   return (
-    <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <div className={`dialog ${register}`} role="dialog" aria-modal="true" style={{ width, maxWidth: "100%" }}>
-        <div className="body">
-          <h3>
-            <Icon name={icon} size="lg" />
-            {title}
-          </h3>
-          {caseLines?.length ? (
-            <div className="case">
-              {caseLines.map((l, i) => (
-                <span key={i}>{l}</span>
-              ))}
-            </div>
-          ) : null}
-          {children}
+    <Overlay>
+      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+        <div className={`dialog ${register}`} role="dialog" aria-modal="true" style={{ width, maxWidth: "100%" }}>
+          <div className="body">
+            <h3>
+              <Icon name={icon} size="lg" />
+              {title}
+            </h3>
+            {caseLines?.length ? (
+              <div className="case">
+                {caseLines.map((l, i) => (
+                  <span key={i}>{l}</span>
+                ))}
+              </div>
+            ) : null}
+            {children}
+          </div>
+          <div className="foot">{footer}</div>
         </div>
-        <div className="foot">{footer}</div>
       </div>
-    </div>
+    </Overlay>
   );
 }

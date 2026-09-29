@@ -171,11 +171,22 @@
 /* The steps stay put while the middle scrolls (2026-09-25, operator). The side panel goes with
    them, since the numbered to-do is read against the page it scrolls. Each gets its own scroll
    when it outgrows the screen; 53px is the sticky topbar's height. */
-.ds .ws-body > .rail, .ds .ws-body > .side { position: sticky; top: 53px; align-self: start; max-height: calc(100vh - 53px); overflow: auto; }
-/* The intake's house card sticks too — below the topbar, not under it: the generated sheet pins
-   it at 16px from the top of the window, so its heading slid beneath the 53px topbar and the box
-   read as cut off while it followed the scroll (2026-09-25, operator). */
-.ds .intake-right:not(.desk-root *) { top: calc(53px + var(--s4)); }
+.ds .ws-body > .rail-col > .rail, .ds .ws-body > .side { position: sticky; top: calc(53px + var(--ws-head-h, 0px)); align-self: start; max-height: calc(100vh - 53px - var(--ws-head-h, 0px)); overflow: auto; }
+/* The booking header stays put too (2026-09-29, operator: "so they know which guest they are
+   working on"): it sticks under the topbar and the columns sit below it — the workspace measures
+   its height onto `--ws-head-h`, since the facts line wraps. Above the columns, below the topbar. */
+.ds .ws-head:not(.desk-root *) { position: sticky; top: 53px; z-index: 35; }
+/* The rail's ink runs down to the gate bar, not to the end of its own list (2026-09-29, operator:
+   "that incomplete black bar seems off — drag it all the way to the Move to Negotiation bar").
+   The ink belongs to the COLUMN — the grid cell, which always runs from the header to the bar —
+   while the nav inside it sticks at its own height. (A nav made window-tall instead was pushed
+   up under the sticky header whenever the bar was on screen.) */
+.ds .ws-body > .rail-col:not(.desk-root *) { background: var(--ink); min-width: 0; }
+/* The intake's house card sticks too — below the topbar (and the booking header on the Inquiry
+   step), not under them: the generated sheet pins it at 16px from the top of the window, so its
+   heading slid beneath the 53px topbar and the box read as cut off while it followed the scroll
+   (2026-09-25, operator). */
+.ds .intake-right:not(.desk-root *) { top: calc(53px + var(--ws-head-h, 0px) + var(--s4)); }
 
 /* Taken to a section from the to-do: it says so for a moment, then settles. */
 @keyframes ds-card-flash {

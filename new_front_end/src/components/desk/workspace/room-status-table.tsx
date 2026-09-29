@@ -181,6 +181,7 @@ export function RoomStatusTable({
   nights,
   perDate,
   selectedIds,
+  referenceIds,
   perNightSel,
   maxSelect,
   onToggle,
@@ -198,6 +199,8 @@ export function RoomStatusTable({
   perDate?: PerDateAvailabilityResult[];
   /** The whole-stay base selection — what a row click edits. */
   selectedIds: string[];
+  /** The plan a night is judged "different" against — the one most nights share; the base when absent. */
+  referenceIds?: string[];
   /** Effective selection per night (override or base) — what the cells show and edit. */
   perNightSel?: Record<string, string[]>;
   maxSelect: number;
@@ -353,7 +356,7 @@ export function RoomStatusTable({
             )}
             {nights.map((n, i) => {
               const count = nightSel(n).length;
-              const differs = !setEq(nightSel(n), selectedIds);
+              const differs = !setEq(nightSel(n), referenceIds ?? selectedIds);
               // The tally under each night is the one figure the operator must not miss: it says
               // whether that night has all its rooms. It is always printed (a night short of rooms
               // on a uniform pick was invisible here), and its colour is its state — red while

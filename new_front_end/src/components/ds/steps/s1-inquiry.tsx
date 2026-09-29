@@ -1598,7 +1598,7 @@ function WhichRooms({
 
   const counter = sel.nightsDiffer
     ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ready`
-    : `${sel.base.length} of ${numberOfRooms} chosen`;
+    : `${sel.commonPlan.length} of ${numberOfRooms} chosen`;
   const saveWord = showSaved
     ? "Saved"
     : stale
@@ -1672,7 +1672,7 @@ function WhichRooms({
                 </a>
               }
             >
-              {plural(sel.differingNights.length, "night")} differ
+              {plural(sel.differingNights.length, "night")} {sel.differingNights.length === 1 ? "differs" : "differ"}
             </Chip>
           ) : (
             <Chip tone="quiet">the same rooms every night</Chip>
@@ -1750,6 +1750,7 @@ function WhichRooms({
             perDate={perDate}
             selectedIds={sel.base}
             perNightSel={sel.effectiveByNight}
+            referenceIds={sel.commonPlan}
             maxSelect={numberOfRooms}
             onToggle={sel.toggleRow}
             onToggleCell={sel.toggleCell}

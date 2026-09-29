@@ -13,6 +13,7 @@ import {
   type BackflowDescriptor,
 } from "@/lib/api/backflows";
 import { DateField, nextDayIso } from "@/components/desk/date-field";
+import { Overlay } from "@/components/ds/steps/kit";
 import type { EntryDetail } from "@/types/api";
 import type { Session } from "@/types/session";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
@@ -90,19 +91,29 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
   const [reason, setReason] = useState("");
   const [newCheckOutDate, setNewCheckOutDate] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  // The menu and the dialog are rendered at the desk's root (2026-09-29): the rail scrolls on its
+  // own, so a menu dropped inside it was clipped at the rail's edge with a scrollbar under it,
+  // and the dialog painted beneath the sticky house card. The menu is placed from the button.
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
 
-  // Close the dropdown on outside click / Escape.
+  // Close the dropdown on outside click / Escape / any scroll (its place was measured once).
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onScroll = () => setOpen(false);
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [open]);
 
@@ -143,7 +154,11 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
     <div ref={rootRef} style={{ position: "relative" }}>
       <button
         className="btn btn-ghost btn-sm"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          const r = rootRef.current?.getBoundingClientRect();
+          if (r) setMenuPos({ top: r.bottom + 6, left: r.left });
+          setOpen((v) => !v);
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
         title="Go back to an earlier step to fix dates, rate, billing model, or resolve a complaint"
@@ -153,14 +168,17 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
         <ChevronDown style={{ width: 14, height: 14, marginLeft: 2 }} />
       </button>
 
-      {open && (
+      {open && menuPos && (
+        <Overlay>
+        <div className="desk-root">
         <div
+          ref={menuRef}
           role="menu"
           style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
-            right: 0,
-            zIndex: 40,
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+            zIndex: 95,
             minWidth: 260,
             background: "var(--paper, #fff)",
             border: "1px solid var(--line)",
@@ -227,9 +245,13 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
             );
           })}
         </div>
+        </div>
+        </Overlay>
       )}
 
       {active && (
+        <Overlay>
+        <div className="desk-root">
         <div
           className="scrim"
           onClick={(e) => e.target === e.currentTarget && !mutation.isPending && setActive(null)}
@@ -296,6 +318,8 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
             </div>
           </div>
         </div>
+        </div>
+        </Overlay>
       )}
     </div>
   );

@@ -534,6 +534,22 @@ export function Notice({ children, note }: { children: ReactNode; note?: ReactNo
 
 /* ------------------------------------------------------------------ dialogs */
 
+/**
+ * A scrim is rendered at the desk's root, not where its component sits (2026-09-29, operator: the
+ * sticky house card sat over an open dialog). The workspace is a size container, which makes it
+ * the containing block and a stacking context for anything `position: fixed` inside it — so a
+ * dialog opened from the rail lived inside the sticky rail's own stacking context and painted
+ * beneath every sticky part that came later on the page. Outside the workspace the scrim covers
+ * the real window and sits above all of it.
+ */
+export function Overlay({ children }: { children: ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHost(document.querySelector<HTMLElement>("[data-ds-overlays]") ?? document.body);
+  }, []);
+  return host ? createPortal(children, host) : null;
+}
+
 export function DsDialog({
   open,
   onClose,
@@ -565,13 +581,15 @@ export function DsDialog({
   }, [open, busy, onClose]);
   if (!open) return null;
   return (
-    <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-        <Dialog register={register} title={title} caseLines={caseLines} footer={footer}>
-          {children}
-        </Dialog>
+    <Overlay>
+      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+        <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
+          <Dialog register={register} title={title} caseLines={caseLines} footer={footer}>
+            {children}
+          </Dialog>
+        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -684,48 +702,50 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     run.catch((e) => toastRefusal(e, "The PDF could not be opened"));
   };
   return (
-    <div className="scrim open" style={{ alignItems: "stretch", justifyContent: "flex-end", padding: 0 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div
-        role="dialog"
-        aria-label={paper.label}
-        style={{ width: "min(560px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
-      >
-        <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
-          <h4 style={{ margin: 0 }}>
-            <Icon name="file" />
-            {paper.label}
-          </h4>
-          <div className="row-acts">
-            <Button kind="quiet" compact icon="file" onClick={pdf}>
-              PDF
-            </Button>
-            <Button kind="quiet" compact icon="print" onClick={pdf}>
-              Print
-            </Button>
-            <Button kind="secondary" compact icon="x" onClick={onClose}>
-              Close
-            </Button>
+    <Overlay>
+      <div className="scrim open" style={{ alignItems: "stretch", justifyContent: "flex-end", padding: 0 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div
+          role="dialog"
+          aria-label={paper.label}
+          style={{ width: "min(560px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
+        >
+          <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+            <h4 style={{ margin: 0 }}>
+              <Icon name="file" />
+              {paper.label}
+            </h4>
+            <div className="row-acts">
+              <Button kind="quiet" compact icon="file" onClick={pdf}>
+                PDF
+              </Button>
+              <Button kind="quiet" compact icon="print" onClick={pdf}>
+                Print
+              </Button>
+              <Button kind="secondary" compact icon="x" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+          </div>
+          <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
+            {paper.kind === "quotation" ? (
+              <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} />
+            ) : paper.kind === "invoice" ? (
+              paper.issued ? (
+                <IssuedInvoicePreview invoiceId={paper.id} />
+              ) : (
+                <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} />
+              )
+            ) : paper.kind === "voucher" ? (
+              <VoucherPreview reservationId={paper.reservationId} />
+            ) : paper.kind === "cancellation" ? (
+              <CancellationVoucherPreview entryId={paper.entryId} />
+            ) : (
+              <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} />
+            )}
           </div>
         </div>
-        <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
-          {paper.kind === "quotation" ? (
-            <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} />
-          ) : paper.kind === "invoice" ? (
-            paper.issued ? (
-              <IssuedInvoicePreview invoiceId={paper.id} />
-            ) : (
-              <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} />
-            )
-          ) : paper.kind === "voucher" ? (
-            <VoucherPreview reservationId={paper.reservationId} />
-          ) : paper.kind === "cancellation" ? (
-            <CancellationVoucherPreview entryId={paper.entryId} />
-          ) : (
-            <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} />
-          )}
-        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 

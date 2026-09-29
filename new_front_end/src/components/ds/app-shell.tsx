@@ -138,7 +138,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="ds">
+    <div className="ds" data-ds-overlays>
       <IconSprite />
       <div className="shell">
         <div className="topbar">
