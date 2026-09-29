@@ -107,7 +107,7 @@ const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
 type RateCol = "rRoom" | "rBed" | "rBf" | "rLu" | "rDi";
 const RATE_META: Record<RateCol, { th: string; meal: string | null }> = {
   rRoom: { th: "Room", meal: null },
-  rBed: { th: "Bed", meal: null },
+  rBed: { th: "Extra bed", meal: null },
   rBf: { th: "B'fast", meal: "breakfast" },
   rLu: { th: "Lunch", meal: "lunch" },
   rDi: { th: "Dinner", meal: "dinner" },
@@ -1092,9 +1092,15 @@ export function RoomCompositionsTable({
           </button>
         )}
       </div>
+      {/* A refusal of what was just typed — the loudest thing on the table while it shows
+          (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
+          stop colour, and says what was capped. It clears itself after five seconds. */}
       {limitMsg && (
-        <p className="rce-warns" style={{ marginBottom: 0 }}>
-          {limitMsg}
+        <p className="rct-refusal" role="alert" aria-live="assertive">
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>{limitMsg}</span>
         </p>
       )}
       {roomMin != null && sealedRoomIds.length < roomMin && (
@@ -1115,7 +1121,6 @@ export function RoomCompositionsTable({
               <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
               {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
               {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
-              <th colSpan={3}>Charges</th>
               {ratesOpen && (
                 <th
                   colSpan={rateCols.length}
@@ -1124,6 +1129,10 @@ export function RoomCompositionsTable({
                   Negotiated rates (Nu., optional{rateCols.length === 2 ? " · EP — room only" : ""})
                 </th>
               )}
+              {/* Charges sits at the far right, beside the total it changes (2026-09-29, operator).
+                  SC / GST / FOC are set once and rarely touched; between the pax counts and the
+                  rate columns they broke the typing path — pax, then the rate that prices it. */}
+              <th colSpan={3}>Charges</th>
               <th className="ratebtn" rowSpan={2}>
                 <div className="rct-corner">
                   <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
@@ -1142,7 +1151,7 @@ export function RoomCompositionsTable({
                   <th title="Children under 6">&lt;6</th>
                 </>
               )}
-              <th title="Extra beds">Bed</th>
+              <th title="Extra beds">Extra bed</th>
               {visibleMeals.map((c) => (
                 <th key={c} title={MEAL_META[c].title}>
                   {MEAL_META[c].th}
@@ -1155,9 +1164,6 @@ export function RoomCompositionsTable({
                   <th>Dinner</th>
                 </>
               )}
-              <th title="Service charge applies">SC</th>
-              <th title="GST applies">GST</th>
-              <th title="Free of charge — room priced at zero">FOC</th>
               {ratesOpen &&
                 rateCols.map((c) => (
                   <th
@@ -1173,6 +1179,9 @@ export function RoomCompositionsTable({
                     {RATE_META[c].th}
                   </th>
                 ))}
+              <th title="Service charge applies">SC</th>
+              <th title="GST applies">GST</th>
+              <th title="Free of charge — room priced at zero">FOC</th>
             </tr>
           </thead>
           <tbody>
@@ -1197,9 +1206,17 @@ export function RoomCompositionsTable({
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}
                   </td>
+                  {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
+                      not a quiet amber — the figure the operator must not miss (2026-09-29). */}
                   <td
                     className={`occ${overCap ? " over" : ""}`}
-                    title={overCap ? `Over capacity ${cap} + ${cnt(r.bed)} extra bed(s)` : cap != null ? `Capacity ${cap}` : undefined}
+                    title={
+                      overCap
+                        ? `Over capacity — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`
+                        : cap != null
+                          ? `Capacity ${cap}`
+                          : undefined
+                    }
                   >
                     {occ}
                   </td>
@@ -1219,9 +1236,6 @@ export function RoomCompositionsTable({
                       {numCell(rowIdx, id, "odi")}
                     </>
                   )}
-                  {boolCell(rowIdx, id, "sc")}
-                  {boolCell(rowIdx, id, "gst")}
-                  {boolCell(rowIdx, id, "foc")}
                   {/* Each rate cell shows the figure it would price at when left empty, as the
                       placeholder — so the column reads as rates rather than as blanks, and a
                       negotiation is entered against a visible anchor. Typing overrides it.
@@ -1286,6 +1300,10 @@ export function RoomCompositionsTable({
                               : ""),
                       });
                     })}
+                  {/* The charges follow the rates, beside the total they change (2026-09-29). */}
+                  {boolCell(rowIdx, id, "sc")}
+                  {boolCell(rowIdx, id, "gst")}
+                  {boolCell(rowIdx, id, "foc")}
                   {ratesOpen && preview ? (
                     <td
                       className="rowtot"
@@ -1322,7 +1340,6 @@ export function RoomCompositionsTable({
                   <td>{sum("odi")}</td>
                 </>
               )}
-              <td colSpan={3} />
               {/* Column money totals (2026-08-07, operator request): each rate column's whole-stay
                   total across every room — net of tax, straight from the live preview; the corner
                   carries the tax-inclusive grand total. Never summed here. */}
@@ -1348,6 +1365,7 @@ export function RoomCompositionsTable({
                       : "—"}
                   </td>
                 ))}
+              <td colSpan={3} />
               {ratesOpen && preview ? (
                 <td className="rowtot" title="Grand total including service charge & GST">
                   {fmtNu(preview.grandTotal)}
@@ -1365,16 +1383,18 @@ export function RoomCompositionsTable({
       {ratesOpen && preview && (
         <div className="rct-live">
           <span className="k">Live total</span>
-          <span>Net {fmtNu(preview.subtotal)}</span>
-          <span>+ SC {fmtNu(preview.serviceCharge)}</span>
-          <span>+ GST {fmtNu(preview.gst)}</span>
-          <b>
-            = {preview.currency} {fmtNu(preview.grandTotal)}
+          <span className="parts">
+            Net {fmtNu(preview.subtotal)} <i>+ SC</i> {fmtNu(preview.serviceCharge)} <i>+ GST</i> {fmtNu(preview.gst)}
+          </span>
+          {/* What the booking costs — the one figure the whole table is for, so it is read at a
+              glance and never mistaken for another number in the row (2026-09-29, "UIappeal"). */}
+          <b className="tot">
+            {preview.currency} {fmtNu(preview.grandTotal)}
           </b>
           {preview.discount && (
             <span className="disc">
-              − {fmtNu(preview.discount.amountOffTotal)} discount →{" "}
-              <b>
+              − {fmtNu(preview.discount.amountOffTotal)} discount → payable{" "}
+              <b className="tot">
                 {preview.currency} {fmtNu(preview.payable)}
               </b>
             </span>

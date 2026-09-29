@@ -2085,12 +2085,14 @@
     line-height: 1.5;
     margin: 0;
   }
+  /* A standing warning about the table's own contents — read at the table's size, not as
+     fine print (2026-09-29, "UIappeal"). */
   & .rce-warns {
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 12.5px;
+    font-weight: 700;
     color: var(--warn);
     background: var(--warn-t);
     border: 1px solid #e6cf9a;
@@ -2728,10 +2730,15 @@
     background: var(--green-t);
     min-width: 34px;
   }
+  /* A mismatch is RED, not a quiet amber (2026-09-29, operator): the row holds more guests
+     than the room sleeps, or the Σ does not match the party that was booked. The colour IS the
+     state, and the cell keeps its own outline so it reads on a busy grid. */
   & .rct-t .occ.over,
   & .rct-t .occ.off {
-    color: var(--warn);
-    background: var(--warn-t);
+    color: var(--stop);
+    background: var(--stop-t);
+    box-shadow: inset 0 0 0 1.5px var(--stop);
+    border-radius: 3px;
   }
   /* Cells ARE the inputs — borderless, filling the cell, spreadsheet-style. */
   & .rct-t td input[type="text"] {
@@ -2821,41 +2828,104 @@
     padding: 5px 6px;
   }
   /* Running backend-priced total strip under the grid. */
+  /* The live total is what the whole table is FOR — it is read at a glance, not hunted for
+     (2026-09-29, "UIappeal"): a solid band, the working figures small beside their label, and
+     the money itself large enough to read across the desk. */
   & .rct-live {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
+    align-items: center;
+    gap: 12px;
     flex-wrap: wrap;
-    margin-top: 6px;
-    padding: 6px 10px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
+    margin-top: 8px;
+    padding: 10px 14px;
+    border: 2px solid var(--green-d);
+    border-radius: var(--r-lg);
     background: var(--green-t);
     font-family: var(--deskmono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ink-2);
   }
   & .rct-live .k {
     font-family: var(--deskui);
-    font-size: 9.5px;
+    font-size: 10.5px;
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
+    color: var(--green-d);
+  }
+  & .rct-live .parts i {
+    font-style: normal;
     color: var(--ink-3);
   }
   & .rct-live b {
     color: var(--green-d);
   }
+  & .rct-live .tot {
+    font-size: 19px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    color: var(--green-dd);
+  }
   & .rct-live .disc {
     color: var(--warn);
+    font-weight: 700;
   }
-  & .rct-live .disc b {
-    color: var(--green-d);
+  & .rct-live .disc .tot {
+    color: var(--green-dd);
   }
   & .rct-live .src {
     font-family: var(--deskui);
-    font-size: 9.5px;
+    font-size: 10px;
     color: var(--ink-3);
+  }
+
+  /* A refusal of what was just typed: the loudest thing on the table while it shows
+     (2026-09-29, "UIappeal"). It arrives with a flash so a capped keystroke is never silent. */
+  & .rct-refusal {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin: 0 0 8px;
+    padding: 9px 12px;
+    border: 2px solid var(--stop);
+    border-radius: var(--r-md);
+    background: var(--stop-t);
+    color: var(--stop);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    animation: rctRefusalIn 0.5s ease-out 1;
+  }
+  & .rct-refusal .ic {
+    flex: none;
+    width: 19px;
+    height: 19px;
+    border-radius: 999px;
+    background: var(--stop);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 19px;
+    text-align: center;
+  }
+  @keyframes rctRefusalIn {
+    0% {
+      transform: translateY(-3px);
+      box-shadow: 0 0 0 0 var(--stop-t);
+    }
+    35% {
+      box-shadow: 0 0 0 5px var(--stop-t);
+    }
+    100% {
+      transform: translateY(0);
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    & .rct-refusal {
+      animation: none;
+    }
   }
 
   /* Frozen identity columns — a 20-night stay scrolls far past the room number, so Room No /
