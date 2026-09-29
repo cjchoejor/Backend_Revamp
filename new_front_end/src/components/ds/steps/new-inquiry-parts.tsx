@@ -9,13 +9,14 @@
  * new-inquiry-form.tsx) — only the dress changed.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { guestFullName, type GuestProfileSummary } from "@/lib/api/guest-profiles";
 import {
   addPartyContact,
+  createTravelAgentLookup,
   searchCorporateAccountsLookup,
   searchTravelAgentsLookup,
   type CoordinatorContact,
@@ -359,9 +360,17 @@ export function PartySearch({
   setParty: (p: LookupPartyMatch | null) => void;
 }) {
   const { session } = useSession();
+  const qc = useQueryClient();
   const [q, setQ] = useState("");
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
+  // A new agency rang in (2026-09-29): file it from here — name and contact, no rates — instead
+  // of starting the lead unlinked, which could never be attached to the agency afterwards.
+  const [filing, setFiling] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newCode, setNewCode] = useState(PHONE_CODES[0]);
+  const [newPhone, setNewPhone] = useState("");
+  const [newEmail, setNewEmail] = useState("");
   const wrap = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const t = setTimeout(() => setTerm(q.trim()), 250);
@@ -387,6 +396,61 @@ export function PartySearch({
   });
   const noun = kind === "TRAVEL_AGENT" ? "agency" : "company";
   const label = kind === "TRAVEL_AGENT" ? "Travel agent" : "Company";
+
+  const file = useMutation({
+    mutationFn: () =>
+      createTravelAgentLookup(session!, {
+        displayName: newName.trim(),
+        phone: newPhone.trim() ? `${newCode}${newPhone.trim()}` : null,
+        email: newEmail.trim() || null,
+      }),
+    onSuccess: (created) => {
+      void qc.invalidateQueries({ queryKey: ["desk-party-lookup"] });
+      setParty(created);
+      setFiling(false);
+      setOpen(false);
+      setNewName("");
+      setNewPhone("");
+      setNewEmail("");
+      toast.success(`${created.displayName} is on file and picked for this booking`, {
+        description: "No rates of its own yet — until the admin sets its rate package the booking prices on the hotel's common package, and the desk can still negotiate at Negotiation.",
+      });
+    },
+    onError: (e) => toastRefusal(e, "The agency could not be filed"),
+  });
+  const startFiling = () => {
+    setNewName(q.trim());
+    setFiling(true);
+  };
+  const filingBlock = filing ? (
+    <div className="bind provisional" style={{ display: "grid", gap: 8, marginTop: 6 }}>
+      <span className="sm">
+        <b>New agency</b> · filed active with no rates of its own — it prices on the hotel's common package until the admin sets its rate package
+      </span>
+      <div className="form2">
+        <div className="field">
+          <label>Agency name</label>
+          <input className="input" autoFocus value={newName} placeholder="as they gave it" onChange={(e) => setNewName(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Agency phone · optional</label>
+          <PhoneInput code={newCode} setCode={setNewCode} number={newPhone} setNumber={setNewPhone} ariaLabel="Agency phone" />
+        </div>
+        <div className="field">
+          <label>Agency email · optional</label>
+          <input className="input" type="email" value={newEmail} placeholder="bookings@…" onChange={(e) => setNewEmail(e.target.value)} />
+        </div>
+      </div>
+      <div className="row-acts">
+        <Button compact state={file.isPending ? "working" : newName.trim() ? "default" : "inert"} reason={newName.trim() ? undefined : "the agency's name first"} workingLabel="Filing…" onClick={() => file.mutate()}>
+          File the agency
+        </Button>
+        <Button kind="quiet" compact onClick={() => setFiling(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  ) : null;
 
   if (party) {
     return (
@@ -439,15 +503,21 @@ export function PartySearch({
               action="Pick"
             />
           )}
-          {matches.length > 0 ? (
-            <span className="hint">
-              {atCap
+          <span className="hint" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {matches.length > 0
+              ? atCap
                 ? `the first ${matches.length} shown — keep typing to narrow`
                 : term
                   ? plural(matches.length, "match", "matches")
-                  : `${matches.length} on file — type to narrow`}
-            </span>
-          ) : null}
+                  : `${matches.length} on file — type to narrow`
+              : null}
+            {kind === "TRAVEL_AGENT" && !filing ? (
+              <Button kind="quiet" compact onClick={startFiling}>
+                {term ? `New agency “${term}”…` : "New agency…"}
+              </Button>
+            ) : null}
+          </span>
+          {filingBlock}
         </>
       ) : (
         <span className="hint">optional · pick the {noun} and its rates follow</span>

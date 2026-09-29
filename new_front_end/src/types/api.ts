@@ -611,6 +611,9 @@ export type EntryDetail = EntryListItem & {
     cameInAs?: string | null;
     travelAgentId?: string | null;
     corporateAccountId?: string | null;
+    /** Who booked (2026-09-29): the agency or the company with its own contact, off the entry payload. */
+    travelAgent?: BookingPartySummary | null;
+    corporateAccount?: BookingPartySummary | null;
     agentProfile?: AgentProfileSummary | null;
   } | null;
   closedAt?: string | null;
@@ -625,6 +628,13 @@ export type EntryDetail = EntryListItem & {
 };
 
 /** One stay of a trip — the enquiry's other bookings, carried on every booking's payload. */
+export type BookingPartySummary = {
+  id: string;
+  displayName: string;
+  contactNumbers: string[];
+  contactEmail: string | null;
+};
+
 export type TripStaySummary = {
   id: string;
   checkInDate?: string | null;

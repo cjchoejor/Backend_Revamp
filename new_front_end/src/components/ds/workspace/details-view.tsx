@@ -73,6 +73,9 @@ export function DetailsView({
   const proforma = invoices.filter((i) => i.invoiceType === "PROFORMA" && i.state !== "SUPERSEDED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const tax = invoices.filter((i) => i.invoiceType === "FINAL" && i.state !== "SUPERSEDED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const model = entry.folio?.billingModel ?? null;
+  // The agency or company on the booking, with its own contact (2026-09-29) — the party's record,
+  // printed beside the guest so the desk knows whom to ring about the booking.
+  const bookedThrough = entry.inquiry?.travelAgent ?? entry.inquiry?.corporateAccount ?? null;
 
   return (
     <>
@@ -100,7 +103,19 @@ export function DetailsView({
               v={g?.id ? <Link href={`/guests/${g.id}`}>{guestName(g)}</Link> : <span className="name-i">to come from the agent</span>}
               meta={[g?.phone, g?.email].filter(Boolean).join(" · ") || "no contact of their own on file"}
             />
-            <FactBox k="Booked by" v={booker ?? channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs)} meta={booker ? channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs) : undefined} />
+            <FactBox
+              k="Booked by"
+              v={bookedThrough?.displayName ?? booker ?? channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs)}
+              meta={
+                bookedThrough
+                  ? [channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs), ...(bookedThrough.contactNumbers ?? []), bookedThrough.contactEmail]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
+                  : booker
+                    ? channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs)
+                    : undefined
+              }
+            />
             <FactBox k="Billed to" v={model ? BILLING_WORD[model] ?? model : "not set yet"} meta={model ? undefined : "chosen at Set up"} />
           </div>
           <Facts wide style={{ marginTop: 10 }}>
