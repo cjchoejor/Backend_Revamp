@@ -1647,32 +1647,7 @@ function WhichRooms({
       }
     >
       <div className="row-acts" style={{ marginBottom: 10 }}>
-        <Button
-          compact
-          kind={showSaved ? "secondary" : "primary"}
-          icon={showSaved ? "check" : undefined}
-          state={
-            saving
-              ? "working"
-              : showSaved || !sel.ready || stale
-                ? "inert"
-                : "default"
-          }
-          title={
-            showSaved
-              ? "this choice is on record — change a room to edit it"
-              : stale
-                ? "the answer is old — ask the house again; your picks are kept"
-                : !sel.ready
-                  ? "every night needs its rooms"
-                  : undefined
-          }
-          workingLabel="Saving…"
-          onClick={onSave}
-        >
-          {saveWord}
-        </Button>
-        <span className={`sm${sel.ready ? " ok-ink" : ""}`}>{counter}</span>
+        <span className={`sm ${sel.ready ? "ok-ink" : "stop-ink"}`}>{counter}</span>
         {tally.map((t) => (
           <Chip
             key={t.parts.join("+")}
@@ -1703,6 +1678,35 @@ function WhichRooms({
             <Chip tone="quiet">the same rooms every night</Chip>
           )
         ) : null}
+        {/* The save sits at the right end of the row, apart from the tallies it acts on
+            (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
+        <span style={{ marginLeft: "auto" }}>
+          <Button
+            compact
+            kind={showSaved ? "secondary" : "primary"}
+            icon={showSaved ? "check" : undefined}
+            state={
+              saving
+                ? "working"
+                : showSaved || !sel.ready || stale
+                  ? "inert"
+                  : "default"
+            }
+            title={
+              showSaved
+                ? "this choice is on record — change a room to edit it"
+                : stale
+                  ? "the answer is old — ask the house again; your picks are kept"
+                  : !sel.ready
+                    ? "every night needs its rooms"
+                    : undefined
+            }
+            workingLabel="Saving…"
+            onClick={onSave}
+          >
+            {saveWord}
+          </Button>
+        </span>
       </div>
       <Tool>
         {board ? (

@@ -3072,7 +3072,7 @@
     font-size: calc(var(--rst-fs) * 0.92);
   }
   & .rst-wrap.dense .rst .rst-nightcount {
-    font-size: calc(var(--rst-fs) * 0.75);
+    font-size: calc(var(--rst-fs) * 0.98);
     margin-top: 0;
   }
   /* Names printed in-cell: the chip keeps the status colour, the text carries the identity. */
@@ -3132,17 +3132,21 @@
   }
   & .rst .rst-nightcount {
     display: block;
-    font-size: 10px;
-    font-weight: 600;
+    /* The per-night tally is the one figure the operator must not miss — it says whether the
+       night has all its rooms. It reads at the header's own size, and its colour is its state:
+       red while rooms are still to be picked, green once the night is full (2026-09-29). */
+    font-size: 12.5px;
+    font-weight: 700;
     letter-spacing: 0;
     text-transform: none;
-    /* Sub-label under a now-dark header — stays the quieter of the two, but no longer washes
-       out against the deeper fill. */
     color: var(--ink-2);
-    margin-top: 2px;
+    margin-top: 3px;
+  }
+  & .rst .rst-nightcount.short {
+    color: var(--stop, #b3261e);
   }
   & .rst .rst-nightcount.done {
-    color: var(--green-d);
+    color: var(--ok);
   }
 
   & .gatebar {

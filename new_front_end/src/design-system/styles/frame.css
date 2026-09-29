@@ -84,6 +84,7 @@
 .ds .fact.line .r { justify-self: end; }
 .ds .warn-ink { color: var(--warning); }
 .ds .ok-ink { color: var(--success); }
+.ds .stop-ink { color: var(--danger); font-weight: 600; }
 /* an action and what it sets off */
 .ds .seerow { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: baseline; }
 .ds .seerow .meta { display: inline; }

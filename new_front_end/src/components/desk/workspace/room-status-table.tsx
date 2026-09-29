@@ -281,7 +281,6 @@ export function RoomStatusTable({
   const setEq = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
   // Any night deviating from the base gets the per-night counts in the header — completion is
   // then per night, and the counter alone can't say which night is short.
-  const anyNightDiffers = nights.some((n) => !setEq(nightSel(n), selectedIds));
 
   // When names are shown in-cell they replace the status word, so the chip carries the colour
   // and the text carries the identity. `cellText` keeps that decision in one place.
@@ -355,12 +354,21 @@ export function RoomStatusTable({
             {nights.map((n, i) => {
               const count = nightSel(n).length;
               const differs = !setEq(nightSel(n), selectedIds);
+              // The tally under each night is the one figure the operator must not miss: it says
+              // whether that night has all its rooms. It is always printed (a night short of rooms
+              // on a uniform pick was invisible here), and its colour is its state — red while
+              // rooms are still to be picked, green once the night is full (operator, 2026-09-29).
+              const full = maxSelect > 0 && count >= maxSelect;
+              const left = Math.max(0, maxSelect - count);
               return (
                 <th key={n} style={{ textAlign: "center" }} title={differs ? "This night has its own rooms" : undefined}>
                   {formatDMY(n) || n} <span style={{ fontWeight: 500 }}>({i + 1})</span>
                   {differs && <span style={{ color: "var(--warn)", fontWeight: 700 }}> •</span>}
-                  {anyNightDiffers && (
-                    <span className={`rst-nightcount${count === maxSelect ? " done" : ""}`}>
+                  {maxSelect > 0 && (
+                    <span
+                      className={`rst-nightcount${full ? " done" : " short"}`}
+                      title={full ? "every room for this night is picked" : `${left} more room${left === 1 ? "" : "s"} to pick for this night`}
+                    >
                       {count}/{maxSelect} picked
                     </span>
                   )}
