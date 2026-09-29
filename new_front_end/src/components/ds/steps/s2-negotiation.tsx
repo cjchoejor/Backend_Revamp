@@ -15,12 +15,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BindingBox, Button, Chip, Icon, SourceMark } from "@/design-system";
+import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { openQuotationPdf } from "@/lib/api/documents";
-import { getBillingSummary, getRateReference } from "@/lib/api/entries";
+import { getBillingSummary } from "@/lib/api/entries";
 import {
   acceptQuotation,
   approveQuotationDiscount,
@@ -363,7 +363,6 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
 
   return (
     <StepCanvas past={past}>
-      <RateCard entry={entry} />
 
       <StepCard
         title="Who sleeps where, and their meals"
@@ -627,6 +626,17 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         {onPark && entry.status === "ACTIVE" ? (
           <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
         ) : null}
+        {/* "The rate, with its basis" was removed on 2026-09-29 (operator: "most of it are already
+            below"): its published rate, its floor and the SC/GST line all sit in the reference
+            strip inside the table, read from the same `rate-reference` call. What it also carried
+            was this ONE unbuilt promise, which belongs here with the other not-yet acts. */}
+        <SeeRow
+          key="counter"
+          label="Record a counter-offer…"
+          note="what they asked, by whom, the outcome — it would roll up to the agent's record"
+          state="inert"
+          reason="Counter-offers as a recorded line are not in the backend yet (BE-39) — until then the discount is set in the table"
+        />
       </OtherWays>
       <PapersCard entry={entry} />
 
@@ -653,89 +663,6 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         onConfirm={(r) => releaseM.mutate(r)}
       />
     </StepCanvas>
-  );
-}
-
-/* ------------------------------------------------------------------ the rate, with its basis */
-
-function RateCard({ entry }: { entry: EntryDetail }) {
-  const { session } = useSession();
-  const ref = useQuery({
-    queryKey: ["rate-reference", entry.id],
-    queryFn: () => getRateReference(session!, entry.id),
-    enabled: !!session,
-    staleTime: 5 * 60_000,
-  });
-  const r = ref.data;
-  const types = r?.roomTypes ?? [];
-  const contracted = types.some((t) => t.roomRateSource === "AGENT_RATE_PACKAGE");
-  const pct = (rate: number) => `${(rate * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%`;
-  return (
-    <StepCard title="The rate, with its basis">
-      {types.length === 0 ? (
-        <span className="meta">{ref.isLoading ? "Reading the rates…" : "The rates show once rooms are chosen at Inquiry."}</span>
-      ) : (
-        <div style={{ display: "grid", gap: 8 }}>
-          {types.map((t) => (
-            <div key={t.roomTypeId} style={{ display: "grid", gap: 4 }}>
-              {types.length > 1 ? (
-                <span className="sm">
-                  <b>{t.name}</b>
-                  <span className="meta">
-                    {" "}
-                    · {t.roomNumbers.length === 1 ? "room" : "rooms"} {t.roomNumbers.join(", ")}
-                  </span>
-                </span>
-              ) : null}
-              <div className="row-acts">
-                <Chip>Published {money(t.standardRate, r?.currency)} / night</Chip>
-                {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
-                  <Chip tone="solid">
-                    {r?.party?.name ?? "The account"} · {money(t.roomRate, r?.currency)} / night · contracted
-                  </Chip>
-                ) : null}
-                {t.packageName ? <Chip>Package {t.packageName}</Chip> : null}
-                {/* The floor is a LIMIT, and it reads as one on both surfaces — the same fact in
-                    the reference strip below carries the same mark ("UIappeal", 2026-09-29). */}
-                {t.msrValue != null ? (
-                  <Chip tone="danger" title="Minimum sellable rate for this room type — a booking priced below it needs the GM's waiver">
-                    floor {money(t.msrValue, r?.currency)}
-                  </Chip>
-                ) : null}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {r ? (
-        <div className="meta" style={{ marginTop: 6 }}>
-          <SourceMark kind="derived">
-            {contracted
-              ? `${r.party ? words(r.party.type) : "Account"} rate · as contracted`
-              : r.party
-                ? `${r.party.name} has no package for these rooms · the published rate applies`
-                : "the published rate plan"}
-          </SourceMark>{" "}
-          · service charge {pct(r.serviceChargeRate)} and GST {pct(r.gstRate)} on top · the rate with its basis is BE-17
-        </div>
-      ) : null}
-
-      <h4 style={{ margin: "12px 0 6px" }}>Counter-offers</h4>
-      <div className="meta">
-        None yet — the line accumulates: what they asked, who, when, the outcome. It rolls up to the agent&rsquo;s record (BE-39).
-      </div>
-      <Live>
-        <div style={{ marginTop: 10 }}>
-          <SeeRow
-            kind="secondary"
-            label="Record a counter-offer…"
-            note="what they asked, by whom, the outcome — below contract or over 10% off needs the FOM"
-            state="inert"
-            reason="Counter-offers as a recorded line are not in the backend yet (BE-39) — until then the discount is set in the table below"
-          />
-        </div>
-      </Live>
-    </StepCard>
   );
 }
 

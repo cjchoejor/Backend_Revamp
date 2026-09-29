@@ -65,12 +65,14 @@ export const BACKFLOWS_BY_STAGE: Record<string, BackflowDescriptor[]> = {
   ],
   S3: [
     { key: "s3ToS2", label: "Renegotiate the price (fresh quote)", toStage: "S2", minLevel: "L2" },
-    { key: "s3ToS1", label: "Change dates / rooms (re-search)", toStage: "S1", minLevel: "L2", destructive: true },
+    { key: "s3ToS1", label: "Change dates, rooms or guests (re-search)", toStage: "S1", minLevel: "L2", destructive: true },
   ],
   S4: [
     { key: "s4ToS3", label: "Change billing model", toStage: "S3", minLevel: "L2" },
     { key: "s4ToS2", label: "Renegotiate rate", toStage: "S2", minLevel: "L2" },
-    { key: "s4ToS1", label: "Change dates (re-search)", toStage: "S1", minLevel: "L2", destructive: true },
+    // The intake is editable only at S1, so dropping rooms or guests after the freeze comes back
+    // here (2026-09-29): a new pass, the party and room count re-typed, the house asked again.
+    { key: "s4ToS1", label: "Change dates, rooms or guests (re-search)", toStage: "S1", minLevel: "L2", destructive: true },
   ],
   S5: [
     { key: "s5ToS1", label: "Pre-arrival config error → re-search", toStage: "S1", minLevel: "L2", destructive: true },
