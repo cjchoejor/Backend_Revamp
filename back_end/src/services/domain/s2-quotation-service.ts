@@ -3,6 +3,7 @@ import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, St
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { extendNegotiationExpiryTx } from "../../lib/negotiation-expiry.js";
 import * as documentGenerationService from "../infrastructure/document-generation-service.js";
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
 import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "../../policies/09-discount/p23-discount-approval-authority.js";
@@ -1166,6 +1167,8 @@ export async function createQuotation(
     // The countdown is real from this moment — W15 expires a lapsed DRAFT, and the desk's
     // timer feed shows "Quote validity" alongside the other clocks.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId }, validity.validUntil, actorId);
+    // The Negotiation clock never lapses a booking while the guest holds a live offer (2026-09-29).
+    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId, validUntil: validity.validUntil, actorId });
     // Discount approved AT generation (2026-08-07): the generating actor held the authority
     // (checked in prepareQuotationDraft), so the approval trace lands with the creation and
     // the p23 send / S2-exit gate is satisfied from birth — no post-hoc approval step.
@@ -1604,6 +1607,7 @@ export async function supersedeQuotationWithNewDraft(
 
     // The new draft's validity clock, armed like create's — the prior version's was cancelled above.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId: prior.entryId }, validity.validUntil, actorId);
+    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId: prior.entryId, validUntil: validity.validUntil, actorId });
 
     // Discount approved AT generation — same rule as createQuotation (2026-08-07): a
     // regenerated round with a discount is a fresh offer, approved by whoever generated it.
@@ -2007,6 +2011,7 @@ export async function sendQuotation(
       { quotationId },
       { startAfter: validUntil },
     );
+    await extendNegotiationExpiryTx(tx, engine, { entryId: q.entryId, validUntil, actorId });
     const ackWindow = await requireActiveConfigValue<Record<string, number>>(tx as any, "acknowledgement.windowPerType");
     const quotationAckSeconds = Number((ackWindow as any)?.quotation ?? 86400);
     const ackFireAt = new Date(now.getTime() + quotationAckSeconds * 1000);

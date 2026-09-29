@@ -23,6 +23,7 @@ import { enforceEntryAtS1ForS1ToS2Progression } from "../policies/01-availabilit
 import { enforceEntryActiveForStageTransition } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { scheduleS2StageDwellWarningMonitor } from "../lib/schedule-s2-dwell-warning-monitor.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { armNegotiationExpiryTx } from "../lib/negotiation-expiry.js";
 
 /**
  * The room selection of THIS pass (2026-09-18). A new pass opened by a re-entry ("new dates or
@@ -148,14 +149,19 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
       where: { entryId, timerType: "ENTRY_EXPIRY", status: "SCHEDULED" },
       select: { id: true, pgBossJobId: true },
     });
+    const engine = await getTimerEngine();
     if (expiryTimers.length) {
-      const engine = await getTimerEngine();
       await Promise.all(expiryTimers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
       await tx.timerRecord.updateMany({
         where: { id: { in: expiryTimers.map((t) => t.id) } },
         data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "S1_TO_S2_PROGRESSION" },
       });
     }
+    // …and the Negotiation clock starts (2026-09-29, SIG-S2 §7.6 / §428): the entry's expiry
+    // outlives Inquiry, on a window of Negotiation's own — the one clock from intake ran on the
+    // 1-hour inquiry window, which is why it was cancelled here and never carried. A generated
+    // quote stretches it to the offer's validity; a booking that has been to Set up gets none.
+    await armNegotiationExpiryTx(tx, engine, { entryId, actorId, now });
     return next;
   });
 

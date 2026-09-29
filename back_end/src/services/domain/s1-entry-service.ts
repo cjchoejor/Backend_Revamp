@@ -24,6 +24,7 @@ import {
 } from "../../policies/01-availability/p01-entry-park-allowed-stages.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
+import { armNegotiationExpiryTx, lapseNegotiationRecordsTx } from "../../lib/negotiation-expiry.js";
 import { ROOM_BED_TYPES, checkBedRequestAgainstRooms, loadRoomBedOptions } from "./room-bed-type-service.js";
 
 /** "5 King + 2 Twin" — the human wording every bed-request error uses. */
@@ -362,8 +363,9 @@ async function setOpenDwellMode(tx: any, entryId: string, mode: StageDwellMode):
  * one entry, inside a transaction. Shared by entry-level unpark and the inquiry-level cascade
  * unpark.
  *
- * `ENTRY_EXPIRY` exists at S1 only: registered at entry creation, cancelled for good on S1→S2
- * (`s1-state-machine.progressS1ToS2`), never re-registered later. Unpark used to re-arm one
+ * `ENTRY_EXPIRY` runs at S1 (the inquiry window, registered at entry creation and cancelled on
+ * S1→S2) and, since 2026-09-29, at S2 as the Negotiation clock (`lib/negotiation-expiry.ts`,
+ * armed by `progressS1ToS2`). Nothing arms it later. Unpark used to re-arm one
  * unconditionally at the **S1** TTL regardless of the entry's actual stage, which handed every
  * unparked entry a death clock it never had:
  *   - an unparked S2 entry expired ~1h later;
@@ -387,6 +389,11 @@ async function restoreStageExpiryTimersTx(
     });
   }
   if (!entryExpiryTimerAppliesAtStage(stageContext)) return;
+  if (stageContext === Stage.S2) {
+    // A fresh Negotiation window from the unpark (2026-09-29) — the park had paused the clock.
+    await armNegotiationExpiryTx(tx, engine, { entryId, actorId });
+    return;
+  }
   const s1ExpiryPolicy = await getRegistryPolicy(tx, "registry.s1Expiry.minutes");
   const registryS1Seconds =
     s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
@@ -770,10 +777,11 @@ function evaluateExpiryEligibility(
 export async function expireEntry(
   prisma: PrismaClient,
   entryId: string,
-  opts?: { fromParkFollowUp?: boolean },
+  opts?: { fromParkFollowUp?: boolean; fromNegotiation?: boolean },
 ) {
   if (!entryId?.trim()) throw new ValidationError("entryId is required");
   const fromParkFollowUp = opts?.fromParkFollowUp === true;
+  const fromNegotiation = opts?.fromNegotiation === true;
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
 
@@ -793,6 +801,33 @@ export async function expireEntry(
     const check = evaluateExpiryEligibility(fresh.status, fromParkFollowUp);
     if (!check.expire) return { skipped: true as const, reason: check.reason };
 
+    // Which clock is this? (2026-09-29) Each stage's clock lapses only its own stage: the S1
+    // inquiry clock (no flag) an entry still at S1, the Negotiation clock (`negotiation`) an
+    // entry still at S2 — a stale job from an earlier stage never ends a booking that moved on.
+    // The park follow-up is the one clock that lapses a parked booking wherever it stands.
+    if (fromNegotiation) {
+      if (fresh.currentStage !== Stage.S2) return { skipped: true as const, reason: "NOT_AT_S2" };
+      // A booking that has been to Set up may hold money — it is the desk's to end, not a clock's.
+      const past = await tx.entry.findUnique({
+        where: { id: entryId },
+        select: { folio: { select: { id: true } }, reservations: { select: { id: true }, take: 1 } },
+      });
+      if (past?.folio || (past?.reservations?.length ?? 0) > 0) return { skipped: true as const, reason: "PAST_NEGOTIATION" };
+      // The guest said yes and the offer still stands: the desk has a booking to move on, so the
+      // clock re-arms for another window rather than lapsing an accepted quote.
+      const accepted = await tx.quotation.findFirst({
+        where: { entryId, state: "ACCEPTED" },
+        orderBy: { createdAt: "desc" },
+        select: { validUntil: true },
+      });
+      if (accepted && (!accepted.validUntil || accepted.validUntil > now)) {
+        const armed = await armNegotiationExpiryTx(tx, await getTimerEngine(), { entryId, actorId: "SYSTEM", now });
+        return { skipped: true as const, reason: "QUOTE_ACCEPTED", rearmedFor: armed?.firesAt ?? null };
+      }
+    } else if (!fromParkFollowUp && fresh.currentStage !== Stage.S1) {
+      return { skipped: true as const, reason: "STAGE_CLOCK_MISMATCH" };
+    }
+
     await tx.entry.update({
       where: { id: entryId },
       data: { status: EntryStatus.EXPIRED, closedAt: now, closedBy: "SYSTEM", version: { increment: 1 } },
@@ -806,6 +841,13 @@ export async function expireEntry(
       reason: "ENTRY_EXPIRED",
       now,
     });
+    // A lapse before Set up leaves nothing ticking or held: the marked rooms' hold rows are
+    // released (silent expiry is a forbidden pattern), the live quotations expired, every clock
+    // still on the booking cancelled (2026-09-29).
+    const lapsed =
+      fresh.currentStage === Stage.S1 || fresh.currentStage === Stage.S2
+        ? await lapseNegotiationRecordsTx(tx, await getTimerEngine(), { entryId, now })
+        : null;
     await auditService.emit(tx as any, auditService.systemActor(), {
       eventType: "ENTRY.EXPIRED",
       entityType: "Entry",
@@ -813,7 +855,7 @@ export async function expireEntry(
       operation: "TRANSITION",
       timestamp: now,
       stageContext: fresh.currentStage as any,
-      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", fromParkFollowUp },
+      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", fromParkFollowUp, negotiation: fromNegotiation, lapsedAt: fresh.currentStage, ...(lapsed ?? {}) },
       inquiryId: fresh.inquiryId,
       entryId: entryId,
       createdBy: "SYSTEM",

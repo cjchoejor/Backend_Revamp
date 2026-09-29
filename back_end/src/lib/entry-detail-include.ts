@@ -33,6 +33,8 @@ export const entryDetailInclude = {
     orderBy: { createdAt: "desc" as const },
   },
   availabilityConfigs: { orderBy: { createdAt: "desc" as const } },
+  /** When the booking entered its current step — the desk prints "At this step · 2h 10m" (2026-09-29). */
+  stageDwellRecords: { where: { exitedAt: null }, orderBy: { enteredAt: "desc" as const }, take: 1, select: { stage: true, enteredAt: true, mode: true } },
   segments: { orderBy: { segmentNumber: "desc" as const }, take: 5 },
   quotations: { orderBy: { versionNumber: "desc" as const } },
   speculativeHolds: {

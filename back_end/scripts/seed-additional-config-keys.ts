@@ -38,6 +38,12 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
       "Early departure fee (2026-08-22, Policy 36): basis NONE | FLAT_AMOUNT (amount, net) | UNSTAYED_NIGHTS (up to nights unstayed nights at the frozen per-night room figure x percent/100) | PERCENT_OF_UNSTAYED (percent of every unstayed night frozen room figure); perRatePlan overrides by rate plan id. Posted on the live folio as a SERVICE charge; the GM may waive it.",
   },
   {
+    key: "expiry.s2.negotiationTtlSeconds",
+    value: 86400,
+    notes:
+      "The Negotiation clock (2026-09-29, SIG-S2 §7.6): a booking that stalls at Negotiation lapses after this many seconds (W20). A generated or sent quote stretches the clock to the offer's validity; a booking that has been to Set up never gets it; the park pauses it.",
+  },
+  {
     key: "expiry.parking.followUpDays",
     value: 30,
     notes:
