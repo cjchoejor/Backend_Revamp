@@ -587,6 +587,8 @@ export type EntryDetail = EntryListItem & {
   spaceAllocations?: SpaceAllocationSummary[];
   availabilityConfigs?: AvailabilityConfigSummary[];
   segments?: SegmentSummary[];
+  /** The open dwell record — when the booking entered its current step (2026-09-29). */
+  stageDwellRecords?: Array<{ stage: string; enteredAt: string; mode: string }>;
   quotations?: QuotationSummary[];
   speculativeHolds?: SpeculativeHoldSummary[];
   vipArrivalNotifications?: VipArrivalNotificationSummary[];

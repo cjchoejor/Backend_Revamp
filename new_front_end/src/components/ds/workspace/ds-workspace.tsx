@@ -81,7 +81,7 @@ import { CaseCards } from "@/components/ds/steps/case-cards";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
 import { SidePapers } from "@/components/ds/workspace/side-papers";
-import { SideTimer } from "@/components/ds/workspace/side-timer";
+import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp } from "@/components/ds/steps/s3-setup";
@@ -550,7 +550,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ? "A no-show, closed and sealed — a read-only record"
           : "A no-show — a read-only record"
         : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL"
-          ? "Expired — a read-only record"
+          ? `${entry.currentStage === "S2" ? "The negotiation lapsed" : entry.currentStage === "S1" ? "The inquiry lapsed" : "Expired"} — a read-only record`
           : "Closed and sealed — a read-only record";
 
   const preconds0: Precondition[] = sealed
@@ -1535,6 +1535,7 @@ function SidePanel({
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
     .slice(0, 8);
   const recent = events.filter((e) => !isHousekeeping(e.eventType)).slice(0, 6);
+  const dwell = entry.stageDwellRecords?.[0];
   return (
     <aside className="side">
       <div>
@@ -1545,6 +1546,7 @@ function SidePanel({
           ) : (
             <span className="meta">nothing running</span>
           )}
+          {dwell && !sealed ? <StepDwell since={dwell.enteredAt} /> : null}
         </div>
       </div>
       <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />

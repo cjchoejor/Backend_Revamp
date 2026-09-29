@@ -8,7 +8,7 @@
  */
 import { Icon } from "@/design-system";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { fmtDateTime } from "@/lib/ds/format";
+import { fmtDateTime, span } from "@/lib/ds/format";
 import type { TimerRecordSummary } from "@/lib/api/entries";
 
 const HOUR = 3_600_000;
@@ -24,6 +24,17 @@ function countdown(ms: number): string {
   const core =
     d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   return ms <= 0 ? `overdue ${core}` : `in ${core}`;
+}
+
+/** How long the booking has sat at this step — a fact beside the clocks, not a countdown (2026-09-29). */
+export function StepDwell({ since }: { since: string }) {
+  const { now } = useHotelClock(30_000);
+  return (
+    <div className="row">
+      <span className="t">At this step</span>
+      <span className="meta">{span(now - new Date(since).getTime())}</span>
+    </div>
+  );
 }
 
 export function SideTimer({ timer, label }: { timer: TimerRecordSummary; label: string }) {
