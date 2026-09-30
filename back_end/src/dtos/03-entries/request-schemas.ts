@@ -74,6 +74,46 @@ export const updateEntryRequestSchema = z.object({
 });
 export type UpdateEntryRequestDto = z.infer<typeof updateEntryRequestSchema>;
 
+/**
+ * POST /api/entries/:id/negotiation-amendment — change the rooms and the party WITHOUT leaving
+ * Negotiation (2026-09-30). Dates are deliberately absent: a date change goes back to Inquiry.
+ * At least one of `party` / `rooms` is required, and the room picks take the same three shapes
+ * the S1 save accepts.
+ */
+export const negotiationAmendmentRequestSchema = z
+  .object({
+    party: z
+      .object({
+        adultCount: z.coerce.number().int().min(0).optional(),
+        childCount: z.coerce.number().int().min(0).optional(),
+        childAges: z.array(z.coerce.number().int().min(0).max(150)).optional(),
+        numberOfRooms: z.coerce.number().int().min(1).max(50).optional(),
+        bedTypeRequest: z.record(z.string(), z.coerce.number().int().min(0).max(50)).nullish(),
+      })
+      .optional(),
+    rooms: z
+      .object({
+        configurationId: z.string().min(1),
+        roomId: z.string().min(1).optional(),
+        roomIds: z.array(z.string().min(1)).max(60).optional(),
+        perNight: z
+          .array(z.object({ date: z.string().min(1), roomIds: z.array(z.string().min(1)).max(60) }))
+          .max(90)
+          .optional(),
+        deficientAcknowledgements: z.unknown().optional(),
+      })
+      .refine((r) => !!r.roomId || (r.roomIds?.length ?? 0) > 0 || (r.perNight?.length ?? 0) > 0, {
+        message: "Name the rooms — roomId, roomIds or perNight.",
+      })
+      .optional(),
+    reason: z.string().trim().min(1, "A reason is required.").max(500),
+    expectedVersion: z.coerce.number().int().optional(),
+  })
+  .refine((b) => !!b.party || !!b.rooms, {
+    message: "Nothing to change — send the party, the rooms, or both.",
+  });
+export type NegotiationAmendmentRequestDto = z.infer<typeof negotiationAmendmentRequestSchema>;
+
 export const patchApartmentContextRequestSchema = z.object({
   apartmentDurationNights: z.coerce.number().int().min(1),
   apartmentRateTierCode: z.string().trim().min(1),

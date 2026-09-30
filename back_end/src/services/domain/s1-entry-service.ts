@@ -560,13 +560,24 @@ export async function updateEntryIntakeFields(
     contactPersonEmail?: string;
     expectedVersion?: number;
   },
+  /**
+   * INTERNAL ONLY — never reachable from the HTTP route (the same discipline as
+   * `confirmReservation`'s carry flags). The governed Negotiation amendment
+   * (`negotiation-amendment-service`) owns the S2 consequences this function knows nothing
+   * about: retiring the pass's live quotations, re-marking the rooms, and writing the
+   * AmendmentEventRecord. Widening the stage gate on `PATCH /entries/:id` instead would let any
+   * caller change the party at S2 and leave a quote standing for guests who are not coming.
+   */
+  opts?: { allowAtNegotiation?: boolean },
 ) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
   // Sealed records are read-only — an EXPIRED booking still sits at S1, so the stage check
   // below alone let its intake keep being edited.
   enforceEntryNotSealedForWorkingAction({ status: entry.status });
-  if (entry.currentStage !== Stage.S1) {
+  const stageAllowed =
+    entry.currentStage === Stage.S1 || (opts?.allowAtNegotiation === true && entry.currentStage === Stage.S2);
+  if (!stageAllowed) {
     throw new ValidationError(`Cannot edit intake fields — entry has advanced to ${entry.currentStage}. Use the stage-specific amendment flow.`);
   }
   if (input.expectedVersion != null && entry.version !== input.expectedVersion) {

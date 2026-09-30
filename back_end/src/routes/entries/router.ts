@@ -11,6 +11,7 @@ import {
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
   setExpectedArrivalRequestSchema,
+  negotiationAmendmentRequestSchema,
   updateEntryRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
@@ -20,6 +21,7 @@ import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
+import { amendNegotiationConfiguration } from "../../services/domain/negotiation-amendment-service.js";
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
@@ -587,6 +589,30 @@ entriesRouter.patch("/:id/group-billing-mode", requireActorLevel("L3"), validate
     next(e);
   }
 });
+
+/**
+ * Change the rooms and the party without leaving Negotiation (2026-09-30). L1 opens the door;
+ * the service raises the bar to the FOM once a quotation has gone to the guest or been accepted,
+ * reading the level from the verified session and never from the body.
+ */
+entriesRouter.post(
+  "/:id/negotiation-amendment",
+  requireActorLevel("L1"),
+  validateBody(negotiationAmendmentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const outcome = await amendNegotiationConfiguration(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.json(outcome);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /** Booking flow's step-1 Edit — narrow update for intake fields only, S1-gated server-side. */
 entriesRouter.patch("/:id", requireActorLevel("L1"), validateBody(updateEntryRequestSchema), async (req, res, next) => {

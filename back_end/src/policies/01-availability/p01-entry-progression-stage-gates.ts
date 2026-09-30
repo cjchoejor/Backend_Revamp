@@ -1,5 +1,6 @@
+import type { ActorLevel } from "@prisma/client";
 import { EntryStatus, Stage } from "@prisma/client";
-import { StageGateBlockedError, StateTransitionError } from "../../lib/errors.js";
+import { PolicyGateBlockedError, StageGateBlockedError, StateTransitionError } from "../../lib/errors.js";
 
 /** Policy 1 — S5→S6 progression requires entry at S5. */
 export function enforceEntryAtS5ForS5ToS6Progression(input: { currentStage: Stage }) {
@@ -142,6 +143,67 @@ export function enforceEntryActiveForStageTransition(input: { status: EntryStatu
  * availability while parked is legitimate, and progression is separately gated by
  * `enforceEntryActiveForStageTransition`.
  */
+/**
+ * The rooms and the party may be changed at NEGOTIATION, in place (2026-09-30, operator ruling).
+ *
+ * S2 only, and deliberately so. At S1 the intake edit is already the way. At S3 a committed hold
+ * and possibly money stand; at S4 a frozen Reservation does — both of which the existing
+ * re-entry to Negotiation deals with properly by sealing the pass and superseding the paperwork,
+ * after which the operator amends here and walks forward again. Giving those stages their own
+ * in-place form would be a second, weaker door into the same act.
+ */
+export function enforceEntryAtS2ForNegotiationAmendment(input: { currentStage: Stage; status: EntryStatus }) {
+  enforceEntryNotSealedForWorkingAction({ status: input.status });
+  if (input.status === EntryStatus.PARKED) {
+    throw new StateTransitionError(
+      "This booking is parked — resume it before changing the rooms or the party",
+      "ENTRY_PARKED",
+    );
+  }
+  if (input.currentStage !== Stage.S2) {
+    throw new StateTransitionError(
+      input.currentStage === Stage.S1
+        ? "The booking is still at Inquiry — change the rooms and the party there"
+        : `The rooms and the party are changed at Negotiation — this booking is at ${input.currentStage}. Re-enter to Negotiation first, then change it there.`,
+      "NOT_AT_S2",
+    );
+  }
+}
+
+/**
+ * Authority follows what MOVED, not the stage — the p58 doctrine, applied to the paper the guest
+ * is holding rather than to the step the booking sits on.
+ *
+ *   nothing sent   → L1. The same act as picking the rooms in the first place, one call later.
+ *   quote SENT     → L2. The guest holds a quotation this makes untrue.
+ *   quote ACCEPTED → L2. They agreed to these rooms at this price; changing it is not a desk
+ *                    decision, it is flagged up to the FOM or the GM (operator, 2026-09-30).
+ *
+ * An accepted quote is NOT refused outright: the operator's ruling was that the change must be
+ * possible, with approval — so an FOM or a GM applies it directly, and an L1 is told whose call
+ * it is instead of being sent back to Inquiry.
+ */
+export function enforceNegotiationAmendmentAuthority(input: {
+  actorLevel: ActorLevel;
+  quotationSent: boolean;
+  quotationAccepted: boolean;
+}) {
+  const elevated = input.actorLevel === "L2" || input.actorLevel === "L3" || input.actorLevel === "L4";
+  if (elevated) return;
+  if (input.quotationAccepted) {
+    throw new PolicyGateBlockedError(
+      "AUTH_REQUIRED_L2",
+      "The guest has ACCEPTED this quotation — changing the rooms or the party now needs the FOM's approval.",
+    );
+  }
+  if (input.quotationSent) {
+    throw new PolicyGateBlockedError(
+      "AUTH_REQUIRED_L2",
+      "The quotation has gone to the guest — changing the rooms or the party now needs the FOM.",
+    );
+  }
+}
+
 export function enforceEntryNotSealedForWorkingAction(input: { status: EntryStatus }) {
   if (input.status === EntryStatus.ACTIVE || input.status === EntryStatus.PARKED) return;
   throw new StateTransitionError(
