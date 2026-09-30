@@ -536,6 +536,12 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
       </StepCard>
 
+      {/* Every version, directly under the table that produced them (2026-09-30, operator). The
+          history used to sit below the quote and the marker, pages away from the grid whose
+          Save mints each version — so the round trip "price it · read what that produced" ran
+          down the whole step and back. */}
+      {allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
+
       {/* Two cards, not one (2026-09-29, operator: "separate them into two sections"). They were
           one card with four fields that alternated between two subjects and three acts sharing a
           grid — nothing said which field fed which button. Now each card is one subject with its
@@ -731,7 +737,6 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         />
       ) : null}
 
-      {allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
 
       <CompetingClaimsCard entryId={entry.id} />
       <RequestsCard />
