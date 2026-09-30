@@ -294,6 +294,7 @@ export function RoomCompositionsTable({
   saveLabel,
   saving,
   unsaved,
+  saveAside,
   onFaultsChange,
   initial,
   onChange,
@@ -333,6 +334,13 @@ export function RoomCompositionsTable({
    * because pressing it then would mint a new version identical to the one on file.
    */
   unsaved?: boolean;
+  /**
+   * Rendered immediately LEFT of the Save (2026-09-30, operator: "move this section to left side
+   * of save button below the table since we have to set and save it at that section"). The
+   * quotation's validity is written BY the save, so it belongs with it rather than in a card
+   * further down the step.
+   */
+  saveAside?: React.ReactNode;
   /**
    * Every fault the table can see, in the operator's words, so the step can hold its own acts
    * shut for the same reasons rather than each surface deciding separately what "sound" means.
@@ -1661,6 +1669,8 @@ export function RoomCompositionsTable({
               Saved — the quotation is priced on exactly this table.
             </span>
           )}
+          <div className="rct-save-act">
+            {saveAside}
           <button
             type="button"
             className={`btn btn-primary rct-save-btn${faults.length > 0 ? "" : unsaved ? " dirty" : " clean"}`}
@@ -1676,6 +1686,7 @@ export function RoomCompositionsTable({
           >
             {saving ? "Saving…" : !unsaved && faults.length === 0 ? "Saved" : (saveLabel ?? "Save & price it")}
           </button>
+          </div>
         </div>
       )}
       {/* One line. The old version also warned that child meal discounts were "pending a backend

@@ -2733,8 +2733,36 @@
     padding-top: 10px;
     border-top: 1px solid var(--line);
   }
-  & .rct-save-btn {
+  /* The validity and the Save travel together at the right end — the save is what writes it. */
+  & .rct-save-act {
     margin-left: auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  & .rct-valid {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+  }
+  & .rct-valid .k {
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  & .rct-valid input {
+    width: 58px;
+    text-align: center;
+    font-family: var(--deskmono);
+  }
+  & .rct-valid-h {
+    flex-basis: 100%;
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+  & .rct-save-btn {
     flex: none;
   }
   & .rct-faults {

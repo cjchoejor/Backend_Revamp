@@ -1108,6 +1108,7 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   saveLabel?: string;
   saving?: boolean;
   unsaved?: boolean;
+  saveAside?: React.ReactNode;
   onFaultsChange?: (faults: string[]) => void;
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */

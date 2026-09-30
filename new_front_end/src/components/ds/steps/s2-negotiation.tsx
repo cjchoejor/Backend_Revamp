@@ -485,6 +485,34 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               saveLabel={working ? "Save & price it again" : "Save & price it"}
               saving={generateM.isPending || regenerateM.isPending}
               unsaved={tableUnsaved}
+              saveAside={
+                <label className="rct-valid">
+                  <span className="k">Valid for</span>
+                  <input
+                    className="input narrow"
+                    inputMode="numeric"
+                    aria-label="Valid for · days"
+                    value={validDays}
+                    readOnly={!editable}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, "");
+                      const n = Number(v);
+                      setValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
+                    }}
+                  />
+                  <span className="k">days</span>
+                  <span className={`rct-valid-h${validDaysNumber == null ? " warn-ink" : ""}`}>
+                    {validDaysNumber == null ? (
+                      `1 to ${maxValidDays}`
+                    ) : (
+                      <>
+                        at most {plural(maxValidDays, "day")}
+                        {checkInAhead ? " · ends before check-in" : ""} → <b>{fmtDateTime(validityEnd, tz)}</b>
+                      </>
+                    )}
+                  </span>
+                </label>
+              }
               onFaultsChange={setTableFaults}
               persistKey={entry.id}
               entryId={entry.id}
@@ -563,35 +591,13 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
       <StepCard
         flow="quote"
         title="The quote"
-        meta="How long the offer stands, and your own note. Then send it to the guest, or just put the price on record — either satisfies the move to Set up."
+        meta="Your own note, and where the quotation goes. How long it stands is set with the table's Save, which is what writes it."
       >
+        {/* "Valid for" moved to the table's Save row on 2026-09-30 (operator: "we have to set and
+            save it at that section") — the save is what writes it. The note stays here: it is
+            the operator's own annotation, not a term of the offer. */}
         <div className="form2" style={{ marginBottom: 12 }}>
-          <div className="field">
-            <label>Valid for · days</label>
-            <input
-              className="input narrow"
-              inputMode="numeric"
-              value={validDays}
-              readOnly={!editable}
-              onChange={(e) => {
-                const v = e.target.value.replace(/\D/g, "");
-                const n = Number(v);
-                setValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
-              }}
-            />
-            <span className={`hint${validDaysNumber == null ? " warn-ink" : ""}`}>
-              {validDaysNumber == null ? (
-                `1 to ${maxValidDays} days`
-              ) : (
-                <>
-                  at most {plural(maxValidDays, "day")}
-                  {checkInAhead ? " · ends before check-in" : ""} → <b>{fmtDateTime(validityEnd, tz)}</b>
-                </>
-              )}
-              {working ? ` · used when the quote is generated again` : ""}
-            </span>
-          </div>
-          <div className="field">
+          <div className="wide field">
             <label>Internal note · not shown to the guest</label>
             <input className="input" value={notes} readOnly={!editable} placeholder="optional" onChange={(e) => setNotes(e.target.value)} />
           </div>
