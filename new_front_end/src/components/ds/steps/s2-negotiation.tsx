@@ -34,6 +34,7 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
+import { ChangeConfiguration } from "./s2-configuration";
 import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
@@ -163,6 +164,12 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
+  /**
+   * "Change configuration" (2026-09-30) — the rooms and the party, changed here rather than by
+   * re-entering to Inquiry. It takes over this card while it is open: the composition table
+   * prices a plan, and editing the plan underneath it would be two tables for one booking.
+   */
+  const [changing, setChanging] = useState(false);
   /**
    * Which nights each chosen room actually holds, for the table's leading Dates column
    * (2026-09-30, operator). Derived HERE rather than in the grid because this is where the
@@ -380,7 +387,16 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         title="Who sleeps where, and their meals"
         meta="One row per room — the guests by age band, the meal plans, extra beds, any negotiated rate and the booking's discount. The house prices the quotation from this table; nothing is added up here."
       >
-        {tableOpen ? (
+        {changing ? (
+          <ChangeConfiguration
+            entry={entry}
+            onClose={() => setChanging(false)}
+            onDone={() => {
+              setChanging(false);
+              refresh();
+            }}
+          />
+        ) : tableOpen ? (
           <Tool>
             <RoomCompositionPlanner
               sealedRoomIds={sealedRoomIds}
@@ -422,6 +438,19 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
           </>
         )}
         <ChildrenAges entry={entry} />
+        {/* The rooms and the party are changed HERE, not by re-entering to Inquiry (2026-09-30,
+            operator ruling). It sits under the table it changes, and closes while the change is
+            being made so there is only ever one plan on screen. */}
+        {!changing && editable && !past ? (
+          <div className="row-acts" style={{ marginTop: 12 }}>
+            <Button kind="quiet" compact onClick={() => setChanging(true)}>
+              Change configuration…
+            </Button>
+            <span className="meta">
+              add or drop rooms, change the adults, the children and their ages — the dates stay as they are
+            </span>
+          </div>
+        ) : null}
       </StepCard>
 
       {/* Two cards, not one (2026-09-29, operator: "separate them into two sections"). They were

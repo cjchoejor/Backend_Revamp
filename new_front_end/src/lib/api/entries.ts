@@ -1135,3 +1135,51 @@ export async function recordEarlyDeparture(
   return apiRequest<EarlyDepartureOutcome>(`/api/entries/${entryId}/early-departure`, { method: "POST", session, body });
 }
 
+
+/**
+ * Change the rooms and the party WITHOUT leaving Negotiation (2026-09-30). Dates are deliberately
+ * not here: a date change goes back to Inquiry. L1 opens the door; the backend raises the bar to
+ * the FOM once a quotation has gone to the guest or been accepted.
+ */
+export type NegotiationAmendmentOutcome = {
+  entryId: string;
+  amendmentId: string | null;
+  partyChanged: boolean;
+  roomsChanged: boolean;
+  priorRoomIds: string[];
+  newRoomIds: string[];
+  quotationsInvalidated: Array<{ id: string; referenceNumber: string; priorState: string }>;
+  hold:
+    | { action: "REPLACED"; priorHoldId: string; holdId: string; expiresAt: string }
+    | { action: "RELEASED"; priorHoldId: string; note: string }
+    | null;
+  summary: string;
+};
+
+export async function amendNegotiationConfiguration(
+  session: Session,
+  entryId: string,
+  body: {
+    party?: {
+      adultCount?: number;
+      childCount?: number;
+      childAges?: number[];
+      numberOfRooms?: number;
+      bedTypeRequest?: Record<string, number> | null;
+    };
+    rooms?: {
+      configurationId: string;
+      roomIds?: string[];
+      perNight?: Array<{ date: string; roomIds: string[] }>;
+      deficientAcknowledgements?: unknown;
+    };
+    reason: string;
+    expectedVersion?: number;
+  },
+) {
+  return apiRequest<NegotiationAmendmentOutcome>(`/api/entries/${entryId}/negotiation-amendment`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
