@@ -2752,11 +2752,11 @@
   & .rct-t.has-dates .room {
     left: 98px;
   }
-  /* The spare width belongs to the trailing column — it carries the Rates toggle and each
-     room's total, and it is where the surplus sat before the Dates column arrived. */
-  & .rct-t th.ratebtn {
-    width: 100%;
-  }
+  /* Nothing claims the surplus (2026-09-30, second pass — operator: "now the rate+ column is
+     too big, see how the old table looked like"). Pinning it to the trailing column swapped one
+     over-wide column for another; the table shared the spare width across every column before
+     the Dates column arrived, and it does again now that Dates is fixed and can no longer take
+     the lion's share. */
   /* A room held for only part of the stay — the case the column exists for. */
   & .rct-t td.dates.part {
     color: var(--warn);
