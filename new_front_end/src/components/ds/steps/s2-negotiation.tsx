@@ -34,7 +34,7 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
-import { ChangeConfiguration } from "./s2-configuration";
+import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
 import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
@@ -441,6 +441,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         {/* The rooms and the party are changed HERE, not by re-entering to Inquiry (2026-09-30,
             operator ruling). It sits under the table it changes, and closes while the change is
             being made so there is only ever one plan on screen. */}
+        {!changing ? <WaitingConfigurationChange entry={entry} /> : null}
         {!changing && editable && !past ? (
           <div className="row-acts" style={{ marginTop: 12 }}>
             <Button kind="quiet" compact onClick={() => setChanging(true)}>
@@ -451,6 +452,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
             </span>
           </div>
         ) : null}
+        {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
       </StepCard>
 
       {/* Two cards, not one (2026-09-29, operator: "separate them into two sections"). They were

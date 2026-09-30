@@ -34,14 +34,18 @@ import {
   roomsFromResultSet,
   type AvailabilityQueryResponse,
 } from "@/lib/api/availability";
-import { amendNegotiationConfiguration } from "@/lib/api/entries";
+import {
+  amendNegotiationConfiguration,
+  decideNegotiationAmendment,
+  withdrawNegotiationAmendment,
+} from "@/lib/api/entries";
 import { getAllowedRoomCounts } from "@/lib/api/child-policy";
 import { listRooms } from "@/lib/api/rooms";
 import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
-import { fmtRange, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
-import { Tool, toastRefusal } from "./kit";
+import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 
 /**
@@ -275,6 +279,13 @@ export function ChangeConfiguration({
       return amendNegotiationConfiguration(session!, entry.id, body);
     },
     onSuccess: (o) => {
+      if (!o.applied) {
+        // The operator prepared it; nothing on the booking has moved (2026-09-30 ruling).
+        toast.success(`Sent for approval — ${o.summary}`);
+        toast.info("The FOM sees it on this step. Nothing has changed on the booking yet.");
+        onDone();
+        return;
+      }
       toast.success(`The configuration is changed — ${o.summary}`);
       if (o.quotationsInvalidated.length > 0) {
         toast.info(
@@ -292,6 +303,14 @@ export function ChangeConfiguration({
     },
     onError: (e) => toastRefusal(e, "The configuration could not be changed"),
   });
+
+  /**
+   * Once a quotation has gone to the guest or been accepted, the change is the FOM's call — so
+   * the desk says so on the button rather than letting the operator press Save and be told
+   * afterwards. The backend decides for real; this only names what the press will do.
+   */
+  const liveQuote = (entry.quotations ?? []).some((q) => q.state === "SENT" || q.state === "ACCEPTED");
+  const needsApproval = liveQuote && !atLeast(session?.actorLevel, "L2");
 
   const nothingMoved = !partyMoved && !roomsMoved;
   const blocked =
@@ -485,7 +504,7 @@ export function ChangeConfiguration({
                         : undefined
             }
           >
-            {save.isPending ? "Saving…" : "Save the configuration"}
+            {save.isPending ? (needsApproval ? "Sending…" : "Saving…") : needsApproval ? "Send for the FOM's approval" : "Save the configuration"}
           </Button>
           <span className="meta">
             {partyMoved && roomsMoved
@@ -498,10 +517,127 @@ export function ChangeConfiguration({
           </span>
         </div>
         <p className="meta" style={{ marginTop: 8 }}>
-          Saving retires any quotation already priced on the old configuration — price it again before moving to Set up.
-          A provisional block moves to the new rooms and keeps its original deadline.
+          {needsApproval
+            ? "The guest is holding a quotation for the rooms as they are, so this goes to the FOM. Nothing changes on the booking until they approve it."
+            : "Saving retires any quotation already priced on the old configuration — price it again before moving to Set up. A provisional block moves to the new rooms and keeps its original deadline."}
         </p>
       </section>
+    </div>
+  );
+}
+
+/**
+ * A configuration change PREPARED at the desk, waiting for the FOM (2026-09-30). It sits with
+ * the table it would change, because that is where both people look: the operator who raised it
+ * and the FOM who decides. Approving APPLIES it — the whole governed act runs again as the
+ * approver, so a room taken in the meantime is refused then, in words, rather than the approval
+ * being a promise the booking cannot keep.
+ */
+export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
+  const [note, setNote] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+  const elevated = atLeast(session?.actorLevel, "L2");
+
+  const requests = entry.negotiationAmendmentRequests ?? [];
+  const waiting = requests.find((r) => r.state === "REQUESTED") ?? null;
+  const decide = useMutation({
+    mutationFn: (decision: "APPROVE" | "REJECT") =>
+      decideNegotiationAmendment(session!, entry.id, waiting!.id, { decision, note: note.trim() || undefined }),
+    onSuccess: (r) => {
+      if (r.state === "APPROVED") {
+        toast.success(`Approved — ${r.outcome?.summary ?? "the configuration is changed"}`);
+        if ((r.outcome?.quotationsInvalidated ?? []).length > 0) {
+          toast.info("The quotation it was priced on is retired — price it again before Set up.");
+        }
+      } else {
+        toast.success("Turned down — the desk sees your note");
+      }
+      setNote("");
+      setRejecting(false);
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The change could not be decided"),
+  });
+  const takeBack = useMutation({
+    mutationFn: () => withdrawNegotiationAmendment(session!, entry.id, waiting!.id, { note: note.trim() || undefined }),
+    onSuccess: () => {
+      toast.success("Taken back — nothing was changed");
+      setNote("");
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The change could not be taken back"),
+  });
+
+  if (!waiting) return null;
+  return (
+    <div className="cfg-wait" role="status">
+      <div className="cfg-wait-h">
+        <b>A change to the rooms and the party is waiting</b>
+        <span className="meta">
+          raised {fmtDateTime(waiting.requestedAt)} · the guest is holding a quotation, so it is the FOM&rsquo;s call
+        </span>
+      </div>
+      <div className="cfg-wait-b">
+        <b className="cfg-wait-s">{waiting.summary}</b>
+        <span className="meta">&ldquo;{waiting.reason}&rdquo;</span>
+      </div>
+      {elevated ? (
+        <>
+          <div className="row-acts">
+            <Button kind="primary" compact onClick={() => decide.mutate("APPROVE")} state={decide.isPending ? "inert" : "default"}>
+              Approve &amp; apply
+            </Button>
+            <Button kind="quiet" compact onClick={() => setRejecting((v) => !v)}>
+              {rejecting ? "Keep it waiting" : "Turn it down…"}
+            </Button>
+            <span className="meta">approving changes the booking at once and retires the quotation it was priced on</span>
+          </div>
+          {rejecting && (
+            <div className="field" style={{ marginTop: 8 }}>
+              <label>Why it is turned down</label>
+              <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="the rate was agreed with the agent for these rooms" />
+              <div className="row-acts" style={{ marginTop: 8 }}>
+                <Button
+                  kind="danger"
+                  compact
+                  onClick={() => decide.mutate("REJECT")}
+                  state={!note.trim() || decide.isPending ? "inert" : "default"}
+                  reason={!note.trim() ? "Say why — the desk sees the note" : undefined}
+                >
+                  Turn it down
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="row-acts">
+          <Button kind="quiet" compact onClick={() => takeBack.mutate()} state={takeBack.isPending ? "inert" : "default"}>
+            Take it back
+          </Button>
+          <span className="meta">waiting for the FOM — nothing on the booking has changed</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The last few decided ones, so the desk can see what happened to what it asked for. */
+export function DecidedConfigurationChanges({ entry }: { entry: EntryDetail }) {
+  const decided = (entry.negotiationAmendmentRequests ?? []).filter((r) => r.state !== "REQUESTED").slice(0, 3);
+  if (decided.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10, display: "grid", gap: 3 }}>
+      {decided.map((r) => (
+        <span key={r.id} className="meta">
+          {r.state === "APPROVED" ? "Approved" : r.state === "REJECTED" ? "Turned down" : r.state === "WITHDRAWN" ? "Taken back" : "Overtaken"} ·{" "}
+          {r.summary}
+          {r.decisionNote ? ` — “${r.decisionNote}”` : ""}
+          {r.decidedAt ? ` · ${fmtDateTime(r.decidedAt)}` : ""}
+        </span>
+      ))}
     </div>
   );
 }

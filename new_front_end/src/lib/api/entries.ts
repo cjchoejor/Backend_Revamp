@@ -1142,6 +1142,9 @@ export async function recordEarlyDeparture(
  * the FOM once a quotation has gone to the guest or been accepted.
  */
 export type NegotiationAmendmentOutcome = {
+  /** False when the operator could not take it themselves — it is waiting for the FOM. */
+  applied: boolean;
+  requestId?: string;
   entryId: string;
   amendmentId: string | null;
   partyChanged: boolean;
@@ -1155,6 +1158,32 @@ export type NegotiationAmendmentOutcome = {
     | null;
   summary: string;
 };
+
+/** Approve (which applies it) or turn down a waiting change — L2+. */
+export async function decideNegotiationAmendment(
+  session: Session,
+  entryId: string,
+  requestId: string,
+  body: { decision: "APPROVE" | "REJECT"; note?: string },
+) {
+  return apiRequest<{ state: string; outcome?: NegotiationAmendmentOutcome }>(
+    `/api/entries/${entryId}/negotiation-amendment-requests/${requestId}/decide`,
+    { method: "POST", session, body },
+  );
+}
+
+/** Taken back by the desk before anyone decided. */
+export async function withdrawNegotiationAmendment(
+  session: Session,
+  entryId: string,
+  requestId: string,
+  body: { note?: string } = {},
+) {
+  return apiRequest<{ state: string }>(
+    `/api/entries/${entryId}/negotiation-amendment-requests/${requestId}/withdraw`,
+    { method: "POST", session, body },
+  );
+}
 
 export async function amendNegotiationConfiguration(
   session: Session,

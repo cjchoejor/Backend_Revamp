@@ -159,6 +159,13 @@
 /* A refusal of the party just typed — the same loud treatment the negotiation table uses. */
 .ds .cfg-stop:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 600; }
 
+/* A configuration change waiting for the FOM (2026-09-30) — it has to catch the eye of the
+   person who can decide it, so it reads as a standing notice rather than another quiet row. */
+.ds .cfg-wait:not(.desk-root *) { display: grid; gap: var(--s3); margin-top: var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--warn, #8f5300); border-radius: var(--r-card); background: var(--warn-soft, #fdf4e7); }
+.ds .cfg-wait-h:not(.desk-root *) { display: grid; gap: 2px; }
+.ds .cfg-wait-b:not(.desk-root *) { display: grid; gap: 2px; padding: var(--s2) var(--s3); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-control); }
+.ds .cfg-wait-s:not(.desk-root *) { font-size: var(--t-lead); }
+
 /* The list's end-of-table bar sits ABOVE the sticky first column, or the column paints through
    it and the bar reads as a grey block eating the last rows (operator, image 4). */
 .ds .table-foot:not(.desk-root *) { z-index: 5; }

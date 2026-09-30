@@ -591,6 +591,22 @@ export type EntryDetail = EntryListItem & {
   stageDwellRecords?: Array<{ stage: string; enteredAt: string; mode: string }>;
   quotations?: QuotationSummary[];
   speculativeHolds?: SpeculativeHoldSummary[];
+  /**
+   * Configuration changes prepared at the desk that need the FOM (2026-09-30), newest first.
+   * `REQUESTED` is the one waiting; the rest are history the card prints under it.
+   */
+  negotiationAmendmentRequests?: Array<{
+    id: string;
+    state: "REQUESTED" | "APPROVED" | "REJECTED" | "WITHDRAWN" | "SUPERSEDED";
+    summary: string;
+    reason: string;
+    requestedBy: string;
+    requestedAt: string;
+    decidedBy?: string | null;
+    decidedAt?: string | null;
+    decisionNote?: string | null;
+    appliedAmendmentId?: string | null;
+  }>;
   vipArrivalNotifications?: VipArrivalNotificationSummary[];
   disputes?: DisputeSummary[];
   keyReturnRecords?: KeyReturnSummary[];
