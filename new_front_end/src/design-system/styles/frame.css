@@ -139,9 +139,16 @@
    hold time…" read as a sentence fragment. A hairline and the full ink say it can be pressed;
    the fill still only arrives on hover, so a card of them stays quiet. The dark topbar and rail
    keep their own treatment. An inert one is dashed — visibly a control, visibly not available. */
-.ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { border-color: var(--line); color: var(--ink); }
+/* Second pass (2026-09-30, operator's screenshot: "the buttons don't look like buttons at all
+   — Generate the quote only, A time I choose, Provisional block, Extend ... it looks like
+   something to read", "UIappeal"). A hairline in --line on a cream card is nearly invisible and
+   the generated sheet also drops the weight to 400, so the control read as a sentence. A quiet
+   button now carries a real surface, a hairline that contrasts with the card it sits on, and the
+   medium weight every other control has. It is still quiet — the fill is the page's own surface,
+   not an accent — so a card of them does not compete with the primary act. */
+.ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface); border-color: var(--line-2); color: var(--ink); font-weight: 500; }
 .ds .btn-quiet:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-3); border-color: var(--ink-3); }
-.ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); }
+.ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); font-weight: 400; }
 /* The list's end-of-table bar sits ABOVE the sticky first column, or the column paints through
    it and the bar reads as a grey block eating the last rows (operator, image 4). */
 .ds .table-foot:not(.desk-root *) { z-index: 5; }

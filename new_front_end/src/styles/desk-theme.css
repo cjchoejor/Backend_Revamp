@@ -2721,6 +2721,43 @@
     color: var(--green-d);
     text-decoration: underline;
   }
+  /* Which nights the rooms below are for (2026-09-30, operator) — the table's first row, so it
+     scrolls with the grid and can never be mistaken for another booking's dates. */
+  & .rct-t .rct-dates th {
+    text-align: left;
+    padding: 6px 10px;
+    background: var(--panel-2, #f6f1e7);
+    border-bottom: 1px solid var(--line);
+    font-weight: 400;
+  }
+  & .rct-t .rct-dates .k {
+    color: var(--ink-3);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 6px;
+  }
+  & .rct-t .rct-dates b {
+    font-size: 13px;
+    color: var(--ink);
+  }
+  & .rct-t .rct-dates .n {
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+  & .rct-t .rct-dates .v {
+    margin-left: 10px;
+    font-size: 11.5px;
+    color: var(--warn);
+  }
+  /* A room held for only part of the stay says so on its own row. */
+  & .rct-t .room .rct-rn {
+    display: block;
+    font-size: 10.5px;
+    color: var(--warn);
+    font-weight: 600;
+  }
   /* Derived occupancy cell — read-only, mono, visually "computed". */
   & .rct-t .occ {
     font-family: var(--deskmono);

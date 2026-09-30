@@ -61,6 +61,15 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
 
   const pct = (rate: number) => `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   const visibleAddOns = ADD_ON_COLS.filter(([key]) => ref.roomTypes.some((t) => t[key] != null));
+  /**
+   * The MSR floor gets a column of its OWN (2026-09-30, operator: "if the basis column shows
+   * MSR, why is it named basis — show it as MSR"). Basis answers WHERE the rate came from
+   * (the standard plan, or a party's package); the floor is a different fact entirely — the
+   * limit the rate may not go under. Reading one out of the other's column was the confusion.
+   * The column drops out when no type has a floor, exactly as the add-on columns do: a party's
+   * package rate is negotiated and the pricing pipeline exempts it from MSR.
+   */
+  const anyFloor = ref.roomTypes.some((t) => t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null);
 
   return (
     // Boxed (2026-08-06, operator request) — the same bordered-strip language as the discount
@@ -87,7 +96,14 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
         <table style={{ borderCollapse: "collapse", fontSize: 11.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--ink-3, #7a6a52)" }}>
-              {["Room type", "Rooms", "Room", ...visibleAddOns.map(([, label]) => label), "Basis"].map((h) => (
+              {[
+                "Room type",
+                "Rooms",
+                "Room",
+                ...visibleAddOns.map(([, label]) => label),
+                "Basis",
+                ...(anyFloor ? ["MSR"] : []),
+              ].map((h) => (
                 <th key={h} style={TH}>
                   {h}
                 </th>
@@ -117,21 +133,28 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
                       {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
                     </>
                   ) : t.roomRateSource === "STANDARD_RATE_PLAN" ? (
-                    <>
-                      standard plan
-                      {t.msrValue != null && (
-                        <>
-                          {" · "}
-                          <span style={FLOOR} title="Minimum sellable rate for this room type — a booking priced below it needs the GM's waiver">
-                            floor {moneyOrDash(t.msrValue, ref.currency)}
-                          </span>
-                        </>
-                      )}
-                    </>
+                    "standard plan"
                   ) : (
                     "no rate on file"
                   )}
                 </td>
+                {anyFloor && (
+                  <td style={{ ...TD, paddingRight: 0 }}>
+                    {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null ? (
+                      <span
+                        className="mono"
+                        style={FLOOR}
+                        title="Minimum sellable rate — the house's floor for this room type. A booking priced below it needs the GM's waiver."
+                      >
+                        {moneyOrDash(t.msrValue, ref.currency)}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--ink-3, #7a6a52)" }} title="Negotiated rates carry no MSR floor">
+                        —
+                      </span>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

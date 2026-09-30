@@ -357,6 +357,23 @@ export function RoomCompositionsTable({
     [rateRef],
   );
   /**
+   * What is wrong with a row, in the operator's words — null when nothing is (2026-09-30,
+   * operator's screenshot: room 205 sitting at 0 adults, "that whole box should be showing in red
+   * highlight ... similar like that if there is any issue in any of the boxes"). Both faults are
+   * refused downstream, so the grid says so before the click rather than after it: a room in the
+   * plan with nobody in it breaks the "no room is empty" seating invariant, and a room of children
+   * with no adult is the unaccompanied-minor rule (`requiredAccompanyingAdults`, default 1 on
+   * every room type).
+   */
+  const rowFault = (roomId: string): string | null => {
+    const r = rows[roomId] ?? EMPTY_ROW;
+    const adults = cnt(r.ad);
+    if (adults + cnt(r.c6) + cnt(r.u6) === 0)
+      return "nobody is in this room — put someone in it, or drop the room back at Inquiry";
+    if (adults === 0) return "no adult in this room — children cannot be booked in on their own";
+    return null;
+  };
+  /**
    * The MSR floor for a room's type — the house's minimum sellable rate (2026-09-29). It applies
    * only where the rate came from the standard plan: a party's own rate package is negotiated, so
    * the pricing pipeline exempts it (`belowMsr: agentRate ? false : …`).
@@ -808,8 +825,14 @@ export function RoomCompositionsTable({
     roomCompositions: RoomCompositionInput[];
     discount: { percent?: number; amount?: number } | null;
   } | null>(null);
+  // The preview runs whether or not the rate columns are open (2026-09-30, operator report:
+  // the sum row's SC and GST "can be left unseen ... they show when Rates + is clicked, and after
+  // clicking Rates + once and Rates - again they keep showing"). That was this query: it was
+  // gated on `ratesOpen`, while the footer cells that print its figures were not — so the figures
+  // were blank until the group had been opened once, then stayed from the cache. The money
+  // belongs under the table at all times, so the query does too.
   useEffect(() => {
-    if (!ratesOpen || !entryId || compositions.length === 0) return;
+    if (!entryId || compositions.length === 0) return;
     const discount =
       Number.isFinite(discNum) && discNum > 0
         ? discUnitNow === "percent"
@@ -818,11 +841,11 @@ export function RoomCompositionsTable({
         : null;
     const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount }), 450);
     return () => clearTimeout(t);
-  }, [compositions, ratesOpen, entryId, discNum, discUnitNow]);
+  }, [compositions, entryId, discNum, discUnitNow]);
   const previewQuery = useQuery({
     queryKey: ["quotation-live-preview", entryId, previewBody],
     queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),
-    enabled: !!session && !!entryId && !!previewBody && ratesOpen,
+    enabled: !!session && !!entryId && !!previewBody,
     // Keep the previous figures on screen while the next debounce round-trips — totals
     // shouldn't blink to dashes on every keystroke.
     placeholderData: (prev) => prev,
@@ -835,6 +858,36 @@ export function RoomCompositionsTable({
 
   // Others à-la-carte columns appear only once someone is on the Others plan.
   const othersVisible = sealedRoomIds.some((id) => cnt(rows[id]?.ot ?? "0") > 0);
+
+  // ---- Which nights these rooms are for (2026-09-30) -------------------------------
+  // Operator: "the reservation is from 30 Sept to 3 Oct but we don't know which dates the rooms
+  // are for". The table priced a stay it never named. A stay date is stored at UTC midnight, so
+  // it is read on the UTC calendar — never the desk machine's (the hotel-day rule).
+  const fmtStayDay = (iso: string, withYear = false): string | null => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? null
+      : d.toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          ...(withYear ? { year: "numeric" } : {}),
+          timeZone: "UTC",
+        });
+  };
+  const ciIso = dayToIso(entryCheckIn);
+  const coIso = dayToIso(entryCheckOut);
+  const stayNights =
+    ciIso && coIso ? Math.round((new Date(coIso).getTime() - new Date(ciIso).getTime()) / 86400000) : null;
+  const stayLabel = ciIso && coIso ? `${fmtStayDay(ciIso)} → ${fmtStayDay(coIso, true)}` : null;
+  /** A per-night pick gives rooms different night counts — then the band can't speak for them all. */
+  const nightsVary = stayNights != null && (preview?.rooms ?? []).some((l) => l.nights !== stayNights);
+  /** Every column the table currently renders, for the full-width date band. */
+  const colCount =
+    8 +
+    (childColsVisible ? 2 : 0) +
+    visibleMeals.length +
+    (othersVisible ? 3 : 0) +
+    (ratesOpen ? rateCols.length : 0);
 
   // ---- Spreadsheet keyboard navigation -------------------------------------------
   // Cells are addressed `row:col` via data-cell. Arrow keys move between cells (Left/
@@ -1133,6 +1186,22 @@ export function RoomCompositionsTable({
       <div className="rct-scroll" ref={wrapRef}>
         <table className="rct-t">
           <thead>
+            {stayLabel && (
+              <tr className="rct-dates">
+                <th colSpan={colCount}>
+                  <span className="k">Rooms for</span>
+                  <b>{stayLabel}</b>
+                  {stayNights != null && (
+                    <span className="n">
+                      {stayNights} night{stayNights === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {nightsVary && (
+                    <span className="v">nights differ by room — each room carries its own count</span>
+                  )}
+                </th>
+              </tr>
+            )}
             <tr className="grp">
               <th className="room" />
               <th />
@@ -1223,22 +1292,43 @@ export function RoomCompositionsTable({
                   >
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}
+                    {/* Only when this room's nights differ from the stay's — a per-night pick. */}
+                    {(() => {
+                      const rn = pvByRoom.get(id)?.nights ?? null;
+                      return rn != null && stayNights != null && rn !== stayNights ? (
+                        <span className="rct-rn" title={`This room is held for ${rn} of the stay's ${stayNights} nights`}>
+                          {rn} of {stayNights} nights
+                        </span>
+                      ) : null;
+                    })()}
                   </td>
                   {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
                       not a quiet amber — the figure the operator must not miss (2026-09-29). */}
                   <td
-                    className={`occ${overCap ? " over" : ""}`}
+                    className={`occ${overCap || occ === 0 ? " over" : ""}`}
                     title={
-                      overCap
-                        ? `Over capacity — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`
-                        : cap != null
-                          ? `Capacity ${cap}`
-                          : undefined
+                      occ === 0
+                        ? "Nobody is in this room — every room in the plan must hold someone, or drop the room at Inquiry"
+                        : overCap
+                          ? `Over capacity — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`
+                          : cap != null
+                            ? `Capacity ${cap}`
+                            : undefined
                     }
                   >
                     {occ}
                   </td>
-                  {numCell(rowIdx, id, "ad")}
+                  {/* A room with no adult in it is refused downstream, so the cell says so here
+                      (2026-09-30, "UIappeal") — red, not a quiet blank. */}
+                  {numCell(rowIdx, id, "ad", {
+                    stop: cnt(r.ad) === 0,
+                    title:
+                      occ === 0
+                        ? "Nobody is in this room yet"
+                        : cnt(r.ad) === 0
+                          ? "Every room needs at least one adult — children cannot be booked into a room on their own"
+                          : undefined,
+                  })}
                   {childColsVisible && (
                     <>
                       {numCell(rowIdx, id, "c6")}
@@ -1416,7 +1506,7 @@ export function RoomCompositionsTable({
 
       {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
           carry — net, taxes, grand total, and the discount's effect when one is set. */}
-      {ratesOpen && preview && (
+      {preview && (
         <div className="rct-live">
           <span className="k">Live total</span>
           <span className="parts">
@@ -1438,6 +1528,23 @@ export function RoomCompositionsTable({
           <span className="ln" />
           <span className="src">priced by the backend — the quote will match</span>
         </div>
+      )}
+
+      {/* A room nobody sleeps in, or a room of children with no adult — named, because the red
+          cell says WHICH box and this says what it means ("UIappeal", 2026-09-30). */}
+      {sealedRoomIds.some((id) => rowFault(id)) && (
+        <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>
+            {sealedRoomIds
+              .filter((id) => rowFault(id))
+              .map((id) => `Room ${roomNoOf(id)} — ${rowFault(id)}`)
+              .join(" · ")}
+            . The quote is refused while this stands.
+          </span>
+        </p>
       )}
 
       {/* Rates under the house floor, named — the grid's red cells say WHICH, this says what it
