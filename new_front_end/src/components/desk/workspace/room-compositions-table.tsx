@@ -293,6 +293,7 @@ export function RoomCompositionsTable({
   onSave,
   saveLabel,
   saving,
+  unsaved,
   onFaultsChange,
   initial,
   onChange,
@@ -323,6 +324,15 @@ export function RoomCompositionsTable({
   onSave?: () => void;
   saveLabel?: string;
   saving?: boolean;
+  /**
+   * Does the table still say what the quotation was priced on? (2026-09-30, operator: "if
+   * there's changes made in the table before it can it be shown in red and green after clicking
+   * it and again if there's changes in the table red so that user knows he made changes".)
+   * True = edited since it was priced, or never priced at all. The COLOUR is the state
+   * ("UIappeal"): red while the two disagree, green once they match — and green is inert,
+   * because pressing it then would mint a new version identical to the one on file.
+   */
+  unsaved?: boolean;
   /**
    * Every fault the table can see, in the operator's words, so the step can hold its own acts
    * shut for the same reasons rather than each surface deciding separately what "sound" means.
@@ -1642,23 +1652,29 @@ export function RoomCompositionsTable({
                 <li key={f}>{f}</li>
               ))}
             </ul>
+          ) : unsaved ? (
+            <span className="stop-ink" style={{ fontWeight: 700 }} role="status">
+              Changed since it was priced — save it, or the quotation still says the old figures.
+            </span>
           ) : (
-            <span className="ok-ink" style={{ fontWeight: 700 }}>
-              The table is sound — every room has its guests, and nothing is over a limit.
+            <span className="ok-ink" style={{ fontWeight: 700 }} role="status">
+              Saved — the quotation is priced on exactly this table.
             </span>
           )}
           <button
             type="button"
-            className="btn btn-primary rct-save-btn"
-            disabled={faults.length > 0 || !!saving}
+            className={`btn btn-primary rct-save-btn${faults.length > 0 ? "" : unsaved ? " dirty" : " clean"}`}
+            disabled={faults.length > 0 || !!saving || !unsaved}
             title={
               faults.length > 0
                 ? `Put right what is listed first — ${faults.length} thing${faults.length === 1 ? "" : "s"} to fix`
-                : "Saves this table by pricing it: the house generates the quotation from these rows"
+                : unsaved
+                  ? "Saves this table by pricing it: the house generates the quotation from these rows"
+                  : "Nothing to save — the quotation already carries this table"
             }
             onClick={() => onSave()}
           >
-            {saving ? "Saving…" : (saveLabel ?? "Save & price it")}
+            {saving ? "Saving…" : !unsaved && faults.length === 0 ? "Saved" : (saveLabel ?? "Save & price it")}
           </button>
         </div>
       )}

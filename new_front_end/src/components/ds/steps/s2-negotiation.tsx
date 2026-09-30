@@ -125,6 +125,48 @@ function holdRoomIds(h: SpeculativeHoldSummary): string[] {
 
 /* ------------------------------------------------------------------ the step */
 
+/**
+ * Is the table still what the quotation was priced on? Compared field by field over what the
+ * grid actually controls, so a stored row carrying extra keys — or a rate stored as a string —
+ * does not read as a change. Nothing else is inferred: no quotation at all means unsaved by
+ * definition, since there is nothing for the table to match.
+ */
+function canonComps(list: readonly RoomCompositionInput[] | undefined): string {
+  const n = (v: unknown) => (v == null || v === "" ? "" : String(Number(v)));
+  return [...(list ?? [])]
+    .map((c) =>
+      [
+        c.roomId,
+        n(c.adultCount ?? 0),
+        n(c.cnb6To10Count ?? 0),
+        n(c.cnbUnder6Count ?? 0),
+        n(c.extraBedCount ?? 0),
+        n(c.mealPlanCpCount ?? 0),
+        n(c.mealPlanMaplCount ?? 0),
+        n(c.mealPlanMapdCount ?? 0),
+        n(c.mealPlanApCount ?? 0),
+        n(c.mealPlanOthersCount ?? 0),
+        n(c.othersBreakfastPax),
+        n(c.othersLunchPax),
+        n(c.othersDinnerPax),
+        n(c.negotiatedRoomRate),
+        n(c.negotiatedExtraBedRate),
+        n(c.negotiatedBreakfastRate),
+        n(c.negotiatedLunchRate),
+        n(c.negotiatedDinnerRate),
+        c.serviceChargeApplies === false ? "0" : "1",
+        c.gstApplies === false ? "0" : "1",
+        c.isFoc === true ? "1" : "0",
+        JSON.stringify(
+          [...(c.nightMealOverrides ?? [])].sort((a, b) => String(a.date).localeCompare(String(b.date))),
+        ),
+      ].join("~"),
+    )
+    .sort()
+    .join("//");
+}
+
+
 export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; past: boolean; onPark?: () => void }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -159,6 +201,13 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   // the quote again" would have re-priced the stay without the meals the guest was quoted.
   // After a re-entry it starts from the last terms in force. Read once, at the table's mount.
   const seedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? undefined, [entry.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * What the QUOTATION is priced on right now — re-read on every refresh, unlike the seed above,
+   * which is deliberately read once so a save does not yank the operator's grid out from under
+   * them. This is the baseline the table is compared against to decide whether it has unsaved
+   * changes (2026-09-30).
+   */
+  const pricedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
 
   /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
@@ -227,6 +276,16 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   }, [working, accepted, recordedDiscount]);
 
   /** A blank or zero figure is "no discount"; clearing a recorded one must be said as `null`. */
+  /**
+   * The discount rides on the same save, so a changed one counts as an unsaved change — the
+   * quotation would otherwise still carry the old concession while the bar shows the new one.
+   */
+  const discountMoved =
+    (discountValue.trim() === "" ? null : Number(discountValue)) !== (recordedDiscount?.value ?? null) ||
+    (recordedDiscount != null && discountUnit !== recordedDiscount.unit);
+  const tableUnsaved =
+    !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
+
   const discountPayload = (() => {
     const n = Number(discountValue);
     if (!discountValue.trim() || !Number.isFinite(n) || n <= 0) return null;
@@ -425,6 +484,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
               saveLabel={working ? "Save & price it again" : "Save & price it"}
               saving={generateM.isPending || regenerateM.isPending}
+              unsaved={tableUnsaved}
               onFaultsChange={setTableFaults}
               persistKey={entry.id}
               entryId={entry.id}

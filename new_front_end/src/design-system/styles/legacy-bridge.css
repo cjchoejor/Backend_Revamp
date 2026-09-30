@@ -116,6 +116,15 @@
 .ds .desk-root .btn-sm { height: 30px; padding: 0 12px; font-size: 15px; }
 .ds .desk-root .btn-primary { background: #1E1C19; color: #FFFFFF; border-color: #1E1C19; }
 .ds .desk-root .btn-primary:hover:not(:disabled) { background: #33302B; }
+/* The negotiation table's Save carries its own state as its colour (2026-09-30, "UIappeal"):
+   RED while the table and the quotation disagree, GREEN once they match. It lives here rather
+   than in desk-theme because this sheet loads last and its `.ds .desk-root .btn-primary` would
+   otherwise paint over it. Green is inert on purpose — pressing it would mint a version
+   identical to the one already on file. */
+.ds .desk-root .rct-save-btn.dirty { background: var(--stop, #B3261E); border-color: var(--stop, #B3261E); color: #fff; }
+.ds .desk-root .rct-save-btn.dirty:hover:not(:disabled) { background: #961F18; border-color: #961F18; }
+.ds .desk-root .rct-save-btn.clean,
+.ds .desk-root .rct-save-btn.clean:disabled { background: var(--ok-t, #E7F3EC); border-color: var(--ok, #1E7A4F); color: var(--ok, #1E7A4F); opacity: 1; cursor: default; }
 .ds .desk-root .btn-ghost { background: #FFFFFF; color: #1E1C19; border-color: #C2B49E; }
 .ds .desk-root .btn-ghost:hover:not(:disabled) { background: #F9F5EE; border-color: #706A61; }
 .ds .desk-root .btn:disabled,
