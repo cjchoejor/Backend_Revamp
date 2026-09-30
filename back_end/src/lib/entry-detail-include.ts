@@ -59,6 +59,8 @@ export const entryDetailInclude = {
     },
   },
   stayExtensionRequests: { orderBy: { createdAt: "desc" as const }, take: 5 },
+  /** Configuration changes waiting for the FOM, and the last few decided (2026-09-30). */
+  negotiationAmendmentRequests: { orderBy: { createdAt: "desc" as const }, take: 5 },
   // Early departure (2026-08-22): the one record of a shortened stay - the desk prints its facts
   // on every step from Stay onward.
   earlyDeparture: true,

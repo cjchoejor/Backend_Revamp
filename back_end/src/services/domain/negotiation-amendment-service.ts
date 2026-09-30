@@ -75,7 +75,13 @@ export type NegotiationAmendmentInput = {
   expectedVersion?: number;
 };
 
+/**
+ * What the act did. `applied: false` means the operator could not take it themselves and it is
+ * now WAITING — the outcome then carries `requestId` and nothing on the booking has moved.
+ */
 export type NegotiationAmendmentOutcome = {
+  applied: boolean;
+  requestId?: string;
   entryId: string;
   amendmentId: string | null;
   partyChanged: boolean;
@@ -131,6 +137,8 @@ export async function amendNegotiationConfiguration(
   entryId: string,
   actor: NegotiationAmendmentActor,
   input: NegotiationAmendmentInput,
+  /** Set only by `decideNegotiationAmendmentRequest` — an approval never re-queues itself. */
+  opts?: { applyingRequestId?: string },
 ): Promise<NegotiationAmendmentOutcome> {
   if (!input?.reason?.trim()) throw new ValidationError("A reason is required to change the configuration.");
   if (!input.party && !input.rooms) {
@@ -173,11 +181,31 @@ export async function amendNegotiationConfiguration(
   const live = passQuotations.filter(
     (q) => q.state === QuotationState.DRAFT || q.state === QuotationState.SENT || q.state === QuotationState.ACCEPTED,
   );
-  enforceNegotiationAmendmentAuthority({
-    actorLevel: actor.actorLevel,
-    quotationSent: live.some((q) => q.state === QuotationState.SENT),
-    quotationAccepted: live.some((q) => q.state === QuotationState.ACCEPTED),
-  });
+  /**
+   * May this operator apply the change themselves, or must it wait for the FOM? The gate throws
+   * the sentence the desk shows; here it is CAUGHT, because the operator's ruling was that an
+   * L1 should be able to PREPARE the change and have it flagged up, not be sent away. Nothing
+   * is written on the waiting path — the proposal is stored and the booking is untouched.
+   */
+  const quotationSent = live.some((q) => q.state === QuotationState.SENT);
+  const quotationAccepted = live.some((q) => q.state === QuotationState.ACCEPTED);
+  let mayApply = true;
+  let whyNot: string | null = null;
+  try {
+    enforceNegotiationAmendmentAuthority({ actorLevel: actor.actorLevel, quotationSent, quotationAccepted });
+  } catch (e) {
+    mayApply = false;
+    whyNot = (e as Error).message;
+  }
+  // An approval re-runs this function as the approver, and the approver always may.
+  if (!mayApply && !opts?.applyingRequestId) {
+    return raiseNegotiationAmendmentRequest(prisma, entry, segmentId, actor, input, {
+      priorRoomIds: readOptionSelected(
+        (entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected) ?? null)?.optionSelected,
+      ).distinctRoomIds,
+      whyNot: whyNot ?? "This change needs the FOM.",
+    });
+  }
 
   const sealedBefore = entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected) ?? null;
   const priorRoomIds = readOptionSelected(sealedBefore?.optionSelected).distinctRoomIds;
@@ -421,7 +449,15 @@ export async function amendNegotiationConfiguration(
     createdBy: actor.actorId,
   });
 
+  if (opts?.applyingRequestId) {
+    await prisma.negotiationAmendmentRequest.update({
+      where: { id: opts.applyingRequestId },
+      data: { appliedAmendmentId: amendmentId },
+    });
+  }
+
   return {
+    applied: true,
     entryId,
     amendmentId,
     partyChanged,
@@ -432,4 +468,230 @@ export async function amendNegotiationConfiguration(
     hold,
     summary,
   };
+}
+
+/* ==================================================================================
+ * The waiting half — a change PREPARED by someone who may not apply it (2026-09-30).
+ * ================================================================================== */
+
+/**
+ * Store the proposal and stop. Nothing on the booking moves: the rooms are not re-sealed, the
+ * party is not written, no quotation is retired. Approval re-runs the whole act with every gate,
+ * so a room taken in the meantime is refused THEN, with its real reason — which is exactly why
+ * the proposal is stored rather than half-applied.
+ */
+async function raiseNegotiationAmendmentRequest(
+  prisma: PrismaClient,
+  entry: { id: string; inquiryId: string; adultCount: number | null; childCount: number | null; numberOfRooms: number | null },
+  segmentId: string,
+  actor: NegotiationAmendmentActor,
+  input: NegotiationAmendmentInput,
+  ctx: { priorRoomIds: string[]; whyNot: string },
+): Promise<NegotiationAmendmentOutcome> {
+  const open = await prisma.negotiationAmendmentRequest.findFirst({
+    where: { entryId: entry.id, state: "REQUESTED" },
+  });
+  if (open) {
+    throw new ValidationError(
+      "A change is already waiting for the FOM on this booking — it has to be decided before another is raised.",
+    );
+  }
+
+  /**
+   * The summary is written HERE, from the numbers as they stand, because by the time the FOM
+   * reads it the booking may have moved on; the approver should see what was asked for, and the
+   * re-run is what checks whether it still holds.
+   */
+  const rooms = input.rooms
+    ? await prisma.room.findMany({ where: { id: { in: proposedRoomIds(input.rooms) } }, select: { id: true, roomNumber: true } })
+    : [];
+  const priorRooms = await prisma.room.findMany({
+    where: { id: { in: ctx.priorRoomIds } },
+    select: { id: true, roomNumber: true },
+  });
+  const roomNo = (id: string) =>
+    rooms.find((r) => r.id === id)?.roomNumber ?? priorRooms.find((r) => r.id === id)?.roomNumber ?? id.slice(0, 6);
+  const summary = describeChange(
+    {
+      adults: entry.adultCount,
+      children: entry.childCount,
+      rooms: entry.numberOfRooms,
+      roomIds: ctx.priorRoomIds,
+    },
+    {
+      adults: input.party?.adultCount ?? entry.adultCount,
+      children: input.party?.childCount ?? entry.childCount,
+      rooms: input.party?.numberOfRooms ?? entry.numberOfRooms,
+      roomIds: input.rooms ? proposedRoomIds(input.rooms) : ctx.priorRoomIds,
+    },
+    roomNo,
+  );
+
+  const req = await prisma.negotiationAmendmentRequest.create({
+    data: {
+      entryId: entry.id,
+      segmentId,
+      proposal: input as unknown as PrismaNS.InputJsonValue,
+      summary,
+      reason: input.reason.trim(),
+      requestedBy: actor.actorId,
+    },
+  });
+
+  await auditService.emit(prisma as any, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
+    eventType: "ENTRY.NEGOTIATION_AMENDMENT_REQUESTED",
+    entityType: "Entry",
+    entityId: entry.id,
+    operation: "CREATE",
+    timestamp: new Date(),
+    stageContext: Stage.S2,
+    inquiryId: entry.inquiryId,
+    entryId: entry.id,
+    payload: { requestId: req.id, summary, reason: input.reason.trim(), because: ctx.whyNot },
+    createdBy: actor.actorId,
+  });
+
+  return {
+    applied: false,
+    requestId: req.id,
+    entryId: entry.id,
+    amendmentId: null,
+    partyChanged: false,
+    roomsChanged: false,
+    priorRoomIds: ctx.priorRoomIds,
+    newRoomIds: ctx.priorRoomIds,
+    quotationsInvalidated: [],
+    hold: null,
+    summary,
+  };
+}
+
+/** The rooms a proposal names, in the three shapes the save accepts. */
+function proposedRoomIds(rooms: NonNullable<NegotiationAmendmentInput["rooms"]>): string[] {
+  if (rooms.perNight?.length) return [...new Set(rooms.perNight.flatMap((n) => n.roomIds))];
+  if (rooms.roomIds?.length) return [...new Set(rooms.roomIds)];
+  return rooms.roomId ? [rooms.roomId] : [];
+}
+
+/**
+ * Approve (which APPLIES it), or turn it down. There is no approved-but-unapplied state: an
+ * approval that did not take effect would be a promise the booking does not keep, and the whole
+ * point of re-running the act is that its gates get the last word.
+ */
+export async function decideNegotiationAmendmentRequest(
+  prisma: PrismaClient,
+  entryId: string,
+  requestId: string,
+  actor: NegotiationAmendmentActor,
+  input: { decision: "APPROVE" | "REJECT"; note?: string },
+): Promise<{ state: string; outcome?: NegotiationAmendmentOutcome }> {
+  const req = await prisma.negotiationAmendmentRequest.findUnique({ where: { id: requestId } });
+  if (!req || req.entryId !== entryId) throw new NotFoundError("NegotiationAmendmentRequest");
+  if (req.state !== "REQUESTED") {
+    throw new ValidationError(`This change was already ${req.state.toLowerCase()} — nothing left to decide.`);
+  }
+  if (input.decision === "REJECT" && !input.note?.trim()) {
+    throw new ValidationError("Say why it is turned down — the desk sees the note.");
+  }
+
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } } });
+  if (!entry) throw new NotFoundError("Entry");
+
+  /**
+   * A proposal describes the pass it was raised in. A re-entry opens a new one and the rooms it
+   * names belong to sealed history, so the request is retired rather than applied to a booking
+   * it no longer describes.
+   */
+  if ((entry.segments[0]?.id ?? null) !== req.segmentId) {
+    await prisma.negotiationAmendmentRequest.update({
+      where: { id: requestId },
+      data: { state: "SUPERSEDED", decidedBy: actor.actorId, decidedAt: new Date(), decisionNote: "The booking started a new pass." },
+    });
+    throw new ValidationError("The booking has started a new pass since this was raised — ask for the change again.");
+  }
+
+  if (input.decision === "REJECT") {
+    const updated = await prisma.negotiationAmendmentRequest.update({
+      where: { id: requestId },
+      data: { state: "REJECTED", decidedBy: actor.actorId, decidedAt: new Date(), decisionNote: input.note!.trim() },
+    });
+    await auditService.emit(prisma as any, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
+      eventType: "ENTRY.NEGOTIATION_AMENDMENT_REJECTED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: Stage.S2,
+      inquiryId: entry.inquiryId,
+      entryId,
+      payload: { requestId, summary: req.summary, note: input.note!.trim() },
+      createdBy: actor.actorId,
+    });
+    return { state: updated.state };
+  }
+
+  // Approving IS applying — every gate runs again, as the approver.
+  const proposal = req.proposal as unknown as NegotiationAmendmentInput;
+  const outcome = await amendNegotiationConfiguration(
+    prisma,
+    entryId,
+    actor,
+    { ...proposal, expectedVersion: undefined },
+    { applyingRequestId: requestId },
+  );
+  const updated = await prisma.negotiationAmendmentRequest.update({
+    where: { id: requestId },
+    data: {
+      state: "APPROVED",
+      decidedBy: actor.actorId,
+      decidedAt: new Date(),
+      decisionNote: input.note?.trim() || null,
+    },
+  });
+  await auditService.emit(prisma as any, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
+    eventType: "ENTRY.NEGOTIATION_AMENDMENT_APPROVED",
+    entityType: "Entry",
+    entityId: entryId,
+    operation: "UPDATE",
+    timestamp: new Date(),
+    stageContext: Stage.S2,
+    inquiryId: entry.inquiryId,
+    entryId,
+    payload: { requestId, summary: outcome.summary, requestedBy: req.requestedBy },
+    createdBy: actor.actorId,
+  });
+  return { state: updated.state, outcome };
+}
+
+/** Taken back by the desk before anyone decided — the raiser changed their mind, or the guest did. */
+export async function withdrawNegotiationAmendmentRequest(
+  prisma: PrismaClient,
+  entryId: string,
+  requestId: string,
+  actor: NegotiationAmendmentActor,
+  input: { note?: string },
+) {
+  const req = await prisma.negotiationAmendmentRequest.findUnique({ where: { id: requestId } });
+  if (!req || req.entryId !== entryId) throw new NotFoundError("NegotiationAmendmentRequest");
+  if (req.state !== "REQUESTED") {
+    throw new ValidationError(`This change was already ${req.state.toLowerCase()} — there is nothing to take back.`);
+  }
+  const updated = await prisma.negotiationAmendmentRequest.update({
+    where: { id: requestId },
+    data: { state: "WITHDRAWN", decidedBy: actor.actorId, decidedAt: new Date(), decisionNote: input.note?.trim() || null },
+  });
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  await auditService.emit(prisma as any, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
+    eventType: "ENTRY.NEGOTIATION_AMENDMENT_WITHDRAWN",
+    entityType: "Entry",
+    entityId: entryId,
+    operation: "UPDATE",
+    timestamp: new Date(),
+    stageContext: Stage.S2,
+    inquiryId: entry?.inquiryId ?? "",
+    entryId,
+    payload: { requestId, summary: req.summary },
+    createdBy: actor.actorId,
+  });
+  return { state: updated.state };
 }

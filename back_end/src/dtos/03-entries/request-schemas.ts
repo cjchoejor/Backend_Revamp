@@ -114,6 +114,18 @@ export const negotiationAmendmentRequestSchema = z
   });
 export type NegotiationAmendmentRequestDto = z.infer<typeof negotiationAmendmentRequestSchema>;
 
+/** Approve (which applies it) or turn down a waiting configuration change. */
+export const decideNegotiationAmendmentRequestSchema = z.object({
+  decision: z.enum(["APPROVE", "REJECT"]),
+  note: z.string().trim().max(500).optional(),
+});
+export type DecideNegotiationAmendmentRequestDto = z.infer<typeof decideNegotiationAmendmentRequestSchema>;
+
+export const withdrawNegotiationAmendmentRequestSchema = z.object({
+  note: z.string().trim().max(500).optional(),
+});
+export type WithdrawNegotiationAmendmentRequestDto = z.infer<typeof withdrawNegotiationAmendmentRequestSchema>;
+
 export const patchApartmentContextRequestSchema = z.object({
   apartmentDurationNights: z.coerce.number().int().min(1),
   apartmentRateTierCode: z.string().trim().min(1),

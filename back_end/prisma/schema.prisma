@@ -145,6 +145,20 @@ enum InterimPaymentPrompt {
   NIGHT_AUDIT
 }
 
+/// A configuration change an operator raised but may not apply themselves (2026-09-30).
+enum NegotiationAmendmentState {
+  /// Prepared at the desk, waiting for the FOM or the GM.
+  REQUESTED
+  /// Approved AND applied — the approval IS the act, so there is no approved-but-unapplied state.
+  APPROVED
+  /// Turned down, with the decider's note.
+  REJECTED
+  /// Taken back by the desk before anyone decided.
+  WITHDRAWN
+  /// The booking moved on (a re-entry, a stage change) and the proposal no longer describes it.
+  SUPERSEDED
+}
+
 enum StayExtensionState {
   /// Extra nights held for the guest; interim invoice minted.
   REQUESTED
@@ -1149,6 +1163,7 @@ model Entry {
   timers                  TimerRecord[]
   interimPaymentRequests  InterimPaymentRequest[]
   stayExtensionRequests   StayExtensionRequest[]
+  negotiationAmendmentRequests NegotiationAmendmentRequest[]
   earlyDeparture          EarlyDepartureRecord?
   writeOffRecords         WriteOffRecord[]
   followUpTasks           FollowUpTaskRecord[]
@@ -2970,6 +2985,46 @@ model InterimPaymentRequest {
 /// invoice goes out and the payment comes in → committed through the governed room-change
 /// journey (new segment, silent re-quote, re-freeze with the new checkout, back at S7). A
 /// request whose hold lapses unpaid releases the nights; nothing else about the booking moved.
+/**
+ * A Negotiation configuration change PREPARED by someone who may not apply it (2026-09-30,
+ * operator ruling: "if L1 does it ... it needs to be flagged [to] them and ask for their
+ * approval first"). Once a quotation has gone to the guest or been accepted, the change is the
+ * FOM's call — but the front desk is the one on the phone, so they fill it in and it waits.
+ *
+ * The row holds the PROPOSAL, not a half-applied change: nothing touches the booking until an
+ * approver runs it, and approval re-runs the whole governed act with every gate, so a room that
+ * was taken in the meantime refuses then, with its real reason. There is deliberately no
+ * approved-but-unapplied state — approving IS applying.
+ */
+model NegotiationAmendmentRequest {
+  id        String                    @id @default(uuid())
+  entryId   String
+  segmentId String
+  state     NegotiationAmendmentState @default(REQUESTED)
+  /// The change exactly as `POST /entries/:id/negotiation-amendment` takes it (party + rooms).
+  proposal  Json
+  /// What it would do, in words, as the desk showed it when it was raised — so the approver
+  /// reads the same sentence the operator did rather than re-deriving one from the payload.
+  summary   String
+  reason    String
+
+  requestedBy        String
+  requestedAt        DateTime  @default(now())
+  decidedBy          String?
+  decidedAt          DateTime?
+  decisionNote       String?
+  /// The AmendmentEventRecord the approval produced, when it applied.
+  appliedAmendmentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, state])
+  @@map("negotiation_amendment_requests")
+}
+
 model StayExtensionRequest {
   id                String             @id @default(uuid())
   entryId           String

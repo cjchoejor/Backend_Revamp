@@ -11,8 +11,10 @@ import {
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
   setExpectedArrivalRequestSchema,
+  decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
   updateEntryRequestSchema,
+  withdrawNegotiationAmendmentRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
@@ -21,7 +23,11 @@ import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
-import { amendNegotiationConfiguration } from "../../services/domain/negotiation-amendment-service.js";
+import {
+  amendNegotiationConfiguration,
+  decideNegotiationAmendmentRequest,
+  withdrawNegotiationAmendmentRequest,
+} from "../../services/domain/negotiation-amendment-service.js";
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
@@ -608,6 +614,52 @@ entriesRouter.post(
         req.body,
       );
       res.json(outcome);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Approve or turn down a waiting configuration change (2026-09-30). **L2** — approving IS
+ * applying, and the whole governed act runs again as the approver, so its own gates get the last
+ * word on whether the proposal still holds.
+ */
+entriesRouter.post(
+  "/:id/negotiation-amendment-requests/:requestId/decide",
+  requireActorLevel("L2"),
+  validateBody(decideNegotiationAmendmentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const result = await decideNegotiationAmendmentRequest(
+        prisma,
+        req.params.id,
+        req.params.requestId,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
+        req.body,
+      );
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Taken back by the desk before anyone decided — L1, since the desk raised it. */
+entriesRouter.post(
+  "/:id/negotiation-amendment-requests/:requestId/withdraw",
+  requireActorLevel("L1"),
+  validateBody(withdrawNegotiationAmendmentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const result = await withdrawNegotiationAmendmentRequest(
+        prisma,
+        req.params.id,
+        req.params.requestId,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
+        req.body,
+      );
+      res.json(result);
     } catch (e) {
       next(e);
     }
