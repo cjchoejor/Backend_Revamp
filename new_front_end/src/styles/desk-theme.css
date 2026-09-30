@@ -2721,6 +2721,31 @@
     color: var(--green-d);
     text-decoration: underline;
   }
+  /* Saving the table (2026-09-30) — the act sits at the foot of the grid it commits, with what
+     stands in its way named beside it rather than left for the operator to find. */
+  & .rct-save {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  & .rct-save-btn {
+    margin-left: auto;
+    flex: none;
+  }
+  & .rct-faults {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 2px;
+    color: var(--stop);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
   /* Which nights each room is for (2026-09-30, operator) — the leading column, pinned like the
      room number beside it, because the two together are the row's identity. */
   & .rct-t .dates {

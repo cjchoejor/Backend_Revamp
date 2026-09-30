@@ -171,6 +171,12 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
    */
   const [changing, setChanging] = useState(false);
   /**
+   * What the composition table says is wrong with itself (2026-09-30). The table is the ONE
+   * judge of whether the configuration may be priced — the step reads its verdict rather than
+   * re-deriving one, so the grid's red cells and this page's shut doors always agree.
+   */
+  const [tableFaults, setTableFaults] = useState<string[]>([]);
+  /**
    * Which nights each chosen room actually holds, for the table's leading Dates column
    * (2026-09-30, operator). Derived HERE rather than in the grid because this is where the
    * booking is: `roomStayRangesByRoom` reads the newest sealed pick, then dated assignment
@@ -348,8 +354,14 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   /* ---- reasons a door stays shut ---- */
   const tableOpen = editable && !accepted && !proformaLocked && !!sealedPreferred;
   const noRooms = !sealedPreferred || !anchorRoomId ? "choose the rooms at Inquiry first" : null;
+  /** A table with a fault in it cannot be sent, marked or priced — it is the same basis. */
+  const tableReason =
+    tableFaults.length > 0
+      ? `put the table right first — ${tableFaults[0]}${tableFaults.length > 1 ? ` (and ${tableFaults.length - 1} more)` : ""}`
+      : null;
   const blockReason =
     noRooms ??
+    tableReason ??
     (markFor === "CUSTOM" && markSeconds <= 0
       ? "set at least a minute"
       : validDaysNumber == null && !working && !accepted
@@ -361,7 +373,12 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
       ? "already sent — generate it again to send a new version"
       : proformaLocked && !draft
         ? "the terms are final — a new pass is needed to send another quote"
-        : (noRooms ?? (!draft && validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : null));
+        : // Sending GENERATES when there is no draft, so a table with a red box in it holds the
+          // send shut for the same reason the Save is shut — one basis, one verdict. A draft that
+          // already exists was priced from a sound table, so it may still go out.
+          (noRooms ??
+          (!draft ? tableReason : null) ??
+          (!draft && validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : null));
 
   const markedCount = activeHold ? holdRoomIds(activeHold).length : sealedRoomIds.length;
   const markLength =
@@ -405,6 +422,10 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
               roomDates={roomDates}
+              onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
+              saveLabel={working ? "Save & price it again" : "Save & price it"}
+              saving={generateM.isPending || regenerateM.isPending}
+              onFaultsChange={setTableFaults}
               persistKey={entry.id}
               entryId={entry.id}
               initialCompositions={seedCompositions}
@@ -527,31 +548,19 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         <Live>
           {editable && !accepted && !proformaLocked ? (
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-              {/* The third act, named like the two above it (2026-09-29): it belongs to neither
-                  column — nothing is sent and no room is marked. */}
+              {/* Recording the price without sending it USED to be a third button here. It is now
+                  the table's own **Save & price it** (2026-09-30, operator request), because a
+                  composition lives nowhere but the quotation — saving the table IS pricing it,
+                  and the table is the only surface that can refuse a configuration with a red box
+                  still in it. Two buttons for one act is what this card was split up to stop. */}
               <b>{working ? "Price it again" : "Just record the price"}</b>
-              <div className="meta" style={{ marginBottom: 2 }}>
+              <div className="meta">
                 {working
-                  ? "A new version from the table above. Nothing is sent and no rooms are marked."
-                  : "Neither sent nor marked — a quotation on file is all the move to Set up needs."}
+                  ? "Save the table above again — a new version is priced from it and this one is kept as history."
+                  : "A quotation on file is all the move to Set up needs. Press "}
+                {!working ? <b>Save &amp; price it</b> : null}
+                {!working ? " at the foot of the table above — nothing is sent and no rooms are marked." : ""}
               </div>
-              {working ? (
-                <SeeRow
-                  label="Generate the quote again"
-                  note={`a new version priced from the table above — ${working.referenceNumber} is kept as history, and the validity starts again`}
-                  onClick={() => regenerateM.mutate()}
-                  state={regenerateM.isPending ? "working" : validDaysNumber == null ? "inert" : "default"}
-                  reason={validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : undefined}
-                />
-              ) : (
-                <SeeRow
-                  label="Generate the quote only"
-                  note="the gate needs a generated quotation — nothing is sent and no rooms are marked"
-                  onClick={noRooms ? undefined : () => generateM.mutate()}
-                  state={generateM.isPending ? "working" : noRooms || validDaysNumber == null ? "inert" : "default"}
-                  reason={noRooms ?? (validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : undefined)}
-                />
-              )}
             </div>
           ) : null}
         </Live>

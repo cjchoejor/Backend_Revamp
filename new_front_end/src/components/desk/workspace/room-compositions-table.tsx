@@ -290,6 +290,10 @@ export function RoomCompositionsTable({
   entryAdults,
   entryChildAges,
   roomDates,
+  onSave,
+  saveLabel,
+  saving,
+  onFaultsChange,
   initial,
   onChange,
   onOpenRoomInBoard,
@@ -310,6 +314,20 @@ export function RoomCompositionsTable({
   lockCommercial?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
+  /**
+   * Commit the table (2026-09-30, operator: "a save button to save the config, but it'll only
+   * allow ... if there's no error or red boxes or mismatches, then it'll generate the quotation
+   * based on the saved list"). A composition is not stored anywhere of its own — the QUOTATION
+   * is where it lands — so saving the table IS pricing it, and the button says so.
+   */
+  onSave?: () => void;
+  saveLabel?: string;
+  saving?: boolean;
+  /**
+   * Every fault the table can see, in the operator's words, so the step can hold its own acts
+   * shut for the same reasons rather than each surface deciding separately what "sound" means.
+   */
+  onFaultsChange?: (faults: string[]) => void;
   /**
    * roomId → the nights that room actually holds, display-ready (2026-09-30, operator: "a
    * column showing the dates they were assigned to"). Derived by the CALLER with
@@ -943,6 +961,55 @@ export function RoomCompositionsTable({
   const totalGuests = sum("ad") + sum("c6") + sum("u6");
   const partySize = (entryAdults ?? 0) + (entryChildAges?.length ?? 0);
 
+  /**
+   * Everything wrong with the table right now, named room by room (2026-09-30). This is the ONE
+   * definition of "sound enough to price": the red cells above are its symptoms, and the Save
+   * button and the step's own acts both read it, so the grid and the page can never disagree
+   * about whether the configuration may be committed.
+   *
+   * Every item here is refused by the backend too — the list exists so the refusal arrives
+   * before the click rather than after it, naming the room instead of an id.
+   */
+  const faults = useMemo<string[]>(() => {
+    const out: string[] = [];
+    if (roomMin != null && sealedRoomIds.length < roomMin) {
+      out.push(
+        `${roomEnvelopeQuery.data?.chargeableOccupants ?? partySize} chargeable guests need at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} chosen at Inquiry`,
+      );
+    }
+    for (const id of sealedRoomIds) {
+      const r = rows[id] ?? EMPTY_ROW;
+      const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
+      const fault = rowFault(id);
+      if (fault) out.push(`Room ${roomNoOf(id)} — ${fault}`);
+      const room = roomById.get(id);
+      const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
+      if (cap != null && occ > cap + cnt(r.bed)) {
+        out.push(`Room ${roomNoOf(id)} — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`);
+      }
+      if (MEAL_COLS.reduce((s2, c) => s2 + cnt(r[c]), 0) > occ) {
+        out.push(`Room ${roomNoOf(id)} — more meal-plan pax than guests in the room`);
+      }
+      if (belowFloor(id, "rRoom")) {
+        out.push(`Room ${roomNoOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
+      }
+    }
+    if (partySize > 0 && totalGuests !== partySize) {
+      out.push(
+        totalGuests < partySize
+          ? `${partySize - totalGuests} of the booking's ${partySize} guests are not in a room yet`
+          : `${totalGuests} guests are placed but the booking has ${partySize}`,
+      );
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sealedRoomIds, rows, roomMin, partySize, totalGuests, roomById, rateRef]);
+
+  useEffect(() => {
+    onFaultsChange?.(faults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [faults.join("|")]);
+
   if (sealedRoomIds.length === 0) {
     return (
       <div style={{ padding: 10, fontSize: 11.5, color: "var(--ink-3)" }}>
@@ -1166,7 +1233,7 @@ export function RoomCompositionsTable({
           <span>{limitMsg}</span>
         </p>
       )}
-      {roomMin != null && sealedRoomIds.length < roomMin && (
+      {!onSave && roomMin != null && sealedRoomIds.length < roomMin && (
         <p className="rce-block">
           {roomEnvelopeQuery.data?.chargeableOccupants} chargeable guest
           {(roomEnvelopeQuery.data?.chargeableOccupants ?? 0) === 1 ? "" : "s"} won&rsquo;t fit in{" "}
@@ -1521,8 +1588,9 @@ export function RoomCompositionsTable({
       )}
 
       {/* A room nobody sleeps in, or a room of children with no adult — named, because the red
-          cell says WHICH box and this says what it means ("UIappeal", 2026-09-30). */}
-      {sealedRoomIds.some((id) => rowFault(id)) && (
+          cell says WHICH box and this says what it means ("UIappeal", 2026-09-30). Shown only
+          where the table has no Save row; there, the faults are listed with the button. */}
+      {!onSave && sealedRoomIds.some((id) => rowFault(id)) && (
         <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
           <span className="ic" aria-hidden="true">
             !
@@ -1539,7 +1607,7 @@ export function RoomCompositionsTable({
 
       {/* Rates under the house floor, named — the grid's red cells say WHICH, this says what it
           means for the quote ("UIappeal", 2026-09-29). */}
-      {sealedRoomIds.some((id) => belowFloor(id, "rRoom")) && (
+      {!onSave && sealedRoomIds.some((id) => belowFloor(id, "rRoom")) && (
         <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
           <span className="ic" aria-hidden="true">
             !
@@ -1554,7 +1622,7 @@ export function RoomCompositionsTable({
           </span>
         </p>
       )}
-      {sealedRoomIds.some((id) => {
+      {!onSave && sealedRoomIds.some((id) => {
         const r = rows[id] ?? EMPTY_ROW;
         return MEAL_COLS.reduce((s, c) => s + cnt(r[c]), 0) > cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
       }) && (
@@ -1562,6 +1630,37 @@ export function RoomCompositionsTable({
           A row has more meal-plan pax than occupants — one plan per guest; the backend will reject the
           draft until it fits.
         </p>
+      )}
+      {/* Saving the table IS pricing it — there is nowhere else a composition lives (2026-09-30).
+          The button stays shut while anything above is red, and the faults are listed here in
+          full, room by room, so the operator fixes them without hunting for the cell. */}
+      {onSave && (
+        <div className="rct-save">
+          {faults.length > 0 ? (
+            <ul className="rct-faults" role="alert" aria-live="polite">
+              {faults.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          ) : (
+            <span className="ok-ink" style={{ fontWeight: 700 }}>
+              The table is sound — every room has its guests, and nothing is over a limit.
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary rct-save-btn"
+            disabled={faults.length > 0 || !!saving}
+            title={
+              faults.length > 0
+                ? `Put right what is listed first — ${faults.length} thing${faults.length === 1 ? "" : "s"} to fix`
+                : "Saves this table by pricing it: the house generates the quotation from these rows"
+            }
+            onClick={() => onSave()}
+          >
+            {saving ? "Saving…" : (saveLabel ?? "Save & price it")}
+          </button>
+        </div>
       )}
       {/* One line. The old version also warned that child meal discounts were "pending a backend
           update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band
