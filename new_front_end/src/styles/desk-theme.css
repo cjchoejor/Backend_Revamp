@@ -2721,41 +2721,35 @@
     color: var(--green-d);
     text-decoration: underline;
   }
-  /* Which nights the rooms below are for (2026-09-30, operator) — the table's first row, so it
-     scrolls with the grid and can never be mistaken for another booking's dates. */
-  & .rct-t .rct-dates th {
+  /* Which nights each room is for (2026-09-30, operator) — the leading column, pinned like the
+     room number beside it, because the two together are the row's identity. */
+  & .rct-t .dates {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--cream);
     text-align: left;
-    padding: 6px 10px;
-    background: var(--panel-2, #f6f1e7);
-    border-bottom: 1px solid var(--line);
-    font-weight: 400;
-  }
-  & .rct-t .rct-dates .k {
-    color: var(--ink-3);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-right: 6px;
-  }
-  & .rct-t .rct-dates b {
-    font-size: 13px;
-    color: var(--ink);
-  }
-  & .rct-t .rct-dates .n {
-    margin-left: 8px;
-    font-size: 12px;
+    padding: 3px 8px;
+    min-width: 104px;
+    white-space: nowrap;
+    font-size: 11.5px;
     color: var(--ink-2);
   }
-  & .rct-t .rct-dates .v {
-    margin-left: 10px;
-    font-size: 11.5px;
-    color: var(--warn);
+  & .rct-t thead .dates {
+    background: var(--cream-3);
   }
-  /* A room held for only part of the stay says so on its own row. */
-  & .rct-t .room .rct-rn {
+  /* With the Dates column present the room number pins beside it, not at the edge. */
+  & .rct-t.has-dates .room {
+    left: 104px;
+  }
+  /* A room held for only part of the stay — the case the column exists for. */
+  & .rct-t td.dates.part {
+    color: var(--warn);
+    font-weight: 600;
+  }
+  & .rct-t td.dates .n {
     display: block;
     font-size: 10.5px;
-    color: var(--warn);
     font-weight: 600;
   }
   /* Derived occupancy cell — read-only, mono, visually "computed". */

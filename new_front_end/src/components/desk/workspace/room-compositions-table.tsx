@@ -289,6 +289,7 @@ export function RoomCompositionsTable({
   entryCheckOut,
   entryAdults,
   entryChildAges,
+  roomDates,
   initial,
   onChange,
   onOpenRoomInBoard,
@@ -309,6 +310,14 @@ export function RoomCompositionsTable({
   lockCommercial?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
+  /**
+   * roomId → the nights that room actually holds, display-ready (2026-09-30, operator: "a
+   * column showing the dates they were assigned to"). Derived by the CALLER with
+   * `roomStayRangesByRoom(entry)` — the same fold the S5-S7 room rows print, so the desk can
+   * never describe one room's nights two ways. Absent = no Dates column (the room-change
+   * panel prices a substitution, where the booking's own stay would be the wrong answer).
+   */
+  roomDates?: Record<string, { label: string; nights: number }>;
   /** Enables the reference-rate placeholders in the negotiated-rate cells. */
   entryId?: string;
   sealedRoomIds: string[];
@@ -859,35 +868,18 @@ export function RoomCompositionsTable({
   // Others à-la-carte columns appear only once someone is on the Others plan.
   const othersVisible = sealedRoomIds.some((id) => cnt(rows[id]?.ot ?? "0") > 0);
 
-  // ---- Which nights these rooms are for (2026-09-30) -------------------------------
+  // ---- Which nights each room is for (2026-09-30) ----------------------------------
   // Operator: "the reservation is from 30 Sept to 3 Oct but we don't know which dates the rooms
-  // are for". The table priced a stay it never named. A stay date is stored at UTC midnight, so
-  // it is read on the UTC calendar — never the desk machine's (the hotel-day rule).
-  const fmtStayDay = (iso: string, withYear = false): string | null => {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime())
-      ? null
-      : d.toLocaleDateString("en-GB", {
-          day: "numeric",
-          month: "short",
-          ...(withYear ? { year: "numeric" } : {}),
-          timeZone: "UTC",
-        });
-  };
+  // are for" — and then, on seeing a banner above the grid: "I wanted a COLUMN showing the dates
+  // they were assigned to". It leads the row, because it is part of the room's identity: a row
+  // reads "12 – 15 Oct · 204" before any of its counts mean anything. The labels are the
+  // caller's (see `roomDates`); the table only prints them.
+  const datesShown = !!roomDates && sealedRoomIds.some((id) => roomDates[id]);
+  /** The stay's own night count — a room that differs from it is the interesting case. */
   const ciIso = dayToIso(entryCheckIn);
   const coIso = dayToIso(entryCheckOut);
   const stayNights =
     ciIso && coIso ? Math.round((new Date(coIso).getTime() - new Date(ciIso).getTime()) / 86400000) : null;
-  const stayLabel = ciIso && coIso ? `${fmtStayDay(ciIso)} → ${fmtStayDay(coIso, true)}` : null;
-  /** A per-night pick gives rooms different night counts — then the band can't speak for them all. */
-  const nightsVary = stayNights != null && (preview?.rooms ?? []).some((l) => l.nights !== stayNights);
-  /** Every column the table currently renders, for the full-width date band. */
-  const colCount =
-    8 +
-    (childColsVisible ? 2 : 0) +
-    visibleMeals.length +
-    (othersVisible ? 3 : 0) +
-    (ratesOpen ? rateCols.length : 0);
 
   // ---- Spreadsheet keyboard navigation -------------------------------------------
   // Cells are addressed `row:col` via data-cell. Arrow keys move between cells (Left/
@@ -1184,25 +1176,10 @@ export function RoomCompositionsTable({
       )}
 
       <div className="rct-scroll" ref={wrapRef}>
-        <table className="rct-t">
+        <table className={`rct-t${datesShown ? " has-dates" : ""}`}>
           <thead>
-            {stayLabel && (
-              <tr className="rct-dates">
-                <th colSpan={colCount}>
-                  <span className="k">Rooms for</span>
-                  <b>{stayLabel}</b>
-                  {stayNights != null && (
-                    <span className="n">
-                      {stayNights} night{stayNights === 1 ? "" : "s"}
-                    </span>
-                  )}
-                  {nightsVary && (
-                    <span className="v">nights differ by room — each room carries its own count</span>
-                  )}
-                </th>
-              </tr>
-            )}
             <tr className="grp">
+              {datesShown && <th className="dates" />}
               <th className="room" />
               <th />
               <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
@@ -1229,6 +1206,7 @@ export function RoomCompositionsTable({
               </th>
             </tr>
             <tr>
+              {datesShown && <th className="dates">Dates</th>}
               <th className="room">Room</th>
               <th title="Occupants — derived: adults + children">Occ</th>
               <th>Adult</th>
@@ -1280,8 +1258,28 @@ export function RoomCompositionsTable({
               const plansOver = planSum > occ;
               const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
               const overCap = cap != null && occ > cap + cnt(r.bed);
+              const dates = roomDates?.[id] ?? null;
               return (
                 <tr key={id} className={r.foc ? "foc" : undefined}>
+                  {datesShown && (
+                    <td
+                      className={`dates${dates && stayNights != null && dates.nights !== stayNights ? " part" : ""}`}
+                      title={
+                        dates
+                          ? `This room is held for ${dates.nights} night${dates.nights === 1 ? "" : "s"}${
+                              stayNights != null && dates.nights !== stayNights ? ` of the stay's ${stayNights}` : ""
+                            }`
+                          : "No nights recorded for this room"
+                      }
+                    >
+                      {dates ? dates.label : "—"}
+                      {dates && stayNights != null && dates.nights !== stayNights && (
+                        <span className="n">
+                          {dates.nights} of {stayNights} nights
+                        </span>
+                      )}
+                    </td>
+                  )}
                   {/* The room cell doubles as "open this room in the guest board". Deliberately
                       the room cell and not the whole row: a row-level handler would fire on
                       every cell click and fight the grid's own editing/navigation. */}
@@ -1292,15 +1290,6 @@ export function RoomCompositionsTable({
                   >
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}
-                    {/* Only when this room's nights differ from the stay's — a per-night pick. */}
-                    {(() => {
-                      const rn = pvByRoom.get(id)?.nights ?? null;
-                      return rn != null && stayNights != null && rn !== stayNights ? (
-                        <span className="rct-rn" title={`This room is held for ${rn} of the stay's ${stayNights} nights`}>
-                          {rn} of {stayNights} nights
-                        </span>
-                      ) : null;
-                    })()}
                   </td>
                   {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
                       not a quiet amber — the figure the operator must not miss (2026-09-29). */}
@@ -1431,6 +1420,7 @@ export function RoomCompositionsTable({
           </tbody>
           <tfoot>
             <tr>
+              {datesShown && <td className="dates" />}
               <td className="room">Σ</td>
               <td className={`occ${partySize > 0 && totalGuests !== partySize ? " off" : ""}`}>{totalGuests}</td>
               <td>{sum("ad")}</td>

@@ -1101,6 +1101,8 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   entryCheckOut?: string | null;
   entryAdults?: number | null;
   entryChildAges?: number[] | null;
+  /** roomId → that room's own nights, display-ready. See RoomCompositionsTable. */
+  roomDates?: Record<string, { label: string; nights: number }>;
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */
   persistKey?: string;

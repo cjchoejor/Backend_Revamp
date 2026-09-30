@@ -34,7 +34,7 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
-import { operativeRoomCompositions } from "@/lib/desk/party-rooms";
+import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
 import {
@@ -163,6 +163,18 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
+  /**
+   * Which nights each chosen room actually holds, for the table's leading Dates column
+   * (2026-09-30, operator). Derived HERE rather than in the grid because this is where the
+   * booking is: `roomStayRangesByRoom` reads the newest sealed pick, then dated assignment
+   * rows, then falls back to the whole stay for a uniform plan — the same fold the S5-S7 room
+   * rows print, so the desk states one room's nights one way everywhere.
+   */
+  const roomDates = useMemo(() => {
+    const out: Record<string, { label: string; nights: number }> = {};
+    for (const [roomId, r] of roomStayRangesByRoom(entry)) out[roomId] = { label: r.label, nights: r.nightCount };
+    return out;
+  }, [entry]);
   const holds = (entry.speculativeHolds ?? []).filter((h) => !passId || h.segmentId === passId);
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED") ?? null;
   const lastHold = activeHold ? null : (holds[0] ?? null);
@@ -376,6 +388,7 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
               entryCheckOut={entry.checkOutDate ?? null}
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
+              roomDates={roomDates}
               persistKey={entry.id}
               entryId={entry.id}
               initialCompositions={seedCompositions}
