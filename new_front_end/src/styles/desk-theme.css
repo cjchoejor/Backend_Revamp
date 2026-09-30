@@ -2729,10 +2729,20 @@
     z-index: 1;
     background: var(--cream);
     text-align: left;
-    padding: 3px 8px;
-    min-width: 104px;
+    padding: 3px 6px;
+    /* Held to exactly its content (2026-09-30, operator: "see how much extra space the dates
+       column is taking uselessly"). The table is width:100% on auto layout, so the surplus was
+       being shared out by content width and this column — the only one with prose in it — took
+       the lion's share. Fixing all three widths keeps it at the span it prints, and the trailing
+       column below takes the slack instead, as it did before this column existed. It must also
+       equal `.has-dates .room`'s offset, or the pinned room number slides over it on a
+       sideways scroll. */
+    width: 98px;
+    min-width: 98px;
+    max-width: 98px;
     white-space: nowrap;
-    font-size: 11.5px;
+    font-size: 11px;
+    line-height: 1.35;
     color: var(--ink-2);
   }
   & .rct-t thead .dates {
@@ -2740,7 +2750,12 @@
   }
   /* With the Dates column present the room number pins beside it, not at the edge. */
   & .rct-t.has-dates .room {
-    left: 104px;
+    left: 98px;
+  }
+  /* The spare width belongs to the trailing column — it carries the Rates toggle and each
+     room's total, and it is where the surplus sat before the Dates column arrived. */
+  & .rct-t th.ratebtn {
+    width: 100%;
   }
   /* A room held for only part of the stay — the case the column exists for. */
   & .rct-t td.dates.part {
