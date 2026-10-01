@@ -7,6 +7,7 @@ import { enforceEntryAtS3ForS3CancellationRoute, enforceEntryAtS5ForS5Cancellati
   enforceEntryBeforeSetupForDecline,
   enforceEntryConfirmedForPreArrivalCancellation, enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { lapseNegotiationRecordsTx } from "../../lib/negotiation-expiry.js";
+import { ENTRY_ENDINGS } from "../../lib/entry-ending.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import {
@@ -88,12 +89,17 @@ export async function declineEntryBeforeSetup(
       );
     }
 
+    // The stage is deliberately NOT moved to TERMINAL the way the cancellation routes move
+    // it: the step the lead died at is worth keeping on screen, and since 2026-10-01 it is
+    // `closedAs` the desk reads its words from, not the stage.
     await tx.entry.update({
       where: { id: entryId },
       data: {
         status: EntryStatus.CANCELLED,
         closedAt: now,
         closedBy: actorId,
+        closedAs: ENTRY_ENDINGS.DECLINED,
+        closedReason: reason,
         version: { increment: 1 },
       },
     });
@@ -492,6 +498,8 @@ export async function cancelEntryAtS3(
         currentStage: Stage.TERMINAL,
         closedAt: now,
         closedBy: actorId,
+        closedAs: ENTRY_ENDINGS.CANCELLED,
+        closedReason: opts?.reason?.trim() || null,
         version: { increment: 1 },
       },
     });
@@ -715,6 +723,8 @@ export async function cancelEntryAtS5(
         currentStage: Stage.TERMINAL,
         closedAt: now,
         closedBy: actorId,
+        closedAs: ENTRY_ENDINGS.CANCELLED,
+        closedReason: opts?.reason?.trim() || null,
         version: { increment: 1 },
       },
     });
@@ -879,6 +889,9 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
         currentStage: Stage.TERMINAL,
         closedAt: now,
         closedBy: actorId,
+        // This route takes no reason of its own (its body is the penalty waiver), so there
+        // is nothing to record beyond what happened.
+        closedAs: ENTRY_ENDINGS.WALKED_OUT,
         version: { increment: 1 },
       },
     });

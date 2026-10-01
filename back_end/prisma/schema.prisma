@@ -1093,6 +1093,14 @@ model Entry {
   version                        Int               @default(1)
   closedAt                       DateTime?
   closedBy                       String?
+  /// How the booking ended, when it did not simply close after the stay (2026-10-01). One of
+  /// the codes in `lib/entry-ending.ts` — INQUIRY_LAPSED · NEGOTIATION_LAPSED · PARK_LAPSED ·
+  /// DECLINED · CANCELLED · WALKED_OUT. Null on a live booking, and on every row ended before
+  /// the column existed, where the desk falls back to the bare status word.
+  closedAs                       String?
+  /// What the operator said when they ended it — the guest's own words on a decline, the
+  /// reason on a cancellation. Null when a clock ended it: nobody said anything.
+  closedReason                   String?
 
   /// Simulates W5 no-show cutoff having fired (normally set by worker).
   noShowCutoffReachedAt DateTime?

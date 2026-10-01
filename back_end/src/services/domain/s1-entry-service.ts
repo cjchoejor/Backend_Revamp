@@ -25,6 +25,7 @@ import {
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
 import { armNegotiationExpiryTx, lapseNegotiationRecordsTx } from "../../lib/negotiation-expiry.js";
+import { ENTRY_ENDINGS } from "../../lib/entry-ending.js";
 import { ROOM_BED_TYPES, checkBedRequestAgainstRooms, loadRoomBedOptions } from "./room-bed-type-service.js";
 
 /** "5 King + 2 Twin" — the human wording every bed-request error uses. */
@@ -839,9 +840,17 @@ export async function expireEntry(
       return { skipped: true as const, reason: "STAGE_CLOCK_MISMATCH" };
     }
 
+    // Which clock ran out, so the desk can say so rather than printing a bare "Expired"
+    // over all three (2026-10-01). No reason is written: nobody said anything — that is the
+    // whole difference between a lapse and the guest turning the booking down.
+    const closedAs = fromParkFollowUp
+      ? ENTRY_ENDINGS.PARK_LAPSED
+      : fresh.currentStage === Stage.S2
+        ? ENTRY_ENDINGS.NEGOTIATION_LAPSED
+        : ENTRY_ENDINGS.INQUIRY_LAPSED;
     await tx.entry.update({
       where: { id: entryId },
-      data: { status: EntryStatus.EXPIRED, closedAt: now, closedBy: "SYSTEM", version: { increment: 1 } },
+      data: { status: EntryStatus.EXPIRED, closedAt: now, closedBy: "SYSTEM", closedAs, version: { increment: 1 } },
     });
     // Release any rooms the (usually stage-S1/S2/S3) entry was still holding. Prior to
     // 2026-07-25 an entry could expire while its SPECULATIVELY_HELD / COMMITTED_HELD /
@@ -866,7 +875,7 @@ export async function expireEntry(
       operation: "TRANSITION",
       timestamp: now,
       stageContext: fresh.currentStage as any,
-      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", fromParkFollowUp, negotiation: fromNegotiation, lapsedAt: fresh.currentStage, ...(lapsed ?? {}) },
+      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", closedAs, fromParkFollowUp, negotiation: fromNegotiation, lapsedAt: fresh.currentStage, ...(lapsed ?? {}) },
       inquiryId: fresh.inquiryId,
       entryId: entryId,
       createdBy: "SYSTEM",
