@@ -69,7 +69,7 @@ import {
   type Precondition,
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds } from "@/lib/desk/party-rooms";
-import { channelWord, factsFromEntry, standingOf } from "@/lib/ds/status";
+import { channelWord, endingOf, factsFromEntry, standingOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtDay, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
@@ -568,8 +568,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
-  const sealedOutcome =
-    entry.status === "CANCELLED"
+  // Since 2026-10-01 the ending itself is on the row, so this reads the same words the lists do
+  // (the stage could not say: the cancellation routes wipe it to TERMINAL), and adds what the
+  // operator said, which only the record has room for.
+  const ending = endingOf(entry.closedAs);
+  const endedSaid = (entry.closedReason ?? "").trim();
+  const sealedOutcome = ending
+    ? `${ending.word}${ending.qualifier ? ` — ${ending.qualifier}` : ""}${endedSaid ? `: “${endedSaid}”` : ""} — a read-only record`
+    : entry.status === "CANCELLED"
       ? "Cancelled — a read-only record"
       : entry.folio?.state === "NO_SHOW_CLOSED"
         ? entry.status === "CLOSED"

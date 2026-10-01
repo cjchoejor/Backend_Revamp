@@ -24,6 +24,9 @@ export type DeskListRow = {
   contactPersonName: string | null;
   contactPersonPhone: string | null;
   closedAt: string | null;
+  /** How it ended, and what was said — so a lapse, a decline and a cancellation read apart. */
+  closedAs?: string | null;
+  closedReason?: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;

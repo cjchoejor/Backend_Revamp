@@ -20,6 +20,9 @@ export type StandingFacts = {
   checkInDate?: string | null;
   reservationPaymentPending?: boolean;
   parkedAt?: string | null;
+  /** How it ended, when it did — the codes in back_end/src/lib/entry-ending.ts. */
+  closedAs?: string | null;
+  closedReason?: string | null;
   parkFollowUpAt?: string | null;
   voucherSent?: boolean | null;
   reserved?: boolean;
@@ -38,6 +41,34 @@ export type StandingFacts = {
   balance?: number | null;
 };
 
+/**
+ * How a booking ended, in the desk's words (2026-10-01).
+ *
+ * Until the backend recorded it, an enquiry nobody answered, a negotiation that stalled and a
+ * park that ran out all read **"Expired"**, and a lead the guest turned down read the same
+ * **"Cancelled"** as a priced cancellation at Set up. The status could not tell them apart and
+ * the stage is wiped to TERMINAL by the cancellation routes, so neither could the screen.
+ *
+ * The qualifier is the KIND, never the operator's own words: a reason can run to a paragraph
+ * and the lists must stay scannable. The record shows the reason in full.
+ *
+ * Null — every booking ended before the column existed — falls back to the bare status word,
+ * which is exactly what those rows have always said.
+ */
+export const ENDING_WORDS: Record<string, { word: string; qualifier: string }> = {
+  INQUIRY_LAPSED: { word: "Lapsed", qualifier: "no answer" },
+  NEGOTIATION_LAPSED: { word: "Lapsed", qualifier: "the offer was not taken up" },
+  PARK_LAPSED: { word: "Lapsed", qualifier: "parked, never resumed" },
+  DECLINED: { word: "Turned down", qualifier: "the guest said no" },
+  CANCELLED: { word: "Cancelled", qualifier: "" },
+  WALKED_OUT: { word: "Walked out", qualifier: "left without checking out" },
+};
+
+/** The ending's words, or null when the row does not record one. */
+export function endingOf(closedAs: string | null | undefined) {
+  return closedAs ? (ENDING_WORDS[closedAs] ?? null) : null;
+}
+
 const TONE_OF: Record<string, ChipTone> = {
   Reserved: "solid",
   "In-house": "solid",
@@ -48,6 +79,9 @@ const TONE_OF: Record<string, ChipTone> = {
   Cancelled: "quiet",
   Expired: "quiet",
   Declined: "quiet",
+  Lapsed: "quiet",
+  "Turned down": "quiet",
+  "Walked out": "warning",
   "No-show": "warning",
   "Written off": "warning",
 };
@@ -59,8 +93,13 @@ function standing(word: string, qualifier = ""): Standing {
 export function standingOf(f: StandingFacts, hotelToday: string | null): Standing {
   const pending = f.reservationPaymentPending ? "advance pending" : "";
   if (f.status === "PARKED") return standing("Parked", f.parkFollowUpAt ? `follow up ${fmtDay(f.parkFollowUpAt)}` : "");
-  if (f.status === "CANCELLED") return standing("Cancelled");
-  if (f.status === "EXPIRED") return f.noShow ? standing("No-show") : standing("Expired");
+  // What actually ended it, when the row records it (2026-10-01); otherwise the bare word.
+  const ending = endingOf(f.closedAs);
+  if (f.status === "CANCELLED") return ending ? standing(ending.word, ending.qualifier) : standing("Cancelled");
+  if (f.status === "EXPIRED") {
+    if (f.noShow) return standing("No-show");
+    return ending ? standing(ending.word, ending.qualifier) : standing("Expired");
+  }
   if (f.folioState === "WRITTEN_OFF") return standing("Written off");
   if (f.folioState === "NO_SHOW_CLOSED" || f.noShow) return standing("No-show");
   if (f.status === "CLOSED") {
@@ -119,6 +158,8 @@ export function factsFromRow(r: DeskListRow, balance?: number | null): StandingF
     currentStage: r.currentStage,
     checkInDate: r.checkInDate,
     reservationPaymentPending: r.reservationPaymentPending,
+    closedAs: r.closedAs ?? null,
+    closedReason: r.closedReason ?? null,
     parkedAt: r.parkedAt,
     parkFollowUpAt: r.parkFollowUpAt,
     voucherSent: r.reservation?.confirmationVoucherSent ?? null,
@@ -149,6 +190,8 @@ export function factsFromEntry(e: EntryDetail, balance?: number | null, bookerNa
     currentStage: e.currentStage,
     checkInDate: e.checkInDate,
     reservationPaymentPending: (e as { reservationPaymentPending?: boolean }).reservationPaymentPending,
+    closedAs: e.closedAs ?? null,
+    closedReason: e.closedReason ?? null,
     parkedAt: (e as { parkedAt?: string | null }).parkedAt ?? null,
     voucherSent: e.reservation ? e.reservation.confirmationVoucherSent : null,
     reserved: !!e.reservation,

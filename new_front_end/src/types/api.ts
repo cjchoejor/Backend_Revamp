@@ -636,6 +636,9 @@ export type EntryDetail = EntryListItem & {
   } | null;
   closedAt?: string | null;
   closedBy?: string | null;
+  /** How it ended, and what was said (2026-10-01) — see `endingOf` in lib/ds/status.ts. */
+  closedAs?: string | null;
+  closedReason?: string | null;
   walkInCompressed?: boolean;
   keysIssuedCount?: number | null;
   keysIssuedAt?: string | null;
