@@ -136,10 +136,13 @@ export function S1Inquiry({
   entry,
   past,
   onPark,
+  onDecline,
 }: {
   entry: EntryDetail;
   past: boolean;
   onPark?: () => void;
+  /** The guest said no (2026-10-01) — offered while the booking can still be turned down. */
+  onDecline?: () => void;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -209,6 +212,17 @@ export function S1Inquiry({
             label="Park…"
             note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own"
             onClick={onPark}
+          />
+        ) : null}
+        {/* The answer the house had no way to write down (2026-10-01): until this, a lead that
+            said no could only be parked or left to lapse as "Expired", which reads the same as
+            an enquiry nobody ever answered. */}
+        {onDecline ? (
+          <SeeRow
+            key="decline"
+            label="The guest said no…"
+            note="ends the booking and records why; the rooms go back on the board and nothing is charged"
+            onClick={onDecline}
           />
         ) : null}
       </OtherWays>

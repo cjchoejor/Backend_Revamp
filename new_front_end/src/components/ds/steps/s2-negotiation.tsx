@@ -167,7 +167,18 @@ function canonComps(list: readonly RoomCompositionInput[] | undefined): string {
 }
 
 
-export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; past: boolean; onPark?: () => void }) {
+export function S2Negotiation({
+  entry,
+  past,
+  onPark,
+  onDecline,
+}: {
+  entry: EntryDetail;
+  past: boolean;
+  onPark?: () => void;
+  /** The guest said no (2026-10-01) — offered while the booking can still be turned down. */
+  onDecline?: () => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const clock = useHotelClock(30_000);
@@ -757,6 +768,15 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
             below"): its published rate, its floor and the SC/GST line all sit in the reference
             strip inside the table, read from the same `rate-reference` call. What it also carried
             was this ONE unbuilt promise, which belongs here with the other not-yet acts. */}
+        {/* The answer the house had no way to write down (2026-10-01) — see the Inquiry step. */}
+        {onDecline ? (
+          <SeeRow
+            key="decline"
+            label="The guest said no…"
+            note="ends the booking and records why; the marked rooms go back on the board, the offer is withdrawn and nothing is charged"
+            onClick={onDecline}
+          />
+        ) : null}
         <SeeRow
           key="counter"
           label="Record a counter-offer…"
