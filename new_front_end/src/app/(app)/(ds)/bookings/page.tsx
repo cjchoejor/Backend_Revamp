@@ -38,8 +38,15 @@ function inGroup(r: DeskListRow, group: string): boolean {
       return r.status === "CLOSED" || step === 9;
     case "Parked":
       return r.status === "PARKED";
+    // The ended bookings, split the way their own chips read (2026-10-01). Grouping them all
+    // under "Cancelled" put a lead the guest turned down beside a priced cancellation at Set
+    // up, and left the lapsed ones reachable only from All.
+    case "Turned down":
+      return r.status === "CANCELLED" && r.closedAs === "DECLINED";
     case "Cancelled":
-      return r.status === "CANCELLED";
+      return r.status === "CANCELLED" && r.closedAs !== "DECLINED";
+    case "Lapsed":
+      return r.status === "EXPIRED" && !r.noShowDetermination;
     default: {
       const i = (STEP_NAMES as readonly string[]).indexOf(group);
       return i >= 0 ? step === i + 1 : true;
@@ -47,7 +54,7 @@ function inGroup(r: DeskListRow, group: string): boolean {
   }
 }
 
-function haystack(r: DeskListRow, statusWord: string): string {
+function haystack(r: DeskListRow, statusWord: string, statusQualifier = ""): string {
   const g = r.guestProfile;
   const booker = bookerOfRow(r);
   return [
@@ -62,6 +69,8 @@ function haystack(r: DeskListRow, statusWord: string): string {
     booker?.name,
     channelWord(r.inquiry?.sourceChannel, r.inquiry?.cameInAs),
     statusWord,
+    // the ending's qualifier too, so "no answer" and "the offer was not taken up" are searchable
+    statusQualifier,
     ...r.roomNumbers,
     ...r.quotations.map((q) => q.referenceNumber),
   ]
@@ -149,8 +158,8 @@ function BookingsScreen() {
         if (!(ci <= hi && (co ?? ci) >= lo)) return false;
       }
       if (needle) {
-        const word = standingOf(factsFromRow(r), today).word;
-        if (!haystack(r, word).includes(needle)) return false;
+        const st = standingOf(factsFromRow(r), today);
+        if (!haystack(r, st.word, st.qualifier).includes(needle)) return false;
       }
       // with no search and no date: the last twelve months and everything ahead
       if (!needle && !from && !to && !view && (group === "All" || group === "Departed") && yearAgo && co && co < yearAgo) return false;
@@ -257,7 +266,7 @@ function BookingsScreen() {
             </Button>
           ))}
           <span className="meta">·</span>
-          {(["Parked", "Cancelled"] as const).map((g) => (
+          {(["Parked", "Turned down", "Lapsed", "Cancelled"] as const).map((g) => (
             <Button key={g} kind={g === group ? "secondary" : "quiet"} compact onClick={() => go({ group: g })}>
               {g}
             </Button>
