@@ -4,6 +4,7 @@ import {
   cancelEarlyDepartureRequestSchema,
   cancelS3EntryRequestSchema,
   cancelS5EntryRequestSchema,
+  declineEntryRequestSchema,
   recordCancellationDisclosureRequestSchema,
 } from "../../dtos/09-cancellations/request-schemas.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -27,6 +28,28 @@ cancellationsRouter.get("/entries/:id/cancellation-preview", requireActorLevel("
     next(e);
   }
 });
+
+/**
+ * The guest said no — ends a lead at Inquiry or Negotiation (2026-10-01). L1: nothing has been
+ * committed, and the front desk is the one on the phone.
+ */
+cancellationsRouter.post(
+  "/entries/:id/decline",
+  requireActorLevel("L1"),
+  validateBody(declineEntryRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await cancellationService.declineEntryBeforeSetup(prisma, req.params.id, req.actor!.actorId, {
+          reason: req.body.reason,
+          actorLevel: req.actor!.level,
+        }),
+      );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 cancellationsRouter.post(
   "/entries/:id/cancel-at-s3",

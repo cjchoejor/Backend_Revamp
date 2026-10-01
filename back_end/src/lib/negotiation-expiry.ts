@@ -147,11 +147,22 @@ export async function extendNegotiationExpiryTx(
 export async function lapseNegotiationRecordsTx(
   tx: Tx,
   engine: Engine,
-  args: { entryId: string; now: Date },
+  args: {
+    entryId: string;
+    now: Date;
+    /**
+     * Why the booking stopped. The clock's own lapse is "EXPIRY"; the desk ending a lead the
+     * guest turned down is "DECLINED" (2026-10-01). What is let go is identical either way --
+     * the marked rooms, the live offers, every clock -- so the two share this one routine
+     * rather than drifting into two readings of what a booking before Set up is still holding.
+     */
+    cause?: "EXPIRY" | "DECLINED";
+  },
 ): Promise<{ holdsReleased: number; quotationsExpired: number; timersCancelled: number }> {
+  const cause = args.cause ?? "EXPIRY";
   const holds = await tx.speculativeHold.updateMany({
     where: { entryId: args.entryId, state: "PLACED" },
-    data: { state: "RELEASED", releasedAt: args.now, releaseReason: "EXPIRY" },
+    data: { state: "RELEASED", releasedAt: args.now, releaseReason: cause },
   });
   const quotes = await tx.quotation.updateMany({
     where: { entryId: args.entryId, state: { in: [QuotationState.DRAFT, QuotationState.SENT] } },
@@ -165,7 +176,12 @@ export async function lapseNegotiationRecordsTx(
   if (timers.length) {
     await tx.timerRecord.updateMany({
       where: { id: { in: timers.map((t) => t.id) } },
-      data: { status: "CANCELLED", cancelledAt: args.now, cancelledBy: "SYSTEM", cancelledReason: "NEGOTIATION_LAPSED" },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: args.now,
+        cancelledBy: "SYSTEM",
+        cancelledReason: cause === "DECLINED" ? "BOOKING_DECLINED" : "NEGOTIATION_LAPSED",
+      },
     });
   }
   return { holdsReleased: holds.count, quotationsExpired: quotes.count, timersCancelled: timers.length };

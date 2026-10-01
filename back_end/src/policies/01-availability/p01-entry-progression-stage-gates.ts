@@ -62,6 +62,22 @@ export function enforceEntryAtS3ForS3CancellationRoute(input: { currentStage: St
   );
 }
 
+/**
+ * Policy 1 — the desk ending a lead the guest turned down, before anything is committed
+ * (2026-10-01, operator request for "the guest said no" at Inquiry and Negotiation).
+ *
+ * Only Inquiry and Negotiation. From Set up onward a booking carries a folio, a disclosed
+ * cancellation term and usually money, and ending it is the priced act the cancel routes
+ * perform — not this one.
+ */
+export function enforceEntryBeforeSetupForDecline(input: { currentStage: Stage }) {
+  if (input.currentStage === Stage.S1 || input.currentStage === Stage.S2) return;
+  throw new StageGateBlockedError(
+    "A booking is turned down from Inquiry or Negotiation. Past Set up it is cancelled through the cancellation route, which prices the terms and handles any money taken.",
+    "NOT_BEFORE_SETUP",
+  );
+}
+
 /** Policy 1 — SIG-S6 Policy 35 — post-check-in early departure (`CancellationService.cancelEntryEarlyDepartureAfterCheckIn`). */
 export function enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation(input: { currentStage: Stage }) {
   if (input.currentStage === Stage.S7) return;
