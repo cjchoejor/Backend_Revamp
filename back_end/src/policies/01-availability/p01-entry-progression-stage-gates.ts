@@ -222,8 +222,15 @@ export function enforceNegotiationAmendmentAuthority(input: {
 
 export function enforceEntryNotSealedForWorkingAction(input: { status: EntryStatus }) {
   if (input.status === EntryStatus.ACTIVE || input.status === EntryStatus.PARKED) return;
+  // In words, not the enum: this refusal reaches the desk (2026-10-01).
+  const what =
+    input.status === EntryStatus.EXPIRED
+      ? "has lapsed"
+      : input.status === EntryStatus.CANCELLED
+        ? "was ended"
+        : "is closed";
   throw new StateTransitionError(
-    `This booking is ${input.status} — sealed records are read-only`,
+    `This booking ${what} — a sealed record is read-only`,
     "ENTRY_SEALED_READ_ONLY",
   );
 }

@@ -17,6 +17,7 @@ import { foldIsoNightsToRanges, heldRoomIds } from "../../lib/entry-inventory-cl
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { enforceEntryAtS2ForSpeculativeHoldPlacement } from "../../policies/10-speculative-hold/p25-s2-stage-for-speculative-hold-placement.js";
 import { enforceSpeculativeHoldPlacedForRelease } from "../../policies/10-speculative-hold/p25-speculative-hold-placed-for-release.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 type PlacementThresholds = {
   thresholds: Array<{ maxRooms: number | null; authorityRequired: "FRONT_DESK" | "FOM" | "GM"; maxConcurrentHolds: number | null }>;
@@ -33,6 +34,8 @@ export async function placeSpeculativeHold(
     include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage where it was, so the gate below passes on a dead booking (2026-10-01).
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS2ForSpeculativeHoldPlacement({ currentStage: entry.currentStage });
 
   const segmentId = entry.segments[0]?.id;

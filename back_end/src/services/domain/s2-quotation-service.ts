@@ -19,6 +19,8 @@ import {
   enforceQuotationSentToAccept,
   enforceQuotationSupersedeAllowedState,
 } from "../../policies/08-pricing-rate-plan/p07-quotation-lifecycle-state-guards.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { assertEntryWorkable } from "../../lib/assert-entry-workable.js";
 import {
   enforceEntryAtS2ForQuotationCreation,
   enforceRoomTypeResolvedForS2Quotation,
@@ -258,6 +260,10 @@ async function prepareQuotationDraft(
     },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage at S2, so the gate above passes on a dead booking: one was
+  // quoted five minutes after it expired, which armed a fresh validity clock on a read-only
+  // record (2026-10-01, operator report). Both createQuotation and supersede come through here.
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS2ForQuotationCreation({ currentStage: entry.currentStage });
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
@@ -1237,6 +1243,7 @@ export async function createGroupQuotation(
     },
   });
   if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS2ForQuotationCreation({ currentStage: entry.currentStage });
   enforceGroupRateContextForS2Quotation({ useType: entry.useType, guestCount: entry.guestCount });
 
@@ -1965,6 +1972,7 @@ export async function sendQuotation(
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
+  await assertEntryWorkable(prisma, q.entryId);
   enforceQuotationInDraftToSend({ state: q.state });
 
   await enforceQuotationSendTimeGovernanceConfig(prisma);
@@ -2235,6 +2243,7 @@ export async function acceptQuotation(
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
+  await assertEntryWorkable(prisma, q.entryId);
   enforceQuotationSentToAccept({ state: q.state });
   const now = new Date();
 

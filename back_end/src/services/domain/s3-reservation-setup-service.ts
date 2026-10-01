@@ -9,6 +9,7 @@ import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 export { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 
@@ -22,6 +23,8 @@ export async function ensureProvisionalFolioAndBillingModel(
   if (!input.billingModel?.trim()) throw new ValidationError("billingModel is required");
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { folio: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1 } } });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage where it was, so the gate below passes on a dead booking (2026-10-01).
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");

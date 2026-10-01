@@ -25,6 +25,7 @@ import {
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 /**
  * SIG-S3 §6.3 — `FolioService.getOrCreate` slice: single provisional folio per entry; trace on create vs continuation.
@@ -37,6 +38,8 @@ export async function getOrCreateProvisionalFolio(
 ) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage where it was, so the gate below passes on a dead booking (2026-10-01).
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
   const seg = await prisma.segment.findFirst({ where: { id: segmentId, entryId } });
   if (!seg) throw new ValidationError("segmentId does not belong to entry");
@@ -140,6 +143,8 @@ export async function recordPayment(
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
     const stageAtPayment = folio.entry.currentStage;
+    // Money never goes onto a booking that has ended (2026-10-01).
+    enforceEntryNotSealedForWorkingAction({ status: folio.entry.status });
     enforceEntryWithinAdvanceCollectionWindow({ currentStage: stageAtPayment });
     enforceAdvancePaymentInboundRecordAtS3({ folioState: folio.state, amount: amountNum });
     // Order of operations at S3 (2026-08-01/03 rulings): the bill goes out first, then the
@@ -260,6 +265,7 @@ export async function issueInvoice(
     const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+    enforceEntryNotSealedForWorkingAction({ status: folio.entry.status });
     enforceEntryAtS3ForS3DomainOperations({ currentStage: folio.entry.currentStage });
     if (folio.state !== FolioState.PROVISIONAL) {
       throw new ValidationError("issueInvoice at S3 requires a provisional folio");

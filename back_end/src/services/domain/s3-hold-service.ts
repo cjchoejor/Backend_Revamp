@@ -155,6 +155,8 @@ export async function placeCommittedHold(
     },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage where it was, so the gate below passes on a dead booking (2026-10-01).
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
