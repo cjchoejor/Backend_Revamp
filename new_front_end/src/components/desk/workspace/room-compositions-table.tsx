@@ -299,6 +299,8 @@ export function RoomCompositionsTable({
   initial,
   onChange,
   onOpenRoomInBoard,
+  onPickRoom,
+  pickedRoomId,
   discountValue,
   discountUnit,
   discountBasis,
@@ -316,6 +318,16 @@ export function RoomCompositionsTable({
   lockCommercial?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
+  /**
+   * Clicking a room CHOOSES it, so the surface above can offer that room's own acts — change it,
+   * change its setup, assign it (2026-10-06, operator: "changing can be just clicking on one room
+   * in the table and showing an option"). Takes precedence over `onOpenRoomInBoard`: the rooms
+   * surface at Arrival / Check-in / Stay is about what to DO with a room, not about re-seating
+   * its guests on the board.
+   */
+  onPickRoom?: (roomId: string) => void;
+  /** The room currently chosen, drawn as such. */
+  pickedRoomId?: string | null;
   /**
    * Commit the table (2026-09-30, operator: "a save button to save the config, but it'll only
    * allow ... if there's no error or red boxes or mismatches, then it'll generate the quotation
@@ -1369,9 +1381,17 @@ export function RoomCompositionsTable({
                       the room cell and not the whole row: a row-level handler would fire on
                       every cell click and fight the grid's own editing/navigation. */}
                   <td
-                    className={`room${onOpenRoomInBoard ? " opens" : ""}`}
-                    onClick={onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
-                    title={onOpenRoomInBoard ? "Open this room on its own in the guest board" : undefined}
+                    className={`room${onPickRoom || onOpenRoomInBoard ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
+                    onClick={onPickRoom ? () => onPickRoom(id) : onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
+                    title={
+                      onPickRoom
+                        ? pickedRoomId === id
+                          ? "Chosen — its acts are above the table"
+                          : "Choose this room to see what can be done with it"
+                        : onOpenRoomInBoard
+                          ? "Open this room on its own in the guest board"
+                          : undefined
+                    }
                   >
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}

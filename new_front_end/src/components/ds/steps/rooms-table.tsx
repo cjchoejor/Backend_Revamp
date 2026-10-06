@@ -1,0 +1,191 @@
+"use client";
+
+/**
+ * The rooms of a booking, as the S2 table — Arrival · Check-in · Stay (2026-10-06, operator:
+ * "instead of these cards, can it maybe show like the table we have in s2, where we list how many
+ * people are there in each room and meal plans and stuffs").
+ *
+ * **One surface, three steps.** The same table the price was negotiated on now shows what the
+ * booking actually holds: each room with its nights, its guests by age band, its meal plans, its
+ * extra beds and — where authority allows it to be read — its rates. Arrival's bins and
+ * free-room cards are gone; Check-in and Stay reach it from a tab of their own rather than a
+ * button buried on a room row.
+ *
+ * **A room is chosen by clicking it**, and its own acts appear above the table (operator:
+ * "changing can be just clicking on one room in the table and showing an option"). Assign stays
+ * a button of its own, because assigning is about the booking's plan rather than about one row.
+ *
+ * **Nothing here writes directly.** "Change room" opens the governed composite — a new pass, a
+ * silently re-made quotation, the hold replaced, the reservation re-frozen, the guests re-seated
+ * — which is what makes the change audited. The table itself is read-first; editing it is its own
+ * act with its own walk.
+ */
+
+import { useMemo, useState, type ReactNode } from "react";
+import { Button, Chip } from "@/design-system/components/primitives";
+import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
+import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
+import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
+import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
+import { useQuery } from "@tanstack/react-query";
+import { useSession } from "@/hooks/use-session";
+import { listRooms } from "@/lib/api/rooms";
+import { StepCard, useRefreshEntry, useStepMode } from "./kit";
+
+/**
+ * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
+ * reaching back would make the two circular — fragile under the bundler even though ES modules
+ * tolerate it. Same query key, so a bed changed by the old room tools refreshes this too.
+ */
+function useRoomsCatalog() {
+  const { session } = useSession();
+  return useQuery({ queryKey: ["rooms-catalog"], queryFn: () => listRooms(session!), enabled: !!session });
+}
+
+/** The rooms the PLAN names, in the order the guest sleeps in them. */
+export function planRoomIds(entry: EntryDetail): string[] {
+  const assigned = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.roomId)));
+  const sealed = optionSelectedRoomIds(
+    ((entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected) ?? null)?.optionSelected,
+  );
+  const hold = entry.committedHold?.roomId ?? null;
+  const base = assigned.length ? assigned : sealed.length ? sealed : hold ? [hold] : [];
+  const ranges = roomStayRangesByRoom(entry);
+  return [...base].sort((a, b) => {
+    const A = ranges.get(a);
+    const B = ranges.get(b);
+    return (A?.firstNight ?? "9999").localeCompare(B?.firstNight ?? "9999") || (B?.nightCount ?? 0) - (A?.nightCount ?? 0);
+  });
+}
+
+/** The table and the chosen room's acts, for a step that already has a card of its own. */
+export function RoomsTable({
+  entry,
+  roomActions,
+  lead,
+}: {
+  entry: EntryDetail;
+  /** Acts for the chosen room that belong to this step — Arrival's Assign, say. */
+  roomActions?: (roomId: string, roomNumber: string) => ReactNode;
+  /** Shown above the table before any room is chosen. */
+  lead?: ReactNode;
+}) {
+  const { past } = useStepMode();
+  const refresh = useRefreshEntry(entry.id);
+  const catalogQ = useRoomsCatalog();
+  const byId = useMemo(() => new Map((catalogQ.data?.items ?? []).map((r) => [r.id, r])), [catalogQ.data]);
+
+  const ids = useMemo(() => planRoomIds(entry), [entry]);
+  const seed = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
+  const ranges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
+  const roomDates = useMemo(() => {
+    const out: Record<string, { label: string; nights: number }> = {};
+    for (const id of ids) {
+      const r = ranges.get(id);
+      if (r) out[id] = { label: r.label, nights: r.nightCount };
+    }
+    return out;
+  }, [ids, ranges]);
+
+  const [picked, setPicked] = useState<string | null>(null);
+  const chosen = picked && ids.includes(picked) ? picked : null;
+  const numberOf = (id: string) =>
+    (entry.roomAssignments ?? []).find((a) => a.roomId === id)?.room?.roomNumber ?? byId.get(id)?.roomNumber ?? id.slice(0, 6);
+
+  /**
+   * In-house the rates, the waivers and the discount are read-only — changing a rate mid-stay is
+   * the GM's rate revision, and a night the folio has already posted must not silently re-price.
+   * The figures still show: the operator has to be able to read what the booking is priced at.
+   */
+  const inHouse = entry.currentStage === "S7";
+
+  const changed = () =>
+    refresh([
+      ["rooms"],
+      ["rooms-catalog"],
+      ["room-plan-history", entry.id],
+      ["room-change-candidates", entry.id],
+      ["identity-proofs", entry.id],
+      ["billing-summary", entry.id],
+      ["entry-timers", entry.id],
+    ]);
+
+  if (ids.length === 0) return <span className="meta">No rooms on the plan yet — they are chosen at Inquiry.</span>;
+
+  return (
+    <>
+      {lead ? <p className="sm" style={{ marginTop: 0 }}>{lead}</p> : null}
+
+      {/* The chosen room's own acts, above the table they belong to. */}
+      {!past ? (
+        <div className="roomacts">
+          {chosen ? (
+            <>
+              <span className="who">
+                Room <b>{numberOf(chosen)}</b>
+                {roomDates[chosen] ? <span className="meta"> · {roomDates[chosen].label}</span> : null}
+              </span>
+              <RoomChangeControl entry={entry} fromRoomId={chosen} fromRoomNumber={numberOf(chosen)} onChanged={changed} compact />
+              {roomActions?.(chosen, numberOf(chosen))}
+              <Button kind="quiet" compact onClick={() => setPicked(null)}>
+                Done with this room
+              </Button>
+            </>
+          ) : (
+            <span className="meta">Click a room in the table to see what can be done with it — change it, or set it up differently.</span>
+          )}
+        </div>
+      ) : null}
+
+      <RoomCompositionPlanner
+        sealedRoomIds={ids}
+        entryCheckIn={entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null}
+        entryCheckOut={entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null}
+        entryAdults={entry.adultCount ?? entry.guestCount ?? null}
+        entryChildAges={entry.childAges ?? null}
+        entryId={entry.id}
+        roomDates={roomDates}
+        initialCompositions={seed}
+        lockCommercial={inHouse}
+        onPickRoom={past ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
+        pickedRoomId={chosen}
+        onChange={() => {
+          /* read-first: the table shows the plan. Editing it is its own act, with its own walk. */
+        }}
+      />
+
+      <div className="meta" style={{ marginTop: 8 }}>
+        {inHouse
+          ? "In-house the rates and waivers are read-only — a mid-stay rate revision is the GM's call, and nights already posted are corrected on the folio."
+          : "What the booking is priced on today. A change here runs the full journey behind the scenes and is recorded against the booking."}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The same thing as a card of its own — Check-in and Stay reach it from a tab, where there is no
+ * surrounding card to sit inside.
+ */
+export function RoomsTableCard({
+  entry,
+  title = "The rooms",
+  roomActions,
+  lead,
+  flow,
+  flowAfter,
+}: {
+  entry: EntryDetail;
+  title?: string;
+  roomActions?: (roomId: string, roomNumber: string) => ReactNode;
+  lead?: ReactNode;
+  flow?: string;
+  flowAfter?: string;
+}) {
+  const n = planRoomIds(entry).length;
+  return (
+    <StepCard title={title} flow={flow} flowAfter={flowAfter} right={n ? <Chip tone="quiet">{n === 1 ? "1 room" : `${n} rooms`}</Chip> : null}>
+      <RoomsTable entry={entry} roomActions={roomActions} lead={lead} />
+    </StepCard>
+  );
+}

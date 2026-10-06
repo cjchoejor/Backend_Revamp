@@ -117,17 +117,15 @@ export function S5Arrival({
   setGuestPresent: (v: boolean) => void;
 }) {
   const facts = useArrivalFacts(entry);
-  const [boardOpen, setBoardOpen] = useState(() => (entry.roomAssignments ?? []).length === 0);
   const since = currentPassStart(entry);
   const clock = useHotelClock(60_000);
-  const openRooms = () => {
-    setBoardOpen(true);
+  // The rooms card is always open now that it IS the table (2026-10-06) — nothing to unfold first.
+  const openRooms = () =>
     requestAnimationFrame(() => document.getElementById(ROOMS_CARD_ID)?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  };
   return (
     <StepCanvas past={past}>
       <ReadyTheRoom entry={entry} facts={facts} onAssign={openRooms} />
-      <AssignRoomsCard entry={entry} boardOpen={boardOpen} setBoardOpen={setBoardOpen} />
+      <AssignRoomsCard entry={entry} />
       <StepCard>
         <Tool>
           <IdentityProofBlock entry={entry} collapsible />

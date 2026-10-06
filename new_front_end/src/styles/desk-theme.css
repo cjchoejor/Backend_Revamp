@@ -2721,6 +2721,15 @@
     color: var(--green-d);
     text-decoration: underline;
   }
+  /* The CHOSEN room (2026-10-06): its acts are offered above the table, so the row has to say
+     plainly which room they belong to — the cell carries the accent and a marker on its edge. */
+  & .rct-t tbody .room.picked {
+    background: var(--green-t);
+    box-shadow: inset 3px 0 0 var(--green-d);
+  }
+  & .rct-t tbody .room.picked b {
+    color: var(--green-d);
+  }
   /* Saving the table (2026-09-30) — the act sits at the foot of the grid it commits, with what
      stands in its way named beside it rather than left for the operator to find. */
   & .rct-save {

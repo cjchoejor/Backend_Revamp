@@ -48,6 +48,7 @@ import {
 } from "@/components/desk/workspace/room-change-control";
 import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 import { enumerateNights } from "./use-room-selection";
+import { RoomsTable } from "./rooms-table";
 
 export const ROOMS_CARD_ID = "arrival-rooms";
 
@@ -87,15 +88,7 @@ export function useRoomsCatalog() {
 
 type Slot = { key: string; label: string; adult: boolean; band: string };
 
-export function AssignRoomsCard({
-  entry,
-  boardOpen,
-  setBoardOpen,
-}: {
-  entry: EntryDetail;
-  boardOpen: boolean;
-  setBoardOpen: (v: boolean) => void;
-}) {
+export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const { past } = useStepMode();
   const refresh = useRefreshEntry(entry.id);
@@ -201,24 +194,6 @@ export function AssignRoomsCard({
   const placedKeys = new Set(binIds.flatMap((id) => guestsIn(id).map((s) => s.key)));
   const unplaced = comps ? slots.filter((s) => !placedKeys.has(s.key)) : [];
 
-  const anchor = planIds[0] ?? null;
-  const anchorType = anchor ? byId.get(anchor)?.roomType?.id ?? null : null;
-  const anchorTypeName = anchor ? typeOf(anchor) : null;
-  const cands = useQuery({
-    queryKey: ["room-change-candidates", entry.id, anchor],
-    queryFn: () => listRoomChangeCandidates(session!, entry.id, anchor!),
-    // Not for a parked booking (2026-09-19): it cannot change rooms until it is resumed, and the
-    // backend refuses the question — the board fired four refused requests on every visit.
-    enabled: !!session && !!anchor && boardOpen && !past && entry.status === "ACTIVE",
-    staleTime: 30_000,
-  });
-  const freeRooms = useMemo(() => {
-    const all = (cands.data?.candidates ?? []).filter((c) =>
-      night === "all" ? c.availability === "FREE" : c.perNight.find((p) => p.date === night)?.status === "FREE",
-    );
-    const same = all.filter((c) => c.sameType || (anchorType && c.roomTypeId === anchorType));
-    return { all, same, shown: allTypes ? all : same };
-  }, [cands.data, night, allTypes, anchorType]);
 
   /* ---- the lines ---- */
   const [openRooms, setOpenRooms] = useState<Set<string>>(new Set());
@@ -313,148 +288,39 @@ export function AssignRoomsCard({
               {planRoomCount > numberOfRooms ? `${plural(planRoomCount, "room")} in the plan · ${numberOfRooms} a night` : `${plural(numberOfRooms, "room")} needed`}
             </Chip>
           )}
-          {planIds.length ? (
-            <Button kind="quiet" compact onClick={() => setBoardOpen(!boardOpen)}>
-              {boardOpen ? "Hide the board" : "Who sleeps where"}
-            </Button>
-          ) : null}
+
         </>
       }
-      meta={
-        boardOpen
-          ? "Rooms free for these nights, by type. Who sleeps where comes from the room plan set at Negotiation; a room with someone in it is assigned — a claim on the room, no step moved. A different room is taken with Change room on its line: every night is checked again and the price follows."
-          : undefined
-      }
+      meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Click a room to change it; every night is checked again and the price follows."
     >
-      {boardOpen && planIds.length ? (
-        <div style={{ marginBottom: 12 }}>
-          {nights.length > 1 ? (
-            <div className="row-acts" style={{ marginBottom: 8, alignItems: "center" }}>
-              <span className="meta">Night</span>
-              <Choice options={[["all", "All nights"] as const, ...nights.map((d) => [d, fmtDay(d)] as const)]} value={night} onChange={setNight} />
-              <span className="meta">{night === "all" ? "the whole stay" : `${fmtDate(night)} only`}</span>
-            </div>
-          ) : null}
-          <div className="grid2" style={{ alignItems: "start", gridTemplateColumns: "minmax(0,1fr) minmax(0,2fr)" }}>
-            <div className="stack">
-              <div className="card" style={{ background: "var(--surface-2)" }}>
-                <div className="row-acts" style={{ justifyContent: "space-between" }}>
-                  <b>The party · {slots.length}</b>
-                  <span className="meta">
-                    {plural(slots.filter((s) => s.adult).length, "adult")} · {plural(slots.filter((s) => !s.adult).length, "child", "children")}
-                  </span>
-                </div>
-                <div style={{ marginTop: 6, minHeight: 34 }}>
-                  {!comps ? (
-                    <span className="meta">No room plan with people in it — the rooms carry the whole party.</span>
-                  ) : unplaced.length ? (
-                    unplaced.map((s) => <GuestChip key={s.key} slot={s} />)
-                  ) : (
-                    <span className="meta">everyone has a room{night === "all" ? "" : " this night"}</span>
-                  )}
-                </div>
-              </div>
-              {seatingProblem ? (
-                <Refusal
-                  kind="state"
-                  message={
-                    issues.unseated.length
-                      ? `${issues.unseated.length} of the party ${issues.unseated.length === 1 ? "has" : "have"} no room yet.`
-                      : issues.emptyRooms.length
-                        ? `${issues.emptyRooms.map((id) => `Room ${numberOf(id)}`).join(", ")} ${issues.emptyRooms.length === 1 ? "has" : "have"} nobody in ${issues.emptyRooms.length === 1 ? "it" : "them"}.`
-                        : "The room plan still names a room this booking no longer holds."
-                  }
-                  carries="Seating everyone re-prices the plan in a new pass and comes back here; nobody moves rooms."
-                  actions={
-                    canWork ? (
-                      <Button kind="secondary" compact onClick={() => setSeatOpen(true)}>
-                        Seat everyone in a room…
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              ) : null}
-            </div>
-            <div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
-                {binIds.map((id) => (
-                  <PlanBin
-                    key={id}
-                    number={numberOf(id)}
-                    type={typeOf(id)}
-                    cap={capOf(id)}
-                    guests={comps ? guestsIn(id) : null}
-                    assigned={assignedIds.includes(id)}
-                    bed={bedWord(byId.get(id)?.bedType)}
-                  />
-                ))}
-              </div>
-              {past ? null : (
-                <>
-                  <div className="row-acts" style={{ margin: "10px 0 6px", alignItems: "center" }}>
-                    <span className="meta">
-                      {cands.isLoading
-                        ? "asking the house which rooms are free…"
-                        : cands.isError
-                          ? "the house could not be asked for free rooms"
-                          : allTypes
-                            ? `${plural(freeRooms.all.length, "room")} free for ${night === "all" ? "these nights" : fmtDay(night)}`
-                            : `${freeRooms.same.length} ${anchorTypeName ?? "of this type"} free for ${night === "all" ? "these nights" : fmtDay(night)}`}
-                    </span>
-                    <Button kind="quiet" compact onClick={() => setAllTypes((v) => !v)}>
-                      {allTypes ? `Only ${anchorTypeName ?? "this type"}` : "Show every category"}
-                    </Button>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
-                    {freeRooms.shown.slice(0, 24).map((c) => (
-                      <FreeBin key={c.roomId} c={c} cap={capOf(c.roomId)} />
-                    ))}
-                  </div>
-                  {freeRooms.shown.length > 24 ? <div className="meta" style={{ marginTop: 6 }}>and {freeRooms.shown.length - 24} more</div> : null}
-                </>
-              )}
-            </div>
-          </div>
+      {/* The rooms ARE the S2 table now (2026-10-06, operator: "instead of these cards ... I
+          would love the table to be shown here"). The party card, the room bins and the
+          free-room cards are gone: the table says who sleeps where, on what plan, with what
+          beds — and a room is changed by clicking it there. */}
+      {seatingProblem ? (
+        <div style={{ marginBottom: 10 }}>
+          <Refusal
+            kind="state"
+            message={
+              issues.unseated.length
+                ? `${issues.unseated.length} of the party ${issues.unseated.length === 1 ? "has" : "have"} no room yet.`
+                : issues.emptyRooms.length
+                  ? `${issues.emptyRooms.map((id) => `Room ${numberOf(id)}`).join(", ")} ${issues.emptyRooms.length === 1 ? "has" : "have"} nobody in ${issues.emptyRooms.length === 1 ? "it" : "them"}.`
+                  : "The room plan still names a room this booking no longer holds."
+            }
+            carries="Seating everyone re-prices the plan in a new pass and comes back here; nobody moves rooms."
+            actions={
+              canWork ? (
+                <Button kind="secondary" compact onClick={() => setSeatOpen(true)}>
+                  Seat everyone in a room…
+                </Button>
+              ) : undefined
+            }
+          />
         </div>
       ) : null}
 
-      {planIds.length ? (
-        <>
-          <div className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <span className="meta">
-              {multi ? `${plural(planRoomCount, "room")} in the plan · ${assignedIds.length} assigned` : assigned ? "assigned" : "chosen earlier — not yet assigned"}
-            </span>
-            {planIds.length > 1 ? (
-              <Button kind="quiet" compact onClick={() => setOpenRooms(allOpen ? new Set() : new Set(planIds))}>
-                {allOpen ? "Hide all details" : "All details"}
-              </Button>
-            ) : null}
-          </div>
-          <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
-            {planIds.map((id) => (
-              <RoomLine
-                key={id}
-                entry={entry}
-                roomId={id}
-                number={numberOf(id)}
-                type={typeOf(id)}
-                room={byId.get(id) ?? null}
-                assignment={assignments.find((a) => a.roomId === id)}
-                stay={stayRanges.get(id)?.label ?? null}
-                stayNights={stayRanges.get(id)?.nightCount ?? null}
-                guests={comps ? guestsIn(id).map((s) => s.label) : []}
-                comp={compByRoom.get(id) ?? null}
-                open={openRooms.has(id)}
-                onToggle={() => toggleRoom(id)}
-                onChanged={changed}
-                canChange={canWork}
-              />
-            ))}
-          </div>
-        </>
-      ) : (
-        <p className="meta">No rooms chosen for this booking yet.</p>
-      )}
+      <RoomsTable entry={entry} />
 
       <Live>
         {!assigned && entry.currentStage === "S5" ? (
@@ -554,208 +420,3 @@ export function AssignRoomsCard({
 
 /* ------------------------------------------------------------------ pieces */
 
-function GuestChip({ slot }: { slot: Slot }) {
-  return (
-    <span style={{ display: "inline-block", margin: 2 }}>
-      <Chip tone={slot.adult ? "default" : "quiet"}>
-        {slot.label}
-        {slot.band}
-      </Chip>
-    </span>
-  );
-}
-
-function PlanBin({
-  number,
-  type,
-  cap,
-  guests,
-  assigned,
-  bed,
-}: {
-  number: string;
-  type: string | null;
-  cap: number | null;
-  guests: Slot[] | null;
-  assigned: boolean;
-  bed: string | null;
-}) {
-  const adults = guests?.filter((g) => g.adult).length ?? 0;
-  const kids = (guests?.length ?? 0) - adults;
-  return (
-    <div className="card" style={{ padding: "8px 10px", borderColor: guests?.length ? "var(--accent-line)" : undefined }}>
-      <div>
-        <b>Room {number}</b>
-        {type ? <span className="meta"> · {type}</span> : null}
-      </div>
-      <div className="row-acts" style={{ marginTop: 4, alignItems: "center" }}>
-        <span className="meta">
-          {guests ? `${adults}/${cap ?? "—"}${kids ? ` + ${plural(kids, "child", "children")}` : ""}` : `${cap ?? "—"} max`}
-        </span>
-        {assigned ? (
-          <Chip tone="success" icon="check">
-            assigned
-          </Chip>
-        ) : (
-          <Chip tone="quiet">chosen</Chip>
-        )}
-      </div>
-      <div style={{ marginTop: 6, minHeight: 30 }}>
-        {guests === null ? <span className="meta">the whole party</span> : guests.length ? guests.map((g) => <GuestChip key={g.key} slot={g} />) : <span className="meta">empty</span>}
-      </div>
-      {bed ? <div className="meta">{bed}</div> : null}
-    </div>
-  );
-}
-
-function FreeBin({ c, cap }: { c: RoomChangeCandidate; cap: number | null }) {
-  return (
-    <div className="card" style={{ padding: "8px 10px" }}>
-      <div>
-        <b>Room {c.roomNumber}</b>
-        {c.roomTypeName ? <span className="meta"> · {c.roomTypeName}</span> : null}
-      </div>
-      <div className="row-acts" style={{ marginTop: 4, alignItems: "center" }}>
-        <span className="meta">0/{cap ?? "—"}</span>
-        <Chip tone="quiet">free</Chip>
-        {c.isDeficient ? <Chip tone="warning">a fault</Chip> : null}
-        {!c.sameType ? <Chip tone="quiet">another category · FOM</Chip> : null}
-      </div>
-      <div className="meta" style={{ marginTop: 6 }}>
-        empty{bedWord(c.bedType) ? ` · ${bedWord(c.bedType)}` : ""}
-      </div>
-    </div>
-  );
-}
-
-function RoomLine({
-  entry,
-  roomId,
-  number,
-  type,
-  room,
-  assignment,
-  stay,
-  stayNights,
-  guests,
-  comp,
-  open,
-  onToggle,
-  onChanged,
-  canChange,
-}: {
-  entry: EntryDetail;
-  roomId: string;
-  number: string;
-  type: string | null;
-  room: RoomListItem | null;
-  assignment: RoomAssignmentSummary | undefined;
-  stay: string | null;
-  stayNights: number | null;
-  guests: string[];
-  comp: RoomCompositionInput | null;
-  open: boolean;
-  onToggle: () => void;
-  onChanged: () => void;
-  canChange: boolean;
-}) {
-  const { past } = useStepMode();
-  const status = room ? deriveRoomStatus(room) : null;
-  const heads = comp ? comp.occupantCount ?? (comp.adultCount ?? 0) + (comp.cnb6To10Count ?? 0) + (comp.cnbUnder6Count ?? 0) : null;
-  const showStatus = status && status !== "reserved" && status !== "ready";
-  const ready = roomReady(assignment);
-  return (
-    <div style={{ borderBottom: "1px solid var(--line)", padding: "8px 0" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <span className="sm">
-          <b>Room {number}</b>
-          <span className="meta">
-            {type ? ` · ${type}` : ""}
-            {stay ? ` · ${stay}` : ""}
-            {heads ? ` · ${plural(heads, "guest")}` : ""}
-          </span>
-        </span>
-        <span className="row-acts" style={{ alignItems: "center" }}>
-          {showStatus ? <Chip tone={STATUS_TONE[status!]}>{ROOM_STATUS[status!].label}</Chip> : null}
-          {assignment ? (
-            ready ? (
-              <Chip tone="success" icon="check">
-                ready
-              </Chip>
-            ) : (
-              <Chip tone="warning">not ready · housekeeping</Chip>
-            )
-          ) : null}
-          {assignment?.deficientAtAssignment ? <Chip tone="warning">a fault, acknowledged at assignment</Chip> : null}
-          <Button kind="quiet" compact onClick={onToggle}>
-            {open ? "Hide" : "Details"}
-          </Button>
-        </span>
-      </div>
-      <div className="desk-root" style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
-        {past ? (
-          <div inert style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <InitialSelectionCell entryId={entry.id} roomId={roomId} />
-            <BedTypeEditor roomId={roomId} entryId={entry.id} />
-            <ExtraBedEditor entry={entry} roomId={roomId} onChanged={onChanged} />
-          </div>
-        ) : (
-          <>
-            <InitialSelectionCell entryId={entry.id} roomId={roomId} />
-            <BedTypeEditor roomId={roomId} entryId={entry.id} />
-            <ExtraBedEditor entry={entry} roomId={roomId} onChanged={onChanged} />
-          </>
-        )}
-      </div>
-      {canChange ? (
-        <div className="desk-root" style={{ marginTop: 4 }}>
-          <RoomChangeControl entry={entry} fromRoomId={roomId} fromRoomNumber={number} onChanged={onChanged} compact />
-        </div>
-      ) : null}
-      {open ? (
-        <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: "var(--r-control)", background: "var(--surface-2)" }}>
-          <Facts wide>
-            <Fact k="Staying" meta={stayNights ? plural(stayNights, "night") : undefined}>
-              {stay}
-            </Fact>
-            <Fact k="Guests">{guests.length ? guests.join(" · ") : null}</Fact>
-            {comp ? (
-              <>
-                <Fact k="Occupants">
-                  {plural(comp.adultCount ?? 0, "adult")}
-                  {comp.cnb6To10Count ? `, ${plural(comp.cnb6To10Count, "child", "children")} 6–10` : ""}
-                  {comp.cnbUnder6Count ? `, ${comp.cnbUnder6Count} under 6` : ""}
-                  {comp.extraBedCount ? ` · ${plural(comp.extraBedCount, "extra bed")}` : " · no extra bed"}
-                </Fact>
-                <Fact k="Meals">{mealPlanSummary(comp)}</Fact>
-                {comp.negotiatedRoomRate != null || comp.negotiatedExtraBedRate != null ? (
-                  <Fact k="Agreed rates">
-                    {[
-                      comp.negotiatedRoomRate != null ? `room ${money(comp.negotiatedRoomRate)} a night` : null,
-                      comp.negotiatedExtraBedRate != null ? `extra bed ${money(comp.negotiatedExtraBedRate)} a night` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Fact>
-                ) : null}
-                {comp.isFoc || comp.serviceChargeApplies === false || comp.gstApplies === false ? (
-                  <Fact k="Waived">
-                    <span className="warn-ink">
-                      {[comp.isFoc ? "free of charge" : null, comp.serviceChargeApplies === false ? "service charge" : null, comp.gstApplies === false ? "GST" : null]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
-                  </Fact>
-                ) : null}
-              </>
-            ) : (
-              <Fact k="Room plan">
-                <span className="meta">no people or meals recorded for this room at Negotiation</span>
-              </Fact>
-            )}
-          </Facts>
-        </div>
-      ) : null}
-    </div>
-  );
-}

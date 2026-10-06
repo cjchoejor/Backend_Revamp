@@ -1122,6 +1122,9 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   initialCompositions?: RoomCompositionInput[];
   /** In-house (S7): rates / waivers / discount render read-only — see RoomCompositionsTable. */
   lockCommercial?: boolean;
+  /** Clicking a room CHOOSES it rather than opening the board — see RoomCompositionsTable. */
+  onPickRoom?: (roomId: string) => void;
+  pickedRoomId?: string | null;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
