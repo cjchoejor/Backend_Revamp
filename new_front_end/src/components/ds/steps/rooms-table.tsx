@@ -34,7 +34,7 @@ import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
-import { DsDialog, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
+import { DsDialog, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -220,6 +220,10 @@ export function RoomsTable({
         </div>
       ) : null}
 
+      {/* The planner is one of the old tools: every rule that lays its grid out is scoped under
+          `.desk-root` in desk-theme.css, and `legacy-bridge.css` re-colours it there. Rendered
+          bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
+      <Tool inert={past}>
       <RoomCompositionPlanner
         sealedRoomIds={ids}
         entryCheckIn={entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null}
@@ -239,6 +243,7 @@ export function RoomsTable({
         saving={saveM.isPending}
         unsaved={unsaved}
       />
+      </Tool>
 
       <DsDialog
         open={reasonOpen}
