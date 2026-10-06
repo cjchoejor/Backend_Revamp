@@ -2691,23 +2691,16 @@
   /* How the room is made up for this stay, beside the room it belongs to (2026-10-06). It is
      not sticky: the room number is the row's anchor, and two pinned columns eat the grid. */
   & .rct-t .bedcol {
-    width: 108px;
-    min-width: 108px;
-    text-align: left;
+    width: 112px;
+    min-width: 112px;
+    text-align: center;
     padding: 3px 6px;
   }
   & .rct-t td.bedcol select {
     width: 100%;
     font-size: 11.5px;
     padding: 2px 4px;
-  }
-  & .rct-t td.bedcol .bedwarn {
-    display: block;
-    font-size: 10.5px;
-    font-weight: 700;
-    color: var(--warn);
-    line-height: 1.3;
-    margin-top: 1px;
+    text-align: center;
   }
 
   & .rct-t .room {

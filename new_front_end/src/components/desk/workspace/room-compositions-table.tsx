@@ -318,7 +318,10 @@ function BedCell({
         ? "From the bed setup the guest asked for"
         : "The room's usual setup";
   return (
-    <td className="bedcol" title={`${why}${differs ? ` · the room is ${BED_WORDS[cell.roomNow!] ?? cell.roomNow} right now` : ""}`}>
+    <td
+      className="bedcol"
+      title={`${why}${differs ? ` · the room is made up as ${BED_WORDS[cell.roomNow!] ?? cell.roomNow} until it is set for this stay` : ""}`}
+    >
       <select
         className="rct-in"
         value={cell.bedType ?? ""}
@@ -333,7 +336,6 @@ function BedCell({
           </option>
         ))}
       </select>
-      {differs ? <span className="bedwarn" title="The room is not made up that way yet">now {BED_WORDS[cell.roomNow!] ?? cell.roomNow}</span> : null}
     </td>
   );
 }
@@ -1374,7 +1376,7 @@ export function RoomCompositionsTable({
               <th className="room">Room</th>
               {bedsShown && (
                 <th className="bedcol" title="How the room is made up for this stay">
-                  Bed
+                  Bed type
                 </th>
               )}
               <th title="Occupants — derived: adults + children">Occ</th>
