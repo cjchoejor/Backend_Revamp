@@ -271,3 +271,13 @@
 .ds .paperrow .nm .v { color: var(--ink-3); font-weight: 400; }
 .ds .paperrow .when { font-size: 12px; color: var(--ink-3); }
 .ds .paperrow .acts { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* Bookings — the Sort menu at the end of the filters, and the band rows that say where today
+   falls in a list sorted by a stay date (2026-10-06). The today band is the accent: it is the
+   line the reader is looking for. */
+.ds .bookings-page .sortwrap:not(.desk-root *) { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.ds .bookings-page .sortwrap select.input:not(.desk-root *) { width: auto; min-width: 250px; }
+.ds .list-band td:not(.desk-root *) { padding: 7px 12px; background: var(--surface-3); border-bottom: 1px solid var(--line-2); font-size: var(--t-meta); font-weight: 800; color: var(--ink-2); letter-spacing: 0.02em; }
+.ds .list-band.today td:not(.desk-root *) { background: var(--accent-soft); color: var(--accent-ink); border-bottom-color: var(--accent-line); }
+.ds .list-band .n:not(.desk-root *) { margin-left: 10px; font-weight: 600; color: var(--ink-3); }
+.ds .bookings-page .date-cell:not(.desk-root *) { white-space: nowrap; }

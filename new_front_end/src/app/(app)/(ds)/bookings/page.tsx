@@ -9,21 +9,125 @@
  * billing summary, read for the rows on screen.
  */
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Chip, EmptyState, Icon, Input } from "@/design-system";
 import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StepChip, bookingHref } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney, useDeskTimers } from "@/hooks/use-desk-data";
 import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import type { DeskListRow, DeskMoneyRow, DeskTimerRow } from "@/lib/api/desk";
-import { fmtDate, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDate, fmtRange, fmtStamp, money, nightsOf, plural, weekdayOf } from "@/lib/ds/format";
 import { bookerOfRow, channelWord, factsFromRow, guestNameOf, standingOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
 const GROUPS = ["Upcoming", "In-house", "Departed", "All"] as const;
 const PAGE = 50;
 
-type Sort = "arrival" | "name";
+/**
+ * How the list is ordered (2026-10-06, operator: "I'm not sure how the default is looking in
+ * this table list, it looks very disoriented ... other filters like the check-in date in
+ * increasing and decreasing order and some more"). The old default put every OPEN booking first
+ * and then everything else, each by check-in — so the dates climbed to December and jumped back
+ * to May with nothing saying why. Every order is now ONE order, stated on the page, chosen from
+ * the Sort menu or by clicking a column heading, and remembered for this desk.
+ */
+type SortKey = "checkin" | "checkout" | "booked" | "changed" | "name" | "step";
+type SortDir = "asc" | "desc";
+type SortId = `${SortKey}-${SortDir}`;
+
+const SORTS: { id: SortId; label: string; words: string }[] = [
+  { id: "checkin-asc", label: "Check-in · soonest first", words: "check-in, soonest first" },
+  { id: "checkin-desc", label: "Check-in · latest first", words: "check-in, latest first" },
+  { id: "checkout-asc", label: "Check-out · soonest first", words: "check-out, soonest first" },
+  { id: "checkout-desc", label: "Check-out · latest first", words: "check-out, latest first" },
+  { id: "booked-desc", label: "Booked · newest first", words: "when booked, newest first" },
+  { id: "booked-asc", label: "Booked · oldest first", words: "when booked, oldest first" },
+  { id: "changed-desc", label: "Last changed · most recent first", words: "last changed, most recent first" },
+  { id: "changed-asc", label: "Last changed · longest untouched first", words: "last changed, longest untouched first" },
+  { id: "name-asc", label: "Guest name · A to Z", words: "guest name, A to Z" },
+  { id: "name-desc", label: "Guest name · Z to A", words: "guest name, Z to A" },
+  { id: "step-asc", label: "Step · Inquiry to Closed", words: "step, Inquiry to Closed" },
+  { id: "step-desc", label: "Step · Closed to Inquiry", words: "step, Closed to Inquiry" },
+];
+const SORT_IDS = new Set<string>(SORTS.map((s) => s.id));
+const SORT_STORE = "desk:bookings-sort";
+/** A heading clicked for the first time sorts this way; a second click turns it round. */
+const FIRST_DIR: Record<SortKey, SortDir> = { checkin: "asc", checkout: "asc", booked: "desc", changed: "desc", name: "asc", step: "asc" };
+
+const validSort = (v: string | null | undefined): SortId | null => (v && SORT_IDS.has(v) ? (v as SortId) : null);
+const sortParts = (id: SortId) => id.split("-") as [SortKey, SortDir];
+const sortWords = (id: SortId) => SORTS.find((s) => s.id === id)?.words ?? id;
+
+/** What each list is best read in when nobody has chosen. */
+function usualSort(group: string): SortId {
+  if (group === "Upcoming") return "checkin-asc"; // who arrives next
+  if (group === "In-house") return "checkout-asc"; // who leaves next
+  return "checkin-desc"; // the latest stays on top, the past running down below
+}
+
+const checkInOf = (r: DeskListRow) => r.checkInDate?.slice(0, 10) ?? null;
+const checkOutOf = (r: DeskListRow) => (r.actualCheckOutDate ?? r.checkOutDate)?.slice(0, 10) ?? null;
+
+function sortValue(r: DeskListRow, key: SortKey): string | number | null {
+  switch (key) {
+    case "checkin":
+      return checkInOf(r);
+    case "checkout":
+      return checkOutOf(r);
+    case "booked":
+      return r.createdAt ?? null;
+    case "changed":
+      return r.updatedAt ?? null;
+    case "name":
+      return guestNameOf(r.guestProfile).toLocaleLowerCase();
+    case "step":
+      return stepNoOfStage(r.currentStage);
+  }
+}
+
+/** One order, whichever way — a booking with no value for the key always sinks to the end. */
+function compareRows(a: DeskListRow, b: DeskListRow, key: SortKey, dir: SortDir): number {
+  const va = sortValue(a, key);
+  const vb = sortValue(b, key);
+  if (va == null || vb == null) {
+    if (va != null) return -1;
+    if (vb != null) return 1;
+  } else {
+    const c = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb));
+    if (c) return dir === "asc" ? c : -c;
+  }
+  // a tie reads by check-in, soonest first, then by booking number
+  const ca = checkInOf(a);
+  const cb = checkInOf(b);
+  if (ca !== cb) return ca == null ? 1 : cb == null ? -1 : ca.localeCompare(cb);
+  return a.id.localeCompare(b.id);
+}
+
+/**
+ * Where today falls in a list sorted by a stay date — the band a row sits in. Each band opens
+ * with its own row, so the reader always knows which side of today they are looking at. Nothing
+ * is banded until the hotel's day is known (the desk never falls back to the machine's clock).
+ */
+function bandOf(r: DeskListRow, key: SortKey, today: string | null): { id: string; label: string } | null {
+  if (key !== "checkin" && key !== "checkout") return null;
+  const d = key === "checkin" ? checkInOf(r) : checkOutOf(r);
+  const what = key === "checkin" ? "Check-in" : "Check-out";
+  if (!d) return { id: "none", label: "No dates yet" };
+  if (!today) return null;
+  if (d > today) return { id: "after", label: `${what} after today` };
+  if (d === today) return { id: "today", label: `${what} today · ${fmtDate(today)}` };
+  return { id: "before", label: `${what} before today` };
+}
+
+/** "Tue", or "Tue · today" for the three days a desk speaks of that way. */
+function dayWord(iso: string, day: { today: string; tomorrow: string; yesterday: string } | null): string {
+  const wd = weekdayOf(iso);
+  if (!day) return wd;
+  if (iso === day.today) return `${wd} · today`;
+  if (iso === day.tomorrow) return `${wd} · tomorrow`;
+  if (iso === day.yesterday) return `${wd} · yesterday`;
+  return wd;
+}
 
 function inGroup(r: DeskListRow, group: string): boolean {
   const step = stepNoOfStage(r.currentStage);
@@ -79,7 +183,7 @@ function haystack(r: DeskListRow, statusWord: string, statusQualifier = ""): str
     .toLowerCase();
 }
 
-function subline(r: DeskListRow): string {
+function subline(r: DeskListRow, extra?: string | null): string {
   const booker = bookerOfRow(r);
   return [
     r.id,
@@ -87,6 +191,7 @@ function subline(r: DeskListRow): string {
     booker && (booker.kind === "agent" || booker.kind === "company") ? booker.name : null,
     r.groupBillingMode === "GROUP_MASTER" ? "group" : null,
     r.walkInCompressed ? "walk-in" : null,
+    extra,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -113,14 +218,25 @@ function BookingsScreen() {
 
   const [text, setText] = useState(q);
   useEffect(() => setText(q), [q]);
-  const [sort, setSort] = useState<Sort>("arrival");
+  // An order chosen here is kept in the address (Back returns to it) and remembered for this desk.
+  const [storedSort, setStoredSort] = useState<SortId | null>(null);
+  useEffect(() => {
+    try {
+      setStoredSort(validSort(localStorage.getItem(SORT_STORE)));
+    } catch {
+      /* private window or blocked storage — the usual order stands */
+    }
+  }, []);
+  const chosenSort = validSort(params.get("sort")) ?? storedSort;
+  const sort: SortId = chosenSort ?? usualSort(group);
+  const [sortKey, sortDir] = sortParts(sort);
   const [pages, setPages] = useState(1);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [draftFrom, setDraftFrom] = useState(from);
   const [draftTo, setDraftTo] = useState(to);
   const calRef = useRef<HTMLDetailsElement | null>(null);
 
-  const go = (next: Partial<Record<"group" | "q" | "from" | "to" | "view", string>>) => {
+  const go = (next: Partial<Record<"group" | "q" | "from" | "to" | "view" | "sort", string>>) => {
     const p = new URLSearchParams(params.toString());
     for (const [k, v] of Object.entries(next)) {
       if (v) p.set(k, v);
@@ -130,6 +246,20 @@ function BookingsScreen() {
     setPages(1);
     router.replace(`/bookings${p.toString() ? `?${p.toString()}` : ""}`);
   };
+
+  const chooseSort = (id: SortId | null) => {
+    setStoredSort(id);
+    try {
+      if (id) localStorage.setItem(SORT_STORE, id);
+      else localStorage.removeItem(SORT_STORE);
+    } catch {
+      /* not remembered — it still applies on this screen */
+    }
+    go({ sort: id ?? "" });
+  };
+  const sortByHeading = (key: SortKey) =>
+    chooseSort(`${key}-${key === sortKey ? (sortDir === "asc" ? "desc" : "asc") : FIRST_DIR[key]}` as SortId);
+  const arrow = (key: SortKey) => (key === sortKey ? (sortDir === "asc" ? " ▲" : " ▼") : "");
 
   // Typing narrows the list after a short pause; the words live in the address so Back returns to them.
   useEffect(() => {
@@ -165,12 +295,19 @@ function BookingsScreen() {
       if (!needle && !from && !to && !view && (group === "All" || group === "Departed") && yearAgo && co && co < yearAgo) return false;
       return true;
     });
-    const past = (r: DeskListRow) => (r.status !== "ACTIVE" || stepNoOfStage(r.currentStage) === 9 ? 1 : 0);
-    const key = (r: DeskListRow) => r.checkInDate?.slice(0, 10) ?? "9999-99-99";
-    if (sort === "name") filtered.sort((a, b) => guestNameOf(a.guestProfile).localeCompare(guestNameOf(b.guestProfile)));
-    else filtered.sort((a, b) => (group === "All" ? past(a) - past(b) : 0) || key(a).localeCompare(key(b)));
+    filtered.sort((a, b) => compareRows(a, b, sortKey, sortDir));
     return filtered;
-  }, [all, group, q, from, to, view, sort, today]);
+  }, [all, group, q, from, to, view, sortKey, sortDir, today]);
+
+  /** How many bookings each band holds — over the whole list, not just the rows on screen. */
+  const bandCounts = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      const b = bandOf(r, sortKey, today);
+      if (b) out.set(b.id, (out.get(b.id) ?? 0) + 1);
+    }
+    return out;
+  }, [rows, sortKey, today]);
 
   const shownCount = Math.min(rows.length, PAGE * pages);
   const shown = rows.slice(0, shownCount);
@@ -206,7 +343,8 @@ function BookingsScreen() {
             <div className="meta">
               {rows.length.toLocaleString("en-IN")} shown
               {!q && !from && !to && !view ? " · the last twelve months and everything ahead · older through Date… or the search" : ""} · sorted by{" "}
-              {sort === "arrival" ? "arrival, soonest first" : "name"} · click a row to preview, double-click to open
+              <b>{sortWords(sort)}</b>
+              {chosenSort ? "" : " (the usual for this list)"} · click a row to preview, double-click to open
             </div>
           </div>
           <Button onClick={() => router.push("/bookings/new")}>New booking</Button>
@@ -271,6 +409,17 @@ function BookingsScreen() {
               {g}
             </Button>
           ))}
+          <label className="sortwrap">
+            <span className="meta">Sort</span>
+            <select className="input" value={chosenSort ?? ""} onChange={(e) => chooseSort(validSort(e.target.value))} aria-label="Sort the bookings">
+              <option value="">Usual for this list · {SORTS.find((s) => s.id === usualSort(group))?.label}</option>
+              {SORTS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {active.length ? (
@@ -299,30 +448,74 @@ function BookingsScreen() {
             <table className="table compact">
               <thead>
                 <tr>
+                  {(
+                    [
+                      ["name", "Booking"],
+                      ["checkin", "Check-in"],
+                      ["checkout", "Check-out"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <th key={key}>
+                      <a
+                        className={`th-sort${sortKey === key ? " on" : ""}`}
+                        href="#"
+                        title={sortKey === key ? "Click to turn the order round" : `Sort by ${label.toLowerCase()}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          sortByHeading(key);
+                        }}
+                      >
+                        {label}
+                        {arrow(key)}
+                      </a>
+                    </th>
+                  ))}
+                  <th className="num">Nights</th>
+                  <th className="num">Rooms</th>
                   <th>
-                    <a className={`th-sort${sort === "name" ? " on" : ""}`} href="#" onClick={(e) => { e.preventDefault(); setSort("name"); }}>
-                      Booking{sort === "name" ? " ▾" : ""}
+                    <a
+                      className={`th-sort${sortKey === "step" ? " on" : ""}`}
+                      href="#"
+                      title={sortKey === "step" ? "Click to turn the order round" : "Sort by step"}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        sortByHeading("step");
+                      }}
+                    >
+                      Step{arrow("step")}
                     </a>
                   </th>
-                  <th>
-                    <a className={`th-sort${sort === "arrival" ? " on" : ""}`} href="#" onClick={(e) => { e.preventDefault(); setSort("arrival"); }}>
-                      Stay{sort === "arrival" ? " ▾" : ""}
-                    </a>
-                  </th>
-                  <th>Rooms</th>
-                  <th>Step</th>
                   <th>Status</th>
                   <th>Clock</th>
                   <th className="num">Total</th>
                 </tr>
               </thead>
               <tbody>
-                {shown.map((r) => {
-                  const nights = nightsOf(r.checkInDate, r.actualCheckOutDate ?? r.checkOutDate);
+                {shown.map((r, i) => {
+                  const ci = checkInOf(r);
+                  const co = checkOutOf(r);
+                  const nights = nightsOf(ci, co);
                   const m = moneyOf.byId.get(r.id);
                   const t = totalWord(m);
+                  const band = bandOf(r, sortKey, today);
+                  const opensBand = band && band.id !== (i > 0 ? bandOf(shown[i - 1], sortKey, today)?.id : null);
+                  const when =
+                    sortKey === "booked"
+                      ? `booked ${fmtStamp(r.createdAt, hotelDay?.timezone)}`
+                      : sortKey === "changed"
+                        ? `changed ${fmtStamp(r.updatedAt, hotelDay?.timezone)}`
+                        : null;
                   return (
-                    <OpenRow key={r.id} entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
+                    <Fragment key={r.id}>
+                    {opensBand ? (
+                      <tr className={`list-band ${band.id}`}>
+                        <td colSpan={9}>
+                          {band.label}
+                          <span className="n">{plural(bandCounts.get(band.id) ?? 0, "booking")}</span>
+                        </td>
+                      </tr>
+                    ) : null}
+                    <OpenRow entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
                       <td>
                         <GuestLink row={r} />
                         {r.guestProfile?.vipTier ? (
@@ -333,15 +526,13 @@ function BookingsScreen() {
                             </Chip>
                           </>
                         ) : null}
-                        <div className="meta">{subline(r)}</div>
+                        <div className="meta">{subline(r, when)}</div>
                       </td>
-                      <td>
-                        {r.checkInDate ? (
+                      <td className="date-cell">
+                        {ci ? (
                           <>
-                            <span className="stay-range">
-                              <b>{fmtRange(r.checkInDate, r.actualCheckOutDate ?? r.checkOutDate)}</b>
-                            </span>
-                            <div className="meta">{nights ? plural(nights, "night") : ""}</div>
+                            <b>{fmtDate(ci)}</b>
+                            <div className="meta">{dayWord(ci, hotelDay)}</div>
                           </>
                         ) : (
                           <>
@@ -350,7 +541,18 @@ function BookingsScreen() {
                           </>
                         )}
                       </td>
-                      <td>{r.roomNumbers.length || r.numberOfRooms || "—"}</td>
+                      <td className="date-cell">
+                        {co ? (
+                          <>
+                            <b>{fmtDate(co)}</b>
+                            <div className="meta">{dayWord(co, hotelDay)}</div>
+                          </>
+                        ) : (
+                          <span className="dash">—</span>
+                        )}
+                      </td>
+                      <td className={`num${nights ? "" : " dash"}`}>{nights ?? "—"}</td>
+                      <td className="num">{r.roomNumbers.length || r.numberOfRooms || "—"}</td>
                       <td>
                         <StepChip step={stepNoOfStage(r.currentStage)} />
                       </td>
@@ -364,6 +566,7 @@ function BookingsScreen() {
                         {t.amount ?? "—"}
                       </td>
                     </OpenRow>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -441,17 +644,28 @@ function Preview({
         <StepChip step={stepNoOfStage(row.currentStage)} />
       </div>
       <dl className="pv">
-        <dt>Stay</dt>
+        <dt>Check-in</dt>
         <dd>
           {row.checkInDate ? (
             <>
-              <b>{fmtRange(row.checkInDate, row.actualCheckOutDate ?? row.checkOutDate)}</b>
-              {nights ? ` · ${plural(nights, "night")}` : ""}
+              <b>{fmtDate(row.checkInDate)}</b> <span className="meta">{weekdayOf(row.checkInDate)}</span>
             </>
           ) : (
             <span className="dash">—</span>
           )}
         </dd>
+        <dt>Check-out</dt>
+        <dd>
+          {checkOutOf(row) ? (
+            <>
+              <b>{fmtDate(checkOutOf(row))}</b> <span className="meta">{weekdayOf(checkOutOf(row))}</span>
+            </>
+          ) : (
+            <span className="dash">—</span>
+          )}
+        </dd>
+        <dt>Nights</dt>
+        <dd>{nights ?? <span className="dash">—</span>}</dd>
         <dt>Rooms</dt>
         <dd>{row.roomNumbers.length ? row.roomNumbers.join(", ") : row.numberOfRooms ? plural(row.numberOfRooms, "room") : "—"}</dd>
         <dt>Guests</dt>
