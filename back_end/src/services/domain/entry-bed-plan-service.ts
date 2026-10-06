@@ -52,6 +52,23 @@ export interface BedPlanRoom {
   appliesNow: boolean;
 }
 
+/**
+ * One asked setup against the plan (2026-10-06, operator: "we need to show somewhere above or on
+ * the top the amount and type of bed type the guest asked, or else the user wouldn't know").
+ * The ask is per NIGHT — "2 Queen and 1 King" is what the party sleeps in each night — so on a
+ * stay that moves rooms the count is taken night by night and the WORST night is the one shown.
+ */
+export interface BedAskLine {
+  bedType: RoomBedType;
+  /** How many rooms the guest asked to be made up this way. */
+  asked: number;
+  /** How many the plan makes up this way — on the worst night when the rooms differ by night. */
+  planned: number;
+  met: boolean;
+  /** Nights the plan falls short on, `YYYY-MM-DD` — only when the rooms differ by night. */
+  shortNights: string[];
+}
+
 export interface EntryBedPlan {
   rooms: BedPlanRoom[];
   /** The guest's own ask, as a tally — null when they expressed none. */
@@ -60,6 +77,12 @@ export interface EntryBedPlan {
   askSatisfiable: boolean;
   /** Why it could not be, in desk words. */
   message: string | null;
+  /** The ask against what the plan makes up today — empty when the guest asked for nothing. */
+  tally: BedAskLine[];
+  /** Every line of the tally is met. True when nothing was asked. */
+  askMet: boolean;
+  /** The booking's rooms differ by night, so the tally was taken night by night. */
+  nightsVary: boolean;
 }
 
 /** From Arrival on, the room is the booking's to make up; before that it belongs to the house. */
@@ -150,6 +173,89 @@ export function shareAskAcrossRooms(
   return { seeded: check.assignment, satisfiable: check.satisfiable, message: check.message };
 }
 
+/**
+ * The rooms held on each night, when they are not the same every night — read off the newest
+ * sealed pick, the one the desk's table and dates column read too. Null for a plain booking,
+ * where one group (every room) answers for every night.
+ */
+function nightGroups(entry: EntryForPlan, ids: readonly string[]): { date: string; roomIds: string[] }[] | null {
+  const sealed = entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected);
+  const perNight = sealed ? readOptionSelected(sealed.optionSelected).perNight : null;
+  if (!perNight?.length) return null;
+  const inPlan = new Set(ids);
+  const groups = perNight
+    .map((n) => ({ date: String(n.date).slice(0, 10), roomIds: n.roomIds.filter((id) => inPlan.has(id)) }))
+    .filter((g) => g.roomIds.length > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (groups.length < 2) return null;
+  const first = [...groups[0].roomIds].sort().join(",");
+  return groups.some((g) => [...g.roomIds].sort().join(",") !== first) ? groups : null;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function nightWord(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return y && m && d ? `${d} ${MONTHS[m - 1]}` : iso;
+}
+
+/**
+ * The ask shared out NIGHT BY NIGHT. A room keeps one setup for the whole stay, so each night
+ * first counts the rooms an earlier night already gave a setup, and only the shortfall is matched
+ * over the rooms still free. On a plain booking this is exactly `shareAskAcrossRooms`.
+ */
+function shareAskByNight(
+  ask: Record<string, number> | null,
+  rooms: readonly { roomId: string; roomNumber: string; allowed: RoomBedType[] }[],
+  nights: { date: string; roomIds: string[] }[] | null,
+): { seeded: Record<string, RoomBedType>; satisfiable: boolean; message: string | null } {
+  if (!ask || !nights) return shareAskAcrossRooms(ask, rooms);
+  const byId = new Map(rooms.map((r) => [r.roomId, r]));
+  const seeded: Record<string, RoomBedType> = {};
+  let satisfiable = true;
+  let message: string | null = null;
+  for (const night of nights) {
+    const held = night.roomIds.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
+    const wanted: Record<string, number> = { ...ask };
+    for (const r of held) {
+      const t = seeded[r.roomId];
+      if (t && (wanted[t] ?? 0) > 0) wanted[t] -= 1;
+    }
+    const still = Object.fromEntries(Object.entries(wanted).filter(([, n]) => n > 0));
+    if (Object.keys(still).length === 0) continue;
+    const out = shareAskAcrossRooms(still, held.filter((r) => !seeded[r.roomId]));
+    Object.assign(seeded, out.seeded);
+    if (!out.satisfiable && satisfiable) {
+      satisfiable = false;
+      message = `On ${nightWord(night.date)}: ${out.message ?? "the rooms that night cannot all be made up as asked"}`;
+    }
+  }
+  return { seeded, satisfiable, message };
+}
+
+/** The ask against the plan, counted on every night and reported for the worst one. */
+export function tallyBedAsk(
+  ask: Record<string, number> | null,
+  rooms: readonly { roomId: string; bedType: RoomBedType | null }[],
+  nights: { date: string; roomIds: string[] }[] | null,
+): BedAskLine[] {
+  if (!ask) return [];
+  const setupOf = new Map(rooms.map((r) => [r.roomId, r.bedType]));
+  const groups = nights ?? [{ date: "", roomIds: rooms.map((r) => r.roomId) }];
+  return Object.entries(ask)
+    .filter(([, n]) => n > 0)
+    .map(([bedType, asked]) => {
+      const counts = groups.map((g) => g.roomIds.filter((id) => setupOf.get(id) === bedType).length);
+      const planned = counts.length ? Math.min(...counts) : 0;
+      return {
+        bedType: bedType as RoomBedType,
+        asked,
+        planned,
+        met: planned >= asked,
+        shortNights: nights ? groups.filter((_, i) => counts[i] < asked).map((g) => g.date) : [],
+      };
+    });
+}
+
 export async function buildEntryBedPlan(prisma: PrismaClient, entryId: string): Promise<EntryBedPlan> {
   const entry = (await prisma.entry.findUnique({
     where: { id: entryId },
@@ -159,7 +265,10 @@ export async function buildEntryBedPlan(prisma: PrismaClient, entryId: string): 
 
   const ids = currentPlanRoomIds(entry);
   const ask = readAsk(entry.bedTypeRequest);
-  if (ids.length === 0) return { rooms: [], ask, askSatisfiable: true, message: null };
+  if (ids.length === 0) {
+    const tally = tallyBedAsk(ask, [], null);
+    return { rooms: [], ask, askSatisfiable: true, message: null, tally, askMet: tally.every((l) => l.met), nightsVary: false };
+  }
 
   const rows = await prisma.room.findMany({
     where: { id: { in: ids } },
@@ -182,7 +291,8 @@ export async function buildEntryBedPlan(prisma: PrismaClient, entryId: string): 
   }));
 
   const plan = readStoredPlan(entry.bedPlan);
-  const { seeded, satisfiable, message } = shareAskAcrossRooms(ask, facts);
+  const nights = nightGroups(entry, ids);
+  const { seeded, satisfiable, message } = shareAskByNight(ask, facts, nights);
   const assigned = new Set(entry.roomAssignments.map((a) => a.roomId));
   const appliesStage = APPLIES_FROM.has(entry.currentStage);
 
@@ -200,7 +310,16 @@ export async function buildEntryBedPlan(prisma: PrismaClient, entryId: string): 
     })
     .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true }));
 
-  return { rooms, ask, askSatisfiable: satisfiable, message };
+  const tally = tallyBedAsk(ask, rooms, nights);
+  return {
+    rooms,
+    ask,
+    askSatisfiable: satisfiable,
+    message,
+    tally,
+    askMet: tally.every((l) => l.met),
+    nightsVary: !!nights,
+  };
 }
 
 /**
