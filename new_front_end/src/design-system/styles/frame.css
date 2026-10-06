@@ -87,7 +87,22 @@
 .ds .stop-ink { color: var(--danger); font-weight: 600; }
 /* an action and what it sets off */
 .ds .seerow { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: baseline; }
-.ds .seerow .meta { display: inline; }
+/* The note WRAPS instead of running off the card (2026-10-06, operator: the words "are not fully
+   shown"). A flex item will not shrink below its content without min-width:0, so a long note was
+   painted past the card's edge rather than folding onto the next line. */
+.ds .seerow .meta { display: inline; flex: 1 1 15rem; min-width: 0; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ an act and its caption
+   A button with its explanation UNDER it, not trailing off its side (2026-10-06, operator:
+   "can these be made into proper buttons"). The control reads as a control; the sentence reads
+   as its caption; and when the act is held, the thing that unlocks it is a button of its own
+   rather than a sentence the person has to act on themselves. */
+.ds .actrow { display: grid; gap: 2px; padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.ds .actrow:first-child { border-top: 0; }
+.ds .actrow > .btn { justify-self: start; }
+.ds .actrow .cap { font-size: 12.5px; color: var(--ink-2); max-width: 62ch; overflow-wrap: anywhere; }
+.ds .actrow .held { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.ds .actrow .held .why { font-size: 12.5px; font-weight: 600; color: var(--warn-ink, #8a5a00); max-width: 56ch; overflow-wrap: anywhere; }
 /* a choice among a few words (Came in as · What kind of stay · Night) */
 .ds .choice { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .ds .choice .btn[aria-pressed="true"] { background: var(--surface); border-color: var(--ink); color: var(--ink); }

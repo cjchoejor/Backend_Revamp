@@ -397,6 +397,75 @@ export function Choice<T extends string>({
 }
 
 /** An action and what it sets off, on one line: "Park… → a reason and a follow-up date". */
+/**
+ * Scroll to another card of the SAME step and flash it (2026-10-06).
+ *
+ * The workspace's own `goToCard` can also open a pane, which only it knows about; this is the
+ * narrow form a canvas needs to point at a sibling card ("send the proforma first" → the
+ * proforma). Returns false when the card is not on screen, so the caller can stay quiet rather
+ * than offering a button that would do nothing.
+ */
+export function goToStepCard(card: string): boolean {
+  const el = typeof document === "undefined" ? null : document.getElementById(anchorFor(card));
+  if (!el) return false;
+  revealCard(el);
+  return true;
+}
+
+/**
+ * One act, with its explanation underneath (2026-10-06, operator: "can these be made into proper
+ * buttons ... it looks like the words in the button are not fully shown").
+ *
+ * `SeeRow` puts the caption beside the control, which reads as a sentence with a box at the start
+ * and ran off the card when the note was long. Here the button is the row's subject and the
+ * caption sits under it, free to wrap.
+ *
+ * **A held act says what would release it, and offers to take you there.** `heldBy` is the reason
+ * in the operator's words; `goTo` names the card that fixes it, so the person presses a button
+ * instead of reading an instruction and hunting for the place to carry it out.
+ */
+export function ActionRow({
+  label,
+  caption,
+  onClick,
+  state,
+  kind = "quiet",
+  heldBy,
+  goTo,
+  goToLabel,
+}: {
+  label: string;
+  caption: ReactNode;
+  onClick?: () => void;
+  state?: ButtonProps["state"];
+  kind?: ButtonProps["kind"];
+  /** Why the act cannot be done yet — shown under the button, in words. */
+  heldBy?: string | null;
+  /** The card on this step that would release it. */
+  goTo?: string;
+  goToLabel?: string;
+}) {
+  const held = !!heldBy;
+  return (
+    <div className="actrow">
+      <Button kind={kind} state={state ?? (onClick ? "default" : "inert")} onClick={onClick} title={heldBy ?? undefined}>
+        {label}
+      </Button>
+      <span className="cap">{caption}</span>
+      {held ? (
+        <span className="held">
+          <span className="why">{heldBy}</span>
+          {goTo ? (
+            <Button kind="quiet" compact onClick={() => goToStepCard(goTo)}>
+              {goToLabel ?? "Take me there"}
+            </Button>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export function SeeRow({
   label,
   note,

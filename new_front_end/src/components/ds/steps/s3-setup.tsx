@@ -1028,6 +1028,11 @@ function ProformaCard({
 
   return (
     <StepCard
+      // The POPULATED card carried no flow key, so once a proforma existed the card lost its
+      // anchor: the side panel's "To do here" jump and any "go to the proforma" button found
+      // nothing to scroll to (2026-10-06). The empty-state card above always had it.
+      flow="proforma"
+      flowAfter="terms"
       title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
       icon="file"
       right={asks ? <Chip tone="quiet">{asks}</Chip> : null}
