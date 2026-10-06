@@ -52,7 +52,7 @@ export function RoomsInUseCard({ entry, id }: { entry: EntryDetail; id: string }
       <StepCard
         title={rooms.length > 1 ? `Rooms in use · ${rooms.length}` : "Room in use"}
         icon="bed"
-        meta="A move to another room of the same type is the desk's; a different type is the FOM's and re-prices the stay from tonight. The nights already slept stay on the old room."
+        meta="Where the guest is tonight, and how each room is made up. A room is changed in the table above — a move to another room of the same type is the desk's; a different type is the FOM's and re-prices the stay from tonight. The nights already slept stay on the old room."
       >
         {rooms.map((a) => {
           const r = stay.get(a.roomId);
@@ -72,11 +72,6 @@ export function RoomsInUseCard({ entry, id }: { entry: EntryDetail; id: string }
                   <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={onChanged} />
                 </InlineTool>
               </div>
-              <Live>
-                <Tool>
-                  <RoomChangeControl entry={entry} fromRoomId={a.roomId} fromRoomNumber={number} onChanged={onChanged} compact />
-                </Tool>
-              </Live>
             </div>
           );
         })}

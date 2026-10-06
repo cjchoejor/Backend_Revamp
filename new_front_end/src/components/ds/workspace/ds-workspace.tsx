@@ -89,6 +89,7 @@ import { S4Reserve } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
+import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
 import { Overlay, ReasonDialog, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
@@ -656,7 +657,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const viewingPast = view === "step" && (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
-  const panes: StepPane[] = step.key === "stay" && !viewingPast && !sealed ? S7_PANES : [];
+  // Check-in gained a Rooms tab of its own (2026-10-06) — the rooms moved out of the Room card.
+  const panes: StepPane[] =
+    viewingPast || sealed ? [] : step.key === "stay" ? S7_PANES : step.key === "checkin" ? S6_PANES : [];
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
 
   const gotoStep = (n: number) => {
@@ -837,6 +840,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             registrationConfirmed={registrationConfirmed}
             setRegistrationConfirmed={checkInStepActive ? setRegistrationConfirmed : NOOP}
             checkIn={checkInStepActive ? { onClick: () => setCheckInOpen(true), ready: canCheckIn, reason: canCheckIn ? undefined : firstNote } : null}
+            pane={pane}
+            openPane={setPane}
           />
         );
       case "stay":

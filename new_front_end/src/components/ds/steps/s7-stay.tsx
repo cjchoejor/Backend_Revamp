@@ -23,6 +23,7 @@ import { BillingModelCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeD
 import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, RoomsInUseCard } from "./s7-rooms";
+import { RoomsTableCard } from "./rooms-table";
 
 const ID = {
   rooms: "s7-rooms",
@@ -42,7 +43,7 @@ const ID = {
  */
 export const S7_PANES: StepPane[] = [
   { key: "nights", label: "Night audit", cards: ["nights"] },
-  { key: "rooms", label: "Room change", cards: [] },
+  { key: "rooms", label: "Rooms", cards: [] },
   { key: "interim", label: "Interim payment", cards: [] },
   { key: "extend", label: "Extend the stay", cards: [] },
   { key: "bills", label: "Bills & statements", cards: [] },
@@ -109,6 +110,13 @@ export function S7Stay({
       </div>
 
       <div className="pane" hidden={at("rooms")}>
+        {/* The rooms as the negotiation table (2026-10-06) — a room is changed by clicking it
+            here, so the per-room control on the card below is gone. */}
+        <RoomsTableCard
+          entry={entry}
+          title="The rooms"
+          lead="In-house the rates and waivers are read-only. A change takes effect from tonight; the nights already slept stay billed as they were audited."
+        />
         <RoomsInUseCard entry={entry} id={ID.rooms} />
       </div>
 
