@@ -1051,6 +1051,11 @@ model Entry {
   /// keys validated against ROOM_BED_TYPES, counts against the registry's achievable
   /// stock (bed conversion groups) and numberOfRooms. Null = no bed preference stated.
   bedTypeRequest                 Json?
+  /// Which room is made up as what FOR THIS STAY — { roomId: bedType }. The ask above is a
+  /// tally with no rooms in it; this is the desk's answer to it, settled on the rooms table.
+  /// It is a PLAN, not the room's state: `Room.bedType` is how a room is made up now, and a
+  /// booking whose stay is weeks away must not change it under tonight's guest.
+  bedPlan                        Json?
   otaSource                      Boolean           @default(false)
   otaReference                   String?
   groupBillingMode               GroupBillingMode?

@@ -62,8 +62,46 @@ import {
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
 import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
+import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 
 export const entriesRouter = Router();
+
+/**
+ * The bed setup each of the booking's rooms is to be made up as (2026-10-06).
+ *
+ * A read says, per room, what this stay wants, where that came from — the desk said so, it was
+ * shared out from the guest's ask at intake, or it is the room's usual setup — what the room is
+ * made up as right now, and whether a choice takes effect immediately (from Arrival, once the
+ * room is assigned) or is only recorded for later.
+ */
+entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await buildEntryBedPlan(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Say what one room is to be made up as. L1: a bed setup is desk work, priced nowhere — the
+ * EXTRA bed is the charged one and lives on the composition. `bedType: null` hands the room back
+ * to the guest's ask, or to its usual setup when there was none.
+ */
+entriesRouter.post("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const bedType = req.body?.bedType;
+    res.json(
+      await setEntryBedPlanRoom(
+        prisma,
+        req.params.id,
+        { roomId: String(req.body?.roomId ?? ""), bedType: bedType == null || bedType === "" ? null : String(bedType) },
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
+      ),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * In-place room change (2026-08-12, operator ruling) — candidates lookup. EVERY registered
