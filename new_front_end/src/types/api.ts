@@ -567,6 +567,9 @@ export type NoShowDeterminationSummary = {
 };
 
 export type EntryDetail = EntryListItem & {
+  /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
+  contactPersonName?: string | null;
+  contactPersonPhone?: string | null;
   /**
    * How long THIS booking's committed hold runs, when the desk set it itself (2026-09-25).
    * Null = the house window from the admin console. Remembered on the booking, so a hold placed

@@ -466,7 +466,11 @@ export function NewInquiryCanvas() {
 
   const fullPhone = phoneCode && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
   const typedGuestName = `${firstName.trim()} ${lastName.trim()}`.trim();
-  const newGuestComplete = !!(firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim());
+  // The phone is optional, like the email (2026-10-06, operator) — an agency booking is reached
+  // through the agency's contact at the top, and the guest's own number is a nice-to-have.
+  const newGuestComplete = !!(firstName.trim() && lastName.trim() && nationality.trim());
+  // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
+  const emailBad = mode === "NEW" && !selectedGuest && email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const guestOk = isEdit || (mode === "NEW" ? !!selectedGuest || newGuestComplete : !!selectedGuest);
 
   // Saving the guest early only moves the write forward; the saved record is then reused.
@@ -527,8 +531,12 @@ export function NewInquiryCanvas() {
     else if (!editable) saveBlockers.push("the booking has moved past Inquiry");
   } else {
     if (!channel) saveBlockers.push("how they came in");
+    // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
+    // button waits for it rather than sending a request that comes back "invalid".
+    if (!useType) saveBlockers.push("what kind of stay it is");
     if (!guestOk)
-      saveBlockers.push(mode === "NEW" ? "the guest's first and last name, phone and nationality" : "the returning guest, picked from the list");
+      saveBlockers.push(mode === "NEW" ? "the guest's first and last name and nationality" : "the returning guest, picked from the list");
+    if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
     if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
   }
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
@@ -1011,7 +1019,7 @@ export function NewInquiryCanvas() {
                       <input type="checkbox" disabled aria-describedby="name-to-come-why" />
                       Name to come from {nameToCome}
                       <span id="name-to-come-why" className="meta">
-                        · not on the desk yet — an inquiry is kept on the guest&rsquo;s record, which needs a name with a phone or email (BE-62)
+                        · not on the desk yet — an inquiry is kept on the guest&rsquo;s record, which needs the guest&rsquo;s name (BE-62)
                       </span>
                     </label>
                   ) : null}
@@ -1067,12 +1075,12 @@ export function NewInquiryCanvas() {
                         <div className="field">
                           <label>Phone</label>
                           <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                          <span className="hint">finds an existing guest first · needed</span>
+                          <span className="hint">optional · typing it finds a guest already on file</span>
                         </div>
                         <div className="field">
                           <label>Email</label>
                           <input className="input" type="email" value={email} placeholder="optional" onChange={(e) => setEmail(e.target.value)} />
-                          <span className="hint">optional</span>
+                          <span className={`hint${emailBad ? " stop-ink" : ""}`}>{emailBad ? "that does not read as an email address" : "optional"}</span>
                         </div>
                         {phoneMatches.length > 0 ? (
                           <div className="wide">
@@ -1109,7 +1117,7 @@ export function NewInquiryCanvas() {
                               kind="secondary"
                               compact
                               state={saveGuest.isPending ? "working" : newGuestComplete && !busy ? "default" : "inert"}
-                              title={newGuestComplete ? undefined : "the name, phone and nationality first"}
+                              title={newGuestComplete ? undefined : "the name and nationality first"}
                               workingLabel="Saving…"
                               onClick={() => saveGuest.mutate()}
                             >

@@ -283,6 +283,29 @@ export async function parkEntry(session: Session, entryId: string, reason: strin
   return normalizeEntryResponse(data);
 }
 
+/** What a move between two stays of one trip did — `POST /entries/:id/switch-stay`. */
+export type TripSwitchOutcome = {
+  fromEntryId: string;
+  toEntryId: string;
+  parked: boolean;
+  resumed: boolean;
+  stillParked: boolean;
+  parkRefused: string | null;
+  resumeRefused: string | null;
+};
+
+/**
+ * Move from one stay of a trip to another: the stay left is parked if it sits at Inquiry or
+ * Negotiation, and the stay opened is resumed when an earlier switch parked it.
+ */
+export async function switchStay(session: Session, fromEntryId: string, toEntryId: string) {
+  return apiRequest<TripSwitchOutcome>(`/api/entries/${fromEntryId}/switch-stay`, {
+    method: "POST",
+    body: { toEntryId },
+    session,
+  });
+}
+
 /** Unpark a parked entry — returns it to ACTIVE at its current stage (SIG-S1 §3.4). */
 export async function unparkEntry(session: Session, entryId: string) {
   const data = await apiRequest<unknown>(`/api/entries/${entryId}/unpark`, {

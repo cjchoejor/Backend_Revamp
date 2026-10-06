@@ -121,7 +121,12 @@ export function StepFlow({ items, on, children }: { items: FlowItem[]; on: boole
  * posts charges, hands over keys and runs the audit in whatever order the day takes. A card waits
  * until everything up to and including the named card's last item is done.
  */
-export function useFlowCard(card?: string, after?: string): { n?: number; met?: boolean; waitsFor?: FlowItem } {
+export function useFlowCard(
+  card?: string,
+  after?: string,
+  /** Wait on the named card's own items only, not on everything numbered before it. */
+  afterOnly?: boolean,
+): { n?: number; met?: boolean; waitsFor?: FlowItem } {
   const { items, on } = useContext(FlowCtx);
   if (!on) return {};
   // A card may hold several items (Check-in's room card: assigned & ready, then the key). It
@@ -136,7 +141,7 @@ export function useFlowCard(card?: string, after?: string): { n?: number; met?: 
     items.forEach((x, k) => {
       if (x.card === after) last = k;
     });
-    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met);
+    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met && (!afterOnly || x.card === after));
   }
   return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
 }
@@ -211,6 +216,7 @@ export function StepCard({
   style,
   flow,
   flowAfter,
+  flowAfterOnly,
   heldFor,
 }: {
   title?: ReactNode;
@@ -229,13 +235,19 @@ export function StepCard({
   /** This card opens once the named card's items are done — the step's real dependencies. */
   flowAfter?: string;
   /**
+   * Wait on `flowAfter`'s own items alone. Without it a card waits on everything numbered before
+   * it, which is right for Set up's chain and wrong for the house, which needs only the stay —
+   * a lead with no number yet can still be searched while the guest is on the line.
+   */
+  flowAfterOnly?: boolean;
+  /**
    * This card waits for something that is not on this screen — the intake's house card waits for
    * the inquiry to be started, which is the gate bar's button. It is drawn as a waiting card that
    * says so, with no "Show it anyway": what it waits for cannot be done from inside it.
    */
   heldFor?: ReactNode;
 }) {
-  const { n, met, waitsFor } = useFlowCard(flow, flowAfter);
+  const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const [anyway, setAnyway] = useState(false);
   const held = !!heldFor;
   const waiting = held || (!!waitsFor && !anyway);

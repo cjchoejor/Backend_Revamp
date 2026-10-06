@@ -33,6 +33,7 @@ import {
   listEntryCommunications,
   parkEntry,
   progressStage,
+  switchStay,
   unparkEntry,
   type EntryBillingSummary,
   type EntryCommunication,
@@ -470,6 +471,65 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const name = entry ? guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null) : null;
   usePageTitle(entry ? (name !== "Guest" ? name : entry.id) : null);
 
+  /**
+   * The other stays of this trip (2026-10-06, operator: "the user has to constantly switch between
+   * stays, and it keeps asking if I want to park or not while switching — can it not ask that,
+   * maybe from the backend it can park it on its own"). A link to one of them is not leaving the
+   * enquiry, so it does not ask: `POST /entries/:id/switch-stay` parks this stay when it sits at
+   * Inquiry or Negotiation ("Switching stays to make configurations") and resumes the other when a
+   * switch parked it. A park somebody made on purpose is never undone by a switch.
+   */
+  const tripKey = (entry?.inquiry?.entries ?? [])
+    .map((s) => s.id)
+    .filter((id) => id !== entryId)
+    .join(",");
+  const tripSiblingOf = (href: string): string | null => {
+    const m = /^\/bookings\/([^/?#]+)/.exec(href);
+    return m && tripKey.split(",").includes(m[1]) ? m[1] : null;
+  };
+  const switchingRef = useRef(false);
+  useEffect(() => {
+    if (!session || !tripKey) return;
+    const siblings = tripKey.split(",");
+    const onTripClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as HTMLElement).closest?.("a[href^='/']") as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank") return;
+      const href = a.getAttribute("href") ?? "";
+      const m = /^\/bookings\/([^/?#]+)/.exec(href);
+      const to = m && siblings.includes(m[1]) ? m[1] : null;
+      if (!to) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (switchingRef.current) return;
+      switchingRef.current = true;
+      void (async () => {
+        try {
+          const out = await switchStay(session, entryId, to);
+          const said = [
+            out.parked ? `${entryId} parked while you work on ${to}` : null,
+            out.resumed ? `${to} resumed` : null,
+          ].filter(Boolean);
+          if (said.length) toast.success(said.join(" · "));
+          if (out.parkRefused) toast.warning(`${entryId} was left as it was — ${out.parkRefused}`);
+          if (out.resumeRefused) toast.warning(`${to} stays parked — ${out.resumeRefused}`);
+          for (const id of [entryId, to]) {
+            for (const k of [["entry", id], ["entry-timers", id], ["entry-trace", id]]) void queryClient.invalidateQueries({ queryKey: k });
+          }
+          void queryClient.invalidateQueries({ queryKey: ["desk-bookings"] });
+        } catch (err) {
+          toast.error(`Moved to ${to}, but ${entryId} could not be parked — ${err instanceof Error ? err.message : "try parking it by hand"}`);
+        } finally {
+          switchingRef.current = false;
+          router.push(href);
+        }
+      })();
+    };
+    document.addEventListener("click", onTripClick, true);
+    return () => document.removeEventListener("click", onTripClick, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, entryId, tripKey]);
+
   // Leaving an unfinished inquiry or negotiation offers the park on the way out — Back, the bar,
   // any link that leaves this booking.
   const parkPromptable = !!entry && entry.status === "ACTIVE" && (entry.currentStage === "S1" || entry.currentStage === "S2");
@@ -488,6 +548,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       if (!a || a.target === "_blank") return;
       const href = a.getAttribute("href") ?? "";
       if (href.startsWith(bookingHref(entryId)) || href.includes(`edit=${entryId}`) || href.startsWith("/api/")) return;
+      // another stay of this trip — the switch handles it, with no question
+      if (tripSiblingOf(href)) return;
       e.preventDefault();
       e.stopPropagation();
       pendingExitRef.current = href;
@@ -500,7 +562,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       window.removeEventListener("popstate", onPop);
       document.removeEventListener("click", onClickCapture, true);
     };
-  }, [parkPromptable, entryId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parkPromptable, entryId, tripKey]);
 
   if (sessionLoading || entryQuery.isLoading) {
     return (

@@ -39,7 +39,7 @@ import {
 } from "@/components/desk/workspace/room-status-table";
 import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
 import { fmtRange, money, plural } from "@/lib/ds/format";
-import { currentPassConfigs } from "@/lib/desk/workspace";
+import { currentPassConfigs, hasAnyContact } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
   type AvailabilityOptionSelected,
@@ -371,7 +371,8 @@ function TheGuest({
     },
     onError: (e) => toastRefusal(e, "The contact could not be saved"),
   });
-  const noContact = !g?.email && !g?.phone;
+  // the same test the move to Negotiation runs (Policy 16): the guest's email or phone, or the arriving person's phone
+  const noContact = !hasAnyContact(entry);
   return (
     <StepCard flow="guest" title="The guest">
       <div className="form2">
@@ -393,7 +394,9 @@ function TheGuest({
             placeholder="none on file"
           />
           <span className={`hint${noContact ? " warn-ink" : ""}`}>
-            phone or email — one is needed
+            {noContact
+              ? "optional on the guest — but someone needs a number: give the person arriving a phone below"
+              : "optional — the booking has a way to reach someone"}
           </span>
         </div>
         <div className="field">
@@ -1218,6 +1221,7 @@ function TheHouse({
       <StepCard
         flow="house"
         flowAfter="stay"
+        flowAfterOnly
         title={
           hasResults || entry.checkInDate ? `The house · ${range}` : "The house"
         }
