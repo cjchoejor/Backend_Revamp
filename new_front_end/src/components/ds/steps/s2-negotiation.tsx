@@ -475,6 +475,7 @@ export function S2Negotiation({
             <RoomCompositionPlanner
               bedPlan={beds.byRoom}
               onBedChange={beds.set}
+              bedAsk={beds.ask}
               sealedRoomIds={sealedRoomIds}
               entryCheckIn={entry.checkInDate ?? null}
               entryCheckOut={entry.checkOutDate ?? null}

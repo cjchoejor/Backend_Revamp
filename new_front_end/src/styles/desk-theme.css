@@ -3029,6 +3029,59 @@
 
   /* A refusal of what was just typed: the loudest thing on the table while it shows
      (2026-09-29, "UIappeal"). It arrives with a flash so a capped keystroke is never silent. */
+  /* The guest's bed ask, over the Bed type column ("UIappeal" — each chip's colour is its state). */
+  & .rct-bedask {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 9px 12px;
+    border: 2px solid var(--stop);
+    border-radius: var(--r-md);
+    background: var(--stop-t);
+    font-size: 13px;
+    line-height: 1.3;
+  }
+  & .rct-bedask.met {
+    border-color: var(--ok);
+    background: var(--ok-t, #e7f3ec);
+  }
+  & .rct-bedask .lbl {
+    font-weight: 800;
+    color: var(--ink);
+  }
+  & .rct-bedask .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1.5px solid currentColor;
+    background: #fff;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  & .rct-bedask .chip b {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ink);
+  }
+  & .rct-bedask .chip.ok {
+    color: var(--ok);
+  }
+  & .rct-bedask .chip.stop {
+    color: var(--stop);
+  }
+  & .rct-bedask .note {
+    margin-left: auto;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--stop);
+  }
+  & .rct-bedask.met .note {
+    color: var(--ok);
+  }
   & .rct-refusal {
     display: flex;
     align-items: flex-start;

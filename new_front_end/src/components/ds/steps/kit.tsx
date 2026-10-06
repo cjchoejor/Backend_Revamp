@@ -42,7 +42,7 @@ import { sendQuotation } from "@/lib/api/quotations";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
 import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
-import type { BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
+import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -643,9 +643,19 @@ export function useBedPlan(entryId: string) {
     }
     return out;
   }, [q.data]);
+  /** The guest's ask against the plan, as the server counted it — null when nothing was asked. */
+  const ask: BedAskSummary | null = q.data?.tally?.length
+    ? {
+        lines: q.data.tally,
+        met: q.data.askMet,
+        nightsVary: q.data.nightsVary,
+        satisfiable: q.data.askSatisfiable,
+        message: q.data.message,
+      }
+    : null;
   return {
     byRoom,
-    ask: q.data?.ask ?? null,
+    ask,
     message: q.data?.message ?? null,
     set: (roomId: string, bedType: string | null) => m.mutate({ roomId, bedType }),
   };

@@ -294,6 +294,71 @@ export interface BedPlanCell {
 
 const BED_WORDS: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
 
+/** The guest's bed ask against the plan, as the backend counted it (`GET /entries/:id/bed-plan`). */
+export interface BedAskSummary {
+  lines: { bedType: string; asked: number; planned: number; met: boolean; shortNights: string[] }[];
+  met: boolean;
+  /** The rooms differ by night, so each night was counted on its own. */
+  nightsVary: boolean;
+  /** Every asked setup could be given a room at all. */
+  satisfiable: boolean;
+  message: string | null;
+}
+
+/**
+ * What the guest asked for, at the top of the table (2026-10-06, operator: "we need to show
+ * somewhere above or on the top the amount and type of bed type the guest asked, or else the user
+ * wouldn't know"). The Bed type column below is where it is answered, so the ask sits directly
+ * over it. "UIappeal": every setup is a chip whose colour is its state — red while the plan makes
+ * up fewer rooms that way than asked, green once it does. Nothing is counted here; the figures
+ * are the server's, night by night on a stay that moves rooms.
+ */
+function BedAskStrip({ ask }: { ask: BedAskSummary }) {
+  return (
+    <div className={`rct-bedask ${ask.met ? "met" : "short"}`} role="status" aria-live="polite">
+      <span className="lbl">Guest asked for</span>
+      {ask.lines.map((l) => {
+        const word = BED_WORDS[l.bedType] ?? l.bedType;
+        const short = l.asked - l.planned;
+        return (
+          <span
+            key={l.bedType}
+            className={`chip ${l.met ? "ok" : "stop"}`}
+            title={
+              l.met
+                ? `${l.planned} room${l.planned === 1 ? " is" : "s are"} to be made up as ${word}${ask.nightsVary ? " on every night" : ""}`
+                : `${l.asked} asked, ${l.planned} set${l.shortNights.length ? ` — short on ${l.shortNights.map(shortNight).join(", ")}` : ""}`
+            }
+          >
+            <b>
+              {l.asked} {word}
+            </b>
+            <span className="st">
+              {l.met ? (
+                <>✓ {l.planned} set</>
+              ) : (
+                <>
+                  {l.planned} set · {short} short
+                  {l.shortNights.length ? ` on ${l.shortNights.map(shortNight).join(", ")}` : ""}
+                </>
+              )}
+            </span>
+          </span>
+        );
+      })}
+      <span className="note">
+        {!ask.satisfiable && ask.message
+          ? ask.message
+          : ask.met
+            ? ask.nightsVary
+              ? "Every night has the setups asked for"
+              : "Every setup asked for has a room"
+            : "Set the rest in the Bed type column below"}
+      </span>
+    </div>
+  );
+}
+
 /** "6 Oct" — the night a fault belongs to, on a booking that moves rooms mid-stay. */
 function shortNight(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -369,6 +434,7 @@ export function RoomCompositionsTable({
   pickedRoomId,
   bedPlan,
   onBedChange,
+  bedAsk,
   discountValue,
   discountUnit,
   discountBasis,
@@ -403,6 +469,8 @@ export function RoomCompositionsTable({
    */
   bedPlan?: Record<string, BedPlanCell>;
   onBedChange?: (roomId: string, bedType: string | null) => void;
+  /** The guest's bed ask against that plan — drawn at the top of the table when there is one. */
+  bedAsk?: BedAskSummary | null;
   /**
    * Commit the table (2026-09-30, operator: "a save button to save the config, but it'll only
    * allow ... if there's no error or red boxes or mismatches, then it'll generate the quotation
@@ -1292,6 +1360,7 @@ export function RoomCompositionsTable({
           across the close bar. Inline it now simply scrolls away with the panel; expanded, the
           layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
           and the toolbar are held at the top structurally rather than by sticky positioning. */}
+      {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
       {entryId && <RateReferenceStrip entryId={entryId} compact />}
       {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
       <NegotiationDiscountBar

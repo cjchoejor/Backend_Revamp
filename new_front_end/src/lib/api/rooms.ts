@@ -88,11 +88,25 @@ export interface BedPlanRoom {
   appliesNow: boolean;
 }
 
+/** One asked setup against the plan — counted night by night on a stay that moves rooms. */
+export interface BedAskLine {
+  bedType: string;
+  asked: number;
+  /** Rooms the plan makes up this way — on the worst night when the rooms differ by night. */
+  planned: number;
+  met: boolean;
+  /** Nights the plan falls short on (`YYYY-MM-DD`). */
+  shortNights: string[];
+}
+
 export interface EntryBedPlan {
   rooms: BedPlanRoom[];
   ask: Record<string, number> | null;
   askSatisfiable: boolean;
   message: string | null;
+  tally: BedAskLine[];
+  askMet: boolean;
+  nightsVary: boolean;
   applied?: boolean;
   appliedNote?: string | null;
 }

@@ -261,6 +261,7 @@ export function RoomsTable({
         key={plannerKey}
         bedPlan={beds.byRoom}
         onBedChange={beds.set}
+        bedAsk={beds.ask}
         tableOnly
         sealedRoomIds={ids}
         entryCheckIn={entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null}
