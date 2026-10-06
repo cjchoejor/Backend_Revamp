@@ -22,7 +22,11 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button, Chip } from "@/design-system/components/primitives";
+import { changeBookingRoom } from "@/lib/api/entries";
+import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
@@ -30,7 +34,7 @@ import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
-import { StepCard, useRefreshEntry, useStepMode } from "./kit";
+import { DsDialog, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -71,6 +75,7 @@ export function RoomsTable({
   lead?: ReactNode;
 }) {
   const { past } = useStepMode();
+  const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const catalogQ = useRoomsCatalog();
   const byId = useMemo(() => new Map((catalogQ.data?.items ?? []).map((r) => [r.id, r])), [catalogQ.data]);
@@ -89,6 +94,22 @@ export function RoomsTable({
 
   const [picked, setPicked] = useState<string | null>(null);
   const chosen = picked && ids.includes(picked) ? picked : null;
+
+  /**
+   * Changing the setup in place (2026-10-06, operator: "it should be editable in that as well,
+   * meal and all, maybe have another option like change configurations ... in the front it looks
+   * like we're doing it in that stage but behind the back it ... went to s2 to negotiate").
+   *
+   * That is exactly what happens: the table's own emission is posted as `roomCompositions` with
+   * no room named, so the booking walks back through Negotiation, is re-quoted, re-held and
+   * re-frozen, and comes back to this step. Nobody moves rooms. The quotation it mints is saved
+   * and superseded like any other; it goes to the guest only if the desk sends it.
+   */
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<RoomCompositionInput[] | null>(null);
+  const [faults, setFaults] = useState<string[]>([]);
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const [reason, setReason] = useState("");
   const numberOf = (id: string) =>
     (entry.roomAssignments ?? []).find((a) => a.roomId === id)?.room?.roomNumber ?? byId.get(id)?.roomNumber ?? id.slice(0, 6);
 
@@ -98,6 +119,22 @@ export function RoomsTable({
    * The figures still show: the operator has to be able to read what the booking is priced at.
    */
   const inHouse = entry.currentStage === "S7";
+
+  const canon = (list: readonly RoomCompositionInput[] | undefined) => {
+    const n = (v: unknown) => (v == null || v === "" ? "" : String(Number(v)));
+    return [...(list ?? [])]
+      .map((c) =>
+        [
+          c.roomId, n(c.adultCount ?? 0), n(c.cnb6To10Count ?? 0), n(c.cnbUnder6Count ?? 0), n(c.extraBedCount ?? 0),
+          n(c.mealPlanCpCount ?? 0), n(c.mealPlanMaplCount ?? 0), n(c.mealPlanMapdCount ?? 0), n(c.mealPlanApCount ?? 0),
+          n(c.negotiatedRoomRate), n(c.negotiatedExtraBedRate),
+          c.serviceChargeApplies === false ? "0" : "1", c.gstApplies === false ? "0" : "1", c.isFoc === true ? "1" : "0",
+        ].join("~"),
+      )
+      .sort()
+      .join("//");
+  };
+  const unsaved = editing && draft != null && canon(draft) !== canon(seed);
 
   const changed = () =>
     refresh([
@@ -109,6 +146,31 @@ export function RoomsTable({
       ["billing-summary", entry.id],
       ["entry-timers", entry.id],
     ]);
+
+  const saveM = useMutation({
+    mutationFn: (reason: string) =>
+      changeBookingRoom(session!, entry.id, {
+        // No room moves: the from-room only anchors the walk. The table IS the new basis.
+        fromRoomId: chosen ?? ids[0],
+        reason,
+        roomCompositions: draft ?? seed,
+      }),
+    onSuccess: (res) => {
+      setReasonOpen(false);
+      setEditing(false);
+      setDraft(null);
+      changed();
+      const d = res?.pricing?.delta;
+      toast.success(
+        d != null && d !== 0
+          ? `Set up again — the total moved by ${d > 0 ? "+" : ""}${d.toLocaleString()} ${res.pricing?.currency ?? ""}`.trim()
+          : "Set up again — the booking is re-priced on this table.",
+      );
+      if (res?.walk && !res.walk.returnedToOrigin)
+        toast.warning(`The booking stopped at ${res.walk.reachedStage}: ${res.walk.blocked?.message ?? "a later step refused"}`);
+    },
+    onError: (e) => toastRefusal(e, "The setup could not be changed"),
+  });
 
   if (ids.length === 0) return <span className="meta">No rooms on the plan yet — they are chosen at Inquiry.</span>;
 
@@ -132,8 +194,29 @@ export function RoomsTable({
               </Button>
             </>
           ) : (
-            <span className="meta">Click a room in the table to see what can be done with it — change it, or set it up differently.</span>
+            <span className="meta">Click a room in the table to see what can be done with it.</span>
           )}
+          <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s2)", alignItems: "center" }}>
+            {editing ? (
+              <>
+                <span className="meta">Editing — meals, beds and guests. Save prices it again.</span>
+                <Button
+                  kind="quiet"
+                  compact
+                  onClick={() => {
+                    setEditing(false);
+                    setDraft(null);
+                  }}
+                >
+                  Leave it as it was
+                </Button>
+              </>
+            ) : (
+              <Button kind="quiet" compact onClick={() => setEditing(true)}>
+                Change configuration…
+              </Button>
+            )}
+          </span>
         </div>
       ) : null}
 
@@ -149,10 +232,48 @@ export function RoomsTable({
         lockCommercial={inHouse}
         onPickRoom={past ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
         pickedRoomId={chosen}
-        onChange={() => {
-          /* read-first: the table shows the plan. Editing it is its own act, with its own walk. */
-        }}
+        onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}
+        onFaultsChange={editing ? setFaults : undefined}
+        onSave={editing ? () => setReasonOpen(true) : undefined}
+        saveLabel="Save & price it again"
+        saving={saveM.isPending}
+        unsaved={unsaved}
       />
+
+      <DsDialog
+        open={reasonOpen}
+        onClose={() => setReasonOpen(false)}
+        register="commit"
+        title="Set the booking up again"
+        caseLines={[entry.id]}
+        busy={saveM.isPending}
+        footer={
+          <>
+            <Button kind="quiet" state={saveM.isPending ? "inert" : "default"} onClick={() => setReasonOpen(false)}>
+              Not now
+            </Button>
+            <Button
+              state={saveM.isPending ? "working" : reason.trim() ? "default" : "inert"}
+              workingLabel="Pricing…"
+              title={reason.trim() ? undefined : "type the reason to continue"}
+              onClick={() => saveM.mutate(reason.trim())}
+            >
+              Price it again
+            </Button>
+          </>
+        }
+      >
+        <p className="sm">
+          The booking goes back through Negotiation and forward again on this table — re-quoted, re-held and re-frozen —
+          and lands back on this step. <b>Nobody moves rooms.</b> The quotation is saved against the booking; it reaches
+          the guest only if you send it.
+          {inHouse ? " The nights already slept keep the setup they were billed on." : ""}
+        </p>
+        <div className="field">
+          <label>Why</label>
+          <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="what the guest asked for" autoFocus />
+        </div>
+      </DsDialog>
 
       <div className="meta" style={{ marginTop: 8 }}>
         {inHouse
