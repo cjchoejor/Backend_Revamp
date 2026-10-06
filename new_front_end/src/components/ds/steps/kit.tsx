@@ -36,7 +36,18 @@ import {
 } from "@/components/desk/workspace/quotation-preview";
 import { readRefusal } from "@/lib/ds/translate";
 import { fmtDateTime, fmtStamp } from "@/lib/ds/format";
-import type { EntryDetail } from "@/types/api";
+import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { sendQuotation } from "@/lib/api/quotations";
+import { dispatchInvoice } from "@/lib/api/reservation-setup";
+import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
+
+/** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
+const CHANNELS = [
+  ["EMAIL", "Email · in the booking's thread"],
+  ["WHATSAPP", "WhatsApp"],
+] as const;
+type Channel = (typeof CHANNELS)[number][0];
 
 /* ------------------------------------------------------------------ the step's mode */
 
@@ -826,27 +837,47 @@ const INVOICE_WORD: Record<string, string> = {
 };
 
 /** Every paper this booking has, as buttons that open it (P1 — a draft is never sent). */
+/**
+ * Papers — every version, not just the newest (2026-10-06, operator: "we'll have it save in the
+ * system each time, and we can show it a papers tab for these stages and which only shows the
+ * history of changes and superseded and the currently working, we can also have the option to
+ * email or whatsapp these papers to them there").
+ *
+ * The card used to show ONE quotation and the live invoices, preview-only. A booking re-priced
+ * at Arrival or in-house mints a quotation every time, so the history is the point: which paper
+ * is in force now, which it replaced, and when. Superseded versions are kept and readable —
+ * their stored PDF prints the figures that were on the table, never today's.
+ *
+ * Sending is the desk's choice, never automatic. A quotation goes by email or is recorded as
+ * handed over on WhatsApp; a bill is dispatched by email. Where the backend has no WhatsApp
+ * record for a paper, the row says so rather than offering a button that would do nothing.
+ */
 export function PapersCard({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const slot = useContext(OtherWaysSlotCtx);
   const [open, setOpen] = useState<PaperRef | null>(null);
+  const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
+  const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
+  const refresh = useRefreshEntry(entry.id);
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
   const folioDocs = useQuery({
     queryKey: ["folio-documents", entry.id, entry.currentStage, entry.folio?.state ?? null],
     queryFn: () => getFolioDocuments(session!, entry.id),
     enabled: !!session && folioLive,
   });
-  const papers = useMemo<PaperRef[]>(() => {
+
+  /** Newest first — the one in force leads, the ones it replaced follow. */
+  const quotes = useMemo(
+    () => [...(entry.quotations ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+    [entry.quotations],
+  );
+  const invoices = useMemo(
+    () => [...(entry.folio?.invoices ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+    [entry.folio?.invoices],
+  );
+
+  const others = useMemo<PaperRef[]>(() => {
     const out: PaperRef[] = [];
-    const quotes = [...(entry.quotations ?? [])].filter((q) => q.state !== "SUPERSEDED").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    const q = quotes[0];
-    if (q) out.push({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: q.state !== "DRAFT" && q.state !== "SENT" && q.state !== "ACCEPTED" && !!q.pdfStorageKey });
-    for (const inv of entry.folio?.invoices ?? []) {
-      if (inv.state === "SUPERSEDED") continue;
-      const word = INVOICE_WORD[inv.invoiceType] ?? "Invoice";
-      if (inv.invoiceType === "FINAL") out.push({ kind: "invoice", id: inv.id, issued: true, label: `${word} ${inv.invoiceNumber ?? inv.id}` });
-      else out.push({ kind: "invoice", id: inv.id, label: `${word} ${inv.invoiceNumber ?? inv.id}` });
-    }
     if (entry.reservation?.id) out.push({ kind: "voucher", reservationId: entry.reservation.id, label: "Confirmation voucher" });
     for (const d of folioDocs.data?.documents ?? []) {
       if (!d.available || d.kind === "tax-invoice") continue;
@@ -855,24 +886,303 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
     if (entry.status === "CANCELLED") out.push({ kind: "cancellation", entryId: entry.id, label: "Cancellation confirmation" });
     return out;
   }, [entry, folioDocs.data]);
-  if (papers.length === 0) return null;
+
+  if (quotes.length === 0 && invoices.length === 0 && others.length === 0) return null;
+
+  const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
+  const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
+
   return beside(
     <StepCard title="Papers">
-      <div className="row-acts">
-        {papers.map((p) => (
-          <Button key={`${p.kind}:${p.label}`} kind="quiet" compact icon="file" onClick={() => setOpen(p)}>
-            {p.label}
-          </Button>
-        ))}
-      </div>
-      <div className="meta" style={{ marginTop: 6 }}>
-        Preview opens the paper as the backend composes it · a draft is never sent
+      {quotes.length ? (
+        <div className="papergrp">
+          <div className="h">Quotations</div>
+          {quotes.map((q) => (
+            <div className="paperrow" key={q.id}>
+              <span className="nm">
+                <b>{q.referenceNumber}</b>
+                {(q.versionNumber ?? 1) > 1 ? <span className="v"> · v{q.versionNumber}</span> : null}
+              </span>
+              <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>
+              <span className="when">{q.createdAt ? fmtStamp(q.createdAt) : ""}</span>
+              <span className="acts">
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
+                  Preview
+                </Button>
+                <Live>
+                  {liveQuote(q) ? (
+                    <Button kind="quiet" compact icon="send" onClick={() => setSendQuote(q)}>
+                      Send…
+                    </Button>
+                  ) : null}
+                </Live>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {invoices.length ? (
+        <div className="papergrp">
+          <div className="h">Bills</div>
+          {invoices.map((i) => (
+            <div className="paperrow" key={i.id}>
+              <span className="nm">
+                <b>{i.invoiceNumber ?? i.id}</b>
+                <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
+                {(i.versionNumber ?? 1) > 1 ? <span className="v"> · v{i.versionNumber}</span> : null}
+              </span>
+              <Chip tone={liveInvoice(i) ? "success" : "quiet"}>{i.state === "SUPERSEDED" ? "replaced" : i.dispatchedAt ? "sent" : i.state.toLowerCase()}</Chip>
+              <span className="when">{i.dispatchedAt ? `sent ${fmtStamp(i.dispatchedAt)}` : i.createdAt ? fmtStamp(i.createdAt) : ""}</span>
+              <span className="acts">
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${i.invoiceNumber ?? i.id}`, issued: i.invoiceType === "FINAL" })}>
+                  Preview
+                </Button>
+                <Live>
+                  {liveInvoice(i) ? (
+                    <Button kind="quiet" compact icon="send" onClick={() => setSendInvoice(i)}>
+                      {i.dispatchedAt ? "Send again…" : "Send…"}
+                    </Button>
+                  ) : null}
+                </Live>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {others.length ? (
+        <div className="papergrp">
+          <div className="h">Other papers</div>
+          <div className="row-acts">
+            {others.map((pp) => (
+              <Button key={`${pp.kind}:${pp.label}`} kind="quiet" compact icon="file" onClick={() => setOpen(pp)}>
+                {pp.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="meta" style={{ marginTop: 8 }}>
+        Every version is kept. A replaced paper prints the figures that were on the table when it
+        was replaced, never today&rsquo;s · preview never sends anything.
       </div>
       <PaperDrawer paper={open} onClose={() => setOpen(null)} />
+      <QuotationSendDialog entry={entry} target={sendQuote} onClose={() => setSendQuote(null)} onSent={() => { setSendQuote(null); refresh(); }} />
+      <InvoiceSendDialog entry={entry} target={sendInvoice} onClose={() => setSendInvoice(null)} onSent={() => { setSendInvoice(null); refresh(); }} />
     </StepCard>,
     slot,
   );
 }
+
+const QUOTE_WORD: Record<string, string> = {
+  DRAFT: "in force",
+  SENT: "sent",
+  ACCEPTED: "accepted",
+  SUPERSEDED: "replaced",
+  EXPIRED: "lapsed",
+};
+
+/**
+ * Send a quotation — by email, or recorded as handed over on WhatsApp (moved into the kit
+ * 2026-10-06 so the Negotiation step and the Papers card send the same way; it lived in
+ * s2-negotiation and the Papers card would otherwise have grown a second, drifting copy).
+ */
+export function QuotationSendDialog({
+  entry,
+  target,
+  onClose,
+  onSent,
+}: {
+  entry: EntryDetail;
+  target: QuotationSummary | null;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const { session } = useSession();
+  const { tz } = useHotelClock(60_000);
+  // Where the quote goes (2026-09-19): the invoices' rule — the agency or company that booked (the
+  // quote carries their rates), else the guest — and the backend now sends to what is typed here.
+  // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
+  // to +975…" while nothing was emailed.
+  const recipient = useInvoiceRecipient(entry);
+  const phoneOnFile = (entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "").trim();
+  const [channel, setChannel] = useState<Channel>("EMAIL");
+  const [to, setTo] = useState("");
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (!target || touched) return;
+    setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
+  }, [target, channel, touched, recipient.defaultTo, phoneOnFile]);
+  const typed = to.trim();
+  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
+  const send = useMutation({
+    mutationFn: () =>
+      sendQuotation(session!, target!.id, {
+        channel,
+        recipientAddress: typed,
+        sentTo: typed,
+      }),
+    onSuccess: () => {
+      toast.success(
+        channel === "WHATSAPP"
+          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}`
+          : typed
+            ? `${target?.referenceNumber} sent by email to ${typed}`
+            : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
+      );
+      onSent();
+    },
+    onError: (e) => toastRefusal(e, "The quotation could not be sent"),
+  });
+  const hint =
+    channel === "WHATSAPP"
+      ? "send it on WhatsApp yourself — the desk records the send with this number"
+      : !typed
+        ? recipient.party
+          ? `${recipient.party} has no email on file — type the address, or send it with none and hand the quote over`
+          : "no email on file — type one, or send it with none and hand the quote over"
+        : !emailish
+          ? "that is not an email address"
+          : recipient.party && typed === recipient.partyEmail
+            ? `${recipient.party}'s email on file — the quote shows their rates`
+            : recipient.guestEmail && typed === recipient.guestEmail
+              ? recipient.party
+                ? `this is the guest's email — the quote is made out to ${recipient.party} and shows its rates`
+                : "the guest's email on file"
+              : "the send is recorded on the booking with this address";
+  if (!target) return null;
+  const ok = channel === "WHATSAPP" ? typed.length > 0 : !typed || emailish;
+  return (
+    <DsDialog
+      open
+      onClose={onClose}
+      busy={send.isPending}
+      title={`Send quotation ${target.referenceNumber}`}
+      caseLines={[
+        `Version ${target.versionNumber}`,
+        target.validUntil ? `Price valid until ${fmtDateTime(target.validUntil, tz)} — sending does not restart the clock` : "No validity recorded",
+      ]}
+      footer={
+        <>
+          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
+            Not now
+          </Button>
+          <Button
+            kind="secondary"
+            icon="print"
+            onClick={() => session && openQuotationPdf(session, target.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}
+          >
+            Print instead
+          </Button>
+          <Button
+            icon="send"
+            state={send.isPending ? "working" : ok ? "default" : "inert"}
+            title={ok ? undefined : channel === "WHATSAPP" ? "put in the WhatsApp number" : "that is not an email address"}
+            workingLabel="Sending…"
+            onClick={() => send.mutate()}
+          >
+            Send now
+          </Button>
+        </>
+      }
+    >
+      <div className="field">
+        <label>Send via</label>
+        <Choice
+          options={CHANNELS}
+          value={channel}
+          onChange={(c) => {
+            setChannel(c);
+            setTouched(false);
+          }}
+        />
+      </div>
+      <div className="field">
+        <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
+        <input
+          className="input"
+          value={to}
+          onChange={(e) => {
+            setTouched(true);
+            setTo(e.target.value);
+          }}
+          placeholder={channel === "EMAIL" ? "name@example.com" : "+975 …"}
+          autoFocus
+        />
+        <span className="hint">{hint}</span>
+      </div>
+    </DsDialog>
+  );
+}
+/** A bill goes out by email; the backend records no WhatsApp send for one. */
+function InvoiceSendDialog({
+  entry,
+  target,
+  onClose,
+  onSent,
+}: {
+  entry: EntryDetail;
+  target: InvoiceSummary | null;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const { session } = useSession();
+  const recipient = useInvoiceRecipient(entry);
+  const [to, setTo] = useState("");
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (!target || touched) return;
+    setTo(target.dispatchedTo ?? recipient.defaultTo);
+  }, [target, touched, recipient.defaultTo]);
+  const typed = to.trim();
+  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
+  const send = useMutation({
+    mutationFn: () => dispatchInvoice(session!, target!.id, { dispatchedTo: typed || undefined }),
+    onSuccess: () => {
+      toast.success(typed ? `${target?.invoiceNumber ?? "The bill"} sent to ${typed}` : `${target?.invoiceNumber ?? "The bill"} recorded as sent — nothing was emailed; hand it over`);
+      onSent();
+    },
+    onError: (e) => toastRefusal(e, "The bill could not be sent"),
+  });
+  if (!target) return null;
+  return (
+    <DsDialog
+      open
+      onClose={onClose}
+      busy={send.isPending}
+      title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${target.invoiceNumber ?? target.id}`}
+      caseLines={[entry.id, target.dispatchedAt ? "Already sent once — this sends it again" : "Not sent yet"]}
+      footer={
+        <>
+          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
+            Not now
+          </Button>
+          <Button
+            icon="send"
+            state={send.isPending ? "working" : !typed || emailish ? "default" : "inert"}
+            title={!typed || emailish ? undefined : "that is not an email address"}
+            workingLabel="Sending…"
+            onClick={() => send.mutate()}
+          >
+            Send now
+          </Button>
+        </>
+      }
+    >
+      <div className="field">
+        <label>Send to</label>
+        <input className="input" value={to} onChange={(e) => { setTouched(true); setTo(e.target.value); }} placeholder="email address" />
+        <span className="hint">
+          {recipient.party ? `${recipient.party} booked — the bill carries their rates` : "the guest's email on file"} · WhatsApp is not
+          recorded for a bill yet; hand it over and it stays on the booking either way
+        </span>
+      </div>
+    </DsDialog>
+  );
+}
+
 
 /* ------------------------------------------------------------------ the guest's answer */
 

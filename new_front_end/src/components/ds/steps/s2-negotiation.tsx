@@ -38,26 +38,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import {
-  Choice,
-  DsDialog,
-  Live,
-  Notice,
-  OtherWays,
-  PaperDrawer,
-  PapersCard,
-  ReasonDialog,
-  RequestsCard,
-  SeeRow,
-  StepCanvas,
-  StepCard,
-  Tool,
-  atLeast,
-  toastRefusal,
-  useRefreshEntry,
-  words,
-  type PaperRef,
-} from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useRefreshEntry, words } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -787,10 +768,9 @@ export function S2Negotiation({
       </OtherWays>
       <PapersCard entry={entry} />
 
-      <SendDialog
+      <QuotationSendDialog
         entry={entry}
         target={sendTarget}
-        tz={tz}
         onClose={() => setSendTarget(null)}
         onSent={() => {
           setSendTarget(null);
@@ -1300,131 +1280,3 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
 
 /* ------------------------------------------------------------------ sending */
 
-function SendDialog({
-  entry,
-  target,
-  tz,
-  onClose,
-  onSent,
-}: {
-  entry: EntryDetail;
-  target: QuotationSummary | null;
-  tz: string;
-  onClose: () => void;
-  onSent: () => void;
-}) {
-  const { session } = useSession();
-  // Where the quote goes (2026-09-19): the invoices' rule — the agency or company that booked (the
-  // quote carries their rates), else the guest — and the backend now sends to what is typed here.
-  // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
-  // to +975…" while nothing was emailed.
-  const recipient = useInvoiceRecipient(entry);
-  const phoneOnFile = (entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "").trim();
-  const [channel, setChannel] = useState<Channel>("EMAIL");
-  const [to, setTo] = useState("");
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    if (!target || touched) return;
-    setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
-  }, [target, channel, touched, recipient.defaultTo, phoneOnFile]);
-  const typed = to.trim();
-  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
-  const send = useMutation({
-    mutationFn: () =>
-      sendQuotation(session!, target!.id, {
-        channel,
-        recipientAddress: typed,
-        sentTo: typed,
-      }),
-    onSuccess: () => {
-      toast.success(
-        channel === "WHATSAPP"
-          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}`
-          : typed
-            ? `${target?.referenceNumber} sent by email to ${typed}`
-            : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
-      );
-      onSent();
-    },
-    onError: (e) => toastRefusal(e, "The quotation could not be sent"),
-  });
-  const hint =
-    channel === "WHATSAPP"
-      ? "send it on WhatsApp yourself — the desk records the send with this number"
-      : !typed
-        ? recipient.party
-          ? `${recipient.party} has no email on file — type the address, or send it with none and hand the quote over`
-          : "no email on file — type one, or send it with none and hand the quote over"
-        : !emailish
-          ? "that is not an email address"
-          : recipient.party && typed === recipient.partyEmail
-            ? `${recipient.party}'s email on file — the quote shows their rates`
-            : recipient.guestEmail && typed === recipient.guestEmail
-              ? recipient.party
-                ? `this is the guest's email — the quote is made out to ${recipient.party} and shows its rates`
-                : "the guest's email on file"
-              : "the send is recorded on the booking with this address";
-  if (!target) return null;
-  const ok = channel === "WHATSAPP" ? typed.length > 0 : !typed || emailish;
-  return (
-    <DsDialog
-      open
-      onClose={onClose}
-      busy={send.isPending}
-      title={`Send quotation ${target.referenceNumber}`}
-      caseLines={[
-        `Version ${target.versionNumber}`,
-        target.validUntil ? `Price valid until ${fmtDateTime(target.validUntil, tz)} — sending does not restart the clock` : "No validity recorded",
-      ]}
-      footer={
-        <>
-          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
-          <Button
-            kind="secondary"
-            icon="print"
-            onClick={() => session && openQuotationPdf(session, target.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}
-          >
-            Print instead
-          </Button>
-          <Button
-            icon="send"
-            state={send.isPending ? "working" : ok ? "default" : "inert"}
-            title={ok ? undefined : channel === "WHATSAPP" ? "put in the WhatsApp number" : "that is not an email address"}
-            workingLabel="Sending…"
-            onClick={() => send.mutate()}
-          >
-            Send now
-          </Button>
-        </>
-      }
-    >
-      <div className="field">
-        <label>Send via</label>
-        <Choice
-          options={CHANNELS}
-          value={channel}
-          onChange={(c) => {
-            setChannel(c);
-            setTouched(false);
-          }}
-        />
-      </div>
-      <div className="field">
-        <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
-        <input
-          className="input"
-          value={to}
-          onChange={(e) => {
-            setTouched(true);
-            setTo(e.target.value);
-          }}
-          placeholder={channel === "EMAIL" ? "name@example.com" : "+975 …"}
-          autoFocus
-        />
-        <span className="hint">{hint}</span>
-      </div>
-    </DsDialog>
-  );
-}
