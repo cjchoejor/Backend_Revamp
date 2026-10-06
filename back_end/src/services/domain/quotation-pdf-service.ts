@@ -444,10 +444,24 @@ async function buildQuotationDocRender(
         const splitTotal = split.reduce((t, pl) => t + pl.amount, 0) + alaCarteTotal;
         const splitReconciles = mealsSubtotal <= 0 || Math.abs(splitTotal - mealsSubtotal) < 0.01;
         if (!splitReconciles) {
+          // The pax ARE stored even when the rates are not, so a room on a single plan still
+          // prints the row every other room prints — same words, same "N pax × N nights", and
+          // the per-head rate worked back from the room's own figure. Without this the one room
+          // that happened to carry rates read differently from its neighbours on the guest's
+          // copy (2026-10-06, operator: "why does the first row show differently in the qty
+          // column ... just below that room, not the others"). A room on several plans cannot
+          // be split from one subtotal, so it keeps one row with no unit rate.
+          const withPax = planRows.filter((pl) => pl.pax > 0);
+          const alaCartePax =
+            Number(raw?.othersBreakfastPax ?? 0) + Number(raw?.othersLunchPax ?? 0) + Number(raw?.othersDinnerPax ?? 0);
+          const only = withPax.length === 1 && alaCartePax === 0 ? withPax[0] : null;
+          const covers = only ? only.pax * roomNights : 0;
           push({
-            description: `Meals${planParts.length ? ` · ${planParts.join(" · ")}` : ""}`,
-            qty: nightsWord(roomNights),
-            rate: null,
+            description: only
+              ? `Meals · ${only.label}`
+              : `Meals${planParts.length ? ` · ${planParts.join(" · ")}` : ""}`,
+            qty: only ? `${only.pax} pax × ${nightsWord(roomNights)}` : nightsWord(roomNights),
+            rate: only && covers > 0 ? Number((mealsSubtotal / covers).toFixed(2)) : null,
             amount: mealsSubtotal,
           });
         }
