@@ -539,7 +539,12 @@ async function buildQuotationDocRender(
     : compDiscountApplies
       ? compDiscount?.requestedPercent != null
         ? `Discount ${pctWord(Number(compDiscount.requestedPercent))}%`
-        : "Discount"
+        : // A flat ask is "Nu 1,000 off the TOTAL", but the rows are net, so the deduction beside
+          // them has to be net too or the column stops adding up — 1,000 off the total is 865.80
+          // off the net. The label therefore carries the figure that was agreed, and the amount
+          // column carries the one that reconciles (2026-10-06, operator: "the discount is 865
+          // when it was 1000, why is it shown that way").
+          `Discount · ${formatMoney(Number(compDiscount?.requestedAmount ?? 0))} off the total`
       : `Discount ${discountPercent}%`;
   const discountValue = !discountApplied
     ? null
