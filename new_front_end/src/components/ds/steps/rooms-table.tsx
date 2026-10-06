@@ -29,10 +29,11 @@ import { changeBookingRoom } from "@/lib/api/entries";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
-import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
+import { operativeRoomCompositions, roomStayRangesByRoom, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listRooms } from "@/lib/api/rooms";
 import { DsDialog, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 
@@ -46,14 +47,18 @@ function useRoomsCatalog() {
   return useQuery({ queryKey: ["rooms-catalog"], queryFn: () => listRooms(session!), enabled: !!session });
 }
 
-/** The rooms the PLAN names, in the order the guest sleeps in them. */
-export function planRoomIds(entry: EntryDetail): string[] {
-  const assigned = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.roomId)));
+/**
+ * The rooms the PLAN names, in the order the guest sleeps in them — a room the guest has already
+ * moved out of is not one of them (see `roomsInUseFor`, which only applies that in-house).
+ */
+export function planRoomIds(entry: EntryDetail, hotelToday: string | null = null): string[] {
+  const rows = entry.roomAssignments ?? [];
+  const assigned = Array.from(new Set(roomsInUseFor(entry, hotelToday).map((a) => a.roomId)));
   const sealed = optionSelectedRoomIds(
     ((entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected) ?? null)?.optionSelected,
   );
   const hold = entry.committedHold?.roomId ?? null;
-  const base = assigned.length ? assigned : sealed.length ? sealed : hold ? [hold] : [];
+  const base = rows.length ? assigned : sealed.length ? sealed : hold ? [hold] : [];
   const ranges = roomStayRangesByRoom(entry);
   return [...base].sort((a, b) => {
     const A = ranges.get(a);
@@ -80,7 +85,8 @@ export function RoomsTable({
   const catalogQ = useRoomsCatalog();
   const byId = useMemo(() => new Map((catalogQ.data?.items ?? []).map((r) => [r.id, r])), [catalogQ.data]);
 
-  const ids = useMemo(() => planRoomIds(entry), [entry]);
+  const hotelToday = useHotelDay()?.today ?? null;
+  const ids = useMemo(() => planRoomIds(entry, hotelToday), [entry, hotelToday]);
   const seed = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
   const ranges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
   const roomDates = useMemo(() => {
@@ -334,7 +340,7 @@ export function RoomsTableCard({
   flow?: string;
   flowAfter?: string;
 }) {
-  const n = planRoomIds(entry).length;
+  const n = planRoomIds(entry, useHotelDay()?.today ?? null).length;
   return (
     <StepCard title={title} flow={flow} flowAfter={flowAfter} right={n ? <Chip tone="quiet">{n === 1 ? "1 room" : `${n} rooms`}</Chip> : null}>
       <RoomsTable entry={entry} roomActions={roomActions} lead={lead} />

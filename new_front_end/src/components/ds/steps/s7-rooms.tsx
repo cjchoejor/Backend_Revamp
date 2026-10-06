@@ -15,7 +15,7 @@ import { Button, Chip } from "@/design-system";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
 import { issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
-import { roomStayRangesByRoom } from "@/lib/desk/party-rooms";
+import { currentRoomAssignments, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDay, plural } from "@/lib/ds/format";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { RoomCompositionSummary, hasRoomComposition } from "@/components/desk/workspace/room-composition-summary";
@@ -34,7 +34,7 @@ export function RoomsInUseCard({ entry, id }: { entry: EntryDetail; id: string }
   // Rooms whose row is still current (an in-house move end-dates the old room at tonight, so it
   // drops off here while its slept nights stay billed). Until the hotel's day is known, every room.
   const rooms = useMemo(() => {
-    const rows = (entry.roomAssignments ?? []).filter((a) => !a.endDate || !hotelToday || String(a.endDate).slice(0, 10) > hotelToday);
+    const rows = currentRoomAssignments(entry.roomAssignments ?? [], hotelToday);
     const distinct = Array.from(new Map(rows.map((a) => [a.roomId, a])).values());
     return distinct.sort((a, b) => {
       const A = stay.get(a.roomId);

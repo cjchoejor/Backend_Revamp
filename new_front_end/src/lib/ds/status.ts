@@ -9,6 +9,7 @@
 import type { ChipTone } from "@/design-system/components/primitives";
 import type { EntryDetail } from "@/types/api";
 import type { DeskListRow } from "@/lib/api/desk";
+import { roomsInUseFor } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtDay, money } from "./format";
 
 export type Standing = { word: string; qualifier: string; tone: ChipTone };
@@ -179,10 +180,26 @@ export function factsFromRow(r: DeskListRow, balance?: number | null): StandingF
   };
 }
 
-export function factsFromEntry(e: EntryDetail, balance?: number | null, bookerName?: string | null): StandingFacts {
+/**
+ * `hotelToday` drops the rooms the guest has already moved out of, so the pill names where they
+ * are rather than everywhere they have been. The desk LIST's own `roomNumbers` come from the
+ * server and still carry a vacated room — a backend read, not this one.
+ */
+export function factsFromEntry(
+  e: EntryDetail,
+  balance?: number | null,
+  bookerName?: string | null,
+  hotelToday?: string | null,
+): StandingFacts {
   const q = (e.quotations ?? [])[0];
   const liveMarker = (e.speculativeHolds ?? []).find((h) => h.state === "PLACED");
-  const rooms = Array.from(new Set((e.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
+  const rooms = Array.from(
+    new Set(
+      roomsInUseFor(e, hotelToday ?? null)
+        .map((a) => a.room?.roomNumber)
+        .filter((x): x is string => !!x),
+    ),
+  ).sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }),
   );
   return {

@@ -286,6 +286,49 @@ export function arrivalNightRoomIds(entry: EntryDetail): Set<string> {
 }
 
 /** roomId → display-ready stay ranges (see `roomNightsByRoom` for the sourcing). */
+/**
+ * The rows for the rooms the booking is in from tonight onward.
+ *
+ * An in-house room change end-dates the OLD room's row at tonight — its slept nights stay billed
+ * exactly as they were audited — so that room is no longer part of the plan. Reading every row as
+ * current put the vacated room back on the rooms table with nobody in it, where it read as a fault
+ * ("Room 205 — nobody is in this room") and refused the re-price (2026-10-06, operator: "it is
+ * showing like this now, saying room 205 is empty, when it was a room change").
+ *
+ * Until the hotel's day is known nothing is dropped: the machine's clock is never the answer to
+ * what day it is, and over-showing a room is the safe way to be wrong for a second.
+ */
+export function currentRoomAssignments<T extends { endDate?: string | null }>(
+  rows: readonly T[],
+  hotelToday: string | null,
+): T[] {
+  if (!hotelToday) return [...rows];
+  return rows.filter((a) => !a.endDate || String(a.endDate).slice(0, 10) > hotelToday);
+}
+
+/**
+ * The rooms the booking is in, as the desk should name them — the rule above, but **in-house
+ * only**.
+ *
+ * Before check-in a dated row is a PLAN for particular nights, not an occupancy that has ended:
+ * a room change at Arrival or Check-in DELETES the pre-occupancy rows rather than end-dating
+ * them, so there is no remnant to drop, while a booking whose dates have slipped into the past
+ * still has its rooms and must still show them. Reading the rule at every step emptied those
+ * bookings' rooms entirely.
+ *
+ * If every row has ended — a stay already run out — the rows stand, because naming no room at
+ * all says less than naming the ones it had.
+ */
+export function roomsInUseFor<T extends { endDate?: string | null }>(
+  entry: { currentStage?: string | null; roomAssignments?: T[] | null },
+  hotelToday: string | null,
+): T[] {
+  const rows = entry.roomAssignments ?? [];
+  if (entry.currentStage !== "S7") return [...rows];
+  const live = currentRoomAssignments(rows, hotelToday);
+  return live.length ? live : [...rows];
+}
+
 export function roomStayRangesByRoom(entry: EntryDetail): Map<string, RoomStayRanges> {
   const out = new Map<string, RoomStayRanges>();
   for (const [roomId, nights] of roomNightsByRoom(entry)) {

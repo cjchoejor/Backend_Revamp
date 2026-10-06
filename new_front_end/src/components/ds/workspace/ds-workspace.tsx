@@ -68,7 +68,7 @@ import {
   s8Readiness,
   type Precondition,
 } from "@/lib/desk/workspace";
-import { arrivalNightRoomIds } from "@/lib/desk/party-rooms";
+import { arrivalNightRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, standingOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtDay, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
@@ -875,12 +875,22 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const native = nativeBody();
 
   /* ---- the header ---- */
-  const standing = standingOf(factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null), hotelToday);
+  const standing = standingOf(
+    factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null, hotelToday),
+    hotelToday,
+  );
   const co = entry.actualCheckOutDate ?? entry.checkOutDate;
   const nights = nightsOf(entry.checkInDate, co);
   // The trip: this enquiry's other stays, when the guest left and came back (2026-09-25).
   const trip = tripOf(entry);
-  const roomNumbers = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
+  // The rooms the guest is in NOW — a room left behind by a mid-stay move is not one of them.
+  const roomNumbers = Array.from(
+    new Set(
+      roomsInUseFor(entry, hotelToday)
+        .map((a) => a.room?.roomNumber)
+        .filter((x): x is string => !!x),
+    ),
+  ).sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }),
   );
   const cur = billing?.currency ?? fin.currency;
