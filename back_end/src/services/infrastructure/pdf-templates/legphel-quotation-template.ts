@@ -86,6 +86,14 @@ export type LegphelQuotationInput = {
   closingNote: string;
   /** Tariff version for the footer, e.g. "T1.0". */
   tariffVersion: string;
+  /**
+   * The same quotation with no money on it (2026-10-06, operator: "sometimes guest needs to be
+   * sent quotation without the price"). The Rate and Amount columns go, and so does the whole
+   * totals block — what is left is what the guest is being offered: the rooms, who is in them,
+   * their meal plans and their nights. One document, two faces; the stored PDF and the record
+   * are always the priced one.
+   */
+  hidePrices?: boolean;
   /** Optional issuance-register id for the footer's middle slot. */
   issuanceRef?: string | null;
   watermark?: DocumentWatermark;
@@ -105,13 +113,15 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     section,
     row("Stay", input.stay),
     miniTable(
-      [
-        { header: "Description" },
-        { header: "Qty", align: "r" },
-        { header: "Rate", align: "r" },
-        { header: "Amount", align: "r" },
-      ],
-      input.lines.map((l) => [l.description, l.qty, l.rate, l.amount]),
+      input.hidePrices
+        ? [{ header: "Description" }, { header: "Qty", align: "r" }]
+        : [
+            { header: "Description" },
+            { header: "Qty", align: "r" },
+            { header: "Rate", align: "r" },
+            { header: "Amount", align: "r" },
+          ],
+      input.lines.map((l) => (input.hidePrices ? [l.description, l.qty] : [l.description, l.qty, l.rate, l.amount])),
       // A room's sub-lines are indented and share its block; the hairline is moved to the last
       // row of each group so room + beds + meals read as one billed item.
       input.lines.map((l, i) => {
@@ -121,17 +131,19 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
           .join(" ") || null;
       }),
     ),
-    input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
-    row("Net value", input.netValue),
-    row(input.serviceChargeLabel, input.serviceCharge),
+    input.hidePrices ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
+    input.hidePrices ? "" : row("Net value", input.netValue),
+    input.hidePrices ? "" : row(input.serviceChargeLabel, input.serviceCharge),
     // The reference annotates GST as "(expected)" on pre-stay documents — no supply has happened
     // yet, so the figure is an estimate until the tax invoice is issued.
-    row(
-      `${htmlEscape(input.gstLabel)} <i style="font-style:normal;color:var(--mute)">(expected)</i>`,
-      input.gst,
-      { rawKey: true },
-    ),
-    row(`Total · ${currency}`, input.total, { total: true }),
+    input.hidePrices
+      ? ""
+      : row(
+          `${htmlEscape(input.gstLabel)} <i style="font-style:normal;color:var(--mute)">(expected)</i>`,
+          input.gst,
+          { rawKey: true },
+        ),
+    input.hidePrices ? "" : row(`Total · ${currency}`, input.total, { total: true }),
     note(input.closingNote, "quiet"),
     footer([input.quotationNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
   ]

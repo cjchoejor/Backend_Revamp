@@ -158,7 +158,18 @@ type QuotationDocRender = {
  * Pure read — no writes, no storage. Both the stored-PDF path and the desk's live preview run
  * through here, so the two can never disagree about what the quotation says.
  */
-async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation): Promise<QuotationDocRender> {
+/**
+ * `hidePrices` renders the SAME quotation with no money on it (2026-10-06, operator: "sometimes
+ * guest needs to be sent quotation without the price"). It is a face of the document, never a
+ * second document: the rows, the rooms, the nights and the quotation number are identical, and
+ * the stored PDF — the commercial record — is always the priced one.
+ */
+async function buildQuotationDocRender(
+  prisma: PrismaClient,
+  q: LoadedQuotation,
+  opts?: { hidePrices?: boolean },
+): Promise<QuotationDocRender> {
+  const hidePrices = opts?.hidePrices === true;
   const terms = (q.commercialTerms as QuotationTerms) ?? {};
   const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
   const roomCount = Math.max(1, Number(terms?.roomCount ?? terms?.pricingBreakdown?.roomCount ?? 1));
@@ -537,6 +548,7 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       : `${formatMoney(preDiscountRate)} → ${formatMoney(postDiscountRate)} / room / night`;
 
   const html = renderLegphelQuotationHtml({
+    hidePrices,
     masthead: mastheadFromHotelProfile(hotel),
     quotationNo: q.referenceNumber,
     bookingRef: q.entryId,
@@ -564,8 +576,10 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
     gstLabel: gstRate > 0 ? `GST @ ${formatRate(gstRate)} of net + service charge` : "GST",
     gst: formatMoney(gstValue),
     total: formatMoney(totalAmount),
-    closingNote:
-      (rowsAreNet
+    closingNote: hidePrices
+      ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
+        "priced quotation under the same number. Subject to availability at confirmation."
+      : (rowsAreNet
         ? "Each room is billed on its own line, with its extra beds and meal plans beneath it; " +
           "meal rates are per person per night. Line amounts are before service charge and GST, " +
           "which are added below. "
@@ -610,10 +624,25 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
 export async function renderQuotationPreviewHtml(
   prisma: PrismaClient,
   quotationId: string,
+  opts?: { hidePrices?: boolean },
 ): Promise<{ html: string; referenceNumber: string }> {
   const q = await loadQuotationForRender(prisma, quotationId);
-  const model = await buildQuotationDocRender(prisma, q);
+  const model = await buildQuotationDocRender(prisma, q, opts);
   return { html: model.html, referenceNumber: q.referenceNumber };
+}
+
+/**
+ * The price-free copy as a PDF, rendered fresh and **never stored**. The stored artifact is the
+ * priced quotation — the commercial record, write-once — and a copy with the money taken off is
+ * a courtesy for the guest, not a second version of the offer. Same number, same rows.
+ */
+export async function renderQuotationPdfWithoutPrices(
+  prisma: PrismaClient,
+  quotationId: string,
+): Promise<{ bytes: Buffer; referenceNumber: string }> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+  const m = await buildQuotationDocRender(prisma, q, { hidePrices: true });
+  return { bytes: await renderHtmlToPdf(m.html, { fitToPage: true }), referenceNumber: q.referenceNumber };
 }
 
 export async function generateOrLoadQuotationPdf(

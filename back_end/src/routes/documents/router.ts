@@ -12,7 +12,7 @@ import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { readDocument } from "../../lib/document-storage.js";
-import { generateOrLoadQuotationPdf, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
+import { generateOrLoadQuotationPdf, renderQuotationPdfWithoutPrices, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
 import { generateOrLoadInvoicePdf, renderInvoicePreviewHtml } from "../../services/domain/invoice-pdf-service.js";
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
 import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
@@ -41,7 +41,13 @@ documentsRouter.get("/quotations/:id/pdf", requireActorLevel("L1"), async (req, 
 
     let bytes: Buffer;
     let filename = `${q.referenceNumber}-quotation.pdf`;
-    if (q.pdfStorageKey) {
+    // The price-free copy is rendered fresh and never stored: the stored artifact is the priced
+    // quotation, which is the commercial record (2026-10-06).
+    if (String(req.query.prices ?? "") === "none") {
+      const out = await renderQuotationPdfWithoutPrices(prisma, q.id);
+      bytes = out.bytes;
+      filename = `${out.referenceNumber}-quotation-no-prices.pdf`;
+    } else if (q.pdfStorageKey) {
       bytes = await readDocument(q.pdfStorageKey);
     } else {
       // On-demand render for internal preview. Attaches to the same immutability contract
@@ -71,7 +77,11 @@ documentsRouter.get("/quotations/:id/pdf", requireActorLevel("L1"), async (req, 
  */
 documentsRouter.get("/quotations/:id/preview-html", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const { html } = await renderQuotationPreviewHtml(prisma, req.params.id);
+    // `?prices=none` is the same document with the money taken off — what a guest who asked for
+    // a quotation without prices receives (2026-10-06). Nothing about the offer changes.
+    const { html } = await renderQuotationPreviewHtml(prisma, req.params.id, {
+      hidePrices: String(req.query.prices ?? "") === "none",
+    });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("X-Content-Type-Options", "nosniff");
     // Never cache — the preview must track live edits to the draft terms.

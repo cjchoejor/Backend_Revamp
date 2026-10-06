@@ -147,6 +147,8 @@ export const sendQuotationRequestSchema = z.object({
   sentTo: z.string().optional(),
   channel: z.string().optional(),
   recipientAddress: z.string().optional(),
+  /** Attach the copy with no money on it — the offer and the stored record are unchanged. */
+  hidePrices: z.boolean().optional(),
 });
 export type SendQuotationRequestDto = z.infer<typeof sendQuotationRequestSchema>;
 

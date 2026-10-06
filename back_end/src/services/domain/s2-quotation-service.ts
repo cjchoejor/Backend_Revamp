@@ -37,7 +37,7 @@ import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { mulMoney, round2, sumMoney, toDecimal } from "../../lib/money.js";
-import { generateOrLoadQuotationPdf } from "./quotation-pdf-service.js";
+import { generateOrLoadQuotationPdf, renderQuotationPdfWithoutPrices } from "./quotation-pdf-service.js";
 import {
   applyBookingDiscountToTotals,
   autoAddRequiredExtraBeds,
@@ -1968,7 +1968,19 @@ export async function sendQuotation(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
-  input: { validDays?: number; sentTo?: string; channel?: string; recipientAddress?: string },
+  input: {
+    validDays?: number;
+    sentTo?: string;
+    channel?: string;
+    recipientAddress?: string;
+    /**
+     * Attach the copy with no money on it (2026-10-06, operator: "sometimes guest needs to be
+     * sent quotation without the price ... maybe a check box while sending it"). The offer
+     * itself is unchanged — same quotation, same number, same validity, and the stored PDF is
+     * still the priced one; only what the guest receives differs, and the trace says so.
+     */
+    hidePrices?: boolean;
+  },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
@@ -2131,6 +2143,8 @@ export async function sendQuotation(
           validUntil: validUntil.toISOString(),
           communicationRecordId: comm.id,
           documentStorageReference: doc.storageReference,
+          // What the guest actually received — the record keeps the priced document either way.
+          pricesShown: input.hidePrices !== true,
         },
         createdBy: actorId,
       },
@@ -2146,13 +2160,23 @@ export async function sendQuotation(
   const channel = (input.channel ?? "EMAIL").toUpperCase();
   if (channel === "EMAIL") {
     const typed = (input.recipientAddress ?? input.sentTo ?? "").trim();
-    await sendQuotationEmailBestEffort(prisma, quotationId, /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null);
+    await sendQuotationEmailBestEffort(
+      prisma,
+      quotationId,
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null,
+      input.hidePrices === true,
+    );
   }
 
   return updated;
 }
 
-async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: string, toAddress: string | null = null) {
+async function sendQuotationEmailBestEffort(
+  prisma: PrismaClient,
+  quotationId: string,
+  toAddress: string | null = null,
+  hidePrices = false,
+) {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
     include: { entry: { include: { guestProfile: true } } },
@@ -2195,11 +2219,18 @@ async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: s
   // rather than re-rendered. Failure to render is non-fatal: the email still goes out with
   // the text body only, and the operator can retry via the manual endpoint.
   try {
+    // The priced PDF is rendered and stored either way — it is the record of what was offered.
+    // When the desk asked for a copy without prices, THAT is what the guest receives.
     const artifact = await generateOrLoadQuotationPdf(prisma, q.id, q.createdBy ?? "SYSTEM");
+    const attached = hidePrices
+      ? await renderQuotationPdfWithoutPrices(prisma, q.id)
+      : { bytes: artifact.bytes, referenceNumber: artifact.invoiceNumber };
     content.attachments = [
       {
-        filename: `${artifact.invoiceNumber}-quotation.pdf`,
-        content: artifact.bytes,
+        filename: hidePrices
+          ? `${attached.referenceNumber}-quotation-no-prices.pdf`
+          : `${attached.referenceNumber}-quotation.pdf`,
+        content: attached.bytes,
         contentType: "application/pdf",
       },
     ];
