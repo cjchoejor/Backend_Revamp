@@ -294,6 +294,14 @@ export interface BedPlanCell {
 
 const BED_WORDS: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
 
+/** "6 Oct" — the night a fault belongs to, on a booking that moves rooms mid-stay. */
+function shortNight(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
 /**
  * How this room is made up for this stay. Not a composition field — a bed setup carries no price
  * (the EXTRA bed is the charged one, two columns along), so changing it leaves the table priced
@@ -432,7 +440,14 @@ export function RoomCompositionsTable({
    * never describe one room's nights two ways. Absent = no Dates column (the room-change
    * panel prices a substitution, where the booking's own stay would be the wrong answer).
    */
-  roomDates?: Record<string, { label: string; nights: number }>;
+  /**
+   * Per room: the nights it is held for. `dates` is what makes a SPLIT legible — a booking that
+   * moves rooms on the second night has rooms that are not in use at the same time, so their
+   * guests are the same people, not more people (2026-10-06, operator: "we have booked rooms in
+   * different rooms the next day ... the table treats this somewhat like a new room and I can't
+   * allocate the same people").
+   */
+  roomDates?: Record<string, { label: string; nights: number; dates?: string[] }>;
   /** Enables the reference-rate placeholders in the negotiated-rate cells. */
   entryId?: string;
   sealedRoomIds: string[];
@@ -790,24 +805,34 @@ export function RoomCompositionsTable({
    *  the first row so a family shares a room. CNB 11+ retired: declared children above
    *  the child band join the adult pool. */
   const distribute = () => {
-    const n = sealedRoomIds.length;
-    if (n === 0) return;
+    if (sealedRoomIds.length === 0) return;
     const ages = entryChildAges ?? [];
     const under6 = ages.filter((a) => a <= youngMax).length;
     const c6to10 = ages.filter((a) => a > youngMax && a <= childMax).length;
     const adults = Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length;
-    const base = Math.floor(adults / n);
-    const rem = adults % n;
+    // The party is seated NIGHT BY NIGHT. On a booking that moves rooms mid-stay the rooms are
+    // not in use together, so spreading the party once across every row would leave each night
+    // holding a fraction of it (2026-10-06). On a plain booking there is one night-group and
+    // this is the old behaviour exactly.
+    const groups: string[][] = busiestNight
+      ? allNights.map((n) => roomsOn(n)).filter((g, i, all) => g.length > 0 && all.findIndex((h) => h.join(",") === g.join(",")) === i)
+      : [sealedRoomIds];
     setRows((prev) => {
       const next = { ...prev };
-      sealedRoomIds.forEach((id, i) => {
-        next[id] = withAutoBed(id, {
-          ...(next[id] ?? { ...EMPTY_ROW }),
-          ad: String(base + (i < rem ? 1 : 0)),
-          c6: String(i === 0 ? c6to10 : 0),
-          u6: String(i === 0 ? under6 : 0),
+      for (const ids of groups) {
+        const n = ids.length;
+        if (n === 0) continue;
+        const base = Math.floor(adults / n);
+        const rem = adults % n;
+        ids.forEach((id, i) => {
+          next[id] = withAutoBed(id, {
+            ...(next[id] ?? { ...EMPTY_ROW }),
+            ad: String(base + (i < rem ? 1 : 0)),
+            c6: String(i === 0 ? c6to10 : 0),
+            u6: String(i === 0 ? under6 : 0),
+          });
         });
-      });
+      }
       return next;
     });
   };
@@ -1055,9 +1080,39 @@ export function RoomCompositionsTable({
   };
 
   // ---- Totals ---------------------------------------------------------------------
-  const sum = (col: NumCol) => sealedRoomIds.reduce((s, id) => s + cnt(rows[id]?.[col] ?? "0"), 0);
-  const totalGuests = sum("ad") + sum("c6") + sum("u6");
+  /**
+   * A booking that changes rooms mid-stay holds rooms that are never in use together, and the
+   * party sleeps in each of them in turn. Adding every row up then says the booking has twice
+   * the guests it has, and every room on the later night reads as one nobody is in.
+   *
+   * So the reconciliation is **per night**: on each night, the rooms held that night must hold
+   * the party between them. The Σ row prints the busiest night's figures — on a plain booking,
+   * where every room runs the whole stay, that is exactly the old sum.
+   */
+  const nightsOf = (id: string) => roomDates?.[id]?.dates ?? null;
+  const splitStay = sealedRoomIds.some((id) => (nightsOf(id)?.length ?? 0) > 0)
+    && new Set(sealedRoomIds.flatMap((id) => nightsOf(id) ?? [])).size > 0
+    && sealedRoomIds.some((a) => sealedRoomIds.some((b) => {
+      const A = nightsOf(a);
+      const B = nightsOf(b);
+      return A && B && a !== b && !A.some((n) => B.includes(n));
+    }));
+  const allNights = Array.from(new Set(sealedRoomIds.flatMap((id) => nightsOf(id) ?? []))).sort();
+  const roomsOn = (night: string) => sealedRoomIds.filter((id) => (nightsOf(id) ?? []).includes(night));
+  const sumOver = (ids: string[], col: NumCol) => ids.reduce((s, id) => s + cnt(rows[id]?.[col] ?? "0"), 0);
+  const guestsOver = (ids: string[]) => sumOver(ids, "ad") + sumOver(ids, "c6") + sumOver(ids, "u6");
+  /** The night the table reconciles against: the one holding the most guests. */
+  const busiestNight = splitStay && allNights.length
+    ? allNights.reduce((best, n) => (guestsOver(roomsOn(n)) > guestsOver(roomsOn(best)) ? n : best), allNights[0])
+    : null;
+  const idsForTotals = busiestNight ? roomsOn(busiestNight) : sealedRoomIds;
+  const sum = (col: NumCol) => sumOver(idsForTotals, col);
+  const totalGuests = guestsOver(idsForTotals);
   const partySize = (entryAdults ?? 0) + (entryChildAges?.length ?? 0);
+  /** Nights whose rooms do not hold the party between them — named in the fault list. */
+  const nightsShort = splitStay && partySize > 0
+    ? allNights.filter((n) => guestsOver(roomsOn(n)) !== partySize)
+    : [];
 
   /**
    * Everything wrong with the table right now, named room by room (2026-09-30). This is the ONE
@@ -1092,16 +1147,28 @@ export function RoomCompositionsTable({
         out.push(`Room ${roomNoOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
       }
     }
-    if (partySize > 0 && totalGuests !== partySize) {
-      out.push(
-        totalGuests < partySize
-          ? `${partySize - totalGuests} of the booking's ${partySize} guests are not in a room yet`
-          : `${totalGuests} guests are placed but the booking has ${partySize}`,
-      );
+    if (partySize > 0) {
+      if (splitStay) {
+        // Each night on its own: the rooms in use that night must hold the party between them.
+        for (const n of nightsShort) {
+          const g = guestsOver(roomsOn(n));
+          out.push(
+            g < partySize
+              ? `${shortNight(n)} — ${partySize - g} of the booking's ${partySize} guests are not in a room`
+              : `${shortNight(n)} — ${g} guests are placed but the booking has ${partySize}`,
+          );
+        }
+      } else if (totalGuests !== partySize) {
+        out.push(
+          totalGuests < partySize
+            ? `${partySize - totalGuests} of the booking's ${partySize} guests are not in a room yet`
+            : `${totalGuests} guests are placed but the booking has ${partySize}`,
+        );
+      }
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sealedRoomIds, rows, roomMin, partySize, totalGuests, roomById, rateRef]);
+  }, [sealedRoomIds, rows, roomMin, partySize, totalGuests, roomById, rateRef, splitStay, nightsShort.join(",")]);
 
   useEffect(() => {
     onFaultsChange?.(faults);
@@ -1303,8 +1370,13 @@ export function RoomCompositionsTable({
         )}
         {partySize > 0 && (
           <span
-            className={`rce-tally${totalGuests !== partySize ? " off" : ""}`}
-            title={`${totalGuests} of ${partySize} intake guests placed in rooms`}
+            className={`rce-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`}
+            title={
+              splitStay
+                ? `${totalGuests} of ${partySize} guests placed on ${shortNight(busiestNight ?? "")}` +
+                  (nightsShort.length ? ` · short on ${nightsShort.map(shortNight).join(", ")}` : " · every night covered")
+                : `${totalGuests} of ${partySize} intake guests placed in rooms`
+            }
           >
             {totalGuests}/{partySize} placed
           </span>

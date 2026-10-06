@@ -1197,15 +1197,12 @@ export function QuotationSendDialog({
           <input type="checkbox" checked={hidePrices} onChange={(e) => setHidePrices(e.target.checked)} />
           Send it without prices
         </label>
+        {/* One sentence, ticked or not — a hint that changed length made the dialog jump as the
+            box was clicked (2026-10-06, operator: "I don't get why checking that increases the
+            box"). */}
         <span className="hint">
-          {hidePrices ? (
-            <>
-              the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no
-              total · Preview it from Papers, where the copy can be read either way
-            </>
-          ) : (
-            "the quotation keeps its prices; the record is the priced one either way"
-          )}
+          the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total.
+          The record keeps the priced quotation either way.
         </span>
       </div>
     </DsDialog>

@@ -35,7 +35,7 @@ import {
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
-import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
+import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
 import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
@@ -226,8 +226,13 @@ export function S2Negotiation({
    * rows print, so the desk states one room's nights one way everywhere.
    */
   const roomDates = useMemo(() => {
-    const out: Record<string, { label: string; nights: number }> = {};
-    for (const [roomId, r] of roomStayRangesByRoom(entry)) out[roomId] = { label: r.label, nights: r.nightCount };
+    // `dates` lets the table reconcile per NIGHT — on a booking that moves rooms mid-stay the
+    // rooms are not in use together, so their guests are the same people (2026-10-06).
+    const nights = roomNightsByRoom(entry);
+    const out: Record<string, { label: string; nights: number; dates?: string[] }> = {};
+    for (const [roomId, r] of roomStayRangesByRoom(entry)) {
+      out[roomId] = { label: r.label, nights: r.nightCount, dates: nights.get(roomId) ?? [] };
+    }
     return out;
   }, [entry]);
   const holds = (entry.speculativeHolds ?? []).filter((h) => !passId || h.segmentId === passId);

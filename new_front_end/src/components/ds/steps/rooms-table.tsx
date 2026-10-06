@@ -29,7 +29,7 @@ import { changeBookingRoom } from "@/lib/api/entries";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
-import { operativeRoomCompositions, roomStayRangesByRoom, roomsInUseFor } from "@/lib/desk/party-rooms";
+import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
@@ -91,13 +91,15 @@ export function RoomsTable({
   const seed = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
   const ranges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
   const roomDates = useMemo(() => {
-    const out: Record<string, { label: string; nights: number }> = {};
+    // `dates` lets the table reconcile per NIGHT on a booking that moves rooms mid-stay.
+    const nights = roomNightsByRoom(entry);
+    const out: Record<string, { label: string; nights: number; dates?: string[] }> = {};
     for (const id of ids) {
       const r = ranges.get(id);
-      if (r) out[id] = { label: r.label, nights: r.nightCount };
+      if (r) out[id] = { label: r.label, nights: r.nightCount, dates: nights.get(id) ?? [] };
     }
     return out;
-  }, [ids, ranges]);
+  }, [ids, ranges, entry]);
 
   const [picked, setPicked] = useState<string | null>(null);
   const chosen = picked && ids.includes(picked) ? picked : null;
