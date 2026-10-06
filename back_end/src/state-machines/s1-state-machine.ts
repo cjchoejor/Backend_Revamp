@@ -70,7 +70,7 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
   enforceStayDatesPresentForS1Exit({ checkInDate: entry.checkInDate, checkOutDate: entry.checkOutDate });
 
   const gp = entry.guestProfile;
-  enforceGuestProfilePrimaryContactForS1Exit({ email: gp?.email, phone: gp?.phone });
+  enforceGuestProfilePrimaryContactForS1Exit({ email: gp?.email, phone: gp?.phone, contactPersonPhone: entry.contactPersonPhone });
 
   await enforceNoOpenDuplicateFlagsForS1Exit(prisma, { duplicateFlags: (entry.inquiry as any)?.duplicateFlags });
 

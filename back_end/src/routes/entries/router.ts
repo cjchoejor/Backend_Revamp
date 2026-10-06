@@ -6,6 +6,7 @@ import {
   createEntryRequestSchema,
   listEntriesQuerySchema,
   parkEntryRequestSchema,
+  switchStayRequestSchema,
   patchApartmentContextRequestSchema,
   reassignEntryCustodianRequestSchema,
   recordKeyReturnRequestSchema,
@@ -20,6 +21,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
+import { switchStay } from "../../services/domain/trip-switch-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
@@ -877,6 +879,14 @@ entriesRouter.post("/:id/park", requireActorLevel("L1"), validateBody(parkEntryR
   try {
     const out = await s1EntryService.parkEntry(prisma, req.params.id, req.actor!.actorId, req.body.reason);
     res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/switch-stay", requireActorLevel("L1"), validateBody(switchStayRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await switchStay(prisma, req.params.id, req.body.toEntryId, req.actor!.actorId));
   } catch (e) {
     next(e);
   }

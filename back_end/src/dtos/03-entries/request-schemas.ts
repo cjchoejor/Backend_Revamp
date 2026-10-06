@@ -138,6 +138,11 @@ export const parkEntryRequestSchema = z.object({
 });
 export type ParkEntryRequestDto = z.infer<typeof parkEntryRequestSchema>;
 
+/** Move to another stay of the same trip — parks the one left, resumes one a switch parked. */
+export const switchStayRequestSchema = z.object({
+  toEntryId: z.string().trim().min(1),
+});
+
 export const reassignEntryCustodianRequestSchema = z.object({
   newCustodianId: z.string().min(1),
   reason: z.string().min(1),

@@ -488,7 +488,14 @@ export async function cascadeUnparkEntryTx(
   });
 }
 
-export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: string, reason?: string) {
+export async function parkEntry(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  reason?: string,
+  /** Extra facts for the trace — a trip switch says so here, which is what lets it be undone. */
+  traceExtra?: Record<string, string | number | boolean | null>,
+) {
   // SIG-S1 §3.3 / SIG-S2 §3.3 + the Park API DTO mandate a reason (max 500 chars). Previously the
   // reason was accepted then silently discarded; it is now required and recorded on the trace.
   const trimmedReason = reason?.trim();
@@ -527,7 +534,7 @@ export async function parkEntry(prisma: PrismaClient, entryId: string, actorId: 
       stageContext: updated.currentStage as any,
       inquiryId: updated.inquiryId,
       entryId,
-      payload: { reason: trimmedReason, level: "ENTRY", stageExpiryTimersCancelled: stageTimersCancelled, parkExpiryDays },
+      payload: { reason: trimmedReason, level: "ENTRY", stageExpiryTimersCancelled: stageTimersCancelled, parkExpiryDays, ...(traceExtra ?? {}) },
       createdBy: actorId,
     });
     return updated;
@@ -724,7 +731,7 @@ export async function updateEntryIntakeFields(
   });
 }
 
-export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId: string) {
+export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId: string, traceExtra?: Record<string, string | number | boolean | null>) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryNotExpiredForS1Lifecycle({ status: entry.status });
@@ -744,7 +751,7 @@ export async function unparkEntry(prisma: PrismaClient, entryId: string, actorId
       stageContext: updated.currentStage as any,
       inquiryId: updated.inquiryId,
       entryId,
-      payload: {},
+      payload: { ...(traceExtra ?? {}) },
       createdBy: actorId,
     });
 
