@@ -252,12 +252,27 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
   const discountPercent = Number(
     terms?.discountAppliedPercent ?? terms?.requestedDiscount?.discountPercent ?? NaN,
   );
-  const discountApplied =
+  const rateMoved =
     Number.isFinite(preDiscountRate) &&
     Number.isFinite(postDiscountRate) &&
     Number.isFinite(discountPercent) &&
     discountPercent > 0 &&
     preDiscountRate > postDiscountRate;
+  /**
+   * The composition path stopped folding the discount into the rate on 2026-08-04 — it comes off
+   * the GRAND TOTAL now, and the per-room component rates stay undiscounted. So `rateMoved` has
+   * been false for every modern quote and the deduction row never printed: the rows showed the
+   * full prices, Net value showed the discounted figure, and nothing on the page explained the
+   * gap (2026-10-06, operator: "when quotation is generated, I think the discount is not shown").
+   *
+   * Nothing about the ROWS has to change — they already print originals. What was missing is the
+   * line that says so, and it is measured the same way as the flat path's: printed rows minus
+   * what the guest is actually charged, which is exactly the concession.
+   */
+  const compDiscount = (terms as { compositionDiscount?: { requestedPercent?: number | null; requestedAmount?: number | null; effectivePercent?: number; netReduction?: number; basis?: string } })?.compositionDiscount ?? null;
+  const compDiscountNet = Number(compDiscount?.netReduction ?? NaN);
+  const compDiscountApplies = !!compDiscount && Number.isFinite(compDiscountNet) && compDiscountNet > 0;
+  const discountApplied = rateMoved || compDiscountApplies;
   // NB: `compositionTotalsPreDiscount` (stored at quote time) holds tax-INCLUSIVE per-room
   // originals. The split rows are net, so the original room rate is taken straight from
   // `resolvedNightlyRate` instead — exact at the net level and needs no stored snapshot. The
@@ -286,6 +301,9 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
     );
     rowsAreNet = true;
+    // The component rates stored on a composition quote are pre-discount, so these rows ARE the
+    // originals — the deduction row below says by how much they were cut.
+    if (compDiscountApplies) originalsPrinted = true;
     const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
     for (const r of compositionPerRoom) {
       const raw = inputsByRoomId.get(r.roomId) as any;
@@ -310,7 +328,7 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       // ignores the default rate for it, so it costs the same discounted or not.
       const negotiatedRoomRate = raw?.negotiatedRoomRate;
       const printedRoomRate =
-        discountApplied && negotiatedRoomRate == null ? preDiscountRate : Number(r.roomRate ?? 0);
+        rateMoved && negotiatedRoomRate == null ? preDiscountRate : Number(r.roomRate ?? 0);
       if (printedRoomRate > Number(r.roomRate ?? 0)) originalsPrinted = true;
       const roomAmount = printedRoomRate * roomNights;
       const push = (line: PrintLine) => {
@@ -501,7 +519,17 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
   // discounted quotes with no original to print fall back to the rate-movement disclosure.
   const discountBaseline = rowsAreNet ? netValue : totalAmount;
   const discountAmount = originalsPrinted ? printedRowsTotal - discountBaseline : 0;
-  const discountLabel = discountApplied ? `Discount ${discountPercent}%` : null;
+  // What the guest was told the concession IS: the percent when one was asked for, the money
+  // when a flat amount was. The figure beside it is always the money, so a percent reads as a
+  // percent of a total the page prints.
+  const pctWord = (n: number) => `${Number(n.toFixed(2))}`;
+  const discountLabel = !discountApplied
+    ? null
+    : compDiscountApplies
+      ? compDiscount?.requestedPercent != null
+        ? `Discount ${pctWord(Number(compDiscount.requestedPercent))}%`
+        : "Discount"
+      : `Discount ${discountPercent}%`;
   const discountValue = !discountApplied
     ? null
     : originalsPrinted

@@ -284,6 +284,18 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   // Per-night figure consistent with the printed total (composition totals are stay-wide).
   const rateValue = Number((totalAmount / Math.max(1, p.nights)).toFixed(2));
 
+  // The booking's discount, read off the terms this document is priced on. `amountOffTotal` is
+  // the tax-INCLUSIVE concession, which is the figure to show beside a tax-inclusive total.
+  const piDisc = (p.terms as { compositionDiscount?: { requestedPercent?: number | null; amountOffTotal?: number } } | null)?.compositionDiscount ?? null;
+  const piDiscAmount = Number(piDisc?.amountOffTotal ?? NaN);
+  const piDiscApplies = !!piDisc && Number.isFinite(piDiscAmount) && piDiscAmount > 0;
+  const piDiscountLabel = piDiscApplies
+    ? piDisc?.requestedPercent != null
+      ? `Discount ${Number(Number(piDisc.requestedPercent).toFixed(2))}% (already applied)`
+      : "Discount (already applied)"
+    : null;
+  const piDiscountValue = piDiscApplies ? formatMoney(piDiscAmount) : null;
+
   // === Advance figures ===
   const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
   const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
@@ -367,6 +379,11 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
     stay: formatStayRange(p.checkIn, p.checkOut, p.nights),
     rateLabel,
     rateValue: formatMoney(rateValue),
+    // The concession, named on the bill as it is on the quotation. The per-room totals printed
+    // above are already net of it, so this says what it WAS rather than deducting it again —
+    // the guest who sees "Discount 10% · 1,131.90" on the quote sees the same here.
+    discountLabel: piDiscountLabel,
+    discountValue: piDiscountValue,
     totalInclusive: formatMoney(totalAmount),
     // Composition quotes decompose from their own priced totals; legacy quotes from the
     // stay-charge engine — never 0.00 placeholders.
