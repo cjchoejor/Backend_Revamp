@@ -106,7 +106,10 @@
 
 /* ------------------------------------------------------------------ the chosen room's acts
    Above the rooms table, so the acts plainly belong to the row that is lit (2026-10-06). */
-.ds .roomacts { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s2) var(--s3); margin-bottom: var(--s2); border: 1px solid var(--line-2); border-radius: var(--r2, 8px); background: var(--surface-2, #fbf8f3); min-height: 40px; }
+.ds .roomacts { padding: var(--s2) var(--s3); margin-bottom: var(--s2); border: 1px solid var(--line-2); border-radius: var(--r2, 8px); background: var(--surface-2, #fbf8f3); min-height: 40px; }
+/* the acts read across one line; a tool that opens a panel takes the full width below them */
+.ds .roomacts .line { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; min-height: 28px; }
+.ds .roomacts > .desk-root { margin-top: var(--s2); }
 .ds .roomacts .who { font-size: 13px; }
 .ds .roomacts .who b { font-weight: 700; }
 .ds .roomacts .meta { font-size: 12.5px; }

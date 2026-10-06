@@ -136,6 +136,19 @@ export function RoomsTable({
   };
   const unsaved = editing && draft != null && canon(draft) !== canon(seed);
 
+  /**
+   * The planner seeds itself ONCE, at mount (a lazy ref, so the grid is never yanked out from
+   * under the operator mid-edit). So leaving edit mode has to REMOUNT it, or "Leave it as it was"
+   * only stops the desk reading the edits while the grid, its live total and the Σ row all still
+   * show them — and pressing Change configuration again then read "Saved" over a table that did
+   * not match the quotation (2026-10-06, operator: "it looks like it saved the previous one, from
+   * behind it didn't but UI looks like that").
+   *
+   * While editing the key is fixed, so a background refresh of the booking cannot discard typing;
+   * otherwise it follows the seed, so a change made elsewhere shows here without a reload.
+   */
+  const plannerKey = editing ? "edit" : `seed:${canon(seed)}`;
+
   const changed = () =>
     refresh([
       ["rooms"],
@@ -181,42 +194,53 @@ export function RoomsTable({
       {/* The chosen room's own acts, above the table they belong to. */}
       {!past ? (
         <div className="roomacts">
-          {chosen ? (
-            <>
-              <span className="who">
-                Room <b>{numberOf(chosen)}</b>
-                {roomDates[chosen] ? <span className="meta"> · {roomDates[chosen].label}</span> : null}
-              </span>
-              <RoomChangeControl entry={entry} fromRoomId={chosen} fromRoomNumber={numberOf(chosen)} onChanged={changed} compact />
-              {roomActions?.(chosen, numberOf(chosen))}
-              <Button kind="quiet" compact onClick={() => setPicked(null)}>
-                Done with this room
-              </Button>
-            </>
-          ) : (
-            <span className="meta">Click a room in the table to see what can be done with it.</span>
-          )}
-          <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s2)", alignItems: "center" }}>
-            {editing ? (
+          <div className="line">
+            {chosen ? (
               <>
-                <span className="meta">Editing — meals, beds and guests. Save prices it again.</span>
-                <Button
-                  kind="quiet"
-                  compact
-                  onClick={() => {
-                    setEditing(false);
-                    setDraft(null);
-                  }}
-                >
-                  Leave it as it was
+                <span className="who">
+                  Room <b>{numberOf(chosen)}</b>
+                  {roomDates[chosen] ? <span className="meta"> · {roomDates[chosen].label}</span> : null}
+                </span>
+                {roomActions?.(chosen, numberOf(chosen))}
+                <Button kind="quiet" compact onClick={() => setPicked(null)}>
+                  Done with this room
                 </Button>
               </>
             ) : (
-              <Button kind="quiet" compact onClick={() => setEditing(true)}>
-                Change configuration…
-              </Button>
+              <span className="meta">Click a room in the table to see what can be done with it.</span>
             )}
-          </span>
+            <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s2)", alignItems: "center" }}>
+              {editing ? (
+                <>
+                  <span className="meta">Editing — meals, beds and guests. Save prices it again.</span>
+                  <Button
+                    kind="quiet"
+                    compact
+                    onClick={() => {
+                      setEditing(false);
+                      setDraft(null);
+                    }}
+                  >
+                    Leave it as it was
+                  </Button>
+                </>
+              ) : (
+                <Button kind="quiet" compact onClick={() => setEditing(true)}>
+                  Change configuration…
+                </Button>
+              )}
+            </span>
+          </div>
+
+          {/* Its own row, and its own `.desk-root`: the change panel opens a rooms-by-night table
+              and the whole S2 planner inside itself, so as a flex ITEM in the line above it was
+              squeezed to a column, and outside `.desk-root` none of its CSS applied at all
+              (2026-10-06, operator: "after selecting a room from change rooms, the UI breaks"). */}
+          {chosen ? (
+            <Tool>
+              <RoomChangeControl entry={entry} fromRoomId={chosen} fromRoomNumber={numberOf(chosen)} onChanged={changed} compact />
+            </Tool>
+          ) : null}
         </div>
       ) : null}
 
@@ -225,6 +249,7 @@ export function RoomsTable({
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
       <Tool inert={past}>
       <RoomCompositionPlanner
+        key={plannerKey}
         tableOnly
         sealedRoomIds={ids}
         entryCheckIn={entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null}
