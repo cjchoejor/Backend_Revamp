@@ -217,6 +217,8 @@ export async function sendQuotation(
     sentTo?: string;
     channel?: string;
     recipientAddress?: string;
+    /** Attach the copy with no money on it — the offer and the stored record are unchanged. */
+    hidePrices?: boolean;
   },
 ) {
   return apiRequest<QuotationSummary>(`/api/quotations/${quotationId}/send`, {

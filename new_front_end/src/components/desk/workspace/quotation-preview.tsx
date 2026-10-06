@@ -156,16 +156,25 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
  * S2 — the quotation document. Live rows compose from current terms; pass `frozenPdf` on a
  * superseded row that has a stored PDF to show the artifact that actually went out.
  */
-export function QuotationPreview({ quotationId, frozenPdf }: { quotationId: string; frozenPdf?: boolean }) {
+export function QuotationPreview({
+  quotationId,
+  frozenPdf,
+  hidePrices,
+}: {
+  quotationId: string;
+  frozenPdf?: boolean;
+  /** The copy a guest who asked for a quotation without prices receives (2026-10-06). */
+  hidePrices?: boolean;
+}) {
   const { session } = useSession();
   if (frozenPdf) {
     return <FrozenPdfFrame path={`/api/quotations/${quotationId}/pdf`} title="Quotation (as sent)" />;
   }
   return (
     <DocumentPreviewFrame
-      queryKey={["quotation-preview", quotationId] as const}
-      fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId)}
-      title="Quotation document"
+      queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced"] as const}
+      fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices })}
+      title={hidePrices ? "Quotation · without prices" : "Quotation document"}
     />
   );
 }

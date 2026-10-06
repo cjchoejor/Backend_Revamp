@@ -818,6 +818,12 @@ export type PaperRef =
 /** The paper opens in a side drawer — the document shell the backend rendered. */
 export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClose: () => void }) {
   const { session } = useSession();
+  // A quotation has two faces since 2026-10-06 — with prices, and the copy a guest who asked for
+  // one without them receives. Same document, same number; this is how the desk reads the second
+  // before sending it.
+  const [noPrices, setNoPrices] = useState(false);
+  const quotationId = paper?.kind === "quotation" ? paper.id : null;
+  useEffect(() => setNoPrices(false), [quotationId]);
   useEffect(() => {
     if (!paper) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -828,7 +834,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
   const pdf = () => {
     const run =
       paper.kind === "quotation"
-        ? openQuotationPdf(session, paper.id)
+        ? openQuotationPdf(session, paper.id, { hidePrices: noPrices })
         : paper.kind === "invoice"
           ? openInvoicePdf(session, paper.id)
           : paper.kind === "voucher"
@@ -852,6 +858,16 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
               {paper.label}
             </h4>
             <div className="row-acts">
+              {paper.kind === "quotation" ? (
+                <Button
+                  kind="quiet"
+                  compact
+                  onClick={() => setNoPrices((v) => !v)}
+                  title={noPrices ? "Back to the priced quotation" : "The same quotation with the money taken off"}
+                >
+                  {noPrices ? "With prices" : "Without prices"}
+                </Button>
+              ) : null}
               <Button kind="quiet" compact icon="file" onClick={pdf}>
                 PDF
               </Button>
@@ -865,7 +881,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
           </div>
           <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
             {paper.kind === "quotation" ? (
-              <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} />
+              <QuotationPreview quotationId={paper.id} frozenPdf={noPrices ? false : paper.frozen} hidePrices={noPrices} />
             ) : paper.kind === "invoice" ? (
               paper.issued ? (
                 <IssuedInvoicePreview invoiceId={paper.id} />
@@ -1068,6 +1084,10 @@ export function QuotationSendDialog({
   const [channel, setChannel] = useState<Channel>("EMAIL");
   const [to, setTo] = useState("");
   const [touched, setTouched] = useState(false);
+  // "Sometimes guest needs to be sent quotation without the price" (2026-10-06). The offer does
+  // not change — same quotation, same number, same validity, and the stored PDF is still the
+  // priced one; only the copy the guest receives has the money taken off.
+  const [hidePrices, setHidePrices] = useState(false);
   useEffect(() => {
     if (!target || touched) return;
     setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
@@ -1080,13 +1100,15 @@ export function QuotationSendDialog({
         channel,
         recipientAddress: typed,
         sentTo: typed,
+        hidePrices,
       }),
     onSuccess: () => {
+      const face = hidePrices ? " · without prices" : "";
       toast.success(
         channel === "WHATSAPP"
-          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}`
+          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}${face}`
           : typed
-            ? `${target?.referenceNumber} sent by email to ${typed}`
+            ? `${target?.referenceNumber} sent by email to ${typed}${face}`
             : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
       );
       onSent();
@@ -1169,6 +1191,22 @@ export function QuotationSendDialog({
           autoFocus
         />
         <span className="hint">{hint}</span>
+      </div>
+      <div className="field">
+        <label className="sm" style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={hidePrices} onChange={(e) => setHidePrices(e.target.checked)} />
+          Send it without prices
+        </label>
+        <span className="hint">
+          {hidePrices ? (
+            <>
+              the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no
+              total · Preview it from Papers, where the copy can be read either way
+            </>
+          ) : (
+            "the quotation keeps its prices; the record is the priced one either way"
+          )}
+        </span>
       </div>
     </DsDialog>
   );
