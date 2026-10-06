@@ -630,12 +630,21 @@ async function prepareQuotationDraft(
         ratesByType.set(tid, {
           room: toDecimal(typePricing.effectiveRate ?? typePricing.resolvedNightlyRate ?? 0),
           roomPreDiscount: toDecimal(typePricing.resolvedNightlyRate ?? 0),
-          // No card for this type — add-ons stay 0, exactly as they were for the whole booking
-          // before. Per-room negotiated rates still override.
-          extraBed: toDecimal(0),
-          breakfast: toDecimal(0),
-          lunch: toDecimal(0),
-          dinner: toDecimal(0),
+          // Only the ROOM rate is per type. An extra bed and a meal are priced by the party's
+          // package or, with no party, by the house tariff — booking-wide either way — so this
+          // branch carries the booking's own add-on rates rather than zeroing them.
+          //
+          // They WERE zeroed here (2026-08-04, when each type started resolving its own room
+          // rate), which meant that on a booking whose rooms are not all of the preferred type,
+          // every other room's extra bed was free and its à-la-carte meals priced at nothing.
+          // Plan-priced meals escaped it — the plan rate is booking-wide — but the per-meal
+          // rates are what the quotation prints its meal rows from, so five of six rooms also
+          // printed no meal row (2026-10-06, operator: "why does the first row show differently
+          // in the qty column").
+          extraBed: bookingTypeRates.extraBed,
+          breakfast: bookingTypeRates.breakfast,
+          lunch: bookingTypeRates.lunch,
+          dinner: bookingTypeRates.dinner,
         });
       } catch (e) {
         if (e instanceof PolicyGateBlockedError) throw e;
