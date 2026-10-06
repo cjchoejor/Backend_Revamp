@@ -72,6 +72,10 @@ async function clean() {
   await prisma.invoiceLine.deleteMany({ where: { invoice: { entryId: { in: ids } } } });
   await prisma.invoice.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.folioLine.deleteMany({ where: { folioId: { in: folioIds } } });
+  // The Set-up records the fixture now seeds, and the ones a walk adds (2026-10-06): both hold the
+  // folio and the segment by FK, so the deletes below fail without them.
+  await prisma.billingModelTransitionRecord.deleteMany({ where: { folioId: { in: folioIds } } });
+  await prisma.cancellationDisclosureRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.folio.deleteMany({ where: { id: { in: folioIds } } });
   await prisma.committedHold.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.roomAssignment.deleteMany({ where: { entryId: { in: ids } } });
@@ -79,7 +83,16 @@ async function clean() {
   await prisma.traceEvent.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.entry.updateMany({ where: { id: { in: ids } }, data: { currentReservationId: null } });
   await prisma.reservation.deleteMany({ where: { entryId: { in: ids } } });
+  // A room change or an extension leaves a quotation and a sealed configuration on each new
+  // segment; both hold the segment by FK, so clearing them has to come first (2026-10-06).
+  await prisma.quotationLine.deleteMany({ where: { quotation: { entryId: { in: ids } } } });
+  await prisma.quotation.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.availabilityConfiguration.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.speculativeHold.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.segment.deleteMany({ where: { entryId: { in: ids } } });
+  // A walk back through Set up and Reserve seeds the pre-arrival task set (2026-10-06).
+  await prisma.preArrivalTask.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
   await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });
@@ -183,6 +196,52 @@ async function main() {
   await prisma.entry.update({ where: { id: entry.id }, data: { currentReservationId: `${P}RES` } });
   await prisma.folio.create({
     data: { id: `${P}FOL`, entryId: entry.id, state: "LIVE", billingModel: "GUEST_PAY", createdBy: staff.id, convertedToLiveAt: checkIn, convertedBy: staff.id, outstandingBalance: new Prisma.Decimal(0) },
+  });
+  // The FIXATION record, not just the folio column (2026-10-06). The S4 re-freeze reads the latest
+  // BillingModelTransitionRecord — `folio.billingModel` is not what Policy 33 consults — so without
+  // this a room change or an extension on the fixture walked as far as RECONFIRMATION and stopped
+  // with MISSING_BILLING_MODEL, leaving the booking at Set up with the new room's figures unfrozen.
+  // Every real in-house booking has one, from `ensureProvisionalFolioAndBillingModel` at Set up.
+  await prisma.billingModelTransitionRecord.create({
+    data: { folioId: `${P}FOL`, segmentId: `${P}SEG`, toModel: "GUEST_PAY", createdBy: staff.id, changeSource: "INITIAL_FIXATION" },
+  });
+  // The other two Set-up records the S4 re-freeze insists on, for the same reason: a room change
+  // or an extension on this fixture re-confirms the reservation, and Policy 33/34 refuse without
+  // them. A real in-house booking carries both from its own pass through Set up.
+  await prisma.cancellationDisclosureRecord.create({
+    data: {
+      entryId: entry.id,
+      segmentId: `${P}SEG`,
+      noShowTreatmentStatement: "Seeded fixture — a no-show is charged the first night.",
+      disclosedBy: staff.id,
+    },
+  });
+  await prisma.invoice.create({
+    data: { id: `${P}INV`, folioId: `${P}FOL`, entryId: entry.id, invoiceType: "PROFORMA", state: "DRAFT", totalAmount: total } as Prisma.InvoiceUncheckedCreateInput,
+  });
+  // The PRICED BASIS (2026-10-06). Without a quotation carrying `roomCompositions`, a room change
+  // or an extension re-quotes from nothing: the silent quote comes out FLAT, so the new room's
+  // assignment row has nothing to freeze from and is left null — the night audit would then post
+  // the ROOM rate for it, and settlement's p22 check would read a frozen basis that no longer
+  // matches what was billed. Every real booking reaches Stay with one of these from Negotiation.
+  await prisma.quotation.create({
+    data: {
+      id: `${P}QUO`,
+      entryId: entry.id,
+      segmentId: seg.id,
+      referenceNumber: `${P}QUO`,
+      createdBy: staff.id,
+      state: "ACCEPTED",
+      acceptedAt: checkIn,
+      totalAmount: total.mul(rooms.length),
+      commercialTerms: {
+        roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0, negotiatedRoomRate: RATE })),
+        compositionTotals: {
+          total: Number(total.mul(rooms.length)),
+          perRoom: rooms.map((r) => ({ roomId: r.id, roomRate: RATE, nights, subtotal: Number(subtotal), total: Number(total) })),
+        },
+      },
+    } as Prisma.QuotationUncheckedCreateInput,
   });
   for (const [i, r] of rooms.entries()) {
     await prisma.roomAssignment.create({

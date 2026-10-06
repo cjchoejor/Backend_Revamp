@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { ContactMode } from "@prisma/client";
-import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -55,7 +55,12 @@ export async function getTravelAgent(prisma: PrismaClient, id: string) {
   return row;
 }
 
-export async function createTravelAgent(prisma: PrismaClient, input: TravelAgentInput, actorId: string) {
+export async function createTravelAgent(
+  prisma: PrismaClient,
+  input: TravelAgentInput,
+  actorId: string,
+  opts: { source?: "ADMIN" | "DESK" } = {},
+) {
   if (!input.displayName?.trim()) throw new ValidationError("displayName is required");
   const mode = input.modeOfContact != null ? validateContactMode(input.modeOfContact) : ContactMode.PHONE;
 
@@ -80,10 +85,57 @@ export async function createTravelAgent(prisma: PrismaClient, input: TravelAgent
       entityType: "TravelAgent",
       entityId: created.id,
       operation: "CREATE",
-      payload: { displayName: created.displayName },
+      payload: { displayName: created.displayName, source: opts.source ?? "ADMIN" },
     });
     return created;
   });
+}
+
+/**
+ * A new agency rang in — file it from the desk (2026-09-29, operator: "a new travel agent which was
+ * not listed in the admin console — how do I start the inquiry?"). Creating an agency was L4-only,
+ * so the desk could only start the lead unlinked, and a booking can never be attached to an agency
+ * later. This is the narrow L1 door: the name and the contact the caller gives, filed as an ACTIVE
+ * agency with NO rate package of its own — the rates are the admin's to set, and until then the
+ * booking prices on the hotel's common package (the house fallback for a party) and the desk
+ * negotiates at Negotiation. It is the same shape as the contact-person quick-add: what an intake
+ * call can capture, nothing commercial.
+ *
+ * A name already on file (active, case-insensitive) is refused naming it — the desk should pick
+ * it, not make a second "Bhutan Travels". Audited like an admin create, with `source: "DESK"`.
+ */
+export async function createTravelAgentFromDesk(
+  prisma: PrismaClient,
+  input: { displayName: string; phone?: string | null; email?: string | null },
+  actorId: string,
+) {
+  const displayName = input.displayName?.trim() ?? "";
+  if (!displayName) throw new ValidationError("The agency's name is required");
+  const existing = await prisma.travelAgent.findFirst({
+    where: { isActive: true, displayName: { equals: displayName, mode: "insensitive" } },
+    select: { id: true, displayName: true },
+  });
+  if (existing) {
+    throw new AppError(409, {
+      error: "TravelAgentExists",
+      message: `${existing.displayName} is already on file — pick it from the list instead of filing it again`,
+      details: { code: "TRAVEL_AGENT_EXISTS", travelAgentId: existing.id },
+    });
+  }
+  const phone = input.phone?.trim() || null;
+  const email = input.email?.trim() || null;
+  return createTravelAgent(
+    prisma,
+    {
+      displayName,
+      contactNumbers: phone ? [phone] : [],
+      contactEmail: email,
+      modeOfContact: email && !phone ? ContactMode.EMAIL : ContactMode.PHONE,
+      notes: "Filed from the desk at intake — no rate package of its own yet",
+    },
+    actorId,
+    { source: "DESK" },
+  );
 }
 
 export async function updateTravelAgent(

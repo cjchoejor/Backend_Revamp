@@ -9,10 +9,6 @@ export const createGuestProfileRequestSchema = z
     nationality: z.string().trim().optional(),
     clientTier: z.string().trim().optional(),
   })
-  .refine((data) => !!(data.email || data.phone), {
-    message: "At least one of email or phone is required",
-    path: ["email"],
-  })
   .refine((data) => !data.email || z.string().email().safeParse(data.email).success, {
     message: "Invalid email address",
     path: ["email"],

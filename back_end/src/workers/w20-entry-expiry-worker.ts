@@ -3,11 +3,12 @@ import * as s1EntryService from "../services/domain/s1-entry-service.js";
 
 export async function runEntryExpiryWorker(
   prisma: PrismaClient,
-  input: { entryId: string; parkFollowUp?: boolean },
+  input: { entryId: string; parkFollowUp?: boolean; negotiation?: boolean },
 ) {
   try {
     return await s1EntryService.expireEntry(prisma, input.entryId, {
       fromParkFollowUp: input.parkFollowUp === true,
+      fromNegotiation: input.negotiation === true,
     });
   } catch (e: any) {
     // Only skip when the ENTRY itself is missing — verify the entry doesn't exist before

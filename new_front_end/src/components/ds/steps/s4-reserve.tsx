@@ -227,7 +227,7 @@ const KNOWN = [
   "Guest's answer to the proforma recorded",
   "Advance settled or credit extended",
   "Room held",
-  "Guest contact on file",
+  "A contact on file",
 ];
 
 function BeforeYouReserve({
@@ -404,12 +404,14 @@ function BeforeYouReserve({
   });
 
   /* the guest's contact */
+  const guestReach = [guest?.email, guest?.phone].filter(Boolean).join(" · ");
+  const bookingReach = [entry.contactPersonName, entry.contactPersonPhone].filter(Boolean).join(" · ");
   lines.push({
     key: "contact",
-    label: "Guest contact",
-    value: guest?.email || guest?.phone ? [guest?.email, guest?.phone].filter(Boolean).join(" · ") : "no email or phone on the guest's record",
-    who: guest?.email || guest?.phone ? "on the guest's record" : undefined,
-    state: metOr("Guest contact on file") ? "on" : "missing",
+    label: "Contact",
+    value: guestReach || (entry.contactPersonPhone ? bookingReach : "") || "no email or phone on the booking",
+    who: guestReach ? "on the guest's record" : entry.contactPersonPhone ? "the booking's contact" : undefined,
+    state: metOr("A contact on file") ? "on" : "missing",
     fix: 1,
   });
 

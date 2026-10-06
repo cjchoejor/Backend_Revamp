@@ -75,6 +75,60 @@ export async function checkBedRequest(session: Session, request: Record<string, 
   });
 }
 
+/** One room's line of the booking's bed plan. */
+export interface BedPlanRoom {
+  roomId: string;
+  roomNumber: string;
+  roomTypeName: string | null;
+  bedType: string | null;
+  source: "PLAN" | "ASK" | "USUAL";
+  usual: string | null;
+  allowed: string[];
+  roomNow: string | null;
+  appliesNow: boolean;
+}
+
+/** One asked setup against the plan — counted night by night on a stay that moves rooms. */
+export interface BedAskLine {
+  bedType: string;
+  asked: number;
+  /** Rooms the plan makes up this way — on the worst night when the rooms differ by night. */
+  planned: number;
+  met: boolean;
+  /** Nights the plan falls short on (`YYYY-MM-DD`). */
+  shortNights: string[];
+}
+
+export interface EntryBedPlan {
+  rooms: BedPlanRoom[];
+  ask: Record<string, number> | null;
+  askSatisfiable: boolean;
+  message: string | null;
+  tally: BedAskLine[];
+  askMet: boolean;
+  nightsVary: boolean;
+  applied?: boolean;
+  appliedNote?: string | null;
+}
+
+/** What each of the booking's rooms is to be made up as for this stay. */
+export async function getEntryBedPlan(session: Session, entryId: string) {
+  return apiRequest<EntryBedPlan>(`/api/entries/${entryId}/bed-plan`, { session });
+}
+
+/**
+ * Say what one room is to be made up as. `bedType: null` hands it back to the guest's ask, or to
+ * the room's usual setup. From Arrival the room is made up that way at once; before then it is
+ * recorded for the stay — the room may have someone else in it tonight.
+ */
+export async function setEntryBedPlan(session: Session, entryId: string, roomId: string, bedType: string | null) {
+  return apiRequest<EntryBedPlan>(`/api/entries/${entryId}/bed-plan`, {
+    method: "POST",
+    session,
+    body: { roomId, bedType },
+  });
+}
+
 /**
  * Change how a room is made up (L1 — a housekeeping fact; traced with the prior value). Pass the
  * booking the change is for: when that guest leaves, the room goes back to its usual setup.

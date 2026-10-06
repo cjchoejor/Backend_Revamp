@@ -147,6 +147,8 @@ export interface BedRequestCheck {
   perType: { bedType: string; asked: number; roomsThatCanTake: number; covered: number }[];
   /** Rooms that can take each setup, for every setup in the vocabulary (the "up to N" ceilings). */
   stock: Record<string, number>;
+  /** The matching itself: which room takes which asked setup. The desk seeds its table from it. */
+  assignment: Record<string, RoomBedType>;
   /** Why it cannot be met, in desk words — null when it can. */
   message: string | null;
 }
@@ -195,6 +197,16 @@ export function checkBedRequestAgainstRooms(
     covered: slots.filter((t, i) => t === bedType && roomOfSlot[i] !== -1).length,
   }));
   const satisfiable = roomOfSlot.every((r) => r !== -1);
+  // The matching is already the answer to "which room is the King" — handing it back lets the
+  // desk seed each room's bed from the guest's tally instead of re-deriving a second answer
+  // (2026-10-06). Rooms it did not need keep their usual setup.
+  const assignment: Record<string, RoomBedType> = {};
+  for (let r = 0; r < rooms.length; r++) {
+    const slot = slotOfRoom[r];
+    if (slot === -1) continue;
+    const t = normaliseBedType(slots[slot]);
+    if (t) assignment[rooms[r].id] = t;
+  }
 
   let message: string | null = null;
   if (!satisfiable) {
@@ -212,7 +224,7 @@ export function checkBedRequestAgainstRooms(
       ? `only ${worst.supply} room${worst.supply === 1 ? "" : "s"} can be made up as ${setWords}, but ${worst.asked} ${worst.asked === 1 ? "is" : "are"} asked for`
       : "the bed setup asked for cannot be met from these rooms";
   }
-  return { satisfiable, perType, stock, message };
+  return { satisfiable, perType, stock, assignment, message };
 }
 
 /* ------------------------------------------------------------------ desk write */

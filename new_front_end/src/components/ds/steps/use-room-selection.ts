@@ -117,9 +117,29 @@ export function useRoomSelection({
 
   const effectiveNight = (n: string): string[] => overrides[n] ?? base;
   const effectiveByNight = useMemo(() => Object.fromEntries(displayNights.map((n) => [n, overrides[n] ?? base])), [displayNights, overrides, base]);
+  // "Differ" is measured between the NIGHTS, not against the base (2026-09-29, operator: two rooms
+  // on every night read "3 nights differ"). "Select all" and every cell click write the picks as
+  // per-night lists and leave the base empty, so three identical nights each "differed" from an
+  // empty base — and "make them the same" fell back to that empty base, wiping the rooms. The
+  // reference is the plan most nights share (a tie goes to the earliest night); a night not on
+  // it is the one that differs.
+  const commonPlan = useMemo(() => {
+    if (displayNights.length === 0) return base;
+    const sets = displayNights.map((n) => overrides[n] ?? base);
+    let best = sets[0];
+    let bestCount = 0;
+    for (const set of sets) {
+      const count = sets.filter((other) => sameSet(other, set)).length;
+      if (count > bestCount) {
+        best = set;
+        bestCount = count;
+      }
+    }
+    return best;
+  }, [displayNights, overrides, base]);
   const differingNights = useMemo(
-    () => displayNights.filter((n) => overrides[n] != null && !sameSet(overrides[n], base)),
-    [displayNights, overrides, base],
+    () => displayNights.filter((n) => !sameSet(overrides[n] ?? base, commonPlan)),
+    [displayNights, overrides, base, commonPlan],
   );
   const nightsDiffer = differingNights.length > 0;
 
@@ -196,12 +216,15 @@ export function useRoomSelection({
       const perNight = displayNights.map((date) => ({ date, roomIds: [...effectiveNight(date)] }));
       return { perNight, allIds: [...new Set(perNight.flatMap((p) => p.roomIds))] };
     }
-    if (stayNights.length === 0) return { roomIds: base, allIds: base };
-    return { perNight: stayNights.map((date) => ({ date, roomIds: [...base] })), allIds: base };
+    // Every night agrees on one plan — which may live in the per-night lists with the base empty.
+    const ids = commonPlan;
+    if (stayNights.length === 0) return { roomIds: ids, allIds: ids };
+    return { perNight: stayNights.map((date) => ({ date, roomIds: [...ids] })), allIds: ids };
   };
 
   const nightsReady = displayNights.filter((n) => effectiveNight(n).length === numberOfRooms).length;
-  const ready = nightsDiffer ? displayNights.length > 0 && nightsReady === displayNights.length : base.length === numberOfRooms;
+  // Ready when every night has its rooms, wherever the picks are stored; with no nights to judge, the base decides.
+  const ready = displayNights.length > 0 ? nightsReady === displayNights.length : base.length === numberOfRooms;
 
   const savedCanon = useMemo(() => {
     const opt = savedOption;
@@ -215,9 +238,10 @@ export function useRoomSelection({
   }, [savedOption, stayNights]);
   const currentCanon = useMemo(() => {
     if (nightsDiffer) return canonNights(displayNights.map((date) => ({ date, roomIds: overrides[date] ?? base })));
-    if (base.length === 0) return null;
-    return stayNights.length > 0 ? canonNights(stayNights.map((date) => ({ date, roomIds: base }))) : `*=${[...base].sort().join(",")}`;
-  }, [nightsDiffer, overrides, displayNights, base, stayNights]);
+    const ids = commonPlan;
+    if (ids.length === 0) return null;
+    return stayNights.length > 0 ? canonNights(stayNights.map((date) => ({ date, roomIds: ids }))) : `*=${[...ids].sort().join(",")}`;
+  }, [nightsDiffer, overrides, displayNights, base, stayNights, commonPlan]);
   const submittedRef = useRef<string | null>(null);
 
   const allPicked = useMemo(() => [...new Set([...base, ...Object.values(overrides).flat()])], [base, overrides]);
@@ -230,6 +254,7 @@ export function useRoomSelection({
     effectiveByNight,
     differingNights,
     nightsDiffer,
+    commonPlan,
     toggleRow,
     toggleCell,
     reportSelectAll,
@@ -241,7 +266,11 @@ export function useRoomSelection({
     currentCanon,
     submittedRef,
     allPicked,
-    resetNights: () => setOverrides({}),
+    // "Make them the same": every night takes the plan most nights already share.
+    resetNights: () => {
+      setBase(commonPlan);
+      setOverrides({});
+    },
     sameSet,
   };
 }

@@ -6,20 +6,30 @@ import {
   createEntryRequestSchema,
   listEntriesQuerySchema,
   parkEntryRequestSchema,
+  switchStayRequestSchema,
   patchApartmentContextRequestSchema,
   reassignEntryCustodianRequestSchema,
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
   setExpectedArrivalRequestSchema,
+  decideNegotiationAmendmentRequestSchema,
+  negotiationAmendmentRequestSchema,
   updateEntryRequestSchema,
+  withdrawNegotiationAmendmentRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
+import { switchStay } from "../../services/domain/trip-switch-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
+import {
+  amendNegotiationConfiguration,
+  decideNegotiationAmendmentRequest,
+  withdrawNegotiationAmendmentRequest,
+} from "../../services/domain/negotiation-amendment-service.js";
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
@@ -54,8 +64,46 @@ import {
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
 import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
+import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 
 export const entriesRouter = Router();
+
+/**
+ * The bed setup each of the booking's rooms is to be made up as (2026-10-06).
+ *
+ * A read says, per room, what this stay wants, where that came from — the desk said so, it was
+ * shared out from the guest's ask at intake, or it is the room's usual setup — what the room is
+ * made up as right now, and whether a choice takes effect immediately (from Arrival, once the
+ * room is assigned) or is only recorded for later.
+ */
+entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await buildEntryBedPlan(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Say what one room is to be made up as. L1: a bed setup is desk work, priced nowhere — the
+ * EXTRA bed is the charged one and lives on the composition. `bedType: null` hands the room back
+ * to the guest's ask, or to its usual setup when there was none.
+ */
+entriesRouter.post("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const bedType = req.body?.bedType;
+    res.json(
+      await setEntryBedPlanRoom(
+        prisma,
+        req.params.id,
+        { roomId: String(req.body?.roomId ?? ""), bedType: bedType == null || bedType === "" ? null : String(bedType) },
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
+      ),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * In-place room change (2026-08-12, operator ruling) — candidates lookup. EVERY registered
@@ -588,6 +636,76 @@ entriesRouter.patch("/:id/group-billing-mode", requireActorLevel("L3"), validate
   }
 });
 
+/**
+ * Change the rooms and the party without leaving Negotiation (2026-09-30). L1 opens the door;
+ * the service raises the bar to the FOM once a quotation has gone to the guest or been accepted,
+ * reading the level from the verified session and never from the body.
+ */
+entriesRouter.post(
+  "/:id/negotiation-amendment",
+  requireActorLevel("L1"),
+  validateBody(negotiationAmendmentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const outcome = await amendNegotiationConfiguration(
+        prisma,
+        req.params.id,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+        req.body,
+      );
+      res.json(outcome);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Approve or turn down a waiting configuration change (2026-09-30). **L2** — approving IS
+ * applying, and the whole governed act runs again as the approver, so its own gates get the last
+ * word on whether the proposal still holds.
+ */
+entriesRouter.post(
+  "/:id/negotiation-amendment-requests/:requestId/decide",
+  requireActorLevel("L2"),
+  validateBody(decideNegotiationAmendmentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const result = await decideNegotiationAmendmentRequest(
+        prisma,
+        req.params.id,
+        req.params.requestId,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
+        req.body,
+      );
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Taken back by the desk before anyone decided — L1, since the desk raised it. */
+entriesRouter.post(
+  "/:id/negotiation-amendment-requests/:requestId/withdraw",
+  requireActorLevel("L1"),
+  validateBody(withdrawNegotiationAmendmentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const result = await withdrawNegotiationAmendmentRequest(
+        prisma,
+        req.params.id,
+        req.params.requestId,
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
+        req.body,
+      );
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 /** Booking flow's step-1 Edit — narrow update for intake fields only, S1-gated server-side. */
 entriesRouter.patch("/:id", requireActorLevel("L1"), validateBody(updateEntryRequestSchema), async (req, res, next) => {
   try {
@@ -761,6 +879,14 @@ entriesRouter.post("/:id/park", requireActorLevel("L1"), validateBody(parkEntryR
   try {
     const out = await s1EntryService.parkEntry(prisma, req.params.id, req.actor!.actorId, req.body.reason);
     res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/switch-stay", requireActorLevel("L1"), validateBody(switchStayRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await switchStay(prisma, req.params.id, req.body.toEntryId, req.actor!.actorId));
   } catch (e) {
     next(e);
   }

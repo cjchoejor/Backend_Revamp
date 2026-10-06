@@ -101,6 +101,15 @@ export async function searchTravelAgentsLookup(session: Session, q: string) {
   return apiRequest<PartyLookupResult>(`/api/lookups/travel-agents/search?${qs}`, { session });
 }
 
+/**
+ * File a NEW agency from the desk (L1, 2026-09-29): the name and the contact the caller gives,
+ * active, with no rate package of its own (it prices on the hotel's common package until the
+ * admin sets one). A name already on file is refused naming it.
+ */
+export async function createTravelAgentLookup(session: Session, body: { displayName: string; phone?: string | null; email?: string | null }) {
+  return apiRequest<LookupPartyMatch>("/api/lookups/travel-agents", { method: "POST", session, body });
+}
+
 export async function searchCorporateAccountsLookup(session: Session, q: string) {
   const qs = new URLSearchParams({ q });
   return apiRequest<PartyLookupResult>(`/api/lookups/corporate-accounts/search?${qs}`, { session });

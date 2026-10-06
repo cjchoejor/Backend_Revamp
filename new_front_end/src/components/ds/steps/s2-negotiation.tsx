@@ -15,12 +15,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BindingBox, Button, Chip, Icon, SourceMark } from "@/design-system";
+import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { openQuotationPdf } from "@/lib/api/documents";
-import { getBillingSummary, getRateReference } from "@/lib/api/entries";
+import { getBillingSummary } from "@/lib/api/entries";
 import {
   acceptQuotation,
   approveQuotationDiscount,
@@ -34,29 +34,11 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
-import { operativeRoomCompositions } from "@/lib/desk/party-rooms";
+import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
+import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import {
-  Choice,
-  DsDialog,
-  Live,
-  Notice,
-  OtherWays,
-  PaperDrawer,
-  PapersCard,
-  ReasonDialog,
-  RequestsCard,
-  SeeRow,
-  StepCanvas,
-  StepCard,
-  Tool,
-  atLeast,
-  toastRefusal,
-  useRefreshEntry,
-  words,
-  type PaperRef,
-} from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -124,7 +106,60 @@ function holdRoomIds(h: SpeculativeHoldSummary): string[] {
 
 /* ------------------------------------------------------------------ the step */
 
-export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; past: boolean; onPark?: () => void }) {
+/**
+ * Is the table still what the quotation was priced on? Compared field by field over what the
+ * grid actually controls, so a stored row carrying extra keys — or a rate stored as a string —
+ * does not read as a change. Nothing else is inferred: no quotation at all means unsaved by
+ * definition, since there is nothing for the table to match.
+ */
+function canonComps(list: readonly RoomCompositionInput[] | undefined): string {
+  const n = (v: unknown) => (v == null || v === "" ? "" : String(Number(v)));
+  return [...(list ?? [])]
+    .map((c) =>
+      [
+        c.roomId,
+        n(c.adultCount ?? 0),
+        n(c.cnb6To10Count ?? 0),
+        n(c.cnbUnder6Count ?? 0),
+        n(c.extraBedCount ?? 0),
+        n(c.mealPlanCpCount ?? 0),
+        n(c.mealPlanMaplCount ?? 0),
+        n(c.mealPlanMapdCount ?? 0),
+        n(c.mealPlanApCount ?? 0),
+        n(c.mealPlanOthersCount ?? 0),
+        n(c.othersBreakfastPax),
+        n(c.othersLunchPax),
+        n(c.othersDinnerPax),
+        n(c.negotiatedRoomRate),
+        n(c.negotiatedExtraBedRate),
+        n(c.negotiatedBreakfastRate),
+        n(c.negotiatedLunchRate),
+        n(c.negotiatedDinnerRate),
+        c.serviceChargeApplies === false ? "0" : "1",
+        c.gstApplies === false ? "0" : "1",
+        c.isFoc === true ? "1" : "0",
+        JSON.stringify(
+          [...(c.nightMealOverrides ?? [])].sort((a, b) => String(a.date).localeCompare(String(b.date))),
+        ),
+      ].join("~"),
+    )
+    .sort()
+    .join("//");
+}
+
+
+export function S2Negotiation({
+  entry,
+  past,
+  onPark,
+  onDecline,
+}: {
+  entry: EntryDetail;
+  past: boolean;
+  onPark?: () => void;
+  /** The guest said no (2026-10-01) — offered while the booking can still be turned down. */
+  onDecline?: () => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const clock = useHotelClock(30_000);
@@ -158,11 +193,48 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   // the quote again" would have re-priced the stay without the meals the guest was quoted.
   // After a re-entry it starts from the last terms in force. Read once, at the table's mount.
   const seedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? undefined, [entry.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * What the QUOTATION is priced on right now — re-read on every refresh, unlike the seed above,
+   * which is deliberately read once so a save does not yank the operator's grid out from under
+   * them. This is the baseline the table is compared against to decide whether it has unsaved
+   * changes (2026-09-30).
+   */
+  const pricedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
 
   /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
+  const beds = useBedPlan(entry.id);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
+  /**
+   * "Change configuration" (2026-09-30) — the rooms and the party, changed here rather than by
+   * re-entering to Inquiry. It takes over this card while it is open: the composition table
+   * prices a plan, and editing the plan underneath it would be two tables for one booking.
+   */
+  const [changing, setChanging] = useState(false);
+  /**
+   * What the composition table says is wrong with itself (2026-09-30). The table is the ONE
+   * judge of whether the configuration may be priced — the step reads its verdict rather than
+   * re-deriving one, so the grid's red cells and this page's shut doors always agree.
+   */
+  const [tableFaults, setTableFaults] = useState<string[]>([]);
+  /**
+   * Which nights each chosen room actually holds, for the table's leading Dates column
+   * (2026-09-30, operator). Derived HERE rather than in the grid because this is where the
+   * booking is: `roomStayRangesByRoom` reads the newest sealed pick, then dated assignment
+   * rows, then falls back to the whole stay for a uniform plan — the same fold the S5-S7 room
+   * rows print, so the desk states one room's nights one way everywhere.
+   */
+  const roomDates = useMemo(() => {
+    // `dates` lets the table reconcile per NIGHT — on a booking that moves rooms mid-stay the
+    // rooms are not in use together, so their guests are the same people (2026-10-06).
+    const nights = roomNightsByRoom(entry);
+    const out: Record<string, { label: string; nights: number; dates?: string[] }> = {};
+    for (const [roomId, r] of roomStayRangesByRoom(entry)) {
+      out[roomId] = { label: r.label, nights: r.nightCount, dates: nights.get(roomId) ?? [] };
+    }
+    return out;
+  }, [entry]);
   const holds = (entry.speculativeHolds ?? []).filter((h) => !passId || h.segmentId === passId);
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED") ?? null;
   const lastHold = activeHold ? null : (holds[0] ?? null);
@@ -202,6 +274,16 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   }, [working, accepted, recordedDiscount]);
 
   /** A blank or zero figure is "no discount"; clearing a recorded one must be said as `null`. */
+  /**
+   * The discount rides on the same save, so a changed one counts as an unsaved change — the
+   * quotation would otherwise still carry the old concession while the bar shows the new one.
+   */
+  const discountMoved =
+    (discountValue.trim() === "" ? null : Number(discountValue)) !== (recordedDiscount?.value ?? null) ||
+    (recordedDiscount != null && discountUnit !== recordedDiscount.unit);
+  const tableUnsaved =
+    !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
+
   const discountPayload = (() => {
     const n = Number(discountValue);
     if (!discountValue.trim() || !Number.isFinite(n) || n <= 0) return null;
@@ -329,8 +411,14 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
   /* ---- reasons a door stays shut ---- */
   const tableOpen = editable && !accepted && !proformaLocked && !!sealedPreferred;
   const noRooms = !sealedPreferred || !anchorRoomId ? "choose the rooms at Inquiry first" : null;
+  /** A table with a fault in it cannot be sent, marked or priced — it is the same basis. */
+  const tableReason =
+    tableFaults.length > 0
+      ? `put the table right first — ${tableFaults[0]}${tableFaults.length > 1 ? ` (and ${tableFaults.length - 1} more)` : ""}`
+      : null;
   const blockReason =
     noRooms ??
+    tableReason ??
     (markFor === "CUSTOM" && markSeconds <= 0
       ? "set at least a minute"
       : validDaysNumber == null && !working && !accepted
@@ -342,7 +430,12 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
       ? "already sent — generate it again to send a new version"
       : proformaLocked && !draft
         ? "the terms are final — a new pass is needed to send another quote"
-        : (noRooms ?? (!draft && validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : null));
+        : // Sending GENERATES when there is no draft, so a table with a red box in it holds the
+          // send shut for the same reason the Save is shut — one basis, one verdict. A draft that
+          // already exists was priced from a sound table, so it may still go out.
+          (noRooms ??
+          (!draft ? tableReason : null) ??
+          (!draft && validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : null));
 
   const markedCount = activeHold ? holdRoomIds(activeHold).length : sealedRoomIds.length;
   const markLength =
@@ -363,20 +456,65 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
 
   return (
     <StepCanvas past={past}>
-      <RateCard entry={entry} />
 
       <StepCard
         title="Who sleeps where, and their meals"
         meta="One row per room — the guests by age band, the meal plans, extra beds, any negotiated rate and the booking's discount. The house prices the quotation from this table; nothing is added up here."
       >
-        {tableOpen ? (
+        {changing ? (
+          <ChangeConfiguration
+            entry={entry}
+            onClose={() => setChanging(false)}
+            onDone={() => {
+              setChanging(false);
+              refresh();
+            }}
+          />
+        ) : tableOpen ? (
           <Tool>
             <RoomCompositionPlanner
+              bedPlan={beds.byRoom}
+              onBedChange={beds.set}
+              bedAsk={beds.ask}
               sealedRoomIds={sealedRoomIds}
               entryCheckIn={entry.checkInDate ?? null}
               entryCheckOut={entry.checkOutDate ?? null}
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
+              roomDates={roomDates}
+              onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
+              saveLabel={working ? "Save & price it again" : "Save & price it"}
+              saving={generateM.isPending || regenerateM.isPending}
+              unsaved={tableUnsaved}
+              saveAside={
+                <label className="rct-valid">
+                  <span className="k">Valid for</span>
+                  <input
+                    className="input narrow"
+                    inputMode="numeric"
+                    aria-label="Valid for · days"
+                    value={validDays}
+                    readOnly={!editable}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, "");
+                      const n = Number(v);
+                      setValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
+                    }}
+                  />
+                  <span className="k">days</span>
+                  <span className={`rct-valid-h${validDaysNumber == null ? " warn-ink" : ""}`}>
+                    {validDaysNumber == null ? (
+                      `1 to ${maxValidDays}`
+                    ) : (
+                      <>
+                        at most {plural(maxValidDays, "day")}
+                        {checkInAhead ? " · ends before check-in" : ""} → <b>{fmtDateTime(validityEnd, tz)}</b>
+                      </>
+                    )}
+                  </span>
+                </label>
+              }
+              onFaultsChange={setTableFaults}
               persistKey={entry.id}
               entryId={entry.id}
               initialCompositions={seedCompositions}
@@ -410,35 +548,118 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
           </>
         )}
         <ChildrenAges entry={entry} />
-      </StepCard>
-
-      <StepCard flow="quote" title="Provisional block, or send the quote">
-        <div className="form2" style={{ marginBottom: 10 }}>
-          <div className="field">
-            <label>Valid for · days</label>
-            <input
-              className="input narrow"
-              inputMode="numeric"
-              value={validDays}
-              readOnly={!editable}
-              onChange={(e) => {
-                const v = e.target.value.replace(/\D/g, "");
-                const n = Number(v);
-                setValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
-              }}
-            />
-            <span className={`hint${validDaysNumber == null ? " warn-ink" : ""}`}>
-              {validDaysNumber == null ? (
-                `1 to ${maxValidDays} days`
-              ) : (
-                <>
-                  at most {plural(maxValidDays, "day")}
-                  {checkInAhead ? " · ends before check-in" : ""} → <b>{fmtDateTime(validityEnd, tz)}</b>
-                </>
-              )}
-              {working ? ` · used when the quote is generated again` : ""}
+        {/* The rooms and the party are changed HERE, not by re-entering to Inquiry (2026-09-30,
+            operator ruling). It sits under the table it changes, and closes while the change is
+            being made so there is only ever one plan on screen. */}
+        {!changing ? <WaitingConfigurationChange entry={entry} /> : null}
+        {!changing && editable && !past ? (
+          <div className="row-acts" style={{ marginTop: 12 }}>
+            <Button kind="quiet" compact onClick={() => setChanging(true)}>
+              Change configuration…
+            </Button>
+            <span className="meta">
+              add or drop rooms, change the adults, the children and their ages — the dates stay as they are
             </span>
           </div>
+        ) : null}
+        {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
+      </StepCard>
+
+      {/* The live quotation sits directly under the table that priced it (2026-09-30, operator).
+          It used to be below the quote and the marker, pages away from the grid whose Save mints
+          it — so the round trip "price it · read what that produced" ran down the whole step and
+          back. Its VERSION LIST stays at the foot of the step: it is a record to look up, not
+          part of the work, and the two swapped places rather than travelling together. */}
+      {shown ? (
+        <QuotationCard
+          entry={entry}
+          q={shown}
+          editable={editable}
+          elevated={elevated}
+          tz={tz}
+          nowMs={clock.now}
+          onSend={() => setSendTarget(shown)}
+          refreshKeys={extraKeys}
+        />
+      ) : null}
+
+
+      {/* Two cards, not one (2026-09-29, operator: "separate them into two sections"). They were
+          one card with four fields that alternated between two subjects and three acts sharing a
+          grid — nothing said which field fed which button. Now each card is one subject with its
+          own fields: THE QUOTE (its validity and note; send it, or just record it) and, below,
+          the optional PROVISIONAL BLOCK (why and for how long the rooms are marked). */}
+      <StepCard
+        flow="quote"
+        title="The quote"
+        meta="Your own note, and where the quotation goes. How long it stands is set with the table's Save, which is what writes it."
+      >
+        {/* "Valid for" moved to the table's Save row on 2026-09-30 (operator: "we have to set and
+            save it at that section") — the save is what writes it. The note stays here: it is
+            the operator's own annotation, not a term of the offer. */}
+        <div className="form2" style={{ marginBottom: 12 }}>
+          <div className="wide field">
+            <label>Internal note · not shown to the guest</label>
+            <input className="input" value={notes} readOnly={!editable} placeholder="optional" onChange={(e) => setNotes(e.target.value)} />
+          </div>
+        </div>
+
+        <div>
+            <b>Send the quote</b>
+            <div className="meta">Generates and sends. Same quote, same validity — sending doesn&rsquo;t restart the clock.</div>
+            {sent ? (
+              <div className="sm" style={{ marginTop: 8 }}>
+                <Icon name="check" /> {sent.referenceNumber} sent {fmtStamp(sent.sentAt, tz)}
+                {sent.sentTo ? <span className="meta"> · to {sent.sentTo}</span> : null}
+              </div>
+            ) : null}
+            <Live>
+              <div style={{ marginTop: 10 }}>
+                <SeeRow
+                  kind="primary"
+                  label="Send the quote…"
+                  note={
+                    draft
+                      ? `opens the send for ${draft.referenceNumber} — email or WhatsApp; print it from the paper`
+                      : "generates the quotation and opens the send — email or WhatsApp"
+                  }
+                  onClick={editable ? openSend : undefined}
+                  state={generateForSendM.isPending ? "working" : editable && !sendReason ? "default" : "inert"}
+                  reason={!editable ? "not at this step" : (sendReason ?? undefined)}
+                />
+              </div>
+            </Live>
+        </div>
+
+        <Live>
+          {editable && !accepted && !proformaLocked ? (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+              {/* Recording the price without sending it USED to be a third button here. It is now
+                  the table's own **Save & price it** (2026-09-30, operator request), because a
+                  composition lives nowhere but the quotation — saving the table IS pricing it,
+                  and the table is the only surface that can refuse a configuration with a red box
+                  still in it. Two buttons for one act is what this card was split up to stop. */}
+              <b>{working ? "Price it again" : "Just record the price"}</b>
+              <div className="meta">
+                {working
+                  ? "Save the table above again — a new version is priced from it and this one is kept as history."
+                  : "A quotation on file is all the move to Set up needs. Press "}
+                {!working ? <b>Save &amp; price it</b> : null}
+                {!working ? " at the foot of the table above — nothing is sent and no rooms are marked." : ""}
+              </div>
+            </div>
+          ) : null}
+        </Live>
+      </StepCard>
+
+      {/* The optional act: it marks the rooms, and generates the quotation too when there is
+          none — on the validity and note from the card above. */}
+      <StepCard
+        title="Provisional block"
+        meta="Optional — marks the rooms so nobody else sells them while the guest decides. Nothing is sent. It generates the quotation too when there isn't one, on the validity above."
+      >
+        {/* The marker's own two settings — no other act on the step reads them. */}
+        <div style={{ display: "grid", gap: 10, marginBottom: 4 }}>
           <div className="field">
             <label>Why hold these rooms · optional</label>
             <input
@@ -469,132 +690,61 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
                 ))}
               </div>
             ) : null}
-          </div>
-          <div className="field">
-            <label>Internal note · not shown to the guest</label>
-            <input className="input" value={notes} readOnly={!editable} placeholder="optional" onChange={(e) => setNotes(e.target.value)} />
+            <span className="hint">only this card reads the two settings above — sending or recording the price ignores both</span>
           </div>
         </div>
-
-        <div className="grid2">
-          <div>
-            <b>Provisional block</b>
-            <div className="meta">Generates the quotation, sends nothing, marks the rooms.</div>
-            {activeHold ? (
-              <BindingBox
-                family="provisional"
-                stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"}
-                style={{ marginTop: 8 }}
-              >
-                <div className="sm" style={{ paddingRight: 80 }}>
-                  {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
-                  if someone commits first
-                </div>
-              </BindingBox>
-            ) : lastHold ? (
-              <div className="meta" style={{ marginTop: 8 }}>
-                The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
-                {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
-              </div>
-            ) : null}
-            {otherMarkers.length ? (
-              <div className="meta" style={{ marginTop: 6 }}>
-                also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}
-              </div>
-            ) : null}
-            <Live>
-              <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
-                {activeHold ? (
-                  <SeeRow
-                    label="Release…"
-                    note="frees the rooms with a reason; the quotation stands"
-                    onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
-                    reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
-                  />
-                ) : (
-                  <SeeRow
-                    kind="secondary"
-                    label="Provisional block"
-                    note={`${working || accepted ? "" : "generates the quotation and "}marks ${plural(markedCount || 1, "room")} ${markLength} · sends nothing`}
-                    onClick={editable ? () => blockM.mutate() : undefined}
-                    state={blockM.isPending ? "working" : editable && !blockReason ? "default" : "inert"}
-                    reason={!editable ? "not at this step" : (blockReason ?? undefined)}
-                  />
-                )}
-                <SeeRow
-                  label="Extend"
-                  note="once for the desk, then the FOM · never a re-quote"
-                  state="inert"
-                  reason="Extending a marker or a quotation's validity is not in the backend yet (BE-59)"
-                />
-              </div>
-            </Live>
-          </div>
-          <div>
-            <b>Send the quote</b>
-            <div className="meta">Generates and sends. Same quote, same validity — sending doesn&rsquo;t restart the clock.</div>
-            {sent ? (
-              <div className="sm" style={{ marginTop: 8 }}>
-                <Icon name="check" /> {sent.referenceNumber} sent {fmtStamp(sent.sentAt, tz)}
-                {sent.sentTo ? <span className="meta"> · to {sent.sentTo}</span> : null}
-              </div>
-            ) : null}
-            <Live>
-              <div style={{ marginTop: 10 }}>
-                <SeeRow
-                  kind="primary"
-                  label="Send the quote…"
-                  note={
-                    draft
-                      ? `opens the send for ${draft.referenceNumber} — email or WhatsApp; print it from the paper`
-                      : "generates the quotation and opens the send — email or WhatsApp"
-                  }
-                  onClick={editable ? openSend : undefined}
-                  state={generateForSendM.isPending ? "working" : editable && !sendReason ? "default" : "inert"}
-                  reason={!editable ? "not at this step" : (sendReason ?? undefined)}
-                />
-              </div>
-            </Live>
-          </div>
-        </div>
-
-        <Live>
-          {editable && !accepted && !proformaLocked ? (
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-              {working ? (
-                <SeeRow
-                  label="Generate the quote again"
-                  note={`a new version priced from the table above — ${working.referenceNumber} is kept as history, and the validity starts again`}
-                  onClick={() => regenerateM.mutate()}
-                  state={regenerateM.isPending ? "working" : validDaysNumber == null ? "inert" : "default"}
-                  reason={validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : undefined}
-                />
-              ) : (
-                <SeeRow
-                  label="Generate the quote only"
-                  note="the gate needs a generated quotation — nothing is sent and no rooms are marked"
-                  onClick={noRooms ? undefined : () => generateM.mutate()}
-                  state={generateM.isPending ? "working" : noRooms || validDaysNumber == null ? "inert" : "default"}
-                  reason={noRooms ?? (validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : undefined)}
-                />
-              )}
+        {activeHold ? (
+          <BindingBox
+            family="provisional"
+            stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"}
+            style={{ marginTop: 8 }}
+          >
+            <div className="sm" style={{ paddingRight: 80 }}>
+              {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
+              if someone commits first
             </div>
-          ) : null}
+          </BindingBox>
+        ) : lastHold ? (
+          <div className="meta" style={{ marginTop: 8 }}>
+            The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
+            {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
+          </div>
+        ) : null}
+        {otherMarkers.length ? (
+          <div className="meta" style={{ marginTop: 6 }}>
+            also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}
+          </div>
+        ) : null}
+        <Live>
+          <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+            {activeHold ? (
+              <SeeRow
+                label="Release…"
+                note="frees the rooms with a reason; the quotation stands"
+                onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
+                reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
+              />
+            ) : (
+              <SeeRow
+                kind="secondary"
+                label="Provisional block"
+                note={`${working || accepted ? "" : "generates the quotation and "}marks ${plural(markedCount || 1, "room")} ${markLength} · sends nothing`}
+                onClick={editable ? () => blockM.mutate() : undefined}
+                state={blockM.isPending ? "working" : editable && !blockReason ? "default" : "inert"}
+                reason={!editable ? "not at this step" : (blockReason ?? undefined)}
+              />
+            )}
+            <SeeRow
+              label="Extend"
+              note="once for the desk, then the FOM · never a re-quote"
+              state="inert"
+              reason="Extending a marker or a quotation's validity is not in the backend yet (BE-59)"
+            />
+          </div>
         </Live>
       </StepCard>
 
-      {shown ? (
-        <QuotationCard
-          entry={entry}
-          q={shown}
-          editable={editable}
-          elevated={elevated}
-          tz={tz}
-          nowMs={clock.now}
-          onSend={() => setSendTarget(shown)}
-          refreshKeys={extraKeys}
-        />
-      ) : null}
+
 
       {allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
 
@@ -604,13 +754,32 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         {onPark && entry.status === "ACTIVE" ? (
           <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
         ) : null}
+        {/* "The rate, with its basis" was removed on 2026-09-29 (operator: "most of it are already
+            below"): its published rate, its floor and the SC/GST line all sit in the reference
+            strip inside the table, read from the same `rate-reference` call. What it also carried
+            was this ONE unbuilt promise, which belongs here with the other not-yet acts. */}
+        {/* The answer the house had no way to write down (2026-10-01) — see the Inquiry step. */}
+        {onDecline ? (
+          <SeeRow
+            key="decline"
+            label="The guest said no…"
+            note="ends the booking and records why; the marked rooms go back on the board, the offer is withdrawn and nothing is charged"
+            onClick={onDecline}
+          />
+        ) : null}
+        <SeeRow
+          key="counter"
+          label="Record a counter-offer…"
+          note="what they asked, by whom, the outcome — it would roll up to the agent's record"
+          state="inert"
+          reason="Counter-offers as a recorded line are not in the backend yet (BE-39) — until then the discount is set in the table"
+        />
       </OtherWays>
       <PapersCard entry={entry} />
 
-      <SendDialog
+      <QuotationSendDialog
         entry={entry}
         target={sendTarget}
-        tz={tz}
         onClose={() => setSendTarget(null)}
         onSent={() => {
           setSendTarget(null);
@@ -630,83 +799,6 @@ export function S2Negotiation({ entry, past, onPark }: { entry: EntryDetail; pas
         onConfirm={(r) => releaseM.mutate(r)}
       />
     </StepCanvas>
-  );
-}
-
-/* ------------------------------------------------------------------ the rate, with its basis */
-
-function RateCard({ entry }: { entry: EntryDetail }) {
-  const { session } = useSession();
-  const ref = useQuery({
-    queryKey: ["rate-reference", entry.id],
-    queryFn: () => getRateReference(session!, entry.id),
-    enabled: !!session,
-    staleTime: 5 * 60_000,
-  });
-  const r = ref.data;
-  const types = r?.roomTypes ?? [];
-  const contracted = types.some((t) => t.roomRateSource === "AGENT_RATE_PACKAGE");
-  const pct = (rate: number) => `${(rate * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%`;
-  return (
-    <StepCard title="The rate, with its basis">
-      {types.length === 0 ? (
-        <span className="meta">{ref.isLoading ? "Reading the rates…" : "The rates show once rooms are chosen at Inquiry."}</span>
-      ) : (
-        <div style={{ display: "grid", gap: 8 }}>
-          {types.map((t) => (
-            <div key={t.roomTypeId} style={{ display: "grid", gap: 4 }}>
-              {types.length > 1 ? (
-                <span className="sm">
-                  <b>{t.name}</b>
-                  <span className="meta">
-                    {" "}
-                    · {t.roomNumbers.length === 1 ? "room" : "rooms"} {t.roomNumbers.join(", ")}
-                  </span>
-                </span>
-              ) : null}
-              <div className="row-acts">
-                <Chip>Published {money(t.standardRate, r?.currency)} / night</Chip>
-                {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
-                  <Chip tone="solid">
-                    {r?.party?.name ?? "The account"} · {money(t.roomRate, r?.currency)} / night · contracted
-                  </Chip>
-                ) : null}
-                {t.packageName ? <Chip>Package {t.packageName}</Chip> : null}
-                {t.msrValue != null ? <Chip tone="quiet">floor {money(t.msrValue, r?.currency)}</Chip> : null}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {r ? (
-        <div className="meta" style={{ marginTop: 6 }}>
-          <SourceMark kind="derived">
-            {contracted
-              ? `${r.party ? words(r.party.type) : "Account"} rate · as contracted`
-              : r.party
-                ? `${r.party.name} has no package for these rooms · the published rate applies`
-                : "the published rate plan"}
-          </SourceMark>{" "}
-          · service charge {pct(r.serviceChargeRate)} and GST {pct(r.gstRate)} on top · the rate with its basis is BE-17
-        </div>
-      ) : null}
-
-      <h4 style={{ margin: "12px 0 6px" }}>Counter-offers</h4>
-      <div className="meta">
-        None yet — the line accumulates: what they asked, who, when, the outcome. It rolls up to the agent&rsquo;s record (BE-39).
-      </div>
-      <Live>
-        <div style={{ marginTop: 10 }}>
-          <SeeRow
-            kind="secondary"
-            label="Record a counter-offer…"
-            note="what they asked, by whom, the outcome — below contract or over 10% off needs the FOM"
-            state="inert"
-            reason="Counter-offers as a recorded line are not in the backend yet (BE-39) — until then the discount is set in the table below"
-          />
-        </div>
-      </Live>
-    </StepCard>
   );
 }
 
@@ -1197,131 +1289,3 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
 
 /* ------------------------------------------------------------------ sending */
 
-function SendDialog({
-  entry,
-  target,
-  tz,
-  onClose,
-  onSent,
-}: {
-  entry: EntryDetail;
-  target: QuotationSummary | null;
-  tz: string;
-  onClose: () => void;
-  onSent: () => void;
-}) {
-  const { session } = useSession();
-  // Where the quote goes (2026-09-19): the invoices' rule — the agency or company that booked (the
-  // quote carries their rates), else the guest — and the backend now sends to what is typed here.
-  // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
-  // to +975…" while nothing was emailed.
-  const recipient = useInvoiceRecipient(entry);
-  const phoneOnFile = (entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "").trim();
-  const [channel, setChannel] = useState<Channel>("EMAIL");
-  const [to, setTo] = useState("");
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    if (!target || touched) return;
-    setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
-  }, [target, channel, touched, recipient.defaultTo, phoneOnFile]);
-  const typed = to.trim();
-  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
-  const send = useMutation({
-    mutationFn: () =>
-      sendQuotation(session!, target!.id, {
-        channel,
-        recipientAddress: typed,
-        sentTo: typed,
-      }),
-    onSuccess: () => {
-      toast.success(
-        channel === "WHATSAPP"
-          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}`
-          : typed
-            ? `${target?.referenceNumber} sent by email to ${typed}`
-            : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
-      );
-      onSent();
-    },
-    onError: (e) => toastRefusal(e, "The quotation could not be sent"),
-  });
-  const hint =
-    channel === "WHATSAPP"
-      ? "send it on WhatsApp yourself — the desk records the send with this number"
-      : !typed
-        ? recipient.party
-          ? `${recipient.party} has no email on file — type the address, or send it with none and hand the quote over`
-          : "no email on file — type one, or send it with none and hand the quote over"
-        : !emailish
-          ? "that is not an email address"
-          : recipient.party && typed === recipient.partyEmail
-            ? `${recipient.party}'s email on file — the quote shows their rates`
-            : recipient.guestEmail && typed === recipient.guestEmail
-              ? recipient.party
-                ? `this is the guest's email — the quote is made out to ${recipient.party} and shows its rates`
-                : "the guest's email on file"
-              : "the send is recorded on the booking with this address";
-  if (!target) return null;
-  const ok = channel === "WHATSAPP" ? typed.length > 0 : !typed || emailish;
-  return (
-    <DsDialog
-      open
-      onClose={onClose}
-      busy={send.isPending}
-      title={`Send quotation ${target.referenceNumber}`}
-      caseLines={[
-        `Version ${target.versionNumber}`,
-        target.validUntil ? `Price valid until ${fmtDateTime(target.validUntil, tz)} — sending does not restart the clock` : "No validity recorded",
-      ]}
-      footer={
-        <>
-          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
-          <Button
-            kind="secondary"
-            icon="print"
-            onClick={() => session && openQuotationPdf(session, target.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}
-          >
-            Print instead
-          </Button>
-          <Button
-            icon="send"
-            state={send.isPending ? "working" : ok ? "default" : "inert"}
-            title={ok ? undefined : channel === "WHATSAPP" ? "put in the WhatsApp number" : "that is not an email address"}
-            workingLabel="Sending…"
-            onClick={() => send.mutate()}
-          >
-            Send now
-          </Button>
-        </>
-      }
-    >
-      <div className="field">
-        <label>Send via</label>
-        <Choice
-          options={CHANNELS}
-          value={channel}
-          onChange={(c) => {
-            setChannel(c);
-            setTouched(false);
-          }}
-        />
-      </div>
-      <div className="field">
-        <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
-        <input
-          className="input"
-          value={to}
-          onChange={(e) => {
-            setTouched(true);
-            setTo(e.target.value);
-          }}
-          placeholder={channel === "EMAIL" ? "name@example.com" : "+975 …"}
-          autoFocus
-        />
-        <span className="hint">{hint}</span>
-      </div>
-    </DsDialog>
-  );
-}

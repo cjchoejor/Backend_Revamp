@@ -50,18 +50,18 @@ export function enforceEntryParkAllowedForCurrentStage(input: { currentStage: St
 /**
  * The stage whose expiry TTL a park suspends and an unpark restores.
  *
- * Only S1 carries an `ENTRY_EXPIRY` timer: it is registered at entry creation
- * (`s1-entry-service.createEntry`) and cancelled for good on S1→S2
- * (`s1-state-machine.progressS1ToS2`, "the entry has left S1 — the S1 inquiry-expiry is moot").
- * Nothing re-registers it at any later stage.
+ * Two stages carry an `ENTRY_EXPIRY` timer: S1 (the inquiry window, registered at entry
+ * creation and cancelled on S1→S2) and — since 2026-09-29, per SIG-S2 §7.6 — S2, the
+ * Negotiation clock (`lib/negotiation-expiry.ts`, armed by `progressS1ToS2` on its own window).
+ * Nothing registers one at any later stage.
  *
- * So an unpark at S2+ must NOT re-arm one. Doing so manufactured a death clock that the entry
- * never had: an unparked S2 entry would expire on the S1 TTL, and — via the inquiry-level
- * cascade, which parks at any stage — an unparked S5/S7 entry would be marked EXPIRED with its
- * rooms released while the guest was in-house.
+ * So an unpark at S3+ must NOT re-arm one. Doing so manufactured a death clock that the entry
+ * never had: an unparked S2 entry used to expire on the S1 TTL (it now gets a fresh Negotiation
+ * window instead), and — via the inquiry-level cascade, which parks at any stage — an unparked
+ * S5/S7 entry would be marked EXPIRED with its rooms released while the guest was in-house.
  */
 export function entryExpiryTimerAppliesAtStage(stage: Stage): boolean {
-  return stage === Stage.S1;
+  return stage === Stage.S1 || stage === Stage.S2;
 }
 
 /** Policy 1 — a park may only be placed on an ACTIVE entry (re-exported for the cascade path). */

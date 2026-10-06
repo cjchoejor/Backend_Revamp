@@ -3,6 +3,7 @@ import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, St
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { extendNegotiationExpiryTx } from "../../lib/negotiation-expiry.js";
 import * as documentGenerationService from "../infrastructure/document-generation-service.js";
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
 import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "../../policies/09-discount/p23-discount-approval-authority.js";
@@ -18,6 +19,8 @@ import {
   enforceQuotationSentToAccept,
   enforceQuotationSupersedeAllowedState,
 } from "../../policies/08-pricing-rate-plan/p07-quotation-lifecycle-state-guards.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { assertEntryWorkable } from "../../lib/assert-entry-workable.js";
 import {
   enforceEntryAtS2ForQuotationCreation,
   enforceRoomTypeResolvedForS2Quotation,
@@ -34,7 +37,7 @@ import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { mulMoney, round2, sumMoney, toDecimal } from "../../lib/money.js";
-import { generateOrLoadQuotationPdf } from "./quotation-pdf-service.js";
+import { generateOrLoadQuotationPdf, renderQuotationPdfWithoutPrices } from "./quotation-pdf-service.js";
 import {
   applyBookingDiscountToTotals,
   autoAddRequiredExtraBeds,
@@ -257,6 +260,10 @@ async function prepareQuotationDraft(
     },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage at S2, so the gate above passes on a dead booking: one was
+  // quoted five minutes after it expired, which armed a fresh validity clock on a read-only
+  // record (2026-10-01, operator report). Both createQuotation and supersede come through here.
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS2ForQuotationCreation({ currentStage: entry.currentStage });
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
@@ -623,12 +630,21 @@ async function prepareQuotationDraft(
         ratesByType.set(tid, {
           room: toDecimal(typePricing.effectiveRate ?? typePricing.resolvedNightlyRate ?? 0),
           roomPreDiscount: toDecimal(typePricing.resolvedNightlyRate ?? 0),
-          // No card for this type — add-ons stay 0, exactly as they were for the whole booking
-          // before. Per-room negotiated rates still override.
-          extraBed: toDecimal(0),
-          breakfast: toDecimal(0),
-          lunch: toDecimal(0),
-          dinner: toDecimal(0),
+          // Only the ROOM rate is per type. An extra bed and a meal are priced by the party's
+          // package or, with no party, by the house tariff — booking-wide either way — so this
+          // branch carries the booking's own add-on rates rather than zeroing them.
+          //
+          // They WERE zeroed here (2026-08-04, when each type started resolving its own room
+          // rate), which meant that on a booking whose rooms are not all of the preferred type,
+          // every other room's extra bed was free and its à-la-carte meals priced at nothing.
+          // Plan-priced meals escaped it — the plan rate is booking-wide — but the per-meal
+          // rates are what the quotation prints its meal rows from, so five of six rooms also
+          // printed no meal row (2026-10-06, operator: "why does the first row show differently
+          // in the qty column").
+          extraBed: bookingTypeRates.extraBed,
+          breakfast: bookingTypeRates.breakfast,
+          lunch: bookingTypeRates.lunch,
+          dinner: bookingTypeRates.dinner,
         });
       } catch (e) {
         if (e instanceof PolicyGateBlockedError) throw e;
@@ -1166,6 +1182,8 @@ export async function createQuotation(
     // The countdown is real from this moment — W15 expires a lapsed DRAFT, and the desk's
     // timer feed shows "Quote validity" alongside the other clocks.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId }, validity.validUntil, actorId);
+    // The Negotiation clock never lapses a booking while the guest holds a live offer (2026-09-29).
+    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId, validUntil: validity.validUntil, actorId });
     // Discount approved AT generation (2026-08-07): the generating actor held the authority
     // (checked in prepareQuotationDraft), so the approval trace lands with the creation and
     // the p23 send / S2-exit gate is satisfied from birth — no post-hoc approval step.
@@ -1234,6 +1252,7 @@ export async function createGroupQuotation(
     },
   });
   if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS2ForQuotationCreation({ currentStage: entry.currentStage });
   enforceGroupRateContextForS2Quotation({ useType: entry.useType, guestCount: entry.guestCount });
 
@@ -1604,6 +1623,7 @@ export async function supersedeQuotationWithNewDraft(
 
     // The new draft's validity clock, armed like create's — the prior version's was cancelled above.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId: prior.entryId }, validity.validUntil, actorId);
+    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId: prior.entryId, validUntil: validity.validUntil, actorId });
 
     // Discount approved AT generation — same rule as createQuotation (2026-08-07): a
     // regenerated round with a discount is a fresh offer, approved by whoever generated it.
@@ -1957,10 +1977,23 @@ export async function sendQuotation(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
-  input: { validDays?: number; sentTo?: string; channel?: string; recipientAddress?: string },
+  input: {
+    validDays?: number;
+    sentTo?: string;
+    channel?: string;
+    recipientAddress?: string;
+    /**
+     * Attach the copy with no money on it (2026-10-06, operator: "sometimes guest needs to be
+     * sent quotation without the price ... maybe a check box while sending it"). The offer
+     * itself is unchanged — same quotation, same number, same validity, and the stored PDF is
+     * still the priced one; only what the guest receives differs, and the trace says so.
+     */
+    hidePrices?: boolean;
+  },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
+  await assertEntryWorkable(prisma, q.entryId);
   enforceQuotationInDraftToSend({ state: q.state });
 
   await enforceQuotationSendTimeGovernanceConfig(prisma);
@@ -2007,6 +2040,7 @@ export async function sendQuotation(
       { quotationId },
       { startAfter: validUntil },
     );
+    await extendNegotiationExpiryTx(tx, engine, { entryId: q.entryId, validUntil, actorId });
     const ackWindow = await requireActiveConfigValue<Record<string, number>>(tx as any, "acknowledgement.windowPerType");
     const quotationAckSeconds = Number((ackWindow as any)?.quotation ?? 86400);
     const ackFireAt = new Date(now.getTime() + quotationAckSeconds * 1000);
@@ -2118,6 +2152,8 @@ export async function sendQuotation(
           validUntil: validUntil.toISOString(),
           communicationRecordId: comm.id,
           documentStorageReference: doc.storageReference,
+          // What the guest actually received — the record keeps the priced document either way.
+          pricesShown: input.hidePrices !== true,
         },
         createdBy: actorId,
       },
@@ -2133,13 +2169,23 @@ export async function sendQuotation(
   const channel = (input.channel ?? "EMAIL").toUpperCase();
   if (channel === "EMAIL") {
     const typed = (input.recipientAddress ?? input.sentTo ?? "").trim();
-    await sendQuotationEmailBestEffort(prisma, quotationId, /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null);
+    await sendQuotationEmailBestEffort(
+      prisma,
+      quotationId,
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null,
+      input.hidePrices === true,
+    );
   }
 
   return updated;
 }
 
-async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: string, toAddress: string | null = null) {
+async function sendQuotationEmailBestEffort(
+  prisma: PrismaClient,
+  quotationId: string,
+  toAddress: string | null = null,
+  hidePrices = false,
+) {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
     include: { entry: { include: { guestProfile: true } } },
@@ -2182,11 +2228,18 @@ async function sendQuotationEmailBestEffort(prisma: PrismaClient, quotationId: s
   // rather than re-rendered. Failure to render is non-fatal: the email still goes out with
   // the text body only, and the operator can retry via the manual endpoint.
   try {
+    // The priced PDF is rendered and stored either way — it is the record of what was offered.
+    // When the desk asked for a copy without prices, THAT is what the guest receives.
     const artifact = await generateOrLoadQuotationPdf(prisma, q.id, q.createdBy ?? "SYSTEM");
+    const attached = hidePrices
+      ? await renderQuotationPdfWithoutPrices(prisma, q.id)
+      : { bytes: artifact.bytes, referenceNumber: artifact.invoiceNumber };
     content.attachments = [
       {
-        filename: `${artifact.invoiceNumber}-quotation.pdf`,
-        content: artifact.bytes,
+        filename: hidePrices
+          ? `${attached.referenceNumber}-quotation-no-prices.pdf`
+          : `${attached.referenceNumber}-quotation.pdf`,
+        content: attached.bytes,
         contentType: "application/pdf",
       },
     ];
@@ -2230,6 +2283,7 @@ export async function acceptQuotation(
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
   if (!q) throw new NotFoundError("Quotation");
+  await assertEntryWorkable(prisma, q.entryId);
   enforceQuotationSentToAccept({ state: q.state });
   const now = new Date();
 

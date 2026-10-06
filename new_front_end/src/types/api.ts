@@ -567,6 +567,9 @@ export type NoShowDeterminationSummary = {
 };
 
 export type EntryDetail = EntryListItem & {
+  /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
+  contactPersonName?: string | null;
+  contactPersonPhone?: string | null;
   /**
    * How long THIS booking's committed hold runs, when the desk set it itself (2026-09-25).
    * Null = the house window from the admin console. Remembered on the booking, so a hold placed
@@ -594,8 +597,26 @@ export type EntryDetail = EntryListItem & {
   spaceAllocations?: SpaceAllocationSummary[];
   availabilityConfigs?: AvailabilityConfigSummary[];
   segments?: SegmentSummary[];
+  /** The open dwell record — when the booking entered its current step (2026-09-29). */
+  stageDwellRecords?: Array<{ stage: string; enteredAt: string; mode: string }>;
   quotations?: QuotationSummary[];
   speculativeHolds?: SpeculativeHoldSummary[];
+  /**
+   * Configuration changes prepared at the desk that need the FOM (2026-09-30), newest first.
+   * `REQUESTED` is the one waiting; the rest are history the card prints under it.
+   */
+  negotiationAmendmentRequests?: Array<{
+    id: string;
+    state: "REQUESTED" | "APPROVED" | "REJECTED" | "WITHDRAWN" | "SUPERSEDED";
+    summary: string;
+    reason: string;
+    requestedBy: string;
+    requestedAt: string;
+    decidedBy?: string | null;
+    decidedAt?: string | null;
+    decisionNote?: string | null;
+    appliedAmendmentId?: string | null;
+  }>;
   vipArrivalNotifications?: VipArrivalNotificationSummary[];
   disputes?: DisputeSummary[];
   keyReturnRecords?: KeyReturnSummary[];
@@ -618,10 +639,16 @@ export type EntryDetail = EntryListItem & {
     cameInAs?: string | null;
     travelAgentId?: string | null;
     corporateAccountId?: string | null;
+    /** Who booked (2026-09-29): the agency or the company with its own contact, off the entry payload. */
+    travelAgent?: BookingPartySummary | null;
+    corporateAccount?: BookingPartySummary | null;
     agentProfile?: AgentProfileSummary | null;
   } | null;
   closedAt?: string | null;
   closedBy?: string | null;
+  /** How it ended, and what was said (2026-10-01) — see `endingOf` in lib/ds/status.ts. */
+  closedAs?: string | null;
+  closedReason?: string | null;
   walkInCompressed?: boolean;
   keysIssuedCount?: number | null;
   keysIssuedAt?: string | null;
@@ -632,6 +659,13 @@ export type EntryDetail = EntryListItem & {
 };
 
 /** One stay of a trip — the enquiry's other bookings, carried on every booking's payload. */
+export type BookingPartySummary = {
+  id: string;
+  displayName: string;
+  contactNumbers: string[];
+  contactEmail: string | null;
+};
+
 export type TripStaySummary = {
   id: string;
   checkInDate?: string | null;

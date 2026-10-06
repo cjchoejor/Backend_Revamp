@@ -31,7 +31,7 @@ import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } fr
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal } from "./kit";
+import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 
 /* ------------------------------------------------------------------ words */
@@ -126,13 +126,20 @@ export function PaymentPlanCard({
   });
 
   /* ---- the locks, in the order the desk meets them ---- */
-  const payLock = !folio
-    ? "open the provisional bill first — the billing model above"
+  /**
+   * Why money cannot be logged yet — and WHICH card on this step would release it
+   * (2026-10-06, operator: "to record payment it doesn't tell how the user should do it ... the
+   * UI UX should be able to do it"). The words alone left the person to find the place
+   * themselves; `card` turns the blocker into a button that takes them there.
+   */
+  const payHold: { why: string; card: string; cta: string } | null = !folio
+    ? { why: "Open the provisional bill first — money has nowhere to land until there is one.", card: "billing-model", cta: "Open the bill" }
     : !bill.dispatched
-      ? "send the proforma first — money is logged against the bill the guest received"
+      ? { why: "Send the proforma first — money is logged against the bill the guest received.", card: "proforma", cta: "Go to the proforma" }
       : !bill.answered
-        ? "record the guest's answer to the proforma first — it is on the proforma below"
+        ? { why: "Record the guest's answer to the proforma first.", card: "proforma", cta: "Go to the proforma" }
         : null;
+  const payLock = payHold?.why ?? null;
   const reconcilable = received > 0 || inPayments.length > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(folio?.billingModel ?? "");
   const reconcileLock = !folio
     ? "open the provisional bill first"
@@ -319,42 +326,44 @@ export function PaymentPlanCard({
 
       <Live>
         {editable && folio ? (
-          <div className="stack sm" style={{ display: "grid", gap: 4, marginTop: 12 }}>
-            <SeeRow
+          <div className="stack sm" style={{ marginTop: 12 }}>
+            <ActionRow
               label="Change the amount asked…"
-              note="a flat amount, or a percent of the quotation · a changed amount issues the proforma again"
+              caption="A flat amount, or a percent of the quotation. A changed amount issues the proforma again."
               onClick={() => setOpen("amount")}
             />
-            <SeeRow
+            <ActionRow
               label={plan ? "Change how they'll pay…" : "Record how they'll pay…"}
-              note="the whole now, part now or in instalments, and when — the proforma prints it, so a change issues it again"
+              caption="The whole now, part now or in instalments, and when. The proforma prints it, so a change issues it again."
               onClick={() => setOpen("plan")}
             />
-            <SeeRow
+            <ActionRow
               kind="primary"
               label="Record payment…"
-              note="the rooms are held automatically when money comes in — even part of it"
+              caption="The rooms are held automatically when money comes in — even part of it."
               onClick={() => setOpen("pay")}
-              state={payLock ? "inert" : "default"}
-              reason={payLock ?? undefined}
+              state={payHold ? "inert" : "default"}
+              heldBy={payHold?.why}
+              goTo={payHold?.card}
+              goToLabel={payHold?.cta}
             />
-            {payLock ? <div className="sm warn-ink">Before money can be logged: {payLock}.</div> : null}
-            <SeeRow
+            <ActionRow
               label="Mark reconciled"
-              note="signs off the money position — ticks the arrival checklist and stops the chasing"
+              caption="Signs off the money position — ticks the arrival checklist and stops the chasing."
               onClick={() => reconcileM.mutate()}
               state={reconcileM.isPending ? "working" : reconcileLock ? "inert" : "default"}
-              reason={reconcileLock ?? undefined}
+              heldBy={reconcileLock}
             />
-            <SeeRow
+            <ActionRow
               label="Extend credit…"
-              note="lets the booking go on without the advance, up to a ceiling and for a time — the FOM's call"
+              caption="Lets the booking go on without the advance, up to a ceiling and for a time."
               onClick={elevated ? () => setOpen("credit") : undefined}
-              reason={elevated ? undefined : "extending credit is the FOM's call"}
+              state={elevated ? "default" : "inert"}
+              heldBy={elevated ? null : "Extending credit is the FOM's call."}
             />
-            <SeeRow
+            <ActionRow
               label="Read the payment again"
-              note="when money was logged on another terminal"
+              caption="When money was logged on another terminal."
               onClick={onRefetch}
               state={refetching ? "working" : "default"}
             />

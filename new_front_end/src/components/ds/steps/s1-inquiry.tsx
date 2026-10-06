@@ -39,7 +39,7 @@ import {
 } from "@/components/desk/workspace/room-status-table";
 import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
 import { fmtRange, money, plural } from "@/lib/ds/format";
-import { currentPassConfigs } from "@/lib/desk/workspace";
+import { currentPassConfigs, hasAnyContact } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
   type AvailabilityOptionSelected,
@@ -136,10 +136,13 @@ export function S1Inquiry({
   entry,
   past,
   onPark,
+  onDecline,
 }: {
   entry: EntryDetail;
   past: boolean;
   onPark?: () => void;
+  /** The guest said no (2026-10-01) — offered while the booking can still be turned down. */
+  onDecline?: () => void;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -209,6 +212,17 @@ export function S1Inquiry({
             label="Park…"
             note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own"
             onClick={onPark}
+          />
+        ) : null}
+        {/* The answer the house had no way to write down (2026-10-01): until this, a lead that
+            said no could only be parked or left to lapse as "Expired", which reads the same as
+            an enquiry nobody ever answered. */}
+        {onDecline ? (
+          <SeeRow
+            key="decline"
+            label="The guest said no…"
+            note="ends the booking and records why; the rooms go back on the board and nothing is charged"
+            onClick={onDecline}
           />
         ) : null}
       </OtherWays>
@@ -357,7 +371,8 @@ function TheGuest({
     },
     onError: (e) => toastRefusal(e, "The contact could not be saved"),
   });
-  const noContact = !g?.email && !g?.phone;
+  // the same test the move to Negotiation runs (Policy 16): the guest's email or phone, or the arriving person's phone
+  const noContact = !hasAnyContact(entry);
   return (
     <StepCard flow="guest" title="The guest">
       <div className="form2">
@@ -379,7 +394,9 @@ function TheGuest({
             placeholder="none on file"
           />
           <span className={`hint${noContact ? " warn-ink" : ""}`}>
-            phone or email — one is needed
+            {noContact
+              ? "optional on the guest — but someone needs a number: give the person arriving a phone below"
+              : "optional — the booking has a way to reach someone"}
           </span>
         </div>
         <div className="field">
@@ -734,8 +751,8 @@ function TheStay({
               ))}
             </div>
             <span className="hint">
-              the exact King / Twin split is set at Arrival — here the house
-              secures enough rooms of the right kind
+              a tally — which room is which is settled on the table at Negotiation; here the house
+              secures enough rooms that can take them
             </span>
           </div>
         ) : null}
@@ -1204,6 +1221,7 @@ function TheHouse({
       <StepCard
         flow="house"
         flowAfter="stay"
+        flowAfterOnly
         title={
           hasResults || entry.checkInDate ? `The house · ${range}` : "The house"
         }
@@ -1598,7 +1616,7 @@ function WhichRooms({
 
   const counter = sel.nightsDiffer
     ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ready`
-    : `${sel.base.length} of ${numberOfRooms} chosen`;
+    : `${sel.commonPlan.length} of ${numberOfRooms} chosen`;
   const saveWord = showSaved
     ? "Saved"
     : stale
@@ -1647,32 +1665,7 @@ function WhichRooms({
       }
     >
       <div className="row-acts" style={{ marginBottom: 10 }}>
-        <Button
-          compact
-          kind={showSaved ? "secondary" : "primary"}
-          icon={showSaved ? "check" : undefined}
-          state={
-            saving
-              ? "working"
-              : showSaved || !sel.ready || stale
-                ? "inert"
-                : "default"
-          }
-          title={
-            showSaved
-              ? "this choice is on record — change a room to edit it"
-              : stale
-                ? "the answer is old — ask the house again; your picks are kept"
-                : !sel.ready
-                  ? "every night needs its rooms"
-                  : undefined
-          }
-          workingLabel="Saving…"
-          onClick={onSave}
-        >
-          {saveWord}
-        </Button>
-        <span className={`sm${sel.ready ? " ok-ink" : ""}`}>{counter}</span>
+        <span className={`sm ${sel.ready ? "ok-ink" : "stop-ink"}`}>{counter}</span>
         {tally.map((t) => (
           <Chip
             key={t.parts.join("+")}
@@ -1697,12 +1690,41 @@ function WhichRooms({
                 </a>
               }
             >
-              {plural(sel.differingNights.length, "night")} differ
+              {plural(sel.differingNights.length, "night")} {sel.differingNights.length === 1 ? "differs" : "differ"}
             </Chip>
           ) : (
             <Chip tone="quiet">the same rooms every night</Chip>
           )
         ) : null}
+        {/* The save sits at the right end of the row, apart from the tallies it acts on
+            (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
+        <span style={{ marginLeft: "auto" }}>
+          <Button
+            compact
+            kind={showSaved ? "secondary" : "primary"}
+            icon={showSaved ? "check" : undefined}
+            state={
+              saving
+                ? "working"
+                : showSaved || !sel.ready || stale
+                  ? "inert"
+                  : "default"
+            }
+            title={
+              showSaved
+                ? "this choice is on record — change a room to edit it"
+                : stale
+                  ? "the answer is old — ask the house again; your picks are kept"
+                  : !sel.ready
+                    ? "every night needs its rooms"
+                    : undefined
+            }
+            workingLabel="Saving…"
+            onClick={onSave}
+          >
+            {saveWord}
+          </Button>
+        </span>
       </div>
       <Tool>
         {board ? (
@@ -1746,6 +1768,7 @@ function WhichRooms({
             perDate={perDate}
             selectedIds={sel.base}
             perNightSel={sel.effectiveByNight}
+            referenceIds={sel.commonPlan}
             maxSelect={numberOfRooms}
             onToggle={sel.toggleRow}
             onToggleCell={sel.toggleCell}

@@ -466,7 +466,11 @@ export function NewInquiryCanvas() {
 
   const fullPhone = phoneCode && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
   const typedGuestName = `${firstName.trim()} ${lastName.trim()}`.trim();
-  const newGuestComplete = !!(firstName.trim() && lastName.trim() && phoneNumber.trim() && nationality.trim());
+  // The phone is optional, like the email (2026-10-06, operator) — an agency booking is reached
+  // through the agency's contact at the top, and the guest's own number is a nice-to-have.
+  const newGuestComplete = !!(firstName.trim() && lastName.trim() && nationality.trim());
+  // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
+  const emailBad = mode === "NEW" && !selectedGuest && email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const guestOk = isEdit || (mode === "NEW" ? !!selectedGuest || newGuestComplete : !!selectedGuest);
 
   // Saving the guest early only moves the write forward; the saved record is then reused.
@@ -527,8 +531,12 @@ export function NewInquiryCanvas() {
     else if (!editable) saveBlockers.push("the booking has moved past Inquiry");
   } else {
     if (!channel) saveBlockers.push("how they came in");
+    // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
+    // button waits for it rather than sending a request that comes back "invalid".
+    if (!useType) saveBlockers.push("what kind of stay it is");
     if (!guestOk)
-      saveBlockers.push(mode === "NEW" ? "the guest's first and last name, phone and nationality" : "the returning guest, picked from the list");
+      saveBlockers.push(mode === "NEW" ? "the guest's first and last name and nationality" : "the returning guest, picked from the list");
+    if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
     if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
   }
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
@@ -860,6 +868,69 @@ export function NewInquiryCanvas() {
                       </>
                     ) : null}
 
+                    {/* Which of their rates was agreed belongs WITH the party, not four cards down
+                        (2026-09-29, operator: the packages "never show" — they were at the foot of
+                        the page, in Rate and notes, long after the agency was picked). An agency
+                        like Bhutan INC carries Season · Off season · Premium, and the rate differs
+                        between them, so the choice is made where the eye already is. */}
+                    {!isEdit ? (
+                      <>
+                      <div className="field">
+                        <label>Rate package</label>
+                        {!party ? (
+                          <input className="input" readOnly value="Published rates" />
+                        ) : packagesQuery.isLoading ? (
+                          <input className="input" readOnly value="Reading their packages…" />
+                        ) : !packages || packages.length === 0 ? (
+                          <input className="input" readOnly value="The hotel's common package" />
+                        ) : (
+                          <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
+                            {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
+                            {packages.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                                {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <span className="hint">
+                          {!party
+                            ? partyKind
+                              ? "pick the agency or company and its packages follow"
+                              : "carries the meal plan and the rate"
+                            : !packages || packages.length === 0
+                              ? `no package on file for ${party.displayName}`
+                              : packages.length === 1
+                                ? "the only package on file for them"
+                                : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
+                        </span>
+                      </div>
+                      <div className="field">
+                        <label>Meal plans priced</label>
+                        <input
+                          className="input"
+                          readOnly
+                          value={
+                            chosenPackage
+                              ? [
+                                  chosenPackage.cpRate ? "CP" : null,
+                                  chosenPackage.mapLunchRate ? "MAP + lunch" : null,
+                                  chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
+                                  chosenPackage.apRate ? "AP" : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ") || "none in the package"
+                              : party
+                                ? "from their package"
+                                : "from the house tariff"
+                          }
+                        />
+                        <span className="hint">each room&rsquo;s plan is chosen at Negotiation</span>
+                      </div>
+                      </>
+                    ) : null}
+
                     {!isEdit && needsCorp ? (
                       <>
                         <div className="field">
@@ -948,7 +1019,7 @@ export function NewInquiryCanvas() {
                       <input type="checkbox" disabled aria-describedby="name-to-come-why" />
                       Name to come from {nameToCome}
                       <span id="name-to-come-why" className="meta">
-                        · not on the desk yet — an inquiry is kept on the guest&rsquo;s record, which needs a name with a phone or email (BE-62)
+                        · not on the desk yet — an inquiry is kept on the guest&rsquo;s record, which needs the guest&rsquo;s name (BE-62)
                       </span>
                     </label>
                   ) : null}
@@ -1004,12 +1075,12 @@ export function NewInquiryCanvas() {
                         <div className="field">
                           <label>Phone</label>
                           <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                          <span className="hint">finds an existing guest first · needed</span>
+                          <span className="hint">optional · typing it finds a guest already on file</span>
                         </div>
                         <div className="field">
                           <label>Email</label>
                           <input className="input" type="email" value={email} placeholder="optional" onChange={(e) => setEmail(e.target.value)} />
-                          <span className="hint">optional</span>
+                          <span className={`hint${emailBad ? " stop-ink" : ""}`}>{emailBad ? "that does not read as an email address" : "optional"}</span>
                         </div>
                         {phoneMatches.length > 0 ? (
                           <div className="wide">
@@ -1046,7 +1117,7 @@ export function NewInquiryCanvas() {
                               kind="secondary"
                               compact
                               state={saveGuest.isPending ? "working" : newGuestComplete && !busy ? "default" : "inert"}
-                              title={newGuestComplete ? undefined : "the name, phone and nationality first"}
+                              title={newGuestComplete ? undefined : "the name and nationality first"}
                               workingLabel="Saving…"
                               onClick={() => saveGuest.mutate()}
                             >
@@ -1304,7 +1375,7 @@ export function NewInquiryCanvas() {
                                 ? `adds up to ${plural(bedSum, "room")} — the room count · `
                                 : `${bedSum} of the ${plural(roomsN, "room")} have a bed setup asked; the rest are ours to pick · `
                               : ""}
-                            the exact King / Twin split is set at Arrival — here the house secures enough rooms of the right kind
+                            a tally — which room is which is settled on the table at Negotiation, where it is shared out from this ask
                           </span>
                         )}
                       </div>
@@ -1334,64 +1405,11 @@ export function NewInquiryCanvas() {
                 </StepCard>
 
                 {/* ------------------------------------------------ rate and notes */}
-                <StepCard title="Rate and notes">
+                <StepCard title="Notes">
                   {isEdit ? (
-                    <span className="meta">The rate package and the notes are changed on the booking itself, under Rate and notes.</span>
+                    <span className="meta">The notes are changed on the booking itself, under Rate and notes.</span>
                   ) : (
                     <div className="form2">
-                      <div className="field">
-                        <label>Rate package</label>
-                        {!party ? (
-                          <input className="input" readOnly value="Published rates" />
-                        ) : packagesQuery.isLoading ? (
-                          <input className="input" readOnly value="Reading their packages…" />
-                        ) : !packages || packages.length === 0 ? (
-                          <input className="input" readOnly value="The hotel's common package" />
-                        ) : (
-                          <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
-                            {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
-                            {packages.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                                {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                        <span className="hint">
-                          {!party
-                            ? partyKind
-                              ? "pick the agency or company and its packages follow"
-                              : "carries the meal plan and the rate"
-                            : !packages || packages.length === 0
-                              ? `no package on file for ${party.displayName}`
-                              : packages.length === 1
-                                ? "the only package on file for them"
-                                : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
-                        </span>
-                      </div>
-                      <div className="field">
-                        <label>Meal plans priced</label>
-                        <input
-                          className="input"
-                          readOnly
-                          value={
-                            chosenPackage
-                              ? [
-                                  chosenPackage.cpRate ? "CP" : null,
-                                  chosenPackage.mapLunchRate ? "MAP + lunch" : null,
-                                  chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
-                                  chosenPackage.apRate ? "AP" : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ") || "none in the package"
-                              : party
-                                ? "from their package"
-                                : "from the house tariff"
-                          }
-                        />
-                        <span className="hint">each room&rsquo;s plan is chosen at Negotiation</span>
-                      </div>
                       <div className="wide field">
                         <label>Notes</label>
                         <textarea

@@ -68,6 +68,14 @@ export const TIMER_WORKER_CONFIG_KEYS: ConfigKeyMeta[] = [
     schema: { kind: "days", label: "Validity (days)" },
   },
   {
+    key: "expiry.s2.negotiationTtlSeconds",
+    title: "Negotiation expiry (S2)",
+    description:
+      "How long a booking may sit at Negotiation before W20 lapses it. A generated or sent quote stretches the clock to the offer's validity; parking pauses it; a booking that has reached Set up is never lapsed by it.",
+    worker: "W20",
+    schema: { kind: "seconds", label: "TTL (seconds)", help: "86400 = 24 hours" },
+  },
+  {
     key: "expiry.s3.committedHoldTtlSeconds",
     title: "Committed hold TTL (S3)",
     description: "How long a committed hold stays before expiry.",

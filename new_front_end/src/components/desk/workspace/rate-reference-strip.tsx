@@ -15,7 +15,28 @@ import { moneyOrDash } from "@/lib/desk/workspace";
  */
 
 const TH: React.CSSProperties = { padding: "3px 16px 4px 0", fontWeight: 600, whiteSpace: "nowrap", textAlign: "left" };
-const TD: React.CSSProperties = { padding: "4px 16px 4px 0", whiteSpace: "nowrap" };
+const TD: React.CSSProperties = { padding: "5px 16px 5px 0", whiteSpace: "nowrap" };
+/**
+ * A rate on this strip is the anchor every negotiated figure below it is typed against, so it is
+ * read, not squinted at ("UIappeal", 2026-09-29): the money sits at 14px in full ink while the
+ * labels around it stay quiet.
+ */
+const MONEY: React.CSSProperties = { ...TD, fontSize: 14, fontWeight: 700, color: "var(--ink, #1e1c19)" };
+/**
+ * The MSR floor is a LIMIT, not a footnote: the house's minimum sellable rate for the type, and a
+ * booking priced under it needs the GM's waiver (p19). It is drawn as a bounded chip so the eye
+ * catches it, and the grid turns a room's rate red when it is typed below this figure.
+ */
+const FLOOR: React.CSSProperties = {
+  display: "inline-block",
+  padding: "1px 7px",
+  borderRadius: 999,
+  border: "1px solid var(--stop, #b3261e)",
+  background: "var(--stop-t, #fbecea)",
+  color: "var(--stop, #b3261e)",
+  fontWeight: 700,
+  fontSize: 12,
+};
 
 /** The add-on rate columns. Rendered only when at least one type carries a value — without a
  *  rate card they are ALL null, and four columns of dashes were most of the strip's noise. */
@@ -40,6 +61,15 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
 
   const pct = (rate: number) => `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   const visibleAddOns = ADD_ON_COLS.filter(([key]) => ref.roomTypes.some((t) => t[key] != null));
+  /**
+   * The MSR floor gets a column of its OWN (2026-09-30, operator: "if the basis column shows
+   * MSR, why is it named basis — show it as MSR"). Basis answers WHERE the rate came from
+   * (the standard plan, or a party's package); the floor is a different fact entirely — the
+   * limit the rate may not go under. Reading one out of the other's column was the confusion.
+   * The column drops out when no type has a floor, exactly as the add-on columns do: a party's
+   * package rate is negotiated and the pricing pipeline exempts it from MSR.
+   */
+  const anyFloor = ref.roomTypes.some((t) => t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null);
 
   return (
     // Boxed (2026-08-06, operator request) — the same bordered-strip language as the discount
@@ -66,7 +96,14 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
         <table style={{ borderCollapse: "collapse", fontSize: 11.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--ink-3, #7a6a52)" }}>
-              {["Room type", "Rooms", "Room", ...visibleAddOns.map(([, label]) => label), "Basis"].map((h) => (
+              {[
+                "Room type",
+                "Rooms",
+                "Room",
+                ...visibleAddOns.map(([, label]) => label),
+                "Basis",
+                ...(anyFloor ? ["MSR"] : []),
+              ].map((h) => (
                 <th key={h} style={TH}>
                   {h}
                 </th>
@@ -81,11 +118,11 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
                   {t.code && <span style={{ marginLeft: 6 }}>{t.name}</span>}
                 </td>
                 <td style={TD}>{t.roomNumbers.join(", ")}</td>
-                <td className="mono" style={TD}>
+                <td className="mono" style={MONEY}>
                   {moneyOrDash(t.roomRate, ref.currency)}
                 </td>
                 {visibleAddOns.map(([key]) => (
-                  <td key={key} className="mono" style={TD}>
+                  <td key={key} className="mono" style={MONEY}>
                     {moneyOrDash(t[key], ref.currency)}
                   </td>
                 ))}
@@ -96,14 +133,28 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
                       {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
                     </>
                   ) : t.roomRateSource === "STANDARD_RATE_PLAN" ? (
-                    <>
-                      standard plan
-                      {t.msrValue != null && <> · MSR floor {moneyOrDash(t.msrValue, ref.currency)}</>}
-                    </>
+                    "standard plan"
                   ) : (
                     "no rate on file"
                   )}
                 </td>
+                {anyFloor && (
+                  <td style={{ ...TD, paddingRight: 0 }}>
+                    {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null ? (
+                      <span
+                        className="mono"
+                        style={FLOOR}
+                        title="Minimum sellable rate — the house's floor for this room type. A booking priced below it needs the GM's waiver."
+                      >
+                        {moneyOrDash(t.msrValue, ref.currency)}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--ink-3, #7a6a52)" }} title="Negotiated rates carry no MSR floor">
+                        —
+                      </span>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

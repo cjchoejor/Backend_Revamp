@@ -7,7 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
-import { NegotiationDiscountBar, RoomCompositionsTable, type DiscountEdit } from "./room-compositions-table";
+import { NegotiationDiscountBar, RoomCompositionsTable, type BedAskSummary, type BedPlanCell, type DiscountEdit } from "./room-compositions-table";
 import { RateReferenceStrip } from "./rate-reference-strip";
 
 /**
@@ -1101,6 +1101,15 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   entryCheckOut?: string | null;
   entryAdults?: number | null;
   entryChildAges?: number[] | null;
+  /** roomId → that room's own nights, display-ready. See RoomCompositionsTable. */
+  roomDates?: Record<string, { label: string; nights: number }>;
+  /** Commit the table by pricing it — see RoomCompositionsTable. Table mode only. */
+  onSave?: () => void;
+  saveLabel?: string;
+  saving?: boolean;
+  unsaved?: boolean;
+  saveAside?: React.ReactNode;
+  onFaultsChange?: (faults: string[]) => void;
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */
   persistKey?: string;
@@ -1113,6 +1122,20 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   initialCompositions?: RoomCompositionInput[];
   /** In-house (S7): rates / waivers / discount render read-only — see RoomCompositionsTable. */
   lockCommercial?: boolean;
+  /** Clicking a room CHOOSES it rather than opening the board — see RoomCompositionsTable. */
+  onPickRoom?: (roomId: string) => void;
+  pickedRoomId?: string | null;
+  /** The booking's bed plan, one line per room — see RoomCompositionsTable. */
+  bedPlan?: Record<string, BedPlanCell>;
+  onBedChange?: (roomId: string, bedType: string | null) => void;
+  bedAsk?: BedAskSummary | null;
+  /**
+   * The grid alone, with no Table / Guest board switch (2026-10-06, operator: "from these s5 s6
+   * s7 can you remove the guest board from the tables, i don't think we need it"). The board is
+   * for SEATING a party while the price is still being shaped; by Arrival the seating is settled
+   * and the table is what the desk reads. Negotiation keeps both.
+   */
+  tableOnly?: boolean;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
@@ -1162,7 +1185,7 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   // The TABLE carries its own sticky copy above the grid (its rate cells are what the reference
   // anchors), so the strip is rendered here only for the guest board.
   const rateRef = props.entryId ? <RateReferenceStrip entryId={props.entryId} /> : null;
-  if (!canBoard)
+  if (!canBoard || props.tableOnly)
     return <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current ?? []} />;
   return (
     <div style={{ display: "grid", gap: 8 }}>

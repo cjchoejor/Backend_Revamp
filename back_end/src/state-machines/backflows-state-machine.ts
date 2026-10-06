@@ -339,7 +339,7 @@ export async function backflowS2ToS1(
     actor,
     reason: input.reason.trim(),
     modeKey: "NEW_BOOKING", // S2→S1 is a re-search inside the primary journey
-    cancelTimerCodes: ["QUOTATION_VALIDITY_W15", "SPECULATIVE_HOLD_EXPIRY_W2"],
+    cancelTimerCodes: ["QUOTATION_VALIDITY_W15", "SPECULATIVE_HOLD_EXPIRY_W2", "NEGOTIATION_EXPIRY"],
     hooks: async (tx, entry) => {
       // Any speculative hold gets released; folio not yet created at S2 (holds nothing).
       const specHold = await tx.speculativeHold.findFirst({

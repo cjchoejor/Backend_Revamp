@@ -84,9 +84,38 @@
 .ds .fact.line .r { justify-self: end; }
 .ds .warn-ink { color: var(--warning); }
 .ds .ok-ink { color: var(--success); }
+.ds .stop-ink { color: var(--danger); font-weight: 600; }
+/* a field's hint that has turned into a refusal reads red too — the plain hint rule is more specific */
+.ds .field .hint.warn-ink:not(.desk-root *) { color: var(--warning); font-weight: 600; }
+.ds .field .hint.stop-ink:not(.desk-root *) { color: var(--danger); font-weight: 600; }
 /* an action and what it sets off */
 .ds .seerow { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: baseline; }
-.ds .seerow .meta { display: inline; }
+/* The note WRAPS instead of running off the card (2026-10-06, operator: the words "are not fully
+   shown"). A flex item will not shrink below its content without min-width:0, so a long note was
+   painted past the card's edge rather than folding onto the next line. */
+.ds .seerow .meta { display: inline; flex: 1 1 15rem; min-width: 0; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ an act and its caption
+   A button with its explanation UNDER it, not trailing off its side (2026-10-06, operator:
+   "can these be made into proper buttons"). The control reads as a control; the sentence reads
+   as its caption; and when the act is held, the thing that unlocks it is a button of its own
+   rather than a sentence the person has to act on themselves. */
+.ds .actrow { display: grid; gap: 2px; padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.ds .actrow:first-child { border-top: 0; }
+.ds .actrow > .btn { justify-self: start; }
+.ds .actrow .cap { font-size: 12.5px; color: var(--ink-2); max-width: 62ch; overflow-wrap: anywhere; }
+.ds .actrow .held { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.ds .actrow .held .why { font-size: 12.5px; font-weight: 600; color: var(--warn-ink, #8a5a00); max-width: 56ch; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ the chosen room's acts
+   Above the rooms table, so the acts plainly belong to the row that is lit (2026-10-06). */
+.ds .roomacts { padding: var(--s2) var(--s3); margin-bottom: var(--s2); border: 1px solid var(--line-2); border-radius: var(--r2, 8px); background: var(--surface-2, #fbf8f3); min-height: 40px; }
+/* the acts read across one line; a tool that opens a panel takes the full width below them */
+.ds .roomacts .line { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; min-height: 28px; }
+.ds .roomacts > .desk-root { margin-top: var(--s2); }
+.ds .roomacts .who { font-size: 13px; }
+.ds .roomacts .who b { font-weight: 700; }
+.ds .roomacts .meta { font-size: 12.5px; }
 /* a choice among a few words (Came in as · What kind of stay · Night) */
 .ds .choice { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .ds .choice .btn[aria-pressed="true"] { background: var(--surface); border-color: var(--ink); color: var(--ink); }
@@ -138,9 +167,33 @@
    hold time…" read as a sentence fragment. A hairline and the full ink say it can be pressed;
    the fill still only arrives on hover, so a card of them stays quiet. The dark topbar and rail
    keep their own treatment. An inert one is dashed — visibly a control, visibly not available. */
-.ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { border-color: var(--line); color: var(--ink); }
+/* Second pass (2026-09-30, operator's screenshot: "the buttons don't look like buttons at all
+   — Generate the quote only, A time I choose, Provisional block, Extend ... it looks like
+   something to read", "UIappeal"). A hairline in --line on a cream card is nearly invisible and
+   the generated sheet also drops the weight to 400, so the control read as a sentence. A quiet
+   button now carries a real surface, a hairline that contrasts with the card it sits on, and the
+   medium weight every other control has. It is still quiet — the fill is the page's own surface,
+   not an accent — so a card of them does not compete with the primary act. */
+.ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface); border-color: var(--line-2); color: var(--ink); font-weight: 500; }
 .ds .btn-quiet:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-3); border-color: var(--ink-3); }
-.ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); }
+.ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); font-weight: 400; }
+/* "Change configuration" (2026-09-30) — the rooms and the party, changed at Negotiation. It
+   takes over its card, so it reads as a short numbered form rather than a second panel. */
+.ds .cfg-change:not(.desk-root *) { display: grid; gap: var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-card); padding: var(--s4); background: var(--surface-2); }
+.ds .cfg-head:not(.desk-root *) { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s3); }
+.ds .cfg-n:not(.desk-root *) { display: block; font-size: var(--t-sm); color: var(--ink-2); letter-spacing: .02em; }
+.ds .cfg-change section:not(.desk-root *) { display: block; }
+.ds .cfg-change section + section:not(.desk-root *) { border-top: 1px solid var(--line); padding-top: var(--s3); }
+/* A refusal of the party just typed — the same loud treatment the negotiation table uses. */
+.ds .cfg-stop:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 600; }
+
+/* A configuration change waiting for the FOM (2026-09-30) — it has to catch the eye of the
+   person who can decide it, so it reads as a standing notice rather than another quiet row. */
+.ds .cfg-wait:not(.desk-root *) { display: grid; gap: var(--s3); margin-top: var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--warn, #8f5300); border-radius: var(--r-card); background: var(--warn-soft, #fdf4e7); }
+.ds .cfg-wait-h:not(.desk-root *) { display: grid; gap: 2px; }
+.ds .cfg-wait-b:not(.desk-root *) { display: grid; gap: 2px; padding: var(--s2) var(--s3); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-control); }
+.ds .cfg-wait-s:not(.desk-root *) { font-size: var(--t-lead); }
+
 /* The list's end-of-table bar sits ABOVE the sticky first column, or the column paints through
    it and the bar reads as a grey block eating the last rows (operator, image 4). */
 .ds .table-foot:not(.desk-root *) { z-index: 5; }
@@ -170,11 +223,22 @@
 /* The steps stay put while the middle scrolls (2026-09-25, operator). The side panel goes with
    them, since the numbered to-do is read against the page it scrolls. Each gets its own scroll
    when it outgrows the screen; 53px is the sticky topbar's height. */
-.ds .ws-body > .rail, .ds .ws-body > .side { position: sticky; top: 53px; align-self: start; max-height: calc(100vh - 53px); overflow: auto; }
-/* The intake's house card sticks too — below the topbar, not under it: the generated sheet pins
-   it at 16px from the top of the window, so its heading slid beneath the 53px topbar and the box
-   read as cut off while it followed the scroll (2026-09-25, operator). */
-.ds .intake-right:not(.desk-root *) { top: calc(53px + var(--s4)); }
+.ds .ws-body > .rail-col > .rail, .ds .ws-body > .side { position: sticky; top: calc(53px + var(--ws-head-h, 0px)); align-self: start; max-height: calc(100vh - 53px - var(--ws-head-h, 0px)); overflow: auto; }
+/* The booking header stays put too (2026-09-29, operator: "so they know which guest they are
+   working on"): it sticks under the topbar and the columns sit below it — the workspace measures
+   its height onto `--ws-head-h`, since the facts line wraps. Above the columns, below the topbar. */
+.ds .ws-head:not(.desk-root *) { position: sticky; top: 53px; z-index: 35; }
+/* The rail's ink runs down to the gate bar, not to the end of its own list (2026-09-29, operator:
+   "that incomplete black bar seems off — drag it all the way to the Move to Negotiation bar").
+   The ink belongs to the COLUMN — the grid cell, which always runs from the header to the bar —
+   while the nav inside it sticks at its own height. (A nav made window-tall instead was pushed
+   up under the sticky header whenever the bar was on screen.) */
+.ds .ws-body > .rail-col:not(.desk-root *) { background: var(--ink); min-width: 0; }
+/* The intake's house card sticks too — below the topbar (and the booking header on the Inquiry
+   step), not under them: the generated sheet pins it at 16px from the top of the window, so its
+   heading slid beneath the 53px topbar and the box read as cut off while it followed the scroll
+   (2026-09-25, operator). */
+.ds .intake-right:not(.desk-root *) { top: calc(53px + var(--ws-head-h, 0px) + var(--s4)); }
 
 /* Taken to a section from the to-do: it says so for a moment, then settles. */
 @keyframes ds-card-flash {
@@ -198,3 +262,25 @@
 /* A pane of a step: its cards stack like the canvas, and a hidden one is really hidden. */
 .ds .steps-canvas > .pane { display: grid; gap: var(--s4); }
 .ds .steps-canvas > .pane[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ papers, as a history
+   One row per version, newest first: what it is, where it stands, when, and what can be done
+   with it (2026-10-06). The row folds on a narrow screen rather than cutting anything off. */
+.ds .papergrp { margin-top: var(--s3); }
+.ds .papergrp:first-child { margin-top: 0; }
+.ds .papergrp > .h { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 2px; }
+.ds .paperrow { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line); }
+.ds .paperrow .nm { font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.ds .paperrow .nm .v { color: var(--ink-3); font-weight: 400; }
+.ds .paperrow .when { font-size: 12px; color: var(--ink-3); }
+.ds .paperrow .acts { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* Bookings — the Sort menu at the end of the filters, and the band rows that say where today
+   falls in a list sorted by a stay date (2026-10-06). The today band is the accent: it is the
+   line the reader is looking for. */
+.ds .bookings-page .sortwrap:not(.desk-root *) { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.ds .bookings-page .sortwrap select.input:not(.desk-root *) { width: auto; min-width: 250px; }
+.ds .list-band td:not(.desk-root *) { padding: 7px 12px; background: var(--surface-3); border-bottom: 1px solid var(--line-2); font-size: var(--t-meta); font-weight: 800; color: var(--ink-2); letter-spacing: 0.02em; }
+.ds .list-band.today td:not(.desk-root *) { background: var(--accent-soft); color: var(--accent-ink); border-bottom-color: var(--accent-line); }
+.ds .list-band .n:not(.desk-root *) { margin-left: 10px; font-weight: 600; color: var(--ink-3); }
+.ds .bookings-page .date-cell:not(.desk-root *) { white-space: nowrap; }

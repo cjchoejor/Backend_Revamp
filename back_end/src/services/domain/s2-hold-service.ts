@@ -17,6 +17,7 @@ import { foldIsoNightsToRanges, heldRoomIds } from "../../lib/entry-inventory-cl
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { enforceEntryAtS2ForSpeculativeHoldPlacement } from "../../policies/10-speculative-hold/p25-s2-stage-for-speculative-hold-placement.js";
 import { enforceSpeculativeHoldPlacedForRelease } from "../../policies/10-speculative-hold/p25-speculative-hold-placed-for-release.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 type PlacementThresholds = {
   thresholds: Array<{ maxRooms: number | null; authorityRequired: "FRONT_DESK" | "FOM" | "GM"; maxConcurrentHolds: number | null }>;
@@ -33,6 +34,8 @@ export async function placeSpeculativeHold(
     include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // A lapse leaves the stage where it was, so the gate below passes on a dead booking (2026-10-01).
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS2ForSpeculativeHoldPlacement({ currentStage: entry.currentStage });
 
   const segmentId = entry.segments[0]?.id;
@@ -253,9 +256,21 @@ export async function releaseSpeculativeHold(
   entryId: string,
   holdId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-  input: { releaseReason: string },
+  input: {
+    releaseReason: string;
+    /**
+     * INTERNAL ONLY — never reachable from the HTTP route, whose DTO carries `releaseReason`
+     * alone (2026-09-30). The GM gate below guards an operator GIVING UP a marker so somebody
+     * else can sell the room. A Negotiation amendment is not that act: the same booking's marker
+     * MOVES to its new rooms and keeps its original deadline, so nothing is forgone and the
+     * authority that governs it is the amendment's own. Without this the desk could re-seal the
+     * rooms and then fail at the marker, leaving one standing over rooms the booking no longer
+     * holds — which is the exact inconsistency the re-mark exists to prevent.
+     */
+    internalReMark?: boolean;
+  },
 ) {
-  enforceSpeculativeHoldReleaseAuthority({ actorLevel: actor.actorLevel });
+  if (!input.internalReMark) enforceSpeculativeHoldReleaseAuthority({ actorLevel: actor.actorLevel });
   if (!input.releaseReason?.trim()) throw new ValidationError("releaseReason is required");
 
   const hold = await prisma.speculativeHold.findUnique({ where: { id: holdId } });

@@ -14,6 +14,7 @@ import {
   enforceRoomPhysicallyAssignableForS5,
   enforceRoomTypeMatchesHoldForAssignment,
 } from "../../policies/01-availability/p01-s5-room-assignment-eligibility-gates.js";
+import { applyBedPlanToAssignedRooms } from "./entry-bed-plan-service.js";
 
 export type DeficientAck = {
   acknowledgementActorId: string;
@@ -132,6 +133,9 @@ export async function assignRoom(
   if (entry.currentStage === Stage.S5) {
     await maybeRegisterRoomReadinessSla(prisma, entryId, roomId, actorId, room.physicalState);
   }
+  // The room is the booking's now, so make it up as the stay planned (2026-10-06). Quiet and
+  // best-effort: a bed that cannot be set is a difference the desk reads on the rooms table.
+  await applyBedPlanToAssignedRooms(entryId, actorId, prisma);
   return created;
 }
 
@@ -241,6 +245,7 @@ export async function assignRoomsFromSealedPerNight(
     });
     created.push({ id: row.id, roomId: row.roomId, startDate: r.startDate, endDate: r.endDate });
   }
+  if (created.length) await applyBedPlanToAssignedRooms(entryId, actorId, prisma);
   return created;
 }
 

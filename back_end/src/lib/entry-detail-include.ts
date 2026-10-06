@@ -49,6 +49,8 @@ export const entryDetailInclude = {
     orderBy: { createdAt: "desc" as const },
   },
   availabilityConfigs: { orderBy: { createdAt: "desc" as const } },
+  /** When the booking entered its current step — the desk prints "At this step · 2h 10m" (2026-09-29). */
+  stageDwellRecords: { where: { exitedAt: null }, orderBy: { enteredAt: "desc" as const }, take: 1, select: { stage: true, enteredAt: true, mode: true } },
   segments: { orderBy: { segmentNumber: "desc" as const }, take: 5 },
   quotations: { orderBy: { versionNumber: "desc" as const } },
   speculativeHolds: {
@@ -73,12 +75,20 @@ export const entryDetailInclude = {
     },
   },
   stayExtensionRequests: { orderBy: { createdAt: "desc" as const }, take: 5 },
+  /** Configuration changes waiting for the FOM, and the last few decided (2026-09-30). */
+  negotiationAmendmentRequests: { orderBy: { createdAt: "desc" as const }, take: 5 },
   // Early departure (2026-08-22): the one record of a shortened stay - the desk prints its facts
   // on every step from Stay onward.
   earlyDeparture: true,
   inquiry: {
     include: {
       agentProfile: { select: { id: true, displayName: true, commissionRate: true, commissionBasis: true } },
+      /**
+       * Who booked (2026-09-29): the agency or the company, with its own contact, so Booking
+       * details can print who to ring about the booking without a second call.
+       */
+      travelAgent: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true } },
+      corporateAccount: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true } },
       /**
        * Every booking on this enquiry — the trip (2026-09-25). A return stay is a second booking
        * under the same enquiry, so the desk reads the other stays from here: no second call, and

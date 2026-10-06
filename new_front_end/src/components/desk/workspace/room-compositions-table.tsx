@@ -107,7 +107,7 @@ const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
 type RateCol = "rRoom" | "rBed" | "rBf" | "rLu" | "rDi";
 const RATE_META: Record<RateCol, { th: string; meal: string | null }> = {
   rRoom: { th: "Room", meal: null },
-  rBed: { th: "Bed", meal: null },
+  rBed: { th: "Extra bed", meal: null },
   rBf: { th: "B'fast", meal: "breakfast" },
   rLu: { th: "Lunch", meal: "lunch" },
   rDi: { th: "Dinner", meal: "dinner" },
@@ -282,6 +282,137 @@ function rowFromComposition(c: RoomCompositionInput): RowState {
   };
 }
 
+/** One room's line of the booking's bed plan — `entry-bed-plan-service` on the backend. */
+export interface BedPlanCell {
+  bedType: string | null;
+  source: "PLAN" | "ASK" | "USUAL";
+  usual: string | null;
+  allowed: string[];
+  roomNow: string | null;
+  appliesNow: boolean;
+}
+
+const BED_WORDS: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
+
+/** The guest's bed ask against the plan, as the backend counted it (`GET /entries/:id/bed-plan`). */
+export interface BedAskSummary {
+  lines: { bedType: string; asked: number; planned: number; met: boolean; shortNights: string[] }[];
+  met: boolean;
+  /** The rooms differ by night, so each night was counted on its own. */
+  nightsVary: boolean;
+  /** Every asked setup could be given a room at all. */
+  satisfiable: boolean;
+  message: string | null;
+}
+
+/**
+ * What the guest asked for, at the top of the table (2026-10-06, operator: "we need to show
+ * somewhere above or on the top the amount and type of bed type the guest asked, or else the user
+ * wouldn't know"). The Bed type column below is where it is answered, so the ask sits directly
+ * over it. "UIappeal": every setup is a chip whose colour is its state — red while the plan makes
+ * up fewer rooms that way than asked, green once it does. Nothing is counted here; the figures
+ * are the server's, night by night on a stay that moves rooms.
+ */
+function BedAskStrip({ ask }: { ask: BedAskSummary }) {
+  return (
+    <div className={`rct-bedask ${ask.met ? "met" : "short"}`} role="status" aria-live="polite">
+      <span className="lbl">Guest asked for</span>
+      {ask.lines.map((l) => {
+        const word = BED_WORDS[l.bedType] ?? l.bedType;
+        const short = l.asked - l.planned;
+        return (
+          <span
+            key={l.bedType}
+            className={`chip ${l.met ? "ok" : "stop"}`}
+            title={
+              l.met
+                ? `${l.planned} room${l.planned === 1 ? " is" : "s are"} to be made up as ${word}${ask.nightsVary ? " on every night" : ""}`
+                : `${l.asked} asked, ${l.planned} set${l.shortNights.length ? ` — short on ${l.shortNights.map(shortNight).join(", ")}` : ""}`
+            }
+          >
+            <b>
+              {l.asked} {word}
+            </b>
+            <span className="st">
+              {l.met ? (
+                <>✓ {l.planned} set</>
+              ) : (
+                <>
+                  {l.planned} set · {short} short
+                  {l.shortNights.length ? ` on ${l.shortNights.map(shortNight).join(", ")}` : ""}
+                </>
+              )}
+            </span>
+          </span>
+        );
+      })}
+      <span className="note">
+        {!ask.satisfiable && ask.message
+          ? ask.message
+          : ask.met
+            ? ask.nightsVary
+              ? "Every night has the setups asked for"
+              : "Every setup asked for has a room"
+            : "Set the rest in the Bed type column below"}
+      </span>
+    </div>
+  );
+}
+
+/** "6 Oct" — the night a fault belongs to, on a booking that moves rooms mid-stay. */
+function shortNight(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+/**
+ * How this room is made up for this stay. Not a composition field — a bed setup carries no price
+ * (the EXTRA bed is the charged one, two columns along), so changing it leaves the table priced
+ * exactly as it was and never asks for a re-quote.
+ */
+function BedCell({
+  roomId,
+  cell,
+  onChange,
+}: {
+  roomId: string;
+  cell?: BedPlanCell;
+  onChange?: (roomId: string, bedType: string | null) => void;
+}) {
+  if (!cell) return <td className="bedcol" />;
+  const opts = cell.allowed.length ? cell.allowed : Object.keys(BED_WORDS);
+  const differs = cell.roomNow && cell.bedType && cell.roomNow !== cell.bedType;
+  const why =
+    cell.source === "PLAN"
+      ? "Set for this booking"
+      : cell.source === "ASK"
+        ? "From the bed setup the guest asked for"
+        : "The room's usual setup";
+  return (
+    <td
+      className="bedcol"
+      title={`${why}${differs ? ` · the room is made up as ${BED_WORDS[cell.roomNow!] ?? cell.roomNow} until it is set for this stay` : ""}`}
+    >
+      <select
+        className="rct-in"
+        value={cell.bedType ?? ""}
+        disabled={!onChange}
+        onChange={(e) => onChange?.(roomId, e.target.value || null)}
+      >
+        {!cell.bedType && <option value="">—</option>}
+        {opts.map((t) => (
+          <option key={t} value={t}>
+            {BED_WORDS[t] ?? t}
+            {t === cell.usual ? " (usual)" : ""}
+          </option>
+        ))}
+      </select>
+    </td>
+  );
+}
+
 export function RoomCompositionsTable({
   entryId,
   sealedRoomIds,
@@ -289,9 +420,21 @@ export function RoomCompositionsTable({
   entryCheckOut,
   entryAdults,
   entryChildAges,
+  roomDates,
+  onSave,
+  saveLabel,
+  saving,
+  unsaved,
+  saveAside,
+  onFaultsChange,
   initial,
   onChange,
   onOpenRoomInBoard,
+  onPickRoom,
+  pickedRoomId,
+  bedPlan,
+  onBedChange,
+  bedAsk,
   discountValue,
   discountUnit,
   discountBasis,
@@ -309,6 +452,70 @@ export function RoomCompositionsTable({
   lockCommercial?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
+  /**
+   * Clicking a room CHOOSES it, so the surface above can offer that room's own acts — change it,
+   * change its setup, assign it (2026-10-06, operator: "changing can be just clicking on one room
+   * in the table and showing an option"). Takes precedence over `onOpenRoomInBoard`: the rooms
+   * surface at Arrival / Check-in / Stay is about what to DO with a room, not about re-seating
+   * its guests on the board.
+   */
+  onPickRoom?: (roomId: string) => void;
+  /** The room currently chosen, drawn as such. */
+  pickedRoomId?: string | null;
+  /**
+   * How each room is to be made up for this stay, from the booking's bed plan (2026-10-06,
+   * operator: "in the table in s2 we can have column as bed type ... make it for s5 s6 s7 as
+   * well"). Seeded from the guest's own ask at intake, else the room's usual setup.
+   */
+  bedPlan?: Record<string, BedPlanCell>;
+  onBedChange?: (roomId: string, bedType: string | null) => void;
+  /** The guest's bed ask against that plan — drawn at the top of the table when there is one. */
+  bedAsk?: BedAskSummary | null;
+  /**
+   * Commit the table (2026-09-30, operator: "a save button to save the config, but it'll only
+   * allow ... if there's no error or red boxes or mismatches, then it'll generate the quotation
+   * based on the saved list"). A composition is not stored anywhere of its own — the QUOTATION
+   * is where it lands — so saving the table IS pricing it, and the button says so.
+   */
+  onSave?: () => void;
+  saveLabel?: string;
+  saving?: boolean;
+  /**
+   * Does the table still say what the quotation was priced on? (2026-09-30, operator: "if
+   * there's changes made in the table before it can it be shown in red and green after clicking
+   * it and again if there's changes in the table red so that user knows he made changes".)
+   * True = edited since it was priced, or never priced at all. The COLOUR is the state
+   * ("UIappeal"): red while the two disagree, green once they match — and green is inert,
+   * because pressing it then would mint a new version identical to the one on file.
+   */
+  unsaved?: boolean;
+  /**
+   * Rendered immediately LEFT of the Save (2026-09-30, operator: "move this section to left side
+   * of save button below the table since we have to set and save it at that section"). The
+   * quotation's validity is written BY the save, so it belongs with it rather than in a card
+   * further down the step.
+   */
+  saveAside?: React.ReactNode;
+  /**
+   * Every fault the table can see, in the operator's words, so the step can hold its own acts
+   * shut for the same reasons rather than each surface deciding separately what "sound" means.
+   */
+  onFaultsChange?: (faults: string[]) => void;
+  /**
+   * roomId → the nights that room actually holds, display-ready (2026-09-30, operator: "a
+   * column showing the dates they were assigned to"). Derived by the CALLER with
+   * `roomStayRangesByRoom(entry)` — the same fold the S5-S7 room rows print, so the desk can
+   * never describe one room's nights two ways. Absent = no Dates column (the room-change
+   * panel prices a substitution, where the booking's own stay would be the wrong answer).
+   */
+  /**
+   * Per room: the nights it is held for. `dates` is what makes a SPLIT legible — a booking that
+   * moves rooms on the second night has rooms that are not in use at the same time, so their
+   * guests are the same people, not more people (2026-10-06, operator: "we have booked rooms in
+   * different rooms the next day ... the table treats this somewhat like a new room and I can't
+   * allocate the same people").
+   */
+  roomDates?: Record<string, { label: string; nights: number; dates?: string[] }>;
   /** Enables the reference-rate placeholders in the negotiated-rate cells. */
   entryId?: string;
   sealedRoomIds: string[];
@@ -356,6 +563,39 @@ export function RoomCompositionsTable({
     () => new Map((rateRef?.roomTypes ?? []).map((t) => [t.roomTypeId, t])),
     [rateRef],
   );
+  /**
+   * What is wrong with a row, in the operator's words — null when nothing is (2026-09-30,
+   * operator's screenshot: room 205 sitting at 0 adults, "that whole box should be showing in red
+   * highlight ... similar like that if there is any issue in any of the boxes"). Both faults are
+   * refused downstream, so the grid says so before the click rather than after it: a room in the
+   * plan with nobody in it breaks the "no room is empty" seating invariant, and a room of children
+   * with no adult is the unaccompanied-minor rule (`requiredAccompanyingAdults`, default 1 on
+   * every room type).
+   */
+  const rowFault = (roomId: string): string | null => {
+    const r = rows[roomId] ?? EMPTY_ROW;
+    const adults = cnt(r.ad);
+    if (adults + cnt(r.c6) + cnt(r.u6) === 0)
+      return "nobody is in this room — put someone in it, or drop the room back at Inquiry";
+    if (adults === 0) return "no adult in this room — children cannot be booked in on their own";
+    return null;
+  };
+  /**
+   * The MSR floor for a room's type — the house's minimum sellable rate (2026-09-29). It applies
+   * only where the rate came from the standard plan: a party's own rate package is negotiated, so
+   * the pricing pipeline exempts it (`belowMsr: agentRate ? false : …`).
+   */
+  const floorOf = (roomId: string): number | null => {
+    const t = refByRoomType.get(roomById.get(roomId)?.roomType?.id ?? "");
+    return t?.roomRateSource === "STANDARD_RATE_PLAN" ? (t.msrValue ?? null) : null;
+  };
+  /** A typed room rate under that floor — a breach the operator must see, so the cell reads red. */
+  const belowFloor = (roomId: string, col: NumCol): boolean => {
+    if (col !== "rRoom") return false;
+    const floor = floorOf(roomId);
+    const typed = parseFloat(rows[roomId]?.rRoom ?? "");
+    return floor != null && Number.isFinite(typed) && typed > 0 && typed < floor;
+  };
   /** The reference figure a given rate cell would fall back to — null when nothing is on file. */
   const refFor = (roomId: string, col: NumCol): number | null => {
     const typeId = roomById.get(roomId)?.roomType?.id;
@@ -633,24 +873,34 @@ export function RoomCompositionsTable({
    *  the first row so a family shares a room. CNB 11+ retired: declared children above
    *  the child band join the adult pool. */
   const distribute = () => {
-    const n = sealedRoomIds.length;
-    if (n === 0) return;
+    if (sealedRoomIds.length === 0) return;
     const ages = entryChildAges ?? [];
     const under6 = ages.filter((a) => a <= youngMax).length;
     const c6to10 = ages.filter((a) => a > youngMax && a <= childMax).length;
     const adults = Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length;
-    const base = Math.floor(adults / n);
-    const rem = adults % n;
+    // The party is seated NIGHT BY NIGHT. On a booking that moves rooms mid-stay the rooms are
+    // not in use together, so spreading the party once across every row would leave each night
+    // holding a fraction of it (2026-10-06). On a plain booking there is one night-group and
+    // this is the old behaviour exactly.
+    const groups: string[][] = busiestNight
+      ? allNights.map((n) => roomsOn(n)).filter((g, i, all) => g.length > 0 && all.findIndex((h) => h.join(",") === g.join(",")) === i)
+      : [sealedRoomIds];
     setRows((prev) => {
       const next = { ...prev };
-      sealedRoomIds.forEach((id, i) => {
-        next[id] = withAutoBed(id, {
-          ...(next[id] ?? { ...EMPTY_ROW }),
-          ad: String(base + (i < rem ? 1 : 0)),
-          c6: String(i === 0 ? c6to10 : 0),
-          u6: String(i === 0 ? under6 : 0),
+      for (const ids of groups) {
+        const n = ids.length;
+        if (n === 0) continue;
+        const base = Math.floor(adults / n);
+        const rem = adults % n;
+        ids.forEach((id, i) => {
+          next[id] = withAutoBed(id, {
+            ...(next[id] ?? { ...EMPTY_ROW }),
+            ad: String(base + (i < rem ? 1 : 0)),
+            c6: String(i === 0 ? c6to10 : 0),
+            u6: String(i === 0 ? under6 : 0),
+          });
         });
-      });
+      }
       return next;
     });
   };
@@ -792,8 +1042,14 @@ export function RoomCompositionsTable({
     roomCompositions: RoomCompositionInput[];
     discount: { percent?: number; amount?: number } | null;
   } | null>(null);
+  // The preview runs whether or not the rate columns are open (2026-09-30, operator report:
+  // the sum row's SC and GST "can be left unseen ... they show when Rates + is clicked, and after
+  // clicking Rates + once and Rates - again they keep showing"). That was this query: it was
+  // gated on `ratesOpen`, while the footer cells that print its figures were not — so the figures
+  // were blank until the group had been opened once, then stayed from the cache. The money
+  // belongs under the table at all times, so the query does too.
   useEffect(() => {
-    if (!ratesOpen || !entryId || compositions.length === 0) return;
+    if (!entryId || compositions.length === 0) return;
     const discount =
       Number.isFinite(discNum) && discNum > 0
         ? discUnitNow === "percent"
@@ -802,11 +1058,11 @@ export function RoomCompositionsTable({
         : null;
     const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount }), 450);
     return () => clearTimeout(t);
-  }, [compositions, ratesOpen, entryId, discNum, discUnitNow]);
+  }, [compositions, entryId, discNum, discUnitNow]);
   const previewQuery = useQuery({
     queryKey: ["quotation-live-preview", entryId, previewBody],
     queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),
-    enabled: !!session && !!entryId && !!previewBody && ratesOpen,
+    enabled: !!session && !!entryId && !!previewBody,
     // Keep the previous figures on screen while the next debounce round-trips — totals
     // shouldn't blink to dashes on every keystroke.
     placeholderData: (prev) => prev,
@@ -819,6 +1075,20 @@ export function RoomCompositionsTable({
 
   // Others à-la-carte columns appear only once someone is on the Others plan.
   const othersVisible = sealedRoomIds.some((id) => cnt(rows[id]?.ot ?? "0") > 0);
+
+  // ---- Which nights each room is for (2026-09-30) ----------------------------------
+  // Operator: "the reservation is from 30 Sept to 3 Oct but we don't know which dates the rooms
+  // are for" — and then, on seeing a banner above the grid: "I wanted a COLUMN showing the dates
+  // they were assigned to". It leads the row, because it is part of the room's identity: a row
+  // reads "12 – 15 Oct · 204" before any of its counts mean anything. The labels are the
+  // caller's (see `roomDates`); the table only prints them.
+  const datesShown = !!roomDates && sealedRoomIds.some((id) => roomDates[id]);
+  const bedsShown = !!bedPlan && sealedRoomIds.some((id) => bedPlan[id]);
+  /** The stay's own night count — a room that differs from it is the interesting case. */
+  const ciIso = dayToIso(entryCheckIn);
+  const coIso = dayToIso(entryCheckOut);
+  const stayNights =
+    ciIso && coIso ? Math.round((new Date(coIso).getTime() - new Date(ciIso).getTime()) / 86400000) : null;
 
   // ---- Spreadsheet keyboard navigation -------------------------------------------
   // Cells are addressed `row:col` via data-cell. Arrow keys move between cells (Left/
@@ -878,9 +1148,100 @@ export function RoomCompositionsTable({
   };
 
   // ---- Totals ---------------------------------------------------------------------
-  const sum = (col: NumCol) => sealedRoomIds.reduce((s, id) => s + cnt(rows[id]?.[col] ?? "0"), 0);
-  const totalGuests = sum("ad") + sum("c6") + sum("u6");
+  /**
+   * A booking that changes rooms mid-stay holds rooms that are never in use together, and the
+   * party sleeps in each of them in turn. Adding every row up then says the booking has twice
+   * the guests it has, and every room on the later night reads as one nobody is in.
+   *
+   * So the reconciliation is **per night**: on each night, the rooms held that night must hold
+   * the party between them. The Σ row prints the busiest night's figures — on a plain booking,
+   * where every room runs the whole stay, that is exactly the old sum.
+   */
+  const nightsOf = (id: string) => roomDates?.[id]?.dates ?? null;
+  const splitStay = sealedRoomIds.some((id) => (nightsOf(id)?.length ?? 0) > 0)
+    && new Set(sealedRoomIds.flatMap((id) => nightsOf(id) ?? [])).size > 0
+    && sealedRoomIds.some((a) => sealedRoomIds.some((b) => {
+      const A = nightsOf(a);
+      const B = nightsOf(b);
+      return A && B && a !== b && !A.some((n) => B.includes(n));
+    }));
+  const allNights = Array.from(new Set(sealedRoomIds.flatMap((id) => nightsOf(id) ?? []))).sort();
+  const roomsOn = (night: string) => sealedRoomIds.filter((id) => (nightsOf(id) ?? []).includes(night));
+  const sumOver = (ids: string[], col: NumCol) => ids.reduce((s, id) => s + cnt(rows[id]?.[col] ?? "0"), 0);
+  const guestsOver = (ids: string[]) => sumOver(ids, "ad") + sumOver(ids, "c6") + sumOver(ids, "u6");
+  /** The night the table reconciles against: the one holding the most guests. */
+  const busiestNight = splitStay && allNights.length
+    ? allNights.reduce((best, n) => (guestsOver(roomsOn(n)) > guestsOver(roomsOn(best)) ? n : best), allNights[0])
+    : null;
+  const idsForTotals = busiestNight ? roomsOn(busiestNight) : sealedRoomIds;
+  const sum = (col: NumCol) => sumOver(idsForTotals, col);
+  const totalGuests = guestsOver(idsForTotals);
   const partySize = (entryAdults ?? 0) + (entryChildAges?.length ?? 0);
+  /** Nights whose rooms do not hold the party between them — named in the fault list. */
+  const nightsShort = splitStay && partySize > 0
+    ? allNights.filter((n) => guestsOver(roomsOn(n)) !== partySize)
+    : [];
+
+  /**
+   * Everything wrong with the table right now, named room by room (2026-09-30). This is the ONE
+   * definition of "sound enough to price": the red cells above are its symptoms, and the Save
+   * button and the step's own acts both read it, so the grid and the page can never disagree
+   * about whether the configuration may be committed.
+   *
+   * Every item here is refused by the backend too — the list exists so the refusal arrives
+   * before the click rather than after it, naming the room instead of an id.
+   */
+  const faults = useMemo<string[]>(() => {
+    const out: string[] = [];
+    if (roomMin != null && sealedRoomIds.length < roomMin) {
+      out.push(
+        `${roomEnvelopeQuery.data?.chargeableOccupants ?? partySize} chargeable guests need at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} chosen at Inquiry`,
+      );
+    }
+    for (const id of sealedRoomIds) {
+      const r = rows[id] ?? EMPTY_ROW;
+      const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
+      const fault = rowFault(id);
+      if (fault) out.push(`Room ${roomNoOf(id)} — ${fault}`);
+      const room = roomById.get(id);
+      const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
+      if (cap != null && occ > cap + cnt(r.bed)) {
+        out.push(`Room ${roomNoOf(id)} — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`);
+      }
+      if (MEAL_COLS.reduce((s2, c) => s2 + cnt(r[c]), 0) > occ) {
+        out.push(`Room ${roomNoOf(id)} — more meal-plan pax than guests in the room`);
+      }
+      if (belowFloor(id, "rRoom")) {
+        out.push(`Room ${roomNoOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
+      }
+    }
+    if (partySize > 0) {
+      if (splitStay) {
+        // Each night on its own: the rooms in use that night must hold the party between them.
+        for (const n of nightsShort) {
+          const g = guestsOver(roomsOn(n));
+          out.push(
+            g < partySize
+              ? `${shortNight(n)} — ${partySize - g} of the booking's ${partySize} guests are not in a room`
+              : `${shortNight(n)} — ${g} guests are placed but the booking has ${partySize}`,
+          );
+        }
+      } else if (totalGuests !== partySize) {
+        out.push(
+          totalGuests < partySize
+            ? `${partySize - totalGuests} of the booking's ${partySize} guests are not in a room yet`
+            : `${totalGuests} guests are placed but the booking has ${partySize}`,
+        );
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sealedRoomIds, rows, roomMin, partySize, totalGuests, roomById, rateRef, splitStay, nightsShort.join(",")]);
+
+  useEffect(() => {
+    onFaultsChange?.(faults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [faults.join("|")]);
 
   if (sealedRoomIds.length === 0) {
     return (
@@ -896,6 +1257,8 @@ export function RoomCompositionsTable({
     col: NumCol,
     opts?: {
       warn?: boolean;
+      /** A breach, not a caution — the cell reads in the stop colour ("UIappeal", 2026-09-29). */
+      stop?: boolean;
       decimal?: boolean;
       wide?: boolean;
       placeholder?: string;
@@ -907,7 +1270,7 @@ export function RoomCompositionsTable({
   ) => {
     const raw = rows[roomId]?.[col] ?? "";
     return (
-      <td key={col} className={opts?.warn ? "warn" : undefined} title={opts?.title}>
+      <td key={col} className={opts?.stop ? "stop" : opts?.warn ? "warn" : undefined} title={opts?.title}>
         <input
           type="text"
           inputMode={opts?.decimal ? "decimal" : "numeric"}
@@ -997,6 +1360,7 @@ export function RoomCompositionsTable({
           across the close bar. Inline it now simply scrolls away with the panel; expanded, the
           layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
           and the toolbar are held at the top structurally rather than by sticky positioning. */}
+      {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
       {entryId && <RateReferenceStrip entryId={entryId} compact />}
       {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
       <NegotiationDiscountBar
@@ -1075,8 +1439,13 @@ export function RoomCompositionsTable({
         )}
         {partySize > 0 && (
           <span
-            className={`rce-tally${totalGuests !== partySize ? " off" : ""}`}
-            title={`${totalGuests} of ${partySize} intake guests placed in rooms`}
+            className={`rce-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`}
+            title={
+              splitStay
+                ? `${totalGuests} of ${partySize} guests placed on ${shortNight(busiestNight ?? "")}` +
+                  (nightsShort.length ? ` · short on ${nightsShort.map(shortNight).join(", ")}` : " · every night covered")
+                : `${totalGuests} of ${partySize} intake guests placed in rooms`
+            }
           >
             {totalGuests}/{partySize} placed
           </span>
@@ -1092,12 +1461,18 @@ export function RoomCompositionsTable({
           </button>
         )}
       </div>
+      {/* A refusal of what was just typed — the loudest thing on the table while it shows
+          (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
+          stop colour, and says what was capped. It clears itself after five seconds. */}
       {limitMsg && (
-        <p className="rce-warns" style={{ marginBottom: 0 }}>
-          {limitMsg}
+        <p className="rct-refusal" role="alert" aria-live="assertive">
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>{limitMsg}</span>
         </p>
       )}
-      {roomMin != null && sealedRoomIds.length < roomMin && (
+      {!onSave && roomMin != null && sealedRoomIds.length < roomMin && (
         <p className="rce-block">
           {roomEnvelopeQuery.data?.chargeableOccupants} chargeable guest
           {(roomEnvelopeQuery.data?.chargeableOccupants ?? 0) === 1 ? "" : "s"} won&rsquo;t fit in{" "}
@@ -1107,15 +1482,16 @@ export function RoomCompositionsTable({
       )}
 
       <div className="rct-scroll" ref={wrapRef}>
-        <table className="rct-t">
+        <table className={`rct-t${datesShown ? " has-dates" : ""}`}>
           <thead>
             <tr className="grp">
+              {datesShown && <th className="dates" />}
               <th className="room" />
+              {bedsShown && <th />}
               <th />
               <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
               {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
               {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
-              <th colSpan={3}>Charges</th>
               {ratesOpen && (
                 <th
                   colSpan={rateCols.length}
@@ -1124,6 +1500,10 @@ export function RoomCompositionsTable({
                   Negotiated rates (Nu., optional{rateCols.length === 2 ? " · EP — room only" : ""})
                 </th>
               )}
+              {/* Charges sits at the far right, beside the total it changes (2026-09-29, operator).
+                  SC / GST / FOC are set once and rarely touched; between the pax counts and the
+                  rate columns they broke the typing path — pax, then the rate that prices it. */}
+              <th colSpan={3}>Charges</th>
               <th className="ratebtn" rowSpan={2}>
                 <div className="rct-corner">
                   <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
@@ -1133,7 +1513,13 @@ export function RoomCompositionsTable({
               </th>
             </tr>
             <tr>
+              {datesShown && <th className="dates">Dates</th>}
               <th className="room">Room</th>
+              {bedsShown && (
+                <th className="bedcol" title="How the room is made up for this stay">
+                  Bed type
+                </th>
+              )}
               <th title="Occupants — derived: adults + children">Occ</th>
               <th>Adult</th>
               {childColsVisible && (
@@ -1142,7 +1528,7 @@ export function RoomCompositionsTable({
                   <th title="Children under 6">&lt;6</th>
                 </>
               )}
-              <th title="Extra beds">Bed</th>
+              <th title="Extra beds">Extra bed</th>
               {visibleMeals.map((c) => (
                 <th key={c} title={MEAL_META[c].title}>
                   {MEAL_META[c].th}
@@ -1155,9 +1541,6 @@ export function RoomCompositionsTable({
                   <th>Dinner</th>
                 </>
               )}
-              <th title="Service charge applies">SC</th>
-              <th title="GST applies">GST</th>
-              <th title="Free of charge — room priced at zero">FOC</th>
               {ratesOpen &&
                 rateCols.map((c) => (
                   <th
@@ -1173,6 +1556,9 @@ export function RoomCompositionsTable({
                     {RATE_META[c].th}
                   </th>
                 ))}
+              <th title="Service charge applies">SC</th>
+              <th title="GST applies">GST</th>
+              <th title="Free of charge — room priced at zero">FOC</th>
             </tr>
           </thead>
           <tbody>
@@ -1184,26 +1570,75 @@ export function RoomCompositionsTable({
               const plansOver = planSum > occ;
               const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
               const overCap = cap != null && occ > cap + cnt(r.bed);
+              const dates = roomDates?.[id] ?? null;
               return (
                 <tr key={id} className={r.foc ? "foc" : undefined}>
+                  {datesShown && (
+                    <td
+                      className={`dates${dates && stayNights != null && dates.nights !== stayNights ? " part" : ""}`}
+                      title={
+                        dates
+                          ? `This room is held for ${dates.nights} night${dates.nights === 1 ? "" : "s"}${
+                              stayNights != null && dates.nights !== stayNights ? ` of the stay's ${stayNights}` : ""
+                            }`
+                          : "No nights recorded for this room"
+                      }
+                    >
+                      {dates ? dates.label : "—"}
+                      {dates && stayNights != null && dates.nights !== stayNights && (
+                        <span className="n">
+                          {dates.nights} of {stayNights} nights
+                        </span>
+                      )}
+                    </td>
+                  )}
                   {/* The room cell doubles as "open this room in the guest board". Deliberately
                       the room cell and not the whole row: a row-level handler would fire on
                       every cell click and fight the grid's own editing/navigation. */}
                   <td
-                    className={`room${onOpenRoomInBoard ? " opens" : ""}`}
-                    onClick={onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
-                    title={onOpenRoomInBoard ? "Open this room on its own in the guest board" : undefined}
+                    className={`room${onPickRoom || onOpenRoomInBoard ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
+                    onClick={onPickRoom ? () => onPickRoom(id) : onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
+                    title={
+                      onPickRoom
+                        ? pickedRoomId === id
+                          ? "Chosen — its acts are above the table"
+                          : "Choose this room to see what can be done with it"
+                        : onOpenRoomInBoard
+                          ? "Open this room on its own in the guest board"
+                          : undefined
+                    }
                   >
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}
                   </td>
+                  {bedsShown && <BedCell roomId={id} cell={bedPlan?.[id]} onChange={onBedChange} />}
+                  {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
+                      not a quiet amber — the figure the operator must not miss (2026-09-29). */}
                   <td
-                    className={`occ${overCap ? " over" : ""}`}
-                    title={overCap ? `Over capacity ${cap} + ${cnt(r.bed)} extra bed(s)` : cap != null ? `Capacity ${cap}` : undefined}
+                    className={`occ${overCap || occ === 0 ? " over" : ""}`}
+                    title={
+                      occ === 0
+                        ? "Nobody is in this room — every room in the plan must hold someone, or drop the room at Inquiry"
+                        : overCap
+                          ? `Over capacity — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`
+                          : cap != null
+                            ? `Capacity ${cap}`
+                            : undefined
+                    }
                   >
                     {occ}
                   </td>
-                  {numCell(rowIdx, id, "ad")}
+                  {/* A room with no adult in it is refused downstream, so the cell says so here
+                      (2026-09-30, "UIappeal") — red, not a quiet blank. */}
+                  {numCell(rowIdx, id, "ad", {
+                    stop: cnt(r.ad) === 0,
+                    title:
+                      occ === 0
+                        ? "Nobody is in this room yet"
+                        : cnt(r.ad) === 0
+                          ? "Every room needs at least one adult — children cannot be booked into a room on their own"
+                          : undefined,
+                  })}
                   {childColsVisible && (
                     <>
                       {numCell(rowIdx, id, "c6")}
@@ -1219,9 +1654,6 @@ export function RoomCompositionsTable({
                       {numCell(rowIdx, id, "odi")}
                     </>
                   )}
-                  {boolCell(rowIdx, id, "sc")}
-                  {boolCell(rowIdx, id, "gst")}
-                  {boolCell(rowIdx, id, "foc")}
                   {/* Each rate cell shows the figure it would price at when left empty, as the
                       placeholder — so the column reads as rates rather than as blanks, and a
                       negotiation is entered against a visible anchor. Typing overrides it.
@@ -1272,9 +1704,12 @@ export function RoomCompositionsTable({
                         decimal: true,
                         wide: true,
                         readOnly: lockCommercial,
+                        stop: belowFloor(id, col),
                         placeholder: ref != null ? String(ref) : "—",
                         sub,
-                        title: lockCommercial
+                        title: belowFloor(id, col)
+                          ? `Below the floor for this room type — ${floorOf(id)} ${rateRef?.currency ?? ""} is the house's minimum sellable rate. A booking priced under it needs the GM's waiver.`
+                          : lockCommercial
                           ? "The guest is in-house — a rate change mid-stay is a GM re-price, not a desk edit. The figures here are what the booking is priced at."
                           : (ref != null
                             ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
@@ -1286,6 +1721,10 @@ export function RoomCompositionsTable({
                               : ""),
                       });
                     })}
+                  {/* The charges follow the rates, beside the total they change (2026-09-29). */}
+                  {boolCell(rowIdx, id, "sc")}
+                  {boolCell(rowIdx, id, "gst")}
+                  {boolCell(rowIdx, id, "foc")}
                   {ratesOpen && preview ? (
                     <td
                       className="rowtot"
@@ -1302,7 +1741,9 @@ export function RoomCompositionsTable({
           </tbody>
           <tfoot>
             <tr>
+              {datesShown && <td className="dates" />}
               <td className="room">Σ</td>
+              {bedsShown && <td className="bedcol" />}
               <td className={`occ${partySize > 0 && totalGuests !== partySize ? " off" : ""}`}>{totalGuests}</td>
               <td>{sum("ad")}</td>
               {childColsVisible && (
@@ -1322,7 +1763,6 @@ export function RoomCompositionsTable({
                   <td>{sum("odi")}</td>
                 </>
               )}
-              <td colSpan={3} />
               {/* Column money totals (2026-08-07, operator request): each rate column's whole-stay
                   total across every room — net of tax, straight from the live preview; the corner
                   carries the tax-inclusive grand total. Never summed here. */}
@@ -1348,6 +1788,22 @@ export function RoomCompositionsTable({
                       : "—"}
                   </td>
                 ))}
+              {/* What the service charge and the GST come to, under the columns that switch them
+                  on (2026-09-29, operator) — the same server figures the live total prints, never
+                  summed here. FOC has nothing to total. */}
+              {preview ? (
+                <>
+                  <td className="money" title="Service charge across every room — whole stay">
+                    {fmtNu(preview.serviceCharge)}
+                  </td>
+                  <td className="money" title="GST across every room — whole stay">
+                    {fmtNu(preview.gst)}
+                  </td>
+                  <td />
+                </>
+              ) : (
+                <td colSpan={3} />
+              )}
               {ratesOpen && preview ? (
                 <td className="rowtot" title="Grand total including service charge & GST">
                   {fmtNu(preview.grandTotal)}
@@ -1362,19 +1818,21 @@ export function RoomCompositionsTable({
 
       {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
           carry — net, taxes, grand total, and the discount's effect when one is set. */}
-      {ratesOpen && preview && (
+      {preview && (
         <div className="rct-live">
           <span className="k">Live total</span>
-          <span>Net {fmtNu(preview.subtotal)}</span>
-          <span>+ SC {fmtNu(preview.serviceCharge)}</span>
-          <span>+ GST {fmtNu(preview.gst)}</span>
-          <b>
-            = {preview.currency} {fmtNu(preview.grandTotal)}
+          <span className="parts">
+            <i>Net</i> {fmtNu(preview.subtotal)} <i>+ SC</i> {fmtNu(preview.serviceCharge)} <i>+ GST</i> {fmtNu(preview.gst)}
+          </span>
+          {/* What the booking costs — the one figure the whole table is for, so it is read at a
+              glance and never mistaken for another number in the row (2026-09-29, "UIappeal"). */}
+          <b className="tot">
+            {preview.currency} {fmtNu(preview.grandTotal)}
           </b>
           {preview.discount && (
             <span className="disc">
-              − {fmtNu(preview.discount.amountOffTotal)} discount →{" "}
-              <b>
+              − {fmtNu(preview.discount.amountOffTotal)} discount → payable{" "}
+              <b className="tot">
                 {preview.currency} {fmtNu(preview.payable)}
               </b>
             </span>
@@ -1384,7 +1842,42 @@ export function RoomCompositionsTable({
         </div>
       )}
 
-      {sealedRoomIds.some((id) => {
+      {/* A room nobody sleeps in, or a room of children with no adult — named, because the red
+          cell says WHICH box and this says what it means ("UIappeal", 2026-09-30). Shown only
+          where the table has no Save row; there, the faults are listed with the button. */}
+      {!onSave && sealedRoomIds.some((id) => rowFault(id)) && (
+        <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>
+            {sealedRoomIds
+              .filter((id) => rowFault(id))
+              .map((id) => `Room ${roomNoOf(id)} — ${rowFault(id)}`)
+              .join(" · ")}
+            . The quote is refused while this stands.
+          </span>
+        </p>
+      )}
+
+      {/* Rates under the house floor, named — the grid's red cells say WHICH, this says what it
+          means for the quote ("UIappeal", 2026-09-29). */}
+      {!onSave && sealedRoomIds.some((id) => belowFloor(id, "rRoom")) && (
+        <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>
+            {sealedRoomIds
+              .filter((id) => belowFloor(id, "rRoom"))
+              .map((id) => `Room ${roomNoOf(id)} (floor ${floorOf(id)})`)
+              .join(" · ")}{" "}
+            — priced below the house&rsquo;s minimum sellable rate. A booking under the floor needs the GM&rsquo;s waiver
+            before the quote can be generated.
+          </span>
+        </p>
+      )}
+      {!onSave && sealedRoomIds.some((id) => {
         const r = rows[id] ?? EMPTY_ROW;
         return MEAL_COLS.reduce((s, c) => s + cnt(r[c]), 0) > cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
       }) && (
@@ -1392,6 +1885,46 @@ export function RoomCompositionsTable({
           A row has more meal-plan pax than occupants — one plan per guest; the backend will reject the
           draft until it fits.
         </p>
+      )}
+      {/* Saving the table IS pricing it — there is nowhere else a composition lives (2026-09-30).
+          The button stays shut while anything above is red, and the faults are listed here in
+          full, room by room, so the operator fixes them without hunting for the cell. */}
+      {onSave && (
+        <div className="rct-save">
+          {faults.length > 0 ? (
+            <ul className="rct-faults" role="alert" aria-live="polite">
+              {faults.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          ) : unsaved ? (
+            <span className="stop-ink" style={{ fontWeight: 700 }} role="status">
+              Changed since it was priced — save it, or the quotation still says the old figures.
+            </span>
+          ) : (
+            <span className="ok-ink" style={{ fontWeight: 700 }} role="status">
+              Saved — the quotation is priced on exactly this table.
+            </span>
+          )}
+          <div className="rct-save-act">
+            {saveAside}
+          <button
+            type="button"
+            className={`btn btn-primary rct-save-btn${faults.length > 0 ? "" : unsaved ? " dirty" : " clean"}`}
+            disabled={faults.length > 0 || !!saving || !unsaved}
+            title={
+              faults.length > 0
+                ? `Put right what is listed first — ${faults.length} thing${faults.length === 1 ? "" : "s"} to fix`
+                : unsaved
+                  ? "Saves this table by pricing it: the house generates the quotation from these rows"
+                  : "Nothing to save — the quotation already carries this table"
+            }
+            onClick={() => onSave()}
+          >
+            {saving ? "Saving…" : !unsaved && faults.length === 0 ? "Saved" : (saveLabel ?? "Save & price it")}
+          </button>
+          </div>
+        </div>
       )}
       {/* One line. The old version also warned that child meal discounts were "pending a backend
           update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band

@@ -63,10 +63,13 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     // A stale page (2026-09-19): the booking moved on under this screen — another terminal reserved
     // it, or bumped its version. Tell the open workspace to re-read it, so the person sees where it
     // stands instead of pressing a button that can no longer work.
+    // ENTRY_SEALED_READ_ONLY is the same shape of staleness (2026-10-01): a clock ended the
+    // booking under this screen — the page's copy still says ACTIVE, so it offered a button
+    // that can no longer work. Re-read it and the step goes read-only on its own.
     const stale =
       res.status === 409 &&
       (err?.error === "OptimisticLockError" ||
-        /^NOT_AT_S[1-9]$/.test(String((err as { blockingCondition?: unknown } | null)?.blockingCondition ?? "")) ||
+        /^(NOT_AT_S[1-9]|ENTRY_SEALED_READ_ONLY)$/.test(String((err as { blockingCondition?: unknown } | null)?.blockingCondition ?? "")) ||
         /^Entry (?:must be|is not) at S[1-9]\b/.test(err?.message ?? ""));
     if (stale && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("desk:stale-booking"));
     throw new ApiError(

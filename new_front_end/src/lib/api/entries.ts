@@ -283,6 +283,29 @@ export async function parkEntry(session: Session, entryId: string, reason: strin
   return normalizeEntryResponse(data);
 }
 
+/** What a move between two stays of one trip did — `POST /entries/:id/switch-stay`. */
+export type TripSwitchOutcome = {
+  fromEntryId: string;
+  toEntryId: string;
+  parked: boolean;
+  resumed: boolean;
+  stillParked: boolean;
+  parkRefused: string | null;
+  resumeRefused: string | null;
+};
+
+/**
+ * Move from one stay of a trip to another: the stay left is parked if it sits at Inquiry or
+ * Negotiation, and the stay opened is resumed when an earlier switch parked it.
+ */
+export async function switchStay(session: Session, fromEntryId: string, toEntryId: string) {
+  return apiRequest<TripSwitchOutcome>(`/api/entries/${fromEntryId}/switch-stay`, {
+    method: "POST",
+    body: { toEntryId },
+    session,
+  });
+}
+
 /** Unpark a parked entry — returns it to ACTIVE at its current stage (SIG-S1 §3.4). */
 export async function unparkEntry(session: Session, entryId: string) {
   const data = await apiRequest<unknown>(`/api/entries/${entryId}/unpark`, {
@@ -1135,3 +1158,80 @@ export async function recordEarlyDeparture(
   return apiRequest<EarlyDepartureOutcome>(`/api/entries/${entryId}/early-departure`, { method: "POST", session, body });
 }
 
+
+/**
+ * Change the rooms and the party WITHOUT leaving Negotiation (2026-09-30). Dates are deliberately
+ * not here: a date change goes back to Inquiry. L1 opens the door; the backend raises the bar to
+ * the FOM once a quotation has gone to the guest or been accepted.
+ */
+export type NegotiationAmendmentOutcome = {
+  /** False when the operator could not take it themselves — it is waiting for the FOM. */
+  applied: boolean;
+  requestId?: string;
+  entryId: string;
+  amendmentId: string | null;
+  partyChanged: boolean;
+  roomsChanged: boolean;
+  priorRoomIds: string[];
+  newRoomIds: string[];
+  quotationsInvalidated: Array<{ id: string; referenceNumber: string; priorState: string }>;
+  hold:
+    | { action: "REPLACED"; priorHoldId: string; holdId: string; expiresAt: string }
+    | { action: "RELEASED"; priorHoldId: string; note: string }
+    | null;
+  summary: string;
+};
+
+/** Approve (which applies it) or turn down a waiting change — L2+. */
+export async function decideNegotiationAmendment(
+  session: Session,
+  entryId: string,
+  requestId: string,
+  body: { decision: "APPROVE" | "REJECT"; note?: string },
+) {
+  return apiRequest<{ state: string; outcome?: NegotiationAmendmentOutcome }>(
+    `/api/entries/${entryId}/negotiation-amendment-requests/${requestId}/decide`,
+    { method: "POST", session, body },
+  );
+}
+
+/** Taken back by the desk before anyone decided. */
+export async function withdrawNegotiationAmendment(
+  session: Session,
+  entryId: string,
+  requestId: string,
+  body: { note?: string } = {},
+) {
+  return apiRequest<{ state: string }>(
+    `/api/entries/${entryId}/negotiation-amendment-requests/${requestId}/withdraw`,
+    { method: "POST", session, body },
+  );
+}
+
+export async function amendNegotiationConfiguration(
+  session: Session,
+  entryId: string,
+  body: {
+    party?: {
+      adultCount?: number;
+      childCount?: number;
+      childAges?: number[];
+      numberOfRooms?: number;
+      bedTypeRequest?: Record<string, number> | null;
+    };
+    rooms?: {
+      configurationId: string;
+      roomIds?: string[];
+      perNight?: Array<{ date: string; roomIds: string[] }>;
+      deficientAcknowledgements?: unknown;
+    };
+    reason: string;
+    expectedVersion?: number;
+  },
+) {
+  return apiRequest<NegotiationAmendmentOutcome>(`/api/entries/${entryId}/negotiation-amendment`, {
+    method: "POST",
+    session,
+    body,
+  });
+}

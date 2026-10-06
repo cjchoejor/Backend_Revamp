@@ -23,6 +23,7 @@
  */
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
+import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
@@ -44,8 +45,11 @@ type QuotationTerms = {
   mealPlan?: string;
   extraBeds?: string | number;
   perGuestMealBreakdown?: { total?: number | string };
-  /** Original (undiscounted) figures, stored at quote time when a discount moved the rate. */
+  /** Original (undiscounted) figures, stored at quote time whenever a discount was applied. */
   compositionTotalsPreDiscount?: {
+    subtotal?: number;
+    serviceCharge?: number;
+    gst?: number;
     total?: number;
     perRoom?: Array<{ roomId: string; total: number }>;
   } | null;
@@ -103,6 +107,8 @@ async function loadQuotationForRender(prisma: PrismaClient, quotationId: string)
  * tax-inclusive per-night rows — see the fallback branch.
  */
 type PrintLine = {
+  /** The nights this room is held for — only on a booking whose rooms differ (2026-10-06). */
+  dates?: string | null;
   description: string;
   /** The multiplier as printed: "3 nights", "2 pax × 3 nights". */
   qty: string;
@@ -158,7 +164,29 @@ type QuotationDocRender = {
  * Pure read — no writes, no storage. Both the stored-PDF path and the desk's live preview run
  * through here, so the two can never disagree about what the quotation says.
  */
-async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation): Promise<QuotationDocRender> {
+/**
+ * `hidePrices` renders the SAME quotation with no money on it (2026-10-06, operator: "sometimes
+ * guest needs to be sent quotation without the price"). It is a face of the document, never a
+ * second document: the rows, the rooms, the nights and the quotation number are identical, and
+ * the stored PDF — the commercial record — is always the priced one.
+ */
+async function buildQuotationDocRender(
+  prisma: PrismaClient,
+  q: LoadedQuotation,
+  opts?: { hidePrices?: boolean },
+): Promise<QuotationDocRender> {
+  const hidePrices = opts?.hidePrices === true;
+
+  // Which nights each room is held for. On a plain booking — every room for the whole stay —
+  // this comes back empty and no Nights column is printed: the Stay line says it once.
+  const roomNights = await roomNightsForEntry(prisma, q.entryId, { segmentId: q.segmentId, asOf: q.createdAt }).catch(
+    () => new Map<string, string[]>(),
+  );
+  const datesShown = roomNightsVary(roomNights);
+  const nightsLabelFor = (roomId: string) => {
+    const n = roomNights.get(roomId);
+    return n && n.length ? labelRoomNights(n) : null;
+  };
   const terms = (q.commercialTerms as QuotationTerms) ?? {};
   const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
   const roomCount = Math.max(1, Number(terms?.roomCount ?? terms?.pricingBreakdown?.roomCount ?? 1));
@@ -252,12 +280,27 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
   const discountPercent = Number(
     terms?.discountAppliedPercent ?? terms?.requestedDiscount?.discountPercent ?? NaN,
   );
-  const discountApplied =
+  const rateMoved =
     Number.isFinite(preDiscountRate) &&
     Number.isFinite(postDiscountRate) &&
     Number.isFinite(discountPercent) &&
     discountPercent > 0 &&
     preDiscountRate > postDiscountRate;
+  /**
+   * The composition path stopped folding the discount into the rate on 2026-08-04 — it comes off
+   * the GRAND TOTAL now, and the per-room component rates stay undiscounted. So `rateMoved` has
+   * been false for every modern quote and the deduction row never printed: the rows showed the
+   * full prices, Net value showed the discounted figure, and nothing on the page explained the
+   * gap (2026-10-06, operator: "when quotation is generated, I think the discount is not shown").
+   *
+   * Nothing about the ROWS has to change — they already print originals. What was missing is the
+   * line that says so, and it is measured the same way as the flat path's: printed rows minus
+   * what the guest is actually charged, which is exactly the concession.
+   */
+  const compDiscount = (terms as { compositionDiscount?: { requestedPercent?: number | null; requestedAmount?: number | null; effectivePercent?: number; netReduction?: number; amountOffTotal?: number; basis?: string } })?.compositionDiscount ?? null;
+  const compDiscountNet = Number(compDiscount?.netReduction ?? NaN);
+  const compDiscountApplies = !!compDiscount && Number.isFinite(compDiscountNet) && compDiscountNet > 0;
+  const discountApplied = rateMoved || compDiscountApplies;
   // NB: `compositionTotalsPreDiscount` (stored at quote time) holds tax-INCLUSIVE per-room
   // originals. The split rows are net, so the original room rate is taken straight from
   // `resolvedNightlyRate` instead — exact at the net level and needs no stored snapshot. The
@@ -286,6 +329,9 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
     );
     rowsAreNet = true;
+    // The component rates stored on a composition quote are pre-discount, so these rows ARE the
+    // originals — the deduction row below says by how much they were cut.
+    if (compDiscountApplies) originalsPrinted = true;
     const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
     for (const r of compositionPerRoom) {
       const raw = inputsByRoomId.get(r.roomId) as any;
@@ -310,7 +356,7 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       // ignores the default rate for it, so it costs the same discounted or not.
       const negotiatedRoomRate = raw?.negotiatedRoomRate;
       const printedRoomRate =
-        discountApplied && negotiatedRoomRate == null ? preDiscountRate : Number(r.roomRate ?? 0);
+        rateMoved && negotiatedRoomRate == null ? preDiscountRate : Number(r.roomRate ?? 0);
       if (printedRoomRate > Number(r.roomRate ?? 0)) originalsPrinted = true;
       const roomAmount = printedRoomRate * roomNights;
       const push = (line: PrintLine) => {
@@ -319,6 +365,7 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       };
       const roomRowIndex = linesForTemplate.length;
       push({
+        dates: nightsLabelFor(r.roomId),
         description: [
           r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
           typeNameByRoomId.get(r.roomId) ?? null,
@@ -380,23 +427,61 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
           { label: "MAP+D (breakfast, dinner)", pax: Number(raw?.mealPlanMapdCount ?? 0), rate: bf + di },
           { label: "AP (all meals)", pax: Number(raw?.mealPlanApCount ?? 0), rate: bf + lu + di },
         ];
-        for (const p of planRows) {
-          if (p.pax > 0 && p.rate > 0) {
-            push({
-              description: `Meals · ${p.label}`,
-              qty: `${p.pax} pax × ${nightsWord(roomNights)}`,
-              rate: p.rate,
-              amount: p.rate * p.pax * roomNights,
-            });
-          }
+        // The room's own `mealsSubtotal` is the truth; splitting it into one row per plan is a
+        // courtesy that has to add up to it. It does not always: the stored per-room meal RATES
+        // are only populated on the first room of a composition, so on a multi-room booking
+        // rooms 2..n priced their meals at a rate the document could not see and printed NO meal
+        // row at all — the rows then under-summed by the missing meals and, once the deduction
+        // was measured as rows-minus-net, the discount came out NEGATIVE (2026-10-06, operator:
+        // "I did a Nu 1000 discount, but it's now showing more"). So: print the split when it
+        // reconciles, and one honest row at the stored figure when it cannot.
+        const split = planRows
+          .filter((pl) => pl.pax > 0 && pl.rate > 0)
+          .map((pl) => ({ ...pl, amount: pl.rate * pl.pax * roomNights }));
+        const alaCarteTotal =
+          (Number(raw?.othersBreakfastPax ?? 0) * bf + Number(raw?.othersLunchPax ?? 0) * lu + Number(raw?.othersDinnerPax ?? 0) * di) *
+          roomNights;
+        const splitTotal = split.reduce((t, pl) => t + pl.amount, 0) + alaCarteTotal;
+        const splitReconciles = mealsSubtotal <= 0 || Math.abs(splitTotal - mealsSubtotal) < 0.01;
+        if (!splitReconciles) {
+          // The pax ARE stored even when the rates are not, so a room on a single plan still
+          // prints the row every other room prints — same words, same "N pax × N nights", and
+          // the per-head rate worked back from the room's own figure. Without this the one room
+          // that happened to carry rates read differently from its neighbours on the guest's
+          // copy (2026-10-06, operator: "why does the first row show differently in the qty
+          // column ... just below that room, not the others"). A room on several plans cannot
+          // be split from one subtotal, so it keeps one row with no unit rate.
+          const withPax = planRows.filter((pl) => pl.pax > 0);
+          const alaCartePax =
+            Number(raw?.othersBreakfastPax ?? 0) + Number(raw?.othersLunchPax ?? 0) + Number(raw?.othersDinnerPax ?? 0);
+          const only = withPax.length === 1 && alaCartePax === 0 ? withPax[0] : null;
+          const covers = only ? only.pax * roomNights : 0;
+          push({
+            description: only
+              ? `Meals · ${only.label}`
+              : `Meals${planParts.length ? ` · ${planParts.join(" · ")}` : ""}`,
+            qty: only ? `${only.pax} pax × ${nightsWord(roomNights)}` : nightsWord(roomNights),
+            rate: only && covers > 0 ? Number((mealsSubtotal / covers).toFixed(2)) : null,
+            amount: mealsSubtotal,
+          });
+        }
+        for (const p of splitReconciles ? split : []) {
+          push({
+            description: `Meals · ${p.label}`,
+            qty: `${p.pax} pax × ${nightsWord(roomNights)}`,
+            rate: p.rate,
+            amount: p.amount,
+          });
         }
         // "Others" guests order à la carte, so their meals are priced per meal taken rather
         // than by a plan — one row per meal that actually has pax on it.
-        const alaCarte: Array<{ label: string; pax: number; rate: number }> = [
-          { label: "breakfast", pax: Number(raw?.othersBreakfastPax ?? 0), rate: bf },
-          { label: "lunch", pax: Number(raw?.othersLunchPax ?? 0), rate: lu },
-          { label: "dinner", pax: Number(raw?.othersDinnerPax ?? 0), rate: di },
-        ];
+        const alaCarte: Array<{ label: string; pax: number; rate: number }> = splitReconciles
+          ? [
+              { label: "breakfast", pax: Number(raw?.othersBreakfastPax ?? 0), rate: bf },
+              { label: "lunch", pax: Number(raw?.othersLunchPax ?? 0), rate: lu },
+              { label: "dinner", pax: Number(raw?.othersDinnerPax ?? 0), rate: di },
+            ]
+          : [];
         for (const a of alaCarte) {
           if (a.pax > 0 && a.rate > 0) {
             push({
@@ -499,9 +584,42 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
   // rows minus what the guest is actually charged. That comparison has to be like-for-like, so
   // net rows are measured against Net value and tax-inclusive rows against the Total. Older
   // discounted quotes with no original to print fall back to the rate-movement disclosure.
+  /**
+   * The concession comes off the TOTAL, at the foot of the document (2026-10-06). So everything
+   * above it is the stay before it: the rows, Net value, the service charge and the GST are all
+   * pre-discount, and the deduction is the tax-inclusive figure that was agreed — Nu 1,000 off
+   * reads as 1,000, not as the 865.80 it is net of tax.
+   */
+  const preDiscountTotals = terms?.compositionTotalsPreDiscount ?? null;
+  const preNet = Number(preDiscountTotals?.subtotal ?? NaN);
+  const preService = Number(preDiscountTotals?.serviceCharge ?? NaN);
+  const preGst = Number(preDiscountTotals?.gst ?? NaN);
+  const showPre = compDiscountApplies && Number.isFinite(preNet) && Number.isFinite(preService) && Number.isFinite(preGst);
+  const shownNet = showPre ? preNet : netValue;
+  const shownService = showPre ? preService : serviceCharge;
+  const shownGst = showPre ? preGst : gstValue;
   const discountBaseline = rowsAreNet ? netValue : totalAmount;
-  const discountAmount = originalsPrinted ? printedRowsTotal - discountBaseline : 0;
-  const discountLabel = discountApplied ? `Discount ${discountPercent}%` : null;
+  const discountAmount = compDiscountApplies
+    ? Number(compDiscount?.amountOffTotal ?? 0)
+    : originalsPrinted
+      ? printedRowsTotal - discountBaseline
+      : 0;
+  // What the guest was told the concession IS: the percent when one was asked for, the money
+  // when a flat amount was. The figure beside it is always the money, so a percent reads as a
+  // percent of a total the page prints.
+  const pctWord = (n: number) => `${Number(n.toFixed(2))}`;
+  const discountLabel = !discountApplied
+    ? null
+    : compDiscountApplies
+      ? compDiscount?.requestedPercent != null
+        ? `Discount ${pctWord(Number(compDiscount.requestedPercent))}%`
+        : // A flat ask is "Nu 1,000 off the TOTAL", but the rows are net, so the deduction beside
+          // them has to be net too or the column stops adding up — 1,000 off the total is 865.80
+          // off the net. The label therefore carries the figure that was agreed, and the amount
+          // column carries the one that reconciles (2026-10-06, operator: "the discount is 865
+          // when it was 1000, why is it shown that way").
+          `Discount · ${formatMoney(Number(compDiscount?.requestedAmount ?? 0))} off the total`
+      : `Discount ${discountPercent}%`;
   const discountValue = !discountApplied
     ? null
     : originalsPrinted
@@ -509,6 +627,8 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
       : `${formatMoney(preDiscountRate)} → ${formatMoney(postDiscountRate)} / room / night`;
 
   const html = renderLegphelQuotationHtml({
+    hidePrices,
+    datesShown,
     masthead: mastheadFromHotelProfile(hotel),
     quotationNo: q.referenceNumber,
     bookingRef: q.entryId,
@@ -520,6 +640,7 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
     attn: null,
     stay: formatStayRange(checkIn, checkOut, nights),
     lines: linesForTemplate.map((l) => ({
+      dates: l.dates ?? null,
       description: l.description,
       qty: l.qty,
       rate: l.rate == null ? "—" : formatMoney(l.rate),
@@ -528,16 +649,18 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
     })),
     discountLabel,
     discountValue,
-    netValue: formatMoney(netValue),
+    netValue: formatMoney(shownNet),
     serviceChargeLabel: scRate > 0 ? `Service charge ${formatRate(scRate)} of net value` : "Service charge",
-    serviceCharge: formatMoney(serviceCharge),
+    serviceCharge: formatMoney(shownService),
     // GST is compound, so the label says what it is charged ON — otherwise "5%" next to a figure
     // that is not 5% of net value reads as an error to anyone checking the sums.
     gstLabel: gstRate > 0 ? `GST @ ${formatRate(gstRate)} of net + service charge` : "GST",
-    gst: formatMoney(gstValue),
+    gst: formatMoney(shownGst),
     total: formatMoney(totalAmount),
-    closingNote:
-      (rowsAreNet
+    closingNote: hidePrices
+      ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
+        "priced quotation under the same number. Subject to availability at confirmation."
+      : (rowsAreNet
         ? "Each room is billed on its own line, with its extra beds and meal plans beneath it; " +
           "meal rates are per person per night. Line amounts are before service charge and GST, " +
           "which are added below. "
@@ -582,10 +705,25 @@ async function buildQuotationDocRender(prisma: PrismaClient, q: LoadedQuotation)
 export async function renderQuotationPreviewHtml(
   prisma: PrismaClient,
   quotationId: string,
+  opts?: { hidePrices?: boolean },
 ): Promise<{ html: string; referenceNumber: string }> {
   const q = await loadQuotationForRender(prisma, quotationId);
-  const model = await buildQuotationDocRender(prisma, q);
+  const model = await buildQuotationDocRender(prisma, q, opts);
   return { html: model.html, referenceNumber: q.referenceNumber };
+}
+
+/**
+ * The price-free copy as a PDF, rendered fresh and **never stored**. The stored artifact is the
+ * priced quotation — the commercial record, write-once — and a copy with the money taken off is
+ * a courtesy for the guest, not a second version of the offer. Same number, same rows.
+ */
+export async function renderQuotationPdfWithoutPrices(
+  prisma: PrismaClient,
+  quotationId: string,
+): Promise<{ bytes: Buffer; referenceNumber: string }> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+  const m = await buildQuotationDocRender(prisma, q, { hidePrices: true });
+  return { bytes: await renderHtmlToPdf(m.html, { fitToPage: true }), referenceNumber: q.referenceNumber };
 }
 
 export async function generateOrLoadQuotationPdf(

@@ -263,6 +263,26 @@ const addContactSchema = z.object({
   email: z.string().trim().max(200).optional().nullable(),
 });
 
+/**
+ * File a NEW agency from the desk (2026-09-29) — the name and the contact the caller gives, active,
+ * with no rate package (the admin's to set). The one L1 write that creates a party; everything
+ * else on an agency stays L4 because it carries the negotiated rates.
+ */
+const newAgencySchema = z.object({
+  displayName: z.string().trim().min(1).max(200),
+  phone: z.string().trim().max(50).optional().nullable(),
+  email: z.string().trim().email().max(200).optional().nullable().or(z.literal("")),
+});
+
+lookupsRouter.post("/lookups/travel-agents", L1, validateBody(newAgencySchema), async (req, res, next) => {
+  try {
+    const created = await travelAgentSvc.createTravelAgentFromDesk(prisma, req.body, req.actor!.actorId);
+    res.status(201).json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
 lookupsRouter.post(
   "/lookups/travel-agents/:id/contacts",
   L1,

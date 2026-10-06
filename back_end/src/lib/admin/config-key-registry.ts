@@ -94,6 +94,7 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "expiry.s1.defaultTtlSeconds": { owner: "ConfigurationService" },
   "expiry.s2.quotationValidityDays": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s2.speculativeHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
+  "expiry.s2.negotiationTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s3.committedHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.defaults": { validate: isObject, owner: "ConfigurationService" },
   // Park-expiry threshold (Part 13 §Seeded Defaults — 30 days from park date). Accepts a raw

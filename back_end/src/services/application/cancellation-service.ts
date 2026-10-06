@@ -4,7 +4,12 @@ import { ActorLevel, EntryStatus, FolioLineType, FolioState, HoldState, Inventor
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceEntryAtS3ForS3CancellationRoute, enforceEntryAtS5ForS5CancellationRoute,
+  enforceEntryBeforeSetupForDecline,
   enforceEntryConfirmedForPreArrivalCancellation, enforceEntryAtS7ForPostCheckInEarlyDepartureCancellation } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { lapseNegotiationRecordsTx } from "../../lib/negotiation-expiry.js";
+import { ENTRY_ENDINGS } from "../../lib/entry-ending.js";
+import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
+import * as auditService from "../infrastructure/audit-service.js";
 import {
   capCancellationPenaltyAtAdvancePayment,
   computePostCheckInEarlyDeparturePenalty,
@@ -24,6 +29,117 @@ import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { toDecimal } from "../../lib/money.js";
 import { resolveRefundMethod } from "../../lib/refund-method.js";
+
+/**
+ * The guest said no — ending a lead at Inquiry or Negotiation (2026-10-01, operator request:
+ * "we can have that in one of the tabs beside 'this step'").
+ *
+ * **It is not the cancellation route one stage down.** `cancelEntryAtS3` exists because by Set
+ * up there is a folio, a disclosed cancellation term and usually an advance: it prices a
+ * penalty, refunds the balance, supersedes the paperwork. None of that is true here — nothing
+ * has been committed, so nothing is priced and nothing is refunded. What this records is the
+ * ANSWER, which the house had no way to write down: until now a lead that said no could only
+ * be parked (a pause — it comes back) or left to the clock, which lapses it as **Expired**,
+ * indistinguishable from an enquiry nobody ever answered.
+ *
+ * **Authority is L1**, by the same doctrine as everything else on the desk: authority follows
+ * what moved. Nothing has. The front desk is the one on the phone when the guest says no.
+ *
+ * A **parked** lead may be turned down — the guest ringing back to decline is precisely the
+ * case a park is waiting for. A booking carrying a folio or a reservation is refused even at
+ * S2 (a re-entered booking keeps its folio across passes): that money is Set up's to end.
+ */
+export async function declineEntryBeforeSetup(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  opts: { reason: string; actorLevel?: RequestActorLevel },
+) {
+  const reason = opts.reason?.trim();
+  if (!reason) throw new ValidationError("Say why the booking is being turned down — it is the whole point of recording it.");
+
+  const now = new Date();
+  const engine = await getTimerEngine();
+
+  return prisma.$transaction(async (tx) => {
+    const entry = await tx.entry.findUnique({
+      where: { id: entryId },
+      select: {
+        id: true,
+        inquiryId: true,
+        currentStage: true,
+        status: true,
+        version: true,
+        folio: { select: { id: true } },
+        reservations: { select: { id: true }, take: 1 },
+      },
+    });
+    if (!entry) throw new NotFoundError("Entry");
+
+    enforceEntryBeforeSetupForDecline({ currentStage: entry.currentStage });
+
+    if (entry.status !== EntryStatus.ACTIVE && entry.status !== EntryStatus.PARKED) {
+      throw new StateTransitionError(
+        `This booking is already ${entry.status === EntryStatus.CANCELLED ? "cancelled" : entry.status.toLowerCase()} — a sealed record is read-only.`,
+      );
+    }
+    if (entry.folio || entry.reservations.length > 0) {
+      throw new StateTransitionError(
+        "This booking already carries a folio or a confirmed reservation from an earlier pass — end it through the cancellation route, which settles what was taken.",
+      );
+    }
+
+    // The stage is deliberately NOT moved to TERMINAL the way the cancellation routes move
+    // it: the step the lead died at is worth keeping on screen, and since 2026-10-01 it is
+    // `closedAs` the desk reads its words from, not the stage.
+    await tx.entry.update({
+      where: { id: entryId },
+      data: {
+        status: EntryStatus.CANCELLED,
+        closedAt: now,
+        closedBy: actorId,
+        closedAs: ENTRY_ENDINGS.DECLINED,
+        closedReason: reason,
+        version: { increment: 1 },
+      },
+    });
+
+    // Everything the lead was still holding goes back, exactly as a lapse releases it: the room
+    // claim flags, the marked rooms' hold rows, the live offers, every clock on the booking.
+    const rooms = await releaseEntryRoomsToFree(tx, { entryId, actorId, reason: "ENTRY_DECLINED", now });
+    const lapsed = await lapseNegotiationRecordsTx(tx, engine, { entryId, now, cause: "DECLINED" });
+
+    await auditService.emit(tx as any, { actorId, actorLevel: (opts.actorLevel ?? "L1") as any }, {
+      eventType: "ENTRY.DECLINED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "TRANSITION",
+      timestamp: now,
+      stageContext: entry.currentStage as any,
+      payload: {
+        entryId,
+        fromStatus: entry.status,
+        toStatus: "CANCELLED",
+        declinedAt: entry.currentStage,
+        reason,
+        roomsReleased: rooms.transitioned,
+        ...lapsed,
+      },
+      inquiryId: entry.inquiryId,
+      entryId,
+      createdBy: actorId,
+    });
+
+    return {
+      entryId,
+      status: EntryStatus.CANCELLED,
+      declinedAt: entry.currentStage,
+      reason,
+      roomsReleased: rooms.transitioned,
+      ...lapsed,
+    };
+  });
+}
 
 export type CancellationFigures = {
   /** The step the booking is cancelled at — Set up (S3) or Arrival (S5). */
@@ -382,6 +498,8 @@ export async function cancelEntryAtS3(
         currentStage: Stage.TERMINAL,
         closedAt: now,
         closedBy: actorId,
+        closedAs: ENTRY_ENDINGS.CANCELLED,
+        closedReason: opts?.reason?.trim() || null,
         version: { increment: 1 },
       },
     });
@@ -605,6 +723,8 @@ export async function cancelEntryAtS5(
         currentStage: Stage.TERMINAL,
         closedAt: now,
         closedBy: actorId,
+        closedAs: ENTRY_ENDINGS.CANCELLED,
+        closedReason: opts?.reason?.trim() || null,
         version: { increment: 1 },
       },
     });
@@ -769,6 +889,9 @@ export async function cancelEntryEarlyDepartureAfterCheckIn(
         currentStage: Stage.TERMINAL,
         closedAt: now,
         closedBy: actorId,
+        // This route takes no reason of its own (its body is the penalty waiver), so there
+        // is nothing to record beyond what happened.
+        closedAs: ENTRY_ENDINGS.WALKED_OUT,
         version: { increment: 1 },
       },
     });

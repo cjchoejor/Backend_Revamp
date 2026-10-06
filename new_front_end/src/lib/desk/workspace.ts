@@ -237,8 +237,8 @@ export function s3Readiness(
     // the bill, the money — and only then the rooms, which the backend refuses to hold until the
     // folio, the disclosure and the money are all in place.
     {
-      label: "Guest contact on file",
-      met: !!(entry.guestProfile?.email || entry.guestProfile?.phone),
+      label: "A contact on file",
+      met: hasAnyContact(entry),
       card: "parties",
     },
     { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
@@ -331,12 +331,21 @@ export function currentPassConfigs(entry: EntryDetail): NonNullable<EntryDetail[
   return configs.filter((c) => (c.segmentId ?? null) === current || (c.segmentId == null && segments.length <= 1));
 }
 
+/**
+ * Someone can be reached about this booking — the guest's email or phone, or the phone of the
+ * person arriving or booking it (the agency's contact). Mirrors Policy 16's S1 exit gate, which
+ * accepts any of the three since the guest's phone became optional (2026-10-06).
+ */
+export function hasAnyContact(entry: EntryDetail): boolean {
+  return !!(entry.guestProfile?.email?.trim() || entry.guestProfile?.phone?.trim() || entry.contactPersonPhone?.trim());
+}
+
 export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
   return [
     // In the order the page reads (2026-09-25): the guest, the stay, then the house's answer.
-    { label: "Guest contact on file", met: !!(entry.guestProfile?.email || entry.guestProfile?.phone), card: "guest" },
+    { label: "A contact on file", met: hasAnyContact(entry), card: "guest" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
     { label: "Availability searched", met: configs.length > 0, card: "house" },
@@ -370,7 +379,7 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
   const holds = entry.speculativeHolds ?? [];
   // A hold that was released or has lapsed is history — the rooms went back to free, which is
   // where a booking that never held anything stands, and that passes. Mirrors Policy 25; keep the
-  // two in step or the desk will lock a step the backend would allow.
+  // two in step or the desk will lock a step the backend would allow (2026-09-28).
   const holdsOk = holds.every(
     (h) => h.state === "PLACED" || h.state === "UPGRADED" || h.state === "RELEASED" || h.state === "EXPIRED",
   );

@@ -13,7 +13,7 @@
  */
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
@@ -33,6 +33,7 @@ import {
   listEntryCommunications,
   parkEntry,
   progressStage,
+  switchStay,
   unparkEntry,
   type EntryBillingSummary,
   type EntryCommunication,
@@ -68,8 +69,8 @@ import {
   s8Readiness,
   type Precondition,
 } from "@/lib/desk/workspace";
-import { arrivalNightRoomIds } from "@/lib/desk/party-rooms";
-import { channelWord, factsFromEntry, standingOf } from "@/lib/ds/status";
+import { arrivalNightRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
+import { channelWord, endingOf, factsFromEntry, standingOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtDay, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
@@ -81,7 +82,7 @@ import { CaseCards } from "@/components/ds/steps/case-cards";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
 import { SidePapers } from "@/components/ds/workspace/side-papers";
-import { SideTimer } from "@/components/ds/workspace/side-timer";
+import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp } from "@/components/ds/steps/s3-setup";
@@ -89,9 +90,11 @@ import { S4Reserve } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
+import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
-import { atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
+import { Overlay, ReasonDialog, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
+import { declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
@@ -247,10 +250,29 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
   const [nightAuditOk, setNightAuditOk] = useState(false);
   const [parkOpen, setParkOpen] = useState(false);
+  const [declineOpen, setDeclineOpen] = useState(false);
   const [parkReason, setParkReason] = useState("");
   const [parkExitFlow, setParkExitFlow] = useState(false);
   const [exitLeaving, setExitLeaving] = useState<"park" | "plain" | null>(null);
   const pendingExitRef = useRef<string | null>(null);
+  // The booking header stays put under the topbar (2026-09-29, operator: "so they know which
+  // guest they are working on"). The sticky columns and the sticky house card sit below it, so
+  // its height — the facts line wraps — is measured onto the workspace as `--ws-head-h` and the
+  // stylesheet offsets them by it. A callback ref, since the header mounts after the loading state.
+  const headObserver = useRef<ResizeObserver | null>(null);
+  const headRef = useCallback((head: HTMLDivElement | null) => {
+    headObserver.current?.disconnect();
+    headObserver.current = null;
+    if (!head) return;
+    const ws = head.closest<HTMLElement>(".ws");
+    if (!ws) return;
+    const apply = () => ws.style.setProperty("--ws-head-h", `${head.offsetHeight}px`);
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(head);
+    headObserver.current = ro;
+  }, []);
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Where the step's "other ways" render — the tab beside This step (2026-09-25).
   const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
@@ -401,6 +423,27 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     },
     onError: fail("Couldn't park this booking"),
   });
+  /**
+   * The guest said no (2026-10-01). Offered at Inquiry and Negotiation only — from Set up the
+   * booking carries money and the priced cancellation is the way out. The dialog lives here
+   * rather than in each step so the two canvases cannot word the same act differently.
+   */
+  const declineMutation = useMutation({
+    mutationFn: (reason: string) => declineEntry(session!, entry!.id, reason),
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry!.id] });
+      void queryClient.invalidateQueries({ queryKey: ["desk-bookings"] });
+      setDeclineOpen(false);
+      toast.success(
+        res.roomsReleased > 0
+          ? `Turned down — ${plural(res.roomsReleased, "room")} back on the board.`
+          : "Turned down — the record says why.",
+      );
+    },
+    onError: fail("Couldn't turn this booking down"),
+  });
+
   const unparkMutation = useMutation({
     mutationFn: () => unparkEntry(session!, entry!.id),
     onSuccess: (updated) => {
@@ -428,6 +471,65 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const name = entry ? guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null) : null;
   usePageTitle(entry ? (name !== "Guest" ? name : entry.id) : null);
 
+  /**
+   * The other stays of this trip (2026-10-06, operator: "the user has to constantly switch between
+   * stays, and it keeps asking if I want to park or not while switching — can it not ask that,
+   * maybe from the backend it can park it on its own"). A link to one of them is not leaving the
+   * enquiry, so it does not ask: `POST /entries/:id/switch-stay` parks this stay when it sits at
+   * Inquiry or Negotiation ("Switching stays to make configurations") and resumes the other when a
+   * switch parked it. A park somebody made on purpose is never undone by a switch.
+   */
+  const tripKey = (entry?.inquiry?.entries ?? [])
+    .map((s) => s.id)
+    .filter((id) => id !== entryId)
+    .join(",");
+  const tripSiblingOf = (href: string): string | null => {
+    const m = /^\/bookings\/([^/?#]+)/.exec(href);
+    return m && tripKey.split(",").includes(m[1]) ? m[1] : null;
+  };
+  const switchingRef = useRef(false);
+  useEffect(() => {
+    if (!session || !tripKey) return;
+    const siblings = tripKey.split(",");
+    const onTripClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as HTMLElement).closest?.("a[href^='/']") as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank") return;
+      const href = a.getAttribute("href") ?? "";
+      const m = /^\/bookings\/([^/?#]+)/.exec(href);
+      const to = m && siblings.includes(m[1]) ? m[1] : null;
+      if (!to) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (switchingRef.current) return;
+      switchingRef.current = true;
+      void (async () => {
+        try {
+          const out = await switchStay(session, entryId, to);
+          const said = [
+            out.parked ? `${entryId} parked while you work on ${to}` : null,
+            out.resumed ? `${to} resumed` : null,
+          ].filter(Boolean);
+          if (said.length) toast.success(said.join(" · "));
+          if (out.parkRefused) toast.warning(`${entryId} was left as it was — ${out.parkRefused}`);
+          if (out.resumeRefused) toast.warning(`${to} stays parked — ${out.resumeRefused}`);
+          for (const id of [entryId, to]) {
+            for (const k of [["entry", id], ["entry-timers", id], ["entry-trace", id]]) void queryClient.invalidateQueries({ queryKey: k });
+          }
+          void queryClient.invalidateQueries({ queryKey: ["desk-bookings"] });
+        } catch (err) {
+          toast.error(`Moved to ${to}, but ${entryId} could not be parked — ${err instanceof Error ? err.message : "try parking it by hand"}`);
+        } finally {
+          switchingRef.current = false;
+          router.push(href);
+        }
+      })();
+    };
+    document.addEventListener("click", onTripClick, true);
+    return () => document.removeEventListener("click", onTripClick, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, entryId, tripKey]);
+
   // Leaving an unfinished inquiry or negotiation offers the park on the way out — Back, the bar,
   // any link that leaves this booking.
   const parkPromptable = !!entry && entry.status === "ACTIVE" && (entry.currentStage === "S1" || entry.currentStage === "S2");
@@ -446,6 +548,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       if (!a || a.target === "_blank") return;
       const href = a.getAttribute("href") ?? "";
       if (href.startsWith(bookingHref(entryId)) || href.includes(`edit=${entryId}`) || href.startsWith("/api/")) return;
+      // another stay of this trip — the switch handles it, with no question
+      if (tripSiblingOf(href)) return;
       e.preventDefault();
       e.stopPropagation();
       pendingExitRef.current = href;
@@ -458,7 +562,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       window.removeEventListener("popstate", onPop);
       document.removeEventListener("click", onClickCapture, true);
     };
-  }, [parkPromptable, entryId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parkPromptable, entryId, tripKey]);
 
   if (sessionLoading || entryQuery.isLoading) {
     return (
@@ -490,6 +595,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const atStep = stepNoOfStage(entry.currentStage);
   const sealed = entry.status === "CLOSED" || entry.status === "CANCELLED" || entry.status === "EXPIRED" || entry.currentStage === "TERMINAL";
   const parkable = !sealed && entry.status === "ACTIVE";
+  /** A parked lead may be turned down too — the guest ringing back to decline is what a park waits for. */
+  const declinable =
+    !sealed && (entry.status === "ACTIVE" || entry.status === "PARKED") && (entry.currentStage === "S1" || entry.currentStage === "S2");
   const promptParkOnExit = parkable && (entry.currentStage === "S1" || entry.currentStage === "S2");
 
   const confirmStepActive = viewing === 4 && !fin.frozen && entry.currentStage === "S3";
@@ -524,15 +632,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
-  const sealedOutcome =
-    entry.status === "CANCELLED"
+  // Since 2026-10-01 the ending itself is on the row, so this reads the same words the lists do
+  // (the stage could not say: the cancellation routes wipe it to TERMINAL), and adds what the
+  // operator said, which only the record has room for.
+  const ending = endingOf(entry.closedAs);
+  const endedSaid = (entry.closedReason ?? "").trim();
+  const sealedOutcome = ending
+    ? `${ending.word}${ending.qualifier ? ` — ${ending.qualifier}` : ""}${endedSaid ? `: “${endedSaid}”` : ""} — a read-only record`
+    : entry.status === "CANCELLED"
       ? "Cancelled — a read-only record"
       : entry.folio?.state === "NO_SHOW_CLOSED"
         ? entry.status === "CLOSED"
           ? "A no-show, closed and sealed — a read-only record"
           : "A no-show — a read-only record"
         : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL"
-          ? "Expired — a read-only record"
+          ? `${entry.currentStage === "S2" ? "The negotiation lapsed" : entry.currentStage === "S1" ? "The inquiry lapsed" : "Expired"} — a read-only record`
           : "Closed and sealed — a read-only record";
 
   const preconds0: Precondition[] = sealed
@@ -606,7 +720,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const viewingPast = view === "step" && (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
-  const panes: StepPane[] = step.key === "stay" && !viewingPast && !sealed ? S7_PANES : [];
+  // Check-in gained a Rooms tab of its own (2026-10-06) — the rooms moved out of the Room card.
+  const panes: StepPane[] =
+    viewingPast || sealed ? [] : step.key === "stay" ? S7_PANES : step.key === "checkin" ? S6_PANES : [];
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
 
   const gotoStep = (n: number) => {
@@ -736,9 +852,23 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const nativeBody = (): ReactNode | null => {
     switch (step.key) {
       case "inquiry":
-        return <S1Inquiry entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} />;
+        return (
+          <S1Inquiry
+            entry={entry}
+            past={viewingPast}
+            onPark={parkable ? openPark : undefined}
+            onDecline={declinable ? () => setDeclineOpen(true) : undefined}
+          />
+        );
       case "quote":
-        return <S2Negotiation entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} />;
+        return (
+          <S2Negotiation
+            entry={entry}
+            past={viewingPast}
+            onPark={parkable ? openPark : undefined}
+            onDecline={declinable ? () => setDeclineOpen(true) : undefined}
+          />
+        );
       case "setup":
         return <S3SetUp entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} goToStep={viewingPast ? NOOP : stableSetSelected} />;
       case "confirm":
@@ -773,6 +903,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             registrationConfirmed={registrationConfirmed}
             setRegistrationConfirmed={checkInStepActive ? setRegistrationConfirmed : NOOP}
             checkIn={checkInStepActive ? { onClick: () => setCheckInOpen(true), ready: canCheckIn, reason: canCheckIn ? undefined : firstNote } : null}
+            pane={pane}
+            openPane={setPane}
           />
         );
       case "stay":
@@ -806,12 +938,22 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const native = nativeBody();
 
   /* ---- the header ---- */
-  const standing = standingOf(factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null), hotelToday);
+  const standing = standingOf(
+    factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null, hotelToday),
+    hotelToday,
+  );
   const co = entry.actualCheckOutDate ?? entry.checkOutDate;
   const nights = nightsOf(entry.checkInDate, co);
   // The trip: this enquiry's other stays, when the guest left and came back (2026-09-25).
   const trip = tripOf(entry);
-  const roomNumbers = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
+  // The rooms the guest is in NOW — a room left behind by a mid-stay move is not one of them.
+  const roomNumbers = Array.from(
+    new Set(
+      roomsInUseFor(entry, hotelToday)
+        .map((a) => a.room?.roomNumber)
+        .filter((x): x is string => !!x),
+    ),
+  ).sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }),
   );
   const cur = billing?.currency ?? fin.currency;
@@ -829,7 +971,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   return (
     <BackendRailSlotContext.Provider value={railSlot}>
       <div className="ws">
-        <div className="ws-head">
+        <div className="ws-head" ref={headRef}>
           <div>
             <a
               href="/bookings"
@@ -909,6 +1051,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         <PrefStrip entry={entry} onDetails={() => setView("details", viewing)} />
 
         <div className="ws-body">
+          {/* The column carries the ink down to the gate bar; the nav inside it sticks (2026-09-29). */}
+          <div className="rail-col">
           <nav className="rail" aria-label="Journey">
             {PHASES.map(([phase, steps]) => (
               <div key={phase} style={{ display: "contents" }}>
@@ -983,6 +1127,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               {parked && parkTimer ? <span>parked · expires {fmtDateTime(parkTimer.firesAt, clock.tz)}</span> : null}
             </div>
           </nav>
+          </div>
 
           <div className="canvas">
             <div className="canvas-tabs" role="tablist">
@@ -1169,68 +1314,90 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           onClose={() => setCloseOpen(false)}
         />
 
+        <ReasonDialog
+          open={declineOpen}
+          danger
+          onClose={() => setDeclineOpen(false)}
+          title="The guest said no"
+          caseLines={[<b key="n">{name}</b>, entry.id]}
+          lead={
+            <>
+              This ends the booking and says why. The rooms go back on the board, any offer out
+              is withdrawn and every clock on it stops. Nothing is charged — nothing has been
+              taken yet.
+            </>
+          }
+          reasonLabel="What did they say?"
+          placeholder="too expensive · booked elsewhere · dates changed"
+          confirmLabel="Turn the booking down"
+          busy={declineMutation.isPending}
+          onConfirm={(reason) => declineMutation.mutate(reason)}
+        />
+
         {parkOpen ? (
-          <div
-            className="scrim open"
-            onClick={(e) => {
-              if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
-              pendingExitRef.current = null;
-              setParkOpen(false);
-            }}
-          >
-            <Dialog
-              register="commit"
-              title={parkExitFlow ? "Park this booking before you leave?" : "Park this booking"}
-              caseLines={[<b key="n">{name}</b>, entry.id]}
-              footer={
-                <>
-                  {parkExitFlow ? (
-                    <Button
-                      kind="quiet"
-                      state={exitLeaving === "plain" ? "working" : parkMutation.isPending || exitLeaving ? "inert" : "default"}
-                      workingLabel="Leaving…"
-                      onClick={() => {
-                        setExitLeaving("plain");
-                        const dest = pendingExitRef.current ?? "/bookings";
-                        pendingExitRef.current = null;
-                        router.push(dest);
-                      }}
-                    >
-                      Leave without parking
-                    </Button>
-                  ) : (
-                    <Button kind="quiet" onClick={() => setParkOpen(false)}>
-                      Not now
-                    </Button>
-                  )}
-                  <Button
-                    state={parkMutation.isPending || exitLeaving === "park" ? "working" : !parkReason.trim() || exitLeaving ? "inert" : "default"}
-                    workingLabel={exitLeaving === "park" ? "Leaving…" : "Parking…"}
-                    onClick={() => parkMutation.mutate()}
-                  >
-                    {parkExitFlow ? "Park & leave" : "Park"}
-                  </Button>
-                </>
-              }
+          <Overlay>
+            <div
+              className="scrim open"
+              onClick={(e) => {
+                if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
+                pendingExitRef.current = null;
+                setParkOpen(false);
+              }}
             >
-              <p className="sm">
-                Parking pauses the booking without losing its place — it stays at {STEP_NAMES[atStep - 1]}, its expiry waits, and it can be resumed any time. Nothing is
-                cancelled or released.
-              </p>
-              <div className="field">
-                <label htmlFor="park-reason">Reason</label>
-                <textarea
-                  id="park-reason"
-                  className="input"
-                  style={{ height: 72, paddingTop: 8 }}
-                  value={parkReason}
-                  onChange={(e) => setParkReason(e.target.value)}
-                  placeholder="e.g. waiting on the guest to confirm dates"
-                  maxLength={500}
-                />
-              </div>
-            </Dialog>
-          </div>
+              <Dialog
+                register="commit"
+                title={parkExitFlow ? "Park this booking before you leave?" : "Park this booking"}
+                caseLines={[<b key="n">{name}</b>, entry.id]}
+                footer={
+                  <>
+                    {parkExitFlow ? (
+                      <Button
+                        kind="quiet"
+                        state={exitLeaving === "plain" ? "working" : parkMutation.isPending || exitLeaving ? "inert" : "default"}
+                        workingLabel="Leaving…"
+                        onClick={() => {
+                          setExitLeaving("plain");
+                          const dest = pendingExitRef.current ?? "/bookings";
+                          pendingExitRef.current = null;
+                          router.push(dest);
+                        }}
+                      >
+                        Leave without parking
+                      </Button>
+                    ) : (
+                      <Button kind="quiet" onClick={() => setParkOpen(false)}>
+                        Not now
+                      </Button>
+                    )}
+                    <Button
+                      state={parkMutation.isPending || exitLeaving === "park" ? "working" : !parkReason.trim() || exitLeaving ? "inert" : "default"}
+                      workingLabel={exitLeaving === "park" ? "Leaving…" : "Parking…"}
+                      onClick={() => parkMutation.mutate()}
+                    >
+                      {parkExitFlow ? "Park & leave" : "Park"}
+                    </Button>
+                  </>
+                }
+              >
+                <p className="sm">
+                  Parking pauses the booking without losing its place — it stays at {STEP_NAMES[atStep - 1]}, its expiry waits, and it can be resumed any time. Nothing is
+                  cancelled or released.
+                </p>
+                <div className="field">
+                  <label htmlFor="park-reason">Reason</label>
+                  <textarea
+                    id="park-reason"
+                    className="input"
+                    style={{ height: 72, paddingTop: 8 }}
+                    value={parkReason}
+                    onChange={(e) => setParkReason(e.target.value)}
+                    placeholder="e.g. waiting on the guest to confirm dates"
+                    maxLength={500}
+                  />
+                </div>
+              </Dialog>
+            </div>
+          </Overlay>
         ) : null}
       </div>
     </BackendRailSlotContext.Provider>
@@ -1270,30 +1437,32 @@ function CommitDialog({
 }) {
   if (!open) return null;
   return (
-    <div className="scrim open" onClick={(e) => e.target === e.currentTarget && !pending && onClose()}>
-      <Dialog
-        register="commit"
-        title={title}
-        caseLines={caseLines}
-        footer={
-          <>
-            <Button kind="quiet" state={pending ? "inert" : "default"} onClick={onClose}>
-              Not yet
-            </Button>
-            <Button icon="lock" state={pending ? "working" : "default"} workingLabel="Working…" onClick={onConfirm}>
-              {confirmLabel}
-            </Button>
-          </>
-        }
-      >
-        <p className="sm">This cannot be undone. What becomes binding:</p>
-        <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
-          {lines.map((l) => (
-            <li key={l}>{l}</li>
-          ))}
-        </ul>
-      </Dialog>
-    </div>
+    <Overlay>
+      <div className="scrim open" onClick={(e) => e.target === e.currentTarget && !pending && onClose()}>
+        <Dialog
+          register="commit"
+          title={title}
+          caseLines={caseLines}
+          footer={
+            <>
+              <Button kind="quiet" state={pending ? "inert" : "default"} onClick={onClose}>
+                Not yet
+              </Button>
+              <Button icon="lock" state={pending ? "working" : "default"} workingLabel="Working…" onClick={onConfirm}>
+                {confirmLabel}
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">This cannot be undone. What becomes binding:</p>
+          <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
+            {lines.map((l) => (
+              <li key={l}>{l}</li>
+            ))}
+          </ul>
+        </Dialog>
+      </div>
+    </Overlay>
   );
 }
 
@@ -1510,6 +1679,7 @@ function SidePanel({
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
     .slice(0, 8);
   const recent = events.filter((e) => !isHousekeeping(e.eventType)).slice(0, 6);
+  const dwell = entry.stageDwellRecords?.[0];
   return (
     <aside className="side">
       <div>
@@ -1520,6 +1690,7 @@ function SidePanel({
           ) : (
             <span className="meta">nothing running</span>
           )}
+          {dwell && !sealed ? <StepDwell since={dwell.enteredAt} /> : null}
         </div>
       </div>
       <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />

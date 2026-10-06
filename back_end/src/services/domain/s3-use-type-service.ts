@@ -7,11 +7,13 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceFocGmApprovalAuthority } from "../../policies/15-foc/p38-foc-gm-approval-authority.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 export async function approveFocGm(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { note?: string }) {
   enforceFocGmApprovalAuthority({ actorLevel: actor.actorLevel });
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
   const now = new Date();
   await prisma.traceEvent.create({
@@ -43,6 +45,7 @@ export async function confirmCoordinator(
   if (!input.authorityScope?.trim()) throw new ValidationError("authorityScope is required");
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
 
   const now = new Date();
@@ -103,6 +106,7 @@ export async function schedulePaymentMilestones(
   if (!input.templateKey?.trim()) throw new ValidationError("templateKey is required");
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
 
   const templates = await requireActiveConfigValue<any>(prisma, "paymentMilestone.scheduleTemplates").catch(() => {

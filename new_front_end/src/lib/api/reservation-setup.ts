@@ -48,6 +48,24 @@ export async function previewCancellation(session: Session, entryId: string, wai
   return apiRequest<CancellationPreview>(`/api/entries/${entryId}/cancellation-preview${waive ? "?waive=true" : ""}`, { session });
 }
 
+/**
+ * The guest said no — ends a lead at Inquiry or Negotiation (2026-10-01). L1; the reason is
+ * required. Nothing is priced and nothing is refunded: nothing has been committed yet. It is
+ * NOT the Set-up cancellation below, which settles money that was taken.
+ */
+export async function declineEntry(session: Session, entryId: string, reason: string) {
+  return apiRequest<{
+    entryId: string;
+    status: string;
+    declinedAt: "S1" | "S2";
+    reason: string;
+    roomsReleased: number;
+    holdsReleased: number;
+    quotationsExpired: number;
+    timersCancelled: number;
+  }>(`/api/entries/${entryId}/decline`, { method: "POST", session, body: { reason } });
+}
+
 /** SIG-S3 §6.5 — pre-confirmation cancellation. Releases hold, cancels timers, supersedes invoices,
  *  posts penalty, terminates entry. */
 export async function cancelEntryAtS3(

@@ -36,7 +36,20 @@ import {
 } from "@/components/desk/workspace/quotation-preview";
 import { readRefusal } from "@/lib/ds/translate";
 import { fmtDateTime, fmtStamp } from "@/lib/ds/format";
-import type { EntryDetail } from "@/types/api";
+import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { sendQuotation } from "@/lib/api/quotations";
+import { dispatchInvoice } from "@/lib/api/reservation-setup";
+import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
+import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
+import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
+
+/** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
+const CHANNELS = [
+  ["EMAIL", "Email · in the booking's thread"],
+  ["WHATSAPP", "WhatsApp"],
+] as const;
+type Channel = (typeof CHANNELS)[number][0];
 
 /* ------------------------------------------------------------------ the step's mode */
 
@@ -108,7 +121,12 @@ export function StepFlow({ items, on, children }: { items: FlowItem[]; on: boole
  * posts charges, hands over keys and runs the audit in whatever order the day takes. A card waits
  * until everything up to and including the named card's last item is done.
  */
-export function useFlowCard(card?: string, after?: string): { n?: number; met?: boolean; waitsFor?: FlowItem } {
+export function useFlowCard(
+  card?: string,
+  after?: string,
+  /** Wait on the named card's own items only, not on everything numbered before it. */
+  afterOnly?: boolean,
+): { n?: number; met?: boolean; waitsFor?: FlowItem } {
   const { items, on } = useContext(FlowCtx);
   if (!on) return {};
   // A card may hold several items (Check-in's room card: assigned & ready, then the key). It
@@ -123,7 +141,7 @@ export function useFlowCard(card?: string, after?: string): { n?: number; met?: 
     items.forEach((x, k) => {
       if (x.card === after) last = k;
     });
-    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met);
+    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met && (!afterOnly || x.card === after));
   }
   return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
 }
@@ -198,6 +216,7 @@ export function StepCard({
   style,
   flow,
   flowAfter,
+  flowAfterOnly,
   heldFor,
 }: {
   title?: ReactNode;
@@ -216,13 +235,19 @@ export function StepCard({
   /** This card opens once the named card's items are done — the step's real dependencies. */
   flowAfter?: string;
   /**
+   * Wait on `flowAfter`'s own items alone. Without it a card waits on everything numbered before
+   * it, which is right for Set up's chain and wrong for the house, which needs only the stay —
+   * a lead with no number yet can still be searched while the guest is on the line.
+   */
+  flowAfterOnly?: boolean;
+  /**
    * This card waits for something that is not on this screen — the intake's house card waits for
    * the inquiry to be started, which is the gate bar's button. It is drawn as a waiting card that
    * says so, with no "Show it anyway": what it waits for cannot be done from inside it.
    */
   heldFor?: ReactNode;
 }) {
-  const { n, met, waitsFor } = useFlowCard(flow, flowAfter);
+  const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const [anyway, setAnyway] = useState(false);
   const held = !!heldFor;
   const waiting = held || (!!waitsFor && !anyway);
@@ -397,6 +422,75 @@ export function Choice<T extends string>({
 }
 
 /** An action and what it sets off, on one line: "Park… → a reason and a follow-up date". */
+/**
+ * Scroll to another card of the SAME step and flash it (2026-10-06).
+ *
+ * The workspace's own `goToCard` can also open a pane, which only it knows about; this is the
+ * narrow form a canvas needs to point at a sibling card ("send the proforma first" → the
+ * proforma). Returns false when the card is not on screen, so the caller can stay quiet rather
+ * than offering a button that would do nothing.
+ */
+export function goToStepCard(card: string): boolean {
+  const el = typeof document === "undefined" ? null : document.getElementById(anchorFor(card));
+  if (!el) return false;
+  revealCard(el);
+  return true;
+}
+
+/**
+ * One act, with its explanation underneath (2026-10-06, operator: "can these be made into proper
+ * buttons ... it looks like the words in the button are not fully shown").
+ *
+ * `SeeRow` puts the caption beside the control, which reads as a sentence with a box at the start
+ * and ran off the card when the note was long. Here the button is the row's subject and the
+ * caption sits under it, free to wrap.
+ *
+ * **A held act says what would release it, and offers to take you there.** `heldBy` is the reason
+ * in the operator's words; `goTo` names the card that fixes it, so the person presses a button
+ * instead of reading an instruction and hunting for the place to carry it out.
+ */
+export function ActionRow({
+  label,
+  caption,
+  onClick,
+  state,
+  kind = "quiet",
+  heldBy,
+  goTo,
+  goToLabel,
+}: {
+  label: string;
+  caption: ReactNode;
+  onClick?: () => void;
+  state?: ButtonProps["state"];
+  kind?: ButtonProps["kind"];
+  /** Why the act cannot be done yet — shown under the button, in words. */
+  heldBy?: string | null;
+  /** The card on this step that would release it. */
+  goTo?: string;
+  goToLabel?: string;
+}) {
+  const held = !!heldBy;
+  return (
+    <div className="actrow">
+      <Button kind={kind} state={state ?? (onClick ? "default" : "inert")} onClick={onClick} title={heldBy ?? undefined}>
+        {label}
+      </Button>
+      <span className="cap">{caption}</span>
+      {held ? (
+        <span className="held">
+          <span className="why">{heldBy}</span>
+          {goTo ? (
+            <Button kind="quiet" compact onClick={() => goToStepCard(goTo)}>
+              {goToLabel ?? "Take me there"}
+            </Button>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export function SeeRow({
   label,
   note,
@@ -516,6 +610,71 @@ export function DocCard({
 }
 
 /** An old working tool placed inside a native card — re-dressed by legacy-bridge.css. */
+/**
+ * The booking's bed plan, ready for the composition table's Bed column (2026-10-06).
+ *
+ * One hook so Negotiation and the rooms table at Arrival / Check-in / Stay cannot describe the
+ * same fact differently. A choice is recorded for the stay; from Arrival it also makes the room
+ * up that way, and the server says which happened — the toast reads accordingly.
+ */
+export function useBedPlan(entryId: string) {
+  const { session } = useSession();
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["bed-plan", entryId],
+    queryFn: () => getEntryBedPlan(session!, entryId),
+    enabled: !!session,
+  });
+  const m = useMutation({
+    mutationFn: (v: { roomId: string; bedType: string | null }) => setEntryBedPlan(session!, entryId, v.roomId, v.bedType),
+    onSuccess: (out, v) => {
+      qc.setQueryData(["bed-plan", entryId], out);
+      void qc.invalidateQueries({ queryKey: ["rooms-catalog"] });
+      const row = out.rooms.find((r) => r.roomId === v.roomId);
+      const word = row?.bedType ? BED_WORDS[row.bedType] ?? row.bedType : "its usual setup";
+      toast.success(
+        out.applied
+          ? `Room ${row?.roomNumber ?? ""} made up as ${word}`.trim()
+          : `Room ${row?.roomNumber ?? ""} is to be made up as ${word} — recorded for this stay`.trim(),
+      );
+      if (out.appliedNote) toast.warning(`The room itself did not follow: ${out.appliedNote}`);
+    },
+    onError: (e) => toastRefusal(e, "The bed setup could not be changed"),
+  });
+  const byRoom = useMemo(() => {
+    const out: Record<string, BedPlanCell> = {};
+    for (const r of q.data?.rooms ?? []) {
+      out[r.roomId] = {
+        bedType: r.bedType,
+        source: r.source,
+        usual: r.usual,
+        allowed: r.allowed,
+        roomNow: r.roomNow,
+        appliesNow: r.appliesNow,
+      };
+    }
+    return out;
+  }, [q.data]);
+  /** The guest's ask against the plan, as the server counted it — null when nothing was asked. */
+  const ask: BedAskSummary | null = q.data?.tally?.length
+    ? {
+        lines: q.data.tally,
+        met: q.data.askMet,
+        nightsVary: q.data.nightsVary,
+        satisfiable: q.data.askSatisfiable,
+        message: q.data.message,
+      }
+    : null;
+  return {
+    byRoom,
+    ask,
+    message: q.data?.message ?? null,
+    set: (roomId: string, bedType: string | null) => m.mutate({ roomId, bedType }),
+  };
+}
+
+const BED_WORDS: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
+
 export function Tool({ children, inert }: { children: ReactNode; inert?: boolean }) {
   const { past } = useStepMode();
   const off = inert ?? past;
@@ -533,6 +692,22 @@ export function Notice({ children, note }: { children: ReactNode; note?: ReactNo
 }
 
 /* ------------------------------------------------------------------ dialogs */
+
+/**
+ * A scrim is rendered at the desk's root, not where its component sits (2026-09-29, operator: the
+ * sticky house card sat over an open dialog). The workspace is a size container, which makes it
+ * the containing block and a stacking context for anything `position: fixed` inside it — so a
+ * dialog opened from the rail lived inside the sticky rail's own stacking context and painted
+ * beneath every sticky part that came later on the page. Outside the workspace the scrim covers
+ * the real window and sits above all of it.
+ */
+export function Overlay({ children }: { children: ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHost(document.querySelector<HTMLElement>("[data-ds-overlays]") ?? document.body);
+  }, []);
+  return host ? createPortal(children, host) : null;
+}
 
 export function DsDialog({
   open,
@@ -565,13 +740,15 @@ export function DsDialog({
   }, [open, busy, onClose]);
   if (!open) return null;
   return (
-    <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-        <Dialog register={register} title={title} caseLines={caseLines} footer={footer}>
-          {children}
-        </Dialog>
+    <Overlay>
+      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+        <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
+          <Dialog register={register} title={title} caseLines={caseLines} footer={footer}>
+            {children}
+          </Dialog>
+        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -663,6 +840,12 @@ export type PaperRef =
 /** The paper opens in a side drawer — the document shell the backend rendered. */
 export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClose: () => void }) {
   const { session } = useSession();
+  // A quotation has two faces since 2026-10-06 — with prices, and the copy a guest who asked for
+  // one without them receives. Same document, same number; this is how the desk reads the second
+  // before sending it.
+  const [noPrices, setNoPrices] = useState(false);
+  const quotationId = paper?.kind === "quotation" ? paper.id : null;
+  useEffect(() => setNoPrices(false), [quotationId]);
   useEffect(() => {
     if (!paper) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -673,7 +856,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
   const pdf = () => {
     const run =
       paper.kind === "quotation"
-        ? openQuotationPdf(session, paper.id)
+        ? openQuotationPdf(session, paper.id, { hidePrices: noPrices })
         : paper.kind === "invoice"
           ? openInvoicePdf(session, paper.id)
           : paper.kind === "voucher"
@@ -684,48 +867,60 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     run.catch((e) => toastRefusal(e, "The PDF could not be opened"));
   };
   return (
-    <div className="scrim open" style={{ alignItems: "stretch", justifyContent: "flex-end", padding: 0 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div
-        role="dialog"
-        aria-label={paper.label}
-        style={{ width: "min(560px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
-      >
-        <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
-          <h4 style={{ margin: 0 }}>
-            <Icon name="file" />
-            {paper.label}
-          </h4>
-          <div className="row-acts">
-            <Button kind="quiet" compact icon="file" onClick={pdf}>
-              PDF
-            </Button>
-            <Button kind="quiet" compact icon="print" onClick={pdf}>
-              Print
-            </Button>
-            <Button kind="secondary" compact icon="x" onClick={onClose}>
-              Close
-            </Button>
+    <Overlay>
+      <div className="scrim open" style={{ alignItems: "stretch", justifyContent: "flex-end", padding: 0 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div
+          role="dialog"
+          aria-label={paper.label}
+          style={{ width: "min(560px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
+        >
+          <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+            <h4 style={{ margin: 0 }}>
+              <Icon name="file" />
+              {paper.label}
+            </h4>
+            <div className="row-acts">
+              {paper.kind === "quotation" ? (
+                <Button
+                  kind="quiet"
+                  compact
+                  onClick={() => setNoPrices((v) => !v)}
+                  title={noPrices ? "Back to the priced quotation" : "The same quotation with the money taken off"}
+                >
+                  {noPrices ? "With prices" : "Without prices"}
+                </Button>
+              ) : null}
+              <Button kind="quiet" compact icon="file" onClick={pdf}>
+                PDF
+              </Button>
+              <Button kind="quiet" compact icon="print" onClick={pdf}>
+                Print
+              </Button>
+              <Button kind="secondary" compact icon="x" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+          </div>
+          <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
+            {paper.kind === "quotation" ? (
+              <QuotationPreview quotationId={paper.id} frozenPdf={noPrices ? false : paper.frozen} hidePrices={noPrices} />
+            ) : paper.kind === "invoice" ? (
+              paper.issued ? (
+                <IssuedInvoicePreview invoiceId={paper.id} />
+              ) : (
+                <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} />
+              )
+            ) : paper.kind === "voucher" ? (
+              <VoucherPreview reservationId={paper.reservationId} />
+            ) : paper.kind === "cancellation" ? (
+              <CancellationVoucherPreview entryId={paper.entryId} />
+            ) : (
+              <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} />
+            )}
           </div>
         </div>
-        <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
-          {paper.kind === "quotation" ? (
-            <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} />
-          ) : paper.kind === "invoice" ? (
-            paper.issued ? (
-              <IssuedInvoicePreview invoiceId={paper.id} />
-            ) : (
-              <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} />
-            )
-          ) : paper.kind === "voucher" ? (
-            <VoucherPreview reservationId={paper.reservationId} />
-          ) : paper.kind === "cancellation" ? (
-            <CancellationVoucherPreview entryId={paper.entryId} />
-          ) : (
-            <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} />
-          )}
-        </div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -737,27 +932,47 @@ const INVOICE_WORD: Record<string, string> = {
 };
 
 /** Every paper this booking has, as buttons that open it (P1 — a draft is never sent). */
+/**
+ * Papers — every version, not just the newest (2026-10-06, operator: "we'll have it save in the
+ * system each time, and we can show it a papers tab for these stages and which only shows the
+ * history of changes and superseded and the currently working, we can also have the option to
+ * email or whatsapp these papers to them there").
+ *
+ * The card used to show ONE quotation and the live invoices, preview-only. A booking re-priced
+ * at Arrival or in-house mints a quotation every time, so the history is the point: which paper
+ * is in force now, which it replaced, and when. Superseded versions are kept and readable —
+ * their stored PDF prints the figures that were on the table, never today's.
+ *
+ * Sending is the desk's choice, never automatic. A quotation goes by email or is recorded as
+ * handed over on WhatsApp; a bill is dispatched by email. Where the backend has no WhatsApp
+ * record for a paper, the row says so rather than offering a button that would do nothing.
+ */
 export function PapersCard({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const slot = useContext(OtherWaysSlotCtx);
   const [open, setOpen] = useState<PaperRef | null>(null);
+  const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
+  const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
+  const refresh = useRefreshEntry(entry.id);
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
   const folioDocs = useQuery({
     queryKey: ["folio-documents", entry.id, entry.currentStage, entry.folio?.state ?? null],
     queryFn: () => getFolioDocuments(session!, entry.id),
     enabled: !!session && folioLive,
   });
-  const papers = useMemo<PaperRef[]>(() => {
+
+  /** Newest first — the one in force leads, the ones it replaced follow. */
+  const quotes = useMemo(
+    () => [...(entry.quotations ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+    [entry.quotations],
+  );
+  const invoices = useMemo(
+    () => [...(entry.folio?.invoices ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+    [entry.folio?.invoices],
+  );
+
+  const others = useMemo<PaperRef[]>(() => {
     const out: PaperRef[] = [];
-    const quotes = [...(entry.quotations ?? [])].filter((q) => q.state !== "SUPERSEDED").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    const q = quotes[0];
-    if (q) out.push({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: q.state !== "DRAFT" && q.state !== "SENT" && q.state !== "ACCEPTED" && !!q.pdfStorageKey });
-    for (const inv of entry.folio?.invoices ?? []) {
-      if (inv.state === "SUPERSEDED") continue;
-      const word = INVOICE_WORD[inv.invoiceType] ?? "Invoice";
-      if (inv.invoiceType === "FINAL") out.push({ kind: "invoice", id: inv.id, issued: true, label: `${word} ${inv.invoiceNumber ?? inv.id}` });
-      else out.push({ kind: "invoice", id: inv.id, label: `${word} ${inv.invoiceNumber ?? inv.id}` });
-    }
     if (entry.reservation?.id) out.push({ kind: "voucher", reservationId: entry.reservation.id, label: "Confirmation voucher" });
     for (const d of folioDocs.data?.documents ?? []) {
       if (!d.available || d.kind === "tax-invoice") continue;
@@ -766,24 +981,322 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
     if (entry.status === "CANCELLED") out.push({ kind: "cancellation", entryId: entry.id, label: "Cancellation confirmation" });
     return out;
   }, [entry, folioDocs.data]);
-  if (papers.length === 0) return null;
+
+  if (quotes.length === 0 && invoices.length === 0 && others.length === 0) return null;
+
+  const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
+  const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
+
   return beside(
     <StepCard title="Papers">
-      <div className="row-acts">
-        {papers.map((p) => (
-          <Button key={`${p.kind}:${p.label}`} kind="quiet" compact icon="file" onClick={() => setOpen(p)}>
-            {p.label}
-          </Button>
-        ))}
-      </div>
-      <div className="meta" style={{ marginTop: 6 }}>
-        Preview opens the paper as the backend composes it · a draft is never sent
+      {quotes.length ? (
+        <div className="papergrp">
+          <div className="h">Quotations</div>
+          {quotes.map((q) => (
+            <div className="paperrow" key={q.id}>
+              <span className="nm">
+                <b>{q.referenceNumber}</b>
+                {(q.versionNumber ?? 1) > 1 ? <span className="v"> · v{q.versionNumber}</span> : null}
+              </span>
+              <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>
+              <span className="when">{q.createdAt ? fmtStamp(q.createdAt) : ""}</span>
+              <span className="acts">
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
+                  Preview
+                </Button>
+                <Live>
+                  {liveQuote(q) ? (
+                    <Button kind="quiet" compact icon="send" onClick={() => setSendQuote(q)}>
+                      Send…
+                    </Button>
+                  ) : null}
+                </Live>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {invoices.length ? (
+        <div className="papergrp">
+          <div className="h">Bills</div>
+          {invoices.map((i) => (
+            <div className="paperrow" key={i.id}>
+              <span className="nm">
+                <b>{i.invoiceNumber ?? i.id}</b>
+                <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
+                {(i.versionNumber ?? 1) > 1 ? <span className="v"> · v{i.versionNumber}</span> : null}
+              </span>
+              <Chip tone={liveInvoice(i) ? "success" : "quiet"}>{i.state === "SUPERSEDED" ? "replaced" : i.dispatchedAt ? "sent" : i.state.toLowerCase()}</Chip>
+              <span className="when">{i.dispatchedAt ? `sent ${fmtStamp(i.dispatchedAt)}` : i.createdAt ? fmtStamp(i.createdAt) : ""}</span>
+              <span className="acts">
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${i.invoiceNumber ?? i.id}`, issued: i.invoiceType === "FINAL" })}>
+                  Preview
+                </Button>
+                <Live>
+                  {liveInvoice(i) ? (
+                    <Button kind="quiet" compact icon="send" onClick={() => setSendInvoice(i)}>
+                      {i.dispatchedAt ? "Send again…" : "Send…"}
+                    </Button>
+                  ) : null}
+                </Live>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {others.length ? (
+        <div className="papergrp">
+          <div className="h">Other papers</div>
+          <div className="row-acts">
+            {others.map((pp) => (
+              <Button key={`${pp.kind}:${pp.label}`} kind="quiet" compact icon="file" onClick={() => setOpen(pp)}>
+                {pp.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="meta" style={{ marginTop: 8 }}>
+        Every version is kept. A replaced paper prints the figures that were on the table when it
+        was replaced, never today&rsquo;s · preview never sends anything.
       </div>
       <PaperDrawer paper={open} onClose={() => setOpen(null)} />
+      <QuotationSendDialog entry={entry} target={sendQuote} onClose={() => setSendQuote(null)} onSent={() => { setSendQuote(null); refresh(); }} />
+      <InvoiceSendDialog entry={entry} target={sendInvoice} onClose={() => setSendInvoice(null)} onSent={() => { setSendInvoice(null); refresh(); }} />
     </StepCard>,
     slot,
   );
 }
+
+const QUOTE_WORD: Record<string, string> = {
+  DRAFT: "in force",
+  SENT: "sent",
+  ACCEPTED: "accepted",
+  SUPERSEDED: "replaced",
+  EXPIRED: "lapsed",
+};
+
+/**
+ * Send a quotation — by email, or recorded as handed over on WhatsApp (moved into the kit
+ * 2026-10-06 so the Negotiation step and the Papers card send the same way; it lived in
+ * s2-negotiation and the Papers card would otherwise have grown a second, drifting copy).
+ */
+export function QuotationSendDialog({
+  entry,
+  target,
+  onClose,
+  onSent,
+}: {
+  entry: EntryDetail;
+  target: QuotationSummary | null;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const { session } = useSession();
+  const { tz } = useHotelClock(60_000);
+  // Where the quote goes (2026-09-19): the invoices' rule — the agency or company that booked (the
+  // quote carries their rates), else the guest — and the backend now sends to what is typed here.
+  // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
+  // to +975…" while nothing was emailed.
+  const recipient = useInvoiceRecipient(entry);
+  const phoneOnFile = (entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "").trim();
+  const [channel, setChannel] = useState<Channel>("EMAIL");
+  const [to, setTo] = useState("");
+  const [touched, setTouched] = useState(false);
+  // "Sometimes guest needs to be sent quotation without the price" (2026-10-06). The offer does
+  // not change — same quotation, same number, same validity, and the stored PDF is still the
+  // priced one; only the copy the guest receives has the money taken off.
+  const [hidePrices, setHidePrices] = useState(false);
+  useEffect(() => {
+    if (!target || touched) return;
+    setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
+  }, [target, channel, touched, recipient.defaultTo, phoneOnFile]);
+  const typed = to.trim();
+  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
+  const send = useMutation({
+    mutationFn: () =>
+      sendQuotation(session!, target!.id, {
+        channel,
+        recipientAddress: typed,
+        sentTo: typed,
+        hidePrices,
+      }),
+    onSuccess: () => {
+      const face = hidePrices ? " · without prices" : "";
+      toast.success(
+        channel === "WHATSAPP"
+          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}${face}`
+          : typed
+            ? `${target?.referenceNumber} sent by email to ${typed}${face}`
+            : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
+      );
+      onSent();
+    },
+    onError: (e) => toastRefusal(e, "The quotation could not be sent"),
+  });
+  const hint =
+    channel === "WHATSAPP"
+      ? "send it on WhatsApp yourself — the desk records the send with this number"
+      : !typed
+        ? recipient.party
+          ? `${recipient.party} has no email on file — type the address, or send it with none and hand the quote over`
+          : "no email on file — type one, or send it with none and hand the quote over"
+        : !emailish
+          ? "that is not an email address"
+          : recipient.party && typed === recipient.partyEmail
+            ? `${recipient.party}'s email on file — the quote shows their rates`
+            : recipient.guestEmail && typed === recipient.guestEmail
+              ? recipient.party
+                ? `this is the guest's email — the quote is made out to ${recipient.party} and shows its rates`
+                : "the guest's email on file"
+              : "the send is recorded on the booking with this address";
+  if (!target) return null;
+  const ok = channel === "WHATSAPP" ? typed.length > 0 : !typed || emailish;
+  return (
+    <DsDialog
+      open
+      onClose={onClose}
+      busy={send.isPending}
+      title={`Send quotation ${target.referenceNumber}`}
+      caseLines={[
+        `Version ${target.versionNumber}`,
+        target.validUntil ? `Price valid until ${fmtDateTime(target.validUntil, tz)} — sending does not restart the clock` : "No validity recorded",
+      ]}
+      footer={
+        <>
+          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
+            Not now
+          </Button>
+          <Button
+            kind="secondary"
+            icon="print"
+            onClick={() => session && openQuotationPdf(session, target.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}
+          >
+            Print instead
+          </Button>
+          <Button
+            icon="send"
+            state={send.isPending ? "working" : ok ? "default" : "inert"}
+            title={ok ? undefined : channel === "WHATSAPP" ? "put in the WhatsApp number" : "that is not an email address"}
+            workingLabel="Sending…"
+            onClick={() => send.mutate()}
+          >
+            Send now
+          </Button>
+        </>
+      }
+    >
+      <div className="field">
+        <label>Send via</label>
+        <Choice
+          options={CHANNELS}
+          value={channel}
+          onChange={(c) => {
+            setChannel(c);
+            setTouched(false);
+          }}
+        />
+      </div>
+      <div className="field">
+        <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
+        <input
+          className="input"
+          value={to}
+          onChange={(e) => {
+            setTouched(true);
+            setTo(e.target.value);
+          }}
+          placeholder={channel === "EMAIL" ? "name@example.com" : "+975 …"}
+          autoFocus
+        />
+        <span className="hint">{hint}</span>
+      </div>
+      <div className="field">
+        <label className="sm" style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={hidePrices} onChange={(e) => setHidePrices(e.target.checked)} />
+          Send it without prices
+        </label>
+        {/* One sentence, ticked or not — a hint that changed length made the dialog jump as the
+            box was clicked (2026-10-06, operator: "I don't get why checking that increases the
+            box"). */}
+        <span className="hint">
+          the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total.
+          The record keeps the priced quotation either way.
+        </span>
+      </div>
+    </DsDialog>
+  );
+}
+/** A bill goes out by email; the backend records no WhatsApp send for one. */
+function InvoiceSendDialog({
+  entry,
+  target,
+  onClose,
+  onSent,
+}: {
+  entry: EntryDetail;
+  target: InvoiceSummary | null;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const { session } = useSession();
+  const recipient = useInvoiceRecipient(entry);
+  const [to, setTo] = useState("");
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (!target || touched) return;
+    setTo(target.dispatchedTo ?? recipient.defaultTo);
+  }, [target, touched, recipient.defaultTo]);
+  const typed = to.trim();
+  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
+  const send = useMutation({
+    mutationFn: () => dispatchInvoice(session!, target!.id, { dispatchedTo: typed || undefined }),
+    onSuccess: () => {
+      toast.success(typed ? `${target?.invoiceNumber ?? "The bill"} sent to ${typed}` : `${target?.invoiceNumber ?? "The bill"} recorded as sent — nothing was emailed; hand it over`);
+      onSent();
+    },
+    onError: (e) => toastRefusal(e, "The bill could not be sent"),
+  });
+  if (!target) return null;
+  return (
+    <DsDialog
+      open
+      onClose={onClose}
+      busy={send.isPending}
+      title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${target.invoiceNumber ?? target.id}`}
+      caseLines={[entry.id, target.dispatchedAt ? "Already sent once — this sends it again" : "Not sent yet"]}
+      footer={
+        <>
+          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
+            Not now
+          </Button>
+          <Button
+            icon="send"
+            state={send.isPending ? "working" : !typed || emailish ? "default" : "inert"}
+            title={!typed || emailish ? undefined : "that is not an email address"}
+            workingLabel="Sending…"
+            onClick={() => send.mutate()}
+          >
+            Send now
+          </Button>
+        </>
+      }
+    >
+      <div className="field">
+        <label>Send to</label>
+        <input className="input" value={to} onChange={(e) => { setTouched(true); setTo(e.target.value); }} placeholder="email address" />
+        <span className="hint">
+          {recipient.party ? `${recipient.party} booked — the bill carries their rates` : "the guest's email on file"} · WhatsApp is not
+          recorded for a bill yet; hand it over and it stays on the booking either way
+        </span>
+      </div>
+    </DsDialog>
+  );
+}
+
 
 /* ------------------------------------------------------------------ the guest's answer */
 

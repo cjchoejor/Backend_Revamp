@@ -23,6 +23,16 @@ export const cancelEarlyDepartureRequestSchema = z.object({
 });
 export type CancelEarlyDepartureRequestDto = z.infer<typeof cancelEarlyDepartureRequestSchema>;
 
+/**
+ * POST /entries/:id/decline — the guest said no, at Inquiry or Negotiation (2026-10-01).
+ * The reason is required: recording WHY is the whole act, and it is what tells a turned-down
+ * lead apart from one that simply lapsed.
+ */
+export const declineEntryRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+});
+export type DeclineEntryRequestDto = z.infer<typeof declineEntryRequestSchema>;
+
 /** POST /entries/:id/cancel-at-s3 — SIG-S3 §6.5 pre-confirmation cancellation. */
 export const cancelS3EntryRequestSchema = z.object({
   reason: z.string().trim().min(1).max(500).optional(),

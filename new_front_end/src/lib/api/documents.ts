@@ -49,8 +49,10 @@ async function openPdf(session: Session, path: string): Promise<void> {
 }
 
 /** S2 — quotation PDF. `GET /api/quotations/:id/pdf`. */
-export function openQuotationPdf(session: Session, quotationId: string): Promise<void> {
-  return openPdf(session, `/api/quotations/${quotationId}/pdf`);
+export function openQuotationPdf(session: Session, quotationId: string, opts?: { hidePrices?: boolean }): Promise<void> {
+  // `prices=none` is the same quotation with the money taken off — rendered fresh, never stored:
+  // the stored artifact is the priced one, which is the commercial record (2026-10-06).
+  return openPdf(session, `/api/quotations/${quotationId}/pdf${opts?.hidePrices ? "?prices=none" : ""}`);
 }
 
 /**
@@ -59,8 +61,14 @@ export function openQuotationPdf(session: Session, quotationId: string): Promise
  * storage write — so the desk can show the document for a draft before anything is generated.
  * Rendered into a sandboxed iframe via `srcDoc`.
  */
-export async function fetchQuotationPreviewHtml(session: Session, quotationId: string): Promise<string> {
-  return fetchPreviewHtml(session, `/api/quotations/${quotationId}/preview-html`, "quotation");
+export async function fetchQuotationPreviewHtml(
+  session: Session,
+  quotationId: string,
+  opts?: { hidePrices?: boolean },
+): Promise<string> {
+  // `prices=none` is the same quotation with the money taken off (2026-10-06).
+  const q = opts?.hidePrices ? "?prices=none" : "";
+  return fetchPreviewHtml(session, `/api/quotations/${quotationId}/preview-html${q}`, "quotation");
 }
 
 /**

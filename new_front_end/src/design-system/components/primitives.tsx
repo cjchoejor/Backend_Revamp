@@ -81,10 +81,10 @@ export function ControlNote({ tone = "default", onWhy, children }: { tone?: "def
 
 /* ---------- chip: one shape for every named standing ---------- */
 export type ChipTone = "default" | "solid" | "accent" | "danger" | "warning" | "success" | "quiet";
-export function Chip({ tone = "default", icon, tier, qualifier, children }: { tone?: ChipTone; icon?: IconName; tier?: boolean; qualifier?: React.ReactNode; children: React.ReactNode }) {
+export function Chip({ tone = "default", icon, tier, qualifier, title, children }: { tone?: ChipTone; icon?: IconName; tier?: boolean; qualifier?: React.ReactNode; title?: string; children: React.ReactNode }) {
   const cls = ["chip", tone === "default" ? "" : tone, tier ? "tier" : ""].filter(Boolean).join(" ");
   return (
-    <span className={cls}>
+    <span className={cls} title={title}>
       {icon ? <Icon name={icon} /> : null}
       {children}
       {qualifier ? <span className="qual">{qualifier}</span> : null}

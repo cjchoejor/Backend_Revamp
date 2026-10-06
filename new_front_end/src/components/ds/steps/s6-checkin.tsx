@@ -33,7 +33,7 @@ import { s6Readiness } from "@/lib/desk/workspace";
 import { fmtDate, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
-import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "@/components/desk/workspace/room-change-control";
+import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import {
   Fact,
@@ -50,7 +50,9 @@ import {
   useRefreshEntry,
   words,
   type FactState,
+  type StepPane,
 } from "./kit";
+import { RoomsTableCard } from "./rooms-table";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -80,6 +82,13 @@ type CheckInMove = { onClick: () => void; ready: boolean; reason?: string } | nu
 /** This stay's identity verification, from the identity-proofs feed (2026-09-18). */
 type StayVerification = { verifiedAt: string; verifiedBy: string | null; path: string | null } | null;
 
+/**
+ * Check-in's own tab (2026-10-06, operator: "remove change room option from Room and keep it as a
+ * tab on the top"). The rooms live beside the step rather than inside a card, so changing one is
+ * reached the same way at Check-in as at Stay.
+ */
+export const S6_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
+
 export function S6CheckIn({
   entry,
   past,
@@ -89,9 +98,13 @@ export function S6CheckIn({
   registrationConfirmed,
   setRegistrationConfirmed,
   checkIn,
+  pane = null,
+  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
+  pane?: string | null;
+  openPane?: (k: string | null) => void;
   issuedKeyRooms: Record<string, boolean>;
   toggleKeyRoom: (roomId: string) => void;
   setKeyRooms: (roomIds: string[], issued: boolean) => void;
@@ -99,6 +112,8 @@ export function S6CheckIn({
   setRegistrationConfirmed: (v: boolean) => void;
   checkIn: CheckInMove;
 }) {
+  // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
+  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
 
@@ -155,6 +170,7 @@ export function S6CheckIn({
 
   return (
     <StepCanvas past={past}>
+      <div className="pane" hidden={at(null)}>
       <StepCard
         title={past || folioLive ? "Checked in · what was on record" : "Before you check in · read these, then press Check in"}
         meta="The code needs every one of these before the folio goes live. Two of them happen at the counter: the document, and the keys."
@@ -247,6 +263,15 @@ export function S6CheckIn({
           : null}
       </OtherWays>
       <PapersCard entry={entry} />
+      </div>
+
+      <div className="pane" hidden={at("rooms")}>
+        <RoomsTableCard
+          entry={entry}
+          title="The rooms"
+          lead="Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again and the price follows."
+        />
+      </div>
     </StepCanvas>
   );
 }
@@ -846,7 +871,6 @@ function RoomRow({
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <InlineTool>
             <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
-            <BedTypeEditor roomId={a.roomId} entryId={entry.id} />
             <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={onChanged} />
           </InlineTool>
           <Button kind="quiet" compact onClick={onToggleOpen}>
@@ -870,11 +894,6 @@ function RoomRow({
           )}
         </div>
       </div>
-      <Live>
-        <Tool>
-          <RoomChangeControl entry={entry} fromRoomId={a.roomId} fromRoomNumber={number} onChanged={onChanged} compact />
-        </Tool>
-      </Live>
       {open ? (
         <div className="bind bound" style={{ padding: "8px 12px" }}>
           <Facts>

@@ -2085,12 +2085,14 @@
     line-height: 1.5;
     margin: 0;
   }
+  /* A standing warning about the table's own contents — read at the table's size, not as
+     fine print (2026-09-29, "UIappeal"). */
   & .rce-warns {
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 12.5px;
+    font-weight: 700;
     color: var(--warn);
     background: var(--warn-t);
     border: 1px solid #e6cf9a;
@@ -2686,6 +2688,21 @@
     padding: 0 6px;
   }
   /* First column (room identity) sticks so wide tables scroll under it. */
+  /* How the room is made up for this stay, beside the room it belongs to (2026-10-06). It is
+     not sticky: the room number is the row's anchor, and two pinned columns eat the grid. */
+  & .rct-t .bedcol {
+    width: 112px;
+    min-width: 112px;
+    text-align: center;
+    padding: 3px 6px;
+  }
+  & .rct-t td.bedcol select {
+    width: 100%;
+    font-size: 11.5px;
+    padding: 2px 4px;
+    text-align: center;
+  }
+
   & .rct-t .room {
     position: sticky;
     left: 0;
@@ -2719,6 +2736,114 @@
     color: var(--green-d);
     text-decoration: underline;
   }
+  /* The CHOSEN room (2026-10-06): its acts are offered above the table, so the row has to say
+     plainly which room they belong to — the cell carries the accent and a marker on its edge. */
+  & .rct-t tbody .room.picked {
+    background: var(--green-t);
+    box-shadow: inset 3px 0 0 var(--green-d);
+  }
+  & .rct-t tbody .room.picked b {
+    color: var(--green-d);
+  }
+  /* Saving the table (2026-09-30) — the act sits at the foot of the grid it commits, with what
+     stands in its way named beside it rather than left for the operator to find. */
+  & .rct-save {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  /* The validity and the Save travel together at the right end — the save is what writes it. */
+  & .rct-save-act {
+    margin-left: auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  & .rct-valid {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+  }
+  & .rct-valid .k {
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  & .rct-valid input {
+    width: 58px;
+    text-align: center;
+    font-family: var(--deskmono);
+  }
+  & .rct-valid-h {
+    flex-basis: 100%;
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+  & .rct-save-btn {
+    flex: none;
+  }
+  & .rct-faults {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 2px;
+    color: var(--stop);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  /* Which nights each room is for (2026-09-30, operator) — the leading column, pinned like the
+     room number beside it, because the two together are the row's identity. */
+  & .rct-t .dates {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--cream);
+    text-align: left;
+    padding: 3px 6px;
+    /* Held to exactly its content (2026-09-30, operator: "see how much extra space the dates
+       column is taking uselessly"). The table is width:100% on auto layout, so the surplus was
+       being shared out by content width and this column — the only one with prose in it — took
+       the lion's share. Fixing all three widths keeps it at the span it prints, and the trailing
+       column below takes the slack instead, as it did before this column existed. It must also
+       equal `.has-dates .room`'s offset, or the pinned room number slides over it on a
+       sideways scroll. */
+    width: 98px;
+    min-width: 98px;
+    max-width: 98px;
+    white-space: nowrap;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--ink-2);
+  }
+  & .rct-t thead .dates {
+    background: var(--cream-3);
+  }
+  /* With the Dates column present the room number pins beside it, not at the edge. */
+  & .rct-t.has-dates .room {
+    left: 98px;
+  }
+  /* Nothing claims the surplus (2026-09-30, second pass — operator: "now the rate+ column is
+     too big, see how the old table looked like"). Pinning it to the trailing column swapped one
+     over-wide column for another; the table shared the spare width across every column before
+     the Dates column arrived, and it does again now that Dates is fixed and can no longer take
+     the lion's share. */
+  /* A room held for only part of the stay — the case the column exists for. */
+  & .rct-t td.dates.part {
+    color: var(--warn);
+    font-weight: 600;
+  }
+  & .rct-t td.dates .n {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
   /* Derived occupancy cell — read-only, mono, visually "computed". */
   & .rct-t .occ {
     font-family: var(--deskmono);
@@ -2728,10 +2853,15 @@
     background: var(--green-t);
     min-width: 34px;
   }
+  /* A mismatch is RED, not a quiet amber (2026-09-29, operator): the row holds more guests
+     than the room sleeps, or the Σ does not match the party that was booked. The colour IS the
+     state, and the cell keeps its own outline so it reads on a busy grid. */
   & .rct-t .occ.over,
   & .rct-t .occ.off {
-    color: var(--warn);
-    background: var(--warn-t);
+    color: var(--stop);
+    background: var(--stop-t);
+    box-shadow: inset 0 0 0 1.5px var(--stop);
+    border-radius: 3px;
   }
   /* Cells ARE the inputs — borderless, filling the cell, spreadsheet-style. */
   & .rct-t td input[type="text"] {
@@ -2759,6 +2889,19 @@
   & .rct-t td.warn input {
     color: var(--warn);
     font-weight: 700;
+  }
+  /* A breach, not a caution: a rate typed below the room type's MSR floor ("UIappeal",
+     2026-09-29). The cell reads in the stop colour and keeps its own outline on a busy grid. */
+  & .rct-t td.stop {
+    background: var(--stop-t);
+    box-shadow: inset 0 0 0 1.5px var(--stop);
+  }
+  & .rct-t td.stop input {
+    color: var(--stop);
+    font-weight: 800;
+  }
+  & .rct-t td.stop .rct-sub {
+    color: var(--stop);
   }
   & .rct-t td.ck {
     padding: 0 6px;
@@ -2809,6 +2952,7 @@
   & .rct-t tfoot td.money {
     font-size: 10.5px;
     color: var(--green-d);
+    white-space: nowrap;
   }
   /* Per-room stay total (incl. SC + GST) in the trailing corner column; the footer's carries
      the grand total. */
@@ -2821,41 +2965,167 @@
     padding: 5px 6px;
   }
   /* Running backend-priced total strip under the grid. */
+  /* The live total is what the whole table is FOR — it is read at a glance, not hunted for
+     (2026-09-29, "UIappeal"): a solid band, the working figures small beside their label, and
+     the money itself large enough to read across the desk. */
   & .rct-live {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
+    align-items: center;
+    gap: 12px;
     flex-wrap: wrap;
-    margin-top: 6px;
-    padding: 6px 10px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
+    margin-top: 8px;
+    padding: 10px 14px;
+    border: 2px solid var(--green-d);
+    border-radius: var(--r-lg);
     background: var(--green-t);
     font-family: var(--deskmono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ink-2);
   }
   & .rct-live .k {
     font-family: var(--deskui);
-    font-size: 9.5px;
+    font-size: 10.5px;
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
+    color: var(--green-d);
+  }
+  /* The working figures are read too, not skimmed — they carry the same weight as the total,
+     one size down (2026-09-29, operator). Their labels stay quiet so the money leads. */
+  & .rct-live .parts {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  & .rct-live .parts i {
+    font-style: normal;
+    font-size: 12px;
+    font-weight: 600;
     color: var(--ink-3);
   }
   & .rct-live b {
     color: var(--green-d);
   }
+  & .rct-live .tot {
+    font-size: 19px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    color: var(--green-dd);
+  }
   & .rct-live .disc {
     color: var(--warn);
+    font-weight: 700;
   }
-  & .rct-live .disc b {
-    color: var(--green-d);
+  & .rct-live .disc .tot {
+    color: var(--green-dd);
   }
   & .rct-live .src {
     font-family: var(--deskui);
-    font-size: 9.5px;
+    font-size: 10px;
     color: var(--ink-3);
+  }
+
+  /* A refusal of what was just typed: the loudest thing on the table while it shows
+     (2026-09-29, "UIappeal"). It arrives with a flash so a capped keystroke is never silent. */
+  /* The guest's bed ask, over the Bed type column ("UIappeal" — each chip's colour is its state). */
+  & .rct-bedask {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 9px 12px;
+    border: 2px solid var(--stop);
+    border-radius: var(--r-md);
+    background: var(--stop-t);
+    font-size: 13px;
+    line-height: 1.3;
+  }
+  & .rct-bedask.met {
+    border-color: var(--ok);
+    background: var(--ok-t, #e7f3ec);
+  }
+  & .rct-bedask .lbl {
+    font-weight: 800;
+    color: var(--ink);
+  }
+  & .rct-bedask .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1.5px solid currentColor;
+    background: #fff;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  & .rct-bedask .chip b {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ink);
+  }
+  & .rct-bedask .chip.ok {
+    color: var(--ok);
+  }
+  & .rct-bedask .chip.stop {
+    color: var(--stop);
+  }
+  & .rct-bedask .note {
+    margin-left: auto;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--stop);
+  }
+  & .rct-bedask.met .note {
+    color: var(--ok);
+  }
+  & .rct-refusal {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin: 0 0 8px;
+    padding: 9px 12px;
+    border: 2px solid var(--stop);
+    border-radius: var(--r-md);
+    background: var(--stop-t);
+    color: var(--stop);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    animation: rctRefusalIn 0.5s ease-out 1;
+  }
+  & .rct-refusal .ic {
+    flex: none;
+    width: 19px;
+    height: 19px;
+    border-radius: 999px;
+    background: var(--stop);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 19px;
+    text-align: center;
+  }
+  @keyframes rctRefusalIn {
+    0% {
+      transform: translateY(-3px);
+      box-shadow: 0 0 0 0 var(--stop-t);
+    }
+    35% {
+      box-shadow: 0 0 0 5px var(--stop-t);
+    }
+    100% {
+      transform: translateY(0);
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    & .rct-refusal {
+      animation: none;
+    }
   }
 
   /* Frozen identity columns — a 20-night stay scrolls far past the room number, so Room No /
@@ -3072,7 +3342,7 @@
     font-size: calc(var(--rst-fs) * 0.92);
   }
   & .rst-wrap.dense .rst .rst-nightcount {
-    font-size: calc(var(--rst-fs) * 0.75);
+    font-size: calc(var(--rst-fs) * 0.98);
     margin-top: 0;
   }
   /* Names printed in-cell: the chip keeps the status colour, the text carries the identity. */
@@ -3132,17 +3402,21 @@
   }
   & .rst .rst-nightcount {
     display: block;
-    font-size: 10px;
-    font-weight: 600;
+    /* The per-night tally is the one figure the operator must not miss — it says whether the
+       night has all its rooms. It reads at the header's own size, and its colour is its state:
+       red while rooms are still to be picked, green once the night is full (2026-09-29). */
+    font-size: 12.5px;
+    font-weight: 700;
     letter-spacing: 0;
     text-transform: none;
-    /* Sub-label under a now-dark header — stays the quieter of the two, but no longer washes
-       out against the deeper fill. */
     color: var(--ink-2);
-    margin-top: 2px;
+    margin-top: 3px;
+  }
+  & .rst .rst-nightcount.short {
+    color: var(--stop, #b3261e);
   }
   & .rst .rst-nightcount.done {
-    color: var(--green-d);
+    color: var(--ok);
   }
 
   & .gatebar {

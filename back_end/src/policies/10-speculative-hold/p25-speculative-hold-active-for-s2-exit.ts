@@ -11,25 +11,23 @@ const FINISHED_SPEC_HOLD_STATES = new Set(["RELEASED", "EXPIRED"]);
 
 /**
  * Policy 25 — Speculative Hold (SIG-S2).
- * S2→S3 exit: a speculative hold the booking is still RELYING ON must be in an active state.
+ * S2→S3 exit: a speculative hold being carried into Set up must be active.
  *
- * SIG-S2 §441 reads "If a `SpeculativeHold` was placed: state = PLACED or UPGRADED", and this
- * guard applied that to every hold row the segment had ever carried — including ones the FOM had
- * deliberately released, which §882 and §1314 describe as ordinary L2+ work. That made releasing
- * a hold strictly worse than never placing one: a booking with NO holds passes this gate, while
- * one that held and released could never reach Set up again. Placing a fresh hold did not rescue
- * it either, because the released rows stayed in the segment and kept tripping the check — so the
- * booking was wedged at S2 with no way forward through the desk or the API. Found 2026-09-28 on
- * ENT-20260928-0001, which carried three RELEASED holds and one accepted quotation.
+ * SIG-S2 §441 reads "if a SpeculativeHold was placed: state = PLACED or UPGRADED". The first cut
+ * applied that to EVERY hold row of the segment, and a booking that had held rooms and released
+ * them could then never leave Negotiation: RELEASED is terminal, a fresh hold does not remove the
+ * released rows, and a booking with NO hold passes — so releasing a hold (ordinary L2+ work, SIG-S2
+ * §882 / §1314, with a button on the desk) left the booking strictly worse off than never holding,
+ * and the only way out was a re-entry that threw the quotation away. Found on the deployment
+ * machine 2026-09-28 (ENT-20260928-0001, three RELEASED holds, "Any holds still healthy" unticked).
  *
- * A finished hold is therefore skipped. This is a deliberate, recorded deviation from a literal
- * reading of §441 — the spec's rule is about the hold being carried forward, and a released one
- * is not being carried anywhere. Nothing is loosened by it: the rooms a released hold used to
- * block are FREE, and the committed hold placed at S3 re-checks every room against the dates
- * through Policy 26 before anything is held again.
- *
- * Anything that is neither active nor finished still blocks — a speculative hold should never
- * read CONFIRMED (that is a committed hold's state), so an unexpected value is worth refusing.
+ * Ruling (2026-09-28, a recorded deviation from the literal §441): a FINISHED hold — RELEASED or
+ * EXPIRED — does not block. §441 is singular; it is about the hold being carried forward into S3,
+ * where it upgrades into the committed hold. A hold the FOM released is not being carried anywhere.
+ * Nothing is loosened by it: the rooms a released hold used to block are free, and the committed
+ * hold placed at S3 re-checks every room against the dates through Policy 26 before anything is
+ * held again. Anything neither active nor finished still refuses — a speculative hold should never
+ * read CONFIRMED (that is a committed hold's state), and an unknown state is not trusted.
  */
 export function enforceSpeculativeHoldActiveForS2Exit(input: { segmentHolds: Array<{ state?: string | null }> }) {
   const bad = input.segmentHolds.find((h) => {

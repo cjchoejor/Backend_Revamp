@@ -36,11 +36,12 @@ export async function createGuestProfile(
     clientTier?: string;
   },
 ) {
+  // Neither is required on the guest's own record (2026-10-06, operator: "can the phone number be
+  // not mandatory like email ... we usually just need it when travel agents come, but we cover
+  // that on the top"). The booking still needs SOME way to reach someone before Negotiation —
+  // Policy 16's S1 exit gate asks for it, and the agency's or the arriving person's number counts.
   const email = input.email?.trim() || null;
   const phone = input.phone?.trim() || null;
-  if (!email && !phone) {
-    throw new ValidationError("At least one of email or phone is required");
-  }
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {

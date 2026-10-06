@@ -649,6 +649,10 @@ export function RoomChangeControl({
         {open ? "Cancel change" : `Change room ${fromRoomNumber}`}
       </button>
 
+      {/* No width cap: the panel used to be a small control under one room row and was held to
+          720px, but it has had a full-width row of its own since 2026-10-06 and a cap there just
+          left the right half of the card empty (operator: "it all cramped towards the left, when
+          there's a lot of space on the right"). Everything inside is already `width: 100%`. */}
       {open && (
         <div
           className={expanded ? "rst-expandwrap on" : undefined}
@@ -658,7 +662,6 @@ export function RoomChangeControl({
             borderRadius: expanded ? 0 : 10,
             padding: expanded ? undefined : "10px 12px",
             background: expanded ? undefined : "var(--panel, rgba(255,255,255,0.5))",
-            maxWidth: expanded ? undefined : 720,
           }}
         >
           {expanded && (

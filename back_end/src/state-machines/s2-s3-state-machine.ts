@@ -14,6 +14,8 @@ import {
 } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getOrCreateProvisionalFolioTx } from "../services/domain/s3-folio-service.js";
 import { scheduleS3StageDwellWarningMonitor } from "../lib/schedule-s3-dwell-warning-monitor.js";
+import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { cancelNegotiationExpiryTx } from "../lib/negotiation-expiry.js";
 
 export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _actorId: string, clientVersion: number | undefined) {
   const entry = await prisma.entry.findUnique({
@@ -78,6 +80,9 @@ export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _act
       where: { entryId, segmentId, sealedAt: null },
       data: { sealedAt: now },
     });
+
+    // The Negotiation clock stops here — the booking has moved on (2026-09-29).
+    await cancelNegotiationExpiryTx(tx, await getTimerEngine(), { entryId, actorId: _actorId, reason: "S2_TO_S3_PROGRESSION", now });
 
     await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S3, version: { increment: 1 } } });
     await tx.traceEvent.create({

@@ -39,6 +39,9 @@ const listSelect = {
   contactPersonName: true,
   contactPersonPhone: true,
   closedAt: true,
+  /** How it ended and what was said — so the lists can say more than "Expired" (2026-10-01). */
+  closedAs: true,
+  closedReason: true,
   version: true,
   createdAt: true,
   updatedAt: true,
