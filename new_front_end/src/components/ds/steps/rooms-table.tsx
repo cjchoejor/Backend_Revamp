@@ -35,7 +35,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listRooms } from "@/lib/api/rooms";
-import { DsDialog, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
+import { DsDialog, StepCard, Tool, toastRefusal, useBedPlan, useRefreshEntry, useStepMode } from "./kit";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -86,6 +86,7 @@ export function RoomsTable({
   const byId = useMemo(() => new Map((catalogQ.data?.items ?? []).map((r) => [r.id, r])), [catalogQ.data]);
 
   const hotelToday = useHotelDay()?.today ?? null;
+  const beds = useBedPlan(entry.id);
   const ids = useMemo(() => planRoomIds(entry, hotelToday), [entry, hotelToday]);
   const seed = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
   const ranges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
@@ -256,6 +257,8 @@ export function RoomsTable({
       <Tool inert={past}>
       <RoomCompositionPlanner
         key={plannerKey}
+        bedPlan={beds.byRoom}
+        onBedChange={beds.set}
         tableOnly
         sealedRoomIds={ids}
         entryCheckIn={entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null}

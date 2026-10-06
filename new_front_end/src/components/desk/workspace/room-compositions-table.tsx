@@ -282,6 +282,62 @@ function rowFromComposition(c: RoomCompositionInput): RowState {
   };
 }
 
+/** One room's line of the booking's bed plan — `entry-bed-plan-service` on the backend. */
+export interface BedPlanCell {
+  bedType: string | null;
+  source: "PLAN" | "ASK" | "USUAL";
+  usual: string | null;
+  allowed: string[];
+  roomNow: string | null;
+  appliesNow: boolean;
+}
+
+const BED_WORDS: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
+
+/**
+ * How this room is made up for this stay. Not a composition field — a bed setup carries no price
+ * (the EXTRA bed is the charged one, two columns along), so changing it leaves the table priced
+ * exactly as it was and never asks for a re-quote.
+ */
+function BedCell({
+  roomId,
+  cell,
+  onChange,
+}: {
+  roomId: string;
+  cell?: BedPlanCell;
+  onChange?: (roomId: string, bedType: string | null) => void;
+}) {
+  if (!cell) return <td className="bedcol" />;
+  const opts = cell.allowed.length ? cell.allowed : Object.keys(BED_WORDS);
+  const differs = cell.roomNow && cell.bedType && cell.roomNow !== cell.bedType;
+  const why =
+    cell.source === "PLAN"
+      ? "Set for this booking"
+      : cell.source === "ASK"
+        ? "From the bed setup the guest asked for"
+        : "The room's usual setup";
+  return (
+    <td className="bedcol" title={`${why}${differs ? ` · the room is ${BED_WORDS[cell.roomNow!] ?? cell.roomNow} right now` : ""}`}>
+      <select
+        className="rct-in"
+        value={cell.bedType ?? ""}
+        disabled={!onChange}
+        onChange={(e) => onChange?.(roomId, e.target.value || null)}
+      >
+        {!cell.bedType && <option value="">—</option>}
+        {opts.map((t) => (
+          <option key={t} value={t}>
+            {BED_WORDS[t] ?? t}
+            {t === cell.usual ? " (usual)" : ""}
+          </option>
+        ))}
+      </select>
+      {differs ? <span className="bedwarn" title="The room is not made up that way yet">now {BED_WORDS[cell.roomNow!] ?? cell.roomNow}</span> : null}
+    </td>
+  );
+}
+
 export function RoomCompositionsTable({
   entryId,
   sealedRoomIds,
@@ -301,6 +357,8 @@ export function RoomCompositionsTable({
   onOpenRoomInBoard,
   onPickRoom,
   pickedRoomId,
+  bedPlan,
+  onBedChange,
   discountValue,
   discountUnit,
   discountBasis,
@@ -328,6 +386,13 @@ export function RoomCompositionsTable({
   onPickRoom?: (roomId: string) => void;
   /** The room currently chosen, drawn as such. */
   pickedRoomId?: string | null;
+  /**
+   * How each room is to be made up for this stay, from the booking's bed plan (2026-10-06,
+   * operator: "in the table in s2 we can have column as bed type ... make it for s5 s6 s7 as
+   * well"). Seeded from the guest's own ask at intake, else the room's usual setup.
+   */
+  bedPlan?: Record<string, BedPlanCell>;
+  onBedChange?: (roomId: string, bedType: string | null) => void;
   /**
    * Commit the table (2026-09-30, operator: "a save button to save the config, but it'll only
    * allow ... if there's no error or red boxes or mismatches, then it'll generate the quotation
@@ -923,6 +988,7 @@ export function RoomCompositionsTable({
   // reads "12 – 15 Oct · 204" before any of its counts mean anything. The labels are the
   // caller's (see `roomDates`); the table only prints them.
   const datesShown = !!roomDates && sealedRoomIds.some((id) => roomDates[id]);
+  const bedsShown = !!bedPlan && sealedRoomIds.some((id) => bedPlan[id]);
   /** The stay's own night count — a room that differs from it is the interesting case. */
   const ciIso = dayToIso(entryCheckIn);
   const coIso = dayToIso(entryCheckOut);
@@ -1278,6 +1344,7 @@ export function RoomCompositionsTable({
             <tr className="grp">
               {datesShown && <th className="dates" />}
               <th className="room" />
+              {bedsShown && <th />}
               <th />
               <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
               {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
@@ -1305,6 +1372,11 @@ export function RoomCompositionsTable({
             <tr>
               {datesShown && <th className="dates">Dates</th>}
               <th className="room">Room</th>
+              {bedsShown && (
+                <th className="bedcol" title="How the room is made up for this stay">
+                  Bed
+                </th>
+              )}
               <th title="Occupants — derived: adults + children">Occ</th>
               <th>Adult</th>
               {childColsVisible && (
@@ -1396,6 +1468,7 @@ export function RoomCompositionsTable({
                     <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
                     {room?.roomType?.code && <span>{room.roomType.code}</span>}
                   </td>
+                  {bedsShown && <BedCell roomId={id} cell={bedPlan?.[id]} onChange={onBedChange} />}
                   {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
                       not a quiet amber — the figure the operator must not miss (2026-09-29). */}
                   <td
@@ -1527,6 +1600,7 @@ export function RoomCompositionsTable({
             <tr>
               {datesShown && <td className="dates" />}
               <td className="room">Σ</td>
+              {bedsShown && <td className="bedcol" />}
               <td className={`occ${partySize > 0 && totalGuests !== partySize ? " off" : ""}`}>{totalGuests}</td>
               <td>{sum("ad")}</td>
               {childColsVisible && (

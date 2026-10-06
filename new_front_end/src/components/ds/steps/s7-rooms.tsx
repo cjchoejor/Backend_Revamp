@@ -19,7 +19,7 @@ import { currentRoomAssignments, roomStayRangesByRoom } from "@/lib/desk/party-r
 import { fmtDay, plural } from "@/lib/ds/format";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { RoomCompositionSummary, hasRoomComposition } from "@/components/desk/workspace/room-composition-summary";
-import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "@/components/desk/workspace/room-change-control";
+import { ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail } from "@/types/api";
 import { Choice, Live, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 import { InlineTool, WideDialog, claimWord, physicalWord } from "./s6-shared";
@@ -68,7 +68,6 @@ export function RoomsInUseCard({ entry, id }: { entry: EntryDetail; id: string }
                 </span>
                 <InlineTool>
                   <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
-                  <BedTypeEditor roomId={a.roomId} entryId={entry.id} />
                   <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={onChanged} />
                 </InlineTool>
               </div>

@@ -33,7 +33,7 @@ import { s6Readiness } from "@/lib/desk/workspace";
 import { fmtDate, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
-import { BedTypeEditor, ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "@/components/desk/workspace/room-change-control";
+import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import {
   Fact,
@@ -871,7 +871,6 @@ function RoomRow({
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <InlineTool>
             <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
-            <BedTypeEditor roomId={a.roomId} entryId={entry.id} />
             <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={onChanged} />
           </InlineTool>
           <Button kind="quiet" compact onClick={onToggleOpen}>

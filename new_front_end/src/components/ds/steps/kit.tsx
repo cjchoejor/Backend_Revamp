@@ -41,6 +41,8 @@ import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { sendQuotation } from "@/lib/api/quotations";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
+import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
+import type { BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -596,6 +598,61 @@ export function DocCard({
 }
 
 /** An old working tool placed inside a native card — re-dressed by legacy-bridge.css. */
+/**
+ * The booking's bed plan, ready for the composition table's Bed column (2026-10-06).
+ *
+ * One hook so Negotiation and the rooms table at Arrival / Check-in / Stay cannot describe the
+ * same fact differently. A choice is recorded for the stay; from Arrival it also makes the room
+ * up that way, and the server says which happened — the toast reads accordingly.
+ */
+export function useBedPlan(entryId: string) {
+  const { session } = useSession();
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["bed-plan", entryId],
+    queryFn: () => getEntryBedPlan(session!, entryId),
+    enabled: !!session,
+  });
+  const m = useMutation({
+    mutationFn: (v: { roomId: string; bedType: string | null }) => setEntryBedPlan(session!, entryId, v.roomId, v.bedType),
+    onSuccess: (out, v) => {
+      qc.setQueryData(["bed-plan", entryId], out);
+      void qc.invalidateQueries({ queryKey: ["rooms-catalog"] });
+      const row = out.rooms.find((r) => r.roomId === v.roomId);
+      const word = row?.bedType ? BED_WORDS[row.bedType] ?? row.bedType : "its usual setup";
+      toast.success(
+        out.applied
+          ? `Room ${row?.roomNumber ?? ""} made up as ${word}`.trim()
+          : `Room ${row?.roomNumber ?? ""} is to be made up as ${word} — recorded for this stay`.trim(),
+      );
+      if (out.appliedNote) toast.warning(`The room itself did not follow: ${out.appliedNote}`);
+    },
+    onError: (e) => toastRefusal(e, "The bed setup could not be changed"),
+  });
+  const byRoom = useMemo(() => {
+    const out: Record<string, BedPlanCell> = {};
+    for (const r of q.data?.rooms ?? []) {
+      out[r.roomId] = {
+        bedType: r.bedType,
+        source: r.source,
+        usual: r.usual,
+        allowed: r.allowed,
+        roomNow: r.roomNow,
+        appliesNow: r.appliesNow,
+      };
+    }
+    return out;
+  }, [q.data]);
+  return {
+    byRoom,
+    ask: q.data?.ask ?? null,
+    message: q.data?.message ?? null,
+    set: (roomId: string, bedType: string | null) => m.mutate({ roomId, bedType }),
+  };
+}
+
+const BED_WORDS: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
+
 export function Tool({ children, inert }: { children: ReactNode; inert?: boolean }) {
   const { past } = useStepMode();
   const off = inert ?? past;

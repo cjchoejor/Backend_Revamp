@@ -38,7 +38,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useRefreshEntry, words } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -204,6 +204,7 @@ export function S2Negotiation({
   /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
+  const beds = useBedPlan(entry.id);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   /**
    * "Change configuration" (2026-09-30) — the rooms and the party, changed here rather than by
@@ -467,6 +468,8 @@ export function S2Negotiation({
         ) : tableOpen ? (
           <Tool>
             <RoomCompositionPlanner
+              bedPlan={beds.byRoom}
+              onBedChange={beds.set}
               sealedRoomIds={sealedRoomIds}
               entryCheckIn={entry.checkInDate ?? null}
               entryCheckOut={entry.checkOutDate ?? null}

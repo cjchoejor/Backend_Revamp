@@ -1367,7 +1367,7 @@ export function NewInquiryCanvas() {
                                 ? `adds up to ${plural(bedSum, "room")} — the room count · `
                                 : `${bedSum} of the ${plural(roomsN, "room")} have a bed setup asked; the rest are ours to pick · `
                               : ""}
-                            the exact King / Twin split is set at Arrival — here the house secures enough rooms of the right kind
+                            a tally — which room is which is settled on the table at Negotiation, where it is shared out from this ask
                           </span>
                         )}
                       </div>

@@ -748,8 +748,8 @@ function TheStay({
               ))}
             </div>
             <span className="hint">
-              the exact King / Twin split is set at Arrival — here the house
-              secures enough rooms of the right kind
+              a tally — which room is which is settled on the table at Negotiation; here the house
+              secures enough rooms that can take them
             </span>
           </div>
         ) : null}

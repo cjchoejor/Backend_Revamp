@@ -7,7 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
-import { NegotiationDiscountBar, RoomCompositionsTable, type DiscountEdit } from "./room-compositions-table";
+import { NegotiationDiscountBar, RoomCompositionsTable, type BedPlanCell, type DiscountEdit } from "./room-compositions-table";
 import { RateReferenceStrip } from "./rate-reference-strip";
 
 /**
@@ -1125,6 +1125,9 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   /** Clicking a room CHOOSES it rather than opening the board — see RoomCompositionsTable. */
   onPickRoom?: (roomId: string) => void;
   pickedRoomId?: string | null;
+  /** The booking's bed plan, one line per room — see RoomCompositionsTable. */
+  bedPlan?: Record<string, BedPlanCell>;
+  onBedChange?: (roomId: string, bedType: string | null) => void;
   /**
    * The grid alone, with no Table / Guest board switch (2026-10-06, operator: "from these s5 s6
    * s7 can you remove the guest board from the tables, i don't think we need it"). The board is
