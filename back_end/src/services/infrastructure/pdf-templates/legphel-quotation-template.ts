@@ -33,6 +33,12 @@ import {
  * `indent` renders the row as a sub-line of the room above it.
  */
 export type LegphelQuotationLine = {
+  /**
+   * The nights this room is held for — "06–07 Oct" (2026-10-06). Printed only on a booking whose
+   * rooms are NOT all held for the same nights: where they are, the Stay line above says it once
+   * and a column repeating it on every row is noise. Sub-lines leave it empty.
+   */
+  dates?: string | null;
   /** "Room 201 · Deluxe · 2 adults" or, indented beneath it, "Meals · AP (all meals)". */
   description: string;
   /** The multiplier as printed: "3 nights", "2 pax × 3 nights", "1 bed × 3 nights". */
@@ -94,6 +100,8 @@ export type LegphelQuotationInput = {
    * are always the priced one.
    */
   hidePrices?: boolean;
+  /** Lead the table with each room's own nights — a booking that moves rooms mid-stay. */
+  datesShown?: boolean;
   /** Optional issuance-register id for the footer's middle slot. */
   issuanceRef?: string | null;
   watermark?: DocumentWatermark;
@@ -113,15 +121,18 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     section,
     row("Stay", input.stay),
     miniTable(
-      input.hidePrices
-        ? [{ header: "Description" }, { header: "Qty", align: "r" }]
-        : [
-            { header: "Description" },
-            { header: "Qty", align: "r" },
-            { header: "Rate", align: "r" },
-            { header: "Amount", align: "r" },
-          ],
-      input.lines.map((l) => (input.hidePrices ? [l.description, l.qty] : [l.description, l.qty, l.rate, l.amount])),
+      [
+        ...(input.datesShown ? [{ header: "Nights" }] : []),
+        { header: "Description" },
+        { header: "Qty", align: "r" as const },
+        ...(input.hidePrices ? [] : [{ header: "Rate", align: "r" as const }, { header: "Amount", align: "r" as const }]),
+      ],
+      input.lines.map((l) => [
+        ...(input.datesShown ? [l.dates ?? ""] : []),
+        l.description,
+        l.qty,
+        ...(input.hidePrices ? [] : [l.rate, l.amount]),
+      ]),
       // A room's sub-lines are indented and share its block; the hairline is moved to the last
       // row of each group so room + beds + meals read as one billed item.
       input.lines.map((l, i) => {

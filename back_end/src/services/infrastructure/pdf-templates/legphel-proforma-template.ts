@@ -63,6 +63,12 @@ export type LegphelProformaInput = {
     */
   discountLabel?: string | null;
   discountValue?: string | null;
+  /**
+    * Which room is held for which nights, when they are not all the same — "201 · 06–07 Oct ·
+    * 202 · 07–08 Oct" (2026-10-06). The proforma prints no per-room table, so without this a
+    * booking that moves rooms mid-stay says only "2 rooms" and the move is nowhere on the bill.
+    */
+  roomNights?: string | null;
   /** The ruled total row — what must be paid now. */
   advanceDueNow: string;
   /**
@@ -110,6 +116,7 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
     section,
     row(input.stayLabel, input.stay),
     row(input.rateLabel, input.rateValue),
+    input.roomNights ? row("Rooms", input.roomNights) : "",
     section,
     input.discountLabel && input.discountValue ? row(input.discountLabel, input.discountValue) : "",
     row(`Total (incl. service & GST)`, input.totalInclusive),

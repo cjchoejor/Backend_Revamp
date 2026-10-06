@@ -23,6 +23,7 @@
  */
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
+import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
@@ -103,6 +104,8 @@ async function loadQuotationForRender(prisma: PrismaClient, quotationId: string)
  * tax-inclusive per-night rows — see the fallback branch.
  */
 type PrintLine = {
+  /** The nights this room is held for — only on a booking whose rooms differ (2026-10-06). */
+  dates?: string | null;
   description: string;
   /** The multiplier as printed: "3 nights", "2 pax × 3 nights". */
   qty: string;
@@ -170,6 +173,17 @@ async function buildQuotationDocRender(
   opts?: { hidePrices?: boolean },
 ): Promise<QuotationDocRender> {
   const hidePrices = opts?.hidePrices === true;
+
+  // Which nights each room is held for. On a plain booking — every room for the whole stay —
+  // this comes back empty and no Nights column is printed: the Stay line says it once.
+  const roomNights = await roomNightsForEntry(prisma, q.entryId, { segmentId: q.segmentId, asOf: q.createdAt }).catch(
+    () => new Map<string, string[]>(),
+  );
+  const datesShown = roomNightsVary(roomNights);
+  const nightsLabelFor = (roomId: string) => {
+    const n = roomNights.get(roomId);
+    return n && n.length ? labelRoomNights(n) : null;
+  };
   const terms = (q.commercialTerms as QuotationTerms) ?? {};
   const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
   const roomCount = Math.max(1, Number(terms?.roomCount ?? terms?.pricingBreakdown?.roomCount ?? 1));
@@ -348,6 +362,7 @@ async function buildQuotationDocRender(
       };
       const roomRowIndex = linesForTemplate.length;
       push({
+        dates: nightsLabelFor(r.roomId),
         description: [
           r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
           typeNameByRoomId.get(r.roomId) ?? null,
@@ -554,6 +569,7 @@ async function buildQuotationDocRender(
 
   const html = renderLegphelQuotationHtml({
     hidePrices,
+    datesShown,
     masthead: mastheadFromHotelProfile(hotel),
     quotationNo: q.referenceNumber,
     bookingRef: q.entryId,
@@ -565,6 +581,7 @@ async function buildQuotationDocRender(
     attn: null,
     stay: formatStayRange(checkIn, checkOut, nights),
     lines: linesForTemplate.map((l) => ({
+      dates: l.dates ?? null,
       description: l.description,
       qty: l.qty,
       rate: l.rate == null ? "—" : formatMoney(l.rate),
