@@ -225,6 +225,7 @@ export function RoomsTable({
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
       <Tool inert={past}>
       <RoomCompositionPlanner
+        tableOnly
         sealedRoomIds={ids}
         entryCheckIn={entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null}
         entryCheckOut={entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null}

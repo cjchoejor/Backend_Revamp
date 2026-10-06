@@ -1125,6 +1125,13 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   /** Clicking a room CHOOSES it rather than opening the board — see RoomCompositionsTable. */
   onPickRoom?: (roomId: string) => void;
   pickedRoomId?: string | null;
+  /**
+   * The grid alone, with no Table / Guest board switch (2026-10-06, operator: "from these s5 s6
+   * s7 can you remove the guest board from the tables, i don't think we need it"). The board is
+   * for SEATING a party while the price is still being shaped; by Arrival the seating is settled
+   * and the table is what the desk reads. Negotiation keeps both.
+   */
+  tableOnly?: boolean;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
@@ -1174,7 +1181,7 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   // The TABLE carries its own sticky copy above the grid (its rate cells are what the reference
   // anchors), so the strip is rendered here only for the guest board.
   const rateRef = props.entryId ? <RateReferenceStrip entryId={props.entryId} /> : null;
-  if (!canBoard)
+  if (!canBoard || props.tableOnly)
     return <RoomCompositionsTable {...props} onChange={handleChange} initial={snapshotRef.current ?? []} />;
   return (
     <div style={{ display: "grid", gap: 8 }}>
