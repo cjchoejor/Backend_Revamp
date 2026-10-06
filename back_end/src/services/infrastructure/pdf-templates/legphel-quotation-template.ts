@@ -70,11 +70,14 @@ export type LegphelQuotationInput = {
   stay: string;
   lines: LegphelQuotationLine[];
   /**
-   * Optional discount row (2026-08-02): the table shows ORIGINAL (pre-discount) prices and
-   * this row carries the deduction — label "Discount 10%", value "− 340.00". (Legacy
-   * discounted quotes without a stored pre-discount snapshot pass a rate-movement note
-   * instead, e.g. "1,700.00 → 1,530.00 / room / night", with discounted rows.) Rendered
-   * above Net value; omitted when no discount applied.
+   * The discount row (2026-10-06): everything above it — the rows, Net value, the service
+   * charge and the GST — is what the stay costs BEFORE the concession, and this row takes it
+   * off the total. Printed between GST and Total, at the operator's reading: "just show the net
+   * value first, service charge, GST, and then the discount and then the total."
+   *
+   * It sits there because that is the only place a flat ask reads as itself. "Nu 1,000 off" is
+   * off the TOTAL; above Net value it had to be stated net of tax (865.80) and the figure the
+   * guest was promised appeared nowhere. Omitted when no discount applied.
    */
   discountLabel?: string | null;
   discountValue?: string | null;
@@ -142,7 +145,6 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
           .join(" ") || null;
       }),
     ),
-    input.hidePrices ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
     input.hidePrices ? "" : row("Net value", input.netValue),
     input.hidePrices ? "" : row(input.serviceChargeLabel, input.serviceCharge),
     // The reference annotates GST as "(expected)" on pre-stay documents — no supply has happened
@@ -154,6 +156,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
           input.gst,
           { rawKey: true },
         ),
+    input.hidePrices ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
     input.hidePrices ? "" : row(`Total · ${currency}`, input.total, { total: true }),
     note(input.closingNote, "quiet"),
     footer([input.quotationNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),

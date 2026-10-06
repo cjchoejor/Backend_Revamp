@@ -45,8 +45,11 @@ type QuotationTerms = {
   mealPlan?: string;
   extraBeds?: string | number;
   perGuestMealBreakdown?: { total?: number | string };
-  /** Original (undiscounted) figures, stored at quote time when a discount moved the rate. */
+  /** Original (undiscounted) figures, stored at quote time whenever a discount was applied. */
   compositionTotalsPreDiscount?: {
+    subtotal?: number;
+    serviceCharge?: number;
+    gst?: number;
     total?: number;
     perRoom?: Array<{ roomId: string; total: number }>;
   } | null;
@@ -294,7 +297,7 @@ async function buildQuotationDocRender(
    * line that says so, and it is measured the same way as the flat path's: printed rows minus
    * what the guest is actually charged, which is exactly the concession.
    */
-  const compDiscount = (terms as { compositionDiscount?: { requestedPercent?: number | null; requestedAmount?: number | null; effectivePercent?: number; netReduction?: number; basis?: string } })?.compositionDiscount ?? null;
+  const compDiscount = (terms as { compositionDiscount?: { requestedPercent?: number | null; requestedAmount?: number | null; effectivePercent?: number; netReduction?: number; amountOffTotal?: number; basis?: string } })?.compositionDiscount ?? null;
   const compDiscountNet = Number(compDiscount?.netReduction ?? NaN);
   const compDiscountApplies = !!compDiscount && Number.isFinite(compDiscountNet) && compDiscountNet > 0;
   const discountApplied = rateMoved || compDiscountApplies;
@@ -424,23 +427,47 @@ async function buildQuotationDocRender(
           { label: "MAP+D (breakfast, dinner)", pax: Number(raw?.mealPlanMapdCount ?? 0), rate: bf + di },
           { label: "AP (all meals)", pax: Number(raw?.mealPlanApCount ?? 0), rate: bf + lu + di },
         ];
-        for (const p of planRows) {
-          if (p.pax > 0 && p.rate > 0) {
-            push({
-              description: `Meals · ${p.label}`,
-              qty: `${p.pax} pax × ${nightsWord(roomNights)}`,
-              rate: p.rate,
-              amount: p.rate * p.pax * roomNights,
-            });
-          }
+        // The room's own `mealsSubtotal` is the truth; splitting it into one row per plan is a
+        // courtesy that has to add up to it. It does not always: the stored per-room meal RATES
+        // are only populated on the first room of a composition, so on a multi-room booking
+        // rooms 2..n priced their meals at a rate the document could not see and printed NO meal
+        // row at all — the rows then under-summed by the missing meals and, once the deduction
+        // was measured as rows-minus-net, the discount came out NEGATIVE (2026-10-06, operator:
+        // "I did a Nu 1000 discount, but it's now showing more"). So: print the split when it
+        // reconciles, and one honest row at the stored figure when it cannot.
+        const split = planRows
+          .filter((pl) => pl.pax > 0 && pl.rate > 0)
+          .map((pl) => ({ ...pl, amount: pl.rate * pl.pax * roomNights }));
+        const alaCarteTotal =
+          (Number(raw?.othersBreakfastPax ?? 0) * bf + Number(raw?.othersLunchPax ?? 0) * lu + Number(raw?.othersDinnerPax ?? 0) * di) *
+          roomNights;
+        const splitTotal = split.reduce((t, pl) => t + pl.amount, 0) + alaCarteTotal;
+        const splitReconciles = mealsSubtotal <= 0 || Math.abs(splitTotal - mealsSubtotal) < 0.01;
+        if (!splitReconciles) {
+          push({
+            description: `Meals${planParts.length ? ` · ${planParts.join(" · ")}` : ""}`,
+            qty: nightsWord(roomNights),
+            rate: null,
+            amount: mealsSubtotal,
+          });
+        }
+        for (const p of splitReconciles ? split : []) {
+          push({
+            description: `Meals · ${p.label}`,
+            qty: `${p.pax} pax × ${nightsWord(roomNights)}`,
+            rate: p.rate,
+            amount: p.amount,
+          });
         }
         // "Others" guests order à la carte, so their meals are priced per meal taken rather
         // than by a plan — one row per meal that actually has pax on it.
-        const alaCarte: Array<{ label: string; pax: number; rate: number }> = [
-          { label: "breakfast", pax: Number(raw?.othersBreakfastPax ?? 0), rate: bf },
-          { label: "lunch", pax: Number(raw?.othersLunchPax ?? 0), rate: lu },
-          { label: "dinner", pax: Number(raw?.othersDinnerPax ?? 0), rate: di },
-        ];
+        const alaCarte: Array<{ label: string; pax: number; rate: number }> = splitReconciles
+          ? [
+              { label: "breakfast", pax: Number(raw?.othersBreakfastPax ?? 0), rate: bf },
+              { label: "lunch", pax: Number(raw?.othersLunchPax ?? 0), rate: lu },
+              { label: "dinner", pax: Number(raw?.othersDinnerPax ?? 0), rate: di },
+            ]
+          : [];
         for (const a of alaCarte) {
           if (a.pax > 0 && a.rate > 0) {
             push({
@@ -543,8 +570,26 @@ async function buildQuotationDocRender(
   // rows minus what the guest is actually charged. That comparison has to be like-for-like, so
   // net rows are measured against Net value and tax-inclusive rows against the Total. Older
   // discounted quotes with no original to print fall back to the rate-movement disclosure.
+  /**
+   * The concession comes off the TOTAL, at the foot of the document (2026-10-06). So everything
+   * above it is the stay before it: the rows, Net value, the service charge and the GST are all
+   * pre-discount, and the deduction is the tax-inclusive figure that was agreed — Nu 1,000 off
+   * reads as 1,000, not as the 865.80 it is net of tax.
+   */
+  const preDiscountTotals = terms?.compositionTotalsPreDiscount ?? null;
+  const preNet = Number(preDiscountTotals?.subtotal ?? NaN);
+  const preService = Number(preDiscountTotals?.serviceCharge ?? NaN);
+  const preGst = Number(preDiscountTotals?.gst ?? NaN);
+  const showPre = compDiscountApplies && Number.isFinite(preNet) && Number.isFinite(preService) && Number.isFinite(preGst);
+  const shownNet = showPre ? preNet : netValue;
+  const shownService = showPre ? preService : serviceCharge;
+  const shownGst = showPre ? preGst : gstValue;
   const discountBaseline = rowsAreNet ? netValue : totalAmount;
-  const discountAmount = originalsPrinted ? printedRowsTotal - discountBaseline : 0;
+  const discountAmount = compDiscountApplies
+    ? Number(compDiscount?.amountOffTotal ?? 0)
+    : originalsPrinted
+      ? printedRowsTotal - discountBaseline
+      : 0;
   // What the guest was told the concession IS: the percent when one was asked for, the money
   // when a flat amount was. The figure beside it is always the money, so a percent reads as a
   // percent of a total the page prints.
@@ -590,13 +635,13 @@ async function buildQuotationDocRender(
     })),
     discountLabel,
     discountValue,
-    netValue: formatMoney(netValue),
+    netValue: formatMoney(shownNet),
     serviceChargeLabel: scRate > 0 ? `Service charge ${formatRate(scRate)} of net value` : "Service charge",
-    serviceCharge: formatMoney(serviceCharge),
+    serviceCharge: formatMoney(shownService),
     // GST is compound, so the label says what it is charged ON — otherwise "5%" next to a figure
     // that is not 5% of net value reads as an error to anyone checking the sums.
     gstLabel: gstRate > 0 ? `GST @ ${formatRate(gstRate)} of net + service charge` : "GST",
-    gst: formatMoney(gstValue),
+    gst: formatMoney(shownGst),
     total: formatMoney(totalAmount),
     closingNote: hidePrices
       ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
