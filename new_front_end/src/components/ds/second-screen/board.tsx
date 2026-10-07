@@ -38,7 +38,7 @@ import {
   tableChanges,
 } from "@/lib/ds/second-screen/diff";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
-import { currentStepOrder, preconditionsFor } from "@/lib/desk/workspace";
+import { currentStepOrder, liveQuotesThisPass, preconditionsFor } from "@/lib/desk/workspace";
 import { mealPlanSummary, operativeRoomCompositions } from "@/lib/desk/party-rooms";
 import { channelWord, factsFromEntry, standingOf } from "@/lib/ds/status";
 import { clockParts, fmtDateTime, fmtDay, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
@@ -53,6 +53,8 @@ import { SidePapers } from "@/components/ds/workspace/side-papers";
 import { BILLING_WORD } from "@/components/ds/workspace/details-view";
 import type { EntryDetail } from "@/types/api";
 import { InquiryBoard } from "@/components/ds/second-screen/inquiry-board";
+import { GuideBox } from "@/components/ds/second-screen/guide-box";
+import { guideFor, type GuideItem } from "@/lib/ds/second-screen/guide";
 
 // This window is the board: nothing it does is ever sent back to the desk as a draft or a notice.
 setScreenRole("board");
@@ -210,8 +212,6 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
   const current = desk?.current ?? currentStepOrder(entry);
   const viewing = desk?.viewing ?? current;
   const items = desk?.items ?? preconditionsFor(entry, DESK_STEPS[current - 1], hotelToday);
-  const gate = desk?.gate ?? null;
-  const next = items.find((i) => !i.met) ?? null;
 
   /* the rooms, night by night */
   const nights = enumerateNights(stay?.checkIn || entry.checkInDate, stay?.checkOut || entry.checkOutDate);
@@ -252,6 +252,28 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
 
   const billing = billingQ.data ?? null;
   const cur = billing?.currency ?? "BTN";
+
+  /* what to do next — the step's list, the guest's answers, the clocks, then the move */
+  const latestRefusal = live.find((n) => n.tone === "error" && n.source === "refusal" && Date.now() - n.at < 90_000)?.text ?? null;
+  const tableFix: GuideItem[] = table?.faults.length
+    ? [{ key: "table", tone: "fix", now: "Put the table right before pricing it", how: table.faults.join(" · ") }]
+    : [];
+  const guide: GuideItem[] = [
+    ...tableFix,
+    ...guideFor({
+      desk,
+      stage: entry.currentStage,
+      timers: timersQ.data?.items ?? [],
+      communications: commsQ.data?.items ?? [],
+      passStart: (entry.segments ?? [])[0]?.startedAt ?? null,
+      quotes: liveQuotesThisPass(entry),
+      payment,
+      balance: billing?.folio?.outstandingBalance ?? null,
+      currency: cur,
+      latestRefusal,
+      now: Date.now(),
+    }),
+  ];
   const name = guestName(entry.guestProfile);
   const standingNow = standingOf(factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, null, hotelToday), hotelToday);
   const party = `${plural(entry.adultCount ?? entry.guestCount ?? 0, "adult")}${entry.childCount ? ` · ${plural(entry.childCount, "child", "children")}${entry.childAges?.length ? ` (${entry.childAges.join(", ")})` : ""}` : ""}`;
@@ -300,42 +322,17 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
           live={live}
           events={events.map((e) => ({ id: e.id, timestamp: e.timestamp, words: traceWords(e), who: whoDid(e) }))}
           tz={tz}
+          also={guide.filter((g) => !g.key.startsWith("step:") && g.key !== "move" && g.key !== "refusal")}
         />
       ) : (
       <div className="board-cols">
         {/* ---- left: do next + problems ---- */}
         <section className="board-col">
-          <h3>Do next</h3>
-          {viewing !== current ? (
-            <p className="board-note">
-              The desk is looking back at {STEP_NAMES[viewing - 1]}. The booking is at <b>{STEP_NAMES[current - 1]}</b>.
-            </p>
-          ) : null}
-          {next ? (
-            <div className="board-next">
-              <span className="k">Next</span>
-              <b>{next.label}</b>
-            </div>
-          ) : items.length ? (
-            <div className="board-next done">
-              <span className="k">This step</span>
-              <b>Everything it needs is done</b>
-            </div>
-          ) : null}
-          <ol className="board-todo">
-            {items.map((i, n) => (
-              <li key={`${n}-${i.label}`} className={i.met ? "met" : i === next ? "now" : ""}>
-                <span className="mark">{i.met ? <Icon name="check" /> : n + 1}</span>
-                <span>{i.label}</span>
-              </li>
-            ))}
-          </ol>
-          {gate ? (
-            <div className={`board-gate${gate.ready ? " open" : ""}`}>
-              <b>{gate.label}</b>
-              <span>{gate.ready ? "open — the desk can press it" : `waits: ${gate.reason ?? "something first"}`}</span>
-            </div>
-          ) : null}
+          <GuideBox
+            items={guide}
+            checklist={items}
+            lookingBack={viewing !== current ? `The desk is looking back at ${STEP_NAMES[viewing - 1]}. The booking is at ${STEP_NAMES[current - 1]}.` : null}
+          />
 
           <h3>Problems</h3>
           {standing.length === 0 && live.length === 0 ? <p className="quiet">None right now.</p> : null}

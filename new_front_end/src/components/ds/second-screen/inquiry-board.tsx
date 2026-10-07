@@ -31,6 +31,8 @@ import { guestName } from "@/lib/desk/model";
 import { factsFromRow, standingOf } from "@/lib/ds/status";
 import { fmtDay, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
 import { StandingChip } from "@/components/ds/ui";
+import { GuideRest } from "@/components/ds/second-screen/guide-box";
+import type { GuideItem } from "@/lib/ds/second-screen/guide";
 import type { EntryDetail } from "@/types/api";
 
 type CatalogRoom = { roomNumber: string; roomTypeId?: string; roomType?: { id: string; name: string } | null };
@@ -46,6 +48,7 @@ export function InquiryBoard({
   live,
   events,
   tz,
+  also,
 }: {
   entry: EntryDetail;
   desk: DeskDraft | null;
@@ -58,6 +61,8 @@ export function InquiryBoard({
   live: Notice[];
   events: Array<{ id: string; timestamp: string; words: string; who: string }>;
   tz: string;
+  /** What else the guide has — answers awaited, clocks running out — shown under the coach. */
+  also: GuideItem[];
 }) {
   const { session } = useSession();
 
@@ -143,6 +148,7 @@ export function InquiryBoard({
               {coach.then}
             </p>
           ) : null}
+          <GuideRest items={also} title="Also" />
           <ol className="ib-steps">
             {(desk?.items ?? []).map((i, n) => (
               <li key={`${n}-${i.label}`} className={i.met ? "met" : ""}>

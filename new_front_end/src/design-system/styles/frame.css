@@ -505,3 +505,20 @@
 .ds .ws.coached [data-help], .ds .ws.coached .card > .meta { display: none !important; }
 .ds .gatebar .gate.quiet-note { display: flex; align-items: center; gap: 12px; }
 .ds .side > .btn-quiet:first-child { justify-self: start; }
+
+/* ---- The guide (2026-10-07): "Waiting on the guest" in amber, the live clock, and the rest of the list. ---- */
+.ds.board .ib-coach.wait { border-color: #D9A43A; background: #FFF8E8; }
+.ds.board .ib-coach.wait > .k { color: #8F5300; }
+.ds.board .board-col .ib-coach { position: static; }
+.ds.board .gb-clock { display: inline-flex; align-items: center; gap: 6px; justify-self: start; padding: 4px 12px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line-2); font-size: 15px; font-weight: 700; }
+.ds.board .gb-clock.close { background: #FCEBC4; border-color: #D9A43A; color: #5a3d00; }
+.ds.board .gb-clock.late { background: color-mix(in srgb, var(--danger) 12%, var(--surface)); border-color: var(--danger); color: var(--danger); }
+.ds.board .gb-rest { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ds.board .gb-rest > .k { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
+.ds.board .gb-rest ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ds.board .gb-rest li { display: grid; gap: 3px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border-left: 4px solid var(--line-2); font-size: 15px; }
+.ds.board .gb-rest li.fix { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--surface)); }
+.ds.board .gb-rest li.wait { border-left-color: #D9A43A; background: #FFF8E8; }
+.ds.board .gb-rest li.ready { border-left-color: var(--success); }
+.ds.board .gb-rest li .meta { font-size: 13.5px; }
+.ds.board .gb-rest .gb-clock { font-size: 13px; padding: 2px 9px; }
