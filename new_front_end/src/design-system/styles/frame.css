@@ -284,3 +284,7 @@
 .ds .list-band.today td:not(.desk-root *) { background: var(--accent-soft); color: var(--accent-ink); border-bottom-color: var(--accent-line); }
 .ds .list-band .n:not(.desk-root *) { margin-left: 10px; font-weight: 600; color: var(--ink-3); }
 .ds .bookings-page .date-cell:not(.desk-root *) { white-space: nowrap; }
+/* A grid item grows to its widest content unless told otherwise, so a wide table inside a
+   step (the S1 rooms-by-night grid over many nights) pushed the middle column under the side
+   panel. The column and the step's cards stay their own width; the table scrolls in its box. */
+.ds .canvas > *, .ds .steps-canvas > *, .ds .steps-canvas > .pane > * { min-width: 0; }
