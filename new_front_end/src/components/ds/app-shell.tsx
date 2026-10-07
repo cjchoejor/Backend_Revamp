@@ -12,7 +12,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Icon, IconSprite, OfflineBanner } from "@/design-system";
 import { useSession, redirectToLogin } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -22,6 +22,7 @@ import { lockSession, logoutSession } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
 import { attentionItems, waitingText } from "@/lib/ds/attention";
 import { clockParts } from "@/lib/ds/format";
+import { SecondScreenButton, SecondScreenPublisher } from "@/components/ds/second-screen/publisher";
 
 const MAIN = [
   { href: "/today", label: "Today" },
@@ -140,6 +141,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="ds" data-ds-overlays>
       <IconSprite />
+      <SecondScreenPublisher />
       <div className="shell">
         <div className="topbar">
           <Link href="/today" className="mark" aria-label="Today">
@@ -155,6 +157,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             ))}
           </nav>
           <span className="spacer" />
+          <SecondScreenButton />
           <span className="clock" title={clock.known ? `Hotel time · ${clock.tz}` : "Hotel time — checking with the server"}>
             <span className="date">{date} · </span>
             <b>{time}</b>

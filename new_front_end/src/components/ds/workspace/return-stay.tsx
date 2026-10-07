@@ -17,7 +17,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip } from "@/design-system";
 import { bookingHref } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";

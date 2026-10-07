@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { guestFullName, type GuestProfileSummary } from "@/lib/api/guest-profiles";

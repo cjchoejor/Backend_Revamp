@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { PinPad } from "./pin-pad";
 import { Logo, Wordmark } from "@/components/brand/logo";
 import { ThemeToggle } from "@/components/layout/theme-toggle";

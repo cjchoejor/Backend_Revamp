@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { CODE_POLICY_MODULES } from "@/lib/admin/config-schemas";
 import { REGISTRY_POLICY_KEYS, getPolicyMeta, type PolicyKeyMeta } from "@/lib/admin/policy-schemas";
 import { deactivatePolicy, listPolicies, savePolicy, type PolicyAdmin } from "@/lib/api/admin";

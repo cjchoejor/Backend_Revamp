@@ -11,7 +11,7 @@
  */
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { recordFolioRefund } from "@/lib/api/checkout";

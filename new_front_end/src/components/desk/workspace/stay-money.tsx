@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlarmClock, CalendarPlus, Check, Eye, EyeOff, Receipt } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { useSession } from "@/hooks/use-session";
 import { recipientHint, useInvoiceRecipient, type InvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { ApiError } from "@/lib/api/client";

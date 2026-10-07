@@ -14,7 +14,7 @@
  *  - "saved" is decided by comparing the picks with what the server holds, never by a flag.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import type { RoomStatusRow, SelectAllOutcome } from "@/components/desk/workspace/room-status-table";
 import type { AvailabilityOptionSelected } from "@/types/api";
 import { optionSelectedRoomIds } from "@/types/api";

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, CornerUpLeft, Lock } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import {

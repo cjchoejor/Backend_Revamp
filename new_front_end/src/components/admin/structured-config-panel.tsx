@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { ConfigFormEditor } from "@/components/admin/config-form-editor";
 import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
 import { getConfigSchema, type ConfigSchema } from "@/lib/admin/config-schemas";

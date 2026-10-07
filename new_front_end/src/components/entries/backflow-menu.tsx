@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/hooks/use-session";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";

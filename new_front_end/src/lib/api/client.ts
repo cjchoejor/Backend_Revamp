@@ -1,6 +1,7 @@
 import type { ApiErrorBody } from "@/types/api";
 import type { Session } from "@/types/session";
 import { translateMessage } from "@/lib/ds/words";
+import { publishNotice } from "@/lib/ds/second-screen/channel";
 
 export class ApiError extends Error {
   constructor(
@@ -72,13 +73,13 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
         /^(NOT_AT_S[1-9]|ENTRY_SEALED_READ_ONLY)$/.test(String((err as { blockingCondition?: unknown } | null)?.blockingCondition ?? "")) ||
         /^Entry (?:must be|is not) at S[1-9]\b/.test(err?.message ?? ""));
     if (stale && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("desk:stale-booking"));
-    throw new ApiError(
-      res.status,
-      err?.error ?? "RequestError",
-      // every refusal reaches a screen in the desk's words (stage codes and levels translated)
-      translateMessage(err?.message ?? `Request failed (${res.status})`),
-      err ?? undefined,
-    );
+    // every refusal reaches a screen in the desk's words (stage codes and levels translated)
+    const words = translateMessage(err?.message ?? `Request failed (${res.status})`);
+    // The second screen hears every refusal of something the operator tried (2026-10-07). A read
+    // that comes back "not there yet" (a folio's payment status before Set up) is an expected
+    // state, not a problem, so reads are sent only when the server itself failed.
+    if (method !== "GET" || res.status >= 500) publishNotice({ tone: "error", text: words, source: "refusal" });
+    throw new ApiError(res.status, err?.error ?? "RequestError", words, err ?? undefined);
   }
 
   return data as T;

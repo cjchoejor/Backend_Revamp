@@ -301,3 +301,132 @@
 .ds .fullscreen-layer .rst .rst-chip { font-size: 13.5px; padding: 4px 14px; min-width: 84px; }
 .ds .fullscreen-layer .rst .rst-selall-btn { font-size: 13px; padding: 4px 11px; }
 .ds .fullscreen-layer .rst .rst-nightcount { font-size: 14px; }
+
+/* ===== The second screen (2026-10-07) =====================================================
+   The desk's top-bar control that opens it, then the board itself: a read-only window on the
+   second monitor. Larger type than the desk (it is read at arm's length), states in colour
+   (UIappeal): red what blocks or failed, amber what is not saved, green what is done. */
+.ds .topbar .screen2 { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid #5a554c; background: transparent; color: #D8D3CA; font: inherit; font-size: 13px; cursor: pointer; margin-right: 10px; }
+.ds .topbar .screen2:hover { border-color: #8d877c; color: #fff; }
+.ds .topbar .screen2 .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b665d; }
+.ds .topbar .screen2.on { border-color: var(--success); color: #fff; }
+.ds .topbar .screen2.on .dot { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 30%, transparent); }
+
+.ds.board { min-height: 100vh; background: var(--paper); color: var(--ink); font-size: 15px; }
+.ds.board .board-bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 8px 20px; background: var(--ink); color: #D8D3CA; }
+.ds.board .board-bar .spacer { flex: 1; }
+.ds.board .board-bar .btn-quiet { color: #D8D3CA; border-color: #5a554c; background: transparent; }
+.ds.board .board-mark { display: inline-flex; align-items: center; gap: 8px; color: #fff; font-weight: 700; letter-spacing: .04em; }
+.ds.board .board-mark img { height: 24px; }
+.ds.board .board-link { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.ds.board .board-link .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
+.ds.board .board-link.on { color: #fff; }
+.ds.board .board-link.on .dot { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 30%, transparent); }
+.ds.board .board-clock { font-size: 15px; }
+.ds.board .board-clock b { color: #fff; font-size: 17px; }
+.ds.board .board-empty { padding: 60px 24px; font-size: 18px; color: var(--ink-2); text-align: center; }
+.ds.board .board-idle { max-width: 760px; margin: 60px auto; padding: 0 24px; display: grid; gap: 12px; }
+.ds.board .board-idle h2 { font-size: 30px; }
+.ds.board .board-idle p { font-size: 17px; color: var(--ink-2); }
+
+.ds.board .board-page { padding: 14px 20px 30px; display: grid; gap: 14px; }
+.ds.board .board-head { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: center; padding: 14px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.ds.board .board-head .who { display: flex; align-items: center; gap: 10px; }
+.ds.board .board-head h1 { font-size: 30px; line-height: 1.1; margin: 0; }
+.ds.board .board-head .facts { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 16px; color: var(--ink-2); }
+.ds.board .board-head .facts b { color: var(--ink); }
+.ds.board .board-money { grid-column: 2; grid-row: 1 / span 2; text-align: right; display: grid; gap: 2px; }
+.ds.board .board-money .k { font-size: 13px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.ds.board .board-money b { font-size: 30px; }
+.ds.board .board-money .meta { font-size: 14px; }
+.ds.board .board-steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; list-style: none; margin: 8px 0 0; padding: 0; }
+.ds.board .board-steps li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); color: var(--ink-3); font-size: 14px; border: 1px solid transparent; }
+.ds.board .board-steps li .n { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line-2); font-size: 13px; font-weight: 700; flex: none; }
+.ds.board .board-steps li.done { color: var(--ink-2); }
+.ds.board .board-steps li.done .n { background: var(--success); border-color: var(--success); color: #fff; }
+.ds.board .board-steps li.cur { background: var(--ink); color: #fff; font-weight: 700; }
+.ds.board .board-steps li.cur .n { background: #fff; color: var(--ink); border-color: #fff; }
+.ds.board .board-steps li.look { border-color: var(--accent); }
+.ds.board .board-sealed { padding: 12px 16px; border-radius: 10px; background: var(--surface-3); font-size: 17px; font-weight: 600; }
+
+.ds.board .board-cols { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.9fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+.ds.board .board-col { display: grid; gap: 10px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.ds.board .board-col h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); margin: 8px 0 0; }
+.ds.board .board-col h3:first-child { margin-top: 0; }
+.ds.board .board-col h3 .h-meta { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 13px; margin-left: 6px; }
+.ds.board .quiet { color: var(--ink-3); font-size: 15px; }
+.ds.board .board-note { font-size: 15px; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-ink); }
+
+.ds.board .board-next { display: grid; gap: 4px; padding: 14px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 9%, var(--surface)); border: 2px solid var(--danger); }
+.ds.board .board-next .k { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--danger); font-weight: 700; }
+.ds.board .board-next b { font-size: 22px; line-height: 1.25; }
+.ds.board .board-next.done { background: color-mix(in srgb, var(--success) 10%, var(--surface)); border-color: var(--success); }
+.ds.board .board-next.done .k { color: var(--success); }
+.ds.board .board-todo { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ds.board .board-todo li { display: flex; align-items: center; gap: 10px; font-size: 16px; }
+.ds.board .board-todo .mark { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line-2); font-size: 13px; font-weight: 700; flex: none; }
+.ds.board .board-todo li.met { color: var(--ink-3); }
+.ds.board .board-todo li.met .mark { background: var(--success); border-color: var(--success); color: #fff; }
+.ds.board .board-todo li.now { font-weight: 700; }
+.ds.board .board-todo li.now .mark { border: 2px solid var(--danger); color: var(--danger); }
+.ds.board .board-gate { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--line-2); font-size: 15px; }
+.ds.board .board-gate b { font-size: 17px; }
+.ds.board .board-gate span { color: var(--danger); }
+.ds.board .board-gate.open { border: 2px solid var(--success); }
+.ds.board .board-gate.open span { color: var(--success); font-weight: 600; }
+
+.ds.board .board-problems, .ds.board .board-notices, .ds.board .board-unsaved, .ds.board .board-feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ds.board .board-problems li, .ds.board .board-notices li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; padding: 8px 10px; border-radius: 8px; font-size: 15px; }
+.ds.board .board-problems li.warn, .ds.board .board-notices li.warning { background: color-mix(in srgb, var(--warning) 14%, var(--surface)); border-left: 4px solid var(--warning); }
+.ds.board .board-notices li.error { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); border-left: 4px solid var(--danger); font-weight: 600; animation: board-flash 1.2s ease-out 1; }
+.ds.board .board-notices li.success { background: color-mix(in srgb, var(--success) 9%, var(--surface)); border-left: 4px solid var(--success); }
+.ds.board .board-notices li.info { background: var(--surface-2); border-left: 4px solid var(--line-2); }
+.ds.board .board-notices li .d { display: block; font-weight: 400; color: var(--ink-2); font-size: 14px; }
+.ds.board .board-notices li .meta { font-size: 13px; white-space: nowrap; }
+@keyframes board-flash { 0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 45%, transparent); } 100% { box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .ds.board .board-notices li.error { animation: none; } }
+.ds.board .board-unsaved li { padding: 8px 10px; border-radius: 8px; background: #FCEBC4; border-left: 5px solid #D9A43A; color: #4a3200; font-size: 15px; font-weight: 600; }
+.ds.board .board-feed li { display: grid; gap: 1px; font-size: 15px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.ds.board .board-feed li:last-child { border-bottom: 0; }
+.ds.board .board-feed .meta { font-size: 13px; }
+
+.ds.board .board-facts { width: 100%; border-collapse: collapse; font-size: 16px; }
+.ds.board .board-facts th { text-align: left; font-weight: 500; color: var(--ink-2); width: 34%; padding: 6px 10px 6px 0; vertical-align: top; }
+.ds.board .board-facts td { padding: 6px 0; }
+.ds.board .board-facts tr { border-bottom: 1px solid var(--line); }
+.ds.board .board-facts tr.missing td { color: var(--danger); font-weight: 600; }
+.ds.board .board-facts tr.unsaved { background: #FCEBC4; }
+.ds.board .ns { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: #D9A43A; color: #2e1f00; font-size: 12px; font-weight: 700; vertical-align: middle; }
+.ds.board .was { color: var(--ink-3); margin-left: 6px; }
+
+.ds.board .board-grid-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.ds.board .board-grid { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 15px; }
+.ds.board .board-grid th, .ds.board .board-grid td { padding: 7px 10px; height: auto; min-height: 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.ds.board .board-grid th { background: var(--surface-2); font-size: 13px; text-align: center; }
+.ds.board .board-grid th:nth-child(2) { text-align: left; }
+.ds.board .board-grid th.rn, .ds.board .board-grid td.rn { text-align: left; font-weight: 700; position: sticky; left: 0; background: var(--surface); }
+.ds.board .board-grid th.rn { background: var(--surface-2); }
+.ds.board .board-grid td.rt { color: var(--ink-2); }
+.ds.board .board-grid .cnt { display: block; font-size: 14px; font-weight: 800; }
+.ds.board .board-grid .cnt.short { color: var(--danger); }
+.ds.board .board-grid .cnt.full { color: var(--success); }
+.ds.board .board-grid td.nc { text-align: center; font-weight: 700; }
+.ds.board .board-grid td.nc.held { background: color-mix(in srgb, var(--success) 16%, var(--surface)); color: var(--success); }
+.ds.board .board-grid td.nc.new { background: #F6CF77; color: #5a3d00; box-shadow: inset 0 0 0 2px #D9A43A; }
+.ds.board .board-grid td.nc.off { background: var(--surface-2); color: var(--danger); text-decoration: line-through; }
+
+.ds.board .board-party { width: 100%; border-collapse: collapse; font-size: 15px; }
+.ds.board .board-party th { font-size: 13px; color: var(--ink-2); text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--line-2); }
+.ds.board .board-party td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+.ds.board .board-party td.rn { font-weight: 700; }
+.ds.board .board-party .num { text-align: right; }
+.ds.board .board-party td.chg { background: #F6CF77; color: #5a3d00; font-weight: 700; }
+.ds.board .board-total { font-size: 17px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.ds.board .board-total b { font-size: 21px; }
+.ds.board .board-timers, .ds.board .board-papers { position: static; max-height: none; overflow: visible; background: transparent; border: 0; padding: 0; }
+
+@media (max-width: 1400px) {
+  .ds.board .board-cols { grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr); }
+  .ds.board .board-cols > .board-col:last-child { grid-column: 1 / -1; }
+  .ds.board .board-steps { grid-template-columns: repeat(5, 1fr); }
+}

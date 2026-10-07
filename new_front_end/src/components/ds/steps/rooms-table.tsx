@@ -23,7 +23,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip } from "@/design-system/components/primitives";
 import { changeBookingRoom } from "@/lib/api/entries";
 import type { RoomCompositionInput } from "@/lib/api/quotations";

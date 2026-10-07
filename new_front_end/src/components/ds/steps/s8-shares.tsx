@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip, Refusal } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { usePaymentStatus } from "@/hooks/use-payment-status";

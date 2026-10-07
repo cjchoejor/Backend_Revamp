@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 
 /**
  * Small "View PDF" button for the desk workspace. Given an async opener (from

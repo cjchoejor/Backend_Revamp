@@ -15,7 +15,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
 import { tripOf } from "@/components/ds/workspace/return-stay";
@@ -95,6 +95,8 @@ import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
 import { Overlay, ReasonDialog, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
 import { declineEntry } from "@/lib/api/reservation-setup";
+import { PublishDraft } from "@/components/ds/second-screen/publisher";
+import type { DeskDraft } from "@/lib/ds/second-screen/drafts";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
@@ -745,6 +747,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const inert = unmet > 0;
   const firstNote = inert ? `${plural(unmet, "thing")} first` : undefined;
   let forward: ReactNode;
+  // the same move in words, for the second screen
+  let gate: DeskDraft["gate"] = null;
   if (sealed || (step.key === "closed" && entry.status === "CLOSED")) {
     forward = (
       <Chip tone="quiet" icon="lock">
@@ -752,12 +756,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Chip>
     );
   } else if (parked) {
+    gate = { label: "Resume", ready: true };
     forward = (
       <Button state={unparkMutation.isPending ? "working" : "default"} workingLabel="Resuming…" onClick={() => unparkMutation.mutate()}>
         Resume
       </Button>
     );
   } else if (confirmStepActive) {
+    gate = { label: "Reserve the booking", ready, reason: ready ? undefined : firstNote };
     forward = (
       <Button icon="lock" state={ready ? "default" : "inert"} reason={ready ? undefined : firstNote} onClick={() => setConfirmOpen(true)}>
         Reserve the booking
@@ -765,6 +771,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (inquiryStepActive) {
     const ok = canProgressS1(entry);
+    gate = { label: "Move to Negotiation", ready: ok, reason: ok ? undefined : firstNote };
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S2" })}>
         Move to Negotiation
@@ -772,18 +779,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (quoteStepActive) {
     const ok = canProgressS2(entry);
+    gate = { label: "Move to Set up", ready: ok, reason: ok ? undefined : firstNote };
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S3" })}>
         Move to Set up
       </Button>
     );
   } else if (setupStepActive) {
+    gate = { label: "Move to Reserve", ready, reason: ready ? undefined : firstNote };
     forward = (
       <Button state={ready ? "default" : "inert"} reason={ready ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
         Move to Reserve
       </Button>
     );
   } else if (confirmedS4Active) {
+    gate = { label: "Move to Arrival", ready: voucherAnswerRecorded, reason: voucherAnswerRecorded ? undefined : "record the guest's answer to the voucher first" };
     forward = (
       <Button
         state={activateMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
@@ -796,6 +806,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (arrivalStepActive) {
     const ok = canProgressS5(entry, guestPresent, hotelToday);
+    gate = { label: "Move to Check-in", ready: ok, reason: ok ? undefined : firstNote };
     forward = (
       <Button
         state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
@@ -807,6 +818,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkInStepActive) {
+    gate = { label: "Check in & go live", ready: canCheckIn, reason: canCheckIn ? undefined : firstNote };
     forward = (
       <Button icon="lock" state={canCheckIn ? "default" : "inert"} reason={canCheckIn ? undefined : firstNote} onClick={() => setCheckInOpen(true)}>
         Check in &amp; go live
@@ -814,6 +826,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (stayStepActive) {
     const ok = canProgressS7(entry, nightAuditOk, hotelToday);
+    gate = { label: "Move to Check-out", ready: ok, reason: ok ? undefined : firstNote };
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S8" })}>
         Move to Check-out
@@ -821,6 +834,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (checkOutStepActive) {
     const ok = canProgressS8(entry);
+    gate = { label: "Move to Closed", ready: ok, reason: ok ? undefined : firstNote };
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S9" })}>
         Move to Closed
@@ -828,12 +842,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (closedStepActive) {
     const ok = !!closure?.canClose && atLeastFom(session?.actorLevel);
+    gate = { label: "Close & seal the record", ready: ok, reason: ok ? undefined : firstNote };
     forward = (
       <Button icon="lock" state={closeMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Sealing…" onClick={() => setCloseOpen(true)}>
         Close &amp; seal the record
       </Button>
     );
   } else if (viewing !== currentOrder) {
+    gate = { label: `Go to ${STEP_NAMES[currentOrder - 1]}`, ready: true };
     forward = (
       <Button kind="secondary" onClick={() => setSelected(currentOrder)}>
         Go to {STEP_NAMES[currentOrder - 1]}
@@ -971,6 +987,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   return (
     <BackendRailSlotContext.Provider value={railSlot}>
       <div className="ws">
+        <PublishDraft
+          entryId={entry.id}
+          kind="desk"
+          value={
+            {
+              viewing,
+              current: currentOrder,
+              view,
+              items: preconds.map((p) => ({ label: p.label, met: p.met, card: p.card })),
+              gate,
+              sealed: sealed ? sealedOutcome : null,
+            } satisfies DeskDraft
+          }
+        />
         <div className="ws-head" ref={headRef}>
           <div>
             <a

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { fmtDateTime as dsDateTime, fmtInstantDate as dsInstantDate } from "@/lib/ds/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, History, Lock } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { useSession } from "@/hooks/use-session";
 import {
   duplicateSegment,

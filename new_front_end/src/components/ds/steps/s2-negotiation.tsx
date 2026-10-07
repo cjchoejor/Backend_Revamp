@@ -14,7 +14,7 @@
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -41,6 +41,8 @@ import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type Quot
 import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { PublishDraft } from "@/components/ds/second-screen/publisher";
+import type { TableDraft } from "@/lib/ds/second-screen/drafts";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -454,8 +456,23 @@ export function S2Negotiation({
   const competing = useCompetingClaims(entry.id);
   const otherMarkers = (competing.data?.items ?? []).filter((i) => i.kind === "SPECULATIVE_HOLD");
 
+  const discountNow = Number(discountValue);
   return (
     <StepCanvas past={past}>
+      <PublishDraft
+        entryId={entry.id}
+        kind="s2.table"
+        value={
+          !past && roomCompositions.length > 0 && (tableUnsaved || tableFaults.length > 0)
+            ? ({
+                unsaved: tableUnsaved,
+                faults: tableFaults,
+                rooms: roomCompositions,
+                discount: discountValue.trim() && Number.isFinite(discountNow) && discountNow > 0 ? { value: discountNow, unit: discountUnit } : null,
+              } satisfies TableDraft)
+            : null
+        }
+      />
 
       <StepCard
         title="Who sleeps where, and their meals"

@@ -14,7 +14,7 @@ import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figu
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { determineNoShow, previewNoShow } from "@/lib/api/no-show";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";

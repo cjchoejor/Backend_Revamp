@@ -21,7 +21,7 @@ import { Fact, FactBox, Facts, PapersCard, StepCard } from "@/components/ds/step
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import type { EntryDetail } from "@/types/api";
 
-const BILLING_WORD: Record<string, string> = {
+export const BILLING_WORD: Record<string, string> = {
   TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
   DIRECT_BILL: "Everything to the account",
   GUEST_PAY: "Everything to the guest",

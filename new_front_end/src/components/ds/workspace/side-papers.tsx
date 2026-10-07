@@ -8,7 +8,7 @@
  */
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { acknowledgeCommunication, type EntryCommunication } from "@/lib/api/entries";

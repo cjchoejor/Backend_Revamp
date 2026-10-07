@@ -12,7 +12,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import {
@@ -62,6 +62,8 @@ import {
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
+import { PublishDraft } from "@/components/ds/second-screen/publisher";
+import type { RoomsDraft, StayDraft } from "@/lib/ds/second-screen/drafts";
 import { cameInAsOf } from "./new-inquiry-parts";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -612,6 +614,29 @@ function TheStay({
 
   return (
     <StepCard flow="stay" title="The stay">
+      <PublishDraft
+        entryId={entry.id}
+        kind="s1.stay"
+        value={
+          dirty && editable
+            ? ({
+                checkIn: f.checkIn,
+                checkOut,
+                nights: nightsN,
+                adults: adultsN,
+                children: childN,
+                ages,
+                rooms: roomsN,
+                beds: bedMap as Record<string, number>,
+                warning: env?.exceedsHotelCapacity
+                  ? `${plural(env.chargeableOccupants, "chargeable guest")} — more than the hotel can sleep`
+                  : env && roomsN < env.allowedRoomCounts.min
+                    ? `${plural(roomsN, "room")} cannot sleep ${plural(env.chargeableOccupants, "chargeable guest")} — at least ${env.allowedRoomCounts.min}`
+                    : null,
+              } satisfies StayDraft)
+            : null
+        }
+      />
       <div className="form2">
         <div className="field">
           <label>Check-in</label>
@@ -1216,8 +1241,23 @@ function TheHouse({
     )
     .filter(Boolean);
 
+  const roomsUnsaved = sel.currentCanon != null && sel.currentCanon !== sel.savedCanon;
   return (
     <>
+      <PublishDraft
+        entryId={entry.id}
+        kind="s1.rooms"
+        value={
+          roomsUnsaved
+            ? ({
+                nights: displayNights.map((date) => ({ date, roomIds: [...(sel.effectiveByNight[date] ?? [])] })),
+                numberOfRooms,
+                nightsReady: sel.nightsReady,
+                ready: sel.ready,
+              } satisfies RoomsDraft)
+            : null
+        }
+      />
       <StepCard
         flow="house"
         flowAfter="stay"

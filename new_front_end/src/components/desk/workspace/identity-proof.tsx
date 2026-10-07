@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { useSession } from "@/hooks/use-session";
 import { verifyGuestIdentity, type VerificationPath } from "@/lib/api/check-in";
 

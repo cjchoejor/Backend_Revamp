@@ -17,7 +17,7 @@
  */
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Button, Chip, Refusal, type ChipTone } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { roomsFromResultSet } from "@/lib/api/availability";

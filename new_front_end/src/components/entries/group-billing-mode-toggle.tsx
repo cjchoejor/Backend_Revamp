@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/ds/toast";
 import { Users } from "lucide-react";
 import { setGroupBillingMode } from "@/lib/api/entries";
 import { useSession } from "@/hooks/use-session";

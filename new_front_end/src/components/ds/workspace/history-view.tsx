@@ -25,28 +25,7 @@ import { reservedThisPass } from "@/lib/desk/workspace";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
 import type { EntryDetail } from "@/types/api";
 
-type Lens = "all" | "money" | "papers" | "requests" | "changes" | "approvals" | "messages";
-
-const LENSES: ReadonlyArray<readonly [Lens, string]> = [
-  ["all", "Everything"],
-  ["money", "Money"],
-  ["papers", "Papers"],
-  ["requests", "Requests"],
-  ["changes", "Changes"],
-  ["approvals", "Approvals"],
-  ["messages", "Messages"],
-];
-
-const LENS_TEST: Record<Exclude<Lens, "all">, RegExp> = {
-  money: /PAYMENT|CHARGE|CORRECTION|CREDIT_NOTE|WRITE_OFF|WRITEOFF|SETTLE|REFUND|INTERIM|ADVANCE|NIGHT_AUDIT\.|RECONCIL|PENALT/,
-  papers: /QUOTATION\.(CREATED|SENT|SUPERSEDED|EXPIRED)|INVOICE\.|PROFORMA|VOUCHER|CONFIRMATION_CONFIRMATION|MASTER_BILL|STATEMENT|CANCELLATION_CONFIRMATION|RESERVATION\.CONFIRMATION/,
-  requests: /PREFERENCE|REQUEST|SPECIAL/,
-  changes: /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN/,
-  approvals: /APPROV|OVERRIDE|AUTHORITY|WAIV|CREDIT_EXTENSION|VERIFIED|ESCALAT|ACCEPTED|CONFIRMED|DETERMIN/,
-  messages: /EMAIL|ACKNOWLEDGEMENT|COMMUNICATION|REMINDER|MESSAGE/,
-};
-
-const inLens = (ev: TraceEvent, lens: Lens) => lens === "all" || LENS_TEST[lens].test(ev.eventType);
+import { LENSES, inLens, type Lens } from "@/lib/ds/lenses";
 
 const whoDid = (ev: TraceEvent) =>
   ev.actorId === "SYSTEM" || ev.actorLevel === "SYSTEM" || ev.actorName === "SYSTEM"
