@@ -4,7 +4,8 @@
 
 $ErrorActionPreference = "Stop"
 
-$ports = @(3001, 4000)
+# 3002 is the redesigned desk (new_front_end); 3001 the old one; 4000 the API.
+$ports = @(3001, 3002, 4000)
 $profiles = @("Private", "Domain")
 
 foreach ($port in $ports) {
@@ -24,5 +25,5 @@ foreach ($port in $ports) {
 }
 
 Write-Host ""
-Write-Host "Done. Restart dev:lan on this PC, then boss opens http://<your-LAN-IP>:3001"
-Write-Host "If still blocked: router may use client isolation (guest Wi-Fi)."
+Write-Host "Done. Restart dev:lan on this PC, then boss opens http://<your-LAN-IP>:3002"
+Write-Host "If still blocked: the network may be marked Public (Settings > Network > Wi-Fi > Private), or the router uses client isolation (guest Wi-Fi)."
