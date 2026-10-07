@@ -3,6 +3,7 @@ import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, St
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { cancelQuotationClocksTx } from "../../lib/quotation-clocks.js";
 import { extendNegotiationExpiryTx } from "../../lib/negotiation-expiry.js";
 import * as documentGenerationService from "../infrastructure/document-generation-service.js";
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
@@ -1937,20 +1938,8 @@ export async function expireQuotation(
       });
     }
 
-    const sched = await tx.timerRecord.findMany({
-      where: {
-        entityType: "Quotation",
-        entityId: quotationId,
-        status: "SCHEDULED",
-        timerType: { in: ["QUOTATION_ACK_TRACKER", "QUOTATION_VALIDITY_W15"] },
-      },
-      select: { id: true, pgBossJobId: true },
-    });
-    await Promise.all(sched.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
-    await tx.timerRecord.updateMany({
-      where: { id: { in: sched.map((t) => t.id) } },
-      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "QUOTATION_EXPIRED" },
-    });
+    // Its own clocks and the answer window on the email it went out in.
+    await cancelQuotationClocksTx(tx, engine, [quotationId], { actorId: "SYSTEM", reason: "QUOTATION_EXPIRED", now });
 
     await tx.traceEvent.create({
       data: {

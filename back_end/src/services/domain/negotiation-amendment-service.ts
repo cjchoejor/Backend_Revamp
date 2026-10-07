@@ -38,6 +38,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { requireActiveMode } from "../../lib/mode-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { cancelQuotationClocksTx } from "../../lib/quotation-clocks.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import {
   enforceEntryAtS2ForNegotiationAmendment,
@@ -310,14 +311,13 @@ export async function amendNegotiationConfiguration(
           createdBy: actor.actorId,
         });
       }
-      // The validity clock belongs to an offer that no longer exists.
-      const timers = await tx.timerRecord.findMany({
-        where: { entryId, timerType: "QUOTATION_VALIDITY_W15", status: "SCHEDULED" },
+      // Every clock belongs to an offer that no longer exists — its validity AND the answer
+      // window on the email it went out in (the second was left running until 2026-10-07).
+      await cancelQuotationClocksTx(tx, engine, live.map((q) => q.id), {
+        actorId: actor.actorId,
+        reason: "QUOTATION_RETIRED_BY_CONFIGURATION_CHANGE",
+        now,
       });
-      for (const t of timers) {
-        if (t.pgBossJobId) await engine.cancel(t.pgBossJobId).catch(() => undefined);
-        await tx.timerRecord.update({ where: { id: t.id }, data: { status: "CANCELLED", cancelledAt: now } });
-      }
     });
   }
 
