@@ -32,6 +32,7 @@ import { factsFromRow, standingOf } from "@/lib/ds/status";
 import { fmtDay, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
 import { StandingChip } from "@/components/ds/ui";
 import { GuideRest } from "@/components/ds/second-screen/guide-box";
+import { MoreList } from "@/components/ds/second-screen/more-list";
 import type { GuideItem } from "@/lib/ds/second-screen/guide";
 import type { EntryDetail } from "@/types/api";
 
@@ -204,16 +205,19 @@ export function InquiryBoard({
         </section>
         <section>
           <h3>Recorded</h3>
-          <ul className="board-feed">
-            {events.slice(0, 4).map((e) => (
+          <MoreList
+            className="board-feed"
+            items={events}
+            limit={4}
+            render={(e) => (
               <li key={e.id}>
                 <span>{e.words}</span>
                 <span className="meta">
                   {fmtTime(e.timestamp, tz)} · {e.who}
                 </span>
               </li>
-            ))}
-          </ul>
+            )}
+          />
         </section>
       </div>
     </div>

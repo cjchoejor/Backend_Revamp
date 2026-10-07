@@ -51,6 +51,23 @@ export function SidePapers({
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const papers = communications.filter((c) => c.direction !== "INBOUND").slice(0, 10);
+  // A paper the guest no longer needs to answer (2026-10-07): an older one of the same kind — the
+  // re-sent quotation replaced the first — or a quotation that was replaced, retired by a change
+  // of configuration, or ran out. It reads "replaced" and offers neither Record nor Send again;
+  // asking for an answer to an offer that no longer exists was the fault.
+  const quoteState = new Map((entry.quotations ?? []).map((q) => [q.id, q.state]));
+  const newestOfKind = new Map<string, string>();
+  for (const c of [...papers].sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
+    if (c.sendStatus === "DISPATCHED" && !newestOfKind.has(c.commType)) newestOfKind.set(c.commType, c.id);
+  }
+  const quoteOf = (c: EntryCommunication) => (typeof c.payload?.quotationId === "string" ? c.payload.quotationId : null);
+  const isReplaced = (c: EntryCommunication) => {
+    if (c.acknowledgementStatus === "RECEIVED" || c.sendStatus !== "DISPATCHED") return false;
+    if (newestOfKind.get(c.commType) !== c.id) return true;
+    const q = quoteOf(c);
+    const st = q ? quoteState.get(q) : undefined;
+    return !!q && !!st && st !== "SENT" && st !== "DRAFT";
+  };
   const [recording, setRecording] = useState<EntryCommunication | null>(null);
   const [method, setMethod] = useState<"WRITTEN" | "VERBAL" | null>(null);
   const [said, setSaid] = useState("");
@@ -89,21 +106,25 @@ export function SidePapers({
             papers.map((c) => {
               const answered = c.acknowledgementStatus === "RECEIVED";
               const sent = c.sendStatus === "DISPATCHED";
+              const replaced = isReplaced(c);
               return (
                 <div className="row" key={c.id}>
                   <span className="t">
-                    {PAPER_NAME[c.commType] ?? c.commType} · {c.channel?.toLowerCase() ?? "email"}
+                    {PAPER_NAME[c.commType] ?? c.commType}
+                    {quoteOf(c) ? ` ${quoteOf(c)}` : ""} · {c.channel?.toLowerCase() ?? "email"}
                   </span>
                   <span className="row-acts" style={{ gap: 6 }}>
                     {answered ? (
                       <Chip tone="success">acknowledged</Chip>
+                    ) : replaced ? (
+                      <Chip tone="quiet">replaced</Chip>
                     ) : sent ? (
                       <Chip tone="warning">{c.isOverdue ? "no answer" : "awaiting"}</Chip>
                     ) : (
                       <Chip tone="quiet">not sent</Chip>
                     )}
                     <span className="meta">{fmtStamp(c.createdAt, tz)}</span>
-                    {!answered && sent && c.canAcknowledge && !sealed ? (
+                    {!answered && !replaced && sent && c.canAcknowledge && !sealed ? (
                       <Button
                         kind="quiet"
                         compact
@@ -116,7 +137,7 @@ export function SidePapers({
                         Record
                       </Button>
                     ) : null}
-                    {!answered && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
+                    {!answered && !replaced && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
                       <Button kind="quiet" compact state={resend.isPending ? "working" : "default"} onClick={() => sendAgain(c)}>
                         Send again
                       </Button>

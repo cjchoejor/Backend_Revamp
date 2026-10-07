@@ -48,12 +48,13 @@ import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import { inLens } from "@/lib/ds/lenses";
 import { enumerateNights } from "@/components/ds/steps/use-room-selection";
 import { StandingChip } from "@/components/ds/ui";
-import { SideTimer } from "@/components/ds/workspace/side-timer";
 import { SidePapers } from "@/components/ds/workspace/side-papers";
 import { BILLING_WORD } from "@/components/ds/workspace/details-view";
 import type { EntryDetail } from "@/types/api";
 import { InquiryBoard } from "@/components/ds/second-screen/inquiry-board";
 import { GuideBox } from "@/components/ds/second-screen/guide-box";
+import { ClockStrip, type StripClock } from "@/components/ds/second-screen/clock-strip";
+import { MoreList } from "@/components/ds/second-screen/more-list";
 import { guideFor, type GuideItem } from "@/lib/ds/second-screen/guide";
 
 // This window is the board: nothing it does is ever sent back to the desk as a draft or a notice.
@@ -242,13 +243,15 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
   const said = s.notices.filter((n) => (n.entryId === entryId || n.entryId == null) && (n.tone === "success" || n.tone === "info"));
 
   const events = (traceQ.data?.items ?? []).filter((e) => !isHousekeeping(e.eventType));
-  const decisions = events.filter((e) => inLens(e, "approvals")).slice(0, 6);
-  const timers = (timersQ.data?.items ?? [])
+  const decisions = events.filter((e) => inLens(e, "approvals"));
+  // Every clock the desk has words for, soonest first — the strip under the steps.
+  const clocks: StripClock[] = (timersQ.data?.items ?? [])
     .filter((t) => t.status === "SCHEDULED")
     .map((t) => ({ t, label: timerLabel(t) }))
     .filter((x): x is { t: (typeof x)["t"]; label: string } => !!x.label)
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
-    .slice(0, 3);
+    .slice(0, 8)
+    .map(({ t, label }) => ({ id: t.id, label, firesAt: t.firesAt, createdAt: t.createdAt, warningAt: t.warningAt, criticalAt: t.criticalAt }));
 
   const billing = billingQ.data ?? null;
   const cur = billing?.currency ?? "BTN";
@@ -308,6 +311,8 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
         </div>
       </div>
 
+      <ClockStrip clocks={clocks} />
+
       {desk?.sealed ? <div className="board-sealed">{desk.sealed}</div> : null}
 
       {current === 1 && viewing === 1 && !desk?.sealed ? (
@@ -345,20 +350,8 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
               ))}
             </ul>
           ) : null}
-          <NoticeList notices={live.slice(0, 8)} />
+          <NoticeList notices={live} limit={4} />
 
-          {timers.length ? (
-            <>
-              <h3>Clocks</h3>
-              <div className="side board-timers">
-                <div className="list">
-                  {timers.map(({ t, label }) => (
-                    <SideTimer key={t.id} timer={t} label={label} />
-                  ))}
-                </div>
-              </div>
-            </>
-          ) : null}
         </section>
 
         {/* ---- middle: the booking as it stands ---- */}
@@ -433,37 +426,43 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
           {said.length ? (
             <>
               <h3>Just said on the desk</h3>
-              <NoticeList notices={said.slice(0, 5)} />
+              <NoticeList notices={said} limit={3} />
             </>
           ) : null}
 
           <h3>Decisions</h3>
           {decisions.length ? (
-            <ul className="board-feed">
-              {decisions.map((e) => (
+            <MoreList
+              className="board-feed"
+              items={decisions}
+              limit={4}
+              render={(e) => (
                 <li key={e.id}>
                   <span>{traceWords(e)}</span>
                   <span className="meta">
                     {fmtTime(e.timestamp, tz)} · {whoDid(e)}
                   </span>
                 </li>
-              ))}
-            </ul>
+              )}
+            />
           ) : (
             <p className="quiet">No approvals or waivers on this booking.</p>
           )}
 
           <h3>Recorded</h3>
-          <ul className="board-feed">
-            {events.slice(0, 12).map((e) => (
+          <MoreList
+            className="board-feed"
+            items={events}
+            limit={5}
+            render={(e) => (
               <li key={e.id}>
                 <span>{traceWords(e)}</span>
                 <span className="meta">
                   {fmtDay(e.timestamp)} {fmtTime(e.timestamp, tz)} · {whoDid(e)}
                 </span>
               </li>
-            ))}
-          </ul>
+            )}
+          />
 
           <div className="side board-papers">
             <SidePapers entry={entry} communications={commsQ.data?.items ?? []} tz={tz} sealed={!!desk?.sealed} onGo={NOOP} />
@@ -507,12 +506,15 @@ function FactRow({ k, v, draft, missing }: { k: string; v: string; draft?: strin
   );
 }
 
-function NoticeList({ notices, empty }: { notices: Notice[]; empty?: string }) {
+function NoticeList({ notices, empty, limit = 8 }: { notices: Notice[]; empty?: string; limit?: number }) {
   const { tz } = useHotelClock(60_000);
   if (!notices.length) return empty ? <p className="quiet">{empty}</p> : null;
   return (
-    <ul className="board-notices">
-      {notices.map((n) => (
+    <MoreList
+      className="board-notices"
+      items={notices}
+      limit={limit}
+      render={(n) => (
         <li key={n.id} className={n.tone}>
           <Icon name={n.tone === "error" || n.tone === "warning" ? "alert" : n.tone === "success" ? "check" : "info"} />
           <span>
@@ -521,8 +523,8 @@ function NoticeList({ notices, empty }: { notices: Notice[]; empty?: string }) {
           </span>
           <span className="meta">{fmtTime(n.at, tz)}</span>
         </li>
-      ))}
-    </ul>
+      )}
+    />
   );
 }
 

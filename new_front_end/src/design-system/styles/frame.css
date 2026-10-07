@@ -522,3 +522,33 @@
 .ds.board .gb-rest li.ready { border-left-color: var(--success); }
 .ds.board .gb-rest li .meta { font-size: 13.5px; }
 .ds.board .gb-rest .gb-clock { font-size: 13px; padding: 2px 9px; }
+
+/* ---- Second screen, compacted (2026-10-07, operator: "the message looks too big … the timers should
+   be visible all the time … a small circular timer beside it"). The coach keeps its colours and
+   order but takes far less room; the clocks are a strip of rings that sticks under the bar. ---- */
+.ds.board .ib-coach { gap: 8px; padding: 14px 16px; border-width: 2px; }
+.ds.board .ib-coach h2 { font-size: 21px; line-height: 1.25; }
+.ds.board .ib-coach .how { font-size: 15px; line-height: 1.4; }
+.ds.board .ib-coach .say { font-size: 16px; line-height: 1.4; padding: 10px 12px; gap: 4px; }
+.ds.board .ib-coach .then { font-size: 14.5px; padding: 8px 10px; }
+.ds.board .ib-steps li { font-size: 14px; }
+.ds.board .gb-rest li { font-size: 14px; padding: 6px 9px; }
+@media (max-width: 1400px) { .ds.board .ib-coach h2 { font-size: 19px; } }
+
+.ds.board .cstrip { position: sticky; top: 46px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 8px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(40, 30, 10, .06); }
+.ds.board .cstrip > .k { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
+.ds.board .cring { display: inline-flex; align-items: center; gap: 8px; }
+.ds.board .cring svg { width: 36px; height: 36px; flex: none; }
+.ds.board .cring circle { fill: none; stroke-width: 4; }
+.ds.board .cring .bg { stroke: var(--line); }
+.ds.board .cring .fg { stroke: var(--success); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+.ds.board .cring.warn .fg { stroke: #D9A43A; }
+.ds.board .cring.crit .fg, .ds.board .cring.late .fg { stroke: var(--danger); }
+.ds.board .cring .txt { display: grid; line-height: 1.2; }
+.ds.board .cring .lb { font-size: 12.5px; color: var(--ink-2); }
+.ds.board .cring b { font-size: 15px; }
+.ds.board .cring.crit b, .ds.board .cring.late b { color: var(--danger); }
+.ds.board .cring.late svg { animation: cring-pulse 1.4s ease-in-out infinite; }
+@keyframes cring-pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .ds.board .cring.late svg { animation: none; } .ds.board .cring .fg { transition: none; } }
+.ds.board .more-toggle { justify-self: start; margin-top: 2px; }

@@ -135,7 +135,7 @@ export function guideFor(input: {
   communications: EntryCommunication[];
   /** When this pass began — papers sent before it belong to an earlier pass. */
   passStart: string | null;
-  quotes: Array<{ state: string; sentAt?: string | null; validUntil?: string | null }>;
+  quotes: Array<{ id?: string; state: string; sentAt?: string | null; validUntil?: string | null }>;
   payment: { requiredAmount: number; shortfall: number } | null;
   balance: number | null;
   currency: string;
@@ -166,20 +166,26 @@ export function guideFor(input: {
   /* what the guest still owes an answer to (this pass only) */
   const answerClock = new Map<string, TimerRecordSummary>();
   for (const t of timers) if (t.status === "SCHEDULED" && t.timerCode === "ACKNOWLEDGEMENT_WINDOW_W22" && t.entityId) answerClock.set(t.entityId, t);
-  const awaiting = communications
-    .filter(
-      (c) =>
-        c.direction === "OUTBOUND" &&
-        c.sendStatus === "DISPATCHED" &&
-        c.acknowledgementStatus !== "RECEIVED" &&
-        c.canAcknowledge &&
-        (!passStart || c.createdAt >= passStart),
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const seenType = new Set<string>();
-  for (const c of awaiting) {
-    if (seenType.has(c.commType)) continue; // the newest of each paper is the one that counts
-    seenType.add(c.commType);
+  // Only the NEWEST paper of each kind counts: when the guest answered the re-sent quotation, the
+  // first one's silence means nothing (2026-10-07 — the board asked for an answer already given).
+  // A quotation that is no longer live (replaced, retired, run out) is waited on by nobody, and an
+  // accepted one is answered whatever its email record says.
+  const quoteState = new Map(quotes.filter((q) => q.id).map((q) => [q.id!, q.state]));
+  const anyAccepted = quotes.some((q) => q.state === "ACCEPTED");
+  const newest = new Map<string, EntryCommunication>();
+  for (const c of [...communications].sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
+    if (c.direction !== "OUTBOUND" || c.sendStatus !== "DISPATCHED") continue;
+    if (passStart && c.createdAt < passStart) continue;
+    if (!newest.has(c.commType)) newest.set(c.commType, c);
+  }
+  const seenType = new Set<string>(newest.keys());
+  for (const c of newest.values()) {
+    if (c.acknowledgementStatus === "RECEIVED" || !c.canAcknowledge) continue;
+    if (c.commType === "QUOTATION") {
+      const qid = typeof c.payload?.quotationId === "string" ? c.payload.quotationId : null;
+      const state = qid ? quoteState.get(qid) : undefined;
+      if (anyAccepted || (qid && state !== "SENT")) continue;
+    }
     const p = PAPER[c.commType] ?? { name: "the paper sent", say: "Did you receive what we sent?" };
     const due = c.acknowledgementTimeoutAt ?? answerClock.get(c.id)?.firesAt ?? null;
     const late = c.isOverdue || (due != null && new Date(due).getTime() <= now);
