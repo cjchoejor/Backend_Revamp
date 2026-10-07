@@ -35,7 +35,8 @@ Endpoints that show the pattern:
 
 | Branch | Contains | Status |
 |---|---|---|
-| `UI-experiment3` | `back_end/` + `front_end/` (his final work) | **The working branch.** Copy of his final `UI-experiment2`. |
+| `UI-experiment4` | everything on `UI-experiment3` as of `90cf626` | **The working branch since 2026-10-07** — cut from `UI-experiment3` for new work; nothing on it yet differs. |
+| `UI-experiment3` | `back_end/` + `new_front_end/` + `front_end/` | **Parked 2026-10-07** at `90cf626` (fully pushed). The user means to come back to it — don't commit here meanwhile. |
 | `UI-experiment2` | his final state | Frozen. His last push; `UI-experiment3` was cut from it. Do not commit here. |
 | `integration-prod-frontend` | the user's own `back_end/` + `my_front_end/` + `front_end/` | **Frozen, but not finished** — holds 16 commits of the user's work not yet ported here (see below). |
 | `main` | older daily branch | Stale; predates both. |
