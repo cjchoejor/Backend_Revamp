@@ -21,6 +21,8 @@ export type Coach = {
   /** What pressing the next button will do. */
   then: string | null;
   tone: "act" | "fix" | "ready";
+  /** The desk card it is done on — clicking the coach on the board takes the desk there. */
+  card?: string | null;
 };
 
 /** "Standard Double, Nu 6,237.00 for the 3 nights · …" — the house's own figures, joined. */
@@ -44,7 +46,20 @@ export function houseSentence(p: AvailabilityPreview): string {
   }`;
 }
 
-export function coachInquiry(input: {
+/** The Inquiry card each instruction is done on. */
+function cardFor(now: string): string | null {
+  if (/reach the guest/.test(now)) return "guest";
+  if (/dates|who is coming|Save the stay|does not fit/.test(now)) return "stay";
+  if (/Ask the house|^Pick|Save the rooms/.test(now)) return "house";
+  return null;
+}
+
+export function coachInquiry(input: Parameters<typeof coachInquiryNow>[0]): Coach {
+  const c = coachInquiryNow(input);
+  return { ...c, card: c.card ?? cardFor(c.now) };
+}
+
+function coachInquiryNow(input: {
   desk: DeskDraft | null;
   stay: StayDraft | null;
   rooms: RoomsDraft | null;

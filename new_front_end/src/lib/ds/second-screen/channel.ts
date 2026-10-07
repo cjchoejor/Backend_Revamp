@@ -15,7 +15,8 @@
  *  - `draft`    what the operator has typed or picked and NOT saved yet, so the board can show
  *               it as "not saved";
  *  - `notice`   every message the desk shows (the toasts) and every refusal from the backend.
- * And board → desk: `hello` when a board opens (answered with a `snapshot` of all of the above, so
+ * And board → desk: `goto` when the operator clicks a line on the board (the desk opens that step
+ * and scrolls to the card, so the board is a way to navigate too), `hello` when a board opens (answered with a `snapshot` of all of the above, so
  * a board opened late never starts blank) and a `beat` every few seconds from both sides, so each
  * knows whether the other is still there.
  *
@@ -68,6 +69,8 @@ export type Message =
   | { t: "draft-clear"; entryId: string; kind: string }
   | { t: "notice"; notice: Notice }
   | { t: "beat"; from: ScreenRole; id: string }
+  /** The board asks the desk to show a card (2026-10-07): the step it lives on, then the card. */
+  | { t: "goto"; entryId: string; card?: string | null; step?: number | null }
   | { t: "bye"; from: ScreenRole; id: string };
 
 type Envelope = { v: number; m: Message };

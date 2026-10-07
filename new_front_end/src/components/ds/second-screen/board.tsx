@@ -26,7 +26,7 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { getBillingSummary, getEntry, getEntryTimers, getEntryTrace, listEntryCommunications } from "@/lib/api/entries";
 import { getEntryBedPlan, listRooms } from "@/lib/api/rooms";
 import type { QuotationLivePreview } from "@/lib/api/quotations";
-import { setScreenRole, type Notice } from "@/lib/ds/second-screen/channel";
+import { post, setScreenRole, type Notice } from "@/lib/ds/second-screen/channel";
 import { boardState, draftOf, onBoardChange, startBoard, type BoardState } from "@/lib/ds/second-screen/board-store";
 import type { DeskDraft, RoomsDraft, StayDraft, TableDraft } from "@/lib/ds/second-screen/drafts";
 import {
@@ -38,7 +38,18 @@ import {
   tableChanges,
 } from "@/lib/ds/second-screen/diff";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
-import { currentStepOrder, liveQuotesThisPass, preconditionsFor } from "@/lib/desk/workspace";
+import {
+  confirmReadiness,
+  currentStepOrder,
+  liveQuotesThisPass,
+  preconditionsFor,
+  s1Readiness,
+  s2Readiness,
+  s5Readiness,
+  s6Readiness,
+  s7Readiness,
+  s8Readiness,
+} from "@/lib/desk/workspace";
 import { mealPlanSummary, operativeRoomCompositions } from "@/lib/desk/party-rooms";
 import { channelWord, factsFromEntry, standingOf } from "@/lib/ds/status";
 import { clockParts, fmtDateTime, fmtDay, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
@@ -212,7 +223,18 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
 
   const current = desk?.current ?? currentStepOrder(entry);
   const viewing = desk?.viewing ?? current;
-  const items = desk?.items ?? preconditionsFor(entry, DESK_STEPS[current - 1], hotelToday);
+  // When the desk is looking back at an earlier step it sends no to-do for the booking's own step —
+  // the board then works it out with the same readiness rules, so its lines stay clickable.
+  const lookingBack = !!desk && desk.viewing !== desk.current;
+  const items =
+    desk && !lookingBack
+      ? desk.items
+      : stepItems(entry, current, hotelToday, {
+          paymentSatisfied: payment?.satisfied,
+          totalReceived: payment?.totalReceived ?? null,
+          requiredAmount: payment?.requiredAmount ?? null,
+          communications: commsQ.data?.items ?? null,
+        });
 
   /* the rooms, night by night */
   const nights = enumerateNights(stay?.checkIn || entry.checkInDate, stay?.checkOut || entry.checkOutDate);
@@ -256,6 +278,9 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
   const billing = billingQ.data ?? null;
   const cur = billing?.currency ?? "BTN";
 
+  /* the board is a way to navigate: a click takes the desk to the card, on the booking's own step */
+  const go = (card: string) => post({ t: "goto", entryId, card, step: current });
+
   /* what to do next — the step's list, the guest's answers, the clocks, then the move */
   const latestRefusal = live.find((n) => n.tone === "error" && n.source === "refusal" && Date.now() - n.at < 90_000)?.text ?? null;
   const tableFix: GuideItem[] = table?.faults.length
@@ -264,7 +289,7 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
   const guide: GuideItem[] = [
     ...tableFix,
     ...guideFor({
-      desk,
+      desk: desk && lookingBack ? { ...desk, viewing: desk.current, items } : desk,
       stage: entry.currentStage,
       timers: timersQ.data?.items ?? [],
       communications: commsQ.data?.items ?? [],
@@ -328,6 +353,7 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
           events={events.map((e) => ({ id: e.id, timestamp: e.timestamp, words: traceWords(e), who: whoDid(e) }))}
           tz={tz}
           also={guide.filter((g) => !g.key.startsWith("step:") && g.key !== "move" && g.key !== "refusal")}
+          onGo={go}
         />
       ) : (
       <div className="board-cols">
@@ -336,6 +362,7 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
           <GuideBox
             items={guide}
             checklist={items}
+            onGo={go}
             lookingBack={viewing !== current ? `The desk is looking back at ${STEP_NAMES[viewing - 1]}. The booking is at ${STEP_NAMES[current - 1]}.` : null}
           />
 
@@ -357,21 +384,21 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
         {/* ---- middle: the booking as it stands ---- */}
         <section className="board-col wide">
           <h3>The stay</h3>
-          <table className="board-facts">
-            <tbody>
-              <FactRow k="Dates" v={`${fmtRange(entry.checkInDate, entry.checkOutDate)} · ${plural(nightsOf(entry.checkInDate, entry.checkOutDate) ?? 0, "night")}`}
-                draft={stay && (stay.checkIn !== entry.checkInDate?.slice(0, 10) || stay.checkOut !== entry.checkOutDate?.slice(0, 10)) ? `${fmtRange(stay.checkIn, stay.checkOut)} · ${plural(stay.nights, "night")}` : null} />
-              <FactRow k="Party" v={party}
-                draft={stay && (stay.adults !== (entry.adultCount ?? entry.guestCount) || stay.children !== (entry.childCount ?? 0)) ? `${plural(stay.adults, "adult")}${stay.children ? ` · ${plural(stay.children, "child", "children")}` : ""}` : null} />
-              <FactRow k="Rooms asked" v={String(entry.numberOfRooms ?? 1)} draft={stay && stay.rooms !== (entry.numberOfRooms ?? 1) ? String(stay.rooms) : null} />
-              <FactRow k="Bed setup asked" v={bedWords(entry.bedTypeRequest) || "no preference"} draft={stay && bedWords(stay.beds) !== bedWords(entry.bedTypeRequest) ? bedWords(stay.beds) || "no preference" : null} />
-              <FactRow k="Came in as" v={channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs)} />
-              <FactRow k="Booked by" v={entry.inquiry?.travelAgent?.displayName ?? entry.inquiry?.corporateAccount?.displayName ?? "the guest"} />
-              {entry.contactPersonName || entry.contactPersonPhone ? (
-                <FactRow k="Contact" v={[entry.contactPersonName, entry.contactPersonPhone].filter(Boolean).join(" · ")} />
-              ) : null}
-            </tbody>
-          </table>
+          <div className="stay-grid">
+            <StayCell k="Dates" v={`${fmtRange(entry.checkInDate, entry.checkOutDate)} · ${plural(nightsOf(entry.checkInDate, entry.checkOutDate) ?? 0, "night")}`}
+              draft={stay && (stay.checkIn !== entry.checkInDate?.slice(0, 10) || stay.checkOut !== entry.checkOutDate?.slice(0, 10)) ? `${fmtRange(stay.checkIn, stay.checkOut)} · ${plural(stay.nights, "night")}` : null}
+              onGo={current === 1 ? () => go("stay") : undefined} />
+            <StayCell k="Party" v={party}
+              draft={stay && (stay.adults !== (entry.adultCount ?? entry.guestCount) || stay.children !== (entry.childCount ?? 0)) ? `${plural(stay.adults, "adult")}${stay.children ? ` · ${plural(stay.children, "child", "children")}` : ""}` : null}
+              onGo={current === 1 ? () => go("stay") : undefined} />
+            <StayCell k="Rooms asked" v={String(entry.numberOfRooms ?? 1)} draft={stay && stay.rooms !== (entry.numberOfRooms ?? 1) ? String(stay.rooms) : null} onGo={current === 1 ? () => go("stay") : undefined} />
+            <StayCell k="Bed setup asked" v={bedWords(entry.bedTypeRequest) || "no preference"} draft={stay && bedWords(stay.beds) !== bedWords(entry.bedTypeRequest) ? bedWords(stay.beds) || "no preference" : null} />
+            <StayCell k="Came in as" v={channelWord(entry.inquiry?.sourceChannel, entry.inquiry?.cameInAs)} />
+            <StayCell k="Booked by" v={entry.inquiry?.travelAgent?.displayName ?? entry.inquiry?.corporateAccount?.displayName ?? "the guest"} />
+            {entry.contactPersonName || entry.contactPersonPhone ? (
+              <StayCell k="Contact" v={[entry.contactPersonName, entry.contactPersonPhone].filter(Boolean).join(" · ")} onGo={current === 1 ? () => go("guest") : undefined} />
+            ) : null}
+          </div>
 
           <h3>
             Rooms by night{" "}
@@ -391,18 +418,20 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
               <h3>Set up</h3>
               <table className="board-facts">
                 <tbody>
-                  <FactRow k="Who pays" v={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "not chosen yet"} missing={!entry.folio?.billingModel} />
-                  <FactRow k="Cancellation terms" v={entry.cancellationDisclosure ? `recorded ${fmtDateTime(entry.cancellationDisclosure.disclosedAt, tz)}` : "not recorded yet"} missing={!entry.cancellationDisclosure} />
-                  <FactRow k="Proforma" v={proformaWords(entry)} missing={!(entry.folio?.invoices ?? []).some((i) => i.invoiceType === "PROFORMA" && i.state !== "SUPERSEDED")} />
+                  <FactRow k="Who pays" v={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "not chosen yet"} missing={!entry.folio?.billingModel} onGo={current === 3 ? () => go("billing-model") : undefined} />
+                  <FactRow k="Cancellation terms" v={entry.cancellationDisclosure ? `recorded ${fmtDateTime(entry.cancellationDisclosure.disclosedAt, tz)}` : "not recorded yet"} missing={!entry.cancellationDisclosure} onGo={current === 3 ? () => go("terms") : undefined} />
+                  <FactRow k="Proforma" v={proformaWords(entry)} missing={!(entry.folio?.invoices ?? []).some((i) => i.invoiceType === "PROFORMA" && i.state !== "SUPERSEDED")} onGo={current === 3 ? () => go("proforma") : undefined} />
                   <FactRow
                     k="Advance"
                     v={payment ? `asked ${money(payment.requiredAmount, cur)} · received ${money(payment.totalReceived, cur)}${payment.shortfall > 0 ? ` · ${money(payment.shortfall, cur)} still owed` : ""}` : "—"}
                     missing={!!payment && !payment.satisfied}
+                    onGo={current === 3 ? () => go("money") : undefined}
                   />
                   <FactRow
                     k="Rooms held"
                     v={entry.committedHold ? `${entry.committedHold.state === "CONFIRMED" ? "held by the reservation" : `until ${fmtDateTime(entry.committedHold.expiresAt, tz)}`}` : "not held yet"}
                     missing={!entry.committedHold}
+                    onGo={current === 3 ? () => go("hold") : undefined}
                   />
                 </tbody>
               </table>
@@ -489,9 +518,32 @@ function StepStrip({ current, viewing }: { current: number; viewing: number }) {
   );
 }
 
-function FactRow({ k, v, draft, missing }: { k: string; v: string; draft?: string | null; missing?: boolean }) {
+/** One fact of the stay, in a compact grid cell — the new value, a "not saved" pill and the old one when the desk has changed it. */
+function StayCell({ k, v, draft, onGo }: { k: string; v: string; draft?: string | null; onGo?: () => void }) {
+  const body = (
+    <>
+      <span className="k">{k}</span>
+      {draft ? (
+        <span className="v">
+          <b>{draft}</b> <span className="ns">not saved</span> <s className="was">{v}</s>
+        </span>
+      ) : (
+        <span className="v">{v}</span>
+      )}
+    </>
+  );
+  return onGo ? (
+    <button type="button" className={`stay-cell go${draft ? " unsaved" : ""}`} onClick={onGo} title="Show it on the desk">
+      {body}
+    </button>
+  ) : (
+    <div className={`stay-cell${draft ? " unsaved" : ""}`}>{body}</div>
+  );
+}
+
+function FactRow({ k, v, draft, missing, onGo }: { k: string; v: string; draft?: string | null; missing?: boolean; onGo?: () => void }) {
   return (
-    <tr className={draft ? "unsaved" : missing ? "missing" : undefined}>
+    <tr className={`${draft ? "unsaved" : missing ? "missing" : ""}${onGo ? " go" : ""}`} onClick={onGo} title={onGo ? "Show it on the desk" : undefined}>
       <th>{k}</th>
       <td>
         {draft ? (
@@ -683,6 +735,33 @@ function PartyTable({
 }
 
 /* ------------------------------------------------------------------ */
+
+/** The booking's own step's checklist, by the desk's own readiness rules. */
+function stepItems(
+  entry: EntryDetail,
+  current: number,
+  hotelToday: string | null,
+  money: Parameters<typeof confirmReadiness>[1],
+): Array<{ label: string; met: boolean; card?: string }> {
+  switch (current) {
+    case 1:
+      return s1Readiness(entry);
+    case 2:
+      return s2Readiness(entry);
+    case 3:
+      return confirmReadiness(entry, money);
+    case 5:
+      return s5Readiness(entry, hotelToday);
+    case 6:
+      return s6Readiness(entry);
+    case 7:
+      return s7Readiness(entry, hotelToday);
+    case 8:
+      return s8Readiness(entry);
+    default:
+      return preconditionsFor(entry, DESK_STEPS[current - 1], hotelToday);
+  }
+}
 
 function bedWords(b: Record<string, number> | null | undefined): string {
   return Object.entries(b ?? {})

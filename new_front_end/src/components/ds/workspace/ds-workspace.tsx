@@ -98,6 +98,7 @@ import { Overlay, ReasonDialog, atLeast, useRefreshEntry } from "@/components/ds
 import { declineEntry } from "@/lib/api/reservation-setup";
 import { PublishDraft } from "@/components/ds/second-screen/publisher";
 import type { DeskDraft } from "@/lib/ds/second-screen/drafts";
+import { subscribe as onScreenMessage } from "@/lib/ds/second-screen/channel";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
@@ -120,6 +121,23 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const clock = useHotelClock(30_000);
   // With the second screen open, the desk sheds what the board shows (2026-10-07).
   const deskQuiet = useDeskQuiet();
+  // A line clicked on the second screen brings the desk to its card (2026-10-07, operator: "the
+  // second monitor needs to be interactive as well"). The handler is refreshed every render, so it
+  // always sees the step and panes on screen now.
+  const screenGotoRef = useRef<((card?: string | null, step?: number | null) => void) | null>(null);
+  useEffect(
+    () =>
+      onScreenMessage((m) => {
+        if (m.t !== "goto" || m.entryId !== entryId) return;
+        try {
+          window.focus();
+        } catch {
+          /* the browser may keep the focus where it is — the desk still scrolls */
+        }
+        screenGotoRef.current?.(m.card ?? null, m.step ?? null);
+      }),
+    [entryId],
+  );
 
   const entryQuery = useQuery({
     queryKey: ["entry", entryId],
@@ -740,6 +758,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       revealCard(el);
     };
     window.requestAnimationFrame(attempt);
+  };
+
+  screenGotoRef.current = (card, stepNo) => {
+    if (stepNo && stepNo !== viewing) {
+      setSelected(stepNo);
+      // the step's cards arrive with the next render — ask again once they are there
+      if (card) window.setTimeout(() => screenGotoRef.current?.(card, null), 150);
+      return;
+    }
+    if (card) goToCard(card);
+    else if (view !== "step") setView("step", viewing);
   };
 
   const viewingPast = view === "step" && (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;

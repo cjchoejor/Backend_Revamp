@@ -29,6 +29,8 @@ export type GuideItem = {
   how?: string | null;
   say?: string | null;
   then?: string | null;
+  /** The desk card this is done on — clicking the line on the board takes the desk there. */
+  card?: string | null;
   /** A clock this item runs against — shown as a live countdown. */
   clock?: { label: string; at: string } | null;
 };
@@ -108,6 +110,9 @@ const PAPER: Record<string, { name: string; say: string }> = {
   FINAL_INVOICE: { name: "the final invoice", say: "Did you receive the invoice? When can we expect the payment?" },
 };
 
+/** Where each paper's answer is recorded on the desk. */
+const PAPER_CARD: Record<string, string> = { QUOTATION: "quote", PROFORMA_INVOICE: "proforma" };
+
 /** Clocks worth a line of their own, and what to do about them. */
 const CLOCK_WORDS: Record<string, { now: string; how: string }> = {
   ENTRY_EXPIRY: { now: "The inquiry lapses soon", how: "Move it on to Negotiation, or park it if the guest needs time." },
@@ -159,7 +164,7 @@ export function guideFor(input: {
       if (item.met) continue;
       const hit = STEP_WORDS.find(([re]) => re.test(item.label));
       const w = hit ? (typeof hit[1] === "function" ? hit[1](ctx) : hit[1]) : { now: item.label };
-      out.push({ key: `step:${item.label}`, tone: "act", now: w.now, how: w.how ?? null, say: w.say ?? null });
+      out.push({ key: `step:${item.label}`, tone: "act", now: w.now, how: w.how ?? null, say: w.say ?? null, card: item.card ?? null });
     }
   }
 
@@ -197,6 +202,7 @@ export function guideFor(input: {
         ? `The time for an answer has passed. Ask the guest, then record what they said where ${p.name} is on the desk.`
         : `When the guest replies — by email, by phone or in person — record it where ${p.name} is on the desk (Record the answer).`,
       say: p.say,
+      card: PAPER_CARD[c.commType] ?? null,
       clock: due ? { label: `Answer to ${p.name}`, at: due } : null,
     });
   }
@@ -209,6 +215,7 @@ export function guideFor(input: {
       out.push({
         key: "send-quote",
         tone: "act",
+        card: "quote",
         now: "Send the quotation to the guest",
         how: "On The quote card, press Send the quote… — by email, or record that you gave it on WhatsApp. Moving on does not need it sent, but the guest needs it to answer.",
         say: live[0]?.validUntil

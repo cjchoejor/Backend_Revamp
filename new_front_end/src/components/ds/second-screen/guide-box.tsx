@@ -31,11 +31,14 @@ export function GuideBox({
   items,
   checklist,
   lookingBack,
+  onGo,
 }: {
   items: GuideItem[];
-  checklist: Array<{ label: string; met: boolean }>;
+  checklist: Array<{ label: string; met: boolean; card?: string }>;
   /** Set when the desk is looking at an earlier step than the booking's. */
   lookingBack?: string | null;
+  /** Take the desk to a card — the board is a way to navigate too. */
+  onGo?: (card: string) => void;
 }) {
   const [top, ...rest] = items;
   return (
@@ -59,6 +62,7 @@ export function GuideBox({
               {top.then}
             </p>
           ) : null}
+          {top.card && onGo ? <GoButton onClick={() => onGo(top.card!)} /> : null}
         </>
       ) : (
         <>
@@ -66,35 +70,79 @@ export function GuideBox({
           <h2>Nothing waiting</h2>
         </>
       )}
-      <GuideRest items={rest} />
-      {checklist.length ? (
-        <ol className="ib-steps">
-          {checklist.map((i, n) => (
-            <li key={`${n}-${i.label}`} className={i.met ? "met" : ""}>
-              <span className="mark">{i.met ? <Icon name="check" /> : n + 1}</span>
-              {i.label}
-            </li>
-          ))}
-        </ol>
-      ) : null}
+      <GuideRest items={rest} onGo={onGo} />
+      <Checklist items={checklist} onGo={onGo} />
     </section>
   );
 }
 
+/** "Show me on the desk" — the desk opens the step and scrolls to the card. */
+export function GoButton({ onClick, label = "Show me on the desk" }: { onClick: () => void; label?: string }) {
+  return (
+    <button type="button" className="btn btn-secondary compact gb-go" onClick={onClick}>
+      {label} <Icon name="chev" />
+    </button>
+  );
+}
+
+/** The step's checklist, ticked — each open line clickable when it has a card on the desk. */
+export function Checklist({ items, onGo }: { items: Array<{ label: string; met: boolean; card?: string }>; onGo?: (card: string) => void }) {
+  if (!items.length) return null;
+  // Numbered the way the desk numbers its cards: only the lines that have a card on the page.
+  let n = 0;
+  const numbers = items.map((i) => (i.card ? ++n : null));
+  return (
+    <ol className="ib-steps">
+      {items.map((i, k) => {
+        const inner = (
+          <>
+            <span className="mark">{i.met ? <Icon name="check" /> : numbers[k] ?? "•"}</span>
+            {i.label}
+          </>
+        );
+        return (
+          <li key={`${k}-${i.label}`} className={i.met ? "met" : ""}>
+            {i.card && onGo ? (
+              <button type="button" className="gb-line" onClick={() => onGo(i.card!)} title="Show it on the desk">
+                {inner}
+              </button>
+            ) : (
+              inner
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 /** The rest of the list — each as one line with its clock, under "After that". */
-export function GuideRest({ items, title = "After that" }: { items: GuideItem[]; title?: string }) {
+export function GuideRest({ items, title = "After that", onGo }: { items: GuideItem[]; title?: string; onGo?: (card: string) => void }) {
   if (!items.length) return null;
   return (
     <div className="gb-rest">
       <span className="k">{title}</span>
       <ul>
-        {items.map((i) => (
-          <li key={i.key} className={i.tone}>
-            <b>{i.now}</b>
-            {i.clock ? <Countdown at={i.clock.at} label={i.clock.label} /> : null}
-            {i.how ? <span className="meta">{i.how}</span> : null}
-          </li>
-        ))}
+        {items.map((i) => {
+          const inner = (
+            <>
+              <b>{i.now}</b>
+              {i.clock ? <Countdown at={i.clock.at} label={i.clock.label} /> : null}
+              {i.how ? <span className="meta">{i.how}</span> : null}
+            </>
+          );
+          return (
+            <li key={i.key} className={`${i.tone}${i.card && onGo ? " go" : ""}`}>
+              {i.card && onGo ? (
+                <button type="button" className="gb-line col" onClick={() => onGo(i.card!)} title="Show it on the desk">
+                  {inner}
+                </button>
+              ) : (
+                inner
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

@@ -31,7 +31,7 @@ import { guestName } from "@/lib/desk/model";
 import { factsFromRow, standingOf } from "@/lib/ds/status";
 import { fmtDay, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
 import { StandingChip } from "@/components/ds/ui";
-import { GuideRest } from "@/components/ds/second-screen/guide-box";
+import { Checklist, GoButton, GuideRest } from "@/components/ds/second-screen/guide-box";
 import { MoreList } from "@/components/ds/second-screen/more-list";
 import type { GuideItem } from "@/lib/ds/second-screen/guide";
 import type { EntryDetail } from "@/types/api";
@@ -50,6 +50,7 @@ export function InquiryBoard({
   events,
   tz,
   also,
+  onGo,
 }: {
   entry: EntryDetail;
   desk: DeskDraft | null;
@@ -64,6 +65,8 @@ export function InquiryBoard({
   tz: string;
   /** What else the guide has — answers awaited, clocks running out — shown under the coach. */
   also: GuideItem[];
+  /** Take the desk to a card. */
+  onGo: (card: string) => void;
 }) {
   const { session } = useSession();
 
@@ -149,15 +152,9 @@ export function InquiryBoard({
               {coach.then}
             </p>
           ) : null}
-          <GuideRest items={also} title="Also" />
-          <ol className="ib-steps">
-            {(desk?.items ?? []).map((i, n) => (
-              <li key={`${n}-${i.label}`} className={i.met ? "met" : ""}>
-                <span className="mark">{i.met ? <Icon name="check" /> : n + 1}</span>
-                {i.label}
-              </li>
-            ))}
-          </ol>
+          {coach.card ? <GoButton onClick={() => onGo(coach.card!)} /> : null}
+          <GuideRest items={also} title="Also" onGo={onGo} />
+          <Checklist items={desk?.items ?? []} onGo={onGo} />
         </section>
         <div className="ib-context">
           {focus ? <p className="ib-focus">Working in <b>{focus.title || "the step"}</b> on the desk</p> : null}
