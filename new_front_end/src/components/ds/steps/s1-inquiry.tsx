@@ -1178,12 +1178,21 @@ function TheHouse({
     ? `${searched.checkIn ?? ""}|${searched.checkOut ?? ""}|${String((latest.searchCriteria as { guestCount?: unknown } | null)?.guestCount ?? "")}`
     : null;
   const autoAskedFor = useRef<string | null>(null);
+  // Started a beat after mounting, never inside the mount itself (2026-10-07 — the button sat on
+  // "Asking…" forever): a mutation fired while the card is still mounting (React mounts it twice in
+  // development) belongs to an observer that is detached a moment later, so it finished unheard and
+  // the button never left its working state. The timer is cleared by that detach; the one set by
+  // the mount that stays fires, and the guard only takes the key when the search really starts.
   useEffect(() => {
     if (!quiet || !editable || past || !entry.checkInDate || !entry.checkOutDate || ask.isPending) return;
     if (searchedKey === bookingKey && !stale) return;
     if (autoAskedFor.current === bookingKey) return;
-    autoAskedFor.current = bookingKey;
-    ask.mutate({ auto: true });
+    const t = window.setTimeout(() => {
+      if (autoAskedFor.current === bookingKey) return;
+      autoAskedFor.current = bookingKey;
+      ask.mutate({ auto: true });
+    }, 60);
+    return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quiet, editable, past, bookingKey, searchedKey, stale]);
 
