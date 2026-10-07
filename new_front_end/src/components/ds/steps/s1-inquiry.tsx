@@ -1784,8 +1784,8 @@ function WhichRooms({
               )
             }
             disabled={saving}
-            dense={full}
             showNames={names}
+            large={full}
           />
         )}
       </Tool>

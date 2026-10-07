@@ -288,3 +288,16 @@
    step (the S1 rooms-by-night grid over many nights) pushed the middle column under the side
    panel. The column and the step's cards stay their own width; the table scrolls in its box. */
 .ds .canvas > *, .ds .steps-canvas > *, .ds .steps-canvas > .pane > * { min-width: 0; }
+/* The S1 rooms table in the full view: the card takes the whole window and the table fills
+   what is left under its heading, at its normal size — the old "dense" shrink made the words
+   tiny while the base 560px cap left the bottom of the screen empty. */
+.ds .fullscreen-layer > .card { display: flex; flex-direction: column; height: calc(100vh - 2 * var(--s4)); min-height: 0; }
+.ds .fullscreen-layer > .card > * { flex: 0 0 auto; }
+.ds .fullscreen-layer > .card > .tool { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ds .fullscreen-layer > .card > .tool > .rst-wrap { flex: 1 1 auto; min-height: 0; max-height: none; }
+/* …and larger than the inline table, since the full view has the room for it. */
+.ds .fullscreen-layer .rst th, .ds .fullscreen-layer .rst td { font-size: 14px; padding-top: 7px; padding-bottom: 7px; }
+.ds .fullscreen-layer .rst .rst-no { font-size: 15px; }
+.ds .fullscreen-layer .rst .rst-chip { font-size: 13.5px; padding: 4px 14px; min-width: 84px; }
+.ds .fullscreen-layer .rst .rst-selall-btn { font-size: 13px; padding: 4px 11px; }
+.ds .fullscreen-layer .rst .rst-nightcount { font-size: 14px; }
