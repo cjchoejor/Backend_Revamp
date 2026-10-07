@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
+  previewAvailabilityRequestSchema,
   queryAvailabilityByEntryRequestSchema,
   queryAvailabilitySearchRequestSchema,
   selectAvailabilityOptionRequestSchema,
@@ -9,6 +10,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
+import { previewAvailabilityForEntry } from "../../services/domain/availability-preview-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -150,6 +152,24 @@ availabilityRouter.post(
     try {
       const out = await s1AvailabilityService.queryAvailability(prisma, req.params.id, req.actor!.actorId, req.actor!.level as any, req.body);
       res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * The house for dates still being typed (2026-10-07, the second screen) — the same engine as the
+ * query above, but nothing is recorded, so it can follow the desk keystroke by keystroke.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/preview",
+  requireActorLevel("L1"),
+  validateBody(previewAvailabilityRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await previewAvailabilityForEntry(prisma, req.params.id, req.body, req.actor!.level as any));
     } catch (e) {
       next(e);
     }

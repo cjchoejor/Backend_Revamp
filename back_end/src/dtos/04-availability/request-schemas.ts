@@ -13,6 +13,14 @@ export const queryAvailabilityByEntryRequestSchema = z.object({
 });
 export type QueryAvailabilityByEntryRequestDto = z.infer<typeof queryAvailabilityByEntryRequestSchema>;
 
+/** `POST /entries/:id/availability/preview` — the house for dates still being typed; nothing is saved. */
+export const previewAvailabilityRequestSchema = z.object({
+  checkInDate: z.string().min(1),
+  checkOutDate: z.string().min(1),
+  guestCount: z.coerce.number().int().min(1).max(999).optional(),
+  roomsNeeded: z.coerce.number().int().min(1).max(200).optional(),
+});
+
 /** `POST /availability/search` — entry id must be present in the body. */
 export const queryAvailabilitySearchRequestSchema = queryAvailabilityByEntryRequestSchema.extend({
   entryId: z.string().min(1),
