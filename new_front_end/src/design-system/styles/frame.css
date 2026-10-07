@@ -552,3 +552,21 @@
 @keyframes cring-pulse { 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .ds.board .cring.late svg { animation: none; } .ds.board .cring .fg { transition: none; } }
 .ds.board .more-toggle { justify-self: start; margin-top: 2px; }
+
+/* ---- Smaller rings and a lighter step strip (2026-10-07, operator: "it looks a little big …
+   the stages section can be reduced a bit"). ---- */
+.ds.board .cstrip { gap: 6px 16px; padding: 6px 14px; }
+.ds.board .cring { gap: 6px; }
+.ds.board .cring svg { width: 24px; height: 24px; }
+.ds.board .cring circle { stroke-width: 4.5; }
+.ds.board .cring .lb { font-size: 12px; }
+.ds.board .cring b { font-size: 13.5px; }
+.ds.board .board-steps { gap: 4px; margin-top: 4px; }
+.ds.board .board-steps li { padding: 4px 8px; gap: 6px; font-size: 13px; border-radius: 6px; }
+.ds.board .board-steps li .n { width: 18px; height: 18px; font-size: 11px; }
+.ds.board .board-steps li .n .ic { width: 11px; height: 11px; }
+.ds.board .board-head { padding: 10px 16px; gap: 4px 20px; }
+.ds.board .board-head h1 { font-size: 26px; }
+.ds.board .board-head .facts { font-size: 15px; }
+.ds.board .board-money b { font-size: 26px; }
+@media (max-width: 1400px) { .ds.board .board-steps { grid-template-columns: repeat(9, 1fr); } .ds.board .board-steps li { padding: 4px 6px; font-size: 12px; } }

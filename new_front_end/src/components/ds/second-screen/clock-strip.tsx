@@ -3,9 +3,9 @@
 /**
  * The booking's running clocks as a strip of small rings (2026-10-07, operator: "the timers should
  * be visible all the time … I need a visual for the timer as well, so we know the time — maybe a
- * small circular timer beside it"). Each ring empties as the clock runs down — green, amber in its
- * warning window, red in its last hour or once passed — with the label and the time left beside
- * it. The strip sticks under the board's bar, so it stays in sight whatever is scrolled.
+ * small circular timer beside it"). Each ring starts empty and its edge fills as the time is used
+ * up — green, amber in its warning window, red in its last hour or once passed — with the label and
+ * the time left beside it. The strip sticks under the board's bar, so it stays in sight whatever is scrolled.
  */
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { fmtDateTime } from "@/lib/ds/format";
@@ -31,7 +31,8 @@ export function ClockRing({ clock, now, tz }: { clock: StripClock; now: number; 
   const start = new Date(clock.createdAt).getTime();
   const left = fires - now;
   const whole = Math.max(1, fires - start);
-  const remaining = Math.min(1, Math.max(0, left / whole));
+  // The edge fills as the time is used up — empty when the clock starts, full when it is due.
+  const used = Math.min(1, Math.max(0, 1 - left / whole));
   const warnAt = clock.warningAt ? new Date(clock.warningAt).getTime() : fires - 6 * HOUR;
   const critAt = clock.criticalAt ? new Date(clock.criticalAt).getTime() : fires - HOUR;
   const level = left <= 0 ? "late" : now >= critAt ? "crit" : now >= warnAt ? "warn" : "ok";
@@ -41,7 +42,7 @@ export function ClockRing({ clock, now, tz }: { clock: StripClock; now: number; 
     <div className={`cring ${level}`} title={`${clock.label} · ${fmtDateTime(clock.firesAt, tz)}`}>
       <svg viewBox="0 0 36 36" aria-hidden="true">
         <circle className="bg" cx="18" cy="18" r={r} />
-        <circle className="fg" cx="18" cy="18" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - remaining)} transform="rotate(-90 18 18)" />
+        <circle className="fg" cx="18" cy="18" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - used)} transform="rotate(-90 18 18)" />
       </svg>
       <div className="txt">
         <span className="lb">{clock.label}</span>
