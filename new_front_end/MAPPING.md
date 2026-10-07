@@ -44,6 +44,7 @@ on :4000.
 | Audit | `/audit` | `GET /api/desk/activity` (FOM and above) | Built. One hotel day, filtered by person or booking. The front desk sees why it is closed to them. |
 | Handoffs · Disputes · Messages | `/handoffs`, `/disputes`, `/messages` | — | "Not available yet". Each item is still worked from its booking. |
 | Console | `/admin/**` | unchanged | Copied as it was. Reached from the user panel (administrators only). |
+| Second screen | `/second-screen` | the desk's own answers, mirrored over a `BroadcastChannel` (its own reads only as a 60s backstop) | Built 2026-10-07 for Inquiry → Reserve. A read-only board for the second monitor: the step strip, Do next + Problems, the booking as it stands (stay, rooms by night, who sleeps where, Set up), Not saved yet · Decisions · Recorded · Papers. Opened from the top bar's **2nd screen** control. See `components/ds/second-screen/` and CLAUDE.md. |
 
 The old `/desk/...` addresses redirect to the new ones.
 
