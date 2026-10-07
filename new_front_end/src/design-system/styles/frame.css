@@ -502,7 +502,7 @@
 .ds .ws.quiet .ws-body.norail:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
 .ds .ws.quiet .canvas:not(.desk-root *) { max-width: none; }
 @container (max-width: 1000px) { .ds .ws.quiet .ws-body:not(.desk-root *) { grid-template-columns: 1fr; } }
-.ds .ws.coached [data-help], .ds .ws.coached .card > .meta { display: none !important; }
+.ds .ws.coached [data-help], .ds .ws.coached-s1 .card > .meta { display: none !important; }
 .ds .gatebar .gate.quiet-note { display: flex; align-items: center; gap: 12px; }
 .ds .side > .btn-quiet:first-child { justify-self: start; }
 
@@ -590,3 +590,19 @@
 .ds.board .stay-cell.go { cursor: pointer; }
 .ds.board .stay-cell.go:hover { border-color: var(--accent); }
 .ds.board .stay-cell.go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- The board's per-step sections, Reserve → Closed (2026-10-07). ---- */
+.ds.board .board-facts tr.done td { color: var(--success); font-weight: 600; }
+.ds.board .board-party tr.go { cursor: pointer; }
+.ds.board .board-party tr.go:hover td { background: var(--surface-2); }
+.ds.board .board-tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ds.board .board-tasks li { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.ds.board .board-tasks .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line-2); font-size: 12px; font-weight: 800; flex: none; }
+.ds.board .board-tasks li.done .mark { background: var(--success); border-color: var(--success); color: #fff; }
+.ds.board .board-tasks li.todo .mark { border: 2px solid var(--danger); color: var(--danger); }
+.ds.board .board-tasks li.todo { font-weight: 600; }
+.ds.board .rs { font-weight: 700; }
+.ds.board .rs-occupied, .ds.board .rs-ready { color: var(--success); }
+.ds.board .rs-reserved { color: var(--accent-ink); }
+.ds.board .rs-dirty, .ds.board .rs-inspect { color: #8F5300; }
+.ds.board .rs-deficient, .ds.board .rs-ooo { color: var(--danger); }

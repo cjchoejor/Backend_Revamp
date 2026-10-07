@@ -13,7 +13,7 @@ import type { GuideItem } from "@/lib/ds/second-screen/guide";
 const KIND: Record<GuideItem["tone"], string> = {
   fix: "Put this right",
   act: "Now",
-  wait: "Waiting on the guest",
+  wait: "Not yet",
   ready: "Ready",
 };
 
@@ -46,7 +46,7 @@ export function GuideBox({
       {lookingBack ? <p className="board-note">{lookingBack}</p> : null}
       {top ? (
         <>
-          <span className="k">{KIND[top.tone]}</span>
+          <span className="k">{top.tone === "wait" && top.onGuest ? "Waiting on the guest" : KIND[top.tone]}</span>
           <h2>{top.now}</h2>
           {top.clock ? <Countdown at={top.clock.at} label={top.clock.label} /> : null}
           {top.how ? <p className="how">{top.how}</p> : null}

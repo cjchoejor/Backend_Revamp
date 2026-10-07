@@ -671,8 +671,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
 
   const ready = readyToConfirm && reserveExtras.length === 0;
-  // The board coaches this step — its help lines fold away on the desk (Inquiry first).
-  const coached = deskQuiet.quiet && !sealed && step.key === "inquiry" && entry.currentStage === "S1" && viewing === currentOrder;
+  // The board coaches the booking's own step — its help lines fold away on the desk. At Inquiry every
+  // card line folds (the board's house and guest panels cover them); elsewhere only the long fixed
+  // explanations (`data-help`), since many short card lines carry live status.
+  const coached = deskQuiet.quiet && !sealed && viewing === currentOrder;
+  const coachedS1 = coached && step.key === "inquiry" && entry.currentStage === "S1";
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
   // Since 2026-10-01 the ending itself is on the row, so this reads the same words the lists do
   // (the stage could not say: the cancellation routes wipe it to TERMINAL), and adds what the
@@ -1037,7 +1040,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   return (
     <BackendRailSlotContext.Provider value={railSlot}>
-      <div className={`ws${deskQuiet.quiet ? " quiet" : ""}${coached ? " coached" : ""}`}>
+      <div className={`ws${deskQuiet.quiet ? " quiet" : ""}${coached ? " coached" : ""}${coachedS1 ? " coached-s1" : ""}`}>
         <PublishDraft
           entryId={entry.id}
           kind="desk"
@@ -1050,6 +1053,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               gate,
               sealed: sealed ? sealedOutcome : null,
               focus: focusCard,
+              local: {
+                guestPresent,
+                registrationConfirmed,
+                keysMarked: Object.keys(issuedKeyRooms).filter((id) => issuedKeyRooms[id]),
+              },
             } satisfies DeskDraft
           }
         />

@@ -31,6 +31,8 @@ export type GuideItem = {
   then?: string | null;
   /** The desk card this is done on — clicking the line on the board takes the desk there. */
   card?: string | null;
+  /** Set on lines that wait on the GUEST — the box then reads "Waiting on the guest". */
+  onGuest?: boolean;
   /** A clock this item runs against — shown as a live countdown. */
   clock?: { label: string; at: string } | null;
 };
@@ -74,16 +76,28 @@ const STEP_WORDS: Array<[RegExp, StepWords | ((ctx: Ctx) => StepWords)]> = [
   [/^Registration confirmed/, { now: "Have the registration card signed", how: "On the Registration card, then tick it as signed." }],
   [/^VIP arrival notified/, { now: "Tell the VIP team the guest has arrived", how: "On the VIP arrival card." }],
   [/rooms? assigned & ready/i, { now: "Get the rooms ready", how: "Housekeeping marks each room clean and ready." }],
-  [/key/i, { now: "Hand over the keys", how: "Tick each room's key as you give it.", say: "Here are your keys." }],
+  [/^Keys returned/, { now: "Collect the keys", how: "On The departure card.", say: "May I have your keys, please?" }],
+  [/^Rooms released/, { now: "Release the rooms to housekeeping", how: "Settling the bill releases them on its own; a room still held shows on The departure card." }],
+  [/key (marked|issued)|keys? issued|arrival-night key/i, { now: "Hand over the keys", how: "Tick each room's key as you give it.", say: "Here are your keys." }],
   [/^(Checkout date on file|Early departure recorded)/, { now: "Check the checkout date", how: "The stay must end today to move to Check-out — or record an early departure." }],
   [/^Charges posted/, { now: "Post the charges", how: "On The folio — anything the guest used. Room nights come from the night audit." }],
   [/^Pre-checkout handoff/, { now: "Start the pre-checkout handoff", how: "Housekeeping checks the room before the guest leaves." }],
   [/^No open disputes/, { now: "Settle the open dispute", how: "On the Disputes card." }],
   [/^Night audit complete/, { now: "Post the final night", how: "On The nights card (the Night audit tab) — post the last night." }],
   [/^Folio settled/, (c) => ({ now: "Settle the bill", how: "On How the bill is settled — take the payment.", say: c.balance ? `Your bill comes to ${c.balance}. How would you like to pay?` : "How would you like to pay?" })],
-  [/^Keys returned/, { now: "Collect the keys", how: "On The departure card.", say: "May I have your keys, please?" }],
   [/^Room inspection recorded/, { now: "Record the room inspection", how: "On The departure card — what housekeeping found, or that the room was fine." }],
   [/^Sealing needs the FOM/, { now: "Ask the FOM to seal the record" }],
+  // Closed — the seal's own checks, worded by the backend (closure-readiness)
+  [/^No dispute left open/, { now: "Close the open dispute", how: "Answer it and close it on the Disputes card." }],
+  [/^Every invoice sent/, { now: "Send the invoice", how: "Issue the final invoice and send it — none may be left as a draft." }],
+  [/payment tracked|Every payment matched/, { now: "Match the payments to the invoice", how: "Record each payment received against the invoice it pays." }],
+  [/^The bill settled, or left owing/, { now: "Settle the bill — or leave it owing for follow-up", say: "We still show a balance on your stay — how would you like to settle it?" }],
+  [/^The no-show decision/, { now: "Record the no-show decision", how: "The FOM records what was decided about the no-show." }],
+  [/^The room inspected, or its inspection window/, { now: "Record the room inspection", how: "What housekeeping found — or the FOM closes the inspection window." }],
+  [/^The after-stay handoff/, { now: "Complete the after-stay handoff" }],
+  [/^Lent equipment back/, { now: "Get the lent equipment back", how: "Record each item as returned." }],
+  [/security deposit returned/, { now: "Return the security deposit", how: "Record the deposit refund on the bill." }],
+  [/^A folio for the booking/, { now: "This booking has no bill", how: "Nothing can be invoiced or sealed until the bill exists." }],
 ];
 
 /** What pressing the forward move does — so the operator knows before they press it. */
@@ -146,6 +160,8 @@ export function guideFor(input: {
   currency: string;
   latestRefusal: string | null;
   now: number;
+  /** In-house: nights already slept with no room charge posted yet (counted by the board). */
+  unpostedNights?: string[];
 }): GuideItem[] {
   const { desk, timers, communications, passStart, quotes, payment, balance, currency, latestRefusal, now, stage } = input;
   const out: GuideItem[] = [];
@@ -159,13 +175,48 @@ export function guideFor(input: {
 
   /* the step's own checklist */
   const looking = !desk || desk.viewing === desk.current;
+  // Mid-stay, the checkout line is unmet only because the day has not come — that is waiting, not
+  // a task; so are the lines that belong to the checkout day (the final night, the pre-checkout
+  // handoff).
+  const stayRunning = (desk?.items ?? []).some((i) => !i.met && /^Booked checkout is /.test(i.label));
   if (looking) {
     for (const item of desk?.items ?? []) {
       if (item.met) continue;
+      const booked = /^Booked checkout is (.+?) — /.exec(item.label);
+      if (booked) {
+        out.push({
+          key: `step:${item.label}`,
+          tone: "wait",
+          now: `The guest stays until ${booked[1]}`,
+          how: "Nothing to do for check-out yet. If they want to leave earlier, record an early departure (the GM) on the Leaving early tab.",
+          card: null,
+        });
+        continue;
+      }
+      if (/^Checking today's date/.test(item.label)) continue;
       const hit = STEP_WORDS.find(([re]) => re.test(item.label));
       const w = hit ? (typeof hit[1] === "function" ? hit[1](ctx) : hit[1]) : { now: item.label };
-      out.push({ key: `step:${item.label}`, tone: "act", now: w.now, how: w.how ?? null, say: w.say ?? null, card: item.card ?? null });
+      const onTheDay = stayRunning && /^(Night audit complete|Pre-checkout handoff)/.test(item.label);
+      out.push({
+        key: `step:${item.label}`,
+        tone: onTheDay ? "wait" : "act",
+        now: onTheDay ? `${w.now} — on the checkout day` : w.now,
+        how: w.how ?? null,
+        say: w.say ?? null,
+        card: item.card ?? null,
+      });
     }
+  }
+
+  /* in-house: a night already slept that is not posted yet */
+  if (input.unpostedNights?.length) {
+    out.push({
+      key: "unposted-nights",
+      tone: "wait",
+      now: `${input.unpostedNights.length === 1 ? "A night is" : `${input.unpostedNights.length} nights are`} not posted yet: ${input.unpostedNights.join(", ")}`,
+      how: "The hotel's night audit posts each night in the morning. Post it now from the Night audit tab if the guest is settling.",
+      card: "nights",
+    });
   }
 
   /* what the guest still owes an answer to (this pass only) */
@@ -202,6 +253,7 @@ export function guideFor(input: {
         ? `The time for an answer has passed. Ask the guest, then record what they said where ${p.name} is on the desk.`
         : `When the guest replies — by email, by phone or in person — record it where ${p.name} is on the desk (Record the answer).`,
       say: p.say,
+      onGuest: !late,
       card: PAPER_CARD[c.commType] ?? null,
       clock: due ? { label: `Answer to ${p.name}`, at: due } : null,
     });
@@ -245,7 +297,8 @@ export function guideFor(input: {
   if (desk?.gate) {
     const then = MOVE_WORDS.find(([re]) => re.test(desk.gate!.label))?.[1] ?? null;
     if (desk.gate.ready) out.push({ key: "move", tone: "ready", now: desk.gate.label, how: "Everything this step needs is done.", then });
-    else if (!out.some((o) => o.tone === "act" || o.tone === "fix")) out.push({ key: "move", tone: "act", now: desk.gate.label, how: desk.gate.reason ? `It waits: ${desk.gate.reason}.` : null, then });
+    // Not open yet, and nothing left to do but wait: the move is the last thing listed, waiting too.
+    else if (!out.some((o) => o.tone === "act" || o.tone === "fix")) out.push({ key: "move", tone: "wait", now: `Then: ${desk.gate.label}`, how: desk.gate.reason ? `It waits: ${desk.gate.reason}.` : null, then });
   }
 
   const rank: Record<GuideTone, number> = { fix: 0, act: 1, wait: 2, ready: 3 };

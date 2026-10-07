@@ -21,6 +21,11 @@ export type DeskDraft = {
    * is its heading ("Which rooms · 2 rooms for 3 nights"). The board shows what that card needs.
    */
   focus: { key: string | null; title: string } | null;
+  /**
+   * What the desk holds only on the screen until the step's commit records it: the guest-present
+   * tick at Arrival, the registration tick and the per-room key marks at Check-in.
+   */
+  local?: { guestPresent?: boolean; registrationConfirmed?: boolean; keysMarked?: string[] };
 };
 
 export type StayDraft = {

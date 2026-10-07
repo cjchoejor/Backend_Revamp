@@ -286,7 +286,13 @@ export function StepCard({
         </div>
       ) : (
         <>
-          {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+          {meta ? (
+            // A long fixed sentence is an explanation, not a status — it folds away while the second
+            // screen coaches the step (2026-10-07). Short or live lines ("sent", "confirmed 7 Oct") stay.
+            <div className="meta" style={{ marginBottom: 8 }} data-help={typeof meta === "string" && meta.length >= 90 ? "" : undefined}>
+              {meta}
+            </div>
+          ) : null}
           {children}
           {acts ? (
             <div className="row-acts" style={{ marginTop: 12 }}>

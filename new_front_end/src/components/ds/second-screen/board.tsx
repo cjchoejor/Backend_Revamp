@@ -41,6 +41,7 @@ import { DESK_STEPS, guestName } from "@/lib/desk/model";
 import {
   confirmReadiness,
   currentStepOrder,
+  effectiveCheckOutIso,
   liveQuotesThisPass,
   preconditionsFor,
   s1Readiness,
@@ -63,6 +64,9 @@ import { SidePapers } from "@/components/ds/workspace/side-papers";
 import { BILLING_WORD } from "@/components/ds/workspace/details-view";
 import type { EntryDetail } from "@/types/api";
 import { InquiryBoard } from "@/components/ds/second-screen/inquiry-board";
+import { StageFacts } from "@/components/ds/second-screen/stage-facts";
+import { listIdentityProofs } from "@/lib/api/identity-proofs";
+import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { GuideBox } from "@/components/ds/second-screen/guide-box";
 import { ClockStrip, type StripClock } from "@/components/ds/second-screen/clock-strip";
 import { MoreList } from "@/components/ds/second-screen/more-list";
@@ -206,6 +210,14 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
   const bedQ = useQuery({ queryKey: ["bed-plan", entryId], queryFn: () => getEntryBedPlan(session!, entryId), enabled: on, ...BACKSTOP });
   const roomsQ = useQuery({ queryKey: ["rooms-catalog"], queryFn: () => listRooms(session!), enabled: on, staleTime: 5 * 60_000 });
   const payment = usePaymentStatus(entryId, { enabled: !!entry?.folio }).data ?? null;
+  // Arrival and Check-in read every guest's details; Closed reads what the seal still waits for.
+  const identityQ = useQuery({
+    queryKey: ["identity-proofs", entryId],
+    queryFn: () => listIdentityProofs(session!, entryId),
+    enabled: on && (entry?.currentStage === "S5" || entry?.currentStage === "S6"),
+    ...BACKSTOP,
+  });
+  const closure = useClosureReadiness(entryId, entry?.currentStage === "S9" && entry?.status !== "CLOSED").data ?? null;
   const preview = useNewestCached<QuotationLivePreview>(["quotation-live-preview", entryId]);
 
   const desk = draftOf<DeskDraft>(s, entryId, "desk")?.value ?? null;
@@ -300,6 +312,7 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
       currency: cur,
       latestRefusal,
       now: Date.now(),
+      unpostedNights: current === 7 ? unpostedNights(entry, hotelToday).map((n) => fmtDay(n)) : [],
     }),
   ];
   const name = guestName(entry.guestProfile);
@@ -400,20 +413,40 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
             ) : null}
           </div>
 
-          <h3>
-            Rooms by night{" "}
-            <span className="h-meta">
-              {plural(numberOfRooms, "room")} needed each night
-              {draftRooms ? " · amber = not saved yet" : ""}
-            </span>
-          </h3>
-          <RoomsGrid nights={nights} saved={saved} draft={draftRooms} need={numberOfRooms} roomById={roomById} beds={bedQ.data?.rooms ?? []} />
+          {current >= 5 ? (
+            <StageFacts
+              entry={entry}
+              current={current}
+              billing={billing}
+              payment={payment}
+              communications={commsQ.data?.items ?? []}
+              coverage={identityQ.data?.coverage ?? null}
+              verifiedAt={identityQ.data?.verification?.verifiedAt ?? null}
+              closure={closure}
+              local={desk?.local ?? null}
+              roomById={roomById}
+              hotelToday={hotelToday}
+              tz={tz}
+              onGo={go}
+            />
+          ) : (
+            <>
+              <h3>
+                Rooms by night{" "}
+                <span className="h-meta">
+                  {plural(numberOfRooms, "room")} needed each night
+                  {draftRooms ? " · amber = not saved yet" : ""}
+                </span>
+              </h3>
+              <RoomsGrid nights={nights} saved={saved} draft={draftRooms} need={numberOfRooms} roomById={roomById} beds={bedQ.data?.rooms ?? []} />
+            </>
+          )}
 
           {current >= 2 || table ? (
             <PartyTable entry={entry} table={table} preview={table ? preview : null} billing={billing} cur={cur} roomNo={roomNo} />
           ) : null}
 
-          {current >= 3 ? (
+          {current === 3 || current === 4 ? (
             <>
               <h3>Set up</h3>
               <table className="board-facts">
@@ -436,6 +469,23 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
                 </tbody>
               </table>
             </>
+          ) : null}
+          {current === 4 ? (
+            <StageFacts
+              entry={entry}
+              current={current}
+              billing={billing}
+              payment={payment}
+              communications={commsQ.data?.items ?? []}
+              coverage={null}
+              verifiedAt={null}
+              closure={null}
+              local={desk?.local ?? null}
+              roomById={roomById}
+              hotelToday={hotelToday}
+              tz={tz}
+              onGo={go}
+            />
           ) : null}
         </section>
 
@@ -735,6 +785,13 @@ function PartyTable({
 }
 
 /* ------------------------------------------------------------------ */
+
+/** In-house: the nights already slept that carry no room charge yet. Counts only — no money. */
+function unpostedNights(entry: EntryDetail, hotelToday: string | null): string[] {
+  if (!hotelToday) return [];
+  const posted = new Set((entry.folio?.lines ?? []).filter((l) => l.lineType === "ROOM_CHARGE").map((l) => String(l.chargeDate).slice(0, 10)));
+  return enumerateNights(entry.checkInDate, effectiveCheckOutIso(entry)).filter((n) => n < hotelToday && !posted.has(n));
+}
 
 /** The booking's own step's checklist, by the desk's own readiness rules. */
 function stepItems(
