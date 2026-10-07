@@ -278,6 +278,23 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Where the step's "other ways" render — the tab beside This step (2026-09-25).
   const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
+  // The card the operator is working in — told to the second screen, which shows what it needs.
+  const [focusCard, setFocusCard] = useState<DeskDraft["focus"]>(null);
+  useEffect(() => {
+    const onWork = (e: Event) => {
+      const card = (e.target as HTMLElement | null)?.closest?.(".ws .card");
+      if (!(card instanceof HTMLElement)) return;
+      const key = card.id.startsWith("card-") ? card.id.slice(5) : null;
+      const title = (card.querySelector(".card-top h4")?.textContent ?? "").replace(/^\d+\s*/, "").trim();
+      setFocusCard((prev) => (prev?.key === key && prev?.title === title ? prev : { key, title }));
+    };
+    document.addEventListener("focusin", onWork);
+    document.addEventListener("pointerdown", onWork);
+    return () => {
+      document.removeEventListener("focusin", onWork);
+      document.removeEventListener("pointerdown", onWork);
+    };
+  }, []);
 
   /* ---- the per-room key checklist (survives a refresh until check-in stamps it) ---- */
   const [reserveExtras, setReserveExtras] = useState<string[]>([]);
@@ -998,6 +1015,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               items: preconds.map((p) => ({ label: p.label, met: p.met, card: p.card })),
               gate,
               sealed: sealed ? sealedOutcome : null,
+              focus: focusCard,
             } satisfies DeskDraft
           }
         />

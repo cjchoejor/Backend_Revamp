@@ -633,6 +633,7 @@ function TheStay({
                   : env && roomsN < env.allowedRoomCounts.min
                     ? `${plural(roomsN, "room")} cannot sleep ${plural(env.chargeableOccupants, "chargeable guest")} — at least ${env.allowedRoomCounts.min}`
                     : null,
+                minRooms: env?.allowedRoomCounts.min ?? null,
               } satisfies StayDraft)
             : null
         }

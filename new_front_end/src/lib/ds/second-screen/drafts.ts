@@ -15,6 +15,12 @@ export type DeskDraft = {
   gate: { label: string; ready: boolean; reason?: string } | null;
   /** Set when the record is sealed — what the banner says. */
   sealed: string | null;
+  /**
+   * The card the operator is working in right now — the last one they clicked or typed in.
+   * `key` is the card's flow key when it has one ("guest", "stay", "house"), else null; `title`
+   * is its heading ("Which rooms · 2 rooms for 3 nights"). The board shows what that card needs.
+   */
+  focus: { key: string | null; title: string } | null;
 };
 
 export type StayDraft = {
@@ -28,6 +34,8 @@ export type StayDraft = {
   beds: Record<string, number>;
   /** The envelope's own warning, when the party does not fit. */
   warning: string | null;
+  /** The fewest rooms this party needs (the house's own envelope), when known. */
+  minRooms: number | null;
 };
 
 export type RoomsDraft = {

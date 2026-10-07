@@ -52,6 +52,7 @@ import { SideTimer } from "@/components/ds/workspace/side-timer";
 import { SidePapers } from "@/components/ds/workspace/side-papers";
 import { BILLING_WORD } from "@/components/ds/workspace/details-view";
 import type { EntryDetail } from "@/types/api";
+import { InquiryBoard } from "@/components/ds/second-screen/inquiry-board";
 
 // This window is the board: nothing it does is ever sent back to the desk as a draft or a notice.
 setScreenRole("board");
@@ -287,6 +288,20 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
 
       {desk?.sealed ? <div className="board-sealed">{desk.sealed}</div> : null}
 
+      {current === 1 && viewing === 1 && !desk?.sealed ? (
+        <InquiryBoard
+          entry={entry}
+          desk={desk}
+          stay={stay}
+          rooms={roomsDraft}
+          savedRooms={saved}
+          roomById={roomById}
+          unsaved={unsaved}
+          live={live}
+          events={events.map((e) => ({ id: e.id, timestamp: e.timestamp, words: traceWords(e), who: whoDid(e) }))}
+          tz={tz}
+        />
+      ) : (
       <div className="board-cols">
         {/* ---- left: do next + problems ---- */}
         <section className="board-col">
@@ -458,6 +473,7 @@ function BookingBoard({ entryId, s }: { entryId: string; s: BoardState }) {
           </div>
         </section>
       </div>
+      )}
     </div>
   );
 }

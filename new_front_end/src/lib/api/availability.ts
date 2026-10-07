@@ -166,3 +166,49 @@ export async function selectAvailabilityOption(
     body,
   });
 }
+
+/** One room type in the house's answer for dates still being typed (2026-10-07). */
+export type AvailabilityPreviewType = {
+  roomTypeId: string;
+  name: string;
+  roomsInType: number;
+  maxCapacity: number | null;
+  /** Free on every night — what can be sold for the whole stay. */
+  freeEveryNight: number;
+  freeByNight: Array<{ date: string; free: number }>;
+  /** Per night, before service charge and GST. */
+  rate: number | null;
+  rateSource: string | null;
+  /** One room for the whole stay — net, and with service charge + GST (worked out server-side). */
+  stayPerRoomNet: number | null;
+  stayPerRoomWithTax: number | null;
+};
+
+export type AvailabilityPreview = {
+  checkInDate: string;
+  checkOutDate: string;
+  nights: string[];
+  roomsNeeded: number;
+  guestCount: number;
+  currency: string;
+  serviceChargeRate: number;
+  gstRate: number;
+  freeEveryNight: number;
+  fits: boolean;
+  shortNights: Array<{ date: string; free: number }>;
+  types: AvailabilityPreviewType[];
+  nearby: Array<{ checkInDate: string; checkOutDate: string; freeEveryNight: number; fits: boolean }>;
+};
+
+/**
+ * The house for dates the operator is still typing — `POST /api/entries/:id/availability/preview`.
+ * The same engine as Ask the house, but nothing is recorded, so the second screen can follow the
+ * desk as the dates and the party change. Indicative, like the Inquiry step's own prices.
+ */
+export async function previewAvailability(
+  session: Session,
+  entryId: string,
+  body: { checkInDate: string; checkOutDate: string; guestCount?: number; roomsNeeded?: number },
+) {
+  return apiRequest<AvailabilityPreview>(`/api/entries/${entryId}/availability/preview`, { method: "POST", session, body });
+}

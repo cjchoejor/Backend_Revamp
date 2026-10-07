@@ -430,3 +430,67 @@
   .ds.board .board-cols > .board-col:last-child { grid-column: 1 / -1; }
   .ds.board .board-steps { grid-template-columns: repeat(5, 1fr); }
 }
+
+/* ---- The second screen at Inquiry (2026-10-07, second pass): the coach, then what the desk
+   cannot show while the operator types — the house for these dates, and the guest. ---- */
+.ds.board .ib { display: grid; gap: 14px; }
+.ds.board .ib-main { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(0, 2fr); gap: 14px; align-items: start; }
+.ds.board .ib-coach { position: sticky; top: 56px; display: grid; gap: 12px; padding: 18px 20px; border-radius: 14px; background: var(--surface); border: 3px solid var(--accent); }
+.ds.board .ib-coach.fix { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
+.ds.board .ib-coach.ready { border-color: var(--success); background: color-mix(in srgb, var(--success) 6%, var(--surface)); }
+.ds.board .ib-coach > .k { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+.ds.board .ib-coach.fix > .k { color: var(--danger); }
+.ds.board .ib-coach.ready > .k { color: var(--success); }
+.ds.board .ib-coach h2 { font-size: 28px; line-height: 1.2; margin: 0; }
+.ds.board .ib-coach .how { font-size: 17px; line-height: 1.45; color: var(--ink-2); margin: 0; }
+.ds.board .ib-coach .say { margin: 0; padding: 14px 16px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 19px; line-height: 1.45; display: grid; gap: 6px; }
+.ds.board .ib-coach .say .k { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: #c9c3b8; }
+.ds.board .ib-coach .then { margin: 0; font-size: 16px; line-height: 1.45; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.ds.board .ib-steps { list-style: none; margin: 4px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.ds.board .ib-steps li { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.ds.board .ib-steps li.met { color: var(--ink-3); }
+.ds.board .ib-steps .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line-2); font-size: 12px; font-weight: 700; flex: none; }
+.ds.board .ib-steps li.met .mark { background: var(--success); border-color: var(--success); color: #fff; }
+
+.ds.board .ib-context { display: grid; gap: 14px; min-width: 0; }
+.ds.board .ib-focus { margin: 0; font-size: 14px; color: var(--ink-3); }
+.ds.board .ib-focus b { color: var(--ink); }
+.ds.board .ib-panel { display: grid; gap: 10px; padding: 16px 18px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); min-width: 0; }
+.ds.board .ib-panel h3 { margin: 0; font-size: 20px; }
+.ds.board .ib-panel h3 .h-meta { font-size: 13px; font-weight: 400; color: var(--ink-3); margin-left: 10px; }
+.ds.board .ib-verdict { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 12px 14px; border-radius: 10px; font-size: 18px; }
+.ds.board .ib-verdict.ok { background: color-mix(in srgb, var(--success) 12%, var(--surface)); border: 2px solid var(--success); color: #0f4d31; }
+.ds.board .ib-verdict.short { background: color-mix(in srgb, var(--danger) 9%, var(--surface)); border: 2px solid var(--danger); color: var(--danger); }
+.ds.board .ib-verdict span { font-size: 15px; }
+.ds.board .ib-nearby { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 14px; }
+.ds.board .ib-nearby .k { font-weight: 700; color: var(--ink-2); margin-right: 4px; }
+.ds.board .ib-nearby .chipish { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface-2); }
+.ds.board .ib-nearby .chipish.ok { border-color: var(--success); color: #0f4d31; background: color-mix(in srgb, var(--success) 10%, var(--surface)); font-weight: 700; }
+.ds.board .ib-house, .ds.board .ib-history { width: 100%; border-collapse: collapse; font-size: 16px; }
+.ds.board .ib-house th, .ds.board .ib-history th { text-align: left; font-size: 13px; color: var(--ink-2); padding: 6px 8px; border-bottom: 2px solid var(--line-2); white-space: nowrap; }
+.ds.board .ib-house td, .ds.board .ib-history td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.ds.board .ib-house .num, .ds.board .ib-history .num { text-align: right; white-space: nowrap; }
+.ds.board .ib-house .nt { text-align: center; width: 54px; font-size: 14px; }
+.ds.board .ib-house td.nt { font-weight: 700; color: var(--success); }
+.ds.board .ib-house td.nt.zero { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.ds.board .ib-house tr.none td { color: var(--ink-3); }
+.ds.board .ib-house tr.picked td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.ds.board .ib-house .pk { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; }
+.ds.board .ib-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; font-size: 16px; }
+.ds.board .ib-who b { font-size: 19px; }
+.ds.board .ib-who .vip { padding: 1px 8px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 800; }
+.ds.board .ib-agency { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 15px; }
+.ds.board .ib-agency .k { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 700; }
+.ds.board .ib-agency b { font-size: 17px; }
+.ds.board .ib-new { margin: 0; font-size: 16px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.ds.board .ib-returning { margin: 0; font-size: 17px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--success) 10%, var(--surface)); border: 2px solid var(--success); }
+.ds.board .ib-returning.owes { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); border-color: var(--danger); }
+.ds.board .ib-returning.known { background: var(--surface-2); border-color: var(--line-2); }
+.ds.board .ib-history td.owes { color: var(--danger); font-weight: 800; }
+.ds.board .ib-foot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.ds.board .ib-foot > section { display: grid; gap: 8px; align-content: start; padding: 14px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.ds.board .ib-foot h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); margin: 0; }
+@media (max-width: 1400px) {
+  .ds.board .ib-main { grid-template-columns: minmax(300px, 1fr) minmax(0, 1.6fr); }
+  .ds.board .ib-coach h2 { font-size: 24px; }
+}
