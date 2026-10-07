@@ -63,6 +63,7 @@ import {
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { PublishDraft } from "@/components/ds/second-screen/publisher";
+import { useDeskQuiet } from "@/hooks/use-second-screen";
 import type { RoomsDraft, StayDraft } from "@/lib/ds/second-screen/drafts";
 import { cameInAsOf } from "./new-inquiry-parts";
 
@@ -838,7 +839,7 @@ function TheStay({
           <Button kind="quiet" onClick={() => setF(seed())}>
             Undo
           </Button>
-          <span className="meta">the house is asked again after a change</span>
+          <span className="meta" data-help>the house is asked again after a change</span>
         </div>
       ) : null}
     </StepCard>
@@ -1146,7 +1147,7 @@ function TheHouse({
   }, [chosenType, available, deficient, pricing]);
 
   const ask = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (_how: { auto?: boolean }) => {
       const ci = entry.checkInDate?.slice(0, 10);
       const co = entry.checkOutDate?.slice(0, 10);
       if (!ci || !co)
@@ -1158,13 +1159,33 @@ function TheHouse({
         useType: entry.useType ?? undefined,
       });
     },
-    onSuccess: (data) => {
+    onSuccess: (data, how) => {
       setResult(data);
-      toast.success("The house has answered for these dates");
+      toast.success(how?.auto ? "Asked the house for these dates — pick the rooms" : "The house has answered for these dates");
       refresh();
     },
     onError: (e) => toastRefusal(e, "The house could not be asked"),
   });
+
+  // With the second screen open, the house is asked on its own (2026-10-07): the board already
+  // shows the answer for the dates being typed, so pressing "Ask the house" only recorded what
+  // the operator could already see. Whenever the booking's saved dates or party differ from the
+  // last search of this pass — a new booking, or a stay just saved with new dates — the search
+  // runs and is recorded exactly as the button records it. A one-monitor desk still presses it.
+  const { quiet } = useDeskQuiet();
+  const bookingKey = `${entry.checkInDate?.slice(0, 10) ?? ""}|${entry.checkOutDate?.slice(0, 10) ?? ""}|${entry.guestCount ?? ""}`;
+  const searchedKey = latest
+    ? `${searched.checkIn ?? ""}|${searched.checkOut ?? ""}|${String((latest.searchCriteria as { guestCount?: unknown } | null)?.guestCount ?? "")}`
+    : null;
+  const autoAskedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!quiet || !editable || past || !entry.checkInDate || !entry.checkOutDate || ask.isPending) return;
+    if (searchedKey === bookingKey && !stale) return;
+    if (autoAskedFor.current === bookingKey) return;
+    autoAskedFor.current = bookingKey;
+    ask.mutate({ auto: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quiet, editable, past, bookingKey, searchedKey, stale]);
 
   const seal = useMutation({
     mutationFn: (body: {
@@ -1312,7 +1333,7 @@ function TheHouse({
                 }
                 title={entry.checkInDate ? undefined : "put in the dates first"}
                 workingLabel="Asking…"
-                onClick={() => ask.mutate()}
+                onClick={() => ask.mutate({})}
               >
                 Ask the house
               </Button>
@@ -1321,7 +1342,7 @@ function TheHouse({
         }
       >
         {!hasResults ? (
-          <span className="meta">
+          <span className="meta" data-help>
             {entry.checkInDate
               ? "Ask the house — the free rooms for these dates appear here while you are still on the phone."
               : "Put in the dates and the rooms — the answer appears here."}
@@ -1363,7 +1384,7 @@ function TheHouse({
               </tbody>
             </table>
             {chosenPricing ? (
-              <div style={{ marginTop: 10 }}>
+              <div style={{ marginTop: 10 }} data-help>
                 <b className="money">
                   {money(
                     chosenPricing.lineTotalIndicative ?? chosenPricing.rateAmount ?? null,
@@ -1411,7 +1432,7 @@ function TheHouse({
                 ) : null}
               </div>
             ) : (
-              <div className="meta" style={{ marginTop: 8 }}>
+              <div className="meta" style={{ marginTop: 8 }} data-help>
                 No rooms chosen yet · Take it chooses{" "}
                 {plural(numberOfRooms, "room")} of the marked type, free on
                 every night
@@ -1430,7 +1451,7 @@ function TheHouse({
                   compact
                   state={ask.isPending ? "working" : "default"}
                   workingLabel="Asking…"
-                  onClick={() => ask.mutate()}
+                  onClick={() => ask.mutate({})}
                 >
                   Ask again
                 </Button>
@@ -1464,7 +1485,7 @@ function TheHouse({
                 justSaved={seal.isSuccess}
                 isGm={isGm}
                 onClose={() => setToolOpen(false)}
-                onReleased={() => ask.mutate()}
+                onReleased={() => ask.mutate({})}
               />
             </div>,
             toolSlot,
@@ -1854,7 +1875,7 @@ function WhichRooms({
         </div>
       ) : null}
       {!full ? (
-        <p className="meta" style={{ marginTop: 10 }}>
+        <p className="meta" style={{ marginTop: 10 }} data-help>
           Click a room&rsquo;s number to use it for the whole stay
           {displayNights.length > 1
             ? "; click one night to change only that night"

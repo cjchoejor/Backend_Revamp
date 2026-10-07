@@ -494,3 +494,14 @@
   .ds.board .ib-main { grid-template-columns: minmax(300px, 1fr) minmax(0, 1.6fr); }
   .ds.board .ib-coach h2 { font-size: 24px; }
 }
+
+/* ---- The desk while the second screen is open (2026-10-07): it sheds what the board shows.
+   `.ws.quiet` — the side panel is not drawn, so the canvas takes its width. `.ws.coached` — the
+   board coaches this step, so the help lines marked `data-help` and the cards' grey lines fold. */
+.ds .ws.quiet .ws-body:not(.desk-root *) { grid-template-columns: 200px minmax(0, 1fr); }
+.ds .ws.quiet .ws-body.norail:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
+.ds .ws.quiet .canvas:not(.desk-root *) { max-width: none; }
+@container (max-width: 1000px) { .ds .ws.quiet .ws-body:not(.desk-root *) { grid-template-columns: 1fr; } }
+.ds .ws.coached [data-help], .ds .ws.coached .card > .meta { display: none !important; }
+.ds .gatebar .gate.quiet-note { display: flex; align-items: center; gap: 12px; }
+.ds .side > .btn-quiet:first-child { justify-self: start; }

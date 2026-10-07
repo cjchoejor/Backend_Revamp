@@ -25,6 +25,7 @@ import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useDeskBookings } from "@/hooks/use-desk-data";
+import { useDeskQuiet } from "@/hooks/use-second-screen";
 import {
   getBillingSummary,
   getEntry,
@@ -117,6 +118,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const refreshEntry = useRefreshEntry(entryId);
   const hotelToday = useHotelDay()?.today ?? null;
   const clock = useHotelClock(30_000);
+  // With the second screen open, the desk sheds what the board shows (2026-10-07).
+  const deskQuiet = useDeskQuiet();
 
   const entryQuery = useQuery({
     queryKey: ["entry", entryId],
@@ -650,6 +653,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
 
   const ready = readyToConfirm && reserveExtras.length === 0;
+  // The board coaches this step — its help lines fold away on the desk (Inquiry first).
+  const coached = deskQuiet.quiet && !sealed && step.key === "inquiry" && entry.currentStage === "S1" && viewing === currentOrder;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
   // Since 2026-10-01 the ending itself is on the row, so this reads the same words the lists do
   // (the stage could not say: the cancellation routes wipe it to TERMINAL), and adds what the
@@ -1003,7 +1008,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   return (
     <BackendRailSlotContext.Provider value={railSlot}>
-      <div className="ws">
+      <div className={`ws${deskQuiet.quiet ? " quiet" : ""}${coached ? " coached" : ""}`}>
         <PublishDraft
           entryId={entry.id}
           kind="desk"
@@ -1269,7 +1274,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             <div ref={setRailSlot} hidden />
           </div>
 
+          {deskQuiet.quiet ? null : (
           <SidePanel
+            onQuiet={deskQuiet.connected ? () => deskQuiet.setShowEverything(false) : undefined}
             entry={entry}
             sealed={sealed}
             onGo={(n) => gotoStep(n)}
@@ -1282,6 +1289,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             tz={clock.tz}
             onHistory={() => setView("history", viewing)}
           />
+          )}
         </div>
 
         <div className="gatebar">
@@ -1291,6 +1299,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             </div>
           ) : sealed ? (
             <div className="sm ink-2">{sealedOutcome}</div>
+          ) : deskQuiet.quiet && preconds.length ? (
+            // The second screen says what is next, and why — the desk keeps only the move.
+            <div className="gate quiet-note">
+              <span className="meta">
+                {unmet > 0 ? `${plural(unmet, "thing")} left — the second screen says what` : "everything this step needs is done"}
+              </span>
+              <button type="button" className="btn btn-quiet compact" onClick={() => deskQuiet.setShowEverything(true)}>
+                Show everything here too
+              </button>
+            </div>
           ) : preconds.length ? (
             // The full list lives in the side panel, numbered (2026-09-25) — the bar says what is
             // next and takes you to it, so the move and the reason for waiting sit together.
@@ -1685,6 +1703,7 @@ function PrefStrip({ entry, onDetails }: { entry: EntryDetail; onDetails: () => 
 }
 
 function SidePanel({
+  onQuiet,
   entry,
   sealed,
   onGo,
@@ -1697,6 +1716,8 @@ function SidePanel({
   tz,
   onHistory,
 }: {
+  /** Set while the second screen is open and the operator asked to see everything here too. */
+  onQuiet?: () => void;
   entry: EntryDetail;
   sealed: boolean;
   onGo: (step: number) => void;
@@ -1730,6 +1751,11 @@ function SidePanel({
   const dwell = entry.stageDwellRecords?.[0];
   return (
     <aside className="side">
+      {onQuiet ? (
+        <button type="button" className="btn btn-quiet compact" onClick={onQuiet}>
+          Leave this to the second screen
+        </button>
+      ) : null}
       <div>
         <h4>Timers</h4>
         <div className="list">
