@@ -43,6 +43,8 @@ export type PickPricing = {
   stayNights: number;
   nights: Array<{
     date: string;
+    /** Which night of the stay this is, from 1 — a night with no rooms is skipped, not renumbered. */
+    nightNo: number;
     rooms: Array<{ roomId: string; roomNumber: string; roomTypeId: string | null; roomTypeName: string | null; rate: Money | null }>;
     net: Money;
     serviceCharge: Money;
@@ -174,7 +176,7 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
   let roomNights = 0;
 
   const nights: PickPricing["nights"] = [];
-  for (const date of stayDates) {
+  for (const [k, date] of stayDates.entries()) {
     const ids = byDate.get(date);
     if (!ids || ids.size === 0) continue;
     let net = dec(0);
@@ -208,7 +210,7 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
     stayNet = stayNet.plus(net);
     staySc = staySc.plus(nSc);
     stayGst = stayGst.plus(nGst);
-    nights.push({ date, rooms: nightRooms, net: out(net), serviceCharge: out(nSc), gst: out(nGst), total: out(net.plus(nSc).plus(nGst)), unpricedRooms: unpriced });
+    nights.push({ date, nightNo: k + 1, rooms: nightRooms, net: out(net), serviceCharge: out(nSc), gst: out(nGst), total: out(net.plus(nSc).plus(nGst)), unpricedRooms: unpriced });
   }
 
   const typeById = new Map(rooms.filter((r) => r.roomType).map((r) => [r.roomType!.id, r.roomType!]));
