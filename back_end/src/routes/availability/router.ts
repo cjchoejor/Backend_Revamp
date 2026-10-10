@@ -2,12 +2,14 @@ import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
   queryAvailabilityByEntryRequestSchema,
+  priceRoomPickRequestSchema,
   queryAvailabilitySearchRequestSchema,
   selectAvailabilityOptionRequestSchema,
 } from "../../dtos/04-availability/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
+import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
@@ -150,6 +152,24 @@ availabilityRouter.post(
     try {
       const out = await s1AvailabilityService.queryAvailability(prisma, req.params.id, req.actor!.actorId, req.actor!.level as any, req.body);
       res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * What the rooms on the S1 table cost, night by night and for the stay (2026-10-10). A pure read:
+ * the picks need not be saved, nothing is written. Room only, at the rate the quotation defaults to.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/price-pick",
+  requireActorLevel("L1"),
+  validateBody(priceRoomPickRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await priceRoomPick(prisma, req.params.id, req.body));
     } catch (e) {
       next(e);
     }

@@ -2,6 +2,7 @@ import express, { Router } from "express";
 import { networkInterfaces } from "node:os";
 import { prisma } from "../../db.js";
 import {
+  addGuestProfileContactRequestSchema,
   createGuestProfileRequestSchema,
   mintIdentityCapturePhoneTokenRequestSchema,
   confirmGuestIdentityDetailsRequestSchema,
@@ -54,6 +55,24 @@ guestProfilesRouter.post(
         req.body,
       );
       res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Wrap up at Inquiry (2026-10-10): the phone or email the guest gave once rooms were chosen.
+ * Fills an empty field only — see `addGuestProfileContact`. L1: the desk on the phone asks.
+ */
+guestProfilesRouter.post(
+  "/guest-profiles/:id/contact",
+  requireActorLevel("L1"),
+  validateBody(addGuestProfileContactRequestSchema),
+  async (req, res, next) => {
+    try {
+      const out = await guestProfileService.addGuestProfileContact(prisma, req.actor!.actorId, req.actor!.level, req.params.id, req.body);
+      res.json(out);
     } catch (e) {
       next(e);
     }
