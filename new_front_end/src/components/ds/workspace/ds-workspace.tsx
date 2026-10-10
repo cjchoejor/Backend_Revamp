@@ -694,7 +694,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const unmet = preconds.filter((p) => !p.met).length;
   // The step's numbered to-do: the items that have a section on this page, in the order they are
   // done. The rail prints it, and each card takes its own number from it (2026-09-25).
-  const flowItems: FlowItem[] = numberFlow(preconds);
+  // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section.
+  const flowItems: FlowItem[] = numberFlow(preconds, { bySection: inquiryStepActive });
   const inherited = preconds.filter((p) => !p.card);
   const nextUp = flowItems.find((i) => !i.met) ?? null;
   const goToCard = (card?: string) => {
@@ -1202,7 +1203,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     onHistory={() => setView("history", viewing)}
                   />
                 </div>
-                <StepFlow items={flowItems} on={!viewingPast && !sealed}>
+                <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null}>
                   <OtherWaysSlot node={otherSlot}>
                     <div hidden={view !== "step"}>{native}</div>
                   </OtherWaysSlot>

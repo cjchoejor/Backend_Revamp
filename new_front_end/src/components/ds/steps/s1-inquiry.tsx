@@ -3,10 +3,13 @@
 /**
  * Step 1 · Inquiry — "understand the stay" (SS03 §S1, prototype `V16.intakeCanvas`).
  *
- * Left, one card each, fields two to a row: who is asking, the guest, the stay, rate and notes.
- * Right, beside the form rather than below it: the house's answer for the dates — free rooms by
- * type, the indicative price, and Take it. The room table is the tool behind "Choose the rooms",
- * for the stays that need a room per night.
+ * Five sections, one after another, in the order of the boss's journey mockup (2026-10-10):
+ * 1 the guest · 2 who is asking · 3 the stay · 4 the house (rooms and rate) · 5 wrap up. The
+ * first three were settled when the lead was kept, so they fold to one line each with an Edit;
+ * the house is the work — free rooms by type, Take it, the room table for a room per night, and
+ * the bill for the rooms picked, night by night and for the stay. Wrap up opens once the rooms
+ * are chosen and asks what the guest did not give at the start: their phone or email, who is
+ * arriving, and any notes.
  */
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +32,7 @@ import {
   listRatePackagesLookup,
   updateInquiryNotes,
 } from "@/lib/api/inquiries";
+import { addGuestContact } from "@/lib/api/guest-profiles";
 import { checkBedRequest, listRooms, releaseRoomBlock } from "@/lib/api/rooms";
 import { releaseCommittedHold } from "@/lib/api/reservation-setup";
 import { releaseSpeculativeHold } from "@/lib/api/quotations";
@@ -58,11 +62,14 @@ import {
   atLeast,
   toastRefusal,
   useRefreshEntry,
+  useStepFlow,
   words,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
-import { cameInAsOf } from "./new-inquiry-parts";
+import { PHONE_CODES, PhoneInput, cameInAsOf } from "./new-inquiry-parts";
+import { PickBill, PickTotalLine, usePickPricing, type BillNight } from "./s1-bill";
+import type { PickPricing } from "@/lib/api/availability";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -171,39 +178,38 @@ export function S1Inquiry({
 
   return (
     <StepCanvas past={past}>
-      <div className="intake">
-        <div className="stack">
-          <WhoIsAsking
-            entry={entry}
-            inq={inq}
-            partyName={partyName}
-            editable={editable}
-          />
-          <TheGuest entry={entry} editable={editable} />
-          <TheStay
-            entry={entry}
-            editable={editable}
-            catalog={rooms.data?.items ?? []}
-          />
-          <RateAndNotes
-            entry={entry}
-            inq={inq}
-            editable={editable}
-            onSaved={() => refresh([["inquiry", entry.inquiryId]])}
-          />
-        </div>
-        <div className="stack intake-right">
-          <TheHouse
-            entry={entry}
-            past={past}
-            editable={editable}
-            duplicates={(inquiryRec?.duplicateFlags ?? []).length}
-            catalog={rooms.data?.items ?? []}
-            toolSlot={toolSlot}
-          />
-        </div>
+      {/* One column, in the order the call goes (2026-10-10): who the guest is, who is asking
+          for them, what they want, what the house has and what it costs, then what is left. */}
+      <div className="stack">
+        <TheGuest entry={entry} />
+        <WhoIsAsking
+          entry={entry}
+          inq={inq}
+          partyName={partyName}
+          editable={editable}
+        />
+        <TheStay
+          entry={entry}
+          editable={editable}
+          catalog={rooms.data?.items ?? []}
+        />
+        <TheHouse
+          entry={entry}
+          past={past}
+          editable={editable}
+          duplicates={(inquiryRec?.duplicateFlags ?? []).length}
+          catalog={rooms.data?.items ?? []}
+          toolSlot={toolSlot}
+        />
+        {/* The room table lands here, right under the house that opens it. */}
+        <div ref={setToolSlot} style={{ display: "contents" }} />
+        <WrapUp
+          entry={entry}
+          inq={inq}
+          editable={editable}
+          onSaved={() => refresh([["inquiry", entry.inquiryId]])}
+        />
       </div>
-      <div ref={setToolSlot} />
       <RequestsCard />
       <OtherWays>
         {onPark && entry.status === "ACTIVE" ? (
@@ -259,9 +265,54 @@ function WhoIsAsking({
     },
     onError: (e) => toastRefusal(e, "The kind of stay could not be changed"),
   });
+  // Which of the party's rates was agreed sits with the party (moved here from "Rate and notes",
+  // as on the intake since 2026-09-29).
+  const owner = inq.travelAgentId
+    ? { travelAgentId: inq.travelAgentId }
+    : inq.corporateAccountId
+      ? { corporateAccountId: inq.corporateAccountId }
+      : null;
+  const packages = useQuery({
+    queryKey: ["lookup", "rate-packages", owner],
+    queryFn: () => listRatePackagesLookup(session!, owner!),
+    enabled: !!session && !!owner,
+  });
+  const pkg =
+    (packages.data?.items ?? []).find((p) => p.id === inq.ratePackageId) ??
+    (inq.ratePackageId
+      ? null
+      : ((packages.data?.items ?? []).find((p) => p.isDefault) ?? null));
+  const pkgWord = !owner
+    ? "Published rates"
+    : pkg
+      ? `${pkg.name}${inq.ratePackageId ? "" : " · their default"}`
+      : inq.ratePackageId
+        ? "a package no longer listed"
+        : "the hotel's common package";
+  const plans = pkg
+    ? [
+        pkg.cpRate ? "CP" : null,
+        pkg.mapLunchRate ? "MAP + lunch" : null,
+        pkg.mapDinnerRate ? "MAP + dinner" : null,
+        pkg.apRate ? "AP" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const cameWord = CAME_IN_AS.find(([k]) => k === came)?.[1] ?? "—";
+  const kindWord = KINDS_OF_STAY.find(([k]) => k === entry.useType)?.[1] ?? null;
   return (
     <StepCard
       title="Who is asking"
+      flow="asking"
+      flowAfter="guest"
+      summary={
+        <>
+          <b>{cameWord}</b>
+          {isAcct && partyName ? <> — {partyName}</> : null} · {pkgWord}
+          {kindWord ? <> · {kindWord}</> : <span className="warn-ink"> · the kind of stay is not set</span>}
+        </>
+      }
       right={
         editable ? (
           <Link
@@ -322,6 +373,24 @@ function WhoIsAsking({
             ) : null}
           </>
         ) : null}
+        <div className="field">
+          <label>Rate package</label>
+          <input className="input" readOnly value={pkgWord} />
+          <span className="hint">carries the meal plan and the rate</span>
+        </div>
+        <div className="field">
+          <label>Meal plans priced</label>
+          <input
+            className="input"
+            readOnly
+            value={
+              plans || (owner ? "none in the package" : "from the house tariff")
+            }
+          />
+          <span className="hint">
+            each room&rsquo;s plan is chosen at Negotiation
+          </span>
+        </div>
         <div className="wide field">
           <label>What kind of stay</label>
           <Choice
@@ -338,43 +407,22 @@ function WhoIsAsking({
 
 /* ------------------------------------------------------------------ the guest */
 
-function TheGuest({
-  entry,
-  editable,
-}: {
-  entry: EntryDetail;
-  editable: boolean;
-}) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
+function TheGuest({ entry }: { entry: EntryDetail }) {
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const contact = entry as EntryDetail & EntryContact;
-  const [name, setName] = useState(contact.contactPersonName ?? "");
-  const [phone, setPhone] = useState(contact.contactPersonPhone ?? "");
-  useEffect(() => {
-    setName(contact.contactPersonName ?? "");
-    setPhone(contact.contactPersonPhone ?? "");
-  }, [contact.contactPersonName, contact.contactPersonPhone]);
-  const dirty =
-    name.trim() !== (contact.contactPersonName ?? "") ||
-    phone.trim() !== (contact.contactPersonPhone ?? "");
-  const save = useMutation({
-    mutationFn: () =>
-      updateEntryIntake(session!, entry.id, {
-        contactPersonName: name.trim(),
-        contactPersonPhone: phone.trim(),
-        expectedVersion: entry.version,
-      }),
-    onSuccess: () => {
-      toast.success("Who is arriving is on record");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The contact could not be saved"),
-  });
-  // the same test the move to Negotiation runs (Policy 16): the guest's email or phone, or the arriving person's phone
-  const noContact = !hasAnyContact(entry);
+  const name = `${g?.firstName ?? ""} ${g?.lastName ?? ""}`.trim();
+  const reach = [g?.phone, g?.email].filter(Boolean).join(" · ");
   return (
-    <StepCard flow="guest" title="The guest">
+    <StepCard
+      flow="guest"
+      title="The guest"
+      summary={
+        <>
+          <b>{name || "—"}</b>
+          {g?.nationality ? <> · {g.nationality}</> : null} ·{" "}
+          {reach || <span className="meta">no phone or email yet — asked at Wrap up</span>}
+        </>
+      }
+    >
       <div className="form2">
         <div className="field">
           <label>Phone</label>
@@ -382,7 +430,7 @@ function TheGuest({
             className="input"
             readOnly
             value={g?.phone ?? ""}
-            placeholder="none on file"
+            placeholder="not given — asked at Wrap up"
           />
         </div>
         <div className="field">
@@ -391,13 +439,8 @@ function TheGuest({
             className="input"
             readOnly
             value={g?.email ?? ""}
-            placeholder="none on file"
+            placeholder="not given — asked at Wrap up"
           />
-          <span className={`hint${noContact ? " warn-ink" : ""}`}>
-            {noContact
-              ? "optional on the guest — but someone needs a number: give the person arriving a phone below"
-              : "optional — the booking has a way to reach someone"}
-          </span>
         </div>
         <div className="field">
           <label>First name</label>
@@ -423,50 +466,7 @@ function TheGuest({
             )}
           </span>
         </div>
-        <div className="rule-above" />
-        <div className="field">
-          <label>Who is arriving · name</label>
-          <input
-            className="input"
-            value={name}
-            readOnly={!editable}
-            placeholder="who leads the party on the day"
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Their phone</label>
-          <input
-            className="input"
-            value={phone}
-            readOnly={!editable}
-            placeholder="+975 …"
-            onChange={(e) => setPhone(e.target.value)}
-          />
-          <span className="hint">needed before arrival</span>
-        </div>
       </div>
-      {editable && dirty ? (
-        <div className="row-acts" style={{ marginTop: 10 }}>
-          <Button
-            compact
-            state={save.isPending ? "working" : "default"}
-            onClick={() => save.mutate()}
-          >
-            Save who is arriving
-          </Button>
-          <Button
-            kind="quiet"
-            compact
-            onClick={() => {
-              setName(contact.contactPersonName ?? "");
-              setPhone(contact.contactPersonPhone ?? "");
-            }}
-          >
-            Undo
-          </Button>
-        </div>
-      ) : null}
     </StepCard>
   );
 }
@@ -563,6 +563,11 @@ function TheStay({
   );
 
   const saved = seed();
+  const savedBedMap = Object.fromEntries(
+    Object.entries(saved.beds)
+      .map(([k, v]) => [k, parseInt(v, 10) || 0])
+      .filter(([, v]) => (v as number) > 0),
+  ) as Record<string, number>;
   const dirty =
     f.checkIn !== saved.checkIn ||
     f.nights !== saved.nights ||
@@ -570,14 +575,7 @@ function TheStay({
     f.adults !== saved.adults ||
     String(childN) !== saved.children ||
     ages.join(",") !== saved.ages.join(",") ||
-    JSON.stringify(bedMap) !==
-      JSON.stringify(
-        Object.fromEntries(
-          Object.entries(saved.beds)
-            .map(([k, v]) => [k, parseInt(v, 10) || 0])
-            .filter(([, v]) => (v as number) > 0),
-        ),
-      );
+    JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
 
   const save = useMutation({
     mutationFn: () =>
@@ -611,8 +609,26 @@ function TheStay({
   const group = entry.groupBillingMode === "GROUP_MASTER";
 
   return (
-    <StepCard flow="stay" title="The stay">
-      <div className="form2">
+    <StepCard
+      flow="stay"
+      flowAfter="guest"
+      title="The stay"
+      summary={
+        <>
+          <b>{entry.checkInDate ? fmtRange(entry.checkInDate, entry.checkOutDate) : "no dates"}</b>
+          {saved.checkIn ? <> · {plural(parseInt(saved.nights, 10) || 1, "night")}</> : null} ·{" "}
+          {plural(parseInt(saved.adults, 10) || 0, "adult")}
+          {(parseInt(saved.children, 10) || 0) > 0
+            ? <>, {plural(parseInt(saved.children, 10) || 0, "child", "children")}{saved.ages.length ? ` (${saved.ages.join(", ")})` : ""}</>
+            : null}{" "}
+          · {plural(parseInt(saved.rooms, 10) || 1, "room")}
+          {Object.keys(savedBedMap).length
+            ? <> · {Object.entries(savedBedMap).map(([t, n]) => `${n} ${BED_WORD[t] ?? words(t)}`).join(" + ")} asked</>
+            : null}
+        </>
+      }
+    >
+      <div className="form3">
         <div className="field">
           <label>Check-in</label>
           <input
@@ -621,6 +637,18 @@ function TheStay({
             value={f.checkIn}
             readOnly={ro}
             onChange={(e) => set({ checkIn: e.target.value })}
+          />
+        </div>
+        {/* The nights sit between the two dates, as on the boss's mockup (2026-10-10): the
+            check-out follows the check-in and the nights, and a picked check-out sets the nights. */}
+        <div className="field">
+          <label>Nights</label>
+          <input
+            className="input"
+            inputMode="numeric"
+            value={f.nights}
+            readOnly={ro}
+            onChange={(e) => set({ nights: e.target.value.replace(/\D/g, "") })}
           />
         </div>
         <div className="field">
@@ -635,16 +663,6 @@ function TheStay({
               const n = enumerateNights(f.checkIn, e.target.value).length;
               if (n >= 1) set({ nights: String(n) });
             }}
-          />
-        </div>
-        <div className="field">
-          <label>Nights</label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.nights}
-            readOnly={ro}
-            onChange={(e) => set({ nights: e.target.value.replace(/\D/g, "") })}
           />
         </div>
         <div className="field">
@@ -819,9 +837,17 @@ function TheStay({
   );
 }
 
-/* ------------------------------------------------------------------ rate and notes */
+/* ------------------------------------------------------------------ wrap up */
 
-function RateAndNotes({
+/**
+ * Wrap up (2026-10-10, operator, after the boss's journey mockup: "while inquiring the guest
+ * doesn't always give our number or emails, but if they're booking and rooms are selected we
+ * have to ask them"). Once the rooms are chosen the desk asks for what was not given at the
+ * start — the guest's phone or email (filled on the guest's record, never replacing one there),
+ * who is arriving and their phone, and any notes. The section is done when the booking has a
+ * way to reach someone, the same test the move to Negotiation runs (Policy 16).
+ */
+function WrapUp({
   entry,
   inq,
   editable,
@@ -833,69 +859,139 @@ function RateAndNotes({
   onSaved: () => void;
 }) {
   const { session } = useSession();
-  const owner = inq.travelAgentId
-    ? { travelAgentId: inq.travelAgentId }
-    : inq.corporateAccountId
-      ? { corporateAccountId: inq.corporateAccountId }
-      : null;
-  const packages = useQuery({
-    queryKey: ["lookup", "rate-packages", owner],
-    queryFn: () => listRatePackagesLookup(session!, owner!),
-    enabled: !!session && !!owner,
-  });
-  const pkg =
-    (packages.data?.items ?? []).find((p) => p.id === inq.ratePackageId) ??
-    (inq.ratePackageId
-      ? null
-      : ((packages.data?.items ?? []).find((p) => p.isDefault) ?? null));
-  const pkgWord = !owner
-    ? "Published rates"
-    : pkg
-      ? `${pkg.name}${inq.ratePackageId ? "" : " · their default"}`
-      : inq.ratePackageId
-        ? "a package no longer listed"
-        : "the hotel's common package";
-  const plans = pkg
-    ? [
-        pkg.cpRate ? "CP" : null,
-        pkg.mapLunchRate ? "MAP + lunch" : null,
-        pkg.mapDinnerRate ? "MAP + dinner" : null,
-        pkg.apRate ? "AP" : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
+  const refresh = useRefreshEntry(entry.id);
+  const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
+  const contact = entry as EntryDetail & EntryContact;
+  const hasPhone = !!g?.phone?.trim();
+  const hasEmail = !!g?.email?.trim();
+
+  const [phoneCode, setPhoneCode] = useState(PHONE_CODES[0]);
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState(contact.contactPersonName ?? "");
+  const [phone, setPhone] = useState(contact.contactPersonPhone ?? "");
   const [notes, setNotes] = useState(inq.notes ?? "");
+  useEffect(() => {
+    setName(contact.contactPersonName ?? "");
+    setPhone(contact.contactPersonPhone ?? "");
+  }, [contact.contactPersonName, contact.contactPersonPhone]);
   useEffect(() => setNotes(inq.notes ?? ""), [inq.notes]);
+
+  const guestPhone = !hasPhone && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
+  const guestEmail = !hasEmail ? email.trim() : "";
+  const emailBad = guestEmail !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail);
+  const arrivingDirty =
+    name.trim() !== (contact.contactPersonName ?? "") ||
+    phone.trim() !== (contact.contactPersonPhone ?? "");
+  const notesDirty = notes.trim() !== (inq.notes ?? "").trim();
+  const dirty = !!guestPhone || !!guestEmail || arrivingDirty || notesDirty;
+
   const save = useMutation({
-    mutationFn: () =>
-      updateInquiryNotes(session!, entry.inquiryId, notes.trim()),
-    onSuccess: () => {
-      toast.success("Notes saved");
+    mutationFn: async () => {
+      const done: string[] = [];
+      if ((guestPhone || guestEmail) && g?.id) {
+        const r = await addGuestContact(session!, g.id, {
+          phone: guestPhone || undefined,
+          email: guestEmail || undefined,
+          entryId: entry.id,
+        });
+        if (r.added.includes("phone")) done.push("the guest's phone");
+        if (r.added.includes("email")) done.push("the guest's email");
+      }
+      if (arrivingDirty) {
+        await updateEntryIntake(session!, entry.id, {
+          contactPersonName: name.trim(),
+          contactPersonPhone: phone.trim(),
+          expectedVersion: entry.version,
+        });
+        done.push("who is arriving");
+      }
+      if (notesDirty) {
+        await updateInquiryNotes(session!, entry.inquiryId, notes.trim());
+        done.push("the notes");
+      }
+      return done;
+    },
+    onSuccess: (done) => {
+      toast.success(done.length ? `On record: ${done.join(", ")}` : "Nothing to save");
+      setPhoneNumber("");
+      setEmail("");
+      refresh();
       onSaved();
     },
-    onError: (e) => toastRefusal(e, "The notes could not be saved"),
+    onError: (e) => {
+      toastRefusal(e, "Wrap up could not be saved");
+      refresh();
+      onSaved();
+    },
   });
+
+  // the same test the move to Negotiation runs (Policy 16): the guest's email or phone, or the arriving person's phone
+  const reachable = hasAnyContact(entry);
   return (
-    <StepCard title="Rate and notes">
+    <StepCard
+      flow="wrap"
+      flowAfter="house"
+      flowAfterOnly
+      title="Wrap up"
+      meta="Before the quote goes out — ask for what was not given at the start."
+    >
       <div className="form2">
         <div className="field">
-          <label>Rate package</label>
-          <input className="input" readOnly value={pkgWord} />
-          <span className="hint">carries the meal plan and the rate</span>
+          <label>Guest&rsquo;s phone</label>
+          {hasPhone ? (
+            <input className="input" readOnly value={g?.phone ?? ""} />
+          ) : (
+            <PhoneInput
+              code={phoneCode}
+              setCode={setPhoneCode}
+              number={phoneNumber}
+              setNumber={setPhoneNumber}
+              ariaLabel="Guest's phone"
+            />
+          )}
+          <span className="hint">
+            {hasPhone ? "on the guest's record" : "not given at the start — ask for it now"}
+          </span>
         </div>
         <div className="field">
-          <label>Meal plans priced</label>
+          <label>Guest&rsquo;s email</label>
+          <input
+            className={`input${emailBad ? " invalid" : ""}`}
+            type="email"
+            readOnly={hasEmail || !editable}
+            value={hasEmail ? (g?.email ?? "") : email}
+            placeholder="name@example.com"
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <span className={`hint${emailBad ? " stop-ink" : ""}`}>
+            {hasEmail
+              ? "on the guest's record — the quote can go here"
+              : emailBad
+                ? "that does not read as an email address"
+                : "where the quote and the confirmation go"}
+          </span>
+        </div>
+        <div className="field">
+          <label>Who is arriving · name</label>
           <input
             className="input"
-            readOnly
-            value={
-              plans || (owner ? "none in the package" : "from the house tariff")
-            }
+            value={name}
+            readOnly={!editable}
+            placeholder="who leads the party on the day"
+            onChange={(e) => setName(e.target.value)}
           />
-          <span className="hint">
-            each room&rsquo;s plan is chosen at Negotiation
-          </span>
+        </div>
+        <div className="field">
+          <label>Their phone</label>
+          <input
+            className="input"
+            value={phone}
+            readOnly={!editable}
+            placeholder="+975 …"
+            onChange={(e) => setPhone(e.target.value)}
+          />
+          <span className="hint">needed before arrival</span>
         </div>
         <div className="wide field">
           <label>Notes</label>
@@ -909,19 +1005,32 @@ function RateAndNotes({
           />
         </div>
       </div>
-      {editable && notes.trim() !== (inq.notes ?? "").trim() ? (
+      <div className={`sm ${reachable ? "ok-ink" : "stop-ink"}`} style={{ marginTop: 8, fontWeight: 600 }}>
+        {reachable
+          ? "The booking has a way to reach someone."
+          : "Nobody can be reached yet — the guest's phone or email, or the arriving person's phone, before Negotiation."}
+      </div>
+      {editable && dirty ? (
         <div className="row-acts" style={{ marginTop: 10 }}>
           <Button
             compact
-            state={save.isPending ? "working" : "default"}
+            state={save.isPending ? "working" : emailBad ? "inert" : "default"}
+            title={emailBad ? "the email does not read as one" : undefined}
+            workingLabel="Saving…"
             onClick={() => save.mutate()}
           >
-            Save the notes
+            Save wrap up
           </Button>
           <Button
             kind="quiet"
             compact
-            onClick={() => setNotes(inq.notes ?? "")}
+            onClick={() => {
+              setPhoneNumber("");
+              setEmail("");
+              setName(contact.contactPersonName ?? "");
+              setPhone(contact.contactPersonPhone ?? "");
+              setNotes(inq.notes ?? "");
+            }}
           >
             Undo
           </Button>
@@ -975,6 +1084,7 @@ function TheHouse({
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  const flow = useStepFlow();
   const isGm = atLeast(session?.actorLevel, "L3");
 
   // This pass's searches only — a new pass searches its dates again (2026-09-18).
@@ -1165,9 +1275,32 @@ function TheHouse({
     onSuccess: () => {
       toast.success("The rooms are chosen and on record");
       refresh();
+      // The rooms are chosen: the work moves on to Wrap up, the bill staying in view.
+      if (flow.on) flow.done("house", { reveal: false });
     },
     onError: (e) => toastRefusal(e, "The rooms could not be recorded"),
   });
+
+  // The bill (2026-10-10): what the rooms on the table cost, night by night and for the stay —
+  // the picks as they stand, saved or not; with none, what Take it would hold.
+  const stayNightSet = useMemo(() => new Set(stayNights), [stayNights]);
+  const picked: BillNight[] = sel.allPicked.length
+    ? displayNights
+        .filter((d) => stayNightSet.has(d))
+        .map((date) => ({ date, roomIds: sel.effectiveByNight[date] ?? [] }))
+    : [];
+  const candidate: BillNight[] =
+    !picked.length && chosenRow && chosenRow.full.length >= numberOfRooms
+      ? stayNights.map((date) => ({ date, roomIds: chosenRow.full.slice(0, numberOfRooms) }))
+      : [];
+  const billFor = picked.length ? picked : candidate;
+  const bill = usePickPricing(entry.id, billFor, hasResults);
+  const pickedSaved = sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  const billTitle = picked.length
+    ? pickedSaved
+      ? "The rooms chosen"
+      : "The rooms picked · not saved yet"
+    : `If you take it · ${plural(numberOfRooms, "room")} of ${chosenType ?? "the marked type"}`;
 
   const takeIt = () => {
     if (!chosenRow) return;
@@ -1321,7 +1454,18 @@ function TheHouse({
                 ))}
               </tbody>
             </table>
-            {chosenPricing ? (
+            {bill.pricing ? (
+              <PickBill
+                pricing={bill.pricing}
+                loading={bill.loading}
+                title={billTitle}
+                caption={
+                  picked.length && !pickedSaved
+                    ? "Save the rooms to keep this choice — the figures follow every pick."
+                    : "Indicative, not a quote · meals, extra beds and any agreed rate are set at Negotiation."
+                }
+              />
+            ) : chosenPricing ? (
               <div style={{ marginTop: 10 }}>
                 <b className="money">
                   {money(
@@ -1421,6 +1565,8 @@ function TheHouse({
                   seal.mutate(p);
                 }}
                 justSaved={seal.isSuccess}
+                bill={picked.length ? bill.pricing : null}
+                billLoading={bill.loading}
                 isGm={isGm}
                 onClose={() => setToolOpen(false)}
                 onReleased={() => ask.mutate()}
@@ -1447,6 +1593,8 @@ function WhichRooms({
   saving,
   onSave,
   justSaved,
+  bill,
+  billLoading,
   isGm,
   onClose,
   onReleased,
@@ -1462,6 +1610,9 @@ function WhichRooms({
   saving: boolean;
   onSave: () => void;
   justSaved: boolean;
+  /** What the picks cost — the house card's bill, in one line beside the save. */
+  bill: PickPricing | null;
+  billLoading: boolean;
   isGm: boolean;
   onClose: () => void;
   onReleased: () => void;
@@ -1697,8 +1848,10 @@ function WhichRooms({
           )
         ) : null}
         {/* The save sits at the right end of the row, apart from the tallies it acts on
-            (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
-        <span style={{ marginLeft: "auto" }}>
+            (operator, 2026-09-29): the eye reads the counts left to right and lands on the act —
+            and since 2026-10-10 the stay's total sits beside it, so the price is read as it moves. */}
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 12 }}>
+          <PickTotalLine pricing={bill} loading={billLoading} />
           <Button
             compact
             kind={showSaved ? "secondary" : "primary"}

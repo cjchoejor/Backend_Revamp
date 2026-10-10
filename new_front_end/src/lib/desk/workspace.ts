@@ -343,13 +343,18 @@ export function hasAnyContact(entry: EntryDetail): boolean {
 export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
+  // In the order of the five sections (2026-10-10, the boss's journey mockup): the guest, who is
+  // asking, the stay, the house, wrap up. A contact is asked last, once the rooms are chosen —
+  // the guest rarely gives a number at the first call, and the move to Negotiation needs one.
   return [
-    // In the order the page reads (2026-09-25): the guest, the stay, then the house's answer.
-    { label: "A contact on file", met: hasAnyContact(entry), card: "guest" },
+    { label: "The guest on file", met: !!(entry.guestProfile ?? entry.inquiry?.guestProfile), card: "guest" },
+    { label: "How they came in", met: !!(entry.inquiry as { sourceChannel?: string | null } | undefined)?.sourceChannel, card: "asking" },
+    { label: "What kind of stay", met: !!entry.useType, card: "asking" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
     { label: "Availability searched", met: configs.length > 0, card: "house" },
     { label: "Preferred room selected", met: !!preferred, card: "house" },
+    { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
   ];
 }
 

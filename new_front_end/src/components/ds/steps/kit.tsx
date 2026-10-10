@@ -9,7 +9,7 @@
  * Markup follows the prototype's own helpers (`card`, `docCard`, `V16.fact`, `V16.seeRow`), so
  * the generated components.css and frame.css style it without anything added per screen.
  */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -94,21 +94,192 @@ export type FlowItem = { n: number; label: string; met: boolean; card?: string }
  */
 export type StepPane = { key: string; label: string; cards: string[] };
 
-const FlowCtx = createContext<{ items: FlowItem[]; on: boolean }>({ items: [], on: false });
+/**
+ * How a finished section folds (2026-10-10, the boss's journey mockup: "a section opens when the
+ * required things of the previous are input").
+ * - `"on-move"` — a finished section folds to its one-line summary once the operator works in
+ *   another one (the intake: the guest, then who is asking, then the stay).
+ * - `"done"` — every finished section is folded unless it is opened (the booking's Inquiry step,
+ *   where the first three were settled when the lead was kept and the house is the work).
+ * Only a card that passes a `summary` ever folds. A folded card keeps its contents mounted,
+ * hidden, so nothing half-typed is lost; Edit opens it again.
+ */
+export type FlowFold = "on-move" | "done";
 
-/** The card-bearing items of a step's checklist, numbered in the order they are worked. */
-export function numberFlow(items: ReadonlyArray<{ label: string; met: boolean; card?: string }>): FlowItem[] {
-  let n = 0;
-  return items.filter((p) => !!p.card).map((p) => ({ n: ++n, label: p.label, met: p.met, card: p.card }));
+type FlowCtxValue = {
+  items: FlowItem[];
+  on: boolean;
+  fold: FlowFold | null;
+  /** The section being worked: the one last clicked or typed in, else the first not done. */
+  current: string | null;
+  active: string | null;
+  visited: ReadonlySet<string>;
+  opened: ReadonlySet<string>;
+  open: (card: string) => void;
+  /**
+   * Fold an opened or finished section and go to the next one still to do. `reveal: false`
+   * marks the next one current without scrolling to it — after Take it the bill above stays in
+   * view while Wrap up below is where the work has moved.
+   */
+  done: (card: string, opts?: { reveal?: boolean }) => void;
+};
+const FlowCtx = createContext<FlowCtxValue>({
+  items: [],
+  on: false,
+  fold: null,
+  current: null,
+  active: null,
+  visited: new Set(),
+  opened: new Set(),
+  open: () => {},
+  done: () => {},
+});
+
+/** The cards of a flow in page order, each once. */
+function flowCards(items: FlowItem[]): string[] {
+  const out: string[] = [];
+  for (const i of items) if (i.card && !out.includes(i.card)) out.push(i.card);
+  return out;
 }
 
-export function StepFlow({ items, on, children }: { items: FlowItem[]; on: boolean; children: ReactNode }) {
+/**
+ * The card-bearing items of a step's checklist, numbered in the order they are worked.
+ * `bySection` numbers the SECTIONS instead — every item of one card shares its number — so a
+ * step laid out as numbered sections (Stage 1, after the boss's journey mockup: 1 the guest …
+ * 5 wrap up) reads 1 to 5 on the page and on the list alike.
+ */
+export function numberFlow(
+  items: ReadonlyArray<{ label: string; met: boolean; card?: string }>,
+  opts?: { bySection?: boolean },
+): FlowItem[] {
+  let n = 0;
+  const sections = new Map<string, number>();
+  return items
+    .filter((p) => !!p.card)
+    .map((p) => {
+      if (!opts?.bySection) return { n: ++n, label: p.label, met: p.met, card: p.card };
+      if (!sections.has(p.card!)) sections.set(p.card!, sections.size + 1);
+      return { n: sections.get(p.card!)!, label: p.label, met: p.met, card: p.card };
+    });
+}
+
+export function StepFlow({
+  items,
+  on,
+  fold = null,
+  children,
+}: {
+  items: FlowItem[];
+  on: boolean;
+  /** Whether finished sections fold, and when — see `FlowFold`. Off when omitted. */
+  fold?: FlowFold | null;
+  children: ReactNode;
+}) {
+  const [active, setActive] = useState<string | null>(null);
+  // The sections the operator has worked in. In "on-move" mode only these fold: a section that is
+  // complete only because of its defaults (the stay opens on today, one night, one adult) is not
+  // one the desk has finished, and folding it would hide it before it was ever read.
+  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set());
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  // The section the operator is in stays where it was on screen when one above it folds — the
+  // mockup's own rule ("keep the box being worked on where it was").
+  const anchor = useRef<{ card: string; top: number } | null>(null);
+  const activate = (el: HTMLElement) => {
+    const card = el.dataset.flow;
+    if (!card) return;
+    setVisited((prev) => (prev.has(card) ? prev : new Set(prev).add(card)));
+    setActive((cur) => {
+      if (cur === card) return cur;
+      anchor.current = { card, top: el.getBoundingClientRect().top };
+      return card;
+    });
+  };
+  const cardOf = (target: EventTarget | null) =>
+    target instanceof Element ? (target.closest("[data-flow]") as HTMLElement | null) : null;
+  // A press moves the work to another section only once it is over: folding the section above
+  // on pointer-down would slide the button away before the click lands (found driving it).
+  const pressed = useRef<HTMLElement | null>(null);
+  // Done (or Take it) moves the work on by itself; the press that triggered it must not then
+  // put the work back on the section it was pressed in.
+  const skipPress = useRef(false);
+  const onPointerDown = (e: React.PointerEvent) => {
+    pressed.current = cardOf(e.target);
+  };
+  const onPointerUp = () => {
+    const el = pressed.current;
+    if (!el) return;
+    window.setTimeout(() => {
+      if (pressed.current === el) pressed.current = null;
+      if (skipPress.current) {
+        skipPress.current = false;
+        return;
+      }
+      activate(el);
+    }, 0);
+  };
+  // Keyboard focus (Tab) moves at once; focus that comes with a press waits for the press.
+  const onFocus = (e: React.FocusEvent) => {
+    if (pressed.current) return;
+    const el = cardOf(e.target);
+    if (el) activate(el);
+  };
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    anchor.current = null;
+    if (!a || a.card !== active) return;
+    const el = document.querySelector<HTMLElement>(`[data-flow="${a.card}"]`);
+    if (!el) return;
+    const d = el.getBoundingClientRect().top - a.top;
+    if (Math.abs(d) > 1) window.scrollBy(0, d);
+  }, [active]);
+
+  const cards = flowCards(items);
+  const firstOpen = cards.find((c) => items.some((i) => i.card === c && !i.met)) ?? null;
+  const current = on ? (active && cards.includes(active) ? active : firstOpen) : null;
+
+  const open = useCallback((card: string) => {
+    setOpened((prev) => new Set(prev).add(card));
+    setVisited((prev) => new Set(prev).add(card));
+    setActive(card);
+  }, []);
+  const done = useCallback(
+    (card: string, opts?: { reveal?: boolean }) => {
+      if (pressed.current) skipPress.current = true;
+      setVisited((prev) => new Set(prev).add(card));
+      setOpened((prev) => {
+        const next = new Set(prev);
+        next.delete(card);
+        return next;
+      });
+      // On to the next section still to do; if every one is done, simply leave this one folded.
+      const after = cards.slice(cards.indexOf(card) + 1);
+      const target = after.find((c) => items.some((i) => i.card === c && !i.met)) ?? after[0] ?? null;
+      setActive(target);
+      if (target && opts?.reveal !== false) {
+        window.requestAnimationFrame(() => {
+          const el = document.getElementById(anchorFor(target));
+          if (!el) return;
+          revealCard(el);
+          el.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]), select.input:not([disabled]), textarea.input:not([readonly])")?.focus({ preventScroll: true });
+        });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cards.join("|"), items.map((i) => `${i.card}${i.met ? 1 : 0}`).join("|")],
+  );
+
   // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
   // a card only re-renders when its own number or standing moves.
-  const key = `${on}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  const key = `${on}|${fold}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const value = useMemo(() => ({ items, on }), [key]);
-  return <FlowCtx.Provider value={value}>{children}</FlowCtx.Provider>;
+  const value = useMemo<FlowCtxValue>(() => ({ items, on, fold: on ? fold : null, current, active, visited, opened, open, done }), [key, open, done]);
+  return (
+    <FlowCtx.Provider value={value}>
+      <div className="flow-scope" onFocusCapture={onFocus} onPointerDownCapture={onPointerDown} onPointerUpCapture={onPointerUp}>
+        {children}
+      </div>
+    </FlowCtx.Provider>
+  );
 }
 
 /**
@@ -144,6 +315,12 @@ export function useFlowCard(
     if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met && (!afterOnly || x.card === after));
   }
   return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
+}
+
+/** The step's flow, for a section that moves the work on by itself (Take it → Wrap up). */
+export function useStepFlow() {
+  const { on, done } = useContext(FlowCtx);
+  return { on, done };
 }
 
 export function anchorFor(card: string) {
@@ -183,7 +360,7 @@ export function FlowTodo({
       <h4>To do here</h4>
       <div className="todo">
         {items.map((i) => (
-          <button key={`${i.n}-${i.card}`} type="button" className={`row-todo${i.met ? " done" : ""}`} onClick={() => onGo(i.card)} title={`Go to ${i.label}`}>
+          <button key={`${i.n}-${i.card}-${i.label}`} type="button" className={`row-todo${i.met ? " done" : ""}`} onClick={() => onGo(i.card)} title={`Go to ${i.label}`}>
             <span className="n">{i.met ? <Icon name="check" /> : i.n}</span>
             <span className="t">{i.label}</span>
           </button>
@@ -218,6 +395,7 @@ export function StepCard({
   flowAfter,
   flowAfterOnly,
   heldFor,
+  summary,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -246,17 +424,61 @@ export function StepCard({
    * says so, with no "Show it anyway": what it waits for cannot be done from inside it.
    */
   heldFor?: ReactNode;
+  /**
+   * What this section holds, in one line — the line it folds to once it is done (2026-10-10).
+   * A card without one never folds.
+   */
+  summary?: ReactNode;
 }) {
   const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
+  const ctx = useContext(FlowCtx);
   const [anyway, setAnyway] = useState(false);
   const held = !!heldFor;
   const waiting = held || (!!waitsFor && !anyway);
+  const isCurrent = !!flow && ctx.on && ctx.current === flow && !waiting;
+  const isOpened = !!flow && ctx.opened.has(flow);
+  // A finished section folds to its line: in "done" mode unless it is opened or being worked in,
+  // in "on-move" mode once the operator is working in another section.
+  const folded =
+    !!flow &&
+    !!summary &&
+    !!met &&
+    !waiting &&
+    !isOpened &&
+    (ctx.fold === "done"
+      ? ctx.active !== flow
+      : ctx.fold === "on-move"
+        ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
+        : false);
+  // A finished, unfolded section offers Done: fold it and go on to the next one.
+  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold;
+  const body = (
+    <>
+      {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+      {children}
+      {acts ? (
+        <div className="row-acts" style={{ marginTop: 12 }}>
+          {acts}
+        </div>
+      ) : null}
+    </>
+  );
   return (
     <div
-      className={["card", sealed ? "sealed" : "", quiet ? "quiet" : "", n ? "flowed" : "", met ? "flow-done" : "", waiting ? "flow-waiting" : ""]
+      className={[
+        "card",
+        sealed ? "sealed" : "",
+        quiet ? "quiet" : "",
+        n ? "flowed" : "",
+        met ? "flow-done" : "",
+        waiting ? "flow-waiting" : "",
+        isCurrent ? "flow-current" : "",
+        folded ? "flow-folded" : "",
+      ]
         .filter(Boolean)
         .join(" ")}
       id={flow ? anchorFor(flow) : id}
+      data-flow={flow}
       style={style}
     >
       {title ? (
@@ -265,8 +487,17 @@ export function StepCard({
             {n ? <span className={`cardno${met ? " done" : ""}`}>{met ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
+            {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
-          {waiting ? null : right ? <div className="row-acts">{right}</div> : null}
+          {waiting || folded ? null : right ? <div className="row-acts">{right}</div> : null}
+        </div>
+      ) : null}
+      {folded ? (
+        <div className="flow-summary">
+          <span className="sum">{summary}</span>
+          <Button kind="quiet" compact onClick={() => ctx.open(flow!)}>
+            Edit
+          </Button>
         </div>
       ) : null}
       {waiting ? (
@@ -284,16 +515,22 @@ export function StepCard({
             </>
           )}
         </div>
-      ) : (
-        <>
-          {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
-          {children}
-          {acts ? (
-            <div className="row-acts" style={{ marginTop: 12 }}>
-              {acts}
+      ) : summary ? (
+        // A card that can fold keeps its contents in one box, mounted and hidden while folded,
+        // so a half-typed field survives the fold. (Only these: other cards keep their children
+        // directly under the card, where `.card > .tool` and friends expect them.)
+        <div className="flow-body" hidden={folded}>
+          {body}
+          {canDone ? (
+            <div className="flow-closebar">
+              <Button kind="secondary" compact onClick={() => ctx.done(flow!)}>
+                Done
+              </Button>
             </div>
           ) : null}
-        </>
+        </div>
+      ) : (
+        body
       )}
     </div>
   );

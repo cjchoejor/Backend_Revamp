@@ -209,6 +209,50 @@
 .ds .card.flow-waiting h4 { color: var(--ink-2); }
 .ds .flow-wait { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
+/* The section being worked (2026-10-10, the boss's journey mockup): a ring, never a thicker
+   border, so nothing below moves — and its number filled, with "you are here" beside the title.
+   A finished section folds to one line and an Edit; a reopened one closes again with Done. */
+.ds .flow-scope { display: contents; }
+.ds .card.flow-current:not(.desk-root *) { box-shadow: 0 0 0 2px var(--ink), 0 2px 10px rgba(43, 39, 36, .08); border-color: var(--ink); }
+.ds .card.flow-current .cardno:not(.done) { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.ds .card .flow-here { display: inline-block; margin-left: 10px; padding: 1px 8px; border-radius: 999px; background: var(--ink); color: var(--surface); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; vertical-align: 2px; }
+.ds .card.flow-folded .card-top { margin-bottom: 4px; }
+.ds .card .flow-summary { display: flex; align-items: center; gap: 12px; }
+.ds .card .flow-summary .sum { flex: 1; min-width: 0; color: var(--ink); font-size: var(--t-sm); line-height: 1.4; }
+.ds .card .flow-closebar { display: flex; justify-content: flex-end; margin-top: 12px; }
+.ds .card .flow-body { display: contents; }
+.ds .card .flow-body[hidden] { display: none; }
+
+/* The stay, three to a row (2026-10-10): check-in · nights · check-out, then adults · children
+   · rooms — the nights between the two dates, as on the boss's journey mockup. */
+.ds .form3:not(.desk-root *) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1fr); gap: var(--s3) var(--s4); }
+.ds .form3 .wide:not(.desk-root *) { grid-column: 1 / -1; }
+@media (max-width: 760px) { .ds .form3:not(.desk-root *) { grid-template-columns: 1fr; } }
+
+/* The bill for the rooms on the table (2026-10-10): the stay's total is the figure the guest
+   asks for on the phone, so it leads, large; each night and each room type sit beneath it. Every
+   figure is the server's. */
+.ds .pickbill { margin-top: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface-2); padding: var(--s3) var(--s4); transition: opacity .15s; }
+.ds .pickbill.loading { opacity: .65; }
+.ds .pickbill .pb-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: var(--s2); }
+.ds .pickbill .pb-title { flex-basis: 100%; font-weight: 700; font-size: var(--t-sm); }
+.ds .pickbill .pb-total { font-size: var(--t-figure); font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ds .pickbill .pb-sub { font-size: var(--t-meta); color: var(--ink-2); }
+.ds .pickbill .table { background: var(--surface); }
+.ds .pickbill .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ds .pickbill .pb-night { white-space: nowrap; font-weight: 600; }
+.ds .pickbill .pb-night .meta { display: block; font-weight: 400; }
+.ds .pickbill .pb-rooms { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.ds .pickbill .pb-room { display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--surface-2); font-weight: 700; font-size: var(--t-meta); }
+.ds .pickbill .pb-room small { font-weight: 400; color: var(--ink-2); }
+.ds .pickbill .pb-byroom { margin: var(--s2) 0; line-height: 1.5; }
+.ds .pickbill .pb-ladder { margin-top: var(--s2); }
+.ds .pickbill .pb-ladder .pb-step td { border-top: 1px solid var(--line-2); font-weight: 600; }
+.ds .pickbill .pb-ladder .pb-grand td { border-top: 2px solid var(--ink); font-weight: 800; font-size: var(--t-sm); }
+.ds .pickbill .pb-caption { margin-top: var(--s2); }
+.ds .pickbill-line .money { font-size: var(--t-sm); }
+.ds .pickbill-line.loading { opacity: .65; }
+
 /* The side panel's to-do: what this step still needs, in the order it is done. */
 .ds .side .todo { display: grid; gap: 2px; }
 .ds .side .todo .row-todo { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; background: none; border: 0; padding: 4px 6px; border-radius: var(--r-control); cursor: pointer; font: inherit; color: var(--ink); }

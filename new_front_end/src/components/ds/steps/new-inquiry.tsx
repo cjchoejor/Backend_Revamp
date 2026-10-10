@@ -4,11 +4,12 @@
  * New inquiry — `/bookings/new` (SS03 step 1, "looking is recording"; prototype `screens.new`,
  * `V16.intakeCanvas`, `V16.intakeGate`).
  *
- * The same four cards the Inquiry step shows, empty and editable: who is asking, the guest, the
- * stay, rate and notes — and beside them the house, which can only answer once the lead exists
- * (the availability search runs against a booking). So "Ask the house" keeps the lead first,
- * asks, and opens the booking where the answer is; "Start the inquiry · keep the lead" keeps it
- * without asking.
+ * The five sections of the boss's journey mockup (2026-10-10), one after another: 1 the guest ·
+ * 2 who is asking · 3 the stay — empty and editable here, each folding to a line as the desk
+ * moves on to the next — then 4 the house and 5 wrap up, which wait: the house can only answer
+ * once the lead exists (the search runs against a booking), and wrap up asks for what is still
+ * missing once rooms are chosen there. "Start the inquiry · keep the lead" keeps it and opens
+ * the booking, where the house is asked.
  *
  * Every rule of the old intake form (components/desk/inquiry/new-inquiry-form.tsx) is kept here:
  * the phone match, the channel mapping, the agency / company pick with its contact persons and
@@ -56,7 +57,6 @@ import {
   PhoneInput,
   PickList,
   PresetOrCustom,
-  SystemLine,
   USE_TYPES,
   addNightsIso,
   bedWord,
@@ -198,15 +198,14 @@ export function NewInquiryCanvas() {
   const partyKind = channel?.party ?? null;
   const needsCorp = channel?.channel === "CORPORATE";
 
-  // Land the cursor on the first field a pick opened: the agency search or the guest's phone after
-  // "Came in as"; the guest's first field after New / Returning.
-  const leftRef = useRef<HTMLDivElement>(null);
+  // Land the cursor on the first field a pick opened: the agency search after "Came in as"; the
+  // guest's first field after New / Returning.
   const focusNext = useRef<"who" | "guest" | null>(null);
   useEffect(() => {
     const where = focusNext.current;
     if (!where) return;
     focusNext.current = null;
-    const root = where === "guest" ? document.getElementById(GUEST_CARD_ID) : leftRef.current;
+    const root = document.getElementById(where === "guest" ? GUEST_CARD_ID : anchorFor("asking"));
     root?.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]):not([type=date])")?.focus();
   }, [channelKey, mode]);
 
@@ -713,14 +712,17 @@ export function NewInquiryCanvas() {
   // (2026-09-25 — it sat at the foot of the page as a bare list). On a new inquiry the house is
   // asked on the booking, once the lead is kept, so that item belongs to the booking's own list;
   // an edit can ask the house from here, so it is listed.
+  // In the order of the boss's journey mockup (2026-10-10): the guest first, then who is asking,
+  // then the stay.
   const flowItems = numberFlow([
+    { label: guestLineLabel, met: guestOk && !emailBad, card: "guest" },
     { label: "Source channel", met: !!channelKey, card: "asking" },
     { label: "Use type", met: !!useType, card: "asking" },
-    { label: guestLineLabel, met: guestOk, card: "guest" },
+    ...(needsCorp && !isEdit ? [{ label: "The company's reference and coordinator", met: corpComplete, card: "asking" }] : []),
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
     { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
     ...(isEdit ? [{ label: "The house asked · a configuration selected", met: houseAsked, card: "house" }] : []),
-  ]);
+  ], { bySection: true });
   // What the system does on save — no card to go to, so listed apart.
   const flowAlso = [
     { label: useTypeReq.label, met: useTypeReq.met },
@@ -820,11 +822,198 @@ export function NewInquiryCanvas() {
             </div>
           ) : null}
           <StepCanvas past={false}>
-            <StepFlow items={flowItems} on={!isEdit || editable}>
-            <div className="intake">
-              <div className="stack" ref={leftRef}>
+            <StepFlow items={flowItems} on={!isEdit || editable} fold="on-move">
+              <div className="stack">
+                {/* ------------------------------------------------ the guest */}
+                <StepCard
+                  flow="guest"
+                  title="The guest"
+                  summary={
+                    <>
+                      <b>{(isEdit ? `${editGuest?.firstName ?? ""} ${editGuest?.lastName ?? ""}`.trim() : selectedGuest ? `${selectedGuest.firstName} ${selectedGuest.lastName}` : typedGuestName) || "—"}</b>
+                      {(isEdit ? editGuest?.nationality : selectedGuest?.nationality ?? nationality) ? <> · {isEdit ? editGuest?.nationality : (selectedGuest?.nationality ?? nationality)}</> : null}
+                      {selectedGuest && !isEdit ? <> · on file</> : null} ·{" "}
+                      {(() => {
+                        const reach = isEdit
+                          ? [editGuest?.phone, editGuest?.email]
+                          : selectedGuest
+                            ? [selectedGuest.phone, selectedGuest.email]
+                            : [fullPhone, email.trim()];
+                        const words = reach.filter(Boolean).join(" · ");
+                        return words || <span className="meta">no phone or email yet — asked at Wrap up</span>;
+                      })()}
+                    </>
+                  }
+                  right={
+                    !isEdit && !selectedGuest ? (
+                      <Choice
+                        options={[
+                          ["NEW", "New guest"],
+                          ["RETURNING", "Returning guest"],
+                        ]}
+                        value={mode}
+                        onChange={(v) => {
+                          setMode(v);
+                          setSelectedGuest(null);
+                          focusNext.current = "guest";
+                        }}
+                      />
+                    ) : null
+                  }
+                >
+                  {nameToCome ? (
+                    <label className="sm ink-2" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+                      <input type="checkbox" disabled aria-describedby="name-to-come-why" />
+                      Name to come from {nameToCome}
+                      <span id="name-to-come-why" className="meta">
+                        · not on the desk yet — an inquiry is kept on the guest&rsquo;s record, which needs the guest&rsquo;s name (BE-62)
+                      </span>
+                    </label>
+                  ) : null}
+
+                  {isEdit ? (
+                    <div className="form2">
+                      <div className="field">
+                        <label>Phone</label>
+                        <input className="input" readOnly value={editGuest?.phone ?? ""} placeholder="none on file" />
+                      </div>
+                      <div className="field">
+                        <label>Email</label>
+                        <input className="input" readOnly value={editGuest?.email ?? ""} placeholder="none on file" />
+                      </div>
+                      <div className="field">
+                        <label>First name</label>
+                        <input className="input" readOnly value={editGuest?.firstName ?? ""} />
+                      </div>
+                      <div className="field">
+                        <label>Last name</label>
+                        <input className="input" readOnly value={editGuest?.lastName ?? ""} />
+                      </div>
+                      <div className="field">
+                        <label>Nationality</label>
+                        <input className="input" readOnly value={editGuest?.nationality ?? ""} />
+                      </div>
+                      <div className="field">
+                        <label>Guest record</label>
+                        <span className="sm" style={{ paddingTop: 8 }}>
+                          {editGuest?.id ? <Link href={`/guests/${editGuest.id}`}>Open the guest&rsquo;s record</Link> : <span className="dash">—</span>}
+                        </span>
+                      </div>
+                      <span className="wide meta">The guest stays as recorded — it cannot change on a saved booking.</span>
+                    </div>
+                  ) : selectedGuest ? (
+                    <div className="bind bound" style={{ display: "grid", gap: 6 }}>
+                      <span className="sm">
+                        <Icon name="check" /> <GuestLine guest={selectedGuest} />
+                      </span>
+                      <div className="row-acts">
+                        <Link className="btn btn-quiet compact" href={`/guests/${selectedGuest.id}`} target="_blank">
+                          Open the guest&rsquo;s record
+                        </Link>
+                        <Button kind="secondary" compact onClick={() => setSelectedGuest(null)}>
+                          Someone else
+                        </Button>
+                        <span className="meta">this booking is kept on the guest already on file</span>
+                      </div>
+                    </div>
+                  ) : mode === "NEW" ? (
+                    <>
+                      <div className="form2">
+                        <div className="field">
+                          <label>Phone</label>
+                          <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
+                          <span className="hint">optional · typing it finds a guest already on file</span>
+                        </div>
+                        <div className="field">
+                          <label>Email</label>
+                          <input className="input" type="email" value={email} placeholder="optional" onChange={(e) => setEmail(e.target.value)} />
+                          <span className={`hint${emailBad ? " stop-ink" : ""}`}>{emailBad ? "that does not read as an email address" : "optional"}</span>
+                        </div>
+                        {phoneMatches.length > 0 ? (
+                          <div className="wide">
+                            <PickList
+                              head={`${phoneMatches.length === 1 ? "A guest" : "Guests"} on file with this number`}
+                              rows={phoneMatches.map((g) => ({ key: g.id, main: <GuestLine guest={g} />, onPick: () => adoptGuest(g) }))}
+                            />
+                          </div>
+                        ) : null}
+                        <div className="field">
+                          <label>First name</label>
+                          <input className="input" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+                        </div>
+                        <div className="field">
+                          <label>Last name</label>
+                          <input className="input" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+                        </div>
+                        <div className="field">
+                          <label>Nationality</label>
+                          <PresetOrCustom
+                            presets={NATIONALITIES}
+                            value={nationality}
+                            onChange={setNationality}
+                            placeholder="type the nationality"
+                            otherLabel="Other…"
+                            ariaLabel="Nationality"
+                          />
+                          <span className="hint">needed</span>
+                        </div>
+                        <div className="field">
+                          <label>Guest record</label>
+                          <span className="row-acts" style={{ paddingTop: 2 }}>
+                            <Button
+                              kind="secondary"
+                              compact
+                              state={saveGuest.isPending ? "working" : newGuestComplete && !busy ? "default" : "inert"}
+                              title={newGuestComplete ? undefined : "the name and nationality first"}
+                              workingLabel="Saving…"
+                              onClick={() => saveGuest.mutate()}
+                            >
+                              Save the guest now
+                            </Button>
+                          </span>
+                          <span className="hint">optional — otherwise the guest is saved with the inquiry</span>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <div className="field">
+                        <label>Find the guest</label>
+                        <input className="input" value={search} placeholder="name, phone or email — at least 2 letters" onChange={(e) => setSearch(e.target.value)} />
+                      </div>
+                      {returning.isLoading ? (
+                        <span className="meta">Looking…</span>
+                      ) : (
+                        <PickList
+                          rows={(returning.data?.items ?? []).map((g) => ({
+                            key: g.id,
+                            main: <GuestLine guest={g} />,
+                            sub: g.clientTier ?? undefined,
+                            onPick: () => adoptGuest(g),
+                          }))}
+                          empty={searchTerm.length === 1 ? "type one more letter" : "no guest found"}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                </StepCard>
+
                 {/* ------------------------------------------------ who is asking */}
-                <StepCard title="Who is asking" flow="asking">
+                <StepCard
+                  title="Who is asking"
+                  flow="asking"
+                  flowAfter="guest"
+                  summary={
+                    <>
+                      <b>{channel?.label ?? "—"}</b>
+                      {party ? <> — {party.displayName}</> : null}
+                      {chosenPackage ? <> · {chosenPackage.name}</> : party ? null : <> · published rates</>}
+                      {useType ? <> · {USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType}</> : null}
+                      {needsCorp && corpRef.trim() ? <> · {corpRef.trim()}</> : null}
+                    </>
+                  }
+                >
                   <div className="form2">
                     <div className="wide field">
                       <label>Came in as</label>
@@ -993,193 +1182,22 @@ export function NewInquiryCanvas() {
                   </div>
                 </StepCard>
 
-                {/* ------------------------------------------------ the guest */}
+                {/* ------------------------------------------------ the stay */}
                 <StepCard
-                  flow="guest"
-                  title="The guest"
-                  right={
-                    !isEdit && !selectedGuest ? (
-                      <Choice
-                        options={[
-                          ["NEW", "New guest"],
-                          ["RETURNING", "Returning guest"],
-                        ]}
-                        value={mode}
-                        onChange={(v) => {
-                          setMode(v);
-                          setSelectedGuest(null);
-                          focusNext.current = "guest";
-                        }}
-                      />
-                    ) : null
+                  title="The stay"
+                  flow="stay"
+                  flowAfter="guest"
+                  summary={
+                    <>
+                      <b>{datesSet ? fmtRange(checkIn, checkOut) : "no dates"}</b>
+                      {datesSet ? <> · {plural(stayNights, "night")}</> : null} · {plural(adultsN, "adult")}
+                      {childN > 0 ? <>, {plural(childN, "child", "children")}{agesComplete ? ` (${ages.join(", ")})` : ""}</> : null} ·{" "}
+                      {plural(roomsN, "room")}
+                      {bedSum > 0 ? <> · {Object.entries(bedRequest).map(([t, n]) => `${n} ${bedWord(t)}`).join(" + ")} asked</> : null}
+                    </>
                   }
                 >
-                  {nameToCome ? (
-                    <label className="sm ink-2" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-                      <input type="checkbox" disabled aria-describedby="name-to-come-why" />
-                      Name to come from {nameToCome}
-                      <span id="name-to-come-why" className="meta">
-                        · not on the desk yet — an inquiry is kept on the guest&rsquo;s record, which needs the guest&rsquo;s name (BE-62)
-                      </span>
-                    </label>
-                  ) : null}
-
-                  {isEdit ? (
-                    <div className="form2">
-                      <div className="field">
-                        <label>Phone</label>
-                        <input className="input" readOnly value={editGuest?.phone ?? ""} placeholder="none on file" />
-                      </div>
-                      <div className="field">
-                        <label>Email</label>
-                        <input className="input" readOnly value={editGuest?.email ?? ""} placeholder="none on file" />
-                      </div>
-                      <div className="field">
-                        <label>First name</label>
-                        <input className="input" readOnly value={editGuest?.firstName ?? ""} />
-                      </div>
-                      <div className="field">
-                        <label>Last name</label>
-                        <input className="input" readOnly value={editGuest?.lastName ?? ""} />
-                      </div>
-                      <div className="field">
-                        <label>Nationality</label>
-                        <input className="input" readOnly value={editGuest?.nationality ?? ""} />
-                      </div>
-                      <div className="field">
-                        <label>Guest record</label>
-                        <span className="sm" style={{ paddingTop: 8 }}>
-                          {editGuest?.id ? <Link href={`/guests/${editGuest.id}`}>Open the guest&rsquo;s record</Link> : <span className="dash">—</span>}
-                        </span>
-                      </div>
-                      <span className="wide meta">The guest stays as recorded — it cannot change on a saved booking.</span>
-                    </div>
-                  ) : selectedGuest ? (
-                    <div className="bind bound" style={{ display: "grid", gap: 6 }}>
-                      <span className="sm">
-                        <Icon name="check" /> <GuestLine guest={selectedGuest} />
-                      </span>
-                      <div className="row-acts">
-                        <Link className="btn btn-quiet compact" href={`/guests/${selectedGuest.id}`} target="_blank">
-                          Open the guest&rsquo;s record
-                        </Link>
-                        <Button kind="secondary" compact onClick={() => setSelectedGuest(null)}>
-                          Someone else
-                        </Button>
-                        <span className="meta">this booking is kept on the guest already on file</span>
-                      </div>
-                    </div>
-                  ) : mode === "NEW" ? (
-                    <>
-                      <div className="form2">
-                        <div className="field">
-                          <label>Phone</label>
-                          <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                          <span className="hint">optional · typing it finds a guest already on file</span>
-                        </div>
-                        <div className="field">
-                          <label>Email</label>
-                          <input className="input" type="email" value={email} placeholder="optional" onChange={(e) => setEmail(e.target.value)} />
-                          <span className={`hint${emailBad ? " stop-ink" : ""}`}>{emailBad ? "that does not read as an email address" : "optional"}</span>
-                        </div>
-                        {phoneMatches.length > 0 ? (
-                          <div className="wide">
-                            <PickList
-                              head={`${phoneMatches.length === 1 ? "A guest" : "Guests"} on file with this number`}
-                              rows={phoneMatches.map((g) => ({ key: g.id, main: <GuestLine guest={g} />, onPick: () => adoptGuest(g) }))}
-                            />
-                          </div>
-                        ) : null}
-                        <div className="field">
-                          <label>First name</label>
-                          <input className="input" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
-                        </div>
-                        <div className="field">
-                          <label>Last name</label>
-                          <input className="input" value={lastName} onChange={(e) => setLastName(e.target.value)} />
-                        </div>
-                        <div className="field">
-                          <label>Nationality</label>
-                          <PresetOrCustom
-                            presets={NATIONALITIES}
-                            value={nationality}
-                            onChange={setNationality}
-                            placeholder="type the nationality"
-                            otherLabel="Other…"
-                            ariaLabel="Nationality"
-                          />
-                          <span className="hint">needed</span>
-                        </div>
-                        <div className="field">
-                          <label>Guest record</label>
-                          <span className="row-acts" style={{ paddingTop: 2 }}>
-                            <Button
-                              kind="secondary"
-                              compact
-                              state={saveGuest.isPending ? "working" : newGuestComplete && !busy ? "default" : "inert"}
-                              title={newGuestComplete ? undefined : "the name and nationality first"}
-                              workingLabel="Saving…"
-                              onClick={() => saveGuest.mutate()}
-                            >
-                              Save the guest now
-                            </Button>
-                          </span>
-                          <span className="hint">optional — otherwise the guest is saved with the inquiry</span>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <div className="field">
-                        <label>Find the guest</label>
-                        <input className="input" value={search} placeholder="name, phone or email — at least 2 letters" onChange={(e) => setSearch(e.target.value)} />
-                      </div>
-                      {returning.isLoading ? (
-                        <span className="meta">Looking…</span>
-                      ) : (
-                        <PickList
-                          rows={(returning.data?.items ?? []).map((g) => ({
-                            key: g.id,
-                            main: <GuestLine guest={g} />,
-                            sub: g.clientTier ?? undefined,
-                            onPick: () => adoptGuest(g),
-                          }))}
-                          empty={searchTerm.length === 1 ? "type one more letter" : "no guest found"}
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  <div className="form2 rule-above">
-                    <div className="field">
-                      <label>Who is arriving · name</label>
-                      <input
-                        className="input"
-                        value={arrivingName}
-                        readOnly={isEdit && !editable}
-                        placeholder={isEdit ? "who leads the party on the day" : `blank — ${arrivingFallbackWord}`}
-                        onChange={(e) => setArrivingName(e.target.value)}
-                      />
-                      <span className="hint">who leads the party on the day</span>
-                    </div>
-                    <div className="field">
-                      <label>Their phone</label>
-                      <input
-                        className="input"
-                        inputMode="tel"
-                        value={arrivingPhone}
-                        readOnly={isEdit && !editable}
-                        placeholder={isEdit ? "+975 …" : arrivingFallbackPhone ? `blank — ${arrivingFallbackPhone}` : "+975 …"}
-                        onChange={(e) => setArrivingPhone(e.target.value)}
-                      />
-                      <span className="hint">needed before arrival</span>
-                    </div>
-                  </div>
-                </StepCard>
-
-                {/* ------------------------------------------------ the stay */}
-                <StepCard title="The stay" flow="stay">
-                  <div className="form2">
+                  <div className="form3">
                     <div className="field">
                       <label>Check-in</label>
                       <input
@@ -1197,6 +1215,19 @@ export function NewInquiryCanvas() {
                         {dateProblem ?? (today ? "from today at the hotel" : "checking today's date at the hotel…")}
                       </span>
                     </div>
+                    {/* The nights sit between the two dates, as on the boss's mockup (2026-10-10). */}
+                    <div className="field">
+                      <label>Nights</label>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={nights}
+                        placeholder="1"
+                        readOnly={isEdit && !editable}
+                        onChange={(e) => setNights(digits(e.target.value))}
+                      />
+                      <span className="hint">the check-out follows</span>
+                    </div>
                     <div className="field">
                       <label>Check-out</label>
                       <input
@@ -1211,18 +1242,6 @@ export function NewInquiryCanvas() {
                         }}
                       />
                       {datesSet ? <span className="hint">{`${fmtRange(checkIn, checkOut)} · ${plural(stayNights, "night")}`}</span> : null}
-                    </div>
-                    <div className="field">
-                      <label>Nights</label>
-                      <input
-                        className="input"
-                        inputMode="numeric"
-                        value={nights}
-                        placeholder="1"
-                        readOnly={isEdit && !editable}
-                        onChange={(e) => setNights(digits(e.target.value))}
-                      />
-                      <span className="hint">the check-out follows</span>
                     </div>
                     <div className="field">
                       <label>Adults</label>
@@ -1381,6 +1400,20 @@ export function NewInquiryCanvas() {
                       </div>
                     ) : null}
                   </div>
+                  {!isEdit ? (
+                    <div className="field" style={{ marginTop: 12 }}>
+                      <label>Notes · optional</label>
+                      <textarea
+                        className="input"
+                        rows={2}
+                        maxLength={2000}
+                        value={notes}
+                        placeholder="anything the guest asked for"
+                        onChange={(e) => setNotes(e.target.value)}
+                      />
+                      <span className="hint">kept on the inquiry — changed later at Wrap up on the booking</span>
+                    </div>
+                  ) : null}
                   <div className="row-acts" style={{ marginTop: 10 }}>
                     <Button
                       kind="quiet"
@@ -1404,43 +1437,18 @@ export function NewInquiryCanvas() {
                   </div>
                 </StepCard>
 
-                {/* ------------------------------------------------ rate and notes */}
-                <StepCard title="Notes">
-                  {isEdit ? (
-                    <span className="meta">The notes are changed on the booking itself, under Rate and notes.</span>
-                  ) : (
-                    <div className="form2">
-                      <div className="wide field">
-                        <label>Notes</label>
-                        <textarea
-                          className="input"
-                          rows={2}
-                          maxLength={2000}
-                          value={notes}
-                          placeholder="anything the guest asked for"
-                          onChange={(e) => setNotes(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {!isEdit ? (
-                    <div style={{ marginTop: 8 }}>
-                      <SystemLine>A duplicate check runs when you save — the same guest on overlapping dates</SystemLine>
-                    </div>
-                  ) : null}
-                </StepCard>
-              </div>
-
               {/* ------------------------------------------------ the house */}
-              <div className="stack intake-right">
                 <StepCard
                   flow="house"
                   title={datesSet ? `The house · ${fmtRange(checkIn, checkOut)}` : "The house"}
                   heldFor={
                     isEdit ? undefined : (
                       <>
-                        <b>{primaryLabel}</b> — the house is asked on the booking, where the free rooms for these dates appear while you are
-                        still on the phone.
+                        <b>{primaryLabel}</b> — the house is asked on the booking, where the free rooms for these dates and what they cost,
+                        night by night and for the stay, appear while you are still on the phone.
+                        {nextUp ? (
+                          <span className="warn-ink"> Still to fill: {flowItems.filter((i) => !i.met).map((i) => `${i.n} ${i.label}`).join(" · ")}.</span>
+                        ) : null}
                       </>
                     )
                   }
@@ -1469,8 +1477,46 @@ export function NewInquiryCanvas() {
                     </p>
                   ) : null}
                 </StepCard>
+
+                {/* ------------------------------------------------ wrap up */}
+                <StepCard
+                  title="Wrap up"
+                  heldFor={
+                    isEdit ? undefined : (
+                      <>
+                        the rooms are chosen on the booking — then it asks for the guest&rsquo;s phone or email if they were not given here,
+                        who is arriving, and any notes. A booking moves on to Negotiation only once someone can be reached.
+                      </>
+                    )
+                  }
+                >
+                  <div className="form2 rule-above">
+                    <div className="field">
+                      <label>Who is arriving · name</label>
+                      <input
+                        className="input"
+                        value={arrivingName}
+                        readOnly={isEdit && !editable}
+                        placeholder={isEdit ? "who leads the party on the day" : `blank — ${arrivingFallbackWord}`}
+                        onChange={(e) => setArrivingName(e.target.value)}
+                      />
+                      <span className="hint">who leads the party on the day</span>
+                    </div>
+                    <div className="field">
+                      <label>Their phone</label>
+                      <input
+                        className="input"
+                        inputMode="tel"
+                        value={arrivingPhone}
+                        readOnly={isEdit && !editable}
+                        placeholder={isEdit ? "+975 …" : arrivingFallbackPhone ? `blank — ${arrivingFallbackPhone}` : "+975 …"}
+                        onChange={(e) => setArrivingPhone(e.target.value)}
+                      />
+                      <span className="hint">needed before arrival</span>
+                    </div>
+                  </div>
+                </StepCard>
               </div>
-            </div>
             </StepFlow>
           </StepCanvas>
         </div>

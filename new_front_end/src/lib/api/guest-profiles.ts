@@ -54,3 +54,19 @@ export function guestFullName(g: Pick<GuestProfileSummary, "firstName" | "lastNa
 export async function getGuestProfile(session: Session, id: string) {
   return apiRequest<GuestProfileSummary>(`/api/guest-profiles/${encodeURIComponent(id)}`, { session });
 }
+
+/**
+ * Wrap up at Inquiry (2026-10-10): a phone or email the guest gave once rooms were chosen. The
+ * server fills an EMPTY field only — one already on file is never replaced from a booking.
+ */
+export function addGuestContact(
+  session: Session,
+  guestProfileId: string,
+  body: { phone?: string | null; email?: string | null; entryId?: string | null },
+) {
+  return apiRequest<{ profile: GuestProfileSummary; added: string[] }>(`/api/guest-profiles/${guestProfileId}/contact`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
