@@ -5,6 +5,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import {
   NOTE_ASSIGNEES,
+  NOTE_PAPER_KINDS,
   addBookingNote,
   editBookingNote,
   listBookingNotes,
@@ -43,6 +44,8 @@ const addNoteSchema = z.object({
   dueAt: z.string().datetime({ offset: true }).nullable().optional(),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   dueTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  paperKind: z.enum(NOTE_PAPER_KINDS).nullable().optional(),
+  paperId: z.string().trim().min(1).max(64).nullable().optional(),
 });
 
 bookingNotesRouter.post("/entries/:id/notes", requireActorLevel("L1"), validateBody(addNoteSchema), async (req, res, next) => {

@@ -3075,10 +3075,16 @@ model BookingNote {
   editedAt     DateTime?
   /// Earlier wordings, oldest first: [{ text, at, by }].
   priorTexts   Json?
+  /// The paper the note was written with (2026-10-12) — "QUOTATION" or "INVOICE" and its id, so
+  /// the note shows beside the paper in Documents and names the paper in Notes. Checked to
+  /// belong to this booking when written; not a foreign key, since a note outlives nothing.
+  paperKind    String?
+  paperId      String?
 
   entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
 
   @@index([entryId, createdAt])
+  @@index([entryId, paperId])
   @@map("booking_notes")
 }
 
