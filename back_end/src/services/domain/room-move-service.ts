@@ -105,6 +105,7 @@ async function loadLegBooking(prisma: PrismaClient, entryId: string) {
       checkOutDate: true,
       actualCheckOutDate: true,
       inquiryId: true,
+      noShowCutoffReachedAt: true,
       guestProfile: { select: { firstName: true, lastName: true } },
       reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } },
       stayExtensionRequests: { where: { state: { in: ["REQUESTED", "BILLED", "PAID"] } }, select: { id: true, state: true } },
@@ -131,6 +132,17 @@ function bookingRefusals(b: LegBooking, label: string, today: Date): string[] {
     } else if (!MOVABLE.has(stage)) {
       out.push(`${label} is ${STAGE_WORD[stage] ?? stage} — nothing to move`);
     }
+  }
+  // An arrival that never happened (2026-10-12, found on the desk): a booking still waiting at Set
+  // up, Reserve or Arrival whose check-in day has gone by holds nights nobody slept, and moving its
+  // room would move those too. Its arrival cut-off has usually passed — the FOM decides the no-show
+  // (or the desk moves its dates) first.
+  const PRE_ARRIVAL = new Set<string>([Stage.S3, Stage.S4, Stage.S5]);
+  const checkIn = b.reservation?.frozenCheckInDate ?? b.checkInDate ?? null;
+  if ((b.status === "ACTIVE" || b.status === "PARKED") && PRE_ARRIVAL.has(stage) && checkIn && checkIn.getTime() < today.getTime()) {
+    out.push(
+      `${label} was due to arrive on ${fmtNight(iso(checkIn))} and has not checked in${b.noShowCutoffReachedAt ? " — its arrival cut-off has passed" : ""}. Decide the no-show, or move its dates, before moving its room`,
+    );
   }
   if (stage === Stage.S7) {
     const out7 = effectiveCheckOutDate(b);
@@ -264,9 +276,49 @@ async function dryRunLegs(prisma: PrismaClient, actor: Actor, legs: RoomMoveLegI
         leg.refusals.push(`${leg.label} is re-priced at the new room type — type what the guest agreed to`);
       }
     } catch (e) {
-      leg.refusals.push(`${leg.label}: ${errorParts(e).message}`);
+      leg.refusals.push(...(await refusalWords(prisma, leg.label, e, today)));
     }
   }
+  return out;
+}
+
+/**
+ * A refusal in the desk's words. A room another booking holds names the booking, its nights and —
+ * when those nights are already past and the booking never arrived — what frees the room: the
+ * chart starts at today, so a clash on a night before it is otherwise invisible.
+ */
+async function refusalWords(prisma: PrismaClient, label: string, e: unknown, today: Date): Promise<string[]> {
+  const parts = errorParts(e);
+  const details = e instanceof AppError ? (e.body.details as { conflicts?: unknown } | undefined) : undefined;
+  const conflicts = Array.isArray(details?.conflicts)
+    ? (details!.conflicts as Array<{ entryId: string | null; roomNumber: string | null; guestName: string | null; startDate: string; endDate: string }>)
+    : null;
+  if (!conflicts || conflicts.length === 0) return [`${label}: ${parts.message}`];
+  const ids = [...new Set(conflicts.map((c) => c.entryId).filter((x): x is string => !!x))];
+  const holders = await prisma.entry.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, currentStage: true, noShowCutoffReachedAt: true, checkInDate: true },
+  });
+  const byId = new Map(holders.map((h) => [h.id, h]));
+  const todayIso = iso(today);
+  return conflicts.map((c) => {
+    const who = [c.entryId, c.guestName].filter(Boolean).join(" · ") || "another booking";
+    const span = nightsLabel(nightsBetweenIso(c.startDate, c.endDate));
+    const past = c.endDate <= todayIso;
+    const h = c.entryId ? byId.get(c.entryId) : undefined;
+    const stale = h && [Stage.S3, Stage.S4, Stage.S5].includes(h.currentStage as never) && h.checkInDate && iso(h.checkInDate) < todayIso;
+    const room = c.roomNumber ? `Room ${c.roomNumber}` : "The room";
+    if (past && stale) {
+      return `${label}: ${room} is held ${span} by ${who} — nights already past, which the chart does not show. That booking never arrived${h!.noShowCutoffReachedAt ? " and its arrival cut-off has passed" : ""}: decide its no-show to free the room`;
+    }
+    if (past) return `${label}: ${room} is held ${span} by ${who} — nights already past, which the chart does not show`;
+    return `${label}: ${room} is taken ${span} by ${who}`;
+  });
+}
+
+function nightsBetweenIso(start: string, end: string): string[] {
+  const out: string[] = [];
+  for (let d = new Date(`${start}T00:00:00.000Z`); iso(d) < end; d = new Date(d.getTime() + 86_400_000)) out.push(iso(d));
   return out;
 }
 
@@ -344,7 +396,24 @@ export async function previewRoomMove(
   const reason = input.reason?.trim() ?? "";
   const legs = await dryRunLegs(prisma, actor, input.legs, reason);
   const kind = input.legs.length === 2 ? "SWAP" : "MOVE";
-  const sameTypeAll = legs.every((l) => l.dry?.sameType !== false);
+  // The rooms themselves, read apart from the walk: a refused walk returns nothing, and the dialog
+  // must still name both rooms and say whether the type changes (an upgrade needs the FOM whether
+  // or not something else refuses it).
+  const roomRows = await prisma.room.findMany({
+    where: { id: { in: [...new Set(input.legs.flatMap((l) => [l.fromRoomId, l.toRoomId]))] } },
+    select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { name: true } } },
+  });
+  const roomById = new Map(roomRows.map((r) => [r.id, r]));
+  const roomView = (id: string) => {
+    const r = roomById.get(id);
+    return r ? { roomId: r.id, roomNumber: r.roomNumber, roomTypeName: r.roomType?.name ?? null } : null;
+  };
+  const sameTypeOf = (l: DryLeg) =>
+    l.dry?.sameType ??
+    (roomById.get(l.input.fromRoomId) && roomById.get(l.input.toRoomId)
+      ? roomById.get(l.input.fromRoomId)!.roomTypeId === roomById.get(l.input.toRoomId)!.roomTypeId
+      : null);
+  const sameTypeAll = legs.every((l) => sameTypeOf(l) !== false);
   const needed: "L1" | "L2" = kind === "SWAP" || !sameTypeAll ? "L2" : "L1";
   const authority = {
     needed,
@@ -369,11 +438,11 @@ export async function previewRoomMove(
       guestName: guestName(leg.booking?.guestProfile ?? null),
       stage,
       stageWord: STAGE_WORD[stage] ?? stage,
-      fromRoom: leg.dry?.fromRoom ?? null,
-      toRoom: leg.dry?.toRoom ?? null,
+      fromRoom: leg.dry?.fromRoom ?? roomView(leg.input.fromRoomId),
+      toRoom: leg.dry?.toRoom ?? roomView(leg.input.toRoomId),
       nights,
       nightsLabel: nights.length ? nightsLabel(nights) : null,
-      sameType: leg.dry?.sameType ?? null,
+      sameType: sameTypeOf(leg),
       priceMode: leg.input.priceMode,
       pricing: await priceLeg(prisma, leg),
       path: leg.dry ? pathFor(stage, leg.dry.sameType, leg.input.priceMode) : [],

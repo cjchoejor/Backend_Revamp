@@ -51,6 +51,7 @@ function describeConflict(c: {
  */
 export function enforceNoOverlappingBookingForCommittedHold(input: {
   conflicts: Array<{
+    entryId?: string | null;
     roomNumber?: string | null;
     source: "RESERVED" | "HOLD";
     entryReferenceNumber: string | null;
@@ -64,6 +65,18 @@ export function enforceNoOverlappingBookingForCommittedHold(input: {
   throw new PolicyGateBlockedError(
     "INVENTORY_NOT_AVAILABLE",
     `Room is not available for committed hold — ${detail}`,
+    {
+      // What was found, for a caller that words it itself (a room move's preview, 2026-10-12).
+      conflicts: input.conflicts.map((c) => ({
+        entryId: c.entryId ?? null,
+        roomNumber: c.roomNumber ?? null,
+        source: c.source,
+        entryReferenceNumber: c.entryReferenceNumber,
+        guestName: c.guestName,
+        startDate: c.startDate.toISOString().slice(0, 10),
+        endDate: c.endDate.toISOString().slice(0, 10),
+      })),
+    },
   );
 }
 
