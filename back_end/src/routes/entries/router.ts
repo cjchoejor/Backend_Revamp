@@ -33,7 +33,8 @@ import {
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
-import { setEntryGuest, updateEntryCaller } from "../../services/domain/inquiry-caller-service.js";
+import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
+import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
@@ -85,6 +86,28 @@ export const entriesRouter = Router();
 entriesRouter.post("/:id/caller", requireActorLevel("L1"), validateBody(callerRequestSchema), async (req, res, next) => {
   try {
     res.json(await updateEntryCaller(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Who is asking, changed at Inquiry (2026-10-12) — channel, party, package, a company's reference. */
+const sourceSchema = z
+  .object({
+    cameInAs: z.enum(CAME_IN_AS_VALUES).nullable().optional(),
+    sourceChannel: z.string().min(1).nullable().optional(),
+    travelAgentId: z.string().min(1).nullable().optional(),
+    corporateAccountId: z.string().min(1).nullable().optional(),
+    ratePackageId: z.string().min(1).nullable().optional(),
+    corporateClientRef: z.string().trim().max(200).nullable().optional(),
+    corporateCoordinator: z.string().trim().max(200).nullable().optional(),
+  })
+  .refine((v) => !!(v.cameInAs || v.sourceChannel), { message: "Say how the booking came in", path: ["cameInAs"] })
+  .refine((v) => !(v.travelAgentId && v.corporateAccountId), { message: "A travel agent OR a company, not both", path: ["travelAgentId"] });
+
+entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSchema), async (req, res, next) => {
+  try {
+    res.json(await updateEntrySource(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
   } catch (e) {
     next(e);
   }

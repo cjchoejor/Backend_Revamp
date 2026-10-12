@@ -3,7 +3,8 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { recordDuplicateDetectionFlagIfPresent } from "../../policies/04-duplicate-detection/p12-duplicate-flag-create-on-inquiry.js";
 import * as auditService from "../infrastructure/audit-service.js";
-import { assertCallerReachable, callerColumns, normaliseCaller, type CallerInput } from "./s1-inquiry-service.js";
+import { assertCallerReachable, callerColumns, normaliseCaller, validateInquiryParty, type CallerInput } from "./s1-inquiry-service.js";
+import { resolveInquiryChannel } from "../../lib/inquiry-came-in-as.js";
 
 /**
  * The caller and the guest staying (2026-10-12, operator, after the boss's journey mockup).
@@ -214,4 +215,92 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     return { guestProfileId: guestProfileId!, duplicate };
   });
   return outcome;
+}
+
+/* ------------------------------------------------------------------ who is asking */
+
+export type SourceInput = {
+  cameInAs?: string | null;
+  sourceChannel?: string | null;
+  travelAgentId?: string | null;
+  corporateAccountId?: string | null;
+  ratePackageId?: string | null;
+  corporateClientRef?: string | null;
+  corporateCoordinator?: string | null;
+};
+
+/**
+ * Change who is asking — how the booking came in, the agency or company, its package and the
+ * company's reference (2026-10-12, operator: "when I click edit it doesn't allow me to edit … the
+ * came in as section"). Inquiry only: the party prices the stay, and from Negotiation on that price
+ * is on a quotation. A trip's other stays share the enquiry, so every one of them must still be at
+ * Inquiry (or ended) — a change here would re-price a stay that has already moved on.
+ *
+ * The custodian is left as assigned; the caller must still be reachable under the new channel.
+ */
+export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entryId: string, input: SourceInput) {
+  const entry = await loadEntry(prisma, entryId);
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  if (entry.currentStage !== "S1") {
+    throw new ValidationError("Who is asking is changed at Inquiry — this booking has moved on (a re-entry to Inquiry opens it again)");
+  }
+  const others = await prisma.entry.findMany({
+    where: { inquiryId: entry.inquiryId, id: { not: entry.id }, currentStage: { not: "S1" }, status: { in: ["ACTIVE", "PARKED"] } },
+    select: { id: true },
+  });
+  if (others.length) {
+    throw new ValidationError(`Another stay on this enquiry has moved past Inquiry (${others.map((o) => o.id).join(", ")}) — who is asking cannot change under it`);
+  }
+  const channel = resolveInquiryChannel({ cameInAs: input.cameInAs ?? undefined, sourceChannel: input.sourceChannel ?? undefined });
+  const party = await validateInquiryParty(prisma, input);
+  const inq = entry.inquiry;
+  // The caller must still be reachable: leaving OTA with no phone or email is refused.
+  assertCallerReachable(
+    normaliseCaller({
+      title: inq.callerTitle,
+      firstName: inq.callerFirstName,
+      lastName: inq.callerLastName,
+      phone: inq.callerPhone,
+      email: inq.callerEmail,
+      onWhatsApp: inq.callerOnWhatsApp,
+    }),
+    channel.sourceChannel,
+  );
+  const corporate = !!party.corporateAccountId || channel.sourceChannel === "CORPORATE";
+  const t = (v: string | null | undefined) => v?.trim() || null;
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.inquiry.update({
+      where: { id: inq.id },
+      data: {
+        sourceChannel: channel.sourceChannel,
+        cameInAs: channel.cameInAs,
+        travelAgentId: party.travelAgentId,
+        corporateAccountId: party.corporateAccountId,
+        ratePackageId: party.ratePackageId,
+        // A company's reference belongs to a company booking; it goes when the company does.
+        corporateClientRef: corporate ? t(input.corporateClientRef) : null,
+        corporateCoordinator: corporate ? t(input.corporateCoordinator) : null,
+        ...(corporate && t(input.corporateClientRef) ? { corporateContextCapturedAt: now, corporateContextCapturedBy: actor.actorId } : {}),
+      } as any,
+    });
+    await tx.entry.updateMany({
+      where: { inquiryId: inq.id, currentStage: "S1" },
+      data: { otaSource: channel.sourceChannel === "OTA" },
+    });
+    await auditService.emit(tx as any, { actorId: actor.actorId, actorLevel: actor.level }, {
+      eventType: "INQUIRY.SOURCE_CHANGED",
+      entityType: "Inquiry",
+      entityId: inq.id,
+      operation: "UPDATE",
+      timestamp: now,
+      inquiryId: inq.id,
+      entryId: entry.id,
+      payload: {
+        from: { sourceChannel: inq.sourceChannel },
+        to: { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId },
+      },
+    });
+    return { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId };
+  });
 }

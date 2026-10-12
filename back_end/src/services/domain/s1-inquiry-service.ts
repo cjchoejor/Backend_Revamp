@@ -58,44 +58,7 @@ export async function createInquiry(
   const caller = normaliseCaller(input.caller);
   if (input.caller || !guestProfileId) assertCallerReachable(caller, channel.sourceChannel);
 
-  const travelAgentId = input.travelAgentId?.trim() || null;
-  const corporateAccountId = input.corporateAccountId?.trim() || null;
-  if (travelAgentId && corporateAccountId) {
-    throw new ValidationError("An inquiry can be linked to a travel agent OR a corporate account, not both");
-  }
-  if (travelAgentId) {
-    const agent = await prisma.travelAgent.findUnique({ where: { id: travelAgentId } });
-    if (!agent) throw new ValidationError(`Travel agent ${travelAgentId} not found`);
-    if (!agent.isActive) throw new ValidationError(`Travel agent ${travelAgentId} is inactive`);
-  }
-  if (corporateAccountId) {
-    const corp = await prisma.corporateAccount.findUnique({ where: { id: corporateAccountId } });
-    if (!corp) throw new ValidationError(`Corporate account ${corporateAccountId} not found`);
-    if (!corp.isActive) throw new ValidationError(`Corporate account ${corporateAccountId} is inactive`);
-  }
-
-  // A package must belong to the party it is being quoted for. Without this check a booking
-  // could carry another agency's package and be priced on their negotiated rate.
-  const ratePackageId = input.ratePackageId?.trim() || null;
-  if (ratePackageId) {
-    const pkg = await prisma.ratePackage.findUnique({
-      where: { id: ratePackageId },
-      select: { id: true, name: true, travelAgentId: true, corporateAccountId: true, scope: true, effectiveTo: true },
-    });
-    if (!pkg) throw new ValidationError(`Rate package ${ratePackageId} not found`);
-    if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
-      throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
-    }
-    if (!travelAgentId && !corporateAccountId) {
-      throw new ValidationError("A rate package can only be chosen for a travel agent or corporate booking");
-    }
-    const belongs =
-      (travelAgentId && pkg.travelAgentId === travelAgentId) ||
-      (corporateAccountId && pkg.corporateAccountId === corporateAccountId);
-    if (!belongs) {
-      throw new ValidationError(`Rate package "${pkg.name}" does not belong to the selected party`);
-    }
-  }
+  const { travelAgentId, corporateAccountId, ratePackageId } = await validateInquiryParty(prisma, input);
 
   // Policy 12 (SIG-S1 §6.1): a confirmed duplicate blocks creation until the FOM resolves it —
   // the operator sees the conflicting booking, and the FOM either goes ahead with a recorded
@@ -198,6 +161,56 @@ export async function createInquiry(
 
     return created;
   });
+}
+
+/**
+ * Who booked, checked: at most one of an agency or a company, active, and a package that belongs
+ * to that party. Shared by the intake and by a change to "who is asking" at Inquiry (2026-10-12).
+ */
+export async function validateInquiryParty(
+  prisma: PrismaClient,
+  input: { travelAgentId?: string | null; corporateAccountId?: string | null; ratePackageId?: string | null },
+) {
+  const travelAgentId = input.travelAgentId?.trim() || null;
+  const corporateAccountId = input.corporateAccountId?.trim() || null;
+  if (travelAgentId && corporateAccountId) {
+    throw new ValidationError("An inquiry can be linked to a travel agent OR a corporate account, not both");
+  }
+  if (travelAgentId) {
+    const agent = await prisma.travelAgent.findUnique({ where: { id: travelAgentId } });
+    if (!agent) throw new ValidationError(`Travel agent ${travelAgentId} not found`);
+    if (!agent.isActive) throw new ValidationError(`Travel agent ${travelAgentId} is inactive`);
+  }
+  if (corporateAccountId) {
+    const corp = await prisma.corporateAccount.findUnique({ where: { id: corporateAccountId } });
+    if (!corp) throw new ValidationError(`Corporate account ${corporateAccountId} not found`);
+    if (!corp.isActive) throw new ValidationError(`Corporate account ${corporateAccountId} is inactive`);
+  }
+
+  // A package must belong to the party it is being quoted for. Without this check a booking
+  // could carry another agency's package and be priced on their negotiated rate.
+  const ratePackageId = input.ratePackageId?.trim() || null;
+  if (ratePackageId) {
+    const pkg = await prisma.ratePackage.findUnique({
+      where: { id: ratePackageId },
+      select: { id: true, name: true, travelAgentId: true, corporateAccountId: true, scope: true, effectiveTo: true },
+    });
+    if (!pkg) throw new ValidationError(`Rate package ${ratePackageId} not found`);
+    if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
+      throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
+    }
+    if (!travelAgentId && !corporateAccountId) {
+      throw new ValidationError("A rate package can only be chosen for a travel agent or corporate booking");
+    }
+    const belongs =
+      (travelAgentId && pkg.travelAgentId === travelAgentId) ||
+      (corporateAccountId && pkg.corporateAccountId === corporateAccountId);
+    if (!belongs) {
+      throw new ValidationError(`Rate package "${pkg.name}" does not belong to the selected party`);
+    }
+  }
+
+  return { travelAgentId, corporateAccountId, ratePackageId };
 }
 
 /* ------------------------------------------------------------------ the caller */
