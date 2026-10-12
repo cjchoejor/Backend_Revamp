@@ -31,6 +31,7 @@ import { documentsRouter } from "./documents/router.js";
 import { communicationsRouter } from "./communications/router.js";
 import { identityCaptureRouter } from "./identity-capture/router.js";
 import { deskRouter } from "./desk/router.js";
+import { bookingNotesRouter } from "./booking-notes/router.js";
 
 export const apiRouter = Router();
 
@@ -89,6 +90,7 @@ apiRouter.use(deficientConditionsRouter);
 apiRouter.use(lookupsRouter);
 apiRouter.use(backflowsRouter);
 apiRouter.use(documentsRouter);
+apiRouter.use(bookingNotesRouter);
 apiRouter.use("/desk", deskRouter);
 apiRouter.use("/admin", adminRouter);
 

@@ -1190,6 +1190,8 @@ model Entry {
   interimPaymentRequests  InterimPaymentRequest[]
   stayExtensionRequests   StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
+  bookingNotes            BookingNote[]
+  guestRequests           GuestRequest[]
   earlyDeparture          EarlyDepartureRecord?
   writeOffRecords         WriteOffRecord[]
   followUpTasks           FollowUpTaskRecord[]
@@ -3049,6 +3051,75 @@ model NegotiationAmendmentRequest {
 
   @@index([entryId, state])
   @@map("negotiation_amendment_requests")
+}
+
+/// A note on a booking, or a to-do (2026-10-12, operator, after the boss's journey mockup — the
+/// Notes tab on every step). A note is locked once written: an edit keeps every earlier wording
+/// in `priorTexts`, so what was said stays on the record. A to-do names who must do it and,
+/// optionally, by when; it is ticked off with who and when.
+model BookingNote {
+  id           String          @id @default(uuid())
+  entryId      String
+  kind         BookingNoteKind @default(NOTE)
+  text         String
+  /// A to-do's owner — DESK · FOM · HOUSEKEEPING · KITCHEN · MAINTENANCE.
+  assignee     String?
+  dueAt        DateTime?
+  doneAt       DateTime?
+  doneBy       String?
+  /// Where the booking stood when it was written (S1…S9).
+  stageContext String?
+  createdBy    String
+  createdAt    DateTime        @default(now())
+  editedBy     String?
+  editedAt     DateTime?
+  /// Earlier wordings, oldest first: [{ text, at, by }].
+  priorTexts   Json?
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, createdAt])
+  @@map("booking_notes")
+}
+
+enum BookingNoteKind {
+  NOTE
+  TODO
+}
+
+/// Something the guest asked the hotel to arrange (BE-64, built 2026-10-12): a kind from the
+/// `guestRequest.kinds` setting, what exactly, for when, asked → arranged. A request taken back
+/// is WITHDRAWN with a reason, never deleted.
+model GuestRequest {
+  id              String            @id @default(uuid())
+  entryId         String
+  kind            String
+  what            String
+  /// The day it is for — stored at UTC midnight like every stay date.
+  forDate         DateTime?
+  /// "HH:MM", hotel-local.
+  forTime         String?
+  state           GuestRequestState @default(ASKED)
+  stageContext    String?
+  createdBy       String
+  createdAt       DateTime          @default(now())
+  arrangedBy      String?
+  arrangedAt      DateTime?
+  arrangedNote    String?
+  withdrawnBy     String?
+  withdrawnAt     DateTime?
+  withdrawnReason String?
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, state])
+  @@map("guest_requests")
+}
+
+enum GuestRequestState {
+  ASKED
+  ARRANGED
+  WITHDRAWN
 }
 
 model StayExtensionRequest {

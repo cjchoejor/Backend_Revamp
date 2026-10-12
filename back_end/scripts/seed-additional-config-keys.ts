@@ -44,6 +44,12 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
       "The Negotiation clock (2026-09-29, SIG-S2 §7.6): a booking that stalls at Negotiation lapses after this many seconds (W20). A generated or sent quote stretches the clock to the offer's validity; a booking that has been to Set up never gets it; the park pauses it.",
   },
   {
+    key: "guestRequest.kinds",
+    value: ["Airport pickup", "Airport drop", "Early check-in", "Late check-out", "Celebration (cake, flowers)", "Room set-up", "Food and drink", "Something else"],
+    notes:
+      "Guest requests (BE-64, 2026-10-12): the kinds the desk picks from when it records something the guest asked the hotel to arrange. Order is the order on the desk.",
+  },
+  {
     key: "expiry.parking.followUpDays",
     value: 30,
     notes:
