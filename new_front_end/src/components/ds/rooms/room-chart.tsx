@@ -22,6 +22,15 @@
  *     free nights on the chart), then the new-inquiry screen with the check-in, the nights and
  *     the room filled in (`/bookings/new?checkIn=&nights=&room=`). The room itself is chosen on
  *     the booking, where the house is asked — the chart only suggests it.
+ *
+ * Third pass, same day (operator: "add a full screen button"; "it shows the hover for everything as
+ * soon as I hover over the table — just show the data, not for a free room or Free that night and
+ * House booked, and show it after one second"; "why are the today, Sat and Sun columns beige"):
+ *   - **Full screen** lifts the chart over the whole window (Escape closes it);
+ *   - the hover card is for what is ON the chart — a booking, a run out of order, two bookings on
+ *     a night — and opens after a second's rest, so moving across the table shows nothing;
+ *   - a free night is white whatever its day: today is drawn as a thin column edge and the
+ *     weekend in the header's weekday, never as a fill that reads like something is there.
  */
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -79,14 +88,14 @@ type Seg =
   | { t: "bar"; span: number; bar: RoomChartBar }
   | { t: "conflict"; night: string; bars: RoomChartBar[] };
 
-/** What the hover card is about. */
+/** What the hover card is about — only what is on the chart (2026-10-12). */
 type Hover =
   | { t: "bar"; bar: RoomChartBar; room: ChartRoom; rect: DOMRect }
   | { t: "conflict"; bars: RoomChartBar[]; room: ChartRoom; night: string; rect: DOMRect }
-  | { t: "ooo"; room: ChartRoom; reason: string | null; from: string; to: string; rect: DOMRect }
-  | { t: "free"; room: ChartRoom; night: string; rect: DOMRect }
-  | { t: "room"; room: ChartRoom; rect: DOMRect }
-  | { t: "night"; night: RoomChart["perNight"][number]; rect: DOMRect };
+  | { t: "ooo"; room: ChartRoom; reason: string | null; from: string; to: string; rect: DOMRect };
+
+/** How long the pointer rests on a booking before its card opens. */
+const HOVER_DELAY_MS = 1000;
 
 /** The open "Start an inquiry" box on a free night. */
 type Pick = { room: ChartRoom; night: string; freeRun: number; reachesEnd: boolean; rect: DOMRect };
@@ -165,7 +174,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   /** A range longer than the chart draws — said, not silently cut. */
   const [rangeNote, setRangeNote] = useState<string | null>(null);
   const [hover, setHover] = useState<Hover | null>(null);
+  const hoverTimer = useRef<number | null>(null);
   const [pick, setPick] = useState<Pick | null>(null);
+  const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
   const pickRef = useRef<HTMLDivElement | null>(null);
 
@@ -195,13 +206,50 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     };
   }, [pick]);
 
+  // Full screen: Escape closes it (unless the start box is open — Escape closes that first), and the
+  // page behind does not scroll.
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !pickRef.current) setFull(false);
+    };
+    // The page reserves a scrollbar gutter on <html> (`scrollbar-gutter: stable`), which a fixed
+    // layer cannot cover — released while full screen is on, so the chart reaches the window's edge.
+    const html = document.documentElement;
+    const prev = { body: document.body.style.overflow, html: html.style.overflow, gutter: html.style.scrollbarGutter };
+    document.body.style.overflow = "hidden";
+    html.style.overflow = "hidden";
+    html.style.scrollbarGutter = "auto";
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev.body;
+      html.style.overflow = prev.html;
+      html.style.scrollbarGutter = prev.gutter;
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [full]);
+  useEffect(
+    () => () => {
+      if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    },
+    [],
+  );
+
   if (q.error && !chart) return <LoadFailed what="the house chart" onRetry={() => void q.refetch()} />;
   if (!chart) return <LoadingBlock />;
 
   const lastNight = chart.nights[chart.nights.length - 1];
   const nameOf = (b?: RoomChartBooking) => (b ? rowNameOf(b) : "Booking");
-  const point = (h: Hover) => setHover(h);
-  const leave = () => setHover(null);
+  // The card opens after the pointer has rested a second, so sweeping across the table shows nothing.
+  const point = (h: Hover) => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => setHover(h), HOVER_DELAY_MS);
+  };
+  const leave = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+    setHover(null);
+  };
   const rectOf = (e: React.SyntheticEvent) => (e.currentTarget as HTMLElement).getBoundingClientRect();
   const openPick = (room: ChartRoom, night: string, index: number, rect: DOMRect, segs: Seg[]) => {
     // How many nights this room is free from here, on the chart.
@@ -209,7 +257,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     let run = 0;
     while (freeIdx.has(index + run)) run++;
     const reachesEnd = index + run >= chart.nights.length;
-    setHover(null);
+    leave();
     setPickNights(1);
     setPick({ room, night, freeRun: run, reachesEnd, rect });
   };
@@ -221,8 +269,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     router.push(`/bookings/new?${p.toString()}`);
   };
 
-  return (
-    <div className="rchart">
+  const body = (
+    <div className={`rchart${full ? " is-full" : ""}`}>
       <div className="rchart-bar">
         <div className="rchart-nav">
           <Button kind="quiet" compact onClick={() => setFrom(shiftDay(chart.from, -7))}>
@@ -283,8 +331,11 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             ))}
           </select>
           <b className="rchart-span">{plural(chart.nights.length, "night")}</b>
+          <Button kind="quiet" compact onClick={() => setFull((f) => !f)} aria-pressed={full}>
+            {full ? "Exit full screen" : "Full screen"}
+          </Button>
           <Help label="About the house chart">
-            <p>Every room, night by night: who holds it and how firmly. Point at a bar for the booking; click it to open the booking.</p>
+            <p>Every room, night by night: who holds it and how firmly. Rest the pointer on a booking for a second to see it; click it to open the booking.</p>
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
           </Help>
@@ -321,12 +372,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <tr className="h2">
               <th className="rc">Free that night</th>
               {chart.perNight.map((n) => (
-                <td
-                  key={n.date}
-                  className={`need ${n.free >= 5 ? "ok" : n.free > 0 ? "short" : "none"}`}
-                  onMouseEnter={(e) => point({ t: "night", night: n, rect: rectOf(e) })}
-                  onMouseLeave={leave}
-                >
+                <td key={n.date} className={`need ${n.free >= 5 ? "ok" : n.free > 0 ? "short" : "none"}`}>
                   {n.free}
                 </td>
               ))}
@@ -335,7 +381,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <tr className="h3">
               <th className="rc">House booked</th>
               {chart.perNight.map((n) => (
-                <td key={n.date} className="hb" onMouseEnter={(e) => point({ t: "night", night: n, rect: rectOf(e) })} onMouseLeave={leave}>
+                <td key={n.date} className="hb">
                   {n.booked}/{n.total}
                 </td>
               ))}
@@ -365,13 +411,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                   return (
                     <tr key={rid} className={`rrow${ri === t.roomIds.length - 1 ? " last" : ""}`}>
                       <th className="rc rno">
-                        <button
-                          type="button"
-                          className="rno-btn"
-                          onClick={() => onOpenRoom(room)}
-                          onMouseEnter={(e) => point({ t: "room", room, rect: rectOf(e) })}
-                          onMouseLeave={leave}
-                        >
+                        <button type="button" className="rno-btn" onClick={() => onOpenRoom(room)} aria-label={`Room ${room.roomNumber} — ${hk.word}${room.faultOpen ? ", fault reported" : ""}`}>
                           <span className="rnum">{room.roomNumber}</span>
                           {room.bedType ? <span className="bed">{BED_LETTER[room.bedType] ?? room.bedType}</span> : null}
                           <i className={`hkdot ${hk.cls}`} />
@@ -384,9 +424,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                           return (
                             <td
                               key={k}
-                              className={["cell free", s.night === chart.today ? "tday" : "", weekend(s.night) ? "we" : "", past ? "past" : "pick"].filter(Boolean).join(" ")}
-                              onMouseEnter={(e) => point({ t: "free", room, night: s.night, rect: rectOf(e) })}
-                              onMouseLeave={leave}
+                              className={["cell free", s.night === chart.today ? "tday" : "", past ? "past" : "pick"].filter(Boolean).join(" ")}
+                              aria-label={past ? undefined : `Room ${room.roomNumber} free on ${longDay(s.night)} — click to start an inquiry`}
                               onClick={(e) => {
                                 if (!past) openPick(room, s.night, s.index, rectOf(e), segs);
                               }}
@@ -508,6 +547,18 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       ) : null}
     </div>
   );
+
+  // Full screen is the same chart lifted over the whole window, at the desk's root so no page
+  // layout (a scrolling main, a sticky header) can clip or out-stack it.
+  return full ? (
+    <Floating>
+      <div className="rchart-full" role="dialog" aria-label="House chart, full screen">
+        {body}
+      </div>
+    </Floating>
+  ) : (
+    body
+  );
 }
 
 /** The hover card — the chart's own colours, the booking's facts in order. */
@@ -597,62 +648,7 @@ function HoverCard({
       </div>
     );
   }
-  if (hover.t === "free") {
-    const past = hover.night < chart.today;
-    return (
-      <div className="rchart-hc small e-k-free" style={style} role="tooltip">
-        <div className="hc-head k-free">
-          <span className="hc-kind">{past ? "Free · a night gone by" : "Free"}</span>
-        </div>
-        <div className="hc-body">
-          <div className="hc-sub">
-            {roomLine(hover.room)} · {longDay(hover.night)}
-          </div>
-        </div>
-        {past ? null : <div className="hc-foot">Click to start an inquiry from this night</div>}
-      </div>
-    );
-  }
-  if (hover.t === "room") {
-    const hk = housekeepingOf(hover.room);
-    return (
-      <div className="rchart-hc small e-k-room" style={style} role="tooltip">
-        <div className="hc-head k-room">
-          <span className="hc-kind">Room {hover.room.roomNumber}</span>
-        </div>
-        <div className="hc-body">
-          <div className="hc-facts">
-            {fact("Type", typeName(hover.room.roomTypeId))}
-            {hover.room.bedType ? fact("Beds", BED_WORD[hover.room.bedType] ?? hover.room.bedType) : null}
-            {fact("Housekeeping", hk.word)}
-            {hover.room.faultOpen ? fact("Fault", "reported") : null}
-            {fact("Taken", `${hover.room.nightsTaken} of ${plural(chart.nights.length, "night")} on the chart`)}
-          </div>
-        </div>
-        <div className="hc-foot">Click to report a fault or review one</div>
-      </div>
-    );
-  }
-  const n = hover.night;
-  return (
-    <div className="rchart-hc small e-k-room" style={style} role="tooltip">
-      <div className="hc-head k-room">
-        <span className="hc-kind">{longDay(n.date)}</span>
-      </div>
-      <div className="hc-body">
-        <div className="hc-name">
-          {n.booked} of {n.total} rooms taken
-        </div>
-        <div className="hc-facts">
-          {fact("With a guest in", n.inHouse)}
-          {fact("Reserved", n.reserved)}
-          {fact("Held", n.held)}
-          {n.outOfOrder ? fact("Out of order", n.outOfOrder) : null}
-          {fact("Free", n.free)}
-        </div>
-      </div>
-    </div>
-  );
+  return null;
 }
 
 function Legend() {
