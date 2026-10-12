@@ -12,6 +12,7 @@
  * arriving, and any notes.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -1016,6 +1017,19 @@ function TheHouse({
     return readPricing(room?.pricingIndicative) ?? pricing;
   }, [chosenType, available, deficient, pricing]);
 
+  // A room suggested by the house chart (2026-10-12): "Start an inquiry" on a free night opens the
+  // new booking with `?room=305`. The house is asked once on arrival and, when the room is free on
+  // every night, it is picked and Take it keeps it — said in words either way. The address loses
+  // `room=` once it is read, so a reload does not do it again.
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const chartRoom = searchParams.get("room")?.trim() || null;
+  const [chartPick, setChartPick] = useState<string | null>(null);
+  const [chartNote, setChartNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const chartAsked = useRef(false);
+  const chartRead = useRef(false);
+
   const ask = useMutation({
     mutationFn: async () => {
       const ci = entry.checkInDate?.slice(0, 10);
@@ -1076,9 +1090,13 @@ function TheHouse({
         .filter((d) => stayNightSet.has(d))
         .map((date) => ({ date, roomIds: sel.effectiveByNight[date] ?? [] }))
     : [];
+  // Take it takes the marked type's rooms free on every night — the chart's room first, when it is one.
+  const takeIds = chosenRow
+    ? (chartPick && chosenRow.full.includes(chartPick) ? [chartPick, ...chosenRow.full.filter((id) => id !== chartPick)] : chosenRow.full).slice(0, numberOfRooms)
+    : [];
   const candidate: BillNight[] =
     !picked.length && chosenRow && chosenRow.full.length >= numberOfRooms
-      ? stayNights.map((date) => ({ date, roomIds: chosenRow.full.slice(0, numberOfRooms) }))
+      ? stayNights.map((date) => ({ date, roomIds: takeIds }))
       : [];
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
@@ -1093,7 +1111,7 @@ function TheHouse({
 
   const takeIt = () => {
     if (!chosenRow) return;
-    const ids = chosenRow.full.slice(0, numberOfRooms);
+    const ids = takeIds;
     sel.setWholeStay(ids);
     const perNight = stayNights.length
       ? stayNights.map((date) => ({ date, roomIds: ids }))
@@ -1101,6 +1119,52 @@ function TheHouse({
     sel.submittedRef.current = null;
     seal.mutate({ perNight, roomIds: ids, allIds: ids });
   };
+
+  useEffect(() => {
+    if (!chartRoom || chartRead.current || !editable || past || !session) return;
+    const clearAddress = () => {
+      const p = new URLSearchParams(searchParams.toString());
+      p.delete("room");
+      const qs = p.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    };
+    if (savedOption) {
+      // Rooms already chosen on this booking — the chart's suggestion does not override them.
+      chartRead.current = true;
+      clearAddress();
+      return;
+    }
+    if (!hasResults) {
+      if (!chartAsked.current && entry.checkInDate && entry.checkOutDate) {
+        chartAsked.current = true;
+        ask.mutate();
+      }
+      return;
+    }
+    chartRead.current = true;
+    const row = rows.find((r) => r.roomNumber === chartRoom);
+    if (row && row.bucket === "available") {
+      sel.setWholeStay([row.roomId]);
+      setPickedType(row.roomTypeName);
+      setChartPick(row.roomId);
+      setChartNote({
+        ok: true,
+        text:
+          numberOfRooms > 1
+            ? `Room ${chartRoom} from the house chart is free on every night and picked — Take it adds ${plural(numberOfRooms - 1, "more room")} of its type.`
+            : `Room ${chartRoom} from the house chart is free on every night — press Take it to keep it.`,
+      });
+    } else {
+      setChartNote({
+        ok: false,
+        text: row
+          ? `Room ${chartRoom} from the house chart is not free on every night of this stay — choose the rooms from the answer.`
+          : `Room ${chartRoom} from the house chart is not in the house's answer — choose the rooms from the answer.`,
+      });
+    }
+    clearAddress();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartRoom, editable, past, session, savedOption, hasResults, rows]);
 
   const [toolOpen, setToolOpen] = useState(false);
   const toolRef = useRef<HTMLDivElement | null>(null);
@@ -1209,6 +1273,11 @@ function TheHouse({
           </span>
         ) : (
           <>
+            {chartNote ? (
+              <p className={`chart-from${chartNote.ok ? "" : " warn"}`} role="status">
+                {chartNote.text}
+              </p>
+            ) : null}
             <table className="table compact">
               <thead>
                 <tr>

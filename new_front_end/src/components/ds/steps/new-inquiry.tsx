@@ -20,7 +20,7 @@
  * nothing here adds money up.
  */
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -83,6 +83,19 @@ const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
 
 export function NewInquiryCanvas() {
   const router = useRouter();
+  // Started from a free night on the house chart (2026-10-12): `?checkIn=&nights=&room=` fill the
+  // stay, and the room is carried to the booking, where the house is asked and it is picked.
+  const params = useSearchParams();
+  const fromChart = useMemo(() => {
+    const ci = params.get("checkIn") ?? "";
+    const n = parseInt(params.get("nights") ?? "", 10);
+    const room = params.get("room")?.trim() || null;
+    return {
+      checkIn: /^\d{4}-\d{2}-\d{2}$/.test(ci) ? ci : null,
+      nights: Number.isFinite(n) && n >= 1 && n <= 60 ? String(n) : null,
+      room,
+    };
+  }, [params]);
   const queryClient = useQueryClient();
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
@@ -120,10 +133,10 @@ export function NewInquiryCanvas() {
   const [arrivingPhone, setArrivingPhone] = useState("");
 
   /* ---------------------------------------------------------------- the stay */
-  const [checkIn, setCheckIn] = useState("");
+  const [checkIn, setCheckIn] = useState(() => fromChart.checkIn ?? "");
   const [checkOut, setCheckOut] = useState("");
   // Nights lead; check-out follows check-in + nights, and a picked check-out sets the nights.
-  const [nights, setNights] = useState("1");
+  const [nights, setNights] = useState(() => fromChart.nights ?? "1");
   const [rooms, setRooms] = useState("1");
   const [adults, setAdults] = useState("1");
   const [children, setChildren] = useState("0");
@@ -131,7 +144,8 @@ export function NewInquiryCanvas() {
   // "5 King + 2 Twin" — optional, may be partial.
   const [beds, setBeds] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
-  const checkInDefaulted = useRef(false);
+  // A check-in brought from the house chart is a typed date — the hotel's today never replaces it.
+  const checkInDefaulted = useRef(!!fromChart.checkIn);
 
   /* ---------------------------------------------------------------- channel and party */
   const channel = channelDef(channelKey);
@@ -542,7 +556,7 @@ export function NewInquiryCanvas() {
       if (session) void queryClient.prefetchQuery({ queryKey: ["entry", id], queryFn: () => getEntry(session, id) });
       toast.success(`${id} kept · the lead is on record`);
       setNavigating(true);
-      router.push(bookingHref(id));
+      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : bookingHref(id));
     },
     onError: (e) => {
       const body = e instanceof ApiError ? e.body : undefined;
@@ -652,6 +666,14 @@ export function NewInquiryCanvas() {
           <StepCanvas past={false}>
             <StepFlow items={flowItems} on fold="on-move">
               <div className="stack">
+                {fromChart.room || fromChart.checkIn ? (
+                  <p className="chart-from">
+                    <b>From the house chart</b>
+                    {fromChart.room ? <> · Room {fromChart.room}</> : null}
+                    {fromChart.checkIn ? <> · {fmtRange(fromChart.checkIn, addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10))))}</> : null}
+                    <span> — fill in the caller and who is asking; the room is picked on the booking, once the house is asked</span>
+                  </p>
+                ) : null}
                 {/* ------------------------------------------------ the caller */}
                 {/* Who rang (2026-10-12, operator, after the journey mockup): the guest, or an
                     agency's person, a company's assistant, a VIP's secretary. The guest STAYING is
