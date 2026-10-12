@@ -714,6 +714,17 @@ export async function selectOption(
     perNight?: Array<{ date: string; roomIds: string[] }>;
     deficientAcknowledgements?: unknown;
   },
+  /**
+   * INTERNAL ONLY — the Negotiation amendment (2026-10-12). `validateOnly` runs every check and
+   * writes nothing; `stay` judges a per-night pick against the stay it is ABOUT to have (new dates,
+   * a new room count) instead of the one stored. Together they let the amendment prove the rooms
+   * hold for the new nights BEFORE it moves the booking's dates, so a refused pick can never leave
+   * a booking on new dates with rooms sealed for the old ones.
+   */
+  opts?: {
+    validateOnly?: boolean;
+    stay?: { checkInDate: Date | null; checkOutDate: Date | null; numberOfRooms: number | null };
+  },
 ) {
   const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: configId } });
   if (!cfg) throw new NotFoundError("AvailabilityConfiguration");
@@ -859,10 +870,12 @@ export async function selectOption(
   // across nights (guest staying in room 201 all week) but not within one night (that would
   // be a duplicate assignment).
   if (normalisedPerNight.length > 0) {
-    const entry = await prisma.entry.findUnique({
-      where: { id: cfg.entryId },
-      select: { numberOfRooms: true, checkInDate: true, checkOutDate: true },
-    });
+    const entry =
+      opts?.stay ??
+      (await prisma.entry.findUnique({
+        where: { id: cfg.entryId },
+        select: { numberOfRooms: true, checkInDate: true, checkOutDate: true },
+      }));
     if (!entry) throw new NotFoundError("Entry");
     const requiredRooms = entry.numberOfRooms ?? normalisedPerNight[0].roomIds.length;
     for (const n of normalisedPerNight) {
@@ -890,6 +903,8 @@ export async function selectOption(
       }
     }
   }
+
+  if (opts?.validateOnly) return null;
 
   return prisma.$transaction(async (tx) => {
     // Storage shape picked from richest → simplest:

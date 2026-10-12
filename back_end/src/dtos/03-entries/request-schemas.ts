@@ -75,13 +75,19 @@ export const updateEntryRequestSchema = z.object({
 export type UpdateEntryRequestDto = z.infer<typeof updateEntryRequestSchema>;
 
 /**
- * POST /api/entries/:id/negotiation-amendment — change the rooms and the party WITHOUT leaving
- * Negotiation (2026-09-30). Dates are deliberately absent: a date change goes back to Inquiry.
- * At least one of `party` / `rooms` is required, and the room picks take the same three shapes
- * the S1 save accepts.
+ * POST /api/entries/:id/negotiation-amendment — change the dates, the rooms and the party WITHOUT
+ * leaving Negotiation (2026-09-30; dates since 2026-10-12). At least one of `dates` / `party` /
+ * `rooms` is required; new dates need `rooms` picked from a search for them (the service checks),
+ * and the room picks take the same three shapes the S1 save accepts.
  */
 export const negotiationAmendmentRequestSchema = z
   .object({
+    dates: z
+      .object({
+        checkInDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Give the check-in as YYYY-MM-DD."),
+        checkOutDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Give the check-out as YYYY-MM-DD."),
+      })
+      .optional(),
     party: z
       .object({
         adultCount: z.coerce.number().int().min(0).optional(),
@@ -109,8 +115,8 @@ export const negotiationAmendmentRequestSchema = z
     reason: z.string().trim().min(1, "A reason is required.").max(500),
     expectedVersion: z.coerce.number().int().optional(),
   })
-  .refine((b) => !!b.party || !!b.rooms, {
-    message: "Nothing to change — send the party, the rooms, or both.",
+  .refine((b) => !!b.party || !!b.rooms || !!b.dates, {
+    message: "Nothing to change — send the dates, the party, the rooms, or any of them.",
   });
 export type NegotiationAmendmentRequestDto = z.infer<typeof negotiationAmendmentRequestSchema>;
 

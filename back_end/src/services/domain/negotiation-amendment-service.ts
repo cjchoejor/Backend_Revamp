@@ -27,10 +27,26 @@
  * whose evaluator is already written. It had no consumer. This is that consumer, so
  * deactivating the mode on /admin/modes disables the feature exactly as it does every backflow.
  *
- * WHAT IT REFUSES TO DO. Dates. A date change moves the availability question, the quote's
- * validity anchor, the no-show cut-off and the hold window at once, so it stays on the
- * re-entry to Inquiry (operator ruling: "dates can't be changed, if dates needs to be changed
- * then going back to s1 is mandatory or a new inquiry").
+ * DATES TOO, SINCE 2026-10-12 (operator ruling, reversing the 2026-09-30 one that sent every
+ * date change back to Inquiry: "make it so that the dates can be changed as well ... do it here,
+ * but it should be well audited"). A date change moves the availability question, so it is only
+ * taken TOGETHER with rooms picked from a search run for the new dates — the rooms are proved
+ * against those nights before the booking's dates move, and a search for other dates is refused.
+ * Everything else the old dates fed is dealt with here, in the open:
+ *   - the pass's live quotations are retired (they priced the old nights — the same rule as a
+ *     party or room change), and their validity clocks with them;
+ *   - the provisional block is re-marked over the new nights, keeping its deadline;
+ *   - the booking's own hold time (`holdExpiresAtOverride`) is cleared when it would now run past
+ *     the day the guest arrives — the rule `setCommittedHoldExpiry` enforces when it is set;
+ *   - guest requests dated inside the old stay but outside the new one are NAMED, not withdrawn
+ *     (the guest may still want them; the desk decides);
+ *   - another live booking of the same guest over the new nights is NAMED — the FOM's
+ *     acknowledgement at Reserve (Policy 13) is still what decides it.
+ * A night already on another stay of this enquiry is refused: that is the same stay twice.
+ *
+ * The audit: `ENTRY.STAY_DATES_CHANGED` (from / to, nights, reason, what was retired, cleared and
+ * named), the dates in `ENTRY.NEGOTIATION_CONFIGURATION_AMENDED`'s before / after, the line in the
+ * AmendmentEventRecord's summary, and `ENTRY.INTAKE_UPDATED` from the intake write itself.
  */
 import type { PrismaClient, Prisma as PrismaNS } from "@prisma/client";
 import { QuotationState, Stage } from "@prisma/client";
@@ -46,13 +62,20 @@ import {
 import { createAmendmentEvent } from "../application/s7-amendment-service.js";
 import { updateEntryIntakeFields } from "./s1-entry-service.js";
 import { selectOption } from "./s1-availability-service.js";
+import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { describeGuestOverlap, findOverlappingBookingOfSameGuest } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { releaseSpeculativeHold, placeSpeculativeHold } from "./s2-hold-service.js";
 
 /** A person at a terminal — `ActorLevel` also carries SYSTEM, which never takes this act. */
 export type NegotiationAmendmentActor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
 export type NegotiationAmendmentInput = {
-  /** The stay's party — the fields the intake screen owns. Dates are deliberately absent. */
+  /**
+   * The stay's dates, "YYYY-MM-DD" (2026-10-12). Absent, or the same as now = unchanged. A change
+   * needs `rooms` picked from a search for exactly these dates.
+   */
+  dates?: { checkInDate: string; checkOutDate: string };
+  /** The stay's party — the fields the intake screen owns. */
   party?: {
     adultCount?: number;
     childCount?: number;
@@ -86,6 +109,16 @@ export type NegotiationAmendmentOutcome = {
   amendmentId: string | null;
   partyChanged: boolean;
   roomsChanged: boolean;
+  datesChanged: boolean;
+  /** The stay before and after, "YYYY-MM-DD" — the same when the dates did not move. */
+  priorDates: { checkInDate: string | null; checkOutDate: string | null };
+  newDates: { checkInDate: string | null; checkOutDate: string | null };
+  /** The booking's own hold time that the new dates made impossible, and so was cleared. */
+  holdTimeCleared: string | null;
+  /** Requests dated inside the old stay that fall outside the new one — named, left as they are. */
+  requestsOutsideStay: Array<{ id: string; kind: string; what: string; forDate: string }>;
+  /** The guest's other live booking over the new nights, when there is one. */
+  guestOverlap: string | null;
   priorRoomIds: string[];
   newRoomIds: string[];
   /** Every live quotation of this pass that the change made untrue, and the state it was in. */
@@ -117,11 +150,15 @@ function partyShape(e: {
 
 /** "6 adults → 4 · 3 rooms → 1 (204, 305 dropped)" — the line the amendment record carries. */
 function describeChange(
-  before: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[] },
-  after: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[] },
+  before: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null },
+  after: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null },
   roomNo: (id: string) => string,
 ): string {
   const parts: string[] = [];
+  const day = (d: Date | null | undefined) => (d ? ymdUtc(d) : null);
+  if (day(before.checkIn) !== day(after.checkIn) || day(before.checkOut) !== day(after.checkOut)) {
+    parts.push(`stay ${stayWords(before.checkIn, before.checkOut)} → ${stayWords(after.checkIn, after.checkOut)}`);
+  }
   if (before.adults !== after.adults) parts.push(`${before.adults ?? 0} adults → ${after.adults ?? 0}`);
   if (before.children !== after.children) parts.push(`${before.children ?? 0} children → ${after.children ?? 0}`);
   if (before.rooms !== after.rooms) parts.push(`${before.rooms ?? 0} rooms asked → ${after.rooms ?? 0}`);
@@ -130,6 +167,70 @@ function describeChange(
   if (dropped.length > 0) parts.push(`dropped ${dropped.map(roomNo).join(", ")}`);
   if (added.length > 0) parts.push(`added ${added.map(roomNo).join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "no change";
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "12 Oct – 15 Oct (3 nights)" — a span ends on the checkout morning. */
+function stayWords(checkIn: Date | null | undefined, checkOut: Date | null | undefined): string {
+  if (!checkIn || !checkOut) return "no dates";
+  const w = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+  const n = Math.round((checkOut.getTime() - checkIn.getTime()) / DAY_MS);
+  return `${w(checkIn)} – ${w(checkOut)} (${n} night${n === 1 ? "" : "s"})`;
+}
+
+/** A stay date as the house stores it: the calendar day, at UTC midnight. */
+function parseStayDay(value: string, what: string): Date {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value ?? "")) throw new ValidationError(`The ${what} could not be read — give it as a date.`);
+  const d = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) throw new ValidationError(`The ${what} is not a real date.`);
+  return d;
+}
+
+/**
+ * The new stay, checked before anything is written. Null = the dates are not moving.
+ *
+ * The checks: a real span, starting today at the hotel or later, and sharing no night with
+ * another live stay of the same enquiry (a return stay is the nights AFTER the guest comes back;
+ * a shared night means the same stay twice).
+ */
+async function checkNewDates(
+  prisma: PrismaClient,
+  entry: { id: string; inquiryId: string; checkInDate: Date | null; checkOutDate: Date | null },
+  dates: NegotiationAmendmentInput["dates"],
+): Promise<{ checkIn: Date; checkOut: Date } | null> {
+  if (!dates) return null;
+  const checkIn = parseStayDay(dates.checkInDate, "check-in date");
+  const checkOut = parseStayDay(dates.checkOutDate, "check-out date");
+  const same =
+    !!entry.checkInDate &&
+    !!entry.checkOutDate &&
+    ymdUtc(entry.checkInDate) === ymdUtc(checkIn) &&
+    ymdUtc(entry.checkOutDate) === ymdUtc(checkOut);
+  if (same) return null;
+  if (checkOut.getTime() <= checkIn.getTime()) {
+    throw new ValidationError("The check-out has to be after the check-in.");
+  }
+  const today = hotelTodayUtc();
+  if (checkIn.getTime() < today.getTime()) {
+    throw new ValidationError(`The stay can start today at the hotel (${ymdUtc(today)}) or later — not before.`);
+  }
+  const siblings = await prisma.entry.findMany({
+    where: { inquiryId: entry.inquiryId, id: { not: entry.id }, status: { notIn: ["CANCELLED", "EXPIRED"] } },
+    select: { id: true, checkInDate: true, checkOutDate: true },
+  });
+  for (const s of siblings) {
+    const sIn = s.checkInDate;
+    const sOut = s.checkOutDate ?? (sIn ? new Date(sIn.getTime() + DAY_MS) : null);
+    if (!sIn || !sOut) continue;
+    if (sIn.getTime() < checkOut.getTime() && sOut.getTime() > checkIn.getTime()) {
+      throw new ValidationError(
+        `This enquiry already has a stay over some of those nights (${s.id} · ${stayWords(sIn, sOut)}) — pick dates that do not share a night with it.`,
+      );
+    }
+  }
+  return { checkIn, checkOut };
 }
 
 export async function amendNegotiationConfiguration(
@@ -141,8 +242,8 @@ export async function amendNegotiationConfiguration(
   opts?: { applyingRequestId?: string },
 ): Promise<NegotiationAmendmentOutcome> {
   if (!input?.reason?.trim()) throw new ValidationError("A reason is required to change the configuration.");
-  if (!input.party && !input.rooms) {
-    throw new ValidationError("Nothing to change — send the party, the rooms, or both.");
+  if (!input.party && !input.rooms && !input.dates) {
+    throw new ValidationError("Nothing to change — send the dates, the party, the rooms, or any of them.");
   }
 
   const entry = await prisma.entry.findUnique({
@@ -166,6 +267,61 @@ export async function amendNegotiationConfiguration(
   // The seeded mode is load-bearing: deactivating GUEST_COMPOSITION_CHANGE disables this act,
   // exactly as deactivating a mode disables its backflow.
   await requireActiveMode(prisma, "GUEST_COMPOSITION_CHANGE");
+
+  /**
+   * The dates, before the authority question — a span that cannot stand is refused at once, so a
+   * waiting request never carries dates the FOM would only find out about on approval.
+   */
+  const newStay = await checkNewDates(prisma, entry, input.dates);
+  const datesChanged = !!newStay;
+  if (datesChanged && !input.rooms) {
+    throw new ValidationError(
+      "New dates need the rooms picked again for those nights — ask the house for the new dates, then pick the rooms.",
+    );
+  }
+  const stayCheckIn = newStay?.checkIn ?? entry.checkInDate;
+  const stayCheckOut = newStay?.checkOut ?? entry.checkOutDate;
+
+  // The configuration named must belong to this booking, and to this pass — a sealed config of
+  // an earlier segment is commercial history and is never re-sealed (the same rule
+  // `recallConfiguration` enforces). And it must have been searched for the stay as it will
+  // stand: a room free on other nights says nothing about these.
+  if (input.rooms) {
+    const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: input.rooms.configurationId } });
+    if (!cfg || cfg.entryId !== entryId) throw new NotFoundError("AvailabilityConfiguration");
+    if (cfg.segmentId && cfg.segmentId !== segmentId) {
+      throw new ValidationError("That search belongs to an earlier pass — ask the house again before saving rooms.");
+    }
+    const sc = (cfg.searchCriteria ?? {}) as Record<string, unknown>;
+    const scIn = typeof sc.checkInDate === "string" ? sc.checkInDate.slice(0, 10) : null;
+    const scOut = typeof sc.checkOutDate === "string" ? sc.checkOutDate.slice(0, 10) : null;
+    const wantIn = stayCheckIn ? ymdUtc(stayCheckIn) : null;
+    const wantOut = stayCheckOut ? ymdUtc(stayCheckOut) : null;
+    const searchedOther = scIn && scOut ? scIn !== wantIn || scOut !== wantOut : datesChanged;
+    if (searchedOther) {
+      throw new ValidationError(
+        `Those rooms were found for ${scIn && scOut ? stayWords(new Date(`${scIn}T00:00:00Z`), new Date(`${scOut}T00:00:00Z`)) : "other dates"}, not for ${stayWords(stayCheckIn, stayCheckOut)} — ask the house for the new dates first.`,
+      );
+    }
+  }
+
+  /**
+   * Prove the rooms hold for the stay AS IT WILL STAND before anything is written. The party and
+   * the dates are written first (the per-night check reads the room count and the nights), and a
+   * pick refused after that would leave the booking on new dates with rooms sealed for the old
+   * ones — so the same `selectOption`, with nothing written, answers first.
+   */
+  if (input.rooms) {
+    const { configurationId, ...picks } = input.rooms;
+    await selectOption(prisma, configurationId, actor.actorId, picks, {
+      validateOnly: true,
+      stay: {
+        checkInDate: stayCheckIn,
+        checkOutDate: stayCheckOut,
+        numberOfRooms: input.party?.numberOfRooms ?? entry.numberOfRooms,
+      },
+    });
+  }
 
   /**
    * Authority follows what MOVED, not the stage (the p58 doctrine). Nothing sent and nothing
@@ -204,6 +360,7 @@ export async function amendNegotiationConfiguration(
         (entry.availabilityConfigs.find((c) => c.sealedAt && c.optionSelected) ?? null)?.optionSelected,
       ).distinctRoomIds,
       whyNot: whyNot ?? "This change needs the FOM.",
+      newStay,
     });
   }
 
@@ -215,18 +372,10 @@ export async function amendNegotiationConfiguration(
     rooms: entry.numberOfRooms,
     roomIds: priorRoomIds,
     shape: partyShape(entry),
+    checkIn: entry.checkInDate,
+    checkOut: entry.checkOutDate,
   };
 
-  // The configuration named must belong to this booking, and to this pass — a sealed config of
-  // an earlier segment is commercial history and is never re-sealed (the same rule
-  // `recallConfiguration` enforces).
-  if (input.rooms) {
-    const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: input.rooms.configurationId } });
-    if (!cfg || cfg.entryId !== entryId) throw new NotFoundError("AvailabilityConfiguration");
-    if (cfg.segmentId && cfg.segmentId !== segmentId) {
-      throw new ValidationError("That search belongs to an earlier pass — ask the house again before saving rooms.");
-    }
-  }
 
   // ---- apply -----------------------------------------------------------------------
   // The party first: its validation (capacity, the hotel's ceiling, unaccompanied minors, the
@@ -234,13 +383,16 @@ export async function amendNegotiationConfiguration(
   // Policy 64 re-classification) all runs before its own transaction, so a refusal here writes
   // nothing at all.
   let partyChanged = false;
-  if (input.party) {
+  if (input.party || newStay) {
     const updated = await updateEntryIntakeFields(
       prisma,
       entryId,
       actor.actorId,
       actor.actorLevel,
-      { ...input.party },
+      {
+        ...(input.party ?? {}),
+        ...(newStay ? { checkInDate: ymdUtc(newStay.checkIn), checkOutDate: ymdUtc(newStay.checkOut) } : {}),
+      },
       { allowAtNegotiation: true },
     );
     partyChanged = partyShape(updated) !== before.shape;
@@ -251,14 +403,14 @@ export async function amendNegotiationConfiguration(
   if (input.rooms) {
     const { configurationId, ...picks } = input.rooms;
     const sealed = await selectOption(prisma, configurationId, actor.actorId, picks);
-    newRoomIds = readOptionSelected(sealed.optionSelected).distinctRoomIds;
+    newRoomIds = readOptionSelected(sealed!.optionSelected).distinctRoomIds;
     const sameSet =
       newRoomIds.length === priorRoomIds.length && newRoomIds.every((id) => priorRoomIds.includes(id));
     roomsChanged = !sameSet;
   }
 
-  if (!partyChanged && !roomsChanged) {
-    throw new ValidationError("Nothing changed — the party and the rooms are as they were.");
+  if (!partyChanged && !roomsChanged && !datesChanged) {
+    throw new ValidationError("Nothing changed — the dates, the party and the rooms are as they were.");
   }
 
   // ---- consequences ----------------------------------------------------------------
@@ -335,12 +487,13 @@ export async function amendNegotiationConfiguration(
   const activeHold = entry.speculativeHolds.find(
     (h) => h.segmentId === segmentId && (h.state === "PLACED" || h.state === "UPGRADED"),
   );
-  if (roomsChanged && activeHold) {
+  // New nights are a new question for the marker too, even over the same rooms.
+  if ((roomsChanged || datesChanged) && activeHold) {
     // The rooms are already re-sealed by this point, so nothing here may throw: a marker problem
     // must be REPORTED, not turned into a failure that hides a change which has happened.
     try {
       await releaseSpeculativeHold(prisma, entryId, activeHold.id, actor, {
-        releaseReason: `Rooms changed at Negotiation — ${input.reason.trim()}`,
+        releaseReason: `${datesChanged ? "Dates" : "Rooms"} changed at Negotiation — ${input.reason.trim()}`,
         internalReMark: true,
       });
       const anchor = newRoomIds[0] ?? null;
@@ -352,7 +505,9 @@ export async function amendNegotiationConfiguration(
             roomId: anchor,
             ttlSeconds: secondsLeft,
             commercialBasis: activeHold.notes ?? `Re-marked after a configuration change — ${input.reason.trim()}`,
-            notes: "Re-placed over the new rooms; the original deadline stands.",
+            notes: datesChanged
+              ? "Re-placed over the new nights; the original deadline stands."
+              : "Re-placed over the new rooms; the original deadline stands.",
           });
           hold = {
             action: "REPLACED",
@@ -383,15 +538,83 @@ export async function amendNegotiationConfiguration(
     }
   }
 
+  /**
+   * What else the old dates fed. The booking's own hold time is cleared when it would now run
+   * past the day the guest arrives (the rule it was set under); requests dated inside the old stay
+   * but outside the new one, and the guest's other booking over the new nights, are NAMED — the
+   * desk decides about them, nothing is withdrawn on its behalf.
+   */
+  let holdTimeCleared: string | null = null;
+  let requestsOutsideStay: NegotiationAmendmentOutcome["requestsOutsideStay"] = [];
+  let guestOverlap: string | null = null;
+  if (newStay) {
+    const now = new Date();
+    const override = entry.holdExpiresAtOverride;
+    if (override && override.getTime() > newStay.checkIn.getTime() + DAY_MS) {
+      holdTimeCleared = override.toISOString();
+      await prisma.$transaction(async (tx) => {
+        await tx.entry.update({
+          where: { id: entryId },
+          data: { holdExpiresAtOverride: null, holdExpiryOverrideSetBy: null, holdExpiryOverrideSetAt: null },
+        });
+        await auditService.emit(tx as any, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
+          eventType: "COMMITTED_HOLD.EXPIRY_CLEARED",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S2,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: {
+            cause: "STAY_DATES_CHANGED",
+            prior: holdTimeCleared,
+            newCheckInDate: ymdUtc(newStay.checkIn),
+            note: "The booking's own hold time ran past the new arrival day — back to the house window.",
+          },
+          createdBy: actor.actorId,
+        });
+      });
+    }
+
+    if (before.checkIn && before.checkOut) {
+      const dated = await prisma.guestRequest.findMany({
+        where: {
+          entryId,
+          state: { in: ["ASKED", "ARRANGED"] as any },
+          forDate: { gte: before.checkIn, lte: before.checkOut },
+        },
+        select: { id: true, kind: true, what: true, forDate: true },
+      });
+      requestsOutsideStay = dated
+        .filter((r) => r.forDate && (r.forDate < newStay.checkIn || r.forDate > newStay.checkOut))
+        .map((r) => ({ id: r.id, kind: r.kind, what: r.what, forDate: ymdUtc(r.forDate!) }));
+    }
+
+    try {
+      const other = await findOverlappingBookingOfSameGuest(prisma, {
+        entryId,
+        guestProfileId: entry.guestProfileId,
+        checkInDate: newStay.checkIn,
+        checkOutDate: newStay.checkOut,
+      });
+      guestOverlap = other ? describeGuestOverlap(other) : null;
+    } catch {
+      /* a warning, never a gate — Reserve asks the question properly */
+    }
+  }
+
   // ---- the record ------------------------------------------------------------------
   const after = await prisma.entry.findUnique({ where: { id: entryId } });
   const summary = describeChange(
-    { adults: before.adults, children: before.children, rooms: before.rooms, roomIds: priorRoomIds },
+    { adults: before.adults, children: before.children, rooms: before.rooms, roomIds: priorRoomIds, checkIn: before.checkIn, checkOut: before.checkOut },
     {
       adults: after?.adultCount ?? before.adults,
       children: after?.childCount ?? before.children,
       rooms: after?.numberOfRooms ?? before.rooms,
       roomIds: newRoomIds,
+      checkIn: after?.checkInDate ?? before.checkIn,
+      checkOut: after?.checkOutDate ?? before.checkOut,
     },
     roomNo,
   );
@@ -435,8 +658,18 @@ export async function amendNegotiationConfiguration(
       summary,
       partyChanged,
       roomsChanged,
-      before: { adults: before.adults, children: before.children, rooms: before.rooms, roomIds: priorRoomIds },
+      datesChanged,
+      before: {
+        checkInDate: before.checkIn ? ymdUtc(before.checkIn) : null,
+        checkOutDate: before.checkOut ? ymdUtc(before.checkOut) : null,
+        adults: before.adults,
+        children: before.children,
+        rooms: before.rooms,
+        roomIds: priorRoomIds,
+      },
       after: {
+        checkInDate: after?.checkInDate ? ymdUtc(after.checkInDate) : null,
+        checkOutDate: after?.checkOutDate ? ymdUtc(after.checkOutDate) : null,
         adults: after?.adultCount ?? null,
         children: after?.childCount ?? null,
         rooms: after?.numberOfRooms ?? null,
@@ -445,9 +678,52 @@ export async function amendNegotiationConfiguration(
       quotationsInvalidated: quotationsInvalidated.map((q) => q.referenceNumber),
       hold,
       amendmentId,
+      ...(opts?.applyingRequestId ? { approvedRequestId: opts.applyingRequestId } : {}),
     },
     createdBy: actor.actorId,
   });
+
+  /**
+   * The dates have their own trace, so "when did this stay move, who moved it, and why" is one
+   * query — not a search through every configuration change for a dates line.
+   */
+  if (newStay) {
+    const nights = (a: Date | null, b: Date | null) => (a && b ? Math.round((b.getTime() - a.getTime()) / DAY_MS) : null);
+    await auditService.emit(prisma as any, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
+      eventType: "ENTRY.STAY_DATES_CHANGED",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: Stage.S2,
+      inquiryId: entry.inquiryId,
+      entryId,
+      payload: {
+        reason: input.reason.trim(),
+        via: "NEGOTIATION_AMENDMENT",
+        from: {
+          checkInDate: before.checkIn ? ymdUtc(before.checkIn) : null,
+          checkOutDate: before.checkOut ? ymdUtc(before.checkOut) : null,
+          nights: nights(before.checkIn, before.checkOut),
+        },
+        to: {
+          checkInDate: ymdUtc(newStay.checkIn),
+          checkOutDate: ymdUtc(newStay.checkOut),
+          nights: nights(newStay.checkIn, newStay.checkOut),
+        },
+        roomsBefore: priorRoomIds.map(roomNo),
+        roomsAfter: newRoomIds.map(roomNo),
+        quotationsRetired: quotationsInvalidated.map((q) => q.referenceNumber),
+        hold,
+        holdTimeCleared,
+        requestsOutsideStay,
+        guestOverlap,
+        amendmentId,
+        ...(opts?.applyingRequestId ? { approvedRequestId: opts.applyingRequestId } : {}),
+      },
+      createdBy: actor.actorId,
+    });
+  }
 
   if (opts?.applyingRequestId) {
     await prisma.negotiationAmendmentRequest.update({
@@ -462,6 +738,18 @@ export async function amendNegotiationConfiguration(
     amendmentId,
     partyChanged,
     roomsChanged,
+    datesChanged,
+    priorDates: {
+      checkInDate: before.checkIn ? ymdUtc(before.checkIn) : null,
+      checkOutDate: before.checkOut ? ymdUtc(before.checkOut) : null,
+    },
+    newDates: {
+      checkInDate: after?.checkInDate ? ymdUtc(after.checkInDate) : null,
+      checkOutDate: after?.checkOutDate ? ymdUtc(after.checkOutDate) : null,
+    },
+    holdTimeCleared,
+    requestsOutsideStay,
+    guestOverlap,
     priorRoomIds,
     newRoomIds,
     quotationsInvalidated,
@@ -482,11 +770,19 @@ export async function amendNegotiationConfiguration(
  */
 async function raiseNegotiationAmendmentRequest(
   prisma: PrismaClient,
-  entry: { id: string; inquiryId: string; adultCount: number | null; childCount: number | null; numberOfRooms: number | null },
+  entry: {
+    id: string;
+    inquiryId: string;
+    adultCount: number | null;
+    childCount: number | null;
+    numberOfRooms: number | null;
+    checkInDate: Date | null;
+    checkOutDate: Date | null;
+  },
   segmentId: string,
   actor: NegotiationAmendmentActor,
   input: NegotiationAmendmentInput,
-  ctx: { priorRoomIds: string[]; whyNot: string },
+  ctx: { priorRoomIds: string[]; whyNot: string; newStay: { checkIn: Date; checkOut: Date } | null },
 ): Promise<NegotiationAmendmentOutcome> {
   const open = await prisma.negotiationAmendmentRequest.findFirst({
     where: { entryId: entry.id, state: "REQUESTED" },
@@ -517,8 +813,12 @@ async function raiseNegotiationAmendmentRequest(
       children: entry.childCount,
       rooms: entry.numberOfRooms,
       roomIds: ctx.priorRoomIds,
+      checkIn: entry.checkInDate,
+      checkOut: entry.checkOutDate,
     },
     {
+      checkIn: ctx.newStay?.checkIn ?? entry.checkInDate,
+      checkOut: ctx.newStay?.checkOut ?? entry.checkOutDate,
       adults: input.party?.adultCount ?? entry.adultCount,
       children: input.party?.childCount ?? entry.childCount,
       rooms: input.party?.numberOfRooms ?? entry.numberOfRooms,
@@ -547,7 +847,13 @@ async function raiseNegotiationAmendmentRequest(
     stageContext: Stage.S2,
     inquiryId: entry.inquiryId,
     entryId: entry.id,
-    payload: { requestId: req.id, summary, reason: input.reason.trim(), because: ctx.whyNot },
+    payload: {
+      requestId: req.id,
+      summary,
+      reason: input.reason.trim(),
+      because: ctx.whyNot,
+      ...(ctx.newStay ? { proposedDates: { checkInDate: ymdUtc(ctx.newStay.checkIn), checkOutDate: ymdUtc(ctx.newStay.checkOut) } } : {}),
+    },
     createdBy: actor.actorId,
   });
 
@@ -558,6 +864,18 @@ async function raiseNegotiationAmendmentRequest(
     amendmentId: null,
     partyChanged: false,
     roomsChanged: false,
+    datesChanged: false,
+    priorDates: {
+      checkInDate: entry.checkInDate ? ymdUtc(entry.checkInDate) : null,
+      checkOutDate: entry.checkOutDate ? ymdUtc(entry.checkOutDate) : null,
+    },
+    newDates: {
+      checkInDate: entry.checkInDate ? ymdUtc(entry.checkInDate) : null,
+      checkOutDate: entry.checkOutDate ? ymdUtc(entry.checkOutDate) : null,
+    },
+    holdTimeCleared: null,
+    requestsOutsideStay: [],
+    guestOverlap: null,
     priorRoomIds: ctx.priorRoomIds,
     newRoomIds: ctx.priorRoomIds,
     quotationsInvalidated: [],
