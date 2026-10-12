@@ -461,3 +461,88 @@
 .ds .subtab .n.warn { background: var(--warning-soft); color: var(--warning); }
 .ds .subtab .n.stop { background: var(--danger-soft); color: var(--danger); }
 .ds .papernote-tag { font-size: 12px; font-weight: 600; color: var(--accent-ink); background: var(--accent-soft); border-radius: 3px; padding: 0 5px; margin-right: 6px; }
+
+/* ===== The house chart — Rooms › Chart (2026-10-12, after the boss's journey mockup) =====
+   Colour = how firmly a booking holds the room; room types carry no colour, their row names them. */
+.ds .rchart {
+  --rs-line: #e2ddd5; --rs-head: #faf8f5; --rs-stay: #f3f0eb;
+  --rs-prov-bg: #fffaf0; --rs-prov-line: #d9b45f; --rs-prov-tx: #7a5b20;
+  --rs-held-bg: #fdf3dc; --rs-held-line: #c98a1a; --rs-held-tx: #7a4f0e;
+  --rs-res-bg: #dbe6f1; --rs-res-tx: #24506f;
+  --rs-in-bg: #3f6f99; --rs-over-bg: #8d3a33;
+  --rs-out-bg: #ebe7e1; --rs-ooo-a: #f1eeea; --rs-ooo-b: #e0dad1; --rs-ooo-tx: #5b554e;
+  --rs-bad: #b4473b;
+  margin-top: var(--s3);
+}
+.ds .rchart-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.ds .rchart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ds .rchart-nav select.rchart-len:not(.desk-root *) { width: 130px; flex: 0 0 auto; height: var(--control-h-compact); padding: 0 8px; }
+.ds .rchart-span { font-size: var(--t-lead); margin-left: 6px; }
+.ds .rchart-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+/* fixed layout: every night the same width, the room column and the total column their own */
+.ds .rchart .tape { border-collapse: separate; border-spacing: 0; font-size: 13px; width: 100%; table-layout: fixed; }
+.ds .rchart .tape th, .ds .rchart .tape td { border-right: 1px solid #eee8df; border-bottom: 1px solid #eee8df; padding: 0; }
+.ds .rchart .tape .rc { position: sticky; left: 0; z-index: 2; background: var(--surface); text-align: left; min-width: 190px; max-width: 190px; padding: 5px 8px; border-right: 2px solid var(--line); font-weight: 400; }
+.ds .rchart .tape thead tr > * { position: sticky; background: var(--rs-head); z-index: 4; }
+.ds .rchart .tape thead .rc { z-index: 6; left: 0; }
+.ds .rchart .tape thead tr.h1 > * { top: 0; height: 56px; }
+.ds .rchart .tape thead tr.h2 > * { top: 56px; height: 26px; }
+.ds .rchart .tape thead tr.h3 > * { top: 82px; height: 26px; }
+.ds .rchart .tape thead tr.h1 th { color: var(--ink-3); font-weight: 400; text-align: center; line-height: 1.15; font-size: 12px; }
+.ds .rchart .tape thead tr.h1 th.rc { width: 190px; }
+.ds .rchart .tape thead tr.h1 th.tc { width: 64px; }
+.ds .rchart .tape thead tr.h1 th b { font-size: 15px; color: var(--ink); }
+.ds .rchart .tape thead tr.h1 th small { display: block; font-size: 10.5px; color: var(--ink-3); }
+.ds .rchart .tape thead tr.h1 th.today { box-shadow: inset 0 -3px 0 var(--ink); background: var(--rs-stay); }
+.ds .rchart .tape thead tr.h1 th.today small { color: var(--ink); font-weight: 700; }
+.ds .rchart .tape thead tr.h1 th.past { color: var(--ink-4); }
+.ds .rchart .tape thead th.rc { font-size: 12.5px; color: var(--ink-3); font-weight: 700; }
+/* the two figures the desk reads first ("UIappeal") */
+.ds .rchart .tape td.need { text-align: center; font-weight: 800; font-size: 13.5px; }
+.ds .rchart .tape td.need.ok { background: var(--success-soft); color: var(--success); }
+.ds .rchart .tape td.need.short { background: var(--warning-soft); color: var(--warning); }
+.ds .rchart .tape td.need.none { background: var(--danger-soft); color: var(--danger); }
+.ds .rchart .tape td.hb { text-align: center; font-weight: 800; font-size: 13.5px; color: var(--ink); background: var(--rs-head); }
+.ds .rchart .tape .tc { min-width: 58px; text-align: center; font-size: 12px; color: var(--ink-3); }
+/* a room type's own row */
+.ds .rchart .tape tr.trow > * { background: #f7f4ef; }
+.ds .rchart .tape tr.trow .rc { background: #f7f4ef; }
+.ds .rchart .tape tr.trow .rc .meta { font-size: 11.5px; }
+.ds .rchart .tape td.fc { text-align: center; font-size: 11.5px; color: var(--ink-3); padding: 3px 2px; }
+.ds .rchart .tape td.fc.none { color: var(--danger); font-weight: 700; }
+/* a room's row */
+.ds .rchart .tape .rno { padding: 2px 6px 2px 14px; }
+.ds .rchart .rno-btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 0; font: inherit; color: var(--ink); cursor: pointer; text-align: left; }
+.ds .rchart .rno-btn:hover b { text-decoration: underline; }
+.ds .rchart .rno-btn b { font-size: 14px; }
+.ds .rchart .rno-btn .bed { color: var(--ink-3); font-size: 12px; }
+.ds .rchart .rno-btn .fault { font-size: 11px; font-weight: 700; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r-chip); padding: 0 5px; }
+.ds .rchart .hkdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: 1px; }
+.ds .rchart .hkdot.hk-ok { background: #2f7a4b; }
+.ds .rchart .hkdot.hk-warn { background: #d39a2c; }
+.ds .rchart .hkdot.hk-bad { background: var(--rs-bad); }
+.ds .rchart .tape td.cell { height: 30px; }
+.ds .rchart .tape td.cell.free { background: var(--surface); box-shadow: inset 0 0 0 1px var(--rs-line); }
+.ds .rchart .tape td.cell.today { background: #fdfcfa; }
+.ds .rchart .tape td.seg { height: 30px; padding: 3px 2px; vertical-align: middle; }
+.ds .rchart .tape .seg .bar { width: 100%; height: 24px; border-radius: 4px; padding: 0 7px; display: flex; align-items: center; gap: 4px; font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 0; text-align: left; cursor: pointer; }
+.ds .rchart .tape .seg .bar .st { font-weight: 400; opacity: .85; }
+.ds .rchart .tape .seg.cont-l .bar { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.ds .rchart .tape .seg.cont-r .bar { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* the kinds — the legend draws the same swatches */
+.ds .rchart .k-prov.bar, .ds .rchart .seg.k-prov .bar, .ds .rchart .sw.k-prov { background: var(--rs-prov-bg); color: var(--rs-prov-tx); outline: 1.5px dotted var(--rs-prov-line); outline-offset: -1.5px; }
+.ds .rchart .seg.k-held .bar, .ds .rchart .sw.k-held { background: var(--rs-held-bg); color: var(--rs-held-tx); outline: 1.5px dashed var(--rs-held-line); outline-offset: -1.5px; }
+.ds .rchart .seg.k-res .bar, .ds .rchart .sw.k-res { background: var(--rs-res-bg); color: var(--rs-res-tx); }
+.ds .rchart .seg.k-res.paypend .bar, .ds .rchart .sw.k-res.paypend { box-shadow: inset 4px 0 0 var(--rs-held-line); }
+.ds .rchart .seg.k-in .bar, .ds .rchart .sw.k-in { background: var(--rs-in-bg); color: #fff; }
+.ds .rchart .seg.k-over .bar, .ds .rchart .sw.k-over { background: var(--rs-over-bg); color: #fff; }
+.ds .rchart .seg.k-out .bar, .ds .rchart .sw.k-out { background: var(--rs-out-bg); color: var(--ink-3); }
+.ds .rchart .seg.k-ooo .bar, .ds .rchart .sw.k-ooo { background: repeating-linear-gradient(45deg, var(--rs-ooo-a), var(--rs-ooo-a) 5px, var(--rs-ooo-b) 5px, var(--rs-ooo-b) 10px); color: var(--rs-ooo-tx); cursor: default; }
+.ds .rchart .seg.k-conflict .bar, .ds .rchart .sw.k-conflict { background: var(--surface); box-shadow: inset 0 0 0 2px var(--rs-bad); color: var(--rs-bad); justify-content: center; font-weight: 800; cursor: help; }
+/* parked — a pause: the claim stands, the bar is drawn faded and striped */
+.ds .rchart .seg.parked .bar, .ds .rchart .sw.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .6) 0 4px, transparent 4px 8px); opacity: .8; }
+.ds .rchart .seg .bar .pk { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; background: rgba(0, 0, 0, .1); border-radius: 3px; padding: 0 4px; }
+.ds .rchart .rslegend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.ds .rchart .rslegend .sw { display: inline-block; width: 18px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+.ds .rchart .rslegend .sw.free { background: var(--surface); box-shadow: inset 0 0 0 1px #cfc8bd; }
+.ds .rchart .rslegend .hkdot { margin-right: 4px; }
