@@ -520,7 +520,8 @@ export async function previewRoomMove(
     displaced: !!l.displacedBy,
     displacedBy: l.displacedBy ?? null,
   }));
-  const selectedCount = new Set(asked.map(legKey)).size;
+  // Only the rooms the desk picked count; partner legs it sends back (displacedBy) were the server's.
+  const selectedCount = new Set(asked.filter((l) => !l.displacedBy).map(legKey)).size;
   if (selectedCount > MAX_SELECTED) throw new ValidationError(`Pick at most ${MAX_SELECTED} rooms at a time`);
 
   const reason = input.reason?.trim() ?? "";
