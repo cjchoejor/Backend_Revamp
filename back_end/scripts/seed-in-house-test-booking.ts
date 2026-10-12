@@ -8,7 +8,7 @@
  *   npx tsx scripts/seed-in-house-test-booking.ts --commit        # write (re-runnable: clears its own prior seed first)
  *   npx tsx scripts/seed-in-house-test-booking.ts --clean --commit  # remove it
  *
- * Options: --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4)
+ * Options: --tag X (a second fixture beside the first) · --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4)
  *          · --rate R (frozen NET per-night room figure, default 2000) · --room NNN (room number)
  *          · --rooms N (how many rooms, default 1 — a MULTI-room booking, added 2026-09-09 for
  *            PMS-237's one-room-leaves-early path, which by definition cannot be exercised on a
@@ -39,7 +39,10 @@ const AHEAD = Math.max(1, Number(arg("--ahead", "4")));
 const RATE = Number(arg("--rate", "2000"));
 const ROOM = arg("--room", "");
 const ROOM_COUNT = Math.max(1, Number(arg("--rooms", "1")));
-const P = "TEST-ED-";
+// --tag X seeds a SECOND fixture beside the first (ids `TEST-ED-X-…`), e.g. two in-house guests
+// for a room switch (2026-10-12). Without a tag the script seeds / cleans every `TEST-ED-` row.
+const TAG = arg("--tag", "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+const P = TAG ? `TEST-ED-${TAG}-` : "TEST-ED-";
 
 const dayStart = (offsetDays: number): Date => {
   // The HOTEL's day — the UTC date is still yesterday in Bhutan until 06:00.
@@ -100,6 +103,12 @@ async function clean() {
   // A walk back through Set up and Reserve seeds the pre-arrival task set (2026-10-06).
   await prisma.preArrivalTask.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
+  // A room move records a leg per booking, and every walk files the papers it held (2026-10-12).
+  // A move left with no legs is removed; one that still names another booking stays as its history.
+  await prisma.heldDocument.deleteMany({ where: { entryId: { in: ids } } });
+  const moveIds = [...new Set((await prisma.roomMoveLeg.findMany({ where: { entryId: { in: ids } }, select: { moveId: true } })).map((l) => l.moveId))];
+  await prisma.roomMoveLeg.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.roomMove.deleteMany({ where: { id: { in: moveIds }, legs: { none: {} } } });
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
   await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });

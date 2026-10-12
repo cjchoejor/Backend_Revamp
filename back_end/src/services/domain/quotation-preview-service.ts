@@ -198,6 +198,8 @@ export async function buildQuotationPreview(
      * prices the entry's own dates + sealed per-night counts, as every other caller expects.
      */
     stayOverride?: { checkIn: Date; checkOut: Date; perRoomNightCounts: Map<string, number> };
+    /** Rooms the booking does not hold yet whose rates must resolve (a room move, 2026-10-12). */
+    planRoomIds?: string[];
   },
 ): Promise<QuotationPreview> {
   const entry = await prisma.entry.findUnique({
@@ -213,7 +215,7 @@ export async function buildQuotationPreview(
 
   // Same resolution the rate-reference strip shows and the draft uses: agent/corporate card
   // where one exists, else the standard rate plan, per ROOM TYPE.
-  const reference = await buildEntryRateReference(prisma, entryId);
+  const reference = await buildEntryRateReference(prisma, entryId, { planRoomIds: opts?.planRoomIds });
   // Age-band meal shares, so a previewed child meal costs what the quote will charge.
   const childPolicy = await loadChildPolicyBundle(prisma);
 

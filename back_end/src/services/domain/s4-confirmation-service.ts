@@ -90,6 +90,16 @@ export async function confirmReservation(
      * its interim invoice before the commit (Policy 80).
      */
     carryAdvanceCondition?: boolean;
+    /**
+     * Internal-only (2026-10-12, operator ruling: "no paper goes to a guest unless the desk
+     * chooses"): every room-change walk re-confirms, and this used to email the guest the new
+     * voucher on its own. Set by the walk, the voucher is still generated and its communication
+     * still minted (the S4→Arrival answer gate reads it), but the email is held — skipped with
+     * reason HELD_FOR_DESK_DECISION — and the walk records a HeldDocument the desk answers
+     * (send by email · mark sent on WhatsApp · don't send). The desk's own confirmation at
+     * Reserve never sets it, and keeps emailing as before.
+     */
+    holdGuestEmail?: boolean;
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -363,6 +373,9 @@ export async function confirmReservation(
       voucherAckSeconds,
       voucherRef: voucher.storageReference,
       templateKey: voucher.templateKey,
+      ...(input?.holdGuestEmail
+        ? { contentSummary: "Confirmation voucher re-issued — held for the desk to send or not" }
+        : {}),
     });
 
     const engine = await getTimerEngine();
@@ -515,6 +528,29 @@ export async function confirmReservation(
         createdBy: actorId,
       } as any,
     }).catch(() => {});
+  }
+
+  if (input?.holdGuestEmail) {
+    // Held for the desk's decision (see the option above) — said on the trail, never silent.
+    await prisma.traceEvent
+      .create({
+        data: {
+          eventType: "RESERVATION_CONFIRMATION_EMAIL.SKIPPED",
+          actorId,
+          actorLevel: "SYSTEM",
+          entityType: "Reservation",
+          entityId: result.reservation.id,
+          operation: "ALERT",
+          timestamp: new Date(),
+          stageContext: Stage.S4,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { reservationId: result.reservation.id, reason: "HELD_FOR_DESK_DECISION" },
+          createdBy: actorId,
+        } as any,
+      })
+      .catch(() => {});
+    return result;
   }
 
   await dispatchStageEmailBestEffort(

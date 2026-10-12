@@ -52,6 +52,10 @@ import { assignRoomsFromSealedPerNight } from "./room-assignment-service.js";
 import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import type { ToleratedClaim } from "../../lib/room-move-claims.js";
+import { recordHeldDocument, type HeldDocumentReason } from "../../lib/held-documents.js";
+import { carryAdvancePinsAcrossNewPass } from "./s3-payment-service.js";
+import { supersedePendingInvoicesTx } from "./s3-folio-service.js";
 
 /**
  * IN-PLACE ROOM CHANGE (2026-08-12 operator ruling) — one desk action, the full governed
@@ -278,13 +282,21 @@ async function loadRoomChangeContext(
   if (!entry) throw new NotFoundError("Entry");
 
   const stage = entry.currentStage;
-  if (stage !== Stage.S5 && stage !== Stage.S6 && stage !== Stage.S7) {
-    throw new ValidationError(`A room change runs from Arrival, Check-in or Stay (S5–S7) — this booking is at ${stage}`);
+  // Set up and Reserve too since 2026-10-12 (a room move from the house chart): the rooms are
+  // committed there as well, and the governed way to change them is the same walk.
+  const ORIGINS: Stage[] = [Stage.S3, Stage.S4, Stage.S5, Stage.S6, Stage.S7];
+  if (!ORIGINS.includes(stage)) {
+    throw new ValidationError(`A room change runs from Set up, Reserve, Arrival, Check-in or Stay — this booking is at ${stage}`);
   }
   enforceEntryActiveForStageTransition({ status: entry.status });
 
-  const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
-  const currentCheckOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
+  // The frozen dates of THIS pass's reservation. At Set up the current pointer can still name an
+  // earlier pass's reservation (a re-entry left it), whose dates are history — the entry's own
+  // dates are the stay then. From Reserve on, the reservation is this pass's, as before.
+  const reservationOfPass =
+    entry.reservation && entry.reservation.segmentId === entry.segments[0]?.id ? entry.reservation : null;
+  const checkIn = reservationOfPass?.frozenCheckInDate ?? entry.checkInDate;
+  const currentCheckOut = reservationOfPass?.frozenCheckOutDate ?? entry.checkOutDate;
   // Extension mode (2026-08-21): the stay runs to the NEW checkout; the extra nights are in
   // the plan from the start, so every downstream step (sealed config, silent quote, hold,
   // re-freeze) sees the extended stay as the booking's basis.
@@ -784,6 +796,49 @@ export type RoomChangeOutcome = {
     reachedStage: string;
     blocked: { atStep: string; code: string | null; message: string } | null;
   };
+  /**
+   * Guest papers the walk generated and HELD for the desk (2026-10-12, operator ruling: no paper
+   * goes to a guest unless the desk chooses) — the re-issued voucher, and at Set up the fresh
+   * proforma. Answered through held-document-service (send by email · WhatsApp · don't send).
+   */
+  heldDocuments: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }>;
+  /** True on a dry run (a room move's preview): everything was validated, nothing was written. */
+  dryRun?: boolean;
+  /** The validated plan, on a dry run — what the preview prices and shows. */
+  plan?: {
+    compositions: RoomCompositionServiceInput[] | null;
+    discount: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
+    planRoomIds: string[];
+    perRoomNightCounts: Record<string, number>;
+    checkIn: string;
+    checkOut: string;
+    /** The room rate a kept price carries onto the new room (cross-type, price kept). */
+    keptRoomRate: number | null;
+  } | null;
+};
+
+/**
+ * A room move's context for one leg's walk (2026-10-12) — internal only, never on the HTTP body.
+ * `tolerate` names the partner leg's claim this leg may pass over (the room the partner is
+ * leaving); a running move is also read from its own record, so this matters for the dry run.
+ */
+export type RoomMoveWalkContext = {
+  moveId: string | null;
+  legId: string | null;
+  partnerEntryId: string | null;
+  /** "ENT-… (guest)" — for the notes, the voucher answer and the traces. */
+  partnerLabel: string | null;
+  tolerate: ToleratedClaim[];
+  /** KEEP = the guest keeps the price they agreed (ruling 2026-10-12); NEW_TYPE = re-priced. */
+  priceMode: "KEEP" | "NEW_TYPE";
+  /** The guest's agreement, typed by the desk, when the leg is re-priced at the new type. */
+  guestAgreedNote: string | null;
+  /**
+   * In-house only: the partner has ALREADY moved into this leg's from-room (both guests in-house,
+   * the partner's leg ran first). The room is not left empty, so it is not marked departed — the
+   * guest now in it keeps it OCCUPIED.
+   */
+  fromRoomEnteredByPartner?: boolean;
 };
 
 /**
@@ -865,6 +920,10 @@ export async function changeRoomToNewSegment(
      * through `commitStayExtension` once the interim payment is in.
      */
     extension?: StayExtensionWalkInput | null;
+    /** Validate everything and return the plan, writing nothing (a room move's preview). */
+    dryRun?: boolean;
+    /** Set when the walk is one leg of a room move from the house chart (2026-10-12). */
+    moveContext?: RoomMoveWalkContext | null;
   },
 ): Promise<RoomChangeOutcome> {
   const reason = input.reason?.trim();
@@ -1041,6 +1100,8 @@ export async function changeRoomToNewSegment(
         checkIn: range.startDate,
         checkOut: range.endDate,
         excludeEntryId: input.entryId,
+        // A room move's partner leaving this very room (2026-10-12) — the one claim passed over.
+        tolerate: input.moveContext?.tolerate,
       });
       enforceNoOverlappingBookingForCommittedHold({
         conflicts: conflicts.map((c) => ({ ...c, roomNumber: room.roomNumber })),
@@ -1139,6 +1200,26 @@ export async function changeRoomToNewSegment(
   // to standardCapacity/maxCapacity — the check had been silently dead.
   const movingComposition = priorCompositions?.find((c) => c.roomId === input.fromRoomId) ?? null;
   const movingChargeable = movingComposition?.adultCount ?? movingComposition?.occupantCount ?? null;
+
+  // A room move keeps the guest's price by default (operator ruling 2026-10-12): moved to a
+  // different room type by the hotel, the guest keeps the room rate they agreed — an upgrade is
+  // complimentary, a downgrade keeps the price. That rate is the one the old room was PRICED at
+  // (the quotation's own per-room figure, pre-discount like every stored rate; the booking discount
+  // carries separately), carried onto the new room as its negotiated rate. It is not a rate
+  // revision — the guest's rate does not move — so it needs no authority beyond the move's own.
+  const keepsPrice = !!input.moveContext && input.moveContext.priceMode === "KEEP" && !sameType;
+  const keptRoomRate: number | null = (() => {
+    if (!keepsPrice) return null;
+    const perRoom = ((priorTerms?.compositionTotals ?? null) as { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } | null)?.perRoom ?? [];
+    const priced = perRoom.find((r) => r.roomId === input.fromRoomId)?.roomRate;
+    const v = typeof priced === "number" ? priced : movingComposition?.negotiatedRoomRate ?? null;
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? Number(v.toFixed(2)) : null;
+  })();
+  if (keepsPrice && keptRoomRate == null) {
+    throw new ValidationError(
+      `Keeping the price needs the rate Room ${ctx.fromRoom.roomNumber} was priced at, and this booking has none recorded — choose "price at the new room type" for it`,
+    );
+  }
   for (const id of distinctTargets) {
     const room = targetById.get(id)!;
     const maxCapacity = (room.roomType as { maxCapacity?: number } | null)?.maxCapacity ?? null;
@@ -1254,8 +1335,9 @@ export async function changeRoomToNewSegment(
           roomId: toRoomId,
           nightMealOverrides: newOverrides,
           // A negotiated rate was negotiated for the OLD room's type — a cross-type move prices
-          // at the new type's own resolved rate instead. Same-type keeps the negotiation.
-          ...(sameType ? {} : { negotiatedRoomRate: undefined }),
+          // at the new type's own resolved rate instead. Same-type keeps the negotiation. A room
+          // move that keeps the guest's price carries the old room's rate (2026-10-12).
+          ...(sameType ? {} : { negotiatedRoomRate: keptRoomRate ?? undefined }),
         },
       ];
     } else if (movingComposition) {
@@ -1277,7 +1359,7 @@ export async function changeRoomToNewSegment(
           nightMealOverrides: (movingComposition.nightMealOverrides ?? []).filter((o) =>
             nights.includes(String(o.date).slice(0, 10)),
           ),
-          ...(crossType ? { negotiatedRoomRate: undefined } : {}),
+          ...(crossType ? { negotiatedRoomRate: keptRoomRate ?? undefined } : {}),
         };
       });
       newCompositions = [...priorCompositions.filter((c) => c.roomId !== input.fromRoomId).map((c) => ({ ...c })), ...spawned];
@@ -1706,6 +1788,7 @@ export async function changeRoomToNewSegment(
   await enforceNoOverbookingForPlannedStay(prisma, {
     entryId: input.entryId,
     otaSource: (entry as { otaSource?: boolean | null }).otaSource === true,
+    tolerate: input.moveContext?.tolerate,
     spans: substitutedPicture.flatMap((n) => {
       const startDate = new Date(`${String(n.date).slice(0, 10)}T00:00:00.000Z`);
       const endDate = new Date(startDate);
@@ -1724,8 +1807,52 @@ export async function changeRoomToNewSegment(
     });
   }
 
+  // ── Dry run (a room move's preview, 2026-10-12): everything above validated, nothing written ──
+  if (input.dryRun) {
+    const perRoomNightCounts: Record<string, number> = {};
+    for (const n of substitutedPicture) for (const id of n.roomIds) perRoomNightCounts[id] = (perRoomNightCounts[id] ?? 0) + 1;
+    return {
+      entryId: input.entryId,
+      originStage: String(stage),
+      newSegmentNumber: Number(entry.segmentNumber ?? 1) + 1,
+      fromRoom: { roomId: ctx.fromRoom.id, roomNumber: ctx.fromRoom.roomNumber, roomTypeName: ctx.fromRoom.roomType?.name ?? null },
+      toRoom: { roomId: toRoom.id, roomNumber: toRoom.roomNumber, roomTypeName: toRoom.roomType?.name ?? null },
+      toRooms: [...nightsByTarget.entries()].map(([roomId, nights]) => {
+        const room = targetById.get(roomId)!;
+        return { roomId, roomNumber: room.roomNumber, roomTypeName: room.roomType?.name ?? null, nights };
+      }),
+      keptNights: keptFromNights,
+      setupOnly,
+      repriced: hasReprice,
+      commercialTermsChanged: commercialChanged,
+      sameType,
+      substitutionNights: ctx.substitutionNights,
+      appliedBedType: null,
+      appliedBedTypes: [],
+      seating: seatingOutcome,
+      extension: null,
+      pricing: { priorTotal, newTotal: null, delta: null, currency: (priorTerms?.currency as string | undefined) ?? null },
+      quotationId: null,
+      walk: { returnedToOrigin: false, reachedStage: String(stage), blocked: null },
+      heldDocuments: [],
+      dryRun: true,
+      plan: {
+        compositions: newCompositions ?? null,
+        discount: priorDiscount ?? null,
+        planRoomIds: substitutedDistinct,
+        perRoomNightCounts,
+        checkIn: ctx.checkIn.toISOString(),
+        checkOut: ctx.checkOut.toISOString(),
+        keptRoomRate,
+      },
+    };
+  }
+
   // ── 1. The governed re-entry (new segment at S2) with origin-specific side effects ─────────
-  const reasonForTrace = isExtension
+  const move = input.moveContext ?? null;
+  const reasonForTrace = move
+    ? `ROOM_MOVE: ${reason}${move.moveId ? ` (${move.moveId}${move.partnerLabel ? `, with ${move.partnerLabel}` : ""})` : ""}`
+    : isExtension
     ? `STAY_EXTENSION: ${reason}`
     : repairSeating
     ? `PARTY_SEATING_REPAIR: ${reason}`
@@ -1787,14 +1914,18 @@ export async function changeRoomToNewSegment(
         // old room OCCUPIED → DEPARTED_DIRTY, new room OCCUPIED). A setup-only change moves
         // nobody: the room stays OCCUPIED and its H2/H3 stand.
         if (!setupOnly) {
-          await transitionRoomClaimState(tx, {
-            roomId: input.fromRoomId,
-            toState: InventoryClaimState.DEPARTED_DIRTY,
-            actorId: actor.actorId,
-            entryId: input.entryId,
-            reason: "S7 in-place room change",
-            now,
-          });
+          // A swap between two in-house guests: the partner already sleeps in this room, so it is
+          // not left empty — it stays OCCUPIED for them (2026-10-12).
+          if (!move?.fromRoomEnteredByPartner) {
+            await transitionRoomClaimState(tx, {
+              roomId: input.fromRoomId,
+              toState: InventoryClaimState.DEPARTED_DIRTY,
+              actorId: actor.actorId,
+              entryId: input.entryId,
+              reason: move ? `S7 room move ${move.moveId ?? ""}`.trim() : "S7 in-place room change",
+              now,
+            });
+          }
           await transitionRoomClaimState(tx, {
             roomId: toRoomId,
             toState: InventoryClaimState.OCCUPIED,
@@ -1890,11 +2021,22 @@ export async function changeRoomToNewSegment(
       },
     });
   } else {
+    // At Set up the proforma is the live bill and prints the stay it was made for, so the walk
+    // replaces it like the renegotiation route does (2026-09-25): a never-rendered version is
+    // frozen first (2026-08-02 ruling — a superseded paper keeps the figures that were on the
+    // table), the pending ones are superseded in the re-entry, and the new pass mints its own on
+    // arrival back at Set up. From Reserve on the voucher is the binding paper and the proforma
+    // stands (the room-change doctrine since 2026-08-12).
+    if (stage === Stage.S3) {
+      const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
+      await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId).catch(() => {});
+    }
     await backflowRoomChangeToS2(prisma, input.entryId, actor, {
       reason: reasonForTrace,
       fromStage: stage,
       cancelTimerCodes: ["NO_SHOW_CUTOFF_W5", "ROOM_READINESS_SLA_W23", "PRE_ARRIVAL_COUNTDOWN_W4"],
       hooks: async (tx) => {
+        if (stage === Stage.S3) await supersedePendingInvoicesTx(tx, input.entryId, actor.actorId);
         // Pre-occupancy: release the hold + every claim flag; the new segment re-places its own
         // hold on the substituted selection (2026-08-02 ruling — a new segment places its own
         // commitments).
@@ -1942,6 +2084,41 @@ export async function changeRoomToNewSegment(
   const appliedBedType = appliedBedTypes.find((b) => b.roomId === toRoomId)?.bedType ?? null;
 
   const newSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;
+  // Papers the walk generates and holds for the desk (2026-10-12) — filled as they are made; the
+  // array rides on every outcome, a stopped walk's included.
+  const heldDocuments: RoomChangeOutcome["heldDocuments"] = [];
+  const heldReason: HeldDocumentReason = move
+    ? "ROOM_MOVE"
+    : isExtension
+      ? "STAY_EXTENSION"
+      : repairSeating
+        ? "SEATING_REPAIR"
+        : hasReprice
+          ? "REPRICE"
+          : setupOnly
+            ? "SETUP_CHANGE"
+            : "ROOM_CHANGE";
+
+  // The bed the booking planned for the room it is leaving follows it to the new room, when that
+  // room can be made up that way (best-effort; the plan's own default covers a room it can't).
+  if (!setupOnly && !isExtension && distinctTargets.length > 0) {
+    try {
+      const plan = ((entry as { bedPlan?: unknown }).bedPlan ?? null) as Record<string, string> | null;
+      const planned = plan?.[input.fromRoomId];
+      if (planned) {
+        const next = { ...(plan ?? {}) };
+        for (const id of distinctTargets) {
+          const room = targetById.get(id)!;
+          const allowed = effectiveAllowedBedTypes(room.allowedBedTypes, room.roomType?.allowedBedTypes);
+          if (allowed.includes(planned as RoomBedType)) next[id] = planned;
+        }
+        await prisma.entry.update({ where: { id: input.entryId }, data: { bedPlan: next as Prisma.InputJsonValue } });
+      }
+    } catch {
+      /* the bed plan re-derives from the ask for any room it does not name */
+    }
+  }
+
   const outcomeBase = {
     entryId: input.entryId,
     originStage: String(stage),
@@ -1969,6 +2146,7 @@ export async function changeRoomToNewSegment(
           extraNights: input.extension.extraNights.map((n) => ({ date: String(n.date).slice(0, 10), roomId: n.roomId })),
         }
       : null,
+    heldDocuments,
   };
 
   let quotationId: string | null = null;
@@ -2014,7 +2192,7 @@ export async function changeRoomToNewSegment(
             ? { stayExtension: { requestId: input.extension!.requestId, newCheckOutDate: ctx.checkOut.toISOString(), reason }, ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}) }
             : setupOnly
               ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason, ...(repairSeating ? { seatingRepair: true } : {}) } }
-              : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason } }),
+              : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason, ...(move?.moveId ? { moveId: move.moveId } : {}) } }),
           recalledFromSegmentNumber: currentSegment.segmentNumber,
         } as Prisma.InputJsonValue,
         resultSet: (ctx.sealedConfig?.resultSet ?? {}) as Prisma.InputJsonValue,
@@ -2036,7 +2214,9 @@ export async function changeRoomToNewSegment(
         ? `Guest seating restored (${reason})`
         : setupOnly
           ? `Setup change on Room ${ctx.fromRoom.roomNumber} (${reason})`
-          : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
+          : move
+            ? `Room move${move.moveId ? ` ${move.moveId}` : ""}: ${ctx.fromRoom.roomNumber} → ${targetsLabel}${move.partnerLabel ? ` (switched with ${move.partnerLabel})` : ""} (${reason})`
+            : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
       ...(newCompositions ? { roomCompositions: newCompositions } : {}),
       ...(priorDiscount ? { requestedDiscount: priorDiscount } : {}),
       actorLevel: effectiveLevel,
@@ -2076,6 +2256,36 @@ export async function changeRoomToNewSegment(
             unresolved: seatingReport.unresolved,
             lines: seatingReport.lines,
           } as Prisma.InputJsonValue,
+          createdBy: actor.actorId,
+        },
+      })
+      .catch(() => {});
+  }
+
+  // The desk's pinned advance and the guest's payment plan carry across this pass (2026-10-12) —
+  // the walk does not reopen the money question. Before the move to Set up, so a proforma the new
+  // pass mints prints the carried figure. Best-effort and said on the trail when it fails.
+  try {
+    await carryAdvancePinsAcrossNewPass(prisma, {
+      entryId: input.entryId,
+      priorSegmentStartedAt: currentSegment.startedAt,
+      actor,
+      cause: heldReason,
+    });
+  } catch (e) {
+    await prisma.traceEvent
+      .create({
+        data: {
+          eventType: "ADVANCE_PAYMENT.CARRY_FAILED",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Entry",
+          entityId: input.entryId,
+          operation: "ALERT",
+          timestamp: new Date(),
+          stageContext: Stage.S2,
+          entryId: input.entryId,
+          payload: { entryId: input.entryId, error: (e as Error)?.message ?? String(e) },
           createdBy: actor.actorId,
         },
       })
@@ -2211,10 +2421,58 @@ export async function changeRoomToNewSegment(
         roomId: anchorRoomId,
         commercialJustification: `Room change: ${reason}`,
         trigger: "ROOM_CHANGE",
+        // From Set up the hold the walk released was running to a set moment — the new one runs
+        // to the same moment, so moving a room never lengthens how long the rooms are held.
+        expiresAtCarry: stage === Stage.S3 ? (entry.committedHold?.expiresAt ?? null) : null,
       });
     }
   } catch (e) {
     return blockedOutcome("HOLD_PLACEMENT", e);
+  }
+
+  // ── Set up is home: the walk stops here, with the fresh proforma held for the desk ──────────
+  if (stage === Stage.S3) {
+    try {
+      const newSegment = await prisma.segment.findFirst({
+        where: { entryId: input.entryId },
+        orderBy: { segmentNumber: "desc" },
+        select: { startedAt: true },
+      });
+      const proforma = entry.folio
+        ? await prisma.invoice.findFirst({
+            where: {
+              folioId: entry.folio.id,
+              invoiceType: "PROFORMA",
+              state: { not: "SUPERSEDED" },
+              ...(newSegment ? { createdAt: { gte: newSegment.startedAt } } : {}),
+            },
+            orderBy: { createdAt: "desc" },
+            select: { id: true },
+          })
+        : null;
+      if (proforma) {
+        const held = await recordHeldDocument(prisma, {
+          entryId: input.entryId,
+          kind: "PROFORMA",
+          documentId: proforma.id,
+          reason: heldReason,
+          heldBy: actor.actorId,
+          heldByLevel: actor.actorLevel,
+          roomMoveLegId: move?.legId ?? null,
+          stage: Stage.S3,
+        });
+        heldDocuments.push({ id: held.id, kind: "PROFORMA", documentId: proforma.id });
+      }
+    } catch {
+      /* the proforma stays on the Documents tab; only the prompt is lost */
+    }
+    const entryAtSetup = await prisma.entry.findUniqueOrThrow({ where: { id: input.entryId }, select: { currentStage: true } });
+    return {
+      ...outcomeBase,
+      pricing: { priorTotal, newTotal, delta: priorTotal != null && newTotal != null ? Number((newTotal - priorTotal).toFixed(2)) : null, currency },
+      quotationId,
+      walk: { returnedToOrigin: String(entryAtSetup.currentStage) === String(stage), reachedStage: String(entryAtSetup.currentStage), blocked: null },
+    };
   }
 
   // ── 6. Re-freeze (new Reservation row for the new segment) ─────────────────────────────────
@@ -2222,15 +2480,35 @@ export async function changeRoomToNewSegment(
     // Same-type: the terms are identical to what an authorized actor already confirmed, so the
     // prior confirmation's high-value authority carries (an L1's sanctioned swap must not
     // strand mid-walk on an unchanged figure). Cross-type re-tests — its value changed.
-    await confirmReservation(prisma, input.entryId, actor.actorId, {
+    const reconfirmed = await confirmReservation(prisma, input.entryId, actor.actorId, {
       version: await freshVersion(),
-      carryHighValueAuthority: sameType,
+      // A kept price leaves the value unchanged too (2026-10-12), so the authority that confirmed
+      // it carries exactly as on a same-type change.
+      carryHighValueAuthority: sameType || keptRoomRate != null,
+      // No paper goes to the guest unless the desk chooses (2026-10-12): the voucher is made and
+      // held, and the desk answers it afterwards.
+      holdGuestEmail: true,
       // Same dates, same question already answered — only an extension re-asks it (asked above).
       carryMultiBookingAcknowledgement: !isExtension,
       // The advance was settled at the first freeze (money or the FOM's credit); the walk does
       // not reopen it — the hold re-placement above skips the same gate for the same reason.
       carryAdvanceCondition: true,
     });
+    try {
+      const held = await recordHeldDocument(prisma, {
+        entryId: input.entryId,
+        kind: "CONFIRMATION_VOUCHER",
+        documentId: reconfirmed.reservation.id,
+        reason: heldReason,
+        heldBy: actor.actorId,
+        heldByLevel: actor.actorLevel,
+        roomMoveLegId: move?.legId ?? null,
+        stage: Stage.S4,
+      });
+      heldDocuments.push({ id: held.id, kind: "CONFIRMATION_VOUCHER", documentId: reconfirmed.reservation.id });
+    } catch {
+      /* the voucher stays on the Documents tab with Send again; only the prompt is lost */
+    }
   } catch (e) {
     return blockedOutcome("RECONFIRMATION", e);
   }
@@ -2254,10 +2532,29 @@ export async function changeRoomToNewSegment(
       },
       orderBy: { createdAt: "desc" },
     });
-    if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED") {
+    // From Arrival onward the guest answered the first voucher (Arrival is gated on it), so the
+    // answer stands. A booking still at Reserve may never have answered: there the walk records
+    // nothing on the guest's behalf, and the new voucher waits for a real answer (2026-10-12).
+    const priorAnswered =
+      stage !== Stage.S4 ||
+      !!(await prisma.communicationRecord.findFirst({
+        where: {
+          entryId: input.entryId,
+          commType: "CONFIRMATION_VOUCHER",
+          direction: "OUTBOUND",
+          acknowledgementStatus: "RECEIVED",
+          ...(newSegmentStart ? { createdAt: { lt: newSegmentStart } } : {}),
+        },
+        select: { id: true },
+      }));
+    if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED" && priorAnswered) {
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
-        verbatimNote: isExtension
+        verbatimNote: move
+          ? move.priceMode === "NEW_TYPE" && !sameType
+            ? `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}, re-priced at the new room type. The guest agreed: ${move.guestAgreedNote ?? "(no note)"}`
+            : `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}. ${reason}. The stay's terms are unchanged apart from the room, so the guest's answer to the earlier voucher stands.`
+          : isExtension
           ? `Guest asked to extend the stay to ${ctx.checkOut.toISOString().slice(0, 10)}: ${reason}. The paid interim invoice and the request itself are the guest's answer to the re-issued voucher.`
           : repairSeating
           ? `Guest seating restored on the booking (${reason}) — no commercial change asked by the guest; the re-issued voucher restates the same stay.`

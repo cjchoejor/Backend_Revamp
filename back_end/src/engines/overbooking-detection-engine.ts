@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { HoldState } from "@prisma/client";
 import { requireActiveConfigValue } from "../lib/config-store.js";
 import { committedHoldSpans, reservedClaimEndDate, stillHoldsInventory, type ClaimSpan } from "../lib/entry-inventory-claim.js";
+import { isTolerated, roomMoveTolerance, type ToleratedClaim } from "../lib/room-move-claims.js";
 
 export type OverbookingResult = {
   overbookingDetected: boolean;
@@ -32,7 +33,13 @@ function rangesOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): bool
  */
 export async function detectOverbookingForSpans(
   prisma: PrismaClient,
-  input: { entryId: string; otaSource: boolean; spans: ClaimSpan[] },
+  input: {
+    entryId: string;
+    otaSource: boolean;
+    spans: ClaimSpan[];
+    /** A room move's partner, passed over on exactly the room it is leaving (lib/room-move-claims.ts). */
+    tolerate?: ToleratedClaim[];
+  },
 ): Promise<OverbookingResult> {
   const maxAllowed = await requireActiveConfigValue<number>(prisma, "overbooking.maxAllowedRooms").catch(() => 0);
   const max = Number(maxAllowed ?? 0);
@@ -59,6 +66,9 @@ export async function detectOverbookingForSpans(
     },
   });
 
+  // A room move's partner is leaving the room this booking is entering — the one claim a move
+  // lets a leg pass over (2026-10-12). A running move is read from its record; a dry run names it.
+  const tolerated = [...(input.tolerate ?? []), ...(await roomMoveTolerance(prisma, input.entryId))];
   const peersByRoom = new Map<string, Set<string>>();
   for (const p of peers) {
     const e = p.entry;
@@ -69,6 +79,7 @@ export async function detectOverbookingForSpans(
       if (theirEnd.getTime() <= theirs.startDate.getTime()) continue;
       for (const mine of spans) {
         if (mine.roomId !== theirs.roomId) continue;
+        if (isTolerated(tolerated, { entryId: p.entryId, roomId: mine.roomId })) continue;
         if (!rangesOverlap(mine.startDate, mine.endDate, theirs.startDate, theirEnd)) continue;
         const set = peersByRoom.get(mine.roomId) ?? new Set<string>();
         set.add(p.entryId);

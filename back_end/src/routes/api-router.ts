@@ -32,6 +32,7 @@ import { communicationsRouter } from "./communications/router.js";
 import { identityCaptureRouter } from "./identity-capture/router.js";
 import { deskRouter } from "./desk/router.js";
 import { bookingNotesRouter } from "./booking-notes/router.js";
+import { roomMovesRouter } from "./room-moves/router.js";
 
 export const apiRouter = Router();
 
@@ -91,6 +92,7 @@ apiRouter.use(lookupsRouter);
 apiRouter.use(backflowsRouter);
 apiRouter.use(documentsRouter);
 apiRouter.use(bookingNotesRouter);
+apiRouter.use(roomMovesRouter);
 apiRouter.use("/desk", deskRouter);
 apiRouter.use("/admin", adminRouter);
 

@@ -133,6 +133,13 @@ export async function placeCommittedHold(
     trigger?: "ADVANCE_PAYMENT" | "ROOM_CHANGE";
     /** The payment whose recording fired the auto-placement — recorded on the trace. */
     triggerPaymentId?: string;
+    /**
+     * ROOM_CHANGE only (2026-10-12): the moment the hold this placement replaces was due to run
+     * out. A room-change walk from Set up releases the hold and places a new one on the new rooms;
+     * without this it would get a fresh window, so moving a room would quietly lengthen how long
+     * the rooms are held. A moment already passed is ignored (the window applies as usual).
+     */
+    expiresAtCarry?: Date | null;
   },
 ) {
   if (!input.roomId?.trim()) throw new ValidationError("roomId is required");
@@ -203,7 +210,14 @@ export async function placeCommittedHold(
 
   const now = new Date();
   // The desk's own hold time for this booking when it set one, else the house window.
-  const window = await resolveHoldExpiry(prisma, entry, now);
+  const resolvedWindow = await resolveHoldExpiry(prisma, entry, now);
+  const carried =
+    input.trigger === "ROOM_CHANGE" && input.expiresAtCarry && input.expiresAtCarry.getTime() > now.getTime() + 60_000
+      ? input.expiresAtCarry
+      : null;
+  const window = carried
+    ? { ...resolvedWindow, expiresAt: carried, ttlSeconds: Math.max(60, Math.round((carried.getTime() - now.getTime()) / 1000)) }
+    : resolvedWindow;
   const { expiresAt, ttlSeconds } = window;
 
   // Multi-room support: the sealed AvailabilityConfiguration is the source of truth for

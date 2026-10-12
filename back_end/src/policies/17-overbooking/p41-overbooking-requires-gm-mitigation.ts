@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { PolicyGateBlockedError } from "../../lib/errors.js";
 import type { ClaimSpan } from "../../lib/entry-inventory-claim.js";
+import type { ToleratedClaim } from "../../lib/room-move-claims.js";
 import { detectOverbooking, detectOverbookingForSpans, type OverbookingResult } from "../../engines/overbooking-detection-engine.js";
 
 /** A detected overbooking stands unless the GM approved it and the mitigation plan is not open. */
@@ -32,7 +33,7 @@ export async function enforceOverbookingRequiresGmMitigationBeforeConfirmation(
  */
 export async function enforceNoOverbookingForPlannedStay(
   prisma: PrismaClient,
-  input: { entryId: string; otaSource: boolean; spans: ClaimSpan[] },
+  input: { entryId: string; otaSource: boolean; spans: ClaimSpan[]; tolerate?: ToleratedClaim[] },
 ) {
   const over = await detectOverbookingForSpans(prisma, input);
   if (!over.overbookingDetected) return;

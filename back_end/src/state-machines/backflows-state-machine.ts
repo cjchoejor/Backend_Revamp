@@ -685,8 +685,12 @@ export async function backflowRoomChangeToS2(
   },
 ) {
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
-  if (input.fromStage !== Stage.S5 && input.fromStage !== Stage.S6 && input.fromStage !== Stage.S7) {
-    throw new ValidationError(`Room-change re-entry runs from S5, S6 or S7 — got ${input.fromStage}`);
+  // From Set up and Reserve too since 2026-10-12 (a room move from the house chart): the rooms are
+  // committed there as well, and the governed way to change them is the same walk back through
+  // Negotiation and forward again.
+  const ROOM_CHANGE_ORIGINS: Stage[] = [Stage.S3, Stage.S4, Stage.S5, Stage.S6, Stage.S7];
+  if (!ROOM_CHANGE_ORIGINS.includes(input.fromStage)) {
+    throw new ValidationError(`Room-change re-entry runs from S3 to S7 — got ${input.fromStage}`);
   }
   return runBackflow(prisma, {
     entryId,

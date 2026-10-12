@@ -35,6 +35,7 @@ import {
   reservedEntrySpans,
 } from "../../lib/entry-inventory-claim.js";
 import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { roomMoveClaims } from "../../lib/room-move-claims.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const CHART_DEFAULT_NIGHTS = 14;
@@ -48,16 +49,20 @@ export const CHART_MAX_NIGHTS = 62;
  *   CHECKED_OUT    — the stay is over (history)
  *   RESERVED       — confirmed (Reserve, Arrival, Check-in); `paymentPending` when the advance is short
  *   HELD           — a committed hold at Set up, not confirmed yet
+ *   MOVING         — a room move from this chart is moving the booking into the room (2026-10-12):
+ *                    held for it while the move runs or waits part-done; once the booking holds the
+ *                    room through its own reservation, that stronger claim is what is drawn
  *   EXTENSION_HELD — the nights a guest in house is extending into, held while the payment comes in
  *   PROVISIONAL    — a provisional block at Negotiation
  */
-export type ChartBarKind = "OVERSTAY" | "IN_HOUSE" | "CHECKED_OUT" | "RESERVED" | "HELD" | "EXTENSION_HELD" | "PROVISIONAL";
+export type ChartBarKind = "OVERSTAY" | "IN_HOUSE" | "CHECKED_OUT" | "RESERVED" | "HELD" | "MOVING" | "EXTENSION_HELD" | "PROVISIONAL";
 const STRENGTH: Record<ChartBarKind, number> = {
   OVERSTAY: 7,
   IN_HOUSE: 6,
   CHECKED_OUT: 5,
   RESERVED: 4,
   HELD: 3,
+  MOVING: 2.5,
   EXTENSION_HELD: 2,
   PROVISIONAL: 1,
 };
@@ -76,6 +81,8 @@ export type RoomChartBar = {
   paymentPending: boolean;
   /** When a hold lets go, for HELD / EXTENSION_HELD / PROVISIONAL. */
   holdExpiresAt: string | null;
+  /** The room move holding it, for MOVING. */
+  moveId: string | null;
 };
 
 export type RoomChartBooking = {
@@ -289,7 +296,7 @@ export async function buildRoomChart(
     return "RESERVED";
   };
 
-  type Claim = { roomId: string; start: Date; end: Date; entryId: string; kind: ChartBarKind; holdExpiresAt: Date | null };
+  type Claim = { roomId: string; start: Date; end: Date; entryId: string; kind: ChartBarKind; holdExpiresAt: Date | null; moveId?: string | null };
   const claims: Claim[] = [];
 
   for (const r of await keepStandingReservations(prisma, reservations)) {
@@ -327,6 +334,18 @@ export async function buildRoomChart(
     for (const e of extEntries) remember(e as unknown as EntryRow);
     for (const x of extensions) {
       claims.push({ roomId: x.roomId, start: x.startDate, end: x.endDate, entryId: x.entryId, kind: "EXTENSION_HELD", holdExpiresAt: x.holdExpiresAt });
+    }
+  }
+  // A room move running from this chart (or waiting part-done) holds each leg's room for its booking.
+  const moves = await roomMoveClaims(prisma, { checkIn: from, checkOut: to });
+  if (moves.length > 0) {
+    const moveEntries = await prisma.entry.findMany({
+      where: { id: { in: [...new Set(moves.map((m) => m.entryId))] } },
+      select: entrySelect,
+    });
+    for (const e of moveEntries) remember(e as unknown as EntryRow);
+    for (const m of moves) {
+      claims.push({ roomId: m.roomId, start: m.startDate, end: m.endDate, entryId: m.entryId, kind: "MOVING", holdExpiresAt: null, moveId: m.moveId });
     }
   }
 
@@ -407,6 +426,7 @@ export async function buildRoomChart(
           parked: e?.status === "PARKED",
           paymentPending: c.kind === "RESERVED" && e?.reservationPaymentPending === true,
           holdExpiresAt: c.holdExpiresAt ? c.holdExpiresAt.toISOString() : null,
+          moveId: c.moveId ?? null,
         });
         i = j + 1;
       }

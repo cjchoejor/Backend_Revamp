@@ -942,8 +942,8 @@ model VIPArrivalNotificationEvent {
 // --- Inquiry & Entry ----------------------------------------------------
 
 model Inquiry {
-  id                         String    @id @default(uuid())
-  referenceNumber            String    @unique
+  id                         String           @id @default(uuid())
+  referenceNumber            String           @unique
   /// The guest who is STAYING. Optional since 2026-10-12: an enquiry starts with the CALLER
   /// (below), who may be an agent, an assistant or the guest; the guest staying is named at
   /// Wrap up, and a booking cannot leave Inquiry without one (Policy 16).
@@ -959,7 +959,7 @@ model Inquiry {
   callerEmail                String?
   callerOnWhatsApp           Boolean?
   agentProfileId             String?
-  sourceChannel              String    @default("DIRECT")
+  sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
   /// five values custodian assignment knows, so "direct by phone", "direct online" and "group /
   /// MICE" all read DIRECT there — the finer choice used to be appended to `notes` and read back
@@ -982,9 +982,9 @@ model Inquiry {
   /// pointing at the agency no longer says whether the guest got season,
   /// off-season or premium.
   ratePackageId              String?
-  createdAt                  DateTime  @default(now())
-  updatedAt                  DateTime  @updatedAt
-  createdBy                  String    @default("actor-seed-system")
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+  createdBy                  String           @default("actor-seed-system")
   parkedAt                   DateTime?
   parkedBy                   String?
 
@@ -1155,49 +1155,51 @@ model Entry {
   apartmentDurationNights Int?
   apartmentRateTierCode   String?
 
-  inquiry                 Inquiry                       @relation(fields: [inquiryId], references: [id])
-  guestProfile            GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
-  segments                Segment[]
+  inquiry                      Inquiry                       @relation(fields: [inquiryId], references: [id])
+  guestProfile                 GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
+  segments                     Segment[]
   // SIG-S4 §90/§197: Reservations are per-segment immutable history. `reservation` points at the
   // CURRENT (latest-confirmed) Reservation via currentReservationId so existing one-to-one reads are
   // unchanged; `reservations` is the append-only per-segment history (prior confirmations, read-only).
-  currentReservationId    String?                       @unique
-  reservation             Reservation?                  @relation("EntryCurrentReservation", fields: [currentReservationId], references: [id])
-  reservations            Reservation[]                 @relation("EntryReservations")
-  folio                   Folio?
-  committedHold           CommittedHold?
-  handoffs                HandoffRecord[]
-  preArrivalTasks         PreArrivalTask[]
-  roomAssignments         RoomAssignment[]
-  noShowDetermination     NoShowDeterminationRecord?
-  stageDwellRecords       StageDwellRecord[]
-  availabilityConfigs     AvailabilityConfiguration[]
-  processingLocks         ProcessingLockRecord[]
-  traceEvents             TraceEvent[]
-  spaceAllocations        SpaceAllocation[]
-  quotations              Quotation[]
-  speculativeHolds        SpeculativeHold[]
-  cancellationDisclosure  CancellationDisclosureRecord?
-  vipArrivalNotifications VIPArrivalNotificationEvent[]
-  identityOcrSuggestions  IdentityOcrSuggestion[]
-  identityDocuments       GuestIdentityDocument[]
-  disputes                DisputeRecord[]
-  amendmentEventRecords   AmendmentEventRecord[]
-  roomInspectionRecords   RoomInspectionRecord[]
-  keyReturnRecords        KeyReturnRecord[]
-  invoices                Invoice[]
-  timers                  TimerRecord[]
-  interimPaymentRequests  InterimPaymentRequest[]
-  stayExtensionRequests   StayExtensionRequest[]
+  currentReservationId         String?                       @unique
+  reservation                  Reservation?                  @relation("EntryCurrentReservation", fields: [currentReservationId], references: [id])
+  reservations                 Reservation[]                 @relation("EntryReservations")
+  folio                        Folio?
+  committedHold                CommittedHold?
+  handoffs                     HandoffRecord[]
+  preArrivalTasks              PreArrivalTask[]
+  roomAssignments              RoomAssignment[]
+  noShowDetermination          NoShowDeterminationRecord?
+  stageDwellRecords            StageDwellRecord[]
+  availabilityConfigs          AvailabilityConfiguration[]
+  processingLocks              ProcessingLockRecord[]
+  traceEvents                  TraceEvent[]
+  spaceAllocations             SpaceAllocation[]
+  quotations                   Quotation[]
+  speculativeHolds             SpeculativeHold[]
+  cancellationDisclosure       CancellationDisclosureRecord?
+  vipArrivalNotifications      VIPArrivalNotificationEvent[]
+  identityOcrSuggestions       IdentityOcrSuggestion[]
+  identityDocuments            GuestIdentityDocument[]
+  disputes                     DisputeRecord[]
+  amendmentEventRecords        AmendmentEventRecord[]
+  roomInspectionRecords        RoomInspectionRecord[]
+  keyReturnRecords             KeyReturnRecord[]
+  invoices                     Invoice[]
+  timers                       TimerRecord[]
+  interimPaymentRequests       InterimPaymentRequest[]
+  stayExtensionRequests        StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
-  bookingNotes            BookingNote[]
-  guestRequests           GuestRequest[]
-  earlyDeparture          EarlyDepartureRecord?
-  writeOffRecords         WriteOffRecord[]
-  followUpTasks           FollowUpTaskRecord[]
-  communications          CommunicationRecord[]
-  equipmentAllocations    EquipmentAllocation[]
-  commissionDueRecords    CommissionDueRecord[]
+  roomMoveLegs                 RoomMoveLeg[]
+  heldDocuments                HeldDocument[]
+  bookingNotes                 BookingNote[]
+  guestRequests                GuestRequest[]
+  earlyDeparture               EarlyDepartureRecord?
+  writeOffRecords              WriteOffRecord[]
+  followUpTasks                FollowUpTaskRecord[]
+  communications               CommunicationRecord[]
+  equipmentAllocations         EquipmentAllocation[]
+  commissionDueRecords         CommissionDueRecord[]
 
   @@index([inquiryId])
   @@index([currentStage, status])
@@ -1467,19 +1469,19 @@ model RoomType {
   /// children aged >= registry.child.unaccompaniedMinorMinAge - i.e. those old enough to
   /// need their own bed per the child policy. Renamed from `maxOccupancy` on 2026-07-10
   /// via schema-level @map so the DB column stays put during migration.
-  standardCapacity           Int @default(2) @map("maxOccupancy")
+  standardCapacity           Int      @default(2) @map("maxOccupancy")
   /// Absolute ceiling on chargeable occupants when the extra-bed configuration is used
   /// (typical Standard Double: 3). Room-count validation at S1 uses this as the divisor:
   /// minRooms = ceil(chargeableOccupants / maxCapacity).
-  maxCapacity                Int @default(3)
+  maxCapacity                Int      @default(3)
   /// Max children allowed in a room of this type — independent cap on top of the capacity
   /// fields. Applies to under-11s who share bedding.
-  maxChildren                Int @default(2)
+  maxChildren                Int      @default(2)
   /// Minimum number of accompanying adults required for any children to occupy this room type.
   /// 1 = "at least one adult must be present with the children".
-  requiredAccompanyingAdults Int @default(1)
+  requiredAccompanyingAdults Int      @default(1)
   /// Max extra beds available for a room of this type (0 = no extra bed possible).
-  maxExtraBeds               Int @default(0)
+  maxExtraBeds               Int      @default(0)
   /// The bed setup a room of this type is normally made up in (2026-09-19, operator ruling):
   /// Standard rooms twin, suites king. A guest can ask for another setup; the desk then changes
   /// the room's own `Room.bedType`. Null = no usual setup stated.
@@ -1499,10 +1501,10 @@ model RoomType {
 }
 
 model Room {
-  id                String              @id @default(uuid())
-  roomNumber        String              @unique
-  roomTypeId        String
-  floorNumber       Int?
+  id                   String              @id @default(uuid())
+  roomNumber           String              @unique
+  roomTypeId           String
+  floorNumber          Int?
   // NOTE (2026-09-01): `capacity` was dropped. Occupancy is a property of the room TYPE —
   // RoomType.standardCapacity / maxCapacity are what capacity-validation-service enforces and
   // what the allowed-room-count envelope derives from. The per-room column was collected by the
@@ -1511,23 +1513,23 @@ model Room {
   /// Physical bed setup of THIS room (2026-08-10) — "KING" / "TWIN" / "QUEEN" / "SINGLE".
   /// Per room, not per type: the legacy data has e.g. Family Apartment split into (King) and
   /// (Twin) rooms. Backfilled from legacy-bookings/room.csv (`bed_size` + `no_of_beds`).
-  bedType           String?
-  bedCount          Int?
+  bedType              String?
+  bedCount             Int?
   /// This room's own list of setups it can be made up in (2026-09-19). Empty = follow its room
   /// type's list (and an empty type list = every setup). `bedType` above is how the room is made
   /// up NOW — what the desk changes when a guest asks for a King.
-  allowedBedTypes   String[]            @default([])
+  allowedBedTypes      String[]            @default([])
   /// This room's own USUAL setup (2026-09-19) — two rooms of one type can be made up differently.
   /// Null = follow `RoomType.defaultBedType`. When a guest leaves, the room goes back to it.
-  defaultBedType    String?
+  defaultBedType       String?
   /// The booking a desk bed change was made for, so the reset on departure only undoes that
   /// booking's change — never one already made for the next guest. Null = no booking's change.
   bedTypeSetForEntryId String?
-  currentClaimState InventoryClaimState @default(FREE)
-  physicalState     RoomPhysicalState   @default(AVAILABLE_CLEAN)
-  expectedReadyAt   DateTime?
+  currentClaimState    InventoryClaimState @default(FREE)
+  physicalState        RoomPhysicalState   @default(AVAILABLE_CLEAN)
+  expectedReadyAt      DateTime?
   /// SIG-S1 shadow inventory surface for Policy 14 filtering at availability query time.
-  isShadowInventory Boolean             @default(false)
+  isShadowInventory    Boolean             @default(false)
 
   // Model 2 — Physical state fields per SIG §2.6
   isDeficient                Boolean                     @default(false)
@@ -1553,6 +1555,8 @@ model Room {
   folioLines                FolioLine[]
   payments                  PaymentRecord[]
   advanceApplications       AdvanceApplication[]
+  roomMoveLegsFrom          RoomMoveLeg[]              @relation("RoomMoveLegFrom")
+  roomMoveLegsTo            RoomMoveLeg[]              @relation("RoomMoveLegTo")
 
   @@map("rooms")
 }
@@ -3018,7 +3022,6 @@ model InterimPaymentRequest {
  * operator ruling: "if L1 does it ... it needs to be flagged [to] them and ask for their
  * approval first"). Once a quotation has gone to the guest or been accepted, the change is the
  * FOM's call — but the front desk is the one on the phone, so they fill it in and it waits.
- *
  * The row holds the PROPOSAL, not a half-applied change: nothing touches the booking until an
  * approver runs it, and approval re-runs the whole governed act with every gate, so a room that
  * was taken in the meantime refuses then, with its real reason. There is deliberately no
@@ -3126,6 +3129,145 @@ enum GuestRequestState {
   ASKED
   ARRANGED
   WITHDRAWN
+}
+
+/// A room move from the house chart (2026-10-12, operator: "the ability to switch rooms ... say there
+/// are two different reservations, and i want to switch them, they may be in different stages and
+/// also in different rooms and date ... go through all the necessary procedures from the backend,
+/// produce all the documents and after switching should give the option to send or not ... well
+/// audited"). One LEG per booking: one leg is a move into a free room, two legs are a swap. Each leg
+/// runs the governed room-change walk (`changeRoomToNewSegment`); this record is the audit spine and,
+/// while IN_PROGRESS or PARTIAL, a claim on each leg's target room (lib/room-move-claims.ts) — so no
+/// third booking can take a room mid-swap, and each leg may pass over its partner's claim on exactly
+/// the room the partner is leaving.
+model RoomMove {
+  id             String         @id
+  kind           RoomMoveKind
+  status         RoomMoveStatus @default(IN_PROGRESS)
+  reason         String
+  requestedBy    String
+  requestedLevel String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  completedAt    DateTime?
+  /// What happened beyond the legs' own outcomes: a walk-back, a retry, a resolution.
+  notes          Json?
+
+  legs RoomMoveLeg[]
+
+  @@index([status])
+  @@map("room_moves")
+}
+
+/// One booking's part of a room move: which of its rooms moves where, over which nights, how it was
+/// priced, and the walk's own outcome (new pass, quotation, reservation, where it stopped).
+model RoomMoveLeg {
+  id              String            @id @default(uuid())
+  moveId          String
+  order           Int
+  entryId         String
+  fromRoomId      String
+  toRoomId        String
+  /// The ISO nights ("YYYY-MM-DD") this leg moves — the booking's nights on the from-room
+  /// (in-house: from tonight).
+  nights          Json
+  originStage     Stage
+  priceMode       RoomMovePriceMode @default(KEEP)
+  /// The guest's agreement, typed by the desk, when the leg is re-priced at the new type.
+  guestAgreedNote String?
+  status          RoomMoveLegStatus @default(PLANNED)
+  /// The room-change walk's outcome (or the refusal) for this leg.
+  outcome         Json?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  move          RoomMove       @relation(fields: [moveId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  entry         Entry          @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  fromRoom      Room           @relation("RoomMoveLegFrom", fields: [fromRoomId], references: [id])
+  toRoom        Room           @relation("RoomMoveLegTo", fields: [toRoomId], references: [id])
+  heldDocuments HeldDocument[]
+
+  @@index([moveId])
+  @@index([entryId])
+  @@index([toRoomId])
+  @@map("room_move_legs")
+}
+
+/// A guest paper a walk produced and did NOT send (2026-10-12, operator ruling: "no paper goes to a
+/// guest unless the desk chooses"). Every room-change walk — room change, stay extension, setup
+/// change, seating repair, re-price, room move — holds the email its re-confirmation used to send
+/// automatically; this row is the question the desk answers: send by email, mark sent on WhatsApp,
+/// or don't send. A newer paper of the same kind marks an older undecided one SUPERSEDED.
+model HeldDocument {
+  id            String                @id @default(uuid())
+  entryId       String
+  kind          HeldDocumentKind
+  /// The reservation id (voucher) or the invoice id (proforma).
+  documentId    String
+  /// ROOM_CHANGE · STAY_EXTENSION · SETUP_CHANGE · SEATING_REPAIR · REPRICE · ROOM_MOVE
+  reason        String
+  roomMoveLegId String?
+  heldAt        DateTime              @default(now())
+  heldBy        String
+  decision      HeldDocumentDecision?
+  sentTo        String?
+  note          String?
+  decidedAt     DateTime?
+  decidedBy     String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  entry       Entry        @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  roomMoveLeg RoomMoveLeg? @relation(fields: [roomMoveLegId], references: [id], onDelete: SetNull)
+
+  @@index([entryId, decision])
+  @@map("held_documents")
+}
+
+enum RoomMoveKind {
+  MOVE
+  SWAP
+}
+
+enum RoomMoveStatus {
+  IN_PROGRESS
+  COMPLETED
+  PARTIAL
+  REVERTED
+  FAILED
+}
+
+/// PLANNED → DONE (the walk returned to its step) · STOPPED (the walk stopped part-way — finish it
+/// from the booking) · REFUSED (refused before it started; the move keeps its claim, Retry) ·
+/// REVERTED (walked back to its own room) · CANCELLED (its claim given up).
+enum RoomMoveLegStatus {
+  PLANNED
+  DONE
+  STOPPED
+  REFUSED
+  REVERTED
+  CANCELLED
+}
+
+/// KEEP = the guest keeps the price they agreed (ruling 2026-10-12); NEW_TYPE = re-priced at the new
+/// room type, with the guest's agreement typed in.
+enum RoomMovePriceMode {
+  KEEP
+  NEW_TYPE
+}
+
+enum HeldDocumentKind {
+  CONFIRMATION_VOUCHER
+  PROFORMA
+}
+
+enum HeldDocumentDecision {
+  SENT_EMAIL
+  SENT_WHATSAPP
+  NOT_SENT
+  SUPERSEDED
 }
 
 model StayExtensionRequest {
