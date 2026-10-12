@@ -84,6 +84,7 @@ import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
 import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type BookingTab } from "@/components/ds/workspace/booking-tabs";
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
+import { useStayPrice } from "@/lib/ds/stay-price";
 import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
@@ -147,6 +148,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     refetchInterval: 30_000,
   });
   const billing = billingQuery.data ?? null;
+  // The price as it stands — the Negotiation table or the Inquiry picks while nothing is saved, so
+  // the header and Charges & payments show what is chosen and follow every change (2026-10-12).
+  const stayPrice = useStayPrice(entry, billing);
 
   const commsQuery = useQuery({
     queryKey: ["entry-communications", entryId],
@@ -741,7 +745,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     window.requestAnimationFrame(attempt);
   };
 
-  const viewingPast = view === "step" && (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
+  const viewingPast = (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
   // Check-in gained a Rooms tab of its own (2026-10-06) — the rooms moved out of the Room card.
   const panes: StepPane[] =
@@ -1012,7 +1016,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         : billing?.headline.frozen
           ? "as confirmed"
           : "indicative";
-  const headline = billing ? billing.headline.amount : fin.frozen ? null : fin.indicativeTotal;
+  const fromScreen = stayPrice.source === "TABLE" || stayPrice.source === "PICKS";
+  const headline = fromScreen ? stayPrice.amount : billing ? billing.headline.amount : fin.frozen ? null : fin.indicativeTotal;
   const booker = listRow ? bookerName(listRow) : null;
 
   return (
@@ -1091,7 +1096,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             >
               {money(headline, cur)}
             </button>
-            <div className="kind">{totalKind} · charges &amp; payments</div>
+            <div className={`kind${fromScreen && stayPrice.unsaved ? " warn-ink" : ""}`}>
+              {fromScreen
+                ? stayPrice.source === "PICKS"
+                  ? `rooms only · ${stayPrice.unsaved ? "picked, not saved" : "indicative"}`
+                  : stayPrice.unsaved
+                    ? "on the table · not saved"
+                    : "on the table · indicative"
+                : totalKind}{" "}
+              · charges &amp; payments
+            </div>
           </div>
         </div>
 
@@ -1243,11 +1257,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 initialLens={lensParam}
                 onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))}
               />
-            ) : (
-              // This step and Other ways are the same canvas: the step's own cards here, its
-              // other ways portalled into the pane below (2026-09-25). Both stay mounted, so
-              // switching tabs never loses what the operator has half-typed.
-              <>
+            ) : null}
+            {/* This step and Other ways are the same canvas: the step's own cards here, its other
+                ways portalled into the pane below (2026-09-25). The canvas stays mounted while any
+                other tab is open (2026-10-12), so a look at Charges & payments never loses what the
+                operator has half-typed into the step — the Negotiation table above all. */}
+            <div hidden={view !== "step" && view !== "other"}>
                 <h3>
                   {STEP_NAMES[viewing - 1]}{" "}
                   <span className="need">
@@ -1288,8 +1303,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </p>
                   ) : null}
                 </div>
-              </>
-            )}
+            </div>
             {/* the old side column's "what runs here" target — kept mounted, not shown */}
             <div ref={setRailSlot} hidden />
           </div>

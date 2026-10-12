@@ -45,6 +45,7 @@ import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
+import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import type { EntryDetail } from "@/types/api";
 
 export type BookingTab = "money" | "requests" | "notes" | "docs" | "history";
@@ -100,6 +101,8 @@ export function ChargesView({
   onPaymentHistory: () => void;
 }) {
   const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
+  // The price as it stands — the table or the picks while nothing is saved (2026-10-12).
+  const sp = useStayPrice(entry, billing);
   const cur = billing?.currency ?? "BTN";
   const st = billing?.stayTotal ?? null;
   const fo = billing?.folio ?? null;
@@ -127,9 +130,17 @@ export function ChargesView({
         Charges &amp; payments <span className="need">the price, the bill and the money in</span>
       </h3>
       <div className="steps-canvas">
-        <StepCard title="The price" meta={tag ?? undefined}>
-          {st?.amount == null ? (
-            <p className="meta">Nothing priced yet — the price builds up as rooms are picked, and is set when a quotation is generated at Negotiation.</p>
+        <StepCard title="The price" meta={sp.source === "QUOTE" ? (tag ?? undefined) : sp.kind || undefined}>
+          {sp.source === "TABLE" ? (
+            <TablePrice sp={sp} />
+          ) : sp.source === "PICKS" ? (
+            <PicksPrice sp={sp} />
+          ) : st?.amount == null ? (
+            <p className="meta">
+              {sp.loading
+                ? "Pricing what is chosen…"
+                : "Nothing priced yet — the price builds up here as rooms are picked at Inquiry, and follows the table at Negotiation."}
+            </p>
           ) : (
             <>
               <div className="bigfig">
@@ -308,6 +319,122 @@ export function ChargesView({
           )}
         </StepCard>
       </div>
+    </>
+  );
+}
+
+/** The Negotiation table, priced by the server as it stands — saved or not. */
+function TablePrice({ sp }: { sp: StayPrice }) {
+  const p = sp.preview;
+  const cur = sp.currency;
+  if (!p) return <p className="meta">Pricing the table…</p>;
+  return (
+    <>
+      <div className="bigfig">
+        <span className="meta">Stay total</span>
+        <b>{money(p.payable, cur)}</b>
+        {sp.loading ? <span className="meta">updating…</span> : null}
+      </div>
+      {sp.savedQuoteAmount != null ? (
+        <p className="warn-ink sm" style={{ margin: "4px 0 0" }}>
+          <b>The quotation on file says {money(sp.savedQuoteAmount, cur)}</b> — save the table at Negotiation to bring it up to date.
+        </p>
+      ) : null}
+      <table className="table compact" style={{ marginTop: 8 }}>
+        <thead>
+          <tr>
+            <th>Room</th>
+            <th>Nights</th>
+            <th className="num">Room</th>
+            <th className="num">Meals</th>
+            <th className="num">Extra bed</th>
+            <th className="num">Service + GST</th>
+            <th className="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {p.rooms.map((r) => (
+            <tr key={r.roomId}>
+              <td>
+                <b>Room {r.roomNumber ?? "—"}</b>
+                {r.isFoc ? <span className="meta"> · free of charge</span> : null}
+              </td>
+              <td>{r.nights}</td>
+              <td className="num">{money(r.roomSubtotal, cur)}</td>
+              <td className="num">{r.mealsSubtotal > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
+              <td className="num">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
+              <td className="num">{money(r.serviceCharge + r.gst, cur)}</td>
+              <td className="num">
+                <b>{money(r.total, cur)}</b>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Facts wide style={{ marginTop: 8 }}>
+        <Fact k="Net">{money(p.payableSubtotal, cur)}</Fact>
+        <Fact k="Service charge">{money(p.payableServiceCharge, cur)}</Fact>
+        <Fact k="GST">{money(p.payableGst, cur)}</Fact>
+        {p.discount ? (
+          <Fact k="Discount" meta={p.discount.requestedPercent != null ? `${p.discount.requestedPercent}% asked` : "a set amount"}>
+            − {money(p.discount.amountOffTotal, cur)}
+          </Fact>
+        ) : null}
+      </Facts>
+      <p className="meta" style={{ marginTop: 6 }}>
+        The figures follow the negotiation table as it is changed — priced by the hotel server, the same way the quotation will be.
+      </p>
+    </>
+  );
+}
+
+/** The rooms picked at Inquiry, priced rooms only by the server. */
+function PicksPrice({ sp }: { sp: StayPrice }) {
+  const p = sp.pick;
+  const cur = sp.currency;
+  if (!p) return null;
+  return (
+    <>
+      <div className="bigfig">
+        <span className="meta">Stay total · rooms only</span>
+        <b>{money(p.totals.total, cur)}</b>
+        {sp.loading ? <span className="meta">updating…</span> : null}
+      </div>
+      <table className="table compact" style={{ marginTop: 8 }}>
+        <thead>
+          <tr>
+            <th>Room type</th>
+            <th>Room-nights</th>
+            <th className="num">Rate a night</th>
+            <th className="num">Net</th>
+            <th className="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {p.byType.map((t) => (
+            <tr key={t.roomTypeId}>
+              <td>
+                <b>{t.name}</b>
+                {t.packageName ? <span className="meta"> · {t.packageName}</span> : null}
+              </td>
+              <td>{t.roomNights}</td>
+              <td className="num">{t.rate != null ? money(t.rate, cur) : "no rate"}</td>
+              <td className="num">{money(t.net, cur)}</td>
+              <td className="num">
+                <b>{money(t.total, cur)}</b>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Facts wide style={{ marginTop: 8 }}>
+        <Fact k="Net">{money(p.totals.net, cur)}</Fact>
+        <Fact k="Service charge">{money(p.totals.serviceCharge, cur)}</Fact>
+        <Fact k="GST">{money(p.totals.gst, cur)}</Fact>
+      </Facts>
+      {p.unpricedTypes.length ? (
+        <p className="warn-ink sm">No rate on file for {p.unpricedTypes.map((t) => t.name).join(", ")} — not counted above.</p>
+      ) : null}
     </>
   );
 }

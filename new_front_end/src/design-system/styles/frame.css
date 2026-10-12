@@ -395,3 +395,6 @@
 .ds .notes-input { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .ds .notes-input .input { flex: 1; min-width: 260px; }
 .ds .notes-input .tick { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }
+
+/* The header total says when the figure is not saved yet (2026-10-12) — in the state colour. */
+.ds .ws-head .total .kind.warn-ink:not(.desk-root *) { color: var(--warning); font-weight: 600; }

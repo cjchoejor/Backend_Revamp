@@ -68,6 +68,7 @@ import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { PickBill, PickTotalBand, usePickPricing, type BillNight } from "./s1-bill";
+import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import type { PickPricing } from "@/lib/api/availability";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -1082,6 +1083,8 @@ function TheHouse({
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
   const pickedSaved = sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  // What is picked, saved or not, for the Charges & payments tab and the header total.
+  usePublishPriceDraft(entry.id, editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved } : null);
   const billTitle = picked.length
     ? pickedSaved
       ? "The rooms chosen"

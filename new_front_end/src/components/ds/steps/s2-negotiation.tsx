@@ -39,6 +39,7 @@ import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } fro
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
 import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
+import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -283,6 +284,22 @@ export function S2Negotiation({
     (recordedDiscount != null && discountUnit !== recordedDiscount.unit);
   const tableUnsaved =
     !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
+
+  // What the table holds, saved or not, for the Charges & payments tab and the header total.
+  usePublishPriceDraft(
+    entry.id,
+    editable
+      ? {
+          kind: "TABLE",
+          roomCompositions,
+          discount: (() => {
+            const n = Number(discountValue);
+            return discountValue.trim() && Number.isFinite(n) && n > 0 ? (discountUnit === "amount" ? { amount: n } : { percent: n }) : null;
+          })(),
+          saved: !tableUnsaved,
+        }
+      : null,
+  );
 
   const discountPayload = (() => {
     const n = Number(discountValue);
