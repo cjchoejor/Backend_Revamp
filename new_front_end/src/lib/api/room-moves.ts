@@ -12,11 +12,17 @@ export type RoomMoveLegInput = {
   toRoomId: string;
   priceMode?: "KEEP" | "NEW_TYPE";
   guestAgreedNote?: string | null;
+  /** On a leg the server added (a booking swapped into the room left behind), sent back as it came. */
+  displacedBy?: string | null;
 };
 
 export type RoomMovePreviewLeg = {
   order: number;
+  /** `entryId|fromRoomId` — a booking can move several of its rooms in one move. */
+  key: string;
   entryId: string;
+  fromRoomId: string;
+  toRoomId: string;
   bookingLabel: string;
   guestName: string | null;
   stage: string;
@@ -27,6 +33,11 @@ export type RoomMovePreviewLeg = {
   nightsLabel: string | null;
   sameType: boolean | null;
   priceMode: "KEEP" | "NEW_TYPE";
+  guestAgreedNote: string | null;
+  /** Added by the server: this booking sits in a room another leg moves into. */
+  displaced: boolean;
+  /** The booking whose move made this one. */
+  displacedBy: string | null;
   pricing: { before: number | null; after: number | null; delta: number | null; currency: string | null; note: string | null };
   path: string[];
   papers: string[];
@@ -39,6 +50,7 @@ export type RoomMovePreview = {
   ok: boolean;
   authority: { needed: "L1" | "L2"; actorLevel: string; ok: boolean; why: string };
   legs: RoomMovePreviewLeg[];
+  /** Refusals that belong to the move as a whole, not to one booking. */
   refusals: string[];
 };
 

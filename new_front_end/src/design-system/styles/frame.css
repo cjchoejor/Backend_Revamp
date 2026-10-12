@@ -647,6 +647,20 @@
 .ds .rchart-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-radius: 8px; background: var(--accent-soft); border: 2px solid var(--accent); color: var(--accent-ink); font-size: 13.5px; }
 .ds .rchart-switch b { font-size: 14.5px; font-weight: 800; }
 .ds .rchart-switch span { color: var(--ink); }
+/* Drag and drop on the house chart (2026-10-12): a grabbable bar, the rows a drop lands on, the
+   label that follows the pointer. A drop that cannot land is red. */
+.ds .rchart .seg .bar.grab { cursor: grab; touch-action: none; }
+body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user-select: none !important; }
+.ds .rchart .seg.dragging .bar { opacity: .45; }
+/* A drag is short-lived and must read over every cell state (free, today, picked), hence !important. */
+.ds .rchart .tape tr.drop-to > th, .ds .rchart .tape tr.drop-to > td { background-color: var(--accent-soft) !important; box-shadow: inset 0 3px 0 var(--accent), inset 0 -3px 0 var(--accent) !important; }
+.ds .rchart .tape tr.drop-to > th.rc { box-shadow: inset 5px 0 0 var(--accent), inset 0 3px 0 var(--accent), inset 0 -3px 0 var(--accent) !important; }
+.ds .rchart .tape tr.drop-bad > th, .ds .rchart .tape tr.drop-bad > td { background-color: var(--danger-soft) !important; box-shadow: inset 0 3px 0 var(--danger), inset 0 -3px 0 var(--danger) !important; }
+.ds .rchart.is-dragging .tape td.cell.pick:hover::after { content: none; }
+.ds .rchart-ghost { position: fixed; z-index: 95; pointer-events: none; display: grid; gap: 2px; max-width: 340px; padding: 8px 11px; border-radius: 9px; background: var(--surface); color: var(--ink); border: 2px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .22); font-size: 13.5px; font-weight: 700; }
+.ds .rchart-ghost b { color: var(--accent-ink); font-weight: 800; }
+.ds .rchart-ghost .sub { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .rchart-ghost.bad { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
 
 /* The move dialog — both bookings side by side, every figure the server's. */
 .ds .rmv { display: grid; gap: 12px; }
@@ -655,7 +669,10 @@
 .ds .rmv-auth.stop { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); font-weight: 700; }
 .ds .rmv-legs { display: grid; gap: 12px; }
 .ds .rmv-legs.two { grid-template-columns: 1fr 1fr; }
+.ds .rmv-legs.many { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 @media (max-width: 760px) { .ds .rmv-legs.two { grid-template-columns: 1fr; } }
+.ds .rmv-displaced { margin: 0; padding: 5px 8px; border-radius: 6px; background: var(--warning-soft); color: var(--warning); font-size: 12.5px; font-weight: 700; }
+.ds .rmv-moveref { padding: 8px 10px 8px 26px; border-radius: 8px; border: 2px solid var(--danger); background: var(--danger-soft); }
 .ds .rmv-leg { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px; display: grid; gap: 7px; background: var(--surface); min-width: 0; }
 .ds .rmv-leg.refused { border: 2px solid var(--danger); background: var(--danger-soft); }
 .ds .rmv-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }

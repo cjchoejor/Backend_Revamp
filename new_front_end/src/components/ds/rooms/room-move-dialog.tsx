@@ -10,6 +10,11 @@
  * steps the booking walks, the papers it produces, what is left to do, and anything that refuses
  * it. Then it runs the move (`POST /room-moves`) and shows where each booking ended, with the
  * held papers to send or not. Every figure and every refusal is the server's.
+ *
+ * Many rooms (2026-10-12, drag and drop): the desk sends the rooms it picked; the server adds a leg
+ * for every booking sitting in a room one of them lands on ("makes room for …"). From the first
+ * answer on, the dialog sends the server's own legs back, so each guest's price choice — the added
+ * ones' too — rides on the leg it belongs to.
  */
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -82,12 +87,15 @@ function PreviewLegCard({
   note,
   onPriceMode,
   onNote,
+  madeBy,
 }: {
   leg: RoomMovePreviewLeg;
   priceMode: "KEEP" | "NEW_TYPE";
   note: string;
   onPriceMode: (m: "KEEP" | "NEW_TYPE") => void;
   onNote: (n: string) => void;
+  /** The guest whose move pushes this booking out of its room, when it was added for that. */
+  madeBy: string | null;
 }) {
   // The note a re-price needs is asked for by its own field, not repeated as a refusal.
   const refusals = leg.refusals.filter((r) => !/type what the guest agreed to/.test(r));
@@ -105,6 +113,11 @@ function PreviewLegCard({
         <span className="rmv-room to">Room {leg.toRoom?.roomNumber ?? "?"}</span>
         {leg.sameType === false ? <span className="rmv-type">{leg.fromRoom?.roomTypeName} → {leg.toRoom?.roomTypeName}</span> : null}
       </div>
+      {leg.displaced ? (
+        <p className="rmv-displaced">
+          Swapped in: {madeBy ?? leg.displacedBy} moves into Room {leg.fromRoom?.roomNumber ?? "?"}, so this guest takes the room they leave.
+        </p>
+      ) : null}
       {leg.nightsLabel ? <div className="sm">Nights: <b>{leg.nightsLabel}</b></div> : null}
       {refused ? null : <div className="sm">Price: <PriceLine p={leg.pricing} /></div>}
       {leg.sameType === false ? (
@@ -211,7 +224,7 @@ export function RoomMoveResult({ move, tz, onChanged }: { move: RoomMove; tz?: s
                 Price: <b>{money(l.pricing.priorTotal, l.pricing.currency ?? "BTN")}</b> → <b>{money(l.pricing.newTotal, l.pricing.currency ?? "BTN")}</b>
               </div>
             ) : null}
-            {l.status === "REFUSED" && move.status === "PARTIAL" ? (
+            {(l.status === "REFUSED" || l.status === "PLANNED") && !l.compensates && move.status === "PARTIAL" ? (
               <Button kind="primary" compact state={retry.isPending ? "inert" : "default"} onClick={() => retry.mutate(l.id)}>
                 {retry.isPending ? "Retrying…" : "Retry this booking's move"}
               </Button>
@@ -253,21 +266,26 @@ export function RoomMoveDialog({
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<RoomMovePreview | null>(null);
   const [result, setResult] = useState<RoomMove | null>(null);
+  /** The legs as the server last returned them — the desk's picks plus the swaps it added. */
+  const [plan, setPlan] = useState<RoomMoveLegInput[] | null>(null);
+  const legKey = (l: { entryId: string; fromRoomId: string }) => `${l.entryId}|${l.fromRoomId}`;
 
   const asked = useMemo(
     () =>
-      (legs ?? []).map((l) => ({
-        ...l,
-        priceMode: priceModes[l.entryId] ?? "KEEP",
-        guestAgreedNote: (priceModes[l.entryId] ?? "KEEP") === "NEW_TYPE" ? notes[l.entryId]?.trim() || null : null,
-      })),
-    [legs, priceModes, notes],
+      (plan ?? legs ?? []).map((l) => {
+        const mode = priceModes[legKey(l)] ?? "KEEP";
+        return { ...l, priceMode: mode, guestAgreedNote: mode === "NEW_TYPE" ? notes[legKey(l)]?.trim() || null : null };
+      }),
+    [plan, legs, priceModes, notes],
   );
-  const modesKey = JSON.stringify(asked.map((l) => [l.entryId, l.priceMode]));
+  const modesKey = JSON.stringify(priceModes);
 
   const previewMut = useMutation({
     mutationFn: () => previewRoomMove(session!, { legs: asked, reason: reason.trim() || null }),
-    onSuccess: (p) => setPreview(p),
+    onSuccess: (p) => {
+      setPreview(p);
+      setPlan(p.legs.map((l) => ({ entryId: l.entryId, fromRoomId: l.fromRoomId, toRoomId: l.toRoomId, displacedBy: l.displacedBy })));
+    },
     onError: (e) => toastRefusal(e, "The move could not be checked"),
   });
   // Ask again when the legs or a price choice change (not on every keystroke of a note).
@@ -284,6 +302,7 @@ export function RoomMoveDialog({
     setReason("");
     setPreview(null);
     setResult(null);
+    setPlan(null);
   }, [legs]);
 
   const refreshAll = (m: RoomMove) => {
@@ -305,14 +324,16 @@ export function RoomMoveDialog({
   });
 
   if (!legs) return null;
-  const swap = legs.length === 2;
+  const legCount = (preview?.legs ?? legs).length;
+  const swap = preview ? preview.kind === "SWAP" : new Set(legs.map((l) => l.entryId)).size > 1;
   const busy = previewMut.isPending || run.isPending;
   const missingNote = asked.some((l) => l.priceMode === "NEW_TYPE" && !l.guestAgreedNote);
+  const nameOfEntry = (entryId: string | null) => (entryId ? (preview?.legs.find((x) => x.entryId === entryId)?.guestName ?? entryId) : null);
   const blockedBy = !preview
     ? "Checking the move…"
     : !preview.authority.ok
       ? `${preview.authority.why} — you are signed in as ${preview.authority.actorLevel === "L1" ? "the front desk" : preview.authority.actorLevel}`
-      : preview.legs.some((l) => l.refusals.length > 0 && !l.refusals.every((r) => /type what the guest agreed to/.test(r)))
+      : preview.refusals.length > 0 || preview.legs.some((l) => l.refusals.length > 0 && !l.refusals.every((r) => /type what the guest agreed to/.test(r)))
         ? "Something above refuses the move"
         : missingNote
           ? "Type what the guest agreed to"
@@ -320,11 +341,16 @@ export function RoomMoveDialog({
             ? "Say why the room is being moved"
             : null;
 
+  const bookings = new Set((preview?.legs ?? legs).map((l) => l.entryId)).size;
   const title = result
     ? `${result.id} · ${swap ? "Switch" : "Move"}`
     : swap
-      ? "Switch these two bookings' rooms"
-      : `Move to Room ${preview?.legs[0]?.toRoom?.roomNumber ?? ""}`;
+      ? legCount === 2
+        ? "Switch these two bookings' rooms"
+        : `Switch rooms · ${legCount} rooms, ${bookings} bookings`
+      : legCount > 1
+        ? `Move ${legCount} rooms`
+        : `Move to Room ${preview?.legs[0]?.toRoom?.roomNumber ?? ""}`;
 
   return (
     <DsDialog
@@ -344,7 +370,7 @@ export function RoomMoveDialog({
               Leave it as it is
             </Button>
             <Button kind="primary" state={blockedBy || busy ? "inert" : "default"} onClick={() => !blockedBy && run.mutate()}>
-              {run.isPending ? "Moving…" : swap ? "Switch the rooms" : "Move the booking"}
+              {run.isPending ? "Moving…" : swap ? "Switch the rooms" : legCount > 1 ? "Move the rooms" : "Move the booking"}
             </Button>
           </>
         )
@@ -361,15 +387,23 @@ export function RoomMoveDialog({
           ) : (
             <p className="sm muted">Checking the move with the house…</p>
           )}
-          <div className={`rmv-legs${swap ? " two" : ""}`}>
+          {preview && preview.refusals.length > 0 ? (
+            <ul className="rmv-refusals rmv-moveref" role="alert">
+              {preview.refusals.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+          ) : null}
+          <div className={`rmv-legs${legCount === 2 ? " two" : legCount > 2 ? " many" : ""}`}>
             {(preview?.legs ?? []).map((l) => (
               <PreviewLegCard
-                key={l.entryId}
+                key={l.key}
                 leg={l}
-                priceMode={priceModes[l.entryId] ?? "KEEP"}
-                note={notes[l.entryId] ?? ""}
-                onPriceMode={(m) => setPriceModes((p) => ({ ...p, [l.entryId]: m }))}
-                onNote={(n) => setNotes((p) => ({ ...p, [l.entryId]: n }))}
+                priceMode={priceModes[l.key] ?? "KEEP"}
+                note={notes[l.key] ?? ""}
+                onPriceMode={(m) => setPriceModes((p) => ({ ...p, [l.key]: m }))}
+                onNote={(n) => setNotes((p) => ({ ...p, [l.key]: n }))}
+                madeBy={nameOfEntry(l.displacedBy)}
               />
             ))}
           </div>
