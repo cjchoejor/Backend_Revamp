@@ -9,6 +9,7 @@ import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { getRateReference } from "@/lib/api/entries";
 import { previewQuotationPricing, type RoomCompositionInput } from "@/lib/api/quotations";
+import { Help, useQuietScreen } from "@/components/ds/help";
 
 /**
  * Spreadsheet-style composition table (2026-07-28) — the pure-tabular alternative to the
@@ -150,6 +151,7 @@ export function NegotiationDiscountBar({
   onDiscountChange,
   lockCommercial,
 }: DiscountEdit & { lockCommercial?: boolean }) {
+  const quiet = useQuietScreen();
   if (!onDiscountChange) return null;
   const unit: DiscountUnit = discountUnit ?? "percent";
   const n = Number(discountValue ?? "");
@@ -224,17 +226,27 @@ export function NegotiationDiscountBar({
           −{unit === "percent" ? `${n}%` : `Nu ${n.toLocaleString()}`} off the total
         </span>
       )}
-      <span className="ln" />
       {/* States the CURRENT model (operator ruling 2026-08-04, applyBookingDiscountToTotals):
           the deduction comes off the grand total, meals and beds included — the earlier
-          "room rate only" wording described the superseded 2026-08-03 model. */}
-      <span
-        className="rct-neg-note"
-        style={{ textAlign: "right", flex: "0 1 auto" }}
-        title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). Priced by the backend when you create or regenerate the quote."
-      >
-        Comes off the grand total — meals &amp; beds included
-      </span>
+          "room rate only" wording described the superseded 2026-08-03 model. In a quiet screen
+          it is behind a "?" beside the fields it explains. */}
+      {quiet ? (
+        <Help label="About the discount">
+          <p>A percentage or a flat amount in Nu. Either way it comes off the booking&rsquo;s grand total, meals and extra beds included.</p>
+          <p>Service charge and GST follow the discounted figure. A discount larger than the bill brings it to zero — it is never a refund.</p>
+          <p>The basis is why the discount is given; it is recorded on the quotation.</p>
+        </Help>
+      ) : null}
+      <span className="ln" />
+      {quiet ? null : (
+        <span
+          className="rct-neg-note"
+          style={{ textAlign: "right", flex: "0 1 auto" }}
+          title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). Priced by the backend when you create or regenerate the quote."
+        >
+          Comes off the grand total — meals &amp; beds included
+        </span>
+      )}
     </div>
   );
 }
@@ -637,6 +649,8 @@ export function RoomCompositionsTable({
   // is wider than the canvas column, so reading rooms against their rates meant scrolling
   // sideways. Reuses the .rst-expandwrap / .rst-expandbar styles.
   const [expanded, setExpanded] = useState(false);
+  /** Explanations behind a "?" — only messages on screen (2026-10-12). */
+  const quiet = useQuietScreen();
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1460,6 +1474,15 @@ export function RoomCompositionsTable({
             <Maximize2 style={{ width: 13, height: 13 }} /> Expand
           </button>
         )}
+        {quiet && (
+          <Help label="How this table works">
+            <p>One row per room: who sleeps there by age, their meal plans and any extra bed. Occ adds itself up from the guest columns.</p>
+            <p>Arrow keys and Enter move between cells. Distribute party spreads the guests over the rooms; Everyone on… puts every room on one meal plan.</p>
+            <p>Rates + opens the negotiated rates. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
+            <p>Count children on the meal plans — under 6 eat free, 6 to 10 at the child rate.</p>
+            <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
+          </Help>
+        )}
       </div>
       {/* A refusal of what was just typed — the loudest thing on the table while it shows
           (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
@@ -1838,7 +1861,7 @@ export function RoomCompositionsTable({
             </span>
           )}
           <span className="ln" />
-          <span className="src">priced by the backend — the quote will match</span>
+          {!quiet && <span className="src">priced by the backend — the quote will match</span>}
         </div>
       )}
 
@@ -1899,8 +1922,12 @@ export function RoomCompositionsTable({
             </ul>
           ) : unsaved ? (
             <span className="stop-ink" style={{ fontWeight: 700 }} role="status">
-              Changed since it was priced — save it, or the quotation still says the old figures.
+              {quiet
+                ? "Changed since it was priced — save it"
+                : "Changed since it was priced — save it, or the quotation still says the old figures."}
             </span>
+          ) : quiet ? (
+            <span />
           ) : (
             <span className="ok-ink" style={{ fontWeight: 700 }} role="status">
               Saved — the quotation is priced on exactly this table.
@@ -1929,13 +1956,13 @@ export function RoomCompositionsTable({
       {/* One line. The old version also warned that child meal discounts were "pending a backend
           update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band
           (under-6 free, 6–10 at the child share), so children SHOULD be counted on the plans. */}
-      <p className="rce-hint">
+      {!quiet && <p className="rce-hint">
         Occ is derived from the guest columns · arrow keys / Enter move between cells · every figure is
         priced by the backend. Rate columns follow the meal plans in use — no plan (EP) negotiates room
         &amp; bed only, and a meal&rsquo;s rate unlocks per room once its plan includes that meal. Count
         children on the meal plans — child pricing applies automatically (under-6 free, 6–10 at the
         child rate).
-      </p>
+      </p>}
     </div>
   );
 }

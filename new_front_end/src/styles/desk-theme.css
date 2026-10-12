@@ -2761,30 +2761,96 @@
   & .rct-save-act {
     margin-left: auto;
     display: flex;
-    align-items: flex-end;
-    gap: 12px;
+    align-items: center;
+    gap: 16px;
     flex-wrap: wrap;
   }
+  /* The quote's validity as a field that reads as one (2026-10-12, operator: "doesn't seem like
+     something that can be edited at first glance"): a label, a bordered box with − and + around
+     the number, and the end date it gives — the rule is behind its "?". */
   & .rct-valid {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     flex-wrap: wrap;
-    font-size: 12.5px;
   }
-  & .rct-valid .k {
+  & .rct-valid .lbl {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  & .rct-valid .stepper {
+    display: inline-flex;
+    align-items: stretch;
+    height: 36px;
+    border: 1px solid var(--line-3);
+    border-radius: 6px;
+    background: #fff;
+    overflow: hidden;
+  }
+  & .rct-valid .stepper:focus-within {
+    border-color: var(--ink-2);
+    box-shadow: 0 0 0 2px rgba(109, 46, 140, 0.18);
+  }
+  & .rct-valid .stepper.bad {
+    border-color: var(--stop);
+  }
+  & .rct-valid .stepper button {
+    width: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--cream);
+    color: var(--ink);
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+  & .rct-valid .stepper button:first-child {
+    border-right: 1px solid var(--line-2);
+  }
+  & .rct-valid .stepper button:last-child {
+    border-left: 1px solid var(--line-2);
+  }
+  & .rct-valid .stepper button:hover:not(:disabled) {
+    background: var(--cream-3);
+  }
+  & .rct-valid .stepper button:disabled {
+    color: var(--ink-4);
+    cursor: not-allowed;
+  }
+  & .rct-valid .stepper input {
+    width: 40px;
+    height: auto;
+    min-height: 0;
+    padding: 0 2px 0 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    text-align: right;
+    font-family: var(--deskmono);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  & .rct-valid .stepper .unit {
+    display: flex;
+    align-items: center;
+    padding: 0 10px 0 4px;
+    font-size: 13.5px;
+    color: var(--ink-2);
+  }
+  & .rct-valid .until {
+    font-size: 13.5px;
     color: var(--ink-2);
     white-space: nowrap;
   }
-  & .rct-valid input {
-    width: 58px;
-    text-align: center;
-    font-family: var(--deskmono);
-  }
-  & .rct-valid-h {
-    flex-basis: 100%;
-    font-size: 11.5px;
-    color: var(--ink-3);
+  & .rct-valid .until b {
+    color: var(--ink);
   }
   & .rct-save-btn {
     flex: none;

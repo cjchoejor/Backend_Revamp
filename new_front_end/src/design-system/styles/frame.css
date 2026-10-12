@@ -398,3 +398,43 @@
 
 /* The header total says when the figure is not saved yet (2026-10-12) — in the state colour. */
 .ds .ws-head .total .kind.warn-ink:not(.desk-root *) { color: var(--warning); font-weight: 600; }
+
+/* ------------------------------------------------------------------
+   Explanations on request (2026-10-12, operator: "keep the button with few lines and a small
+   question mark icon, where when the user clicks it shows the details"). The "?" works inside the
+   old tools (.desk-root) too, so it is not excluded from them; its box is rendered at the root.
+   ------------------------------------------------------------------ */
+.ds button.help-q {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 20px; height: 20px; min-width: 0; padding: 0; margin: 0 0 0 6px;
+  border-radius: 50%; border: 1px solid var(--line-2); background: var(--surface, #fff);
+  color: var(--ink-2); font: 700 12px/1 var(--font, system-ui); cursor: pointer; vertical-align: middle;
+  box-shadow: none;
+}
+.ds button.help-q:hover, .ds button.help-q[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-ink); }
+.ds button.help-q:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .help-pop {
+  position: fixed; z-index: 1000; width: max-content; max-width: min(320px, calc(100vw - 16px));
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card);
+  box-shadow: var(--shadow-pop); color: var(--ink); font: 400 14px/1.45 var(--font); text-align: left; white-space: normal;
+}
+.ds .help-pop p { margin: 0; }
+.ds .help-pop p + p { margin-top: 6px; }
+.ds .help-pop .why { color: var(--warning); font-weight: 600; }
+.ds .card-top h4 .help-q { margin-left: 8px; }
+
+/* A proper button (2026-10-12, operator: "it doesn't look like a proper button"): the quiet act
+   is a filled, raised control at full height, so it reads as something to press, not a field. */
+.ds .btn.act:not(.desk-root *):not(.topbar *):not(.rail *) {
+  height: var(--control-h); padding: 0 var(--s4); font-size: var(--t-sm); font-weight: 700;
+  background: var(--surface-3); border: 1px solid var(--line-2); color: var(--ink);
+  box-shadow: 0 1px 0 rgba(30, 28, 25, .14);
+}
+.ds .btn.act:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: #E4D9C6; border-color: var(--ink-3); }
+.ds .btn.act:active:not(.desk-root *):not(.topbar *):not(.rail *) { box-shadow: none; transform: translateY(1px); }
+.ds .btn.act.inert:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-2); color: var(--ink-4); border-color: var(--line); box-shadow: none; font-weight: 600; }
+
+/* An act and its "?" on one line; a reason it is held stays on screen, as a message. */
+.ds .seerow.plain:not(.desk-root *) { align-items: center; gap: var(--s2); padding: 2px 0; }
+.ds .seerow.plain .why, .ds .actrow.plain .why { font-size: 13px; font-weight: 600; color: var(--warning); overflow-wrap: anywhere; }
+.ds .actrow.plain .actline { display: inline-flex; align-items: center; justify-self: start; }

@@ -43,6 +43,7 @@ import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
 import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
 import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
+import { Help, useQuietScreen } from "@/components/ds/help";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -439,6 +440,9 @@ export function StepCard({
 }) {
   const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
+  // In a quiet screen the grey line under the title is an explanation, so it moves behind a "?"
+  // beside the title (2026-10-12). A card with no title keeps it where it is.
+  const metaInHelp = useQuietScreen() && !!meta && !!title;
   const [anyway, setAnyway] = useState(false);
   const held = !!heldFor;
   const waiting = held || (!!waitsFor && !anyway);
@@ -461,7 +465,7 @@ export function StepCard({
   const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold;
   const body = (
     <>
-      {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+      {meta && !metaInHelp ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
       {children}
       {acts ? (
         <div className="row-acts" style={{ marginTop: 12 }}>
@@ -494,6 +498,7 @@ export function StepCard({
             {n ? <span className={`cardno${met ? " done" : ""}`}>{met ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
+            {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
             {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
           {waiting || folded ? null : right ? <div className="row-acts">{right}</div> : null}
@@ -726,12 +731,31 @@ export function ActionRow({
   goToLabel?: string;
 }) {
   const held = !!heldBy;
+  const quiet = useQuietScreen();
+  const button = (
+    <Button
+      kind={kind}
+      state={state ?? (onClick ? "default" : "inert")}
+      onClick={onClick}
+      title={heldBy ?? undefined}
+      className={quiet && (kind === "quiet" || kind === "secondary") ? "act" : undefined}
+    >
+      {label}
+    </Button>
+  );
   return (
-    <div className="actrow">
-      <Button kind={kind} state={state ?? (onClick ? "default" : "inert")} onClick={onClick} title={heldBy ?? undefined}>
-        {label}
-      </Button>
-      <span className="cap">{caption}</span>
+    <div className={`actrow${quiet ? " plain" : ""}`}>
+      {quiet ? (
+        <span className="actline">
+          {button}
+          <Help label={`About ${actName(label)}`}>{caption}</Help>
+        </span>
+      ) : (
+        <>
+          {button}
+          <span className="cap">{caption}</span>
+        </>
+      )}
       {held ? (
         <span className="held">
           <span className="why">{heldBy}</span>
@@ -761,6 +785,31 @@ export function SeeRow({
   reason?: string;
   kind?: ButtonProps["kind"];
 }) {
+  const quiet = useQuietScreen();
+  if (quiet) {
+    const shut = state === "inert" || !onClick;
+    // A reason naming a backend item (BE-39) says the act is not built yet — that belongs with
+    // the explanation. Any other reason is the booking's own state, a message, so it stays out.
+    const soon = !!reason && /\bBE-\d+/.test(reason);
+    return (
+      <div className="seerow plain">
+        <Button
+          kind={kind}
+          state={state ?? (onClick ? "default" : "inert")}
+          onClick={onClick}
+          title={reason}
+          className={kind === "quiet" || kind === "secondary" ? "act" : undefined}
+        >
+          {label}
+        </Button>
+        <Help label={`About ${actName(label)}`}>
+          <p>{sentence(note)}</p>
+          {shut && soon ? <p className="why">{reason!.replace(/\s*\(BE-\d+\)/, "")}</p> : null}
+        </Help>
+        {shut && reason && !soon ? <span className="why">{reason}</span> : null}
+      </div>
+    );
+  }
   return (
     <div className="seerow">
       <Button kind={kind} compact state={state ?? (onClick ? "default" : "inert")} onClick={onClick} title={reason}>
@@ -770,6 +819,18 @@ export function SeeRow({
       {reason && (state === "inert" || !onClick) ? <span className="meta warn-ink">· {reason}</span> : null}
     </div>
   );
+}
+
+/** "Park…" → "Park" — the name a "?" is about. */
+function actName(label: string): string {
+  return label.replace(/[…:.]+$/, "").trim();
+}
+
+/** A note written to follow "→" reads as a sentence on its own: capital first, full stop last. */
+function sentence(note: ReactNode): ReactNode {
+  if (typeof note !== "string" || !note) return note;
+  const t = note.charAt(0).toUpperCase() + note.slice(1);
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 }
 
 /**

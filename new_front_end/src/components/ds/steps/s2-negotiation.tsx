@@ -40,6 +40,7 @@ import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
 import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
+import { Help } from "@/components/ds/help";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -310,6 +311,16 @@ export function S2Negotiation({
 
   /* ---- validity: whole days from now, capped at 30 and at check-in (the server re-checks) ---- */
   const [validDays, setValidDays] = useState("2");
+  /**
+   * The validity is written by the Save, so changing it after the quote was priced is an unsaved
+   * change too (2026-10-12) — without this the Save stayed on "Saved" and the new validity could
+   * never be applied. Cleared when a save lands.
+   */
+  const [validTouched, setValidTouched] = useState(false);
+  const changeValidDays = (v: string) => {
+    setValidDays(v);
+    setValidTouched(true);
+  };
   const checkInMs = entry.checkInDate ? new Date(entry.checkInDate).getTime() : Number.NaN;
   // Mirrors resolveQuotationValidity: the check-in caps the window only while it is still ahead.
   // A same-day booking's check-in (stored at the day's start) has already passed, and capping at
@@ -353,6 +364,7 @@ export function S2Negotiation({
     mutationFn: () => createQuotation(session!, entry.id, createBody()),
     onSuccess: (q) => {
       toast.success(`Quotation ${q.referenceNumber} generated — nothing sent, no rooms marked`);
+      setValidTouched(false);
       refresh(extraKeys);
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated"),
@@ -369,6 +381,7 @@ export function S2Negotiation({
     },
     onSuccess: (q) => {
       toast.success(`Version ${q.versionNumber} generated — the earlier one is kept`);
+      setValidTouched(false);
       refresh(extraKeys);
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated again"),
@@ -476,7 +489,7 @@ export function S2Negotiation({
 
       <StepCard
         title="Who sleeps where, and their meals"
-        meta="One row per room — the guests by age band, the meal plans, extra beds, any negotiated rate and the booking's discount. The house prices the quotation from this table; nothing is added up here."
+        meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
         {changing ? (
           <ChangeConfiguration
@@ -502,34 +515,60 @@ export function S2Negotiation({
               onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
               saveLabel={working ? "Save & price it again" : "Save & price it"}
               saving={generateM.isPending || regenerateM.isPending}
-              unsaved={tableUnsaved}
+              unsaved={tableUnsaved || validTouched}
               saveAside={
-                <label className="rct-valid">
-                  <span className="k">Valid for</span>
-                  <input
-                    className="input narrow"
-                    inputMode="numeric"
-                    aria-label="Valid for · days"
-                    value={validDays}
-                    readOnly={!editable}
-                    onChange={(e) => {
-                      const v = e.target.value.replace(/\D/g, "");
-                      const n = Number(v);
-                      setValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
-                    }}
-                  />
-                  <span className="k">days</span>
-                  <span className={`rct-valid-h${validDaysNumber == null ? " warn-ink" : ""}`}>
+                // A field that reads as one (2026-10-12, operator: "valid for 2 days doesn't seem
+                // like something that can be edited at first glance"): a bordered box with − and +,
+                // the end date it gives beside it, and the rule behind a "?".
+                <div className="rct-valid">
+                  <span className="lbl">Quote valid for</span>
+                  <span className={`stepper${validDaysNumber == null ? " bad" : ""}`}>
+                    <button
+                      type="button"
+                      aria-label="One day less"
+                      disabled={!editable || validDaysNumber == null || validDaysNumber <= 1}
+                      onClick={() => changeValidDays(String(Math.max(1, (validDaysNumber ?? 2) - 1)))}
+                    >
+                      −
+                    </button>
+                    <input
+                      inputMode="numeric"
+                      aria-label="Quote valid for, in days"
+                      value={validDays}
+                      readOnly={!editable}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/\D/g, "");
+                        const n = Number(v);
+                        changeValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
+                      }}
+                    />
+                    <span className="unit">{validDaysNumber === 1 ? "day" : "days"}</span>
+                    <button
+                      type="button"
+                      aria-label="One day more"
+                      disabled={!editable || (validDaysNumber ?? 0) >= maxValidDays}
+                      onClick={() => changeValidDays(String(Math.min(maxValidDays, (validDaysNumber ?? 0) + 1)))}
+                    >
+                      +
+                    </button>
+                  </span>
+                  <span className={`until${validDaysNumber == null ? " stop-ink" : ""}`}>
                     {validDaysNumber == null ? (
-                      `1 to ${maxValidDays}`
+                      `Enter 1 to ${maxValidDays}`
                     ) : (
                       <>
-                        at most {plural(maxValidDays, "day")}
-                        {checkInAhead ? " · ends before check-in" : ""} → <b>{fmtDateTime(validityEnd, tz)}</b>
+                        until <b>{fmtDateTime(validityEnd, tz)}</b>
                       </>
                     )}
                   </span>
-                </label>
+                  <Help label="About how long the quote is valid">
+                    <p>How long the guest has to accept this price. The time starts when the table is saved and priced.</p>
+                    <p>
+                      Anything from 1 to {plural(maxValidDays, "day")}
+                      {checkInAhead ? ", and it always ends before check-in" : ""}. Sending the quote later does not restart it.
+                    </p>
+                  </Help>
+                </div>
               }
               onFaultsChange={setTableFaults}
               persistKey={entry.id}
@@ -552,13 +591,11 @@ export function S2Negotiation({
               <Notice>Choose the rooms at Inquiry first — the table needs them.</Notice>
             ) : accepted && !past ? (
               <Notice>
-                These are the terms the guest accepted, so the table is closed. To change anything, move to Set up and use{" "}
-                <b>Renegotiate the price…</b> — a new pass with a fresh quotation.
+                The guest accepted these terms, so the table is closed. To change the price, use <b>Renegotiate the price…</b> at Set up.
               </Notice>
             ) : proformaLocked && !past ? (
               <Notice>
-                A proforma has been generated on Set up, so these terms are final — it bills them. A price change is a new pass, through{" "}
-                <b>Renegotiate the price…</b> on Set up. Changing only the advance re-issues the proforma at the same terms.
+                A proforma has been issued on these terms, so they are final. To change the price, use <b>Renegotiate the price…</b> at Set up.
               </Notice>
             ) : null}
             <CompositionSummary entry={entry} />
@@ -570,13 +607,14 @@ export function S2Negotiation({
             being made so there is only ever one plan on screen. */}
         {!changing ? <WaitingConfigurationChange entry={entry} /> : null}
         {!changing && editable && !past ? (
-          <div className="row-acts" style={{ marginTop: 12 }}>
-            <Button kind="quiet" compact onClick={() => setChanging(true)}>
+          <div className="row-acts" style={{ marginTop: 12, alignItems: "center" }}>
+            <Button kind="quiet" className="act" onClick={() => setChanging(true)}>
               Change configuration…
             </Button>
-            <span className="meta">
-              add or drop rooms, change the adults, the children and their ages — the dates stay as they are
-            </span>
+            <Help label="About changing the configuration">
+              <p>Add or drop rooms, or change the adults, the children and their ages.</p>
+              <p>The dates stay as they are — to change them, re-enter to Inquiry.</p>
+            </Help>
           </div>
         ) : null}
         {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
@@ -609,36 +647,40 @@ export function S2Negotiation({
       <StepCard
         flow="quote"
         title="The quote"
-        meta="Your own note, and where the quotation goes. How long it stands is set with the table's Save, which is what writes it."
+        meta="The quotation is made when the table above is saved and priced. Sending it to the guest is optional — a priced quotation is all the move to Set up needs. Saving the table again makes a new version and keeps the earlier one. The internal note is for staff only and is never sent."
       >
         {/* "Valid for" moved to the table's Save row on 2026-09-30 (operator: "we have to set and
             save it at that section") — the save is what writes it. The note stays here: it is
             the operator's own annotation, not a term of the offer. */}
         <div className="form2" style={{ marginBottom: 12 }}>
           <div className="wide field">
-            <label>Internal note · not shown to the guest</label>
-            <input className="input" value={notes} readOnly={!editable} placeholder="optional" onChange={(e) => setNotes(e.target.value)} />
+            <label>Internal note</label>
+            <input
+              className="input"
+              value={notes}
+              readOnly={!editable}
+              placeholder="only staff see this — optional"
+              onChange={(e) => setNotes(e.target.value)}
+            />
           </div>
         </div>
 
         <div>
-            <b>Send the quote</b>
-            <div className="meta">Generates and sends. Same quote, same validity — sending doesn&rsquo;t restart the clock.</div>
             {sent ? (
-              <div className="sm" style={{ marginTop: 8 }}>
+              <div className="sm" style={{ marginBottom: 8 }}>
                 <Icon name="check" /> {sent.referenceNumber} sent {fmtStamp(sent.sentAt, tz)}
-                {sent.sentTo ? <span className="meta"> · to {sent.sentTo}</span> : null}
+                {sent.sentTo ? <> · to {sent.sentTo}</> : null}
               </div>
             ) : null}
             <Live>
-              <div style={{ marginTop: 10 }}>
+              <div>
                 <SeeRow
                   kind="primary"
                   label="Send the quote…"
                   note={
                     draft
-                      ? `opens the send for ${draft.referenceNumber} — email or WhatsApp; print it from the paper`
-                      : "generates the quotation and opens the send — email or WhatsApp"
+                      ? `Opens the send for ${draft.referenceNumber}, by email or WhatsApp. To print it, open the paper. Sending does not restart its validity.`
+                      : "Prices the quotation from the table and opens the send, by email or WhatsApp. Sending does not restart its validity."
                   }
                   onClick={editable ? openSend : undefined}
                   state={generateForSendM.isPending ? "working" : editable && !sendReason ? "default" : "inert"}
@@ -648,23 +690,14 @@ export function S2Negotiation({
             </Live>
         </div>
 
+        {/* Recording the price without sending it is the table's own Save & price it
+            (2026-09-30) — a composition lives nowhere but the quotation. Until one exists, one line
+            says where it is made; the rest of the explanation is behind the card's "?". */}
         <Live>
-          {editable && !accepted && !proformaLocked ? (
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-              {/* Recording the price without sending it USED to be a third button here. It is now
-                  the table's own **Save & price it** (2026-09-30, operator request), because a
-                  composition lives nowhere but the quotation — saving the table IS pricing it,
-                  and the table is the only surface that can refuse a configuration with a red box
-                  still in it. Two buttons for one act is what this card was split up to stop. */}
-              <b>{working ? "Price it again" : "Just record the price"}</b>
-              <div className="meta">
-                {working
-                  ? "Save the table above again — a new version is priced from it and this one is kept as history."
-                  : "A quotation on file is all the move to Set up needs. Press "}
-                {!working ? <b>Save &amp; price it</b> : null}
-                {!working ? " at the foot of the table above — nothing is sent and no rooms are marked." : ""}
-              </div>
-            </div>
+          {editable && !working && !accepted && !proformaLocked ? (
+            <p className="sm" style={{ margin: "10px 0 0" }}>
+              Not priced yet — press <b>Save &amp; price it</b> under the table, or send it now.
+            </p>
           ) : null}
         </Live>
       </StepCard>
@@ -673,12 +706,12 @@ export function S2Negotiation({
           none — on the validity and note from the card above. */}
       <StepCard
         title="Provisional block"
-        meta="Optional — marks the rooms so nobody else sells them while the guest decides. Nothing is sent. It generates the quotation too when there isn't one, on the validity above."
+        meta="Optional. Marks the rooms so nobody else sells them while the guest decides; nothing is sent to the guest. If there is no quotation yet, it prices one first, on the validity set under the table. The reason and the time here are used by this block only."
       >
         {/* The marker's own two settings — no other act on the step reads them. */}
         <div style={{ display: "grid", gap: 10, marginBottom: 4 }}>
           <div className="field">
-            <label>Why hold these rooms · optional</label>
+            <label>Reason · optional</label>
             <input
               className="input"
               value={holdWhy}
@@ -707,7 +740,6 @@ export function S2Negotiation({
                 ))}
               </div>
             ) : null}
-            <span className="hint">only this card reads the two settings above — sending or recording the price ignores both</span>
           </div>
         </div>
         {activeHold ? (
@@ -722,14 +754,14 @@ export function S2Negotiation({
             </div>
           </BindingBox>
         ) : lastHold ? (
-          <div className="meta" style={{ marginTop: 8 }}>
+          <div className="sm" style={{ marginTop: 8 }}>
             The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
             {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
           </div>
         ) : null}
         {otherMarkers.length ? (
-          <div className="meta" style={{ marginTop: 6 }}>
-            also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}
+          <div className="sm" style={{ marginTop: 6 }}>
+            Also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}
           </div>
         ) : null}
         <Live>
@@ -737,7 +769,7 @@ export function S2Negotiation({
             {activeHold ? (
               <SeeRow
                 label="Release…"
-                note="frees the rooms with a reason; the quotation stands"
+                note="Frees the rooms, with a reason. The quotation stands."
                 onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
                 reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
               />
@@ -745,7 +777,7 @@ export function S2Negotiation({
               <SeeRow
                 kind="secondary"
                 label="Provisional block"
-                note={`${working || accepted ? "" : "generates the quotation and "}marks ${plural(markedCount || 1, "room")} ${markLength} · sends nothing`}
+                note={`${working || accepted ? "Marks" : "Prices the quotation and marks"} ${plural(markedCount || 1, "room")} ${markLength}. Nothing is sent to the guest.`}
                 onClick={editable ? () => blockM.mutate() : undefined}
                 state={blockM.isPending ? "working" : editable && !blockReason ? "default" : "inert"}
                 reason={!editable ? "not at this step" : (blockReason ?? undefined)}
@@ -753,9 +785,9 @@ export function S2Negotiation({
             )}
             <SeeRow
               label="Extend"
-              note="once for the desk, then the FOM · never a re-quote"
+              note="Gives the marked rooms more time — once by the desk, then by the FOM. It never re-prices the quotation."
               state="inert"
-              reason="Extending a marker or a quotation's validity is not in the backend yet (BE-59)"
+              reason="Extending a marker or a quotation's validity can't be done yet (BE-59)."
             />
           </div>
         </Live>
@@ -768,7 +800,12 @@ export function S2Negotiation({
       <CompetingClaimsCard entryId={entry.id} />
       <OtherWays>
         {onPark && entry.status === "ACTIVE" ? (
-          <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
+          <SeeRow
+            key="park"
+            label="Park…"
+            note="Pauses the booking where it is, with a reason. Its clock stops until it is resumed; a booking parked for too long lapses on its own."
+            onClick={onPark}
+          />
         ) : null}
         {/* "The rate, with its basis" was removed on 2026-09-29 (operator: "most of it are already
             below"): its published rate, its floor and the SC/GST line all sit in the reference
@@ -779,16 +816,16 @@ export function S2Negotiation({
           <SeeRow
             key="decline"
             label="The guest said no…"
-            note="ends the booking and records why; the marked rooms go back on the board, the offer is withdrawn and nothing is charged"
+            note="Ends the booking and records what the guest said. The marked rooms go back on sale, the offer is withdrawn and nothing is charged."
             onClick={onDecline}
           />
         ) : null}
         <SeeRow
           key="counter"
           label="Record a counter-offer…"
-          note="what they asked, by whom, the outcome — it would roll up to the agent's record"
+          note="Records what the guest or agent asked for, by whom, and how it ended — it adds to the agent's record."
           state="inert"
-          reason="Counter-offers as a recorded line are not in the backend yet (BE-39) — until then the discount is set in the table"
+          reason="Counter-offers can't be recorded yet (BE-39). For now, set the discount in the table."
         />
       </OtherWays>
 
@@ -917,14 +954,18 @@ function ChildrenAges({ entry }: { entry: EntryDetail }) {
   const ages = entry.childAges ?? [];
   const young = policy.data?.ageBands.youngChildMaxAge ?? 5;
   const child = policy.data?.ageBands.childMaxAge ?? 10;
+  // With no children there is nothing to say (2026-10-12) — the table's guest columns show it.
+  if (!ages.length) return null;
   return (
-    <div className="row-acts" style={{ marginTop: 12 }}>
-      <span className="meta">Children&rsquo;s ages</span>
-      <b className="sm">{ages.length ? ages.join(", ") : "no children"}</b>
-      <span className="meta">
-        under {young + 1} free · {young + 1}–{child} at the child rate · {child + 1} and over count as adults — from the child policy · ages are set
-        at Inquiry
-      </span>
+    <div className="row-acts" style={{ marginTop: 12, alignItems: "center" }}>
+      <span className="sm">Children&rsquo;s ages</span>
+      <b className="sm">{ages.join(", ")}</b>
+      <Help label="About children's ages">
+        <p>
+          Under {young + 1} are free, {young + 1} to {child} are charged at the child rate, and {child + 1} and over count as adults.
+        </p>
+        <p>The ages are set at Inquiry.</p>
+      </Help>
     </div>
   );
 }
@@ -1068,7 +1109,7 @@ function QuotationCard({
         </>
       }
     >
-      <div className="meta">
+      <div className="sm">
         Generated {fmtStamp(q.createdAt, tz)} · <span className="money">{money(figure, q.currency)}</span> quoted
         {perNight != null ? ` · ${money(perNight, q.currency)} a night across the stay` : ""}
       </div>
@@ -1104,7 +1145,7 @@ function QuotationCard({
                     Approve the discount · FOM
                   </Button>
                 ) : (
-                  <span className="meta">an older quotation — the FOM records the approval here before it can be sent</span>
+                  <span className="warn-ink sm">Needs the FOM&rsquo;s approval before it can be sent</span>
                 )}
               </Live>
             ) : null}
@@ -1119,7 +1160,7 @@ function QuotationCard({
       ) : null}
 
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
-        <span className="meta">The guest&rsquo;s answer</span>
+        <b className="sm">The guest&rsquo;s answer</b>
         {q.state === "ACCEPTED" ? (
           <span className="sm">
             <Icon name="check" /> Accepted{q.acceptedAt ? ` · ${fmtStamp(q.acceptedAt, tz)}` : ""}
@@ -1135,13 +1176,13 @@ function QuotationCard({
                   <SeeRow
                     kind="secondary"
                     label="Record the answer…"
-                    note="how they accepted and the words used — a verbal answer counts, once written down"
+                    note="Records how the guest accepted and the words they used. A spoken answer counts once it is written down."
                     onClick={editable ? () => setAnswerOpen(true) : undefined}
                     reason={editable ? undefined : "not at this step"}
                   />
                   <SeeRow
                     label="No answer — the FOM decides…"
-                    note="closes the reply window as the FOM's decision, with a reason"
+                    note="Closes the reply window as the FOM's decision, with a reason."
                     onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
                     reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
                   />
@@ -1186,9 +1227,9 @@ function QuotationCard({
             </Live>
           </>
         ) : q.state === "DRAFT" ? (
-          <span className="meta">Nothing to answer until it has gone out — sending is optional; the gate needs only the generated quotation.</span>
+          <span className="sm">Not sent yet.</span>
         ) : (
-          <span className="meta">This version is {state.word}.</span>
+          <span className="sm">This version is {state.word}.</span>
         )}
       </div>
 
@@ -1218,7 +1259,7 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
   return (
     <StepCard
       title="Every version of the quotation"
-      meta={passes.many ? "Versions from an earlier pass are kept for the record — view only." : undefined}
+      meta={`Each version shows the total it was priced at. A replaced version opens exactly as it was sent.${passes.many ? " Versions from an earlier pass are kept for the record — view only." : ""}`}
     >
       <table className="table compact">
         <thead>
@@ -1294,9 +1335,6 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
           })}
         </tbody>
       </table>
-      <p className="meta" style={{ marginTop: 6 }}>
-        The figures are each version&rsquo;s own stored total. A replaced version with a stored paper opens as it was sent.
-      </p>
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </StepCard>
   );

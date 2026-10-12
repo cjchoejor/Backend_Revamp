@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { getRateReference } from "@/lib/api/entries";
 import { moneyOrDash } from "@/lib/desk/workspace";
+import { Help, useQuietScreen } from "@/components/ds/help";
 
 /**
  * Reference rates under the S2 composition editors (2026-08-01, operator request): typing a
@@ -49,6 +50,7 @@ const ADD_ON_COLS = [
 
 export function RateReferenceStrip({ entryId, compact }: { entryId: string; compact?: boolean }) {
   const { session } = useSession();
+  const quiet = useQuietScreen();
   const query = useQuery({
     queryKey: ["rate-reference", entryId],
     queryFn: () => getRateReference(session!, entryId),
@@ -87,10 +89,27 @@ export function RateReferenceStrip({ entryId, compact }: { entryId: string; comp
     >
       <div style={{ marginBottom: compact ? 3 : 6, display: "flex", alignItems: "baseline", gap: 6 }}>
         <span className="rce-lbl">Reference rates</span>
-        <span style={{ fontSize: 11 }}>
-          per night · SC {pct(ref.serviceChargeRate)} + GST {pct(ref.gstRate)} on top
-          {ref.party && <> · {ref.party.type === "TRAVEL_AGENT" ? "agent" : "corporate"} card: {ref.party.name}</>}
-        </span>
+        {quiet ? (
+          <>
+            {ref.party && (
+              <span style={{ fontSize: 11 }}>
+                {ref.party.type === "TRAVEL_AGENT" ? "agent" : "corporate"} card: {ref.party.name}
+              </span>
+            )}
+            <Help label="About the reference rates">
+              <p>What each room type sells at per night when no rate is negotiated — the figure a rate typed in the table is set against.</p>
+              <p>
+                Service charge ({pct(ref.serviceChargeRate)}) and GST ({pct(ref.gstRate)}) are added on top.
+              </p>
+              <p>Basis says where the rate comes from. MSR is the lowest rate the house sells at — a room priced below it needs the GM&rsquo;s waiver.</p>
+            </Help>
+          </>
+        ) : (
+          <span style={{ fontSize: 11 }}>
+            per night · SC {pct(ref.serviceChargeRate)} + GST {pct(ref.gstRate)} on top
+            {ref.party && <> · {ref.party.type === "TRAVEL_AGENT" ? "agent" : "corporate"} card: {ref.party.name}</>}
+          </span>
+        )}
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse", fontSize: 11.5 }}>

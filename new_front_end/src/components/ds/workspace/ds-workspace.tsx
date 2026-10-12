@@ -50,6 +50,7 @@ import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
 import { FlowTodo, OtherWaysSlot, StepFlow, anchorFor, numberFlow, revealCard, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
+import { QuietScreen } from "@/components/ds/help";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
@@ -1262,6 +1263,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 ways portalled into the pane below (2026-09-25). The canvas stays mounted while any
                 other tab is open (2026-10-12), so a look at Charges & payments never loses what the
                 operator has half-typed into the step — the Negotiation table above all. */}
+            {/* Explanations on request (2026-10-12, operator: "do it for this screen; if I like it we
+                will do it for all"). On Negotiation the grey explanatory lines sit behind a "?" and
+                only messages stay on screen; every other step is unchanged until it is turned on. */}
+            <QuietScreen on={viewing === 2}>
             <div hidden={view !== "step" && view !== "other"}>
                 <h3>
                   {STEP_NAMES[viewing - 1]}{" "}
@@ -1297,13 +1302,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 </StepFlow>
                 <div hidden={view !== "other"}>
                   <div ref={setOtherSlot} />
-                  {view === "other" ? (
+                  {view === "other" && viewing !== 2 ? (
                     <p className="meta">
                       What else this booking can do from {STEP_NAMES[viewing - 1]} — none of it is needed to move on.
                     </p>
                   ) : null}
                 </div>
             </div>
+            </QuietScreen>
             {/* the old side column's "what runs here" target — kept mounted, not shown */}
             <div ref={setRailSlot} hidden />
           </div>

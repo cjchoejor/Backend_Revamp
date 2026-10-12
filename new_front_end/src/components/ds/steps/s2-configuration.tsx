@@ -46,6 +46,7 @@ import { currentPassConfigs } from "@/lib/desk/workspace";
 import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
 import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
+import { Help } from "@/components/ds/help";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 
 /**
@@ -329,10 +330,13 @@ export function ChangeConfiguration({
       <div className="cfg-head">
         <div>
           <b>Change the rooms and the party</b>
-          <div className="meta">
-            The dates stay as they are — {fmtRange(entry.checkInDate, entry.checkOutDate)}. To change them, re-enter to
-            Inquiry.
-          </div>
+          <Help label="About changing the configuration">
+            <p>
+              Change the party, ask the house, then tick the rooms. The rooms this booking holds today come back ticked, so a change is a tick
+              or an untick.
+            </p>
+            <p>The dates stay as they are — {fmtRange(entry.checkInDate, entry.checkOutDate)}. To change them, re-enter to Inquiry.</p>
+          </Help>
         </div>
         <Button kind="quiet" compact onClick={onClose}>
           Cancel
@@ -416,11 +420,7 @@ export function ChangeConfiguration({
           <Button kind="secondary" compact onClick={() => ask.mutate()} state={ask.isPending ? "inert" : "default"}>
             {result ? "Ask again" : "Ask the house"}
           </Button>
-          <span className="meta">
-            {result
-              ? `${plural(available.length, "room")} free over these nights`
-              : "the same dates, the party above — the free rooms come back below"}
-          </span>
+          {result ? <span className="sm">{plural(available.length, "room")} free over these nights</span> : null}
         </div>
       </section>
 
@@ -428,10 +428,8 @@ export function ChangeConfiguration({
       <section>
         <b className="cfg-n">3 · The rooms</b>
         {!result ? (
-          <p className="meta" style={{ marginTop: 6 }}>
-            Ask the house first. The rooms this booking holds today —{" "}
-            {priorRoomIds.length ? priorRoomIds.map(roomNo).join(", ") : "none"} — come back ticked, so a change is a
-            tick or an untick.
+          <p className="sm" style={{ marginTop: 6 }}>
+            Ask the house first. Holding today: {priorRoomIds.length ? priorRoomIds.map(roomNo).join(", ") : "none"}.
           </p>
         ) : (
           <>
@@ -440,13 +438,13 @@ export function ChangeConfiguration({
                 {picked.length} of {plural(roomCount, "room")} chosen
               </span>
               {roomsMoved ? (
-                <span className="meta">
+                <span className="sm">
                   {dropped.length ? `dropping ${dropped.map(roomNo).join(", ")}` : ""}
                   {dropped.length && added.length ? " · " : ""}
                   {added.length ? `adding ${added.map(roomNo).join(", ")}` : ""}
                 </span>
               ) : (
-                <span className="meta">the same rooms as now</span>
+                <span className="sm">the same rooms as now</span>
               )}
             </div>
             <Tool>
@@ -481,7 +479,6 @@ export function ChangeConfiguration({
             placeholder="the guest's party shrank — two rooms no longer needed"
             onChange={(e) => setReason(e.target.value)}
           />
-          <span className="hint">it goes on the booking&rsquo;s record with your name</span>
         </div>
         <div className="row-acts" style={{ marginTop: 10 }}>
           <Button
@@ -506,21 +503,20 @@ export function ChangeConfiguration({
           >
             {save.isPending ? (needsApproval ? "Sending…" : "Saving…") : needsApproval ? "Send for the FOM's approval" : "Save the configuration"}
           </Button>
-          <span className="meta">
-            {partyMoved && roomsMoved
-              ? "the party and the rooms change together, as one record"
-              : partyMoved
-                ? "the party changes; the rooms stay as they are"
-                : roomsMoved
-                  ? "the rooms change; the party stays as it is"
-                  : "change the party above, or tick a different room"}
-          </span>
+          <Help label="About saving the change">
+            <p>The reason goes on the booking&rsquo;s record with your name.</p>
+            <p>
+              Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves to
+              the new rooms and keeps its deadline.
+            </p>
+            <p>When the guest is already holding a quotation, the change goes to the FOM, and nothing changes until they approve it.</p>
+          </Help>
         </div>
-        <p className="meta" style={{ marginTop: 8 }}>
-          {needsApproval
-            ? "The guest is holding a quotation for the rooms as they are, so this goes to the FOM. Nothing changes on the booking until they approve it."
-            : "Saving retires any quotation already priced on the old configuration — price it again before moving to Set up. A provisional block moves to the new rooms and keeps its original deadline."}
-        </p>
+        {needsApproval ? (
+          <p className="warn-ink sm" style={{ marginTop: 8, fontWeight: 600 }}>
+            This goes to the FOM — nothing changes on the booking until they approve it.
+          </p>
+        ) : null}
       </section>
     </div>
   );
@@ -575,13 +571,15 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
     <div className="cfg-wait" role="status">
       <div className="cfg-wait-h">
         <b>A change to the rooms and the party is waiting</b>
-        <span className="meta">
-          raised {fmtDateTime(waiting.requestedAt)} · the guest is holding a quotation, so it is the FOM&rsquo;s call
-        </span>
+        <span className="sm">raised {fmtDateTime(waiting.requestedAt)}</span>
+        <Help label="About this waiting change">
+          <p>The guest is holding a quotation, so the change is the FOM&rsquo;s call. Nothing on the booking has changed yet.</p>
+          <p>Approving changes the booking at once and retires the quotation it was priced on.</p>
+        </Help>
       </div>
       <div className="cfg-wait-b">
         <b className="cfg-wait-s">{waiting.summary}</b>
-        <span className="meta">&ldquo;{waiting.reason}&rdquo;</span>
+        <span className="sm">&ldquo;{waiting.reason}&rdquo;</span>
       </div>
       {elevated ? (
         <>
@@ -592,7 +590,6 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
             <Button kind="quiet" compact onClick={() => setRejecting((v) => !v)}>
               {rejecting ? "Keep it waiting" : "Turn it down…"}
             </Button>
-            <span className="meta">approving changes the booking at once and retires the quotation it was priced on</span>
           </div>
           {rejecting && (
             <div className="field" style={{ marginTop: 8 }}>
@@ -617,7 +614,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
           <Button kind="quiet" compact onClick={() => takeBack.mutate()} state={takeBack.isPending ? "inert" : "default"}>
             Take it back
           </Button>
-          <span className="meta">waiting for the FOM — nothing on the booking has changed</span>
+          <span className="sm">Waiting for the FOM — nothing on the booking has changed</span>
         </div>
       )}
     </div>
@@ -631,7 +628,7 @@ export function DecidedConfigurationChanges({ entry }: { entry: EntryDetail }) {
   return (
     <div style={{ marginTop: 10, display: "grid", gap: 3 }}>
       {decided.map((r) => (
-        <span key={r.id} className="meta">
+        <span key={r.id} className="sm">
           {r.state === "APPROVED" ? "Approved" : r.state === "REJECTED" ? "Turned down" : r.state === "WITHDRAWN" ? "Taken back" : "Overtaken"} ·{" "}
           {r.summary}
           {r.decisionNote ? ` — “${r.decisionNote}”` : ""}
