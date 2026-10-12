@@ -718,7 +718,7 @@ export function NewInquiryCanvas() {
     if (el) revealCard(el);
   };
 
-  const primaryLabel = isEdit ? "Save the changes" : "Start the inquiry · keep the lead";
+  const primaryLabel = isEdit ? "Save the changes" : "Done · Start the inquiry";
   const saveReason = saveBlockers.length ? `first: ${saveBlockers.join(" · ")}` : null;
   const askReason = askBlockers.length ? `first: ${askBlockers.join(" · ")}` : null;
 
@@ -1530,12 +1530,15 @@ export function NewInquiryCanvas() {
               <span>{flowAlso.find((p) => !p.met)?.label}</span>
             </div>
           ) : (
-            <div className="item met">
+            <button type="button" className="item met" onClick={() => (isEdit ? undefined : goToCard("stay"))}>
               <Icon name="check" />
-              <span>{isEdit ? "everything the inquiry needs is here" : "everything the inquiry needs is here — start it"}</span>
-            </div>
+              <span>{isEdit ? "everything the inquiry needs is here" : "everything the inquiry needs is here — start it from The stay"}</span>
+            </button>
           )}
         </div>
+        {/* On a new inquiry the start is the stay's own button, "Done · Start the inquiry" — a second
+            one here was a duplicate (2026-10-12, operator). An edit keeps its save here. */}
+        {isEdit ? (
         <div className="acts">
           <Button
             state={savingNow ? "working" : saveReason || busy ? "inert" : "default"}
@@ -1546,9 +1549,10 @@ export function NewInquiryCanvas() {
             {primaryLabel}
           </Button>
           <span className={`control-note${saveReason ? " fault" : ""}`} style={{ margin: 0, textAlign: "right", maxWidth: 360 }}>
-            {saveReason ?? (isEdit ? "saves the stay and returns to the booking" : "saves the lead and opens the booking; Take it then moves it on")}
+            {saveReason ?? "saves the stay and returns to the booking"}
           </span>
         </div>
+        ) : null}
       </div>
     </div>
   );
