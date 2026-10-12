@@ -449,3 +449,12 @@
 .ds .subtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 700; }
 .ds .subtab:focus-visible { outline: none; box-shadow: var(--focus); }
 .ds .way-form { display: grid; gap: var(--s2); max-width: 640px; }
+/* A note written with a paper, under its row (2026-10-12). */
+.ds .papernotes { display: grid; gap: 2px; padding: 0 0 6px 18px; }
+.ds .papernote { font-size: 13px; color: var(--ink); }
+.ds .papernote .ic { color: var(--ink-3); }
+.ds .papernote .who { color: var(--ink-3); }
+.ds .subtab .n { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--surface-3); color: var(--ink-2); font-size: 11.5px; font-weight: 700; text-align: center; }
+.ds .subtab .n.warn { background: var(--warning-soft); color: var(--warning); }
+.ds .subtab .n.stop { background: var(--danger-soft); color: var(--danger); }
+.ds .papernote-tag { font-size: 12px; font-weight: 600; color: var(--accent-ink); background: var(--accent-soft); border-radius: 3px; padding: 0 5px; margin-right: 6px; }

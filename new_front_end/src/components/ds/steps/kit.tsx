@@ -9,7 +9,7 @@
  * Markup follows the prototype's own helpers (`card`, `docCard`, `V16.fact`, `V16.seeRow`), so
  * the generated components.css and frame.css style it without anything added per screen.
  */
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,6 +43,7 @@ import { sendQuotation } from "@/lib/api/quotations";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
 import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
+import { addBookingNote, listBookingNotes } from "@/lib/api/booking-notes";
 import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
 import { Help, useQuietScreen } from "@/components/ds/help";
 
@@ -921,6 +922,45 @@ export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null
   );
 }
 
+/**
+ * Sub-tabs inside a tab (2026-10-12, operator: "charges and payments, guest requests, notes and
+ * documents can be made into sub tabs"). The open one lives in the address (`?sub=`), and every
+ * panel stays mounted, so a half-typed field survives a look at another sub-tab. A tab with
+ * nothing in it is left out by the caller.
+ */
+export type SubTab = { key: string; label: ReactNode; content: ReactNode };
+
+export function SubTabs({ tabs, label, param = "sub" }: { tabs: ReadonlyArray<SubTab | null | false | undefined>; label: string; param?: string }) {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const live = tabs.filter((t): t is SubTab => !!t);
+  if (live.length === 0) return null;
+  const want = params.get(param);
+  const current = live.find((t) => t.key === want) ?? live[0];
+  const pick = (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set(param, key);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  return (
+    <>
+      <div className="subtabs" role="tablist" aria-label={label}>
+        {live.map((t) => (
+          <button key={t.key} type="button" role="tab" className="subtab" aria-selected={t.key === current.key} onClick={() => pick(t.key)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {live.map((t) => (
+        <div key={t.key} role="tabpanel" className="subtab-panel" hidden={t.key !== current.key}>
+          {t.content}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** Open the step's Other ways tab on one of its ways — from a button on This step. */
 export function useOpenOtherWay() {
   const params = useSearchParams();
@@ -1358,8 +1398,32 @@ const INVOICE_WORD: Record<string, string> = {
  * handed over on WhatsApp; a bill is dispatched by email. Where the backend has no WhatsApp
  * record for a paper, the row says so rather than offering a button that would do nothing.
  */
-export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail; withFolioDocs?: boolean }) {
+/** Which papers a card shows — Documents splits them by kind (2026-10-12). */
+export type PaperShelf = "all" | "quotes" | "proformas" | "bills" | "others";
+
+export function PapersCard({
+  entry,
+  withFolioDocs = true,
+  show = "all",
+  title = "Papers",
+}: {
+  entry: EntryDetail;
+  withFolioDocs?: boolean;
+  show?: PaperShelf;
+  title?: string;
+}) {
   const { session } = useSession();
+  // The notes written with a paper sit beside it (2026-10-12, operator: "in documents it should
+  // show the note beside the paper if it is present"). The same read the Notes tab uses.
+  const notesQ = useQuery({
+    queryKey: ["booking-notes", entry.id],
+    queryFn: () => listBookingNotes(session!, entry.id),
+    enabled: !!session,
+  });
+  const notesFor = (paperId: string) => [
+    ...(notesQ.data?.items ?? []).filter((n) => n.paper?.id === paperId).map((n) => ({ key: n.id, text: n.text, who: n.createdByName, at: n.createdAt })),
+    ...(notesQ.data?.quotationNotes ?? []).filter((n) => n.quotationId === paperId).map((n) => ({ key: `t:${n.quotationId}`, text: n.text, who: n.createdByName, at: n.createdAt })),
+  ];
   const [open, setOpen] = useState<PaperRef | null>(null);
   const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
   const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
@@ -1376,10 +1440,21 @@ export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail
     () => [...(entry.quotations ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
     [entry.quotations],
   );
-  const invoices = useMemo(
+  const allInvoices = useMemo(
     () => [...(entry.folio?.invoices ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
     [entry.folio?.invoices],
   );
+  const proformas = allInvoices.filter((i) => i.invoiceType === "PROFORMA");
+  const bills = allInvoices.filter((i) => i.invoiceType !== "PROFORMA");
+  const quotesShown = show === "all" || show === "quotes" ? quotes : [];
+  const invoiceGroups: Array<[string, InvoiceSummary[]]> =
+    show === "all"
+      ? [["Bills", allInvoices]]
+      : show === "proformas"
+        ? [["Proforma invoices", proformas]]
+        : show === "bills"
+          ? [["Bills", bills]]
+          : [];
 
   const others = useMemo<PaperRef[]>(() => {
     const out: PaperRef[] = [];
@@ -1392,18 +1467,20 @@ export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail
     return out;
   }, [entry, folioDocs.data, withFolioDocs]);
 
-  if (quotes.length === 0 && invoices.length === 0 && others.length === 0) return null;
+  const othersShown = show === "all" || show === "others" ? others : [];
+  if (quotesShown.length === 0 && invoiceGroups.every(([, list]) => list.length === 0) && othersShown.length === 0) return null;
 
   const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
   const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
 
   return (
-    <StepCard title="Papers">
-      {quotes.length ? (
+    <StepCard title={title}>
+      {quotesShown.length ? (
         <div className="papergrp">
-          <div className="h">Quotations</div>
-          {quotes.map((q) => (
-            <div className="paperrow" key={q.id}>
+          {show === "all" ? <div className="h">Quotations</div> : null}
+          {quotesShown.map((q) => (
+            <Fragment key={q.id}>
+            <div className="paperrow">
               <span className="nm">
                 <b>{q.referenceNumber}</b>
                 {(q.versionNumber ?? 1) > 1 ? <span className="v"> · v{q.versionNumber}</span> : null}
@@ -1423,15 +1500,19 @@ export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail
                 </Live>
               </span>
             </div>
+            <PaperNotes notes={notesFor(q.id)} />
+            </Fragment>
           ))}
         </div>
       ) : null}
 
-      {invoices.length ? (
-        <div className="papergrp">
-          <div className="h">Bills</div>
+      {invoiceGroups.map(([groupName, invoices]) =>
+        invoices.length ? (
+        <div className="papergrp" key={groupName}>
+          {show === "all" ? <div className="h">{groupName}</div> : null}
           {invoices.map((i) => (
-            <div className="paperrow" key={i.id}>
+            <Fragment key={i.id}>
+            <div className="paperrow">
               <span className="nm">
                 <b>{i.invoiceNumber ?? i.id}</b>
                 <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
@@ -1452,15 +1533,18 @@ export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail
                 </Live>
               </span>
             </div>
+            <PaperNotes notes={notesFor(i.id)} />
+            </Fragment>
           ))}
         </div>
-      ) : null}
+        ) : null,
+      )}
 
-      {others.length ? (
+      {othersShown.length ? (
         <div className="papergrp">
-          <div className="h">Other papers</div>
+          {show === "all" ? <div className="h">Other papers</div> : null}
           <div className="row-acts">
-            {others.map((pp) => (
+            {othersShown.map((pp) => (
               <Button key={`${pp.kind}:${pp.label}`} kind="quiet" compact icon="file" onClick={() => setOpen(pp)}>
                 {pp.label}
               </Button>
@@ -1477,6 +1561,23 @@ export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail
       <QuotationSendDialog entry={entry} target={sendQuote} onClose={() => setSendQuote(null)} onSent={() => { setSendQuote(null); refresh(); }} />
       <InvoiceSendDialog entry={entry} target={sendInvoice} onClose={() => setSendInvoice(null)} onSent={() => { setSendInvoice(null); refresh(); }} />
     </StepCard>
+  );
+}
+
+/** The notes written with a paper, under its row. */
+function PaperNotes({ notes }: { notes: Array<{ key: string; text: string; who: string | null; at: string }> }) {
+  if (notes.length === 0) return null;
+  return (
+    <div className="papernotes">
+      {notes.map((n) => (
+        <div key={n.key} className="papernote">
+          <Icon name="pen" /> <span className="t">&ldquo;{n.text}&rdquo;</span>
+          <span className="who">
+            {n.who ? ` — ${n.who}` : ""}, {fmtStamp(n.at)}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1519,6 +1620,16 @@ export function QuotationSendDialog({
   // not change — same quotation, same number, same validity, and the stored PDF is still the
   // priced one; only the copy the guest receives has the money taken off.
   const [hidePrices, setHidePrices] = useState(false);
+  /**
+   * The internal note goes with the send (2026-10-12, operator: "keep the internal note in the pop
+   * up so that there is only one send button"). It is kept as a note on the booking, filed against
+   * this quotation — so it shows in Notes naming the quotation, and beside it in Documents.
+   */
+  const [note, setNote] = useState("");
+  const qc = useQueryClient();
+  useEffect(() => {
+    setNote("");
+  }, [target?.id]);
   useEffect(() => {
     if (!target || touched) return;
     setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
@@ -1533,8 +1644,17 @@ export function QuotationSendDialog({
         sentTo: typed,
         hidePrices,
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
       const face = hidePrices ? " · without prices" : "";
+      const text = note.trim();
+      if (text && target) {
+        try {
+          await addBookingNote(session!, entry.id, { kind: "NOTE", text, paperKind: "QUOTATION", paperId: target.id });
+          void qc.invalidateQueries({ queryKey: ["booking-notes", entry.id] });
+        } catch (e) {
+          toastRefusal(e, "The quotation went out, but the note could not be kept");
+        }
+      }
       toast.success(
         channel === "WHATSAPP"
           ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}${face}`
@@ -1635,6 +1755,18 @@ export function QuotationSendDialog({
           the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total.
           The record keeps the priced quotation either way.
         </span>
+      </div>
+      <div className="field">
+        <label>Internal note · optional</label>
+        <textarea
+          className="input"
+          style={{ height: 64, paddingTop: 8 }}
+          maxLength={2000}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="only staff see this — e.g. agent prefers WhatsApp"
+        />
+        <span className="hint">kept in Notes with this quotation, and shown beside it in Documents — never sent</span>
       </div>
     </DsDialog>
   );

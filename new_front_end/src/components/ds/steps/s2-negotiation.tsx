@@ -264,7 +264,6 @@ export function S2Negotiation({
 
   /* ---- what the table and the doors hold ---- */
   const [roomCompositions, setRoomCompositions] = useState<RoomCompositionInput[]>([]);
-  const [notes, setNotes] = useState("");
   const [holdWhy, setHoldWhy] = useState("");
   const [markFor, setMarkFor] = useState<MarkFor>("SETTING");
   const [mark, setMark] = useState({ d: "0", h: "0", m: "15" });
@@ -282,8 +281,6 @@ export function S2Negotiation({
       setDiscountUnit(recordedDiscount.unit);
       setDiscountBasis(recordedDiscount.basis);
     }
-    const savedNote = ((working ?? accepted)?.commercialTerms as Record<string, unknown> | null | undefined)?.notes;
-    setNotes(typeof savedNote === "string" ? savedNote : "");
   }, [working, accepted, recordedDiscount]);
 
   /** A blank or zero figure is "no discount"; clearing a recorded one must be said as `null`. */
@@ -296,16 +293,6 @@ export function S2Negotiation({
     (recordedDiscount != null && discountUnit !== recordedDiscount.unit);
   const tableUnsaved =
     !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
-  /**
-   * The internal note is written by the same Save (2026-10-12), and The quote card that carries it
-   * shows only once a quotation exists — so a changed note is an unsaved change too. A cleared note
-   * is not: the house carries the earlier note forward when none is sent.
-   */
-  const savedNoteText = (() => {
-    const n = ((working ?? accepted)?.commercialTerms as Record<string, unknown> | null | undefined)?.notes;
-    return typeof n === "string" ? n.trim() : "";
-  })();
-  const noteMoved = !!working && notes.trim() !== "" && notes.trim() !== savedNoteText;
 
   // What the table holds, saved or not, for the Charges & payments tab and the header total.
   usePublishPriceDraft(
@@ -370,7 +357,6 @@ export function S2Negotiation({
     Math.max(0, Math.floor(Number(mark.m) || 0)) * 60;
 
   const createBody = () => ({
-    notes: notes.trim() || undefined,
     validDays: validDaysNumber ?? undefined,
     requestedDiscount: discountPayload ?? undefined,
     roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
@@ -394,7 +380,6 @@ export function S2Negotiation({
     mutationFn: () => {
       if (!working) throw new Error("There is no quotation to generate again");
       return supersedeQuotation(session!, working.id, {
-        notes: notes.trim() || undefined,
         validDays: validDaysNumber ?? undefined,
         requestedDiscount: discountPayload ?? (recordedDiscount ? null : undefined),
         roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
@@ -432,15 +417,6 @@ export function S2Negotiation({
       if (createdRef.current) refresh(extraKeys);
     },
   });
-  const generateForSendM = useMutation({
-    mutationFn: () => createQuotation(session!, entry.id, createBody()),
-    onSuccess: (q) => {
-      toast.success(`Quotation ${q.referenceNumber} generated — now choose how it goes`);
-      refresh(extraKeys);
-      setSendTarget(q);
-    },
-    onError: (e) => toastRefusal(e, "The quotation could not be generated"),
-  });
   const releaseM = useMutation({
     mutationFn: (reason: string) => {
       if (!activeHold) throw new Error("No rooms are marked");
@@ -454,10 +430,6 @@ export function S2Negotiation({
     onError: (e) => toastRefusal(e, "The rooms could not be released"),
   });
 
-  const openSend = () => {
-    if (draft) setSendTarget(draft);
-    else generateForSendM.mutate();
-  };
 
   /* ---- reasons a door stays shut ---- */
   const tableOpen = editable && !accepted && !proformaLocked && !!sealedPreferred;
@@ -475,18 +447,6 @@ export function S2Negotiation({
       : validDaysNumber == null && !working && !accepted
         ? `the validity is 1–${maxValidDays} days`
         : null);
-  const sendReason = accepted
-    ? "the guest has accepted — nothing to send"
-    : sent && !draft
-      ? "already sent — generate it again to send a new version"
-      : proformaLocked && !draft
-        ? "the terms are final — a new pass is needed to send another quote"
-        : // Sending GENERATES when there is no draft, so a table with a red box in it holds the
-          // send shut for the same reason the Save is shut — one basis, one verdict. A draft that
-          // already exists was priced from a sound table, so it may still go out.
-          (noRooms ??
-          (!draft ? tableReason : null) ??
-          (!draft && validDaysNumber == null ? `the validity is 1–${maxValidDays} days` : null));
 
   const markedCount = activeHold ? holdRoomIds(activeHold).length : sealedRoomIds.length;
   const markLength =
@@ -621,7 +581,7 @@ export function S2Negotiation({
               onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
               saveLabel={working ? "Save & price it again" : "Save & price it"}
               saving={generateM.isPending || regenerateM.isPending}
-              unsaved={tableUnsaved || validTouched || noteMoved}
+              unsaved={tableUnsaved || validTouched}
               saveAside={
                 // A field that reads as one (2026-10-12, operator: "valid for 2 days doesn't seem
                 // like something that can be edited at first glance"): a bordered box with − and +,
@@ -764,63 +724,9 @@ export function S2Negotiation({
       ) : null}
 
 
-      {/* Two cards, not one (2026-09-29, operator: "separate them into two sections"). They were
-          one card with four fields that alternated between two subjects and three acts sharing a
-          grid — nothing said which field fed which button. Now each card is one subject with its
-          own fields: THE QUOTE (its validity and note; send it, or just record it) and, below,
-          the optional PROVISIONAL BLOCK (why and for how long the rooms are marked). */}
-      {/* Only once the table has been saved and priced (2026-10-12, operator: "the quote section
-          shouldn't appear unless the user clicked on Save & price it"). Until then the table is
-          where the work is, and the to-do points there. */}
-      {shown ? (
-      <StepCard
-        title="The quote"
-        meta="Sending it to the guest is optional — a priced quotation is all the move to Set up needs. Saving the table again makes a new version and keeps the earlier one. The internal note is for staff only, never sent; it is saved with the table's Save."
-      >
-        {/* "Valid for" moved to the table's Save row on 2026-09-30 (operator: "we have to set and
-            save it at that section") — the save is what writes it. The note stays here: it is
-            the operator's own annotation, not a term of the offer. */}
-        <div className="form2" style={{ marginBottom: 12 }}>
-          <div className="wide field">
-            <label>Internal note</label>
-            <input
-              className="input"
-              value={notes}
-              readOnly={!editable}
-              placeholder="only staff see this — optional"
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div>
-            {sent ? (
-              <div className="sm" style={{ marginBottom: 8 }}>
-                <Icon name="check" /> {sent.referenceNumber} sent {fmtStamp(sent.sentAt, tz)}
-                {sent.sentTo ? <> · to {sent.sentTo}</> : null}
-              </div>
-            ) : null}
-            <Live>
-              <div>
-                <SeeRow
-                  kind="primary"
-                  label="Send the quote…"
-                  note={
-                    draft
-                      ? `Opens the send for ${draft.referenceNumber}, by email or WhatsApp. To print it, open the paper. Sending does not restart its validity.`
-                      : "Prices the quotation from the table and opens the send, by email or WhatsApp. Sending does not restart its validity."
-                  }
-                  onClick={editable ? openSend : undefined}
-                  state={generateForSendM.isPending ? "working" : editable && !sendReason ? "default" : "inert"}
-                  reason={!editable ? "not at this step" : (sendReason ?? undefined)}
-                />
-              </div>
-            </Live>
-        </div>
-
-      </StepCard>
-      ) : null}
-
+      {/* "The quote" card was removed (2026-10-12, operator: "keep the internal note in the pop up
+          so that there is only one send button"). The quotation's own Send… is the send; the
+          internal note is typed in the send dialog and kept as a note filed with the quotation. */}
       {allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
 
       <CompetingClaimsCard entryId={entry.id} />
@@ -1151,7 +1057,7 @@ function QuotationCard({
           </Button>
           <Live>
             <Button
-              kind="quiet"
+              kind={editable && q.state === "DRAFT" ? "primary" : "quiet"}
               compact
               icon="send"
               state={editable && q.state === "DRAFT" ? "default" : "inert"}

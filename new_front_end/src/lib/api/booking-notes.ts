@@ -28,10 +28,23 @@ export type BookingNote = {
   editedAt: string | null;
   editedByName: string | null;
   priorTexts: Array<{ text: string; at: string; by: string; byName: string | null }>;
+  /** The paper it was written with — the internal note typed when a quotation is sent (2026-10-12). */
+  paper: { kind: "QUOTATION" | "INVOICE"; id: string; label: string } | null;
+};
+
+/** A note written into a quotation's own terms before 2026-10-12 — read back, read-only. */
+export type QuotationTermNote = {
+  quotationId: string;
+  label: string;
+  text: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string | null;
 };
 
 export type BookingNotes = {
   items: BookingNote[];
+  quotationNotes: QuotationTermNote[];
   counts: { notes: number; openTodos: number; overdueTodos: number };
 };
 
@@ -40,7 +53,7 @@ export function listBookingNotes(session: Session, entryId: string) {
 }
 
 export type AddBookingNoteBody =
-  | { kind: "NOTE"; text: string }
+  | { kind: "NOTE"; text: string; paperKind?: "QUOTATION" | "INVOICE"; paperId?: string }
   | {
       kind: "TODO";
       text: string;

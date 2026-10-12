@@ -43,7 +43,7 @@ import { fmtDateTime, fmtDay, fmtStamp, hotelFormParts, money, plural } from "@/
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
-import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
+import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import type { EntryDetail } from "@/types/api";
@@ -130,6 +130,15 @@ export function ChargesView({
         Charges &amp; payments <span className="need">the price, the bill and the money in</span>
       </h3>
       <div className="steps-canvas">
+        {/* Sub-tabs (2026-10-12, operator): the price, the bill and the money in, one at a time. */}
+        <SubTabs
+          label="Charges & payments"
+          tabs={[
+            {
+              key: "price",
+              label: "The price",
+              content: (
+                <>
         <StepCard title="The price" meta={sp.source === "QUOTE" ? (tag ?? undefined) : sp.kind || undefined}>
           {sp.source === "TABLE" ? (
             <TablePrice sp={sp} />
@@ -201,7 +210,17 @@ export function ChargesView({
             </>
           )}
         </StepCard>
-
+                </>
+              ),
+            },
+            {
+              key: "bill",
+              label: <>
+                  The bill
+                  {balance != null && balance > 0.005 ? <span className="n stop">due</span> : null}
+                </>,
+              content: (
+                <>
         <StepCard title="The bill" meta={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "who pays is chosen at Set up"}>
           {!fo ? (
             <p className="meta">No bill yet — it starts at Set up, and charges post on it from check-in.</p>
@@ -256,7 +275,17 @@ export function ChargesView({
             </>
           )}
         </StepCard>
-
+                </>
+              ),
+            },
+            {
+              key: "money",
+              label: <>
+                  Money received
+                  {payments.length ? <span className="n">{payments.length}</span> : null}
+                </>,
+              content: (
+                <>
         <StepCard
           title="Money received"
           right={
@@ -318,6 +347,11 @@ export function ChargesView({
             <p className="meta" style={{ marginTop: 6 }}>Nothing received yet.</p>
           )}
         </StepCard>
+                </>
+              ),
+            },
+          ]}
+        />
       </div>
     </>
   );
@@ -523,55 +557,18 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
         Guest requests <span className="need">what the guest likes, and what they asked us to arrange</span>
       </h3>
       <div className="steps-canvas">
-        <StepCard
-          title="Preference"
-          meta="what the guest likes — a high floor, a quiet room; it stays with the booking at every step"
-          right={
-            sealed || editingPref ? null : (
-              <Button
-                kind="quiet"
-                compact
-                icon="pen"
-                onClick={() => {
-                  setPrefDraft(pref);
-                  setEditingPref(true);
-                }}
-              >
-                {pref ? "Change" : "Add"}
-              </Button>
-            )
-          }
-        >
-          {editingPref ? (
-            <div className="row-acts" style={{ alignItems: "flex-start" }}>
-              <textarea
-                className="input"
-                rows={2}
-                autoFocus
-                maxLength={2000}
-                style={{ flex: 1, minWidth: 260 }}
-                value={prefDraft}
-                placeholder="e.g. high floor, quiet room, honeymoon — allergic to nuts"
-                onChange={(e) => setPrefDraft(e.target.value)}
-              />
-              <Button compact state={savePref.isPending ? "working" : prefDraft.trim() === pref ? "inert" : "default"} reason={prefDraft.trim() === pref ? "nothing changed" : undefined} onClick={() => savePref.mutate()}>
-                Save
-              </Button>
-              <Button kind="quiet" compact onClick={() => setEditingPref(false)}>
-                Cancel
-              </Button>
-            </div>
-          ) : pref ? (
-            <p className="sm" style={{ margin: 0 }}>
-              <b>{pref}</b>
-            </p>
-          ) : (
-            <p className="meta" style={{ margin: 0 }}>
-              {sealed ? "No preference was recorded." : "None noted yet."}
-            </p>
-          )}
-        </StepCard>
-
+        {/* Sub-tabs (2026-10-12): the requests to arrange first, the guest's preference beside them. */}
+        <SubTabs
+          label="Guest requests"
+          tabs={[
+            {
+              key: "requests",
+              label: <>
+                  Requests
+                  {open ? <span className="n warn">{open}</span> : null}
+                </>,
+              content: (
+                <>
         <StepCard
           title="Requests"
           meta={
@@ -635,7 +632,6 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
             </div>
           )}
         </StepCard>
-
         {sealed ? null : (
           <StepCard title="Take a request" meta="a request is something to arrange — what the guest simply likes goes under Preference, above">
             <div className="form2">
@@ -665,6 +661,70 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
             </div>
           </StepCard>
         )}
+                </>
+              ),
+            },
+            {
+              key: "preference",
+              label: <>
+                  Preference
+                  {pref ? <span className="n">1</span> : null}
+                </>,
+              content: (
+                <>
+        <StepCard
+          title="Preference"
+          meta="what the guest likes — a high floor, a quiet room; it stays with the booking at every step"
+          right={
+            sealed || editingPref ? null : (
+              <Button
+                kind="quiet"
+                compact
+                icon="pen"
+                onClick={() => {
+                  setPrefDraft(pref);
+                  setEditingPref(true);
+                }}
+              >
+                {pref ? "Change" : "Add"}
+              </Button>
+            )
+          }
+        >
+          {editingPref ? (
+            <div className="row-acts" style={{ alignItems: "flex-start" }}>
+              <textarea
+                className="input"
+                rows={2}
+                autoFocus
+                maxLength={2000}
+                style={{ flex: 1, minWidth: 260 }}
+                value={prefDraft}
+                placeholder="e.g. high floor, quiet room, honeymoon — allergic to nuts"
+                onChange={(e) => setPrefDraft(e.target.value)}
+              />
+              <Button compact state={savePref.isPending ? "working" : prefDraft.trim() === pref ? "inert" : "default"} reason={prefDraft.trim() === pref ? "nothing changed" : undefined} onClick={() => savePref.mutate()}>
+                Save
+              </Button>
+              <Button kind="quiet" compact onClick={() => setEditingPref(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : pref ? (
+            <p className="sm" style={{ margin: 0 }}>
+              <b>{pref}</b>
+            </p>
+          ) : (
+            <p className="meta" style={{ margin: 0 }}>
+              {sealed ? "No preference was recorded." : "None noted yet."}
+            </p>
+          )}
+        </StepCard>
+                </>
+              ),
+            },
+          ]}
+        />
       </div>
 
       <DsDialog
@@ -809,6 +869,8 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const items = q.data?.items ?? [];
   const todos = items.filter((n) => n.kind === "TODO").sort((a, b) => (a.doneAt ? 1 : 0) - (b.doneAt ? 1 : 0) || (a.dueAt ?? "9").localeCompare(b.dueAt ?? "9"));
   const notes = items.filter((n) => n.kind === "NOTE");
+  /** Notes written into a quotation's own terms before 2026-10-12 — read back, read-only. */
+  const termNotes = q.data?.quotationNotes ?? [];
   const system = useMemo(
     () =>
       (trace.data?.items ?? [])
@@ -825,6 +887,24 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
         Notes <span className="need">what was said, what was promised, and what is still to do</span>
       </h3>
       <div className="steps-canvas">
+        {/* Sub-tabs (2026-10-12): what the desk keeps, and what the system kept with each act. */}
+        <SubTabs
+          label="Notes"
+          tabs={[
+            {
+              key: "notes",
+              label: <>
+                  Notes &amp; to-dos
+                  {q.data?.counts.overdueTodos ? (
+                    <span className="n stop">{q.data.counts.overdueTodos}</span>
+                  ) : q.data?.counts.openTodos ? (
+                    <span className="n warn">{q.data.counts.openTodos}</span>
+                  ) : notes.length + termNotes.length ? (
+                    <span className="n">{notes.length + termNotes.length}</span>
+                  ) : null}
+                </>,
+              content: (
+                <>
         <StepCard title="Write a note" meta="a note is locked once kept; a change keeps the earlier wording">
           <div className="notes-input">
             <input
@@ -873,7 +953,6 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
             </div>
           ) : null}
         </StepCard>
-
         {todos.length ? (
           <StepCard
             title="To-dos"
@@ -897,7 +976,8 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
               {todos.map((n) => (
                 <div key={n.id} className={`reqrow ${n.doneAt ? "arranged" : n.overdue ? "late" : "asked"}`}>
                   <div className="req-main">
-                    <b>{whoWord(n.assignee)}</b> · {n.text}
+                    <b>{whoWord(n.assignee)}</b> · {n.paper ? <span className="papernote-tag">{n.paper.label}</span> : null}
+                    {n.text}
                     <div className="meta">
                       {n.dueAt ? <span className={n.overdue ? "stop-ink" : undefined}>by {fmtDateTime(n.dueAt, tz)}{n.overdue ? " — past its time" : ""} · </span> : null}
                       set {fmtStamp(n.createdAt, tz)}
@@ -924,11 +1004,10 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
             </div>
           </StepCard>
         ) : null}
-
-        <StepCard title="Notes" meta={notes.length ? plural(notes.length, "note") : undefined}>
+        <StepCard title="Notes" meta={notes.length + termNotes.length ? plural(notes.length + termNotes.length, "note") : undefined}>
           {q.isLoading ? (
             <p className="meta">Reading the notes…</p>
-          ) : notes.length === 0 ? (
+          ) : notes.length === 0 && termNotes.length === 0 ? (
             <p className="meta" style={{ margin: 0 }}>No notes yet.</p>
           ) : (
             <div className="reqlist">
@@ -951,7 +1030,10 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                         </Button>
                       </div>
                     ) : (
-                      <span>{n.text}</span>
+                      <span>
+                        {n.paper ? <span className="papernote-tag">{n.paper.label}</span> : null}
+                        {n.text}
+                      </span>
                     )}
                     <div className="meta">
                       {fmtStamp(n.createdAt, tz)}
@@ -980,10 +1062,33 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                   )}
                 </div>
               ))}
+              {termNotes.map((t) => (
+                <div key={`t:${t.quotationId}`} className="reqrow note">
+                  <div className="req-main">
+                    <span>
+                      <span className="papernote-tag">{t.label}</span>
+                      {t.text}
+                    </span>
+                    <div className="meta">
+                      {fmtStamp(t.createdAt, tz)} · written with the quotation{t.createdByName ? ` · ${t.createdByName}` : ""}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </StepCard>
-
+                </>
+              ),
+            },
+            {
+              key: "system",
+              label: <>
+                  Kept by the system
+                  {system.length ? <span className="n">{system.length}</span> : null}
+                </>,
+              content: (
+                <>
         <StepCard title="Kept by the system" meta="the words typed with each act — a park, a decline, a change, the guest's answer" quiet>
           {trace.isLoading ? (
             <p className="meta">Reading the record…</p>
@@ -1007,6 +1112,11 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
             </div>
           )}
         </StepCard>
+                </>
+              ),
+            },
+          ]}
+        />
       </div>
     </>
   );
@@ -1046,24 +1156,68 @@ export function DocumentsView({
   onGo: (step: number) => void;
 }) {
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
+  // One sub-tab per kind of paper (2026-10-12, operator: "for papers it should be divided among
+  // different types of papers"). A kind with nothing in it has no tab.
+  const quotes = (entry.quotations ?? []).length;
+  const invoices = entry.folio?.invoices ?? [];
+  const proformas = invoices.filter((i) => i.invoiceType === "PROFORMA").length;
+  const bills = invoices.filter((i) => i.invoiceType !== "PROFORMA").length;
+  const vouchers = (entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
+  const sent = communications.filter((c) => c.direction !== "INBOUND");
+  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && c.acknowledgementStatus !== "RECEIVED").length;
+  const count = (n: number) => (n ? <span className="n">{n}</span> : null);
   return (
     <>
       <h3>
         Documents <span className="need">every paper, every version, and what the guest said back</span>
       </h3>
       <div className="steps-canvas">
-        <PapersCard entry={entry} withFolioDocs={!folioLive} />
-        {folioLive ? (
-          // The interim statement, the master bill and the tax invoice — views of the bill as it
-          // stands. Moved here from Stay's own tab (2026-10-12): it was a copy of this one.
-          <Tool inert={false}>
-            <FolioDocumentsBlock entry={entry} stage="S7" />
-          </Tool>
-        ) : null}
-        <SentPapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />
-        {(entry.quotations ?? []).length === 0 && (entry.folio?.invoices ?? []).length === 0 && !entry.reservation ? (
+        {quotes + invoices.length + vouchers + sent.length === 0 && !folioLive ? (
           <EmptyState title="No papers yet">A quotation is the first — it is generated at Negotiation.</EmptyState>
-        ) : null}
+        ) : (
+          <SubTabs
+            label="Documents"
+            tabs={[
+              quotes ? { key: "quotations", label: <>Quotations{count(quotes)}</>, content: <PapersCard entry={entry} show="quotes" title="Quotations" /> } : null,
+              proformas
+                ? { key: "proformas", label: <>Proforma invoices{count(proformas)}</>, content: <PapersCard entry={entry} show="proformas" title="Proforma invoices" /> }
+                : null,
+              bills || folioLive
+                ? {
+                    key: "bills",
+                    label: <>Bills &amp; statements{count(bills)}</>,
+                    content: (
+                      <>
+                        {bills ? <PapersCard entry={entry} show="bills" title="Bills" withFolioDocs={!folioLive} /> : null}
+                        {folioLive ? (
+                          // The interim statement, the master bill and the tax invoice — views of the
+                          // bill as it stands (moved here from Stay's own tab, 2026-10-12).
+                          <Tool inert={false}>
+                            <FolioDocumentsBlock entry={entry} stage="S7" />
+                          </Tool>
+                        ) : null}
+                      </>
+                    ),
+                  }
+                : null,
+              vouchers
+                ? { key: "vouchers", label: <>Vouchers{count(vouchers)}</>, content: <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} /> }
+                : null,
+              sent.length
+                ? {
+                    key: "sent",
+                    label: (
+                      <>
+                        Sent &amp; answers
+                        {awaiting ? <span className="n warn">{awaiting}</span> : count(sent.length)}
+                      </>
+                    ),
+                    content: <SentPapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />,
+                  }
+                : null,
+            ]}
+          />
+        )}
       </div>
     </>
   );
