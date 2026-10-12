@@ -13,12 +13,11 @@
 import { useState } from "react";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { EarlyDepartureBlock, EarlyDepartureFacts } from "@/components/desk/workspace/early-departure";
-import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import { InterimPaymentBlock, StayExtensionBlock } from "@/components/desk/workspace/stay-money";
 import type { EntryDetail } from "@/types/api";
-import { OtherWays, PapersCard, RequestsCard, SeeRow, StepCanvas, Tool, useRefreshEntry, type StepPane } from "./kit";
+import { OtherWays, SeeRow, StepCanvas, Tool, useRefreshEntry, type StepPane } from "./kit";
 import { BillingModelCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
 import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
@@ -30,7 +29,6 @@ const ID = {
   interim: "s7-interim",
   extend: "s7-extend",
   split: "s7-split",
-  bills: "s7-bills",
   early: "s7-early",
   guests: "s7-guests",
 };
@@ -46,7 +44,6 @@ export const S7_PANES: StepPane[] = [
   { key: "rooms", label: "Rooms", cards: [] },
   { key: "interim", label: "Interim payment", cards: [] },
   { key: "extend", label: "Extend the stay", cards: [] },
-  { key: "bills", label: "Bills & statements", cards: [] },
   { key: "early", label: "Leaving early", cards: [] },
 ];
 
@@ -143,14 +140,6 @@ export function S7Stay({
         </div>
       </div>
 
-      <div className="pane" hidden={at("bills")}>
-        <div id={ID.bills}>
-          <Tool inert={false}>
-            <FolioDocumentsBlock entry={entry} stage="S7" />
-          </Tool>
-        </div>
-      </div>
-
       <div className="pane" hidden={at("early")}>
         {entry.earlyDeparture ? (
           <Tool inert={false}>
@@ -164,7 +153,6 @@ export function S7Stay({
         </div>
       </div>
 
-      <RequestsCard />
       <OtherWays>
         {/* Only what has no tab and no card of its own until it exists (2026-09-25): a dispute
             and a fault are raised from here because their cards render only once there is one.
@@ -188,7 +176,6 @@ export function S7Stay({
             ]
           : null}
       </OtherWays>
-      <PapersCard entry={entry} />
 
       {past ? null : (
         <>

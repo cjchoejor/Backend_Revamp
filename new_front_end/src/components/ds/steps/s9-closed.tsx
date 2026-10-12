@@ -45,7 +45,6 @@ import {
   Facts,
   Live,
   PaperDrawer,
-  PapersCard,
   ReasonDialog,
   SeeRow,
   StepCanvas,
@@ -125,7 +124,6 @@ export function S9Closed({
       <OneDoorBackIn />
       <SealedPapers entry={entry} tz={clock.tz} />
       {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
-      <PapersCard entry={entry} />
     </StepCanvas>
   );
 }

@@ -38,7 +38,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, PapersCard, QuotationSendDialog, ReasonDialog, RequestsCard, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWays, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useRefreshEntry, words } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -749,7 +749,6 @@ export function S2Negotiation({
       {allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
 
       <CompetingClaimsCard entryId={entry.id} />
-      <RequestsCard />
       <OtherWays>
         {onPark && entry.status === "ACTIVE" ? (
           <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
@@ -775,7 +774,6 @@ export function S2Negotiation({
           reason="Counter-offers as a recorded line are not in the backend yet (BE-39) — until then the discount is set in the table"
         />
       </OtherWays>
-      <PapersCard entry={entry} />
 
       <QuotationSendDialog
         entry={entry}

@@ -808,29 +808,6 @@ export function OtherWays({ children }: { children: ReactNode }) {
   );
 }
 
-/** Requests at any step (R2) — the list and its kinds are backend item BE-64. */
-export function RequestsCard() {
-  const slot = useContext(OtherWaysSlotCtx);
-  return beside(
-    <StepCard title="Requests">
-      <p className="meta">Nothing asked yet — a request can be added at any step, and the form asks the questions that kind needs.</p>
-      <Live>
-        <div style={{ marginTop: 10, maxWidth: 420 }}>
-          <Button
-            kind="secondary"
-            state="inert"
-            reason="Requests by kind — asked, arranged, done — are not in the backend yet (BE-64). A preference goes in the line above the steps."
-            style={{ width: "100%" }}
-          >
-            Add a request…
-          </Button>
-        </div>
-      </Live>
-    </StepCard>,
-    slot,
-  );
-}
-
 /** A paper as a card: its name and version, when it was generated, what it says, and its acts. */
 export function DocCard({
   name,
@@ -1202,9 +1179,8 @@ const INVOICE_WORD: Record<string, string> = {
  * handed over on WhatsApp; a bill is dispatched by email. Where the backend has no WhatsApp
  * record for a paper, the row says so rather than offering a button that would do nothing.
  */
-export function PapersCard({ entry }: { entry: EntryDetail }) {
+export function PapersCard({ entry, withFolioDocs = true }: { entry: EntryDetail; withFolioDocs?: boolean }) {
   const { session } = useSession();
-  const slot = useContext(OtherWaysSlotCtx);
   const [open, setOpen] = useState<PaperRef | null>(null);
   const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
   const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
@@ -1229,20 +1205,20 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
   const others = useMemo<PaperRef[]>(() => {
     const out: PaperRef[] = [];
     if (entry.reservation?.id) out.push({ kind: "voucher", reservationId: entry.reservation.id, label: "Confirmation voucher" });
-    for (const d of folioDocs.data?.documents ?? []) {
+    for (const d of withFolioDocs ? folioDocs.data?.documents ?? [] : []) {
       if (!d.available || d.kind === "tax-invoice") continue;
       out.push({ kind: "folio", entryId: entry.id, doc: d.kind, label: d.title, refreshKey: `${entry.updatedAt}` });
     }
     if (entry.status === "CANCELLED") out.push({ kind: "cancellation", entryId: entry.id, label: "Cancellation confirmation" });
     return out;
-  }, [entry, folioDocs.data]);
+  }, [entry, folioDocs.data, withFolioDocs]);
 
   if (quotes.length === 0 && invoices.length === 0 && others.length === 0) return null;
 
   const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
   const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
 
-  return beside(
+  return (
     <StepCard title="Papers">
       {quotes.length ? (
         <div className="papergrp">
@@ -1321,8 +1297,7 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
       <PaperDrawer paper={open} onClose={() => setOpen(null)} />
       <QuotationSendDialog entry={entry} target={sendQuote} onClose={() => setSendQuote(null)} onSent={() => { setSendQuote(null); refresh(); }} />
       <InvoiceSendDialog entry={entry} target={sendInvoice} onClose={() => setSendInvoice(null)} onSent={() => { setSendInvoice(null); refresh(); }} />
-    </StepCard>,
-    slot,
+    </StepCard>
   );
 }
 

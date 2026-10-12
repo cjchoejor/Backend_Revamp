@@ -3,48 +3,46 @@
 /**
  * History — "how it got here" (the 14 Sep storyboards HISTORY-1…4).
  *
- * "As it stands" first: the stay, the rate, the rooms, who pays, the advance, the position, the
- * disputes and papers — each the backend's own figure. Then every act, newest first, in chapters
- * by step (the booking's current step open), each chapter under day headings, each act time
- * first with who did it. The lenses narrow the same record: Money, Papers, Requests, Changes,
- * Approvals, Messages. Nothing here is ever edited; the system's own bookkeeping is left to
- * Under the hood.
+ * Every act, newest first, in chapters by step (the booking's current step open), each chapter
+ * under day headings, each act time first with who did it. The inner tabs narrow the same record
+ * (2026-10-12, operator): All · Changes · Price & payments · Approvals · Desk notes. Nothing here
+ * is ever edited; the system's own bookkeeping is left to Under the hood.
+ *
+ * "As it stands" left on 2026-10-12: it restated Booking details and Charges & payments, and the
+ * operator's rule for that pass was that nothing on the booking shows twice.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyState, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
-import { usePaymentStatus } from "@/hooks/use-payment-status";
-import { getEntryTrace, type EntryBillingSummary } from "@/lib/api/entries";
+import { getEntryTrace } from "@/lib/api/entries";
 import type { TraceEvent } from "@/lib/trace/humanize";
-import { fmtInstantDate, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
-import { rateWords } from "@/lib/ds/rates";
+import { fmtInstantDate, fmtTime, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceDetail, traceWords } from "@/lib/ds/trace-words";
-import { reservedThisPass } from "@/lib/desk/workspace";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
 import type { EntryDetail } from "@/types/api";
 
-type Lens = "all" | "money" | "papers" | "requests" | "changes" | "approvals" | "messages";
+type Lens = "all" | "changes" | "money" | "approvals" | "notes";
 
 const LENSES: ReadonlyArray<readonly [Lens, string]> = [
-  ["all", "Everything"],
-  ["money", "Money"],
-  ["papers", "Papers"],
-  ["requests", "Requests"],
+  ["all", "All"],
   ["changes", "Changes"],
+  ["money", "Price & payments"],
   ["approvals", "Approvals"],
-  ["messages", "Messages"],
+  ["notes", "Desk notes"],
 ];
 
 const LENS_TEST: Record<Exclude<Lens, "all">, RegExp> = {
-  money: /PAYMENT|CHARGE|CORRECTION|CREDIT_NOTE|WRITE_OFF|WRITEOFF|SETTLE|REFUND|INTERIM|ADVANCE|NIGHT_AUDIT\.|RECONCIL|PENALT/,
-  papers: /QUOTATION\.(CREATED|SENT|SUPERSEDED|EXPIRED)|INVOICE\.|PROFORMA|VOUCHER|CONFIRMATION_CONFIRMATION|MASTER_BILL|STATEMENT|CANCELLATION_CONFIRMATION|RESERVATION\.CONFIRMATION/,
-  requests: /PREFERENCE|REQUEST|SPECIAL/,
-  changes: /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN/,
+  changes:
+    /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN|CALLER|SOURCE_CHANGED|GUEST_NAMED|GUEST_REQUEST|PREFERENCE|DECLINED/,
+  money:
+    /PAYMENT|CHARGE|CORRECTION|CREDIT_NOTE|WRITE_OFF|WRITEOFF|SETTLE|REFUND|INTERIM|ADVANCE|NIGHT_AUDIT\.|RECONCIL|PENALT|DISCOUNT|REPRICE|QUOTATION\.(CREATED|SUPERSEDED|ACCEPTED)|INVOICE\.(CREATED|ISSUED)/,
   approvals: /APPROV|OVERRIDE|AUTHORITY|WAIV|CREDIT_EXTENSION|VERIFIED|ESCALAT|ACCEPTED|CONFIRMED|DETERMIN/,
-  messages: /EMAIL|ACKNOWLEDGEMENT|COMMUNICATION|REMINDER|MESSAGE/,
+  notes: /^BOOKING_NOTE\./,
 };
+
+const isLens = (v: string | null | undefined): v is Lens => !!v && LENSES.some(([k]) => k === v);
 
 const inLens = (ev: TraceEvent, lens: Lens) => lens === "all" || LENS_TEST[lens].test(ev.eventType);
 
@@ -61,21 +59,16 @@ function chapterOf(ev: TraceEvent): number {
   return code && /^S[1-9]$/.test(code) ? stepNoOfStage(code) : 0;
 }
 
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
-
 export function HistoryView({
   entry,
-  billing,
   tz,
+  initialLens,
   onOpenedPass,
 }: {
   entry: EntryDetail;
-  billing: EntryBillingSummary | null;
   tz: string;
+  /** Opened from another tab on one of the inner tabs — Charges & payments opens Price & payments. */
+  initialLens?: string | null;
   onOpenedPass: (stage: string) => void;
 }) {
   const { session } = useSession();
@@ -84,8 +77,7 @@ export function HistoryView({
     queryFn: () => getEntryTrace(session!, entry.id, 300),
     enabled: !!session,
   });
-  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
-  const [lens, setLens] = useState<Lens>("all");
+  const [lens, setLens] = useState<Lens>(isLens(initialLens) ? initialLens : "all");
   const [showPasses, setShowPasses] = useState(false);
 
   const all = useMemo(() => (trace.data?.items ?? []).filter((e) => !isHousekeeping(e.eventType)), [trace.data]);
@@ -99,56 +91,6 @@ export function HistoryView({
   const [open, setOpen] = useState<Record<number, boolean>>({});
   const isOpen = (n: number, i: number) => open[n] ?? (n === current || (i === 0 && !chapters.some(([k]) => k === current)));
 
-  /* ---- as it stands ---- */
-  const co = entry.actualCheckOutDate ?? entry.checkOutDate;
-  const nights = nightsOf(entry.checkInDate, co);
-  const rooms = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
-    a.localeCompare(b, "en", { numeric: true }),
-  );
-  const res = reservedThisPass(entry) ? entry.reservation : null;
-  const cur = billing?.currency ?? "BTN";
-  const moves = Math.max(0, (entry.folio?.billingModelTransitions ?? []).length - 1);
-  const openDisputes = (entry.disputes ?? []).filter((d) => !/CLOSED|RESOLVED/.test(String((d as { state?: string }).state ?? ""))).length;
-  const voucherSent = !!entry.reservation?.confirmationVoucherSent;
-
-  const stands: Array<{ k: string; v: React.ReactNode; meta?: React.ReactNode }> = [
-    {
-      k: "Stay",
-      v: `${fmtRange(entry.checkInDate, co)}${nights ? ` · ${plural(nights, "night")}` : ""}`,
-      meta: (entry.segmentNumber ?? 1) > 1 ? `pass ${entry.segmentNumber} · changed along the way` : "as booked",
-    },
-    {
-      k: "Rate",
-      v: res ? rateWords(billing, res.frozenRate, cur) ?? "—" : billing?.stayTotal?.amount != null ? money(billing.stayTotal.amount, cur) : "—",
-      meta: res ? "as reserved" : billing?.stayTotal?.amount != null ? "the stay, as quoted" : "no quotation yet",
-    },
-    {
-      k: "Rooms",
-      v: rooms.length ? `${rooms.length} · ${rooms.join(", ")}` : `${entry.numberOfRooms ?? "—"}`,
-      meta: rooms.length ? "assigned" : "not yet assigned",
-    },
-    {
-      k: "Billing",
-      v: entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "not set yet",
-      meta: moves > 0 ? `changed ${plural(moves, "time")}, with a reason` : undefined,
-    },
-    {
-      k: "Advance",
-      v: pay.data ? `${money(pay.data.totalReceived, cur)} received` : "—",
-      meta: pay.data?.paymentPlan ? "a payment plan is on record" : pay.data?.creditExtensionActive ? "credit extended by the FOM" : undefined,
-    },
-    {
-      k: "Position",
-      v: billing?.folio?.outstandingBalance != null ? `${money(billing.folio.outstandingBalance, cur)} owing` : "—",
-      meta:
-        billing?.folio?.billedSoFar != null
-          ? `${money(billing.folio.paymentsReceived ?? 0, cur)} received · ${money(billing.folio.billedSoFar, cur)} posted`
-          : undefined,
-    },
-    { k: "Requests", v: "not tracked yet", meta: "requests as records are BE-64" },
-    { k: "Disputes · papers", v: `${openDisputes} open · voucher ${voucherSent ? "sent" : "not sent"}` },
-  ];
-
   return (
     <>
       <h3>
@@ -157,22 +99,7 @@ export function HistoryView({
       <div className="steps-canvas">
         <div className="card">
           <div className="card-top">
-            <h4>As it stands</h4>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "var(--s4)" }}>
-            {stands.map((s) => (
-              <div key={s.k} style={{ display: "grid", gap: 2 }}>
-                <span className="meta">{s.k}</span>
-                <b>{s.v}</b>
-                {s.meta ? <span className="meta">{s.meta}</span> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-top">
-            <h4>History</h4>
+            <h4>Everything that happened</h4>
           </div>
           <div className="row-acts" style={{ marginBottom: 8 }}>
             <div className="filters choice">

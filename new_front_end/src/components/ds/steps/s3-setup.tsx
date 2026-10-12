@@ -52,9 +52,7 @@ import {
   OnRecord,
   OtherWays,
   PaperDrawer,
-  PapersCard,
   ReasonDialog,
-  RequestsCard,
   SeeRow,
   StepCanvas,
   StepCard,
@@ -288,7 +286,6 @@ export function S3SetUp({
       {isParty ? <PartyBlock entry={entry} /> : null}
 
       <CompetingClaimsCard entryId={entry.id} />
-      <RequestsCard />
 
       <OtherWays>
         {entry.status === "ACTIVE" && editable ? (
@@ -322,7 +319,6 @@ export function S3SetUp({
         ) : null}
       </OtherWays>
 
-      <PapersCard entry={entry} />
 
       <ReasonDialog
         open={cancelOpen}

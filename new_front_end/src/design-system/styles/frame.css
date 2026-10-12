@@ -359,3 +359,39 @@
 .ds .fullscreen-layer .rst .rst-chip { font-size: 13.5px; padding: 4px 14px; min-width: 84px; }
 .ds .fullscreen-layer .rst .rst-selall-btn { font-size: 13px; padding: 4px 11px; }
 .ds .fullscreen-layer .rst .rst-nightcount { font-size: 14px; }
+
+/* ---- The booking's five tabs (2026-10-12) ----
+   This step › the step's own tabs › Other ways · Booking details | the booking's tabs. The bar
+   wraps rather than running off the canvas on Stay, which carries the most tabs. */
+.ds .canvas-tabs:not(.desk-root *) { flex-wrap: wrap; row-gap: 2px; column-gap: 10px; }
+.ds .canvas-tabs .tabgroup { display: flex; gap: 2px; flex-wrap: nowrap; }
+.ds .canvas-tabs .tabgroup.booking { padding-left: 10px; border-left: 1px solid var(--line-2); }
+.ds .tab .tab-n { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 9px; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; background: var(--surface-2, #efe9dd); color: var(--ink-2); }
+.ds .tab .tab-n.warn { background: var(--warning); color: #fff; }
+.ds .tab .tab-n.stop { background: var(--danger); color: #fff; }
+
+/* Charges & payments: the stay total is the figure the card exists for (UIappeal). */
+.ds .bigfig { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ds .bigfig b { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ds .balance-line { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line-2); }
+.ds .balance-line span { font-weight: 600; }
+.ds .balance-line b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ds .balance-line.due { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.ds .balance-line.due b { color: var(--danger); }
+.ds .balance-line.clear { border-color: var(--success); background: color-mix(in srgb, var(--success) 7%, transparent); }
+.ds .balance-line.clear b { color: var(--success); }
+
+/* Guest requests, to-dos and notes: one row each, its state on the right. */
+.ds .reqlist { display: grid; gap: 0; }
+.ds .reqrow { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.ds .reqrow:first-child { border-top: 0; }
+.ds .reqrow .req-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ds .reqrow .req-main .meta { margin-top: 2px; }
+.ds .reqrow.asked { box-shadow: inset 3px 0 0 var(--warning); padding-left: 10px; }
+.ds .reqrow.late { box-shadow: inset 3px 0 0 var(--danger); padding-left: 10px; }
+.ds .reqrow.withdrawn .req-main > b,
+.ds .reqrow.withdrawn .req-main { color: var(--ink-3, #8c8478); }
+.ds .reqrow.sys .req-main > span { color: var(--ink-2); }
+.ds .notes-input { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ds .notes-input .input { flex: 1; min-width: 260px; }
+.ds .notes-input .tick { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }

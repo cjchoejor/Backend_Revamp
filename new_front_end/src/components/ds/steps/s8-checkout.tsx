@@ -31,6 +31,7 @@ import {
   recordRoomInspection,
 } from "@/lib/api/checkout";
 import { getNightAuditRecord, openDispute, postCreditNote } from "@/lib/api/in-stay";
+import { listGuestRequests } from "@/lib/api/booking-notes";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
@@ -56,9 +57,7 @@ import {
   Live,
   OtherWays,
   PaperDrawer,
-  PapersCard,
   ReasonDialog,
-  RequestsCard,
   SeeRow,
   StepCanvas,
   StepCard,
@@ -157,7 +156,6 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
       <OverpaidCard entry={entry} live={live} />
       <Invoices entry={entry} live={live} tz={clock.tz} />
       <Departure entry={entry} live={live} />
-      <RequestsCard />
       <OtherWays>
         {live && !settled ? (
           <SeeRow
@@ -186,7 +184,6 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
           />
         ) : null}
       </OtherWays>
-      <PapersCard entry={entry} />
 
       <ReasonDialog
         open={!!back}
@@ -235,6 +232,13 @@ function FolioComplete({
     enabled: !!session && !!lastNight,
   });
   const audited = audit.data?.runStatus === "COMPLETE";
+  // The guest's requests (BE-64, 2026-10-12) — one still to arrange is worth a look before they go.
+  const requests = useQuery({
+    queryKey: ["guest-requests", entry.id],
+    queryFn: () => listGuestRequests(session!, entry.id),
+    enabled: !!session,
+  });
+  const openRequests = requests.data?.counts.open ?? 0;
   const lines = entry.folio?.lines ?? [];
   const open = (entry.disputes ?? []).filter(isOpenDispute);
   // The entry payload lists handoffs newest first — the departure handoff is the newest H4.
@@ -274,8 +278,16 @@ function FolioComplete({
         <span title="Chits as records — keyed, waiting, swept by the night audit — are not in the backend yet (BE-68)">
           <Chip tone="quiet">chits · not tracked yet</Chip>
         </span>
-        <span title="Requests as records — asked, arranged, done — are not in the backend yet (BE-64)">
-          <Chip tone="quiet">requests · not tracked yet</Chip>
+        <span title="The guest's requests are in the Guest requests tab">
+          <Chip tone={openRequests ? "warning" : "success"} icon={openRequests ? undefined : "check"}>
+            {requests.isLoading
+              ? "reading the requests…"
+              : openRequests
+                ? `${plural(openRequests, "request")} still to arrange`
+                : requests.data?.counts.total
+                  ? "every request arranged"
+                  : "no requests"}
+          </Chip>
         </span>
       </div>
       {problems.length ? (

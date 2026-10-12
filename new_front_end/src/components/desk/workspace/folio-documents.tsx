@@ -148,7 +148,7 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
       <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px", lineHeight: 1.55 }}>
         {stage === "S7" ? (
           <>
-            Every bill here is a <b>view of the live folio above</b> — nothing is numbered or stored, each print is a
+            Every bill here is a <b>view of the live folio</b> — nothing is numbered or stored, each print is a
             snapshot as at now. Hand the guest the <b>tentative invoice</b>; the tax invoice stays a draft until
             settlement issues the one original at check-out.
           </>

@@ -41,8 +41,6 @@ import {
   Facts,
   Live,
   OtherWays,
-  PapersCard,
-  RequestsCard,
   SeeRow,
   StepCanvas,
   StepCard,
@@ -241,7 +239,6 @@ export function S6CheckIn({
         ) : null}
       </Live>
 
-      <RequestsCard />
       <OtherWays>
         {entry.status === "ACTIVE"
           ? [
@@ -262,7 +259,6 @@ export function S6CheckIn({
             ]
           : null}
       </OtherWays>
-      <PapersCard entry={entry} />
       </div>
 
       <div className="pane" hidden={at("rooms")}>

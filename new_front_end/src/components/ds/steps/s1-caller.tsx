@@ -10,7 +10,9 @@
  *     whenever there is a phone, and a title and name that may wait.
  * 5 · Wrap up — once the rooms are chosen: the guest who is STAYING (the caller, or someone else
  *     — found on file or new), the caller's name if it was not taken at the start, who is
- *     arriving, and any notes. The booking leaves Inquiry only with the guest staying named.
+ *     arriving. The booking leaves Inquiry only with the guest staying named. The guest's
+ *     preference and the desk's notes live in the booking's Guest requests and Notes tabs
+ *     (2026-10-12) — not repeated here.
  *
  * Every rule here is the backend's (`POST /entries/:id/caller`, `POST /entries/:id/guest`); the
  * desk mirrors it only to say before the click what the click would be refused for.
@@ -23,7 +25,7 @@ import { Button } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { updateEntryIntake } from "@/lib/api/entries";
 import { guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
-import { setEntryGuest, updateEntryCaller, updateInquiryNotes, type SetGuestBody } from "@/lib/api/inquiries";
+import { setEntryGuest, updateEntryCaller, type SetGuestBody } from "@/lib/api/inquiries";
 import { callerNameOf } from "@/lib/ds/status";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
@@ -242,12 +244,10 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
 
   const [arrName, setArrName] = useState(contact.contactPersonName ?? "");
   const [arrPhone, setArrPhone] = useState(contact.contactPersonPhone ?? "");
-  const [notes, setNotes] = useState(inq.notes ?? "");
   useEffect(() => {
     setArrName(contact.contactPersonName ?? "");
     setArrPhone(contact.contactPersonPhone ?? "");
   }, [contact.contactPersonName, contact.contactPersonPhone]);
-  useEffect(() => setNotes(inq.notes ?? ""), [inq.notes]);
 
   const callerNameTyped = !!(cFirst.trim() && cLast.trim());
   const callerNameDirty = !callerHasName && !!(cFirst.trim() || cLast.trim() || cTitle);
@@ -268,8 +268,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
             ? "an email that reads as one"
             : null;
   const arrivingDirty = arrName.trim() !== (contact.contactPersonName ?? "") || arrPhone.trim() !== (contact.contactPersonPhone ?? "");
-  const notesDirty = notes.trim() !== (inq.notes ?? "").trim();
-  const dirty = choosing || callerNameDirty || arrivingDirty || notesDirty;
+  const dirty = choosing || callerNameDirty || arrivingDirty;
 
   const save = useMutation({
     mutationFn: async () => {
@@ -301,10 +300,6 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
         // The version moved if the guest was just named; read it fresh rather than refuse on a stale one.
         await updateEntryIntake(session!, entry.id, { contactPersonName: arrName.trim(), contactPersonPhone: arrPhone.trim() });
         done.push("who is arriving");
-      }
-      if (notesDirty) {
-        await updateInquiryNotes(session!, entry.inquiryId, notes.trim());
-        done.push("the notes");
       }
       return done;
     },
@@ -486,10 +481,6 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           <label>Their phone</label>
           <input className="input" value={arrPhone} readOnly={!editable} placeholder="+975 …" onChange={(e) => setArrPhone(e.target.value)} />
           <span className="hint">needed before arrival</span>
-        </div>
-        <div className="wide field">
-          <label>Notes</label>
-          <textarea className="input" rows={2} value={notes} readOnly={!editable} placeholder="anything the guest asked for" onChange={(e) => setNotes(e.target.value)} />
         </div>
       </div>
 

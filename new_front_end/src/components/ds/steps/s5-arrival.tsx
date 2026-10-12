@@ -41,8 +41,6 @@ import {
   FactLine,
   Facts,
   Live,
-  PapersCard,
-  RequestsCard,
   StepCanvas,
   StepCard,
   Tool,
@@ -152,9 +150,7 @@ export function S5Arrival({
         </div>
       </StepCard>
       <BillingModelCard entry={entry} />
-      <RequestsCard />
       <BookingOtherWays entry={entry} onPark={onPark} guestPresent={guestPresent} />
-      <PapersCard entry={entry} />
     </StepCanvas>
   );
 }

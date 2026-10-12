@@ -37,8 +37,6 @@ import {
   Live,
   OnRecord,
   PaperDrawer,
-  PapersCard,
-  RequestsCard,
   StepCanvas,
   StepCard,
   Tool,
@@ -199,9 +197,7 @@ export function S4Reserve({
           <SoFar entry={entry} />
         </>
       )}
-      <RequestsCard />
       <BookingOtherWays entry={entry} onPark={onPark} />
-      <PapersCard entry={entry} />
     </StepCanvas>
   );
 }
@@ -506,8 +502,8 @@ function BeforeYouReserve({
         ))}
         {asked.items.length ? (
           <div className="meta" style={{ marginTop: 4 }}>
-            What was arranged is kept on this desk only — requests as records, with their department&rsquo;s handoff, are not in
-            the backend yet (BE-64).
+            What was arranged here is kept on this desk only — the guest&rsquo;s own requests, and what was arranged for each, are
+            in the Guest requests tab.
           </div>
         ) : null}
         <div className="meta" style={{ marginTop: 12 }}>

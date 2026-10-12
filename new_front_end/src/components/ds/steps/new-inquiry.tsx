@@ -14,11 +14,13 @@
  * Every rule of the old intake form (components/desk/inquiry/new-inquiry-form.tsx) is kept here:
  * the phone match, the channel mapping, the agency / company pick with its contact persons and
  * packages, the company context, the child bands, the room-count envelope and the hotel's
- * capacity, the bed stock, the hotel's day, the early guest save and `?edit=<entryId>`.
- * The figures that decide anything come from the backend; nothing here adds money up.
+ * capacity, the bed stock, the hotel's day and the early guest save. A saved inquiry is changed
+ * on the booking itself, section by section (2026-10-12 — the separate edit screen is gone, so
+ * the step rail never leaves the desk). The figures that decide anything come from the backend;
+ * nothing here adds money up.
  */
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -26,14 +28,12 @@ import { Button, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { queryAvailabilityByEntry } from "@/lib/api/availability";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
-import { createEntry, getEntry, updateEntryIntake } from "@/lib/api/entries";
-import { createGuestProfile, guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
+import { createEntry, getEntry } from "@/lib/api/entries";
+import { guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
 import {
   captureCorporateContext,
   createInquiry,
-  getInquiry,
   listRatePackagesLookup,
   type CoordinatorContact,
   type LookupPartyMatch,
@@ -41,7 +41,6 @@ import {
 import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
-import { updateEntryCaller, updateEntrySource } from "@/lib/api/inquiries";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
 import { Choice, FlowTodo, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
@@ -51,17 +50,14 @@ import {
   CHANNEL_OPTIONS,
   ChildChargeNote,
   GuestLine,
-  NATIONALITIES,
   PHONE_CODES,
   PartyContacts,
   PartySearch,
   PhoneInput,
   PickList,
-  PresetOrCustom,
   USE_TYPES,
   addNightsIso,
   bedWord,
-  cameInAsOf,
   channelDef,
   defaultContactFor,
   diffNightsIso,
@@ -84,39 +80,11 @@ const GUEST_CARD_ID = anchorFor("caller");
 
 const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
 
-type InquiryScalars = {
-  callerTitle?: string | null;
-  callerFirstName?: string | null;
-  callerLastName?: string | null;
-  callerPhone?: string | null;
-  callerEmail?: string | null;
-  callerOnWhatsApp?: boolean | null;
-  travelAgentId?: string | null;
-  corporateAccountId?: string | null;
-  ratePackageId?: string | null;
-  notes?: string | null;
-  sourceChannel?: string | null;
-  cameInAs?: string | null;
-  corporateClientRef?: string | null;
-  corporateCoordinator?: string | null;
-};
-type InquiryRecord = {
-  travelAgent?: (Partial<LookupPartyMatch> & { displayName?: string | null }) | null;
-  corporateAccount?: (Partial<LookupPartyMatch> & { displayName?: string | null }) | null;
-};
-type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
-
-type Outcome = { entry: EntryDetail; asked: boolean; askError: unknown };
 
 export function NewInquiryCanvas() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { session } = useSession();
-  const params = useSearchParams();
-  // `?edit=<entryId>` opens this screen on a saved inquiry: the stay, the kind of stay and who is
-  // arriving can change; the guest and how they came in stay as recorded.
-  const editId = params.get("edit");
-  const isEdit = !!editId;
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
 
@@ -142,7 +110,6 @@ export function NewInquiryCanvas() {
   const [phoneCode, setPhoneCode] = useState(PHONE_CODES[0]);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [email, setEmail] = useState("");
-  const [nationality, setNationality] = useState(NATIONALITIES[0]);
   // The caller (2026-10-12): who rang, which is not always the guest. Title and name can wait for
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
   const [callerTitle, setCallerTitle] = useState("");
@@ -166,66 +133,6 @@ export function NewInquiryCanvas() {
   const [notes, setNotes] = useState("");
   const checkInDefaulted = useRef(false);
 
-  /* ---------------------------------------------------------------- edit mode */
-  const editQuery = useQuery({
-    queryKey: ["entry", editId],
-    queryFn: () => getEntry(session!, editId!),
-    enabled: !!session && isEdit,
-  });
-  const editEntry = editQuery.data ?? null;
-  const editInquiry = useQuery({
-    queryKey: ["inquiry", editEntry?.inquiryId],
-    queryFn: () => getInquiry(session!, editEntry!.inquiryId),
-    enabled: !!session && !!editEntry?.inquiryId,
-  });
-  const editInq = (editEntry?.inquiry ?? null) as InquiryScalars | null;
-  const editRec = (editInquiry.data ?? null) as InquiryRecord | null;
-  const editPartyName = editRec?.travelAgent?.displayName ?? editRec?.corporateAccount?.displayName ?? null;
-  const editGuest = editEntry?.guestProfile ?? editEntry?.inquiry?.guestProfile ?? null;
-  const editContact = (editEntry ?? {}) as EntryContact;
-  // The intake is changed only while the booking is an active inquiry (the server refuses later).
-  const editable = !!editEntry && editEntry.currentStage === "S1" && editEntry.status === "ACTIVE";
-  const editInited = useRef(false);
-  // The package and the party recorded on the inquiry, restored once their lists have loaded.
-  const recordedPkg = useRef<string | null>(null);
-  const partyRestored = useRef(false);
-  const skipInherit = useRef(false);
-  useEffect(() => {
-    if (!isEdit || !editEntry || editInited.current) return;
-    editInited.current = true;
-    const ci = editEntry.checkInDate?.slice(0, 10) ?? "";
-    const co = editEntry.checkOutDate?.slice(0, 10) ?? "";
-    setChannelKey(cameInAsOf(editInq?.sourceChannel, editInq?.notes, editEntry.useType, editInq?.cameInAs));
-    setUseType(editEntry.useType ?? "");
-    setAdults(String(editEntry.adultCount ?? editEntry.guestCount ?? 1));
-    setChildren(String(editEntry.childCount ?? 0));
-    setAges((editEntry.childAges ?? []).map(String));
-    setRooms(String(editEntry.numberOfRooms ?? 1));
-    setBeds(Object.fromEntries(Object.entries(editEntry.bedTypeRequest ?? {}).map(([t, n]) => [t, String(n)])));
-    setCheckIn(ci);
-    setCheckOut(co);
-    if (ci && co) setNights(String(Math.max(1, diffNightsIso(ci, co))));
-    setArrivingName(editContact.contactPersonName ?? "");
-    setArrivingPhone(editContact.contactPersonPhone ?? "");
-    // The caller, as recorded — or, on an inquiry from before callers were kept, its guest.
-    const legacy = !(editInq?.callerPhone || editInq?.callerEmail || editInq?.callerFirstName || editInq?.callerLastName);
-    const phone = (legacy ? editGuest?.phone : editInq?.callerPhone) ?? "";
-    if (phone) {
-      const sp = splitStoredPhone(phone);
-      setPhoneCode(sp.code);
-      setPhoneNumber(sp.number);
-    }
-    setEmail((legacy ? editGuest?.email : editInq?.callerEmail) ?? "");
-    setCallerTitle(editInq?.callerTitle ?? "");
-    setFirstName((legacy ? editGuest?.firstName : editInq?.callerFirstName) ?? "");
-    setLastName((legacy ? editGuest?.lastName : editInq?.callerLastName) ?? "");
-    setOnWhatsApp(editInq?.callerOnWhatsApp ?? null);
-    setCorpRef(editInq?.corporateClientRef ?? "");
-    setCorpCoordinator(editInq?.corporateCoordinator ?? "");
-    recordedPkg.current = editInq?.ratePackageId ?? null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEdit, editEntry]);
-
   /* ---------------------------------------------------------------- channel and party */
   const channel = channelDef(channelKey);
   const partyKind = channel?.party ?? null;
@@ -242,7 +149,7 @@ export function NewInquiryCanvas() {
   }, [channelKey]);
 
   const pickChannel = (k: ChannelKey) => {
-    if ((isEdit && !editable) || k === channelKey) return;
+    if (k === channelKey) return;
     setChannelKey(k);
     focusNext.current = "who";
   };
@@ -252,16 +159,6 @@ export function NewInquiryCanvas() {
     setParty(null);
     setPartyContact(null);
   }, [partyKind]);
-  // Editing: the agency or company on record, put back once its kind is chosen (after the clear
-  // above has run for that kind), without re-inheriting the company's reference over the recorded one.
-  useEffect(() => {
-    if (!isEdit || partyRestored.current || !partyKind || !editRec) return;
-    const rec = (partyKind === "TRAVEL_AGENT" ? editRec.travelAgent : editRec.corporateAccount) as LookupPartyMatch | null | undefined;
-    partyRestored.current = true;
-    if (!rec?.id) return;
-    skipInherit.current = true;
-    setParty(rec);
-  }, [isEdit, partyKind, editRec]);
 
   // A new party brings its own contact: the first person on file, else the party's own details.
   useEffect(() => {
@@ -277,10 +174,6 @@ export function NewInquiryCanvas() {
   }, [needsCorp]);
   // …and inherited from the picked company's contract references and coordinators (spec §2.6.2).
   useEffect(() => {
-    if (skipInherit.current) {
-      skipInherit.current = false;
-      return;
-    }
     if (partyKind !== "CORPORATE" || !party) return;
     const refs = party.contractRefs ?? [];
     const coords = party.coordinators ?? [];
@@ -290,8 +183,8 @@ export function NewInquiryCanvas() {
   }, [party?.id]);
   // For a company the contact person IS the coordinator — named once, not twice.
   useEffect(() => {
-    if (needsCorp && partyContact && !isEdit) setCorpCoordinator(partyContact.name);
-  }, [needsCorp, partyContact, isEdit]);
+    if (needsCorp && partyContact) setCorpCoordinator(partyContact.name);
+  }, [needsCorp, partyContact]);
 
   const packagesQuery = useQuery({
     queryKey: ["lookup-rate-packages", partyKind, party?.id],
@@ -312,9 +205,7 @@ export function NewInquiryCanvas() {
       setRatePackageId(null);
       return;
     }
-    const recorded = recordedPkg.current && packages.some((p) => p.id === recordedPkg.current) ? recordedPkg.current : null;
-    recordedPkg.current = null;
-    setRatePackageId((cur) => recorded ?? (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
+    setRatePackageId((cur) => (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
   }, [party?.id, packages]);
   const chosenPackage = packages?.find((p) => p.id === ratePackageId) ?? null;
 
@@ -322,10 +213,10 @@ export function NewInquiryCanvas() {
   // Check-in defaults to the hotel's today, once; a typed date is never replaced, and the
   // once-only latch keeps the minute poll from resetting it at midnight.
   useEffect(() => {
-    if (!today || isEdit || checkInDefaulted.current) return;
+    if (!today || checkInDefaulted.current) return;
     checkInDefaulted.current = true;
     setCheckIn((cur) => cur || today);
-  }, [today, isEdit]);
+  }, [today]);
   useEffect(() => {
     if (!checkIn) return;
     const n = Math.max(1, parseInt(nights || "1", 10) || 1);
@@ -484,7 +375,7 @@ export function NewInquiryCanvas() {
     const t = setTimeout(() => setPhoneTerm(phoneDigits), 350);
     return () => clearTimeout(t);
   }, [phoneDigits]);
-  const phoneLookupOn = !isEdit && !selectedGuest && phoneTerm.length >= 4;
+  const phoneLookupOn = !selectedGuest && phoneTerm.length >= 4;
   const phoneMatch = useQuery({
     queryKey: ["desk-guest-phone", phoneTerm],
     queryFn: () => searchGuestProfiles(session!, phoneTerm, 5),
@@ -497,7 +388,6 @@ export function NewInquiryCanvas() {
     setFirstName(g.firstName);
     setLastName(g.lastName);
     setEmail(g.email ?? "");
-    if (g.nationality) setNationality(g.nationality);
     // The stored number replaces the fragment typed to find them.
     if (g.phone) {
       const { code, number } = splitStoredPhone(g.phone);
@@ -519,10 +409,7 @@ export function NewInquiryCanvas() {
   const whatsAppAnswered = !fullPhone || onWhatsApp !== null;
   const guestOk = callerReachable && whatsAppAnswered && !emailBad;
 
-  usePageTitle(
-    isEdit ? (editGuest ? guestFullName({ firstName: editGuest.firstName ?? "", lastName: editGuest.lastName ?? "" }) : null) : typedGuestName || null,
-    isEdit ? "Edit the inquiry" : "New inquiry",
-  );
+  usePageTitle(typedGuestName || null, "New inquiry");
 
   /* ---------------------------------------------------------------- who is arriving */
   const arrivingFallbackName = partyContact?.name?.trim() || typedGuestName;
@@ -555,28 +442,16 @@ export function NewInquiryCanvas() {
   const roomsGuestsSet = partyOk && roomsN >= 1;
 
   const saveBlockers: string[] = [];
-  if (isEdit) {
-    if (!editEntry) saveBlockers.push("the booking is still opening");
-    else if (!editable) saveBlockers.push("the booking has moved past Inquiry");
-    if (!callerReachable) saveBlockers.push("the caller's phone or email");
-    else if (!whatsAppAnswered) saveBlockers.push("whether the caller's number is on WhatsApp");
-    if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
-    if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
-  } else {
-    if (!channel) saveBlockers.push("how they came in");
-    // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
-    // button waits for it rather than sending a request that comes back "invalid".
-    if (!useType) saveBlockers.push("what kind of stay it is");
-    if (!callerReachable) saveBlockers.push("the caller's phone or email");
-    else if (!whatsAppAnswered) saveBlockers.push("whether the caller's number is on WhatsApp");
-    if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
-    if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
-  }
+  if (!channel) saveBlockers.push("how they came in");
+  // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
+  // button waits for it rather than sending a request that comes back "invalid".
+  if (!useType) saveBlockers.push("what kind of stay it is");
+  if (!callerReachable) saveBlockers.push("the caller's phone or email");
+  else if (!whatsAppAnswered) saveBlockers.push("whether the caller's number is on WhatsApp");
+  if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
+  if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
   if (dateProblem) saveBlockers.push(dateProblem);
-  if (isEdit && !datesSet && !dateProblem) saveBlockers.push("the check-in and check-out");
-  const askBlockers = [...saveBlockers];
-  if (!datesSet && !dateProblem && !isEdit) askBlockers.push("the check-in and check-out, or the nights");
 
   /* ---------------------------------------------------------------- the save */
   const [navigating, setNavigating] = useState(false);
@@ -592,182 +467,97 @@ export function NewInquiryCanvas() {
   const fomHere = atLeast(session?.actorLevel, "L2");
 
   const run = useMutation({
-    mutationFn: async (ask: boolean): Promise<Outcome> => {
+    mutationFn: async (): Promise<EntryDetail> => {
       if (!session) throw new Error("Not signed in");
       const a = Math.max(1, adultsN);
       const c = Math.max(0, childN);
       const agesOut = c > 0 && parsedAges.length === c ? parsedAges : undefined;
-      let entry: EntryDetail;
 
-      if (isEdit && editEntry) {
-        const nameChanged = arrivingName.trim() !== (editContact.contactPersonName ?? "") && arrivingName.trim() !== "";
-        const phoneChanged = arrivingPhone.trim() !== (editContact.contactPersonPhone ?? "") && arrivingPhone.trim() !== "";
-        entry = await updateEntryIntake(session, editEntry.id, {
-          checkInDate: checkIn || undefined,
-          checkOutDate: checkOut || undefined,
-          adultCount: a,
-          childCount: c,
-          childAges: c > 0 ? agesOut : [],
-          guestCount: a + c,
-          numberOfRooms: Math.max(1, roomsN),
-          // An emptied bed setup is cleared, not left as it was.
-          bedTypeRequest: bedSum > 0 ? bedRequest : null,
-          useType: useType !== (editEntry.useType ?? "") ? useType : undefined,
-          contactPersonName: nameChanged ? arrivingName.trim() : undefined,
-          contactPersonPhone: phoneChanged ? arrivingPhone.trim() : undefined,
-          expectedVersion: editEntry.version,
-        });
-        // Who is asking (2026-10-12): changed only when it moved — the backend re-checks the party
-        // and package, and refuses once another stay on the enquiry has moved on.
-        const recTa = editInq?.travelAgentId ?? null;
-        const recCo = editInq?.corporateAccountId ?? null;
-        const nowTa = partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null;
-        const nowCo = partyKind === "CORPORATE" ? (party?.id ?? null) : null;
-        const prevKey = cameInAsOf(editInq?.sourceChannel, editInq?.notes, editEntry.useType, editInq?.cameInAs);
-        const sourceMoved =
-          channelKey !== prevKey ||
-          nowTa !== recTa ||
-          nowCo !== recCo ||
-          (party?.id ? ratePackageId : null) !== (editInq?.ratePackageId ?? null) ||
-          (needsCorp && (corpRef.trim() !== (editInq?.corporateClientRef ?? "") || corpCoordinator.trim() !== (editInq?.corporateCoordinator ?? "")));
-        if (sourceMoved && channel) {
-          await updateEntrySource(session, editEntry.id, {
-            cameInAs: channel.cameInAs,
-            sourceChannel: channel.channel,
-            travelAgentId: nowTa,
-            corporateAccountId: nowCo,
-            ratePackageId: party?.id ? ratePackageId : null,
-            corporateClientRef: needsCorp ? corpRef.trim() : null,
-            corporateCoordinator: needsCorp ? corpCoordinator.trim() : null,
-          });
-        }
-        const callerNow = {
+      if (!channel) throw new Error("Say how they came in first");
+      // The guest staying is named at Wrap up (2026-10-12) — unless the caller's number found a
+      // guest already on file, who is taken as the guest until Wrap up says otherwise.
+      const guestProfileId = selectedGuest?.id ?? null;
+      const inquiryBody = {
+        guestProfileId,
+        caller: {
           title: callerTitle || null,
           firstName: firstName.trim() || null,
           lastName: lastName.trim() || null,
           phone: fullPhone || null,
           email: email.trim() || null,
           onWhatsApp: fullPhone ? onWhatsApp : null,
-        };
-        const callerWas = {
-          title: editInq?.callerTitle ?? null,
-          firstName: editInq?.callerFirstName ?? null,
-          lastName: editInq?.callerLastName ?? null,
-          phone: editInq?.callerPhone ?? null,
-          email: editInq?.callerEmail ?? null,
-          onWhatsApp: editInq?.callerOnWhatsApp ?? null,
-        };
-        if (JSON.stringify(callerNow) !== JSON.stringify(callerWas)) await updateEntryCaller(session, editEntry.id, callerNow);
-      } else {
-        if (!channel) throw new Error("Say how they came in first");
-        // The guest staying is named at Wrap up (2026-10-12) — unless the caller's number found a
-        // guest already on file, who is taken as the guest until Wrap up says otherwise.
-        const guestProfileId = selectedGuest?.id ?? null;
-        const inquiryBody = {
-          guestProfileId,
-          caller: {
-            title: callerTitle || null,
-            firstName: firstName.trim() || null,
-            lastName: lastName.trim() || null,
-            phone: fullPhone || null,
-            email: email.trim() || null,
-            onWhatsApp: fullPhone ? onWhatsApp : null,
-          },
-          sourceChannel: channel.channel,
-          cameInAs: channel.cameInAs,
-          notes: notes.trim() || undefined,
-          proposedCheckIn: checkIn || undefined,
-          proposedCheckOut: checkOut || undefined,
-          travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
-          corporateAccountId: partyKind === "CORPORATE" ? (party?.id ?? null) : null,
-          ratePackageId: party?.id ? ratePackageId : null,
-          ...(dupeResolution.current ? { duplicateResolution: dupeResolution.current } : {}),
-        };
-        const key = JSON.stringify(inquiryBody);
-        let inquiryId = madeInquiry.current?.key === key ? madeInquiry.current.id : null;
-        if (!inquiryId) {
-          const inquiry = await createInquiry(session, inquiryBody);
-          inquiryId = inquiry.id;
-          madeInquiry.current = { key, id: inquiryId };
-        }
-        if (needsCorp) {
-          await captureCorporateContext(session, inquiryId, {
-            corporateClientRef: corpRef.trim(),
-            corporateCoordinator: corpCoordinator.trim(),
-          });
-        }
-        // The booking's contact: who is arriving when named; else the agency's person; else the
-        // guest. The party's email only rides along with the party's own person.
-        const overridden = arrivingName.trim() !== "";
-        entry = await createEntry(session, {
-          inquiryId,
-          useType,
-          guestProfileId: guestProfileId ?? undefined,
-          checkInDate: checkIn || undefined,
-          checkOutDate: checkOut || undefined,
-          guestCount: a + c,
-          adultCount: a,
-          childCount: c,
-          childAges: agesOut,
-          numberOfRooms: Math.max(1, roomsN),
-          bedTypeRequest: bedSum > 0 ? bedRequest : undefined,
-          otaSource: channel.channel === "OTA",
-          contactPersonName: (arrivingName.trim() || arrivingFallbackName) || undefined,
-          contactPersonPhone: (arrivingPhone.trim() || arrivingFallbackPhone) || undefined,
-          contactPersonEmail: (!overridden && partyContact?.email?.trim()) || undefined,
+        },
+        sourceChannel: channel.channel,
+        cameInAs: channel.cameInAs,
+        notes: notes.trim() || undefined,
+        proposedCheckIn: checkIn || undefined,
+        proposedCheckOut: checkOut || undefined,
+        travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
+        corporateAccountId: partyKind === "CORPORATE" ? (party?.id ?? null) : null,
+        ratePackageId: party?.id ? ratePackageId : null,
+        ...(dupeResolution.current ? { duplicateResolution: dupeResolution.current } : {}),
+      };
+      const key = JSON.stringify(inquiryBody);
+      let inquiryId = madeInquiry.current?.key === key ? madeInquiry.current.id : null;
+      if (!inquiryId) {
+        const inquiry = await createInquiry(session, inquiryBody);
+        inquiryId = inquiry.id;
+        madeInquiry.current = { key, id: inquiryId };
+      }
+      if (needsCorp) {
+        await captureCorporateContext(session, inquiryId, {
+          corporateClientRef: corpRef.trim(),
+          corporateCoordinator: corpCoordinator.trim(),
         });
-        madeInquiry.current = null;
       }
-
-      // Looking is recording: the house is asked against the booking just kept.
-      let asked = false;
-      let askError: unknown = null;
-      if (ask) {
-        try {
-          await queryAvailabilityByEntry(session, entry.id, {
-            checkInDate: entry.checkInDate?.slice(0, 10) ?? checkIn,
-            checkOutDate: entry.checkOutDate?.slice(0, 10) ?? checkOut,
-            guestCount: entry.guestCount ?? a + c,
-            useType: entry.useType ?? useType,
-          });
-          asked = true;
-        } catch (e) {
-          askError = e;
-        }
-      }
-      return { entry, asked, askError };
+      // The booking's contact: who is arriving when named; else the agency's person; else the
+      // guest. The party's email only rides along with the party's own person.
+      const overridden = arrivingName.trim() !== "";
+      const entry = await createEntry(session, {
+        inquiryId,
+        useType,
+        guestProfileId: guestProfileId ?? undefined,
+        checkInDate: checkIn || undefined,
+        checkOutDate: checkOut || undefined,
+        guestCount: a + c,
+        adultCount: a,
+        childCount: c,
+        childAges: agesOut,
+        numberOfRooms: Math.max(1, roomsN),
+        bedTypeRequest: bedSum > 0 ? bedRequest : undefined,
+        otaSource: channel.channel === "OTA",
+        contactPersonName: (arrivingName.trim() || arrivingFallbackName) || undefined,
+        contactPersonPhone: (arrivingPhone.trim() || arrivingFallbackPhone) || undefined,
+        contactPersonEmail: (!overridden && partyContact?.email?.trim()) || undefined,
+      });
+      madeInquiry.current = null;
+      return entry;
     },
-    onSuccess: ({ entry, asked, askError }, ask) => {
+    onSuccess: (entry) => {
       const id = entry.id;
       for (const k of [["entry", id], ["entries"], ["desk-bookings"], ["entry-trace", id], ["entry-timers", id], ["inquiry", entry.inquiryId]]) {
         void queryClient.invalidateQueries({ queryKey: k });
       }
       // Warm the booking while the route loads, with the house's answer already in it.
       if (session) void queryClient.prefetchQuery({ queryKey: ["entry", id], queryFn: () => getEntry(session, id) });
-      if (isEdit) toast.success(asked ? "The intake is updated — the house has answered" : "The intake is updated");
-      else toast.success(asked ? `${id} kept — the house has answered` : `${id} kept · the lead is on record`);
-      if (askError) toastRefusal(askError, "The lead is kept, but the house could not be asked — ask again on the booking");
+      toast.success(`${id} kept · the lead is on record`);
       setNavigating(true);
-      router.push(ask || isEdit ? bookingHref(id, 1) : bookingHref(id));
+      router.push(bookingHref(id));
     },
     onError: (e) => {
       const body = e instanceof ApiError ? e.body : undefined;
-      if (!isEdit && body?.blockingCondition === "DUPLICATE_INQUIRY_CONFIRMED") {
+      if (body?.blockingCondition === "DUPLICATE_INQUIRY_CONFIRMED") {
         const det = (body.details ?? {}) as { conflictingEntryId?: string };
         setDupe({ entryId: det.conflictingEntryId ?? null });
         dupeResolution.current = null;
         return;
       }
-      toastRefusal(e, isEdit ? "The changes could not be saved" : "The inquiry could not be started");
+      toastRefusal(e, "The inquiry could not be started");
     },
   });
   const busy = run.isPending || navigating;
-  const askingNow = busy && run.variables === true;
-  const savingNow = busy && run.variables === false;
 
   /* ---------------------------------------------------------------- the gate */
-  const configs = editEntry?.availabilityConfigs ?? [];
-  const houseAsked = isEdit && configs.some((c) => c.optionSelected != null && !c.isStale);
   const useTypeReq: GateLine =
     useType === "APARTMENT"
       ? {
@@ -781,19 +571,17 @@ export function NewInquiryCanvas() {
         : { label: "Use-type requirements · none", whose: "desk", met: true };
   const guestLineLabel = "The caller · a phone or an email";
   // The checklist, in the order the page is worked; the side panel numbers it onto the cards
-  // (2026-09-25 — it sat at the foot of the page as a bare list). On a new inquiry the house is
-  // asked on the booking, once the lead is kept, so that item belongs to the booking's own list;
-  // an edit can ask the house from here, so it is listed.
+  // (2026-09-25 — it sat at the foot of the page as a bare list). The house is asked on the
+  // booking, once the lead is kept, so that item belongs to the booking's own list.
   // In the order of the boss's journey mockup (2026-10-10): the guest first, then who is asking,
   // then the stay.
   const flowItems = numberFlow([
     { label: guestLineLabel, met: guestOk, card: "caller" },
     { label: "Source channel", met: !!channelKey, card: "asking" },
     { label: "Use type", met: !!useType, card: "asking" },
-    ...(needsCorp && !isEdit ? [{ label: "The company's reference and coordinator", met: corpComplete, card: "asking" }] : []),
+    ...(needsCorp ? [{ label: "The company's reference and coordinator", met: corpComplete, card: "asking" }] : []),
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
     { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
-    ...(isEdit ? [{ label: "The house asked · a configuration selected", met: houseAsked, card: "house" }] : []),
   ], { bySection: true });
   // What the system does on save — no card to go to, so listed apart.
   const flowAlso = [
@@ -808,35 +596,22 @@ export function NewInquiryCanvas() {
     if (el) revealCard(el);
   };
 
-  const primaryLabel = isEdit ? "Save the changes" : "Done · Start the inquiry";
+  const primaryLabel = "Done · Start the inquiry";
   const saveReason = saveBlockers.length ? `first: ${saveBlockers.join(" · ")}` : null;
-  const askReason = askBlockers.length ? `first: ${askBlockers.join(" · ")}` : null;
 
   /* ---------------------------------------------------------------- render */
   return (
     <div className="ws">
       <div className="ws-head">
         <div>
-          <Link href={isEdit ? bookingHref(editId!, 1) : "/bookings"} className="backlink">
-            <Icon name="chev" /> {isEdit ? "Back to the booking" : "Back to Bookings"}
+          <Link href="/bookings" className="backlink">
+            <Icon name="chev" /> Back to Bookings
           </Link>
           <div className="who">
-            <h2 className="ink-2">{isEdit ? "Edit the inquiry" : "New inquiry"}</h2>
+            <h2 className="ink-2">New inquiry</h2>
           </div>
           <div className="facts">
-            {isEdit ? (
-              <>
-                <span>{editId}</span>
-                {editGuest ? (
-                  <span>
-                    <b>{guestFullName({ firstName: editGuest.firstName ?? "", lastName: editGuest.lastName ?? "" })}</b>
-                  </span>
-                ) : null}
-                <span className="meta">the caller, who is asking, the stay and who is arriving can change — the guest staying is named at Wrap up</span>
-              </>
-            ) : (
-              <span className="meta">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</span>
-            )}
+            <span className="meta">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</span>
           </div>
         </div>
         <div className="total">
@@ -874,18 +649,8 @@ export function NewInquiryCanvas() {
           <h3>
             {STEP_NAMES[0]} <span className="need">{STEP_NEEDS[1]}</span>
           </h3>
-          {isEdit && editEntry && !editable ? (
-            <div className="notice inert">
-              <span className="sm">This booking has moved past Inquiry — its intake can no longer be changed here.</span>
-            </div>
-          ) : null}
-          {isEdit && editQuery.isError ? (
-            <div className="notice inert">
-              <span className="sm">The booking could not be opened — go back and try again.</span>
-            </div>
-          ) : null}
           <StepCanvas past={false}>
-            <StepFlow items={flowItems} on={!isEdit || editable} fold="on-move">
+            <StepFlow items={flowItems} on fold="on-move">
               <div className="stack">
                 {/* ------------------------------------------------ the caller */}
                 {/* Who rang (2026-10-12, operator, after the journey mockup): the guest, or an
@@ -1013,8 +778,8 @@ export function NewInquiryCanvas() {
                   <div className="form2">
                     <div className="wide field">
                       <label>Came in as</label>
-                      <Choice options={CHANNEL_OPTIONS} value={channelKey} disabled={isEdit && !editable} onChange={pickChannel} />
-                      <span className={`hint${!isEdit && !channelKey ? " warn-ink" : ""}`}>
+                      <Choice options={CHANNEL_OPTIONS} value={channelKey} onChange={pickChannel} />
+                      <span className={`hint${!channelKey ? " warn-ink" : ""}`}>
                         {channelKey
                             ? "it decides what the rest of this form asks for"
                             : "pick one — it decides what the rest of this form asks for"}
@@ -1143,7 +908,6 @@ export function NewInquiryCanvas() {
                       <Choice
                         options={USE_TYPES}
                         value={useType as UseTypeKey}
-                        disabled={isEdit && !editable}
                         onChange={(v) => setUseType(v)}
                       />
                       {useType === "APARTMENT" ? (
@@ -1160,17 +924,13 @@ export function NewInquiryCanvas() {
                   title="The stay"
                   flow="stay"
                   flowAfter="caller"
-                  doneAction={
-                    isEdit
-                      ? undefined
-                      : {
-                          label: "Done · Start the inquiry",
-                          onClick: () => run.mutate(false),
-                          state: savingNow ? "working" : saveReason || busy ? "inert" : "default",
-                          title: saveReason ?? undefined,
-                          workingLabel: navigating ? "Opening the booking…" : "Keeping the lead…",
-                        }
-                  }
+                  doneAction={{
+                    label: primaryLabel,
+                    onClick: () => run.mutate(),
+                    state: busy ? "working" : saveReason ? "inert" : "default",
+                    title: saveReason ?? undefined,
+                    workingLabel: navigating ? "Opening the booking…" : "Keeping the lead…",
+                  }}
                   summary={
                     <>
                       <b>{datesSet ? fmtRange(checkIn, checkOut) : "no dates"}</b>
@@ -1189,7 +949,6 @@ export function NewInquiryCanvas() {
                         type="date"
                         value={checkIn}
                         min={today ?? undefined}
-                        readOnly={isEdit && !editable}
                         onChange={(e) => setCheckIn(e.target.value)}
                         onBlur={() => {
                           if (today && checkIn && checkIn < today) setCheckIn(today);
@@ -1207,7 +966,6 @@ export function NewInquiryCanvas() {
                         inputMode="numeric"
                         value={nights}
                         placeholder="1"
-                        readOnly={isEdit && !editable}
                         onChange={(e) => setNights(digits(e.target.value))}
                       />
                       <span className="hint">the check-out follows</span>
@@ -1219,7 +977,6 @@ export function NewInquiryCanvas() {
                         type="date"
                         value={checkOut}
                         min={checkOutMin}
-                        readOnly={isEdit && !editable}
                         onChange={(e) => onCheckOut(e.target.value)}
                         onBlur={() => {
                           if (checkIn && checkOut && diffNightsIso(checkIn, checkOut) < 1) onCheckOut(addNightsIso(checkIn, 1));
@@ -1233,7 +990,6 @@ export function NewInquiryCanvas() {
                         className={`input${adultsN < 1 ? " invalid" : ""}`}
                         inputMode="numeric"
                         value={adults}
-                        readOnly={isEdit && !editable}
                         onChange={(e) => setAdults(digits(e.target.value))}
                       />
                       {adultsN < 1 ? <span className="error">at least one adult</span> : null}
@@ -1244,7 +1000,6 @@ export function NewInquiryCanvas() {
                         className="input"
                         inputMode="numeric"
                         value={children}
-                        readOnly={isEdit && !editable}
                         onChange={(e) => setChildren(digits(e.target.value, 2))}
                       />
                       <span className="hint">under {policy ? minAdult : "the adult age"}</span>
@@ -1254,7 +1009,7 @@ export function NewInquiryCanvas() {
                       <select
                         className="input"
                         value={rooms}
-                        disabled={allowedRooms.length === 0 || (isEdit && !editable)}
+                        disabled={allowedRooms.length === 0}
                         onChange={(e) => setRooms(e.target.value)}
                       >
                         {allowedRooms.length === 0 ? (
@@ -1302,7 +1057,6 @@ export function NewInquiryCanvas() {
                                   aria-invalid={over || undefined}
                                   placeholder={`#${i + 1}`}
                                   value={a}
-                                  readOnly={isEdit && !editable}
                                   onChange={(e) => {
                                     const v = digits(e.target.value);
                                     setAges((prev) => prev.map((x, j) => (j === i ? v : x)));
@@ -1352,7 +1106,6 @@ export function NewInquiryCanvas() {
                                 placeholder="0"
                                 aria-label={`${bedWord(type)} rooms asked for`}
                                 value={beds[type] ?? ""}
-                                readOnly={isEdit && !editable}
                                 onChange={(e) => {
                                   const v = digits(e.target.value, 2);
                                   setBeds((prev) => ({ ...prev, [type]: v }));
@@ -1384,20 +1137,18 @@ export function NewInquiryCanvas() {
                       </div>
                     ) : null}
                   </div>
-                  {!isEdit ? (
-                    <div className="field" style={{ marginTop: 12 }}>
-                      <label>Notes · optional</label>
-                      <textarea
-                        className="input"
-                        rows={2}
-                        maxLength={2000}
-                        value={notes}
-                        placeholder="anything the guest asked for"
-                        onChange={(e) => setNotes(e.target.value)}
-                      />
-                      <span className="hint">kept on the inquiry — changed later at Wrap up on the booking</span>
-                    </div>
-                  ) : null}
+                  <div className="field" style={{ marginTop: 12 }}>
+                    <label>The guest&rsquo;s preference · optional</label>
+                    <textarea
+                      className="input"
+                      rows={2}
+                      maxLength={2000}
+                      value={notes}
+                      placeholder="e.g. high floor, quiet room, honeymoon — allergic to nuts"
+                      onChange={(e) => setNotes(e.target.value)}
+                    />
+                    <span className="hint">kept on the booking, under Guest requests — notes and to-dos go in its Notes tab</span>
+                  </div>
                   <div className="row-acts" style={{ marginTop: 10 }}>
                     <Button
                       kind="quiet"
@@ -1426,53 +1177,25 @@ export function NewInquiryCanvas() {
                   flow="house"
                   title={datesSet ? `The house · ${fmtRange(checkIn, checkOut)}` : "The house"}
                   heldFor={
-                    isEdit ? undefined : (
-                      <>
-                        <b>{primaryLabel}</b> — the house is asked on the booking, where the free rooms for these dates and what they cost,
-                        night by night and for the stay, appear while you are still on the phone.
-                        {nextUp ? (
-                          <span className="warn-ink"> Still to fill: {flowItems.filter((i) => !i.met).map((i) => `${i.n} ${i.label}`).join(" · ")}.</span>
-                        ) : null}
-                      </>
-                    )
+                    <>
+                      <b>{primaryLabel}</b> — the house is asked on the booking, where the free rooms for these dates and what they cost,
+                      night by night and for the stay, appear while you are still on the phone.
+                      {nextUp ? (
+                        <span className="warn-ink"> Still to fill: {flowItems.filter((i) => !i.met).map((i) => `${i.n} ${i.label}`).join(" · ")}.</span>
+                      ) : null}
+                    </>
                   }
-                  acts={
-                    <Button
-                      state={askingNow ? "working" : askReason || busy ? "inert" : "default"}
-                      title={askReason ?? undefined}
-                      workingLabel={navigating ? "Opening the booking…" : isEdit ? "Saving and asking…" : "Keeping the lead and asking…"}
-                      onClick={() => run.mutate(true)}
-                    >
-                      {isEdit ? "Save and ask the house" : "Ask the house"}
-                    </Button>
-                  }
-                >
-                  <p className="meta">
-                    {datesSet
-                      ? "Ask the house — the free rooms for these dates appear on the booking while you are still on the phone."
-                      : "Put in the dates and the rooms — the answer appears here while you are still on the phone."}
-                  </p>
-                  <p className="meta" style={{ marginTop: 6 }}>
-                    {isEdit ? "The changes are saved first, then the house is asked again." : "Looking is recording: asking keeps the lead first — taken or not."}
-                  </p>
-                  {askReason && !busy ? (
-                    <p className="meta warn-ink" style={{ marginTop: 6 }}>
-                      {askReason}
-                    </p>
-                  ) : null}
-                </StepCard>
+                />
 
                 {/* ------------------------------------------------ wrap up */}
                 <StepCard
                   title="Wrap up"
                   heldFor={
-                    isEdit ? undefined : (
-                      <>
-                        the rooms are chosen on the booking — then it names the guest who is staying (the caller, or someone else), takes the
-                        caller&rsquo;s name if it was not given here, who is arriving, and any notes. A booking moves on to Negotiation only
-                        once the guest staying is named.
-                      </>
-                    )
+                    <>
+                      the rooms are chosen on the booking — then it names the guest who is staying (the caller, or someone else), takes the
+                      caller&rsquo;s name if it was not given here, and who is arriving. A booking moves on to Negotiation only once the guest
+                      staying is named.
+                    </>
                   }
                 >
                   <div className="form2 rule-above">
@@ -1481,8 +1204,7 @@ export function NewInquiryCanvas() {
                       <input
                         className="input"
                         value={arrivingName}
-                        readOnly={isEdit && !editable}
-                        placeholder={isEdit ? "who leads the party on the day" : `blank — ${arrivingFallbackWord}`}
+                        placeholder={`blank — ${arrivingFallbackWord}`}
                         onChange={(e) => setArrivingName(e.target.value)}
                       />
                       <span className="hint">who leads the party on the day</span>
@@ -1493,8 +1215,7 @@ export function NewInquiryCanvas() {
                         className="input"
                         inputMode="tel"
                         value={arrivingPhone}
-                        readOnly={isEdit && !editable}
-                        placeholder={isEdit ? "+975 …" : arrivingFallbackPhone ? `blank — ${arrivingFallbackPhone}` : "+975 …"}
+                        placeholder={arrivingFallbackPhone ? `blank — ${arrivingFallbackPhone}` : "+975 …"}
                         onChange={(e) => setArrivingPhone(e.target.value)}
                       />
                       <span className="hint">needed before arrival</span>
@@ -1513,13 +1234,7 @@ export function NewInquiryCanvas() {
               <span className="meta">nothing running</span>
             </div>
           </div>
-          {!isEdit || editable ? <FlowTodo items={flowItems} also={flowAlso} onGo={goToCard} /> : null}
-          <div>
-            <h4>What we told the guest, and what they said</h4>
-            <div className="list">
-              <span className="meta">nothing yet</span>
-            </div>
-          </div>
+          <FlowTodo items={flowItems} also={flowAlso} onGo={goToCard} />
         </aside>
       </div>
 
@@ -1551,7 +1266,7 @@ export function NewInquiryCanvas() {
               workingLabel="Keeping the lead…"
               onClick={() => {
                 dupeResolution.current = { resolution: dupeKind, reason: dupeReason.trim() };
-                run.mutate(false);
+                run.mutate();
               }}
             >
               Go ahead with this booking
@@ -1576,29 +1291,12 @@ export function NewInquiryCanvas() {
               <span>{flowAlso.find((p) => !p.met)?.label}</span>
             </div>
           ) : (
-            <button type="button" className="item met" onClick={() => (isEdit ? undefined : goToCard("stay"))}>
+            <button type="button" className="item met" onClick={() => goToCard("stay")}>
               <Icon name="check" />
-              <span>{isEdit ? "everything the inquiry needs is here" : "everything the inquiry needs is here — start it from The stay"}</span>
+              <span>everything the inquiry needs is here — start it from The stay</span>
             </button>
           )}
         </div>
-        {/* On a new inquiry the start is the stay's own button, "Done · Start the inquiry" — a second
-            one here was a duplicate (2026-10-12, operator). An edit keeps its save here. */}
-        {isEdit ? (
-        <div className="acts">
-          <Button
-            state={savingNow ? "working" : saveReason || busy ? "inert" : "default"}
-            title={saveReason ?? undefined}
-            workingLabel={navigating ? "Opening the booking…" : isEdit ? "Saving…" : "Keeping the lead…"}
-            onClick={() => run.mutate(false)}
-          >
-            {primaryLabel}
-          </Button>
-          <span className={`control-note${saveReason ? " fault" : ""}`} style={{ margin: 0, textAlign: "right", maxWidth: 360 }}>
-            {saveReason ?? "saves the stay and returns to the booking"}
-          </span>
-        </div>
-        ) : null}
       </div>
     </div>
   );

@@ -2,22 +2,22 @@
 
 /**
  * Booking details — "what the booking is" (prototype, the Booking details tab): the three
- * parties, the stay, the numbers the booking carries, the thread, and the papers. Figures are
- * the backend's own; nothing is edited here except, at Inquiry, through the intake.
+ * parties, the stay, the trip and the numbers the booking carries.
+ *
+ * Since 2026-10-12 the money, the papers, the preference and the notes are not repeated here —
+ * they have tabs of their own (Charges & payments · Documents · Guest requests · Notes), and the
+ * operator's rule for that pass was that nothing on the booking shows twice. Nothing is edited
+ * here: at Inquiry the Edit button opens the Inquiry step, where every section edits in place.
  */
 import Link from "next/link";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/design-system";
-import { usePaymentStatus } from "@/hooks/use-payment-status";
-import type { EntryBillingSummary } from "@/lib/api/entries";
 import { JourneySummaryBlock } from "@/components/desk/workspace/journey-summary";
 import { channelWord } from "@/lib/ds/status";
-import { fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
-import { rateWords } from "@/lib/ds/rates";
+import { fmtRange, nightsOf, plural } from "@/lib/ds/format";
 import { guestName } from "@/lib/desk/model";
-import { liveQuotesThisPass, reservedThisPass } from "@/lib/desk/workspace";
-import { Fact, FactBox, Facts, PapersCard, StepCard } from "@/components/ds/steps/kit";
+import { reservedThisPass } from "@/lib/desk/workspace";
+import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import type { EntryDetail } from "@/types/api";
 
@@ -27,28 +27,25 @@ const BILLING_WORD: Record<string, string> = {
   GUEST_PAY: "Everything to the guest",
 };
 
-type Scalars = { corporateClientRef?: string | null; notes?: string | null };
+type Scalars = { corporateClientRef?: string | null };
 type Contact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
 
 export function DetailsView({
   entry,
   booker,
   custodian,
-  billing,
+  onEdit,
 }: {
   entry: EntryDetail;
   booker: string | null;
   custodian: string | null;
-  billing: EntryBillingSummary | null;
+  /** At Inquiry: open the Inquiry step, where the caller, who is asking and the stay edit in place. */
+  onEdit: (() => void) | null;
 }) {
-  const router = useRouter();
-  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
   const [journey, setJourney] = useState(false);
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const inq = (entry.inquiry ?? {}) as Scalars;
   const contact = entry as EntryDetail & Contact;
-  const editable = entry.currentStage === "S1" && entry.status === "ACTIVE";
-  const cur = billing?.currency ?? "BTN";
 
   const co = entry.actualCheckOutDate ?? entry.checkOutDate;
   const nights = nightsOf(entry.checkInDate, co);
@@ -67,11 +64,6 @@ export function DetailsView({
         .join(" · ")
     : "";
   const res = reservedThisPass(entry) ? entry.reservation : null;
-  const quotes = liveQuotesThisPass(entry);
-  const quote = quotes.find((q) => q.state === "ACCEPTED") ?? quotes[0] ?? null;
-  const invoices = entry.folio?.invoices ?? [];
-  const proforma = invoices.filter((i) => i.invoiceType === "PROFORMA" && i.state !== "SUPERSEDED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const tax = invoices.filter((i) => i.invoiceType === "FINAL" && i.state !== "SUPERSEDED").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const model = entry.folio?.billingModel ?? null;
   // The agency or company on the booking, with its own contact (2026-09-29) — the party's record,
   // printed beside the guest so the desk knows whom to ring about the booking.
@@ -89,11 +81,12 @@ export function DetailsView({
             <Button
               kind="secondary"
               compact
-              state={editable ? "default" : "inert"}
-              title={editable ? undefined : "after the inquiry, dates and party change through a re-entry"}
-              onClick={() => router.push(`/bookings/new?edit=${encodeURIComponent(entry.id)}`)}
+              icon="pen"
+              state={onEdit ? "default" : "inert"}
+              title={onEdit ? "the Inquiry step edits the caller, who is asking and the stay in place" : "after the inquiry, dates and party change through a re-entry"}
+              onClick={onEdit ?? undefined}
             >
-              Edit booking details
+              Edit at the Inquiry step
             </Button>
           }
         >
@@ -132,17 +125,8 @@ export function DetailsView({
               {rooms.length ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}` : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
             </Fact>
             <Fact k="Guests">{party}</Fact>
-            <Fact k="Rate" meta={res ? "as reserved" : quote ? "as quoted" : undefined}>
-              {res ? rateWords(billing, res.frozenRate, cur) : null}
-            </Fact>
-            <Fact k="Total" meta={billing?.headline.frozen ? "as confirmed" : billing?.headline.kind === "BILLED_SO_FAR" ? "billed so far" : billing ? "indicative" : undefined}>
-              {billing?.headline.amount != null ? money(billing.headline.amount, cur) : null}
-            </Fact>
-            <Fact k="Advance" meta={pay.data ? `${money(pay.data.totalReceived, cur)} received` : undefined}>
-              {pay.data ? (pay.data.requiredAmount > 0 ? money(pay.data.requiredAmount, cur) : "none asked") : null}
-            </Fact>
-            {billing?.folio?.outstandingBalance != null ? <Fact k="Still owed">{money(billing.folio.outstandingBalance, cur)}</Fact> : null}
           </Facts>
+          <p className="meta" style={{ marginTop: 8 }}>The price and the money are in Charges &amp; payments.</p>
         </StepCard>
 
         <TripCard entry={entry} />
@@ -151,17 +135,10 @@ export function DetailsView({
           <Facts wide>
             <Fact k="Enquiry">{entry.inquiry?.id}</Fact>
             <Fact k="Booking">{entry.id}</Fact>
-            <Fact k="Quotation">{quote?.referenceNumber}</Fact>
-            <Fact k="Proforma">{proforma?.invoiceNumber ?? proforma?.id}</Fact>
             <Fact k="Reservation">{res?.id}</Fact>
-            {tax ? <Fact k="Tax invoice">{tax.invoiceNumber ?? tax.id}</Fact> : null}
             <Fact k="Their reference">{inq.corporateClientRef}</Fact>
             {(entry.segmentNumber ?? 1) > 1 ? <Fact k="Pass">{entry.segmentNumber}</Fact> : null}
           </Facts>
-        </StepCard>
-
-        <StepCard title="The thread">
-          <p className={inq.notes ? "sm" : "meta"}>{inq.notes || "Nothing written yet — the line above the steps holds what the guest asked for."}</p>
         </StepCard>
 
         <StepCard
@@ -180,7 +157,6 @@ export function DetailsView({
           ) : null}
         </StepCard>
 
-        <PapersCard entry={entry} />
       </div>
     </>
   );

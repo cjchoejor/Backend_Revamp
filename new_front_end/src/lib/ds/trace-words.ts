@@ -115,6 +115,17 @@ const WORDS: Record<string, string> = {
   "SPACE.DEFICIENCY_REPORTED": "Hall fault reported",
   "DEFICIENCY.VERIFIED": "Fault confirmed",
   "DEFICIENCY.REJECTED": "Fault report rejected",
+  "BOOKING_NOTE.ADDED": "Note written",
+  "BOOKING_NOTE.TODO_ADDED": "To-do set",
+  "BOOKING_NOTE.EDITED": "Note changed",
+  "BOOKING_NOTE.TODO_DONE": "To-do done",
+  "BOOKING_NOTE.TODO_REOPENED": "To-do opened again",
+  "GUEST_REQUEST.ADDED": "Request taken",
+  "GUEST_REQUEST.ARRANGED": "Request arranged",
+  "GUEST_REQUEST.WITHDRAWN": "Request taken back",
+  "INQUIRY.CALLER_UPDATED": "Caller's details changed",
+  "INQUIRY.SOURCE_CHANGED": "Who is asking changed",
+  "ENTRY.GUEST_NAMED": "Guest staying named",
 };
 
 const LEVEL_WORD: Record<string, string> = { L1: "desk", L2: "FOM", L3: "GM", L4: "administrator" };
@@ -201,6 +212,17 @@ export function traceDetail(ev: TraceEvent): string | null {
   if (typeof p.refund === "number" && p.refund > 0) bits.push(`owed back ${money(p.refund)}`);
   const how = readableCode(p.acknowledgementMethod ?? p.acceptanceMethod);
   if (how) bits.push(how);
+  // A note, a to-do or a request carries its own words — they are the record (2026-10-12).
+  if (ev.eventType.startsWith("BOOKING_NOTE.") || ev.eventType.startsWith("GUEST_REQUEST.")) {
+    const kindWord = str("kind");
+    const text = str("text") ?? str("what");
+    const owner = readableCode(p.assignee);
+    if (ev.eventType.startsWith("GUEST_REQUEST.") && kindWord) bits.push(kindWord);
+    if (text) bits.push(`“${text}”`);
+    if (owner && ev.eventType.startsWith("BOOKING_NOTE.")) bits.push(`for ${owner}`);
+    const was = str("was");
+    if (was) bits.push(`was “${was}”`);
+  }
   const said = str("verbatimNote");
   if (said) bits.push(`“${said}”`);
   const reason = str("reason") ?? str("decisionReason");

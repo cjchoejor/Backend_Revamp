@@ -3,8 +3,13 @@
 /**
  * The booking workspace in the new frame (Surface Spec 03 and its 13–14 Sep amendment).
  *
- * header · preference strip · rail | canvas (This step · Booking details · History) | side panel
- * · gate bar with one forward move.
+ * header · rail | canvas | side panel · gate bar with one forward move.
+ *
+ * The canvas's tabs read left to right (2026-10-12, operator): This step › the step's own tabs
+ * (Stay's Night audit, Rooms, …) › Other ways · Booking details › the booking's five tabs —
+ * Charges & payments · Guest requests · Notes · Documents · History — the same on every step.
+ * What those five hold was taken out of the steps, the side panel and the header, so nothing on
+ * the booking shows twice.
  *
  * Every rule the old workspace enforced is kept: the readiness lists, the order of the moves, the
  * two commitment boundaries behind their dialogs, park and resume, the key checklist that survives
@@ -35,8 +40,6 @@ import {
   progressStage,
   switchStay,
   unparkEntry,
-  type EntryBillingSummary,
-  type EntryCommunication,
   type TimerRecordSummary,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
@@ -44,7 +47,6 @@ import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
-import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
 import { FlowTodo, OtherWaysSlot, StepFlow, anchorFor, numberFlow, revealCard, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
@@ -71,17 +73,17 @@ import {
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtDay, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
-import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
 import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
 import type { EntryDetail } from "@/types/api";
 import { CaseCards } from "@/components/ds/steps/case-cards";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
-import { SidePapers } from "@/components/ds/workspace/side-papers";
+import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type BookingTab } from "@/components/ds/workspace/booking-tabs";
+import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
@@ -101,7 +103,7 @@ const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 const NOOP = () => {};
 
-type View = "step" | "other" | "details" | "history";
+type View = "step" | "other" | "details" | BookingTab;
 
 
 /* ------------------------------------------------------------------ */
@@ -162,6 +164,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Verified at THIS stay — the check-in gate's own reading (2026-09-18).
   const stayIdentityVerified = !!identityProofsQuery.data?.verification;
 
+  // The five tabs say how much is in them (the mockup's counts): open requests, notes and open
+  // to-dos — a to-do past its time in red.
+  const requestsQuery = useQuery({
+    queryKey: ["guest-requests", entryId],
+    queryFn: () => listGuestRequests(session!, entryId),
+    enabled: !!session && !sessionLoading,
+  });
+  const notesQuery = useQuery({
+    queryKey: ["booking-notes", entryId],
+    queryFn: () => listBookingNotes(session!, entryId),
+    enabled: !!session && !sessionLoading,
+    refetchInterval: 60_000,
+  });
+
   const timersQuery = useQuery({
     queryKey: ["entry-timers", entryId],
     queryFn: () => getEntryTimers(session!, entryId),
@@ -185,13 +201,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // step that needs attention and Back returns to it.
   const stepParam = Number(params.get("step"));
   const viewParam = params.get("view");
-  const view: View =
-    viewParam === "details" ? "details" : viewParam === "history" ? "history" : viewParam === "other" ? "other" : "step";
+  const VIEWS: readonly View[] = ["other", "details", "money", "requests", "notes", "docs", "history"];
+  const view: View = VIEWS.includes(viewParam as View) ? (viewParam as View) : "step";
+  // History opens on a lens when another tab sends the desk there (Charges & payments → its log).
+  const lensParam = params.get("lens");
   const [selected, setSelectedState] = useState<number | null>(stepParam >= 1 && stepParam <= 9 ? stepParam : null);
-  const setView = (v: View, step?: number) => {
+  const setView = (v: View, step?: number, lens?: string) => {
     const p = new URLSearchParams(params.toString());
     if (v === "step") p.delete("view");
     else p.set("view", v);
+    if (lens) p.set("lens", lens);
+    else p.delete("lens");
     if (step) p.set("step", String(step));
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   };
@@ -223,7 +243,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
-  const [moneyOpen, setMoneyOpen] = useState(false);
   const [guestPresent, setGuestPresent] = useState(false);
   // The registration tick survives a refresh until check-in records it, like the key checklist
   // (2026-09-18) — a reload mid check-in used to clear it silently and lock "Check in" again.
@@ -550,7 +569,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       const a = (e.target as HTMLElement).closest?.("a[href^='/']") as HTMLAnchorElement | null;
       if (!a || a.target === "_blank") return;
       const href = a.getAttribute("href") ?? "";
-      if (href.startsWith(bookingHref(entryId)) || href.includes(`edit=${entryId}`) || href.startsWith("/api/")) return;
+      if (href.startsWith(bookingHref(entryId)) || href.startsWith("/api/")) return;
       // another stay of this trip — the switch handles it, with no question
       if (tripSiblingOf(href)) return;
       e.preventDefault();
@@ -941,6 +960,30 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   };
   const native = nativeBody();
 
+  /* ---- the five tabs' counts ---- */
+  const tabCount = (k: BookingTab): ReactNode => {
+    if (k === "requests") {
+      const open = requestsQuery.data?.counts.open ?? 0;
+      return open ? <span className="tab-n warn">{open}</span> : null;
+    }
+    if (k === "notes") {
+      const c = notesQuery.data?.counts;
+      if (!c) return null;
+      const n = c.notes + c.openTodos;
+      return (
+        <>
+          {n ? <span className="tab-n">{n}</span> : null}
+          {c.overdueTodos ? <span className="tab-n stop">{c.overdueTodos} late</span> : null}
+        </>
+      );
+    }
+    if (k === "docs") {
+      const n = (entry.quotations ?? []).length + (entry.folio?.invoices ?? []).length + (entry.reservation ? 1 : 0);
+      return n ? <span className="tab-n">{n}</span> : null;
+    }
+    return null;
+  };
+
   /* ---- the header ---- */
   const standing = standingOf(
     factsFromEntry(entry, billing?.folio?.outstandingBalance ?? null, listRow ? bookerName(listRow) : null, hotelToday),
@@ -1035,24 +1078,22 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               </span>
             </div>
           </div>
-          <div className="total" style={{ position: "relative" }}>
+          <div className="total">
+            {/* The figure opens Charges & payments (2026-10-12) — the breakdown lives there now. */}
             <button
               type="button"
               className="figure money"
-              aria-expanded={moneyOpen}
+              aria-pressed={view === "money"}
               onClick={() => {
-                setMoneyOpen((o) => !o);
                 void billingQuery.refetch();
+                setView(view === "money" ? "step" : "money", viewing);
               }}
             >
               {money(headline, cur)}
             </button>
-            <div className="kind">{totalKind} · click for the breakdown</div>
-            {moneyOpen ? <MoneyPop billing={billing} currency={cur} segmentNumber={entry.segmentNumber ?? 1} onClose={() => setMoneyOpen(false)} /> : null}
+            <div className="kind">{totalKind} · charges &amp; payments</div>
           </div>
         </div>
-
-        <PrefStrip entry={entry} onDetails={() => setView("details", viewing)} />
 
         <div className="ws-body">
           {/* The column carries the ink down to the gate bar; the nav inside it sticks (2026-09-29). */}
@@ -1135,6 +1176,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
           <div className="canvas">
             <div className="canvas-tabs" role="tablist">
+              {/* Two groups (2026-10-12): the step's own tabs, then the booking's five — so on Stay,
+                  which carries the most, the five wrap together rather than splitting. */}
+              <div className="tabgroup">
               <button type="button" className="tab" role="tab" aria-selected={view === "step" && !pane} onClick={() => (pane ? setPane(null) : setView("step", viewing))}>
                 This step
               </button>
@@ -1151,9 +1195,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               <button type="button" className="tab" role="tab" aria-selected={view === "details"} onClick={() => setView("details", viewing)}>
                 Booking details
               </button>
-              <button type="button" className="tab" role="tab" aria-selected={view === "history"} onClick={() => setView("history", viewing)}>
-                History
-              </button>
+              </div>
+              <div className="tabgroup booking">
+                {BOOKING_TABS.map(([k, label]) => (
+                  <button key={k} type="button" className="tab" role="tab" aria-selected={view === k} onClick={() => setView(k, viewing)}>
+                    {label}
+                    {tabCount(k)}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {entry.earlyDeparture ? (
@@ -1171,9 +1221,28 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ) : null}
 
             {view === "details" ? (
-              <DetailsView entry={entry} booker={booker} custodian={listRow?.custodianName ?? null} billing={billing ?? null} />
+              <DetailsView
+                entry={entry}
+                booker={booker}
+                custodian={listRow?.custodianName ?? null}
+                onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
+              />
+            ) : view === "money" ? (
+              <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
+            ) : view === "requests" ? (
+              <RequestsView entry={entry} sealed={sealed} tz={clock.tz} />
+            ) : view === "notes" ? (
+              <NotesView entry={entry} tz={clock.tz} />
+            ) : view === "docs" ? (
+              <DocumentsView entry={entry} communications={communications ?? []} tz={clock.tz} sealed={sealed} onGo={(n) => gotoStep(n)} />
             ) : view === "history" ? (
-              <HistoryView entry={entry} billing={billing ?? null} tz={clock.tz} onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))} />
+              <HistoryView
+                key={lensParam ?? "all"}
+                entry={entry}
+                tz={clock.tz}
+                initialLens={lensParam}
+                onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))}
+              />
             ) : (
               // This step and Other ways are the same canvas: the step's own cards here, its
               // other ways portalled into the pane below (2026-09-25). Both stay mounted, so
@@ -1233,10 +1302,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             todoInherited={view === "step" && !viewingPast && !sealed ? inherited : []}
             onGoToCard={goToCard}
             timers={timersQuery.data?.items ?? []}
-            events={traceQuery.data?.items ?? []}
-            communications={communications ?? []}
-            tz={clock.tz}
-            onHistory={() => setView("history", viewing)}
           />
         </div>
 
@@ -1409,11 +1474,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 }
 
 /** Who recorded an event, in words — the system is "system", a person is their name. */
-function whoDid(ev: { actorId: string; actorLevel: string; actorName?: string }): string {
-  if (ev.actorId === "SYSTEM" || ev.actorLevel === "SYSTEM" || ev.actorName === "SYSTEM") return "system";
-  return ev.actorName ?? ev.actorId;
-}
-
 function bookerName(row: { inquiry: { travelAgent: { displayName: string } | null; corporateAccount: { displayName: string } | null } | null }): string | null {
   return row.inquiry?.travelAgent?.displayName ?? row.inquiry?.corporateAccount?.displayName ?? null;
 }
@@ -1470,176 +1530,6 @@ function CommitDialog({
   );
 }
 
-function MoneyPop({ billing, currency, segmentNumber, onClose }: { billing: EntryBillingSummary | null; currency: string; segmentNumber: number; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      if (ref.current && !ref.current.contains(t) && !t.closest(".ws-head .total")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-  const st = billing?.stayTotal;
-  const fo = billing?.folio ?? null;
-  const row = (label: ReactNode, value: number | null | undefined, bold?: boolean) => (
-    <div className={`ml${bold ? " b" : ""}`}>
-      <span>{label}</span>
-      <span className="money">{money(value, currency)}</span>
-    </div>
-  );
-  return (
-    <div className="money-pop" ref={ref} role="dialog" aria-label="Money on this booking">
-      <h4 style={{ marginBottom: 6 }}>Money on this booking</h4>
-      {!billing ? <p className="meta">Reading the figures…</p> : null}
-      {row(`Stay total · ${st?.frozen ? "as confirmed" : "indicative"}`, st?.amount, true)}
-      {st?.basis === "PER_NIGHT_TIMES_NIGHTS" && st.perNightAmount != null ? (
-        <div className="meta">
-          {money(st.perNightAmount, currency)} a night{st.nights != null ? ` · ${plural(st.nights, "night")}` : ""}
-        </div>
-      ) : null}
-      {st?.earlyDeparture ? (
-        <div className="meta">
-          shortened: {st.earlyDeparture.sleptNights} nights slept · {money(st.earlyDeparture.forgoneRoomTotal, currency)} not charged
-        </div>
-      ) : null}
-      {st?.segmentNumber != null && segmentNumber > 1 ? <div className="meta">priced on pass {st.segmentNumber} — every room change re-prices it</div> : null}
-      {billing?.rooms?.length ? (
-        <>
-          <h4 style={{ margin: "10px 0 4px", fontSize: "var(--t-sm)" }}>Per room</h4>
-          <div style={{ maxHeight: 240, overflowY: "auto" }}>
-            {billing.rooms.map((r, i) => {
-              const m = r.mealCounts;
-              const meals = [m?.cp ? `${m.cp} CP` : null, m?.mapl ? `${m.mapl} MAP+L` : null, m?.mapd ? `${m.mapd} MAP+D` : null, m?.ap ? `${m.ap} AP` : null, m?.others ? `${m.others} other` : null]
-                .filter(Boolean)
-                .join(" · ");
-              const bits = [
-                r.roomSubtotal != null ? `room ${money(r.roomSubtotal, currency)}` : null,
-                (r.mealsSubtotal ?? 0) > 0 || meals ? `meals ${money(r.mealsSubtotal, currency)}${meals ? ` (${meals}${r.mealsVaryByNight ? " · varies by night" : ""})` : ""}` : null,
-                r.extraBedCount > 0 ? `${plural(r.extraBedCount, "extra bed")} ${money(r.extraBedSubtotal, currency)}` : null,
-              ].filter(Boolean);
-              return (
-                <div key={r.roomId ?? i} style={{ padding: "3px 0" }}>
-                  <div className="ml">
-                    <span>
-                      <b>Room {r.roomNumber ?? "—"}</b>
-                      <span className="meta">
-                        {r.roomTypeName ? ` · ${r.roomTypeName}` : ""}
-                        {r.nights != null ? ` · ${plural(r.nights, "night")}` : ""}
-                        {r.isFoc ? " · free of charge" : ""}
-                      </span>
-                    </span>
-                    <span className="money">{money(r.total, currency)}</span>
-                  </div>
-                  {bits.length ? <div className="meta">{bits.join(" · ")}</div> : null}
-                </div>
-              );
-            })}
-          </div>
-          <div className="meta">
-            Room, meals and bed are net; each room&apos;s total adds service charge and GST.
-            {billing.rooms.some((r) => r.componentsPreDiscount) ? " Parts are before the booking discount; totals after it." : ""}
-          </div>
-        </>
-      ) : null}
-      <div style={{ borderTop: "1px solid var(--line)", margin: "8px 0 4px" }} />
-      {fo ? (
-        <>
-          {row(`Billed so far${fo.lineCount ? ` · ${plural(fo.lineCount, "line")}` : ""}`, fo.billedSoFar)}
-          {row("Payments received", fo.paymentsReceived)}
-          {fo.refunded != null ? row("Refunded", fo.refunded) : null}
-          {fo.writtenOff != null ? row("Written off", fo.writtenOff) : null}
-          {row("Balance", fo.outstandingBalance, true)}
-        </>
-      ) : (
-        <p className="meta">No folio yet — nothing billed.</p>
-      )}
-      <p className="meta" style={{ marginTop: 6 }}>
-        Every figure comes from the hotel server and follows the folio as bills post.
-      </p>
-    </div>
-  );
-}
-
-function PrefStrip({ entry, onDetails }: { entry: EntryDetail; onDetails: () => void }) {
-  const { session } = useSession();
-  const queryClient = useQueryClient();
-  const current = entry.inquiry?.notes?.trim() ?? "";
-  const sealed = entry.status !== "ACTIVE" && entry.status !== "PARKED";
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(current);
-  const save = useMutation({
-    mutationFn: () => updateInquiryNotes(session!, entry.inquiryId, draft.trim()),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["entry", entry.id] });
-      void queryClient.invalidateQueries({ queryKey: ["desk-bookings"] });
-      toast.success("Preference saved.");
-      setEditing(false);
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't save the preference"),
-  });
-  return (
-    <div className="pref">
-      <Icon name="info" />
-      {editing ? (
-        <>
-          <input
-            className="input"
-            autoFocus
-            style={{ flex: 1, height: 30 }}
-            value={draft}
-            maxLength={2000}
-            placeholder="e.g. high floor, quiet room, honeymoon — allergic to nuts"
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") save.mutate();
-              if (e.key === "Escape") setEditing(false);
-            }}
-          />
-          <Button compact state={save.isPending ? "working" : "default"} onClick={() => save.mutate()}>
-            Save
-          </Button>
-          <Button kind="quiet" compact onClick={() => setEditing(false)}>
-            Cancel
-          </Button>
-        </>
-      ) : (
-        <>
-          {current ? (
-            <span>
-              Preference · <b>{current}</b>
-            </span>
-          ) : (
-            <span className="meta">{sealed ? "No preference was recorded" : "No preference recorded yet"}</span>
-          )}
-          {/* A sealed booking's preference is part of the record (2026-09-18). */}
-          {sealed ? null : (
-            <Button
-              kind="quiet"
-              compact
-              onClick={() => {
-                setDraft(current);
-                setEditing(true);
-              }}
-            >
-              Edit
-            </Button>
-          )}
-          <span style={{ flex: 1 }} />
-          <Button kind="secondary" compact onClick={onDetails}>
-            Booking details
-          </Button>
-        </>
-      )}
-    </div>
-  );
-}
-
 function SidePanel({
   entry,
   sealed,
@@ -1648,10 +1538,6 @@ function SidePanel({
   todoInherited,
   onGoToCard,
   timers,
-  events,
-  communications,
-  tz,
-  onHistory,
 }: {
   entry: EntryDetail;
   sealed: boolean;
@@ -1660,10 +1546,6 @@ function SidePanel({
   todoInherited: Precondition[];
   onGoToCard: (card?: string) => void;
   timers: TimerRecordSummary[];
-  events: import("@/lib/trace/humanize").TraceEvent[];
-  communications: EntryCommunication[];
-  tz: string;
-  onHistory: () => void;
 }) {
   // The housekeeping (H2) and kitchen (H3) handoffs share one clock code; name them apart by
   // the handoff each clock is on, or both read "Housekeeping to accept".
@@ -1682,7 +1564,6 @@ function SidePanel({
     .filter((x): x is { t: (typeof timers)[number]; label: string } => !!x.label)
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
     .slice(0, 8);
-  const recent = events.filter((e) => !isHousekeeping(e.eventType)).slice(0, 6);
   const dwell = entry.stageDwellRecords?.[0];
   return (
     <aside className="side">
@@ -1698,29 +1579,6 @@ function SidePanel({
         </div>
       </div>
       <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />
-      <div>
-        <h4>Recent</h4>
-        <div className="list">
-          {recent.length ? (
-            recent.map((ev) => (
-              <div className="row" key={ev.id}>
-                <span className="t">{traceWords(ev)}</span>
-                <span className="meta">
-                  {fmtStamp(ev.timestamp, tz)} · {whoDid(ev)}
-                </span>
-              </div>
-            ))
-          ) : (
-            <span className="quiet">nothing yet</span>
-          )}
-        </div>
-        <div className="row-acts" style={{ marginTop: 6 }}>
-          <Button kind="quiet" compact onClick={onHistory}>
-            See all history
-          </Button>
-        </div>
-      </div>
-      <SidePapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />
     </aside>
   );
 }
