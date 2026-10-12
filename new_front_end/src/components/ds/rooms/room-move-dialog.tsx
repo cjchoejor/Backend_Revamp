@@ -106,7 +106,7 @@ function PreviewLegCard({
         {leg.sameType === false ? <span className="rmv-type">{leg.fromRoom?.roomTypeName} → {leg.toRoom?.roomTypeName}</span> : null}
       </div>
       {leg.nightsLabel ? <div className="sm">Nights: <b>{leg.nightsLabel}</b></div> : null}
-      <div className="sm">Price: <PriceLine p={leg.pricing} /></div>
+      {refused ? null : <div className="sm">Price: <PriceLine p={leg.pricing} /></div>}
       {leg.sameType === false ? (
         <div className="rmv-pricemode" role="radiogroup" aria-label="How this guest is priced">
           <label className={priceMode === "KEEP" ? "on" : undefined}>
