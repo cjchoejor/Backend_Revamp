@@ -430,7 +430,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     onError: fail("Check-in failed"),
   });
   const parkMutation = useMutation({
-    mutationFn: () => parkEntry(session!, entry!.id, parkReason.trim()),
+    // A reason passed in is the inline form's (Negotiation's Other ways); the dialog's is in state.
+    mutationFn: (reason?: string) => parkEntry(session!, entry!.id, (reason ?? parkReason).trim()),
     onSuccess: (updated) => {
       afterMove(updated);
       void queryClient.invalidateQueries({ queryKey: ["entry-timers", updated.id] });
@@ -895,6 +896,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             past={viewingPast}
             onPark={parkable ? openPark : undefined}
             onDecline={declinable ? () => setDeclineOpen(true) : undefined}
+            parkNow={parkable ? (reason) => parkMutation.mutate(reason) : undefined}
+            parking={parkMutation.isPending}
+            declineNow={declinable ? (reason) => declineMutation.mutate(reason) : undefined}
+            declining={declineMutation.isPending}
           />
         );
       case "setup":
@@ -1461,7 +1466,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <Button
                       state={parkMutation.isPending || exitLeaving === "park" ? "working" : !parkReason.trim() || exitLeaving ? "inert" : "default"}
                       workingLabel={exitLeaving === "park" ? "Leaving…" : "Parking…"}
-                      onClick={() => parkMutation.mutate()}
+                      onClick={() => parkMutation.mutate(undefined)}
                     >
                       {parkExitFlow ? "Park & leave" : "Park"}
                     </Button>

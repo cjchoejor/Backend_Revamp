@@ -438,3 +438,14 @@
 .ds .seerow.plain:not(.desk-root *) { align-items: center; gap: var(--s2); padding: 2px 0; }
 .ds .seerow.plain .why, .ds .actrow.plain .why { font-size: 13px; font-weight: 600; color: var(--warning); overflow-wrap: anywhere; }
 .ds .actrow.plain .actline { display: inline-flex; align-items: center; justify-self: start; }
+
+/* Other ways as sub-tabs (2026-10-12): a tab per way, its panel is what the button used to open. */
+.ds .subtabs { display: flex; gap: var(--s1); flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: var(--s2) 0 var(--s4); }
+.ds .subtab {
+  appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  padding: var(--s2) var(--s3); font: 600 var(--t-sm)/1.2 var(--font); color: var(--ink-2); cursor: pointer;
+}
+.ds .subtab:hover { color: var(--ink); background: var(--surface-2); }
+.ds .subtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 700; }
+.ds .subtab:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .way-form { display: grid; gap: var(--s2); max-width: 640px; }

@@ -11,6 +11,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, Icon, type ButtonProps, type DialogRegister, type IconName } from "@/design-system";
@@ -866,6 +867,123 @@ export function OtherWays({ children }: { children: ReactNode }) {
       </div>
     </StepCard>,
     slot,
+  );
+}
+
+/**
+ * The step's other ways as sub-tabs (2026-10-12, operator: "in the other ways ... the buttons look
+ * like they were not fit in properly — make sub tabs inside; below them show what the button shows
+ * when clicked"). Each way is a tab, and its panel IS what its button used to open — the reason
+ * field and the act itself, not a button that opens a dialog. Every panel stays mounted, so a
+ * half-typed reason survives a look at another tab. The open tab lives in the address
+ * (`?way=`), so This step can send the operator straight to one (`useOpenOtherWay`).
+ */
+export type OtherWayTab = { key: string; label: string; content: ReactNode };
+
+export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null | false | undefined> }) {
+  const { past } = useStepMode();
+  const slot = useContext(OtherWaysSlotCtx);
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const live = tabs.filter((t): t is OtherWayTab => !!t);
+  if (past || live.length === 0) return null;
+  const want = params.get("way");
+  const current = live.find((t) => t.key === want) ?? live[0];
+  const pick = (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set("way", key);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  return beside(
+    <StepCard title="Other ways this booking can go" quiet>
+      <div className="subtabs" role="tablist" aria-label="Other ways">
+        {live.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            className="subtab"
+            aria-selected={t.key === current.key}
+            onClick={() => pick(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {live.map((t) => (
+        <div key={t.key} role="tabpanel" className="subtab-panel" hidden={t.key !== current.key}>
+          {t.content}
+        </div>
+      ))}
+    </StepCard>,
+    slot,
+  );
+}
+
+/** Open the step's Other ways tab on one of its ways — from a button on This step. */
+export function useOpenOtherWay() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  return (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set("view", "other");
+    p.set("way", key);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    if (typeof window !== "undefined") window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+}
+
+/**
+ * A reason and the act it commits, inline (2026-10-12) — what a reason dialog shows, set out on
+ * the page instead: the field, the button, and the explanation behind a "?". The button waits for
+ * the reason.
+ */
+export function ReasonForm({
+  label,
+  fieldLabel,
+  placeholder,
+  help,
+  onConfirm,
+  busy,
+  danger,
+}: {
+  label: string;
+  fieldLabel: string;
+  placeholder?: string;
+  help?: ReactNode;
+  onConfirm: (reason: string) => void;
+  busy?: boolean;
+  danger?: boolean;
+}) {
+  const [reason, setReason] = useState("");
+  const ready = reason.trim().length > 0;
+  return (
+    <div className="way-form">
+      <div className="field">
+        <label>{fieldLabel}</label>
+        <textarea
+          className="input"
+          style={{ height: 72, paddingTop: 8 }}
+          value={reason}
+          placeholder={placeholder}
+          maxLength={500}
+          onChange={(e) => setReason(e.target.value)}
+        />
+      </div>
+      <div className="row-acts" style={{ alignItems: "center", marginTop: 10 }}>
+        <Button
+          kind={danger ? "danger" : "primary"}
+          state={busy ? "working" : ready ? "default" : "inert"}
+          title={ready ? undefined : "Type the reason first"}
+          onClick={() => onConfirm(reason.trim())}
+        >
+          {label}
+        </Button>
+        {help ? <Help label={`About ${label}`}>{help}</Help> : null}
+      </div>
+    </div>
   );
 }
 
