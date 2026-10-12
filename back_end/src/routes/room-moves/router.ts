@@ -32,8 +32,9 @@ const legSchema = z.object({
   toRoomId: z.string().trim().min(1).max(64),
   priceMode: z.enum(["KEEP", "NEW_TYPE"]).optional(),
   guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
+  displacedBy: z.string().trim().max(64).nullable().optional(),
 });
-const legsSchema = z.array(legSchema).min(1).max(2);
+const legsSchema = z.array(legSchema).min(1).max(12);
 
 roomMovesRouter.post(
   "/room-moves/preview",

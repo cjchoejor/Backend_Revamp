@@ -14,9 +14,13 @@ import { foldIsoNightsToRanges } from "./entry-inventory-claim.js";
  *     its nights, for everyone except its own booking. A third booking can therefore never take
  *     either room mid-swap — not the room being vacated, not the room being entered.
  *   - **Tolerance.** For a leg's OWN booking, and only that booking, a conflict is passed over when
- *     it comes from a PARTNER leg of the same move whose FROM room is this leg's TARGET — the partner
- *     is leaving exactly that room. Nothing else is tolerated: not another room, not another booking,
- *     not a finished or cancelled move.
+ *     it comes from another booking's leg of the same move on a room the two are trading:
+ *       · the partner is LEAVING the room this leg enters (its from-room is this leg's target), or
+ *       · the partner is ENTERING a room this booking is leaving (its target is one of this
+ *         booking's from-rooms) — a booking moving several rooms re-holds the ones it still sits in
+ *         at every walk, and the partner's claim on such a room must not refuse that.
+ *     Nothing else is tolerated: not another room, not another booking, not a finished or cancelled
+ *     move.
  *
  * Read by `findRoomBookingConflicts` (the walk's pre-check and Policy 26 inside the hold),
  * `detectOverbookingForSpans` (Policy 41 inside the re-confirmation), the S1 search and the house
@@ -102,7 +106,8 @@ export async function roomMoveClaims(
 
 /**
  * The partner claims the asking booking may pass over: for each live leg of the asking booking,
- * every OTHER live leg of the same move that is leaving the room this leg is entering.
+ * every OTHER booking's live leg of the same move that is leaving the room this leg enters, or is
+ * entering the room this leg leaves.
  */
 export async function roomMoveTolerance(db: Db, askingEntryId: string | null | undefined): Promise<ToleratedClaim[]> {
   if (!askingEntryId) return [];
@@ -115,8 +120,8 @@ export async function roomMoveTolerance(db: Db, askingEntryId: string | null | u
       if (partner.moveId !== leg.moveId || partner.id === leg.id) continue;
       if (partner.entryId === askingEntryId) continue;
       if (!CLAIMING_LEG.has(partner.status)) continue;
-      if (partner.fromRoomId !== leg.toRoomId) continue;
-      out.push({ entryId: partner.entryId, roomId: leg.toRoomId });
+      if (partner.fromRoomId === leg.toRoomId) out.push({ entryId: partner.entryId, roomId: leg.toRoomId });
+      if (partner.toRoomId === leg.fromRoomId) out.push({ entryId: partner.entryId, roomId: leg.fromRoomId });
     }
   }
   return out;

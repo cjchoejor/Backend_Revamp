@@ -90,6 +90,8 @@ export async function planRoomFlagRepairs(
     checkIn: today,
     checkOut: new Date(Date.UTC(today.getUTCFullYear() + 10, 0, 1)),
     excludeEntryId: "",
+    // A room's flag follows the bookings that hold it; a running room move is not one.
+    ignoreRoomMoves: true,
   });
   const pending = new Set(
     (

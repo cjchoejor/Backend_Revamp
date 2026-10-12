@@ -2812,3 +2812,14 @@ export async function changeRoomToNewSegment(
     },
   };
 }
+
+/**
+ * The nights a room change of `fromRoomId` would move — the walk's own reading (in-house from
+ * tonight, otherwise every night the room holds the booking). A room move reads it to plan its
+ * legs before any walk runs (2026-10-12). Throws exactly as the walk would on a booking it cannot
+ * change.
+ */
+export async function roomChangeNights(prisma: PrismaClient, entryId: string, fromRoomId: string): Promise<string[]> {
+  const ctx = await loadRoomChangeContext(prisma, entryId, fromRoomId);
+  return ctx.substitutionNights;
+}

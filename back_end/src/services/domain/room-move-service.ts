@@ -7,7 +7,7 @@ import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
 import { resolveCompositionBasis } from "../../lib/party-seating.js";
 import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
 import type { ToleratedClaim } from "../../lib/room-move-claims.js";
-import { changeRoomToNewSegment, type RoomChangeOutcome, type RoomMoveWalkContext } from "./room-change-service.js";
+import { changeRoomToNewSegment, roomChangeNights, type RoomChangeOutcome, type RoomMoveWalkContext } from "./room-change-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
 
@@ -16,8 +16,11 @@ import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
  * reservations — different stages, rooms and dates — through every procedure, every paper, with
  * the choice to send or not, and well audited").
  *
- * A move is a RECORD with one LEG per booking: one leg is a move into a free room, two legs are a
- * swap. Each leg runs the governed room-change walk (`changeRoomToNewSegment`): a new pass, a
+ * A move is a RECORD with one LEG per room that moves: one leg is a move into a free room, two legs
+ * a swap; a drag of several selected rooms is several legs, and a booking sitting in a room one of
+ * them lands on is given a leg back into the room that was left (operator rulings 2026-10-12: drag
+ * and drop, Ctrl and Shift selection, keep their order, swap with what is there, one walk per
+ * room). Each leg runs the governed room-change walk (`changeRoomToNewSegment`): a new pass, a
  * silent quotation, back through Set up, the hold re-placed, the booking re-confirmed with a new
  * voucher (or, at Set up, a fresh proforma), and back to the step it started on. Nothing is copied
  * or patched — every gate each booking would face on its own, it faces here.
@@ -30,11 +33,11 @@ import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
  *     nothing else.
  *   - **Validation before anything changes.** Every leg is dry-run first (the walk's own checks,
  *     with nothing written), so a swap that one side cannot make is refused whole.
- *   - **Order and recovery.** Pre-arrival legs run first, in-house last. A second leg refused
- *     before it starts walks the first back to its own room when the first was pre-arrival (a
- *     third leg of the same move, so the room it returns to stays claimed meanwhile), and leaves
- *     the move PARTIAL with Retry when the first was in-house — a guest who has physically moved is
- *     not moved back by a machine.
+ *   - **Order and recovery.** Pre-arrival legs run first, in-house last, one walk after another.
+ *     A leg refused before it starts walks every finished leg back to its own room while no in-house
+ *     guest has moved yet (walk-backs are legs of the same move, so the rooms they return to stay
+ *     claimed meanwhile), and leaves the move PARTIAL with Retry once one has — a guest who has
+ *     physically moved is not moved back by a machine.
  *   - **Papers held.** Every walk holds the papers it makes (HeldDocument); the desk answers each:
  *     send by email, mark sent on WhatsApp, or don't send.
  *
@@ -55,6 +58,8 @@ export type RoomMoveLegInput = {
   priceMode?: "KEEP" | "NEW_TYPE";
   /** Required when a cross-type leg is re-priced — the guest's agreement in the desk's words. */
   guestAgreedNote?: string | null;
+  /** Set on a swap partner the preview added, when the desk sends the leg back — display only. */
+  displacedBy?: string | null;
 };
 
 const STAGE_WORD: Record<string, string> = {
@@ -173,9 +178,19 @@ function pathFor(stage: string, sameType: boolean, priceMode: "KEEP" | "NEW_TYPE
   return [...steps, "back to Stay — the guest moves tonight"];
 }
 
+/** How many bookings' rooms the desk may pick at once, and how many legs a move may grow to. */
+const MAX_SELECTED = 8;
+const MAX_LEGS = 12;
+
+const legKey = (l: { entryId: string; fromRoomId: string }) => `${l.entryId}|${l.fromRoomId}`;
+
 export type RoomMovePreviewLeg = {
   order: number;
+  /** `entryId|fromRoomId` — a booking can move several of its rooms in one move. */
+  key: string;
   entryId: string;
+  fromRoomId: string;
+  toRoomId: string;
   bookingLabel: string;
   guestName: string | null;
   stage: string;
@@ -186,6 +201,11 @@ export type RoomMovePreviewLeg = {
   nightsLabel: string | null;
   sameType: boolean | null;
   priceMode: "KEEP" | "NEW_TYPE";
+  guestAgreedNote: string | null;
+  /** True when the leg was added because the booking sits in a room another leg moves into. */
+  displaced: boolean;
+  /** The booking whose leg made this one ("moves into the room ENT-… leaves"). */
+  displacedBy: string | null;
   pricing: { before: number | null; after: number | null; delta: number | null; currency: string | null; note: string | null };
   path: string[];
   papers: string[];
@@ -202,8 +222,10 @@ export type RoomMovePreview = {
   refusals: string[];
 };
 
+type PlannedLeg = RoomMoveLegInput & { priceMode: "KEEP" | "NEW_TYPE"; displaced: boolean; displacedBy: string | null };
+
 type DryLeg = {
-  input: RoomMoveLegInput & { priceMode: "KEEP" | "NEW_TYPE" };
+  input: PlannedLeg;
   booking: LegBooking | null;
   label: string;
   dry: RoomChangeOutcome | null;
@@ -215,42 +237,130 @@ async function bookingLabel(prisma: PrismaClient, b: LegBooking | null, entryId:
   return name ? `${entryId} (${name})` : entryId;
 }
 
-/** Shape check of the legs asked for — before any booking is read. */
-function checkLegShape(legs: RoomMoveLegInput[]) {
-  if (!Array.isArray(legs) || legs.length === 0) throw new ValidationError("Name the booking (and room) to move");
-  if (legs.length > 2) throw new ValidationError("A move takes one booking, or two to swap — a rotation of three is not built yet");
-  for (const l of legs) {
-    if (!l.entryId?.trim() || !l.fromRoomId?.trim() || !l.toRoomId?.trim()) throw new ValidationError("Each booking needs its room and the room it moves to");
-    if (l.fromRoomId === l.toRoomId) throw new ValidationError("That is the room the booking already has");
-  }
-  if (legs.length === 2) {
-    const [a, b] = legs;
-    if (a.entryId === b.entryId) throw new ValidationError("Both bars are the same booking — pick two different bookings to switch");
-    if (a.toRoomId !== b.fromRoomId || b.toRoomId !== a.fromRoomId) {
-      throw new ValidationError("A switch exchanges the two bookings' rooms — each must move into the room the other leaves");
-    }
-  }
+type RoomRow = { id: string; roomNumber: string; roomTypeId: string; roomType: { name: string } | null };
+async function loadRooms(prisma: PrismaClient, ids: string[]) {
+  const rows: RoomRow[] = await prisma.room.findMany({
+    where: { id: { in: [...new Set(ids)] } },
+    select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { name: true } } },
+  });
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
-/** Run every leg's walk as a dry run (nothing written), each tolerating its partner. */
-async function dryRunLegs(prisma: PrismaClient, actor: Actor, legs: RoomMoveLegInput[], reason: string): Promise<DryLeg[]> {
+/**
+ * The shape of what was asked, before any booking is read: whole legs, no room twice, and no
+ * booking moving into a room it is itself leaving in the same move (each room walks on its own,
+ * one after another, so such a chain cannot be checked ahead — moved one at a time it can).
+ */
+function shapeRefusals(legs: RoomMoveLegInput[], rooms: Map<string, RoomRow>): string[] {
+  const no = (id: string) => rooms.get(id)?.roomNumber ?? "?";
+  const out: string[] = [];
+  const seenFrom = new Map<string, string>();
+  const seenTo = new Map<string, string>();
+  const seenKey = new Set<string>();
+  for (const l of legs) {
+    if (l.fromRoomId === l.toRoomId) out.push(`${l.entryId} already has Room ${no(l.fromRoomId)}`);
+    if (seenKey.has(legKey(l))) out.push(`${l.entryId}'s Room ${no(l.fromRoomId)} is picked twice`);
+    seenKey.add(legKey(l));
+    const fromOwner = seenFrom.get(l.fromRoomId);
+    if (fromOwner && fromOwner !== l.entryId) {
+      out.push(`Two bookings are moving out of Room ${no(l.fromRoomId)} — move them one at a time`);
+    }
+    seenFrom.set(l.fromRoomId, l.entryId);
+    if (seenTo.has(l.toRoomId)) out.push(`Two of the picked rooms would land in Room ${no(l.toRoomId)} — drop them where each has its own room`);
+    seenTo.set(l.toRoomId, l.entryId);
+  }
+  for (const l of legs) {
+    const own = legs.find((o) => o !== l && o.entryId === l.entryId && o.fromRoomId === l.toRoomId);
+    if (own) {
+      out.push(
+        `${l.entryId} would move into Room ${no(l.toRoomId)}, which it is leaving in the same move — drop the rooms where they do not overlap their own, or move them one at a time`,
+      );
+    }
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Add the swap partners (operator ruling 2026-10-12: a booking dropped on a room another booking
+ * holds swaps with it). For every leg, each OTHER booking holding the target room over the nights
+ * the leg moves — and not itself leaving that room in this move — is given a leg back into the room
+ * the chain started from: the leg's own room, or, when that room is itself taken by another leg of
+ * the move, the room that leg left, and so on. One level only: a partner moves where a leg left,
+ * and anything else in that room refuses the partner's own walk, in words.
+ */
+async function withSwapPartners(prisma: PrismaClient, asked: PlannedLeg[]): Promise<{ legs: PlannedLeg[]; truncated: boolean }> {
+  const legs = [...asked];
+  let truncated = false;
+  const leavingRoom = (entryId: string, roomId: string) => legs.some((l) => l.entryId === entryId && l.fromRoomId === roomId);
+  for (const leg of asked) {
+    let nights: string[] = [];
+    try {
+      nights = await roomChangeNights(prisma, leg.entryId, leg.fromRoomId);
+    } catch {
+      continue; // the walk refuses this leg itself, in its own words
+    }
+    const holders = new Set<string>();
+    for (const range of foldIsoNightsToRanges(nights)) {
+      const conflicts = await findRoomBookingConflicts(prisma, {
+        roomIds: [leg.toRoomId],
+        checkIn: range.startDate,
+        checkOut: range.endDate,
+        excludeEntryId: leg.entryId,
+        ignoreRoomMoves: true,
+      });
+      for (const c of conflicts) holders.add(c.entryId);
+    }
+    for (const holder of holders) {
+      if (leavingRoom(holder, leg.toRoomId)) continue;
+      // The room the chain started from.
+      let back = leg.fromRoomId;
+      const seen = new Set<string>([back]);
+      for (;;) {
+        const into = legs.find((l) => l.toRoomId === back && !(l.entryId === holder && l.fromRoomId === leg.toRoomId));
+        if (!into || seen.has(into.fromRoomId)) break;
+        back = into.fromRoomId;
+        seen.add(back);
+      }
+      if (back === leg.toRoomId) continue;
+      if (legs.length >= MAX_LEGS) {
+        truncated = true;
+        break;
+      }
+      legs.push({
+        entryId: holder,
+        fromRoomId: leg.toRoomId,
+        toRoomId: back,
+        priceMode: "KEEP",
+        guestAgreedNote: null,
+        displaced: true,
+        displacedBy: leg.entryId,
+      });
+    }
+  }
+  return { legs, truncated };
+}
+
+/** Run every leg's walk as a dry run (nothing written), each passing over its partners' claims. */
+async function dryRunLegs(prisma: PrismaClient, actor: Actor, legs: PlannedLeg[], reason: string): Promise<DryLeg[]> {
   const today = hotelTodayUtc();
   const out: DryLeg[] = [];
-  for (const raw of legs) {
-    const priceMode = raw.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP";
-    const input = { ...raw, priceMode } as DryLeg["input"];
-    const booking = await loadLegBooking(prisma, raw.entryId);
-    const label = await bookingLabel(prisma, booking, raw.entryId);
+  for (const input of legs) {
+    const booking = await loadLegBooking(prisma, input.entryId);
+    const label = await bookingLabel(prisma, booking, input.entryId);
     const refusals: string[] = [];
-    if (!booking) refusals.push(`${raw.entryId} was not found`);
-    else refusals.push(...bookingRefusals(booking, label, today));
+    if (!booking) refusals.push(`${input.entryId} was not found`);
+    else {
+      // The "already part of another move" rule must not count this very move's own legs.
+      refusals.push(...bookingRefusals(booking, label, today));
+    }
     out.push({ input, booking, label, dry: null, refusals });
   }
   for (const leg of out) {
     if (leg.refusals.length > 0) continue;
-    const partner = out.find((p) => p !== leg) ?? null;
-    const tolerate: ToleratedClaim[] =
-      partner && partner.input.fromRoomId === leg.input.toRoomId ? [{ entryId: partner.input.entryId, roomId: leg.input.toRoomId }] : [];
+    // Every other booking's leg leaving the room this one enters — the one claim passed over.
+    const leaving = out.filter((p) => p.input.entryId !== leg.input.entryId && p.input.fromRoomId === leg.input.toRoomId);
+    const tolerate: ToleratedClaim[] = leaving.map((p) => ({ entryId: p.input.entryId, roomId: leg.input.toRoomId }));
+    const partner = leaving[0] ?? out.find((p) => p.input.entryId !== leg.input.entryId) ?? null;
     const moveContext: RoomMoveWalkContext = {
       moveId: null,
       legId: null,
@@ -322,11 +432,13 @@ function nightsBetweenIso(start: string, end: string): string[] {
   return out;
 }
 
-async function priceLeg(prisma: PrismaClient, leg: DryLeg): Promise<RoomMovePreviewLeg["pricing"]> {
+async function priceLeg(prisma: PrismaClient, leg: DryLeg, roomsOfBooking: number): Promise<RoomMovePreviewLeg["pricing"]> {
   const dry = leg.dry;
   const before = dry?.pricing.priorTotal ?? null;
   const currency = dry?.pricing.currency ?? null;
   const plan = dry?.plan ?? null;
+  // Several rooms of one booking walk one after another, each priced on its own walk.
+  const oneAtATime = roomsOfBooking > 1 ? "This booking's rooms move one at a time — the figure is for this room's move alone" : null;
   if (!dry || !plan) return { before, after: null, delta: null, currency, note: null };
   if (!plan.compositions || plan.compositions.length === 0) {
     return { before, after: null, delta: null, currency, note: "Priced the way the booking is priced today (a flat rate) — the new quotation states the figure" };
@@ -349,31 +461,34 @@ async function priceLeg(prisma: PrismaClient, leg: DryLeg): Promise<RoomMovePrev
       },
     );
     const after = preview.payable;
+    const kept = !dry.sameType && leg.input.priceMode === "KEEP" ? "The guest keeps the room rate they agreed" : null;
     return {
       before,
       after,
       delta: before != null ? Number((after - before).toFixed(2)) : null,
       currency: preview.currency ?? currency,
-      note: !dry.sameType && leg.input.priceMode === "KEEP" ? "The guest keeps the room rate they agreed" : null,
+      note: [kept, oneAtATime].filter(Boolean).join(" · ") || null,
     };
   } catch (e) {
     return { before, after: null, delta: null, currency, note: `Could not price it ahead: ${errorParts(e).message}` };
   }
 }
 
-function followUpsFor(leg: DryLeg, partner: DryLeg | null): string[] {
+function followUpsFor(leg: DryLeg, all: DryLeg[]): string[] {
   const out: string[] = [];
   const stage = String(leg.booking?.currentStage ?? "");
   const from = leg.dry?.fromRoom.roomNumber ?? "?";
   const to = leg.dry?.toRoom.roomNumber ?? "?";
+  const others = all.filter((p) => p.input.entryId !== leg.input.entryId);
   if (stage === Stage.S7) {
     out.push(`Take back the key to Room ${from}, then hand over Room ${to}'s from the Stay step's Keys`);
-    const partnerInHouse = String(partner?.booking?.currentStage ?? "") === Stage.S7;
-    if (!partnerInHouse) out.push(`Room ${from} is marked departed — housekeeping turns it`);
+    // Another in-house guest moving straight into this room keeps it occupied; otherwise it is turned.
+    const enteredByInHouse = others.some((p) => String(p.booking?.currentStage ?? "") === Stage.S7 && p.input.toRoomId === leg.input.fromRoomId);
+    if (!enteredByInHouse) out.push(`Room ${from} is marked departed — housekeeping turns it`);
   }
   // The room this booking enters is being left by an in-house guest: it is turned first.
   const enteringVacatedRoom =
-    !!partner && String(partner.booking?.currentStage ?? "") === Stage.S7 && stage !== Stage.S7 && partner.input.fromRoomId === leg.input.toRoomId;
+    stage !== Stage.S7 && others.some((p) => String(p.booking?.currentStage ?? "") === Stage.S7 && p.input.fromRoomId === leg.input.toRoomId);
   if (stage === Stage.S6) {
     out.push(
       enteringVacatedRoom
@@ -392,27 +507,42 @@ export async function previewRoomMove(
   actor: Actor,
   input: { legs: RoomMoveLegInput[]; reason?: string | null },
 ): Promise<RoomMovePreview> {
-  checkLegShape(input.legs);
+  if (!Array.isArray(input.legs) || input.legs.length === 0) throw new ValidationError("Pick the booking (and room) to move");
+  for (const l of input.legs) {
+    if (!l.entryId?.trim() || !l.fromRoomId?.trim() || !l.toRoomId?.trim()) throw new ValidationError("Each booking needs its room and the room it moves to");
+  }
+  const asked: PlannedLeg[] = input.legs.map((l) => ({
+    entryId: l.entryId,
+    fromRoomId: l.fromRoomId,
+    toRoomId: l.toRoomId,
+    priceMode: l.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP",
+    guestAgreedNote: l.guestAgreedNote?.trim() || null,
+    displaced: !!l.displacedBy,
+    displacedBy: l.displacedBy ?? null,
+  }));
+  const selectedCount = new Set(asked.map(legKey)).size;
+  if (selectedCount > MAX_SELECTED) throw new ValidationError(`Pick at most ${MAX_SELECTED} rooms at a time`);
+
   const reason = input.reason?.trim() ?? "";
-  const legs = await dryRunLegs(prisma, actor, input.legs, reason);
-  const kind = input.legs.length === 2 ? "SWAP" : "MOVE";
-  // The rooms themselves, read apart from the walk: a refused walk returns nothing, and the dialog
-  // must still name both rooms and say whether the type changes (an upgrade needs the FOM whether
-  // or not something else refuses it).
-  const roomRows = await prisma.room.findMany({
-    where: { id: { in: [...new Set(input.legs.flatMap((l) => [l.fromRoomId, l.toRoomId]))] } },
-    select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { name: true } } },
-  });
-  const roomById = new Map(roomRows.map((r) => [r.id, r]));
+  // The swap partners — added once, by the server, whatever the desk sent (a call that already
+  // names a partner leg leaves it as it is).
+  const { legs: planned, truncated } = await withSwapPartners(prisma, asked);
+  // A leg the desk sent that the server would add anyway is the same leg: keep the desk's choices.
+  const rooms = await loadRooms(prisma, planned.flatMap((l) => [l.fromRoomId, l.toRoomId]));
+  const shape = shapeRefusals(planned, rooms);
+  const legs = await dryRunLegs(prisma, actor, planned, reason);
+
   const roomView = (id: string) => {
-    const r = roomById.get(id);
+    const r = rooms.get(id);
     return r ? { roomId: r.id, roomNumber: r.roomNumber, roomTypeName: r.roomType?.name ?? null } : null;
   };
   const sameTypeOf = (l: DryLeg) =>
     l.dry?.sameType ??
-    (roomById.get(l.input.fromRoomId) && roomById.get(l.input.toRoomId)
-      ? roomById.get(l.input.fromRoomId)!.roomTypeId === roomById.get(l.input.toRoomId)!.roomTypeId
+    (rooms.get(l.input.fromRoomId) && rooms.get(l.input.toRoomId)
+      ? rooms.get(l.input.fromRoomId)!.roomTypeId === rooms.get(l.input.toRoomId)!.roomTypeId
       : null);
+  const bookings = new Set(planned.map((l) => l.entryId));
+  const kind: "MOVE" | "SWAP" = bookings.size > 1 ? "SWAP" : "MOVE";
   const sameTypeAll = legs.every((l) => sameTypeOf(l) !== false);
   const needed: "L1" | "L2" = kind === "SWAP" || !sameTypeAll ? "L2" : "L1";
   const authority = {
@@ -421,19 +551,22 @@ export async function previewRoomMove(
     ok: atLeast(actor.actorLevel, needed),
     why:
       kind === "SWAP"
-        ? "Switching two bookings moves a guest who did not ask — it needs the FOM"
+        ? "Moving more than one booking moves a guest who did not ask — it needs the FOM"
         : needed === "L2"
           ? "A different room type is an upgrade or downgrade — it needs the FOM"
           : "A move into a free room of the same type is desk work",
   };
   const out: RoomMovePreviewLeg[] = [];
   for (const [i, leg] of legs.entries()) {
-    const partner = legs.find((p) => p !== leg) ?? null;
     const stage = String(leg.booking?.currentStage ?? "");
     const nights = leg.dry?.toRooms.find((r) => r.roomId === leg.input.toRoomId)?.nights ?? leg.dry?.substitutionNights ?? [];
+    const roomsOfBooking = planned.filter((p) => p.entryId === leg.input.entryId).length;
     out.push({
       order: i + 1,
+      key: legKey(leg.input),
       entryId: leg.input.entryId,
+      fromRoomId: leg.input.fromRoomId,
+      toRoomId: leg.input.toRoomId,
       bookingLabel: leg.label,
       guestName: guestName(leg.booking?.guestProfile ?? null),
       stage,
@@ -444,19 +577,22 @@ export async function previewRoomMove(
       nightsLabel: nights.length ? nightsLabel(nights) : null,
       sameType: sameTypeOf(leg),
       priceMode: leg.input.priceMode,
-      pricing: await priceLeg(prisma, leg),
+      guestAgreedNote: leg.input.guestAgreedNote ?? null,
+      displaced: leg.input.displaced,
+      displacedBy: leg.input.displacedBy,
+      pricing: await priceLeg(prisma, leg, roomsOfBooking),
       path: leg.dry ? pathFor(stage, leg.dry.sameType, leg.input.priceMode) : [],
       papers: leg.dry
         ? stage === Stage.S3
           ? ["A new quotation (kept on file, not sent)", "A fresh proforma — held for you to send or not"]
           : ["A new quotation (kept on file, not sent)", "A new confirmation voucher — held for you to send or not"]
         : [],
-      followUps: leg.dry ? followUpsFor(leg, partner) : [],
+      followUps: leg.dry ? followUpsFor(leg, legs) : [],
       refusals: leg.refusals,
     });
   }
-  const refusals: string[] = [];
-  return { kind, ok: authority.ok && out.every((l) => l.refusals.length === 0), authority, legs: out, refusals };
+  const refusals = truncated ? [...shape, `A move can grow to at most ${MAX_LEGS} rooms with the bookings it swaps with — pick fewer`] : shape;
+  return { kind, ok: authority.ok && refusals.length === 0 && out.every((l) => l.refusals.length === 0), authority, legs: out, refusals };
 }
 
 /* ─────────────────────────────── the record ─────────────────────────────── */
@@ -488,6 +624,8 @@ const moveInclude = {
 
 export type RoomMoveView = ReturnType<typeof viewMove>;
 
+type LegOutcome = Partial<RoomChangeOutcome> & { refusal?: { message: string; code: string | null }; compensates?: string };
+
 function viewMove(m: MoveRow) {
   return {
     id: m.id,
@@ -500,7 +638,7 @@ function viewMove(m: MoveRow) {
     completedAt: m.completedAt?.toISOString() ?? null,
     notes: (m.notes ?? []) as unknown[],
     legs: m.legs.map((l) => {
-      const o = (l.outcome ?? null) as (Partial<RoomChangeOutcome> & { refusal?: { message: string; code: string | null }; compensates?: string }) | null;
+      const o = (l.outcome ?? null) as LegOutcome | null;
       const nights = Array.isArray(l.nights) ? (l.nights as string[]) : [];
       return {
         id: l.id,
@@ -601,11 +739,12 @@ async function runLeg(
   opts: { roomCompositions?: RoomCompositionServiceInput[] | null; compensates?: string | null } = {},
 ): Promise<"DONE" | "STOPPED" | "REFUSED"> {
   const leg = await prisma.roomMoveLeg.findUniqueOrThrow({ where: { id: legId } });
-  const partners = await prisma.roomMoveLeg.findMany({
+  const others = await prisma.roomMoveLeg.findMany({
     where: { moveId, id: { not: legId }, entryId: { not: leg.entryId } },
     include: { entry: { select: { guestProfile: { select: { firstName: true, lastName: true } } } } },
   });
-  const partner = partners[0] ?? null;
+  // The partner named on this leg's papers: the booking leaving the room it enters, else any other.
+  const partner = others.find((p) => p.fromRoomId === leg.toRoomId) ?? others[0] ?? null;
   const partnerLabel = partner
     ? guestName(partner.entry.guestProfile)
       ? `${partner.entryId} (${guestName(partner.entry.guestProfile)})`
@@ -613,10 +752,10 @@ async function runLeg(
     : null;
   const segmentsBefore = await prisma.segment.count({ where: { entryId: leg.entryId } });
   await prisma.roomMoveLeg.update({ where: { id: legId }, data: { startedAt: new Date() } });
-  // Both guests in-house and the partner already moved into this leg's room: it is not left empty.
+  // Both guests in-house and another one already moved into this leg's room: it is not left empty.
   const fromRoomEnteredByPartner =
     String(leg.originStage) === Stage.S7 &&
-    partners.some((p) => p.status === "DONE" && String(p.originStage) === Stage.S7 && p.toRoomId === leg.fromRoomId);
+    others.some((p) => p.status === "DONE" && String(p.originStage) === Stage.S7 && p.toRoomId === leg.fromRoomId);
   let status: "DONE" | "STOPPED" | "REFUSED";
   let outcome: Record<string, unknown>;
   try {
@@ -700,15 +839,19 @@ async function repairMoveRooms(prisma: PrismaClient, roomIds: string[]) {
   }
 }
 
+const compensatesOf = (l: { outcome: Prisma.JsonValue | null }) => ((l.outcome ?? null) as LegOutcome | null)?.compensates ?? null;
+
 async function settleMoveStatus(prisma: PrismaClient, actor: Actor, moveId: string) {
   const m = await prisma.roomMove.findUniqueOrThrow({ where: { id: moveId }, include: { legs: true } });
-  const live = m.legs.filter((l) => l.status !== "CANCELLED");
+  const originals = m.legs.filter((l) => !compensatesOf(l));
+  const walkBacks = m.legs.filter((l) => !!compensatesOf(l));
   let status: "COMPLETED" | "PARTIAL" | "REVERTED" | "FAILED";
-  if (m.legs.some((l) => l.status === "REVERTED") && live.every((l) => l.status === "DONE" || l.status === "REVERTED" || l.status === "REFUSED")) {
-    // Walked back: the compensating leg is DONE and every original leg is REVERTED or REFUSED.
-    status = live.some((l) => l.status === "DONE" && !((l.outcome ?? {}) as { compensates?: string }).compensates) ? "PARTIAL" : "REVERTED";
-  } else if (live.every((l) => l.status === "DONE")) status = "COMPLETED";
-  else if (live.every((l) => l.status === "REFUSED")) status = "FAILED";
+  if (originals.some((l) => l.status === "REVERTED")) {
+    // Walked back: every original leg is undone or never ran, and every walk-back finished.
+    const settled = originals.every((l) => ["REVERTED", "REFUSED", "CANCELLED"].includes(l.status)) && walkBacks.every((l) => l.status === "DONE");
+    status = settled ? "REVERTED" : "PARTIAL";
+  } else if (originals.every((l) => l.status === "DONE")) status = "COMPLETED";
+  else if (originals.every((l) => l.status === "REFUSED" || l.status === "CANCELLED")) status = "FAILED";
   else status = "PARTIAL";
   const done = status !== "PARTIAL";
   await prisma.roomMove.update({ where: { id: moveId }, data: { status, completedAt: done ? new Date() : null } });
@@ -722,6 +865,60 @@ async function settleMoveStatus(prisma: PrismaClient, actor: Actor, moveId: stri
   return status;
 }
 
+/**
+ * Walk back every finished leg of a move that has not reached an in-house guest — newest first, as
+ * legs of the same move, all created before any runs so each keeps the room it returns to claimed.
+ * A booking moving several rooms is restored to the very terms it had (its original compositions)
+ * on its last walk-back; the earlier ones carry the price, as every move does.
+ */
+async function walkBack(
+  prisma: PrismaClient,
+  actor: Actor,
+  moveId: string,
+  done: Array<{ id: string; entryId: string; fromRoomId: string; toRoomId: string; nights: Prisma.JsonValue; originStage: Stage; priceMode: "KEEP" | "NEW_TYPE" }>,
+  originalComps: Map<string, RoomCompositionServiceInput[] | null>,
+  because: string,
+) {
+  const reversed = [...done].reverse();
+  const top = await prisma.roomMoveLeg.aggregate({ where: { moveId }, _max: { order: true } });
+  let order = top._max.order ?? 0;
+  const backs: Array<{ id: string; of: string; entryId: string }> = [];
+  for (const l of reversed) {
+    const b = await prisma.roomMoveLeg.create({
+      data: {
+        moveId,
+        order: ++order,
+        entryId: l.entryId,
+        fromRoomId: l.toRoomId,
+        toRoomId: l.fromRoomId,
+        nights: l.nights as Prisma.InputJsonValue,
+        originStage: l.originStage,
+        priceMode: l.priceMode,
+      },
+    });
+    backs.push({ id: b.id, of: l.id, entryId: l.entryId });
+  }
+  let allBack = true;
+  for (const [i, b] of backs.entries()) {
+    const lastForBooking = !backs.slice(i + 1).some((x) => x.entryId === b.entryId);
+    const st = await runLeg(prisma, actor, moveId, b.id, `Undoing ${moveId}: ${because}`, {
+      roomCompositions: lastForBooking ? originalComps.get(b.entryId) ?? null : null,
+      compensates: b.of,
+    });
+    if (st === "DONE") {
+      await prisma.roomMoveLeg.update({ where: { id: b.of }, data: { status: "REVERTED" } });
+      const orig = done.find((d) => d.id === b.of)!;
+      await trace(prisma, actor, "ROOM_MOVE.WALKED_BACK", orig.entryId, String(orig.originStage), { moveId, legId: b.of, undoLegId: b.id, because });
+    } else {
+      allBack = false;
+      // A walk-back that cannot run leaves the rest where they are: the move is part-done.
+      await appendNote(prisma, moveId, { kind: "WALK_BACK_FAILED", by: actor.actorId, legId: b.id });
+      break;
+    }
+  }
+  return allBack;
+}
+
 export async function executeRoomMove(
   prisma: PrismaClient,
   actor: Actor,
@@ -733,22 +930,20 @@ export async function executeRoomMove(
   if (!preview.authority.ok) {
     throw new PolicyGateBlockedError("AUTH_REQUIRED_L2", `${preview.authority.why} — you are signed in as ${actor.actorLevel}`);
   }
-  const refusals = preview.legs.flatMap((l) => l.refusals);
+  const refusals = [...preview.refusals, ...preview.legs.flatMap((l) => l.refusals)];
   if (refusals.length > 0) throw new PolicyGateBlockedError("ROOM_MOVE_REFUSED", refusals.join(" · "), { refusals });
 
   // Pre-arrival legs first, in-house last: an in-house guest physically moves, and is the one a
-  // machine never moves back — so they move only once the other side is safely done.
-  const ordered = preview.legs
-    .map((l, i) => ({ l, raw: input.legs[i] }))
-    .sort((a, b) => Number(IN_HOUSE.has(a.l.stage)) - Number(IN_HOUSE.has(b.l.stage)) || a.l.order - b.l.order);
+  // machine never moves back — so they move only once every other side is safely done.
+  const ordered = [...preview.legs].sort((a, b) => Number(IN_HOUSE.has(a.stage)) - Number(IN_HOUSE.has(b.stage)) || a.order - b.order);
 
   const now = new Date();
   const moveId = await prisma.$transaction(async (tx) => {
     // One move at a time is created; once it exists, its claims and the "already part of a move"
     // refusal protect its bookings and rooms.
     await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(730226101)::text AS locked`);
-    const entryIds = input.legs.map((l) => l.entryId);
-    const roomIds = input.legs.flatMap((l) => [l.fromRoomId, l.toRoomId]);
+    const entryIds = ordered.map((l) => l.entryId);
+    const roomIds = ordered.flatMap((l) => [l.fromRoomId, l.toRoomId]);
     const clash = await tx.roomMoveLeg.findFirst({
       where: {
         move: { status: { in: [...ACTIVE_MOVE] } },
@@ -766,15 +961,15 @@ export async function executeRoomMove(
         requestedBy: actor.actorId,
         requestedLevel: actor.actorLevel,
         legs: {
-          create: ordered.map(({ l, raw }, i) => ({
+          create: ordered.map((l, i) => ({
             order: i + 1,
             entryId: l.entryId,
-            fromRoomId: raw.fromRoomId,
-            toRoomId: raw.toRoomId,
+            fromRoomId: l.fromRoomId,
+            toRoomId: l.toRoomId,
             nights: l.nights as Prisma.InputJsonValue,
             originStage: l.stage as Stage,
             priceMode: l.priceMode,
-            guestAgreedNote: raw.guestAgreedNote?.trim() || null,
+            guestAgreedNote: l.guestAgreedNote,
           })),
         },
       },
@@ -783,7 +978,7 @@ export async function executeRoomMove(
   });
   const legs = await prisma.roomMoveLeg.findMany({ where: { moveId }, orderBy: { order: "asc" } });
   for (const l of legs) {
-    const partner = legs.find((p) => p.id !== l.id) ?? null;
+    const partner = legs.find((p) => p.entryId !== l.entryId && p.fromRoomId === l.toRoomId) ?? legs.find((p) => p.entryId !== l.entryId) ?? null;
     await trace(prisma, actor, "ROOM_MOVE.STARTED", l.entryId, String(l.originStage), {
       moveId,
       legId: l.id,
@@ -791,65 +986,50 @@ export async function executeRoomMove(
       fromRoomId: l.fromRoomId,
       toRoomId: l.toRoomId,
       partnerEntryId: partner?.entryId ?? null,
+      legs: legs.length,
       reason,
     });
   }
 
-  // What the first booking is priced on, before it moves — what a walk back restores.
-  const firstCompositions = legs.length === 2 ? await currentCompositions(prisma, legs[0].entryId) : null;
+  // What each booking is priced on before any of it moves — what a walk back restores.
+  const originalComps = new Map<string, RoomCompositionServiceInput[] | null>();
+  for (const entryId of [...new Set(legs.map((l) => l.entryId))]) originalComps.set(entryId, await currentCompositions(prisma, entryId));
 
-  const first = await runLeg(prisma, actor, moveId, legs[0].id, reason);
-  if (legs.length === 1 || first === "REFUSED") {
-    if (legs.length === 2 && first === "REFUSED") {
-      await prisma.roomMoveLeg.update({ where: { id: legs[1].id }, data: { status: "CANCELLED" } });
+  const done: typeof legs = [];
+  for (const [i, leg] of legs.entries()) {
+    const st = await runLeg(prisma, actor, moveId, leg.id, reason);
+    if (st === "DONE") {
+      done.push(leg);
+      continue;
     }
-    await settleMoveStatus(prisma, actor, moveId);
-    return getRoomMove(prisma, moveId);
-  }
-
-  const second = await runLeg(prisma, actor, moveId, legs[1].id, reason);
-  if (second === "REFUSED" && first === "DONE" && !IN_HOUSE.has(String(legs[0].originStage))) {
-    // The second booking cannot move and the first is not in-house: walk the first back to its own
-    // room, as a third leg of the same move — its claim keeps that room safe while it walks.
-    const back = await prisma.roomMoveLeg.create({
-      data: {
-        moveId,
-        order: 3,
-        entryId: legs[0].entryId,
-        fromRoomId: legs[0].toRoomId,
-        toRoomId: legs[0].fromRoomId,
-        nights: legs[0].nights as Prisma.InputJsonValue,
-        originStage: legs[0].originStage,
-        priceMode: legs[0].priceMode,
-      },
-    });
-    await prisma.roomMoveLeg.update({ where: { id: legs[1].id }, data: { status: "CANCELLED" } });
-    const why = ((await prisma.roomMoveLeg.findUniqueOrThrow({ where: { id: legs[1].id } })).outcome as { refusal?: { message: string } } | null)
-      ?.refusal?.message;
-    const undo = await runLeg(prisma, actor, moveId, back.id, `Undoing ${moveId}: ${legs[1].entryId} could not move${why ? ` — ${why}` : ""}`, {
-      roomCompositions: firstCompositions,
-      compensates: legs[0].id,
-    });
-    if (undo === "DONE") {
-      await prisma.roomMoveLeg.update({ where: { id: legs[0].id }, data: { status: "REVERTED" } });
-      // The refused leg is the reason for the walk-back — kept on the record as refused.
-      await prisma.roomMoveLeg.update({ where: { id: legs[1].id }, data: { status: "REFUSED" } });
-      await trace(prisma, actor, "ROOM_MOVE.WALKED_BACK", legs[0].entryId, String(legs[0].originStage), {
-        moveId,
-        legId: legs[0].id,
-        undoLegId: back.id,
-        because: why ?? null,
-      });
-    } else {
-      await prisma.roomMoveLeg.update({ where: { id: legs[1].id }, data: { status: "REFUSED" } });
-      await appendNote(prisma, moveId, { kind: "WALK_BACK_FAILED", by: actor.actorId, legId: back.id });
+    if (st === "STOPPED") {
+      // A walk that stopped part-way leaves its booking between passes. Nothing more runs — not its
+      // other rooms, not the bookings swapping with it — and nothing is walked back over it: the
+      // desk finishes that booking from its page, then retries the rest or closes the move.
+      break;
     }
+    // REFUSED before it started.
+    const rest = legs.slice(i + 1);
+    const inHouseMoved = done.some((d) => IN_HOUSE.has(String(d.originStage)));
+    if (!inHouseMoved && done.length > 0) {
+      // Nobody in-house has moved yet: put every finished leg back. The refused leg and the legs that
+      // never ran stop claiming while the walk-backs run, then the refused one keeps its record.
+      for (const r of rest) await prisma.roomMoveLeg.update({ where: { id: r.id }, data: { status: "CANCELLED" } });
+      await prisma.roomMoveLeg.update({ where: { id: leg.id }, data: { status: "CANCELLED" } });
+      const why = ((await prisma.roomMoveLeg.findUniqueOrThrow({ where: { id: leg.id } })).outcome as LegOutcome | null)?.refusal?.message;
+      await walkBack(prisma, actor, moveId, done, originalComps, `${leg.entryId} could not move${why ? ` — ${why}` : ""}`);
+      await prisma.roomMoveLeg.update({ where: { id: leg.id }, data: { status: "REFUSED" } });
+    } else if (done.length === 0) {
+      for (const r of rest) await prisma.roomMoveLeg.update({ where: { id: r.id }, data: { status: "CANCELLED" } });
+    }
+    // An in-house guest has moved: no machine moves them back. The rest wait for Retry.
+    break;
   }
   await settleMoveStatus(prisma, actor, moveId);
   return getRoomMove(prisma, moveId);
 }
 
-/** Run again a leg that never started (REFUSED) on a PARTIAL move — FOM. */
+/** Run a leg of a part-done move that was refused or never ran — FOM. */
 export async function retryRoomMoveLeg(prisma: PrismaClient, actor: Actor, moveId: string, legId: string, reason?: string | null) {
   if (!atLeast(actor.actorLevel, "L2")) throw new PolicyGateBlockedError("AUTH_REQUIRED_L2", "Retrying a room move needs the FOM");
   const m = await prisma.roomMove.findUnique({ where: { id: moveId }, include: { legs: true } });
@@ -857,12 +1037,16 @@ export async function retryRoomMoveLeg(prisma: PrismaClient, actor: Actor, moveI
   if (m.status !== "PARTIAL") throw new ValidationError(`${moveId} is ${m.status.toLowerCase().replace("_", " ")} — only a part-done move is retried`);
   const leg = m.legs.find((l) => l.id === legId);
   if (!leg) throw new NotFoundError("Room move leg");
-  if (leg.status !== "REFUSED") {
+  if (leg.status !== "REFUSED" && leg.status !== "PLANNED") {
     throw new ValidationError(
       leg.status === "STOPPED"
-        ? "This booking's walk already began and stopped part-way — finish it from the booking's own page, then resolve the move"
-        : "Only a booking whose move was refused before it started is retried",
+        ? "This booking's walk already began and stopped part-way — finish it from the booking's own page, then close the move"
+        : "Only a booking whose move was refused, or has not run yet, is run again",
     );
+  }
+  const stopped = m.legs.find((l) => l.entryId === leg.entryId && l.status === "STOPPED");
+  if (stopped) {
+    throw new ValidationError(`${leg.entryId} has a walk that stopped part-way in this move — finish it from the booking's page first`);
   }
   await trace(prisma, actor, "ROOM_MOVE.LEG_RETRIED", leg.entryId, String(leg.originStage), { moveId, legId });
   await prisma.roomMoveLeg.update({ where: { id: legId }, data: { status: "PLANNED", outcome: Prisma.JsonNull, startedAt: null, finishedAt: null } });
