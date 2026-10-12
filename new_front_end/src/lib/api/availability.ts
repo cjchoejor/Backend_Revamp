@@ -198,6 +198,10 @@ export type PickPricing = {
     rateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
     packageName: string | null;
     net: number | null;
+    /** The type's share of the stay's taxes, and its total — the types add up to the stay. */
+    serviceCharge: number | null;
+    gst: number | null;
+    total: number | null;
   }>;
   byRoom: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; dates: string[] }>;
   totals: { roomNights: number; net: number; serviceCharge: number; gst: number; total: number };

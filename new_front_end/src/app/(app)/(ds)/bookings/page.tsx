@@ -17,7 +17,7 @@ import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import type { DeskListRow, DeskMoneyRow, DeskTimerRow } from "@/lib/api/desk";
 import { fmtDate, fmtRange, fmtStamp, money, nightsOf, plural, weekdayOf } from "@/lib/ds/format";
-import { bookerOfRow, channelWord, factsFromRow, guestNameOf, standingOf } from "@/lib/ds/status";
+import { bookerOfRow, channelWord, factsFromRow, guestNameOf, isNamed, rowNameOf, standingOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
 const GROUPS = ["Upcoming", "In-house", "Departed", "All"] as const;
@@ -79,7 +79,7 @@ function sortValue(r: DeskListRow, key: SortKey): string | number | null {
     case "changed":
       return r.updatedAt ?? null;
     case "name":
-      return guestNameOf(r.guestProfile).toLocaleLowerCase();
+      return rowNameOf(r).toLocaleLowerCase();
     case "step":
       return stepNoOfStage(r.currentStage);
   }
@@ -162,9 +162,11 @@ function haystack(r: DeskListRow, statusWord: string, statusQualifier = ""): str
   const g = r.guestProfile;
   const booker = bookerOfRow(r);
   return [
-    guestNameOf(g),
+    rowNameOf(r),
     g?.phone,
     g?.email,
+    r.inquiry?.callerPhone,
+    r.inquiry?.callerEmail,
     r.id,
     r.inquiryId,
     r.inquiry?.referenceNumber,
@@ -622,7 +624,7 @@ function Preview({
     <aside className="preview" aria-label="Booking preview">
       <div className="pv-head">
         <div>
-          <h3 className={g && guestNameOf(g) !== "to come from the agent" ? "" : "name-i"}>{guestNameOf(g)}</h3>
+          <h3 className={isNamed(g) ? "" : "name-i"}>{rowNameOf(row)}</h3>
           <div className="meta">
             {row.id} · Enquiry <b>{row.inquiryId}</b>
           </div>

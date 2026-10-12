@@ -396,6 +396,7 @@ export function StepCard({
   flowAfterOnly,
   heldFor,
   summary,
+  doneAction,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -429,6 +430,12 @@ export function StepCard({
    * A card without one never folds.
    */
   summary?: ReactNode;
+  /**
+   * What the section's Done does instead of folding — the intake's stay ends with "Done · Start
+   * the inquiry" (2026-10-12, operator: the start button sat at the foot of the page and broke the
+   * flow). Shown whenever the section is open; inert, with its reason, until it can be pressed.
+   */
+  doneAction?: { label: string; onClick: () => void; state?: "default" | "inert" | "working"; title?: string; workingLabel?: string };
 }) {
   const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
@@ -521,7 +528,18 @@ export function StepCard({
         // directly under the card, where `.card > .tool` and friends expect them.)
         <div className="flow-body" hidden={folded}>
           {body}
-          {canDone ? (
+          {doneAction ? (
+            <div className="flow-closebar">
+              {doneAction.state === "inert" && doneAction.title ? (
+                <span className="meta warn-ink" style={{ alignSelf: "center", marginRight: 10 }}>
+                  {doneAction.title}
+                </span>
+              ) : null}
+              <Button state={doneAction.state ?? "default"} title={doneAction.title} workingLabel={doneAction.workingLabel} onClick={doneAction.onClick}>
+                {doneAction.label}
+              </Button>
+            </div>
+          ) : canDone ? (
             <div className="flow-closebar">
               <Button kind="secondary" compact onClick={() => ctx.done(flow!)}>
                 Done

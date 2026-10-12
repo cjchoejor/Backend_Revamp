@@ -193,6 +193,7 @@ export function RoomStatusTable({
   dense,
   large,
   showNames,
+  nightTotals,
 }: {
   rows: RoomStatusRow[];
   /** ISO YYYY-MM-DD for every night of the stay (check-in inclusive, check-out exclusive). */
@@ -229,6 +230,12 @@ export function RoomStatusTable({
   large?: boolean;
   /** Print the holder's name in the cell itself rather than only on hover. */
   showNames?: boolean;
+  /**
+   * What each night comes to for the rooms picked, printed under its date (2026-10-12, operator:
+   * "in the table can you show the price that night"). Already-formatted money from the SERVER's
+   * bill — the table adds nothing up.
+   */
+  nightTotals?: Record<string, string>;
 }) {
   // night → roomId → who holds it that night. Keeps the whole occupancy context, not just the
   // id, so each cell can name the holder. The engine includes CLAIMED rooms in `perDate`, so
@@ -378,6 +385,11 @@ export function RoomStatusTable({
                       {count}/{maxSelect} picked
                     </span>
                   )}
+                  {nightTotals?.[n] ? (
+                    <span className="rst-nightprice" title="This night, for the rooms picked — incl. service charge and GST, room only">
+                      {nightTotals[n]}
+                    </span>
+                  ) : null}
                 </th>
               );
             })}

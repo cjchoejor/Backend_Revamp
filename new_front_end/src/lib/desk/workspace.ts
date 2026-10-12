@@ -337,23 +337,44 @@ export function currentPassConfigs(entry: EntryDetail): NonNullable<EntryDetail[
  * accepts any of the three since the guest's phone became optional (2026-10-06).
  */
 export function hasAnyContact(entry: EntryDetail): boolean {
-  return !!(entry.guestProfile?.email?.trim() || entry.guestProfile?.phone?.trim() || entry.contactPersonPhone?.trim());
+  return !!(
+    entry.guestProfile?.email?.trim() ||
+    entry.guestProfile?.phone?.trim() ||
+    entry.contactPersonPhone?.trim() ||
+    // The caller (2026-10-12) — whoever rang can be rung back; the backend counts them too.
+    entry.inquiry?.callerPhone?.trim() ||
+    entry.inquiry?.callerEmail?.trim()
+  );
+}
+
+/**
+ * The caller can be reached (2026-10-12): a phone or an email, or an OTA booking, which needs
+ * neither. A booking from before callers were recorded has no caller fields at all; its guest
+ * was the caller then, so a guest on file counts.
+ */
+export function callerReachable(entry: EntryDetail): boolean {
+  const inq = entry.inquiry;
+  if (inq?.callerPhone?.trim() || inq?.callerEmail?.trim()) return true;
+  if (inq?.sourceChannel === "OTA") return true;
+  const anyCaller = !!(inq?.callerFirstName || inq?.callerLastName || inq?.callerTitle || inq?.callerOnWhatsApp != null);
+  return !anyCaller && !!(entry.guestProfile ?? entry.inquiry?.guestProfile);
 }
 
 export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
-  // In the order of the five sections (2026-10-10, the boss's journey mockup): the guest, who is
-  // asking, the stay, the house, wrap up. A contact is asked last, once the rooms are chosen —
-  // the guest rarely gives a number at the first call, and the move to Negotiation needs one.
+  // In the order of the five sections (2026-10-10, the boss's journey mockup): the caller, who is
+  // asking, the stay, the house, wrap up. The guest STAYING is named at Wrap up (2026-10-12) — the
+  // caller is often an agent or an assistant — and the move to Negotiation needs one.
   return [
-    { label: "The guest on file", met: !!(entry.guestProfile ?? entry.inquiry?.guestProfile), card: "guest" },
+    { label: "The caller · a phone or an email", met: callerReachable(entry), card: "caller" },
     { label: "How they came in", met: !!(entry.inquiry as { sourceChannel?: string | null } | undefined)?.sourceChannel, card: "asking" },
     { label: "What kind of stay", met: !!entry.useType, card: "asking" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
     { label: "Availability searched", met: configs.length > 0, card: "house" },
     { label: "Preferred room selected", met: !!preferred, card: "house" },
+    { label: "The guest staying, named", met: !!entry.guestProfile, card: "wrap" },
     { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
   ];
 }

@@ -72,16 +72,41 @@ function basisWords(p: PickPricing) {
   return "published rates";
 }
 
-/** One line: the stay's total and what it is made of — for the room table's save row. */
-export function PickTotalLine({ pricing, loading }: { pricing: PickPricing | null; loading?: boolean }) {
-  if (!pricing) return null;
+/** Each room type's total, taxes included — the server's allocation, so they add up to the stay. */
+function TypeTotals({ pricing }: { pricing: PickPricing }) {
+  const priced = pricing.byType.filter((t) => t.total != null);
+  if (!priced.length) return null;
   return (
-    <span className={`pickbill-line${loading ? " loading" : ""}`}>
-      <b className="money">{money(pricing.totals.total, pricing.currency)}</b>{" "}
-      <span className="meta">
-        for the stay · {plural(pricing.totals.roomNights, "room-night")} · incl. taxes · room only
-      </span>
+    <span className="pb-types">
+      {priced.map((t) => (
+        <span key={t.roomTypeId} className="pb-type" title={`${plural(t.roomNights, "room-night")} × ${money(t.rate, pricing.currency)} + service charge + GST`}>
+          <span className="pb-type-name">{t.name}</span>
+          <span className="pb-type-n">{plural(t.roomNights, "room-night")}</span>
+          <b className="money">{money(t.total, pricing.currency)}</b>
+        </span>
+      ))}
     </span>
+  );
+}
+
+/**
+ * The stay's total where it cannot be missed — above the room table (2026-10-12, operator: "can the
+ * total for the stay be shown in a more appealing way, like the user should see it and not miss
+ * it; also the total for each type of room"). UIappeal: the figure is the band's largest thing.
+ */
+export function PickTotalBand({ pricing, loading }: { pricing: PickPricing | null; loading?: boolean }) {
+  if (!pricing || pricing.totals.roomNights === 0) return null;
+  return (
+    <div className={`pickband${loading ? " loading" : ""}`} aria-live="polite">
+      <div className="pickband-main">
+        <span className="pickband-label">Total for the stay</span>
+        <span className="pickband-total money">{money(pricing.totals.total, pricing.currency)}</span>
+        <span className="pickband-sub">
+          {plural(pricing.totals.roomNights, "room-night")} · {plural(pricing.nights.length, "night")} · incl. {pct(pricing.serviceChargeRate)} service charge + {pct(pricing.gstRate)} GST · room only
+        </span>
+      </div>
+      <TypeTotals pricing={pricing} />
+    </div>
   );
 }
 
@@ -108,6 +133,7 @@ export function PickBill({
           {pct(pricing.gstRate)} GST · room only · {basisWords(pricing)}
         </span>
       </div>
+      <TypeTotals pricing={pricing} />
 
       <table className="table compact pb-nights">
         <thead>

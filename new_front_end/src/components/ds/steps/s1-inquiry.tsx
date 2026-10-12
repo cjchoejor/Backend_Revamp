@@ -67,8 +67,9 @@ import {
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
-import { PHONE_CODES, PhoneInput, cameInAsOf } from "./new-inquiry-parts";
-import { PickBill, PickTotalLine, usePickPricing, type BillNight } from "./s1-bill";
+import { cameInAsOf } from "./new-inquiry-parts";
+import { TheCaller, WrapUp } from "./s1-caller";
+import { PickBill, PickTotalBand, usePickPricing, type BillNight } from "./s1-bill";
 import type { PickPricing } from "@/lib/api/availability";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -181,7 +182,7 @@ export function S1Inquiry({
       {/* One column, in the order the call goes (2026-10-10): who the guest is, who is asking
           for them, what they want, what the house has and what it costs, then what is left. */}
       <div className="stack">
-        <TheGuest entry={entry} />
+        <TheCaller entry={entry} editable={editable} />
         <WhoIsAsking
           entry={entry}
           inq={inq}
@@ -205,7 +206,6 @@ export function S1Inquiry({
         <div ref={setToolSlot} style={{ display: "contents" }} />
         <WrapUp
           entry={entry}
-          inq={inq}
           editable={editable}
           onSaved={() => refresh([["inquiry", entry.inquiryId]])}
         />
@@ -305,7 +305,7 @@ function WhoIsAsking({
     <StepCard
       title="Who is asking"
       flow="asking"
-      flowAfter="guest"
+      flowAfter="caller"
       summary={
         <>
           <b>{cameWord}</b>
@@ -405,71 +405,6 @@ function WhoIsAsking({
   );
 }
 
-/* ------------------------------------------------------------------ the guest */
-
-function TheGuest({ entry }: { entry: EntryDetail }) {
-  const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const name = `${g?.firstName ?? ""} ${g?.lastName ?? ""}`.trim();
-  const reach = [g?.phone, g?.email].filter(Boolean).join(" · ");
-  return (
-    <StepCard
-      flow="guest"
-      title="The guest"
-      summary={
-        <>
-          <b>{name || "—"}</b>
-          {g?.nationality ? <> · {g.nationality}</> : null} ·{" "}
-          {reach || <span className="meta">no phone or email yet — asked at Wrap up</span>}
-        </>
-      }
-    >
-      <div className="form2">
-        <div className="field">
-          <label>Phone</label>
-          <input
-            className="input"
-            readOnly
-            value={g?.phone ?? ""}
-            placeholder="not given — asked at Wrap up"
-          />
-        </div>
-        <div className="field">
-          <label>Email</label>
-          <input
-            className="input"
-            readOnly
-            value={g?.email ?? ""}
-            placeholder="not given — asked at Wrap up"
-          />
-        </div>
-        <div className="field">
-          <label>First name</label>
-          <input className="input" readOnly value={g?.firstName ?? ""} />
-        </div>
-        <div className="field">
-          <label>Last name</label>
-          <input className="input" readOnly value={g?.lastName ?? ""} />
-        </div>
-        <div className="field">
-          <label>Nationality</label>
-          <input className="input" readOnly value={g?.nationality ?? ""} />
-        </div>
-        <div className="field">
-          <label>Guest record</label>
-          <span className="sm" style={{ paddingTop: 8 }}>
-            {g?.id ? (
-              <Link href={`/guests/${g.id}`}>
-                Open the guest&rsquo;s record
-              </Link>
-            ) : (
-              <span className="dash">—</span>
-            )}
-          </span>
-        </div>
-      </div>
-    </StepCard>
-  );
-}
 
 /* ------------------------------------------------------------------ the stay */
 
@@ -611,7 +546,7 @@ function TheStay({
   return (
     <StepCard
       flow="stay"
-      flowAfter="guest"
+      flowAfter="caller"
       title="The stay"
       summary={
         <>
@@ -831,209 +766,6 @@ function TheStay({
             Undo
           </Button>
           <span className="meta">the house is asked again after a change</span>
-        </div>
-      ) : null}
-    </StepCard>
-  );
-}
-
-/* ------------------------------------------------------------------ wrap up */
-
-/**
- * Wrap up (2026-10-10, operator, after the boss's journey mockup: "while inquiring the guest
- * doesn't always give our number or emails, but if they're booking and rooms are selected we
- * have to ask them"). Once the rooms are chosen the desk asks for what was not given at the
- * start — the guest's phone or email (filled on the guest's record, never replacing one there),
- * who is arriving and their phone, and any notes. The section is done when the booking has a
- * way to reach someone, the same test the move to Negotiation runs (Policy 16).
- */
-function WrapUp({
-  entry,
-  inq,
-  editable,
-  onSaved,
-}: {
-  entry: EntryDetail;
-  inq: InquiryScalars;
-  editable: boolean;
-  onSaved: () => void;
-}) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
-  const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const contact = entry as EntryDetail & EntryContact;
-  const hasPhone = !!g?.phone?.trim();
-  const hasEmail = !!g?.email?.trim();
-
-  const [phoneCode, setPhoneCode] = useState(PHONE_CODES[0]);
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState(contact.contactPersonName ?? "");
-  const [phone, setPhone] = useState(contact.contactPersonPhone ?? "");
-  const [notes, setNotes] = useState(inq.notes ?? "");
-  useEffect(() => {
-    setName(contact.contactPersonName ?? "");
-    setPhone(contact.contactPersonPhone ?? "");
-  }, [contact.contactPersonName, contact.contactPersonPhone]);
-  useEffect(() => setNotes(inq.notes ?? ""), [inq.notes]);
-
-  const guestPhone = !hasPhone && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
-  const guestEmail = !hasEmail ? email.trim() : "";
-  const emailBad = guestEmail !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail);
-  const arrivingDirty =
-    name.trim() !== (contact.contactPersonName ?? "") ||
-    phone.trim() !== (contact.contactPersonPhone ?? "");
-  const notesDirty = notes.trim() !== (inq.notes ?? "").trim();
-  const dirty = !!guestPhone || !!guestEmail || arrivingDirty || notesDirty;
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const done: string[] = [];
-      if ((guestPhone || guestEmail) && g?.id) {
-        const r = await addGuestContact(session!, g.id, {
-          phone: guestPhone || undefined,
-          email: guestEmail || undefined,
-          entryId: entry.id,
-        });
-        if (r.added.includes("phone")) done.push("the guest's phone");
-        if (r.added.includes("email")) done.push("the guest's email");
-      }
-      if (arrivingDirty) {
-        await updateEntryIntake(session!, entry.id, {
-          contactPersonName: name.trim(),
-          contactPersonPhone: phone.trim(),
-          expectedVersion: entry.version,
-        });
-        done.push("who is arriving");
-      }
-      if (notesDirty) {
-        await updateInquiryNotes(session!, entry.inquiryId, notes.trim());
-        done.push("the notes");
-      }
-      return done;
-    },
-    onSuccess: (done) => {
-      toast.success(done.length ? `On record: ${done.join(", ")}` : "Nothing to save");
-      setPhoneNumber("");
-      setEmail("");
-      refresh();
-      onSaved();
-    },
-    onError: (e) => {
-      toastRefusal(e, "Wrap up could not be saved");
-      refresh();
-      onSaved();
-    },
-  });
-
-  // the same test the move to Negotiation runs (Policy 16): the guest's email or phone, or the arriving person's phone
-  const reachable = hasAnyContact(entry);
-  return (
-    <StepCard
-      flow="wrap"
-      flowAfter="house"
-      flowAfterOnly
-      title="Wrap up"
-      meta="Before the quote goes out — ask for what was not given at the start."
-    >
-      <div className="form2">
-        <div className="field">
-          <label>Guest&rsquo;s phone</label>
-          {hasPhone ? (
-            <input className="input" readOnly value={g?.phone ?? ""} />
-          ) : (
-            <PhoneInput
-              code={phoneCode}
-              setCode={setPhoneCode}
-              number={phoneNumber}
-              setNumber={setPhoneNumber}
-              ariaLabel="Guest's phone"
-            />
-          )}
-          <span className="hint">
-            {hasPhone ? "on the guest's record" : "not given at the start — ask for it now"}
-          </span>
-        </div>
-        <div className="field">
-          <label>Guest&rsquo;s email</label>
-          <input
-            className={`input${emailBad ? " invalid" : ""}`}
-            type="email"
-            readOnly={hasEmail || !editable}
-            value={hasEmail ? (g?.email ?? "") : email}
-            placeholder="name@example.com"
-            onChange={(e) => setEmail(e.target.value)}
-          />
-          <span className={`hint${emailBad ? " stop-ink" : ""}`}>
-            {hasEmail
-              ? "on the guest's record — the quote can go here"
-              : emailBad
-                ? "that does not read as an email address"
-                : "where the quote and the confirmation go"}
-          </span>
-        </div>
-        <div className="field">
-          <label>Who is arriving · name</label>
-          <input
-            className="input"
-            value={name}
-            readOnly={!editable}
-            placeholder="who leads the party on the day"
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Their phone</label>
-          <input
-            className="input"
-            value={phone}
-            readOnly={!editable}
-            placeholder="+975 …"
-            onChange={(e) => setPhone(e.target.value)}
-          />
-          <span className="hint">needed before arrival</span>
-        </div>
-        <div className="wide field">
-          <label>Notes</label>
-          <textarea
-            className="input"
-            rows={2}
-            value={notes}
-            readOnly={!editable}
-            placeholder="anything the guest asked for"
-            onChange={(e) => setNotes(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className={`sm ${reachable ? "ok-ink" : "stop-ink"}`} style={{ marginTop: 8, fontWeight: 600 }}>
-        {reachable
-          ? "The booking has a way to reach someone."
-          : "Nobody can be reached yet — the guest's phone or email, or the arriving person's phone, before Negotiation."}
-      </div>
-      {editable && dirty ? (
-        <div className="row-acts" style={{ marginTop: 10 }}>
-          <Button
-            compact
-            state={save.isPending ? "working" : emailBad ? "inert" : "default"}
-            title={emailBad ? "the email does not read as one" : undefined}
-            workingLabel="Saving…"
-            onClick={() => save.mutate()}
-          >
-            Save wrap up
-          </Button>
-          <Button
-            kind="quiet"
-            compact
-            onClick={() => {
-              setPhoneNumber("");
-              setEmail("");
-              setName(contact.contactPersonName ?? "");
-              setPhone(contact.contactPersonPhone ?? "");
-              setNotes(inq.notes ?? "");
-            }}
-          >
-            Undo
-          </Button>
         </div>
       ) : null}
     </StepCard>
@@ -1848,10 +1580,8 @@ function WhichRooms({
           )
         ) : null}
         {/* The save sits at the right end of the row, apart from the tallies it acts on
-            (operator, 2026-09-29): the eye reads the counts left to right and lands on the act —
-            and since 2026-10-10 the stay's total sits beside it, so the price is read as it moves. */}
+            (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 12 }}>
-          <PickTotalLine pricing={bill} loading={billLoading} />
           <Button
             compact
             kind={showSaved ? "secondary" : "primary"}
@@ -1879,6 +1609,9 @@ function WhichRooms({
           </Button>
         </span>
       </div>
+      {/* What the picks cost, where it cannot be missed (2026-10-12, operator: "the total for the
+          stay shown in a more appealing way … and the total for each type of room"). */}
+      <PickTotalBand pricing={bill} loading={billLoading} />
       <Tool>
         {board ? (
           <RoomSelectBoard
@@ -1939,6 +1672,7 @@ function WhichRooms({
             disabled={saving}
             showNames={names}
             large={full}
+            nightTotals={bill ? Object.fromEntries(bill.nights.map((n) => [n.date, money(n.total, bill.currency)])) : undefined}
           />
         )}
       </Tool>

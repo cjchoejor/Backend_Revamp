@@ -10,10 +10,40 @@ export async function getInquiry(session: Session, inquiryId: string) {
   return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}`, { session });
 }
 
+export type CallerDetails = {
+  title?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  onWhatsApp?: boolean | null;
+};
+
+/** Fill in or correct the caller (2026-10-12). Fields left out keep what is on record. */
+export function updateEntryCaller(session: Session, entryId: string, body: CallerDetails) {
+  return apiRequest<{ caller: CallerDetails }>(`/api/entries/${entryId}/caller`, { method: "POST", session, body });
+}
+
+export type SetGuestBody =
+  | { mode: "CALLER"; nationality?: string | null }
+  | { mode: "EXISTING"; guestProfileId: string }
+  | { mode: "NEW"; title?: string | null; firstName: string; lastName: string; nationality?: string | null; phone?: string | null; email?: string | null };
+
+/** Name the guest who is staying — the caller, a guest on file, or someone new (Inquiry only). */
+export function setEntryGuest(session: Session, entryId: string, body: SetGuestBody) {
+  return apiRequest<{ guestProfileId: string; duplicate: { conflictingInquiryId: string; conflictingEntryId: string } | null }>(
+    `/api/entries/${entryId}/guest`,
+    { method: "POST", session, body },
+  );
+}
+
 export async function createInquiry(
   session: Session,
   body: {
-    guestProfileId: string;
+    /** The guest staying, when already known (a returning caller found on file); else named at Wrap up. */
+    guestProfileId?: string | null;
+    /** Who called (2026-10-12): a phone or an email (not on an OTA), "on WhatsApp?" with a phone. */
+    caller?: CallerDetails | null;
     sourceChannel: string;
     /** How the guest came in; the backend checks it belongs to `sourceChannel`. */
     cameInAs?: string;

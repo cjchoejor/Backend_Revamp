@@ -626,6 +626,14 @@ export type EntryDetail = EntryListItem & {
      * the same enquiry, so this is how each booking knows about the other.
      */
     entries?: TripStaySummary[] | null;
+    /** Who called (2026-10-12): the caller is recorded on the enquiry; the guest is named at Wrap up. */
+    callerTitle?: string | null;
+    callerFirstName?: string | null;
+    callerLastName?: string | null;
+    callerPhone?: string | null;
+    callerEmail?: string | null;
+    callerOnWhatsApp?: boolean | null;
+    guestProfileId?: string | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;
     /** How the guest came in (WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE). */

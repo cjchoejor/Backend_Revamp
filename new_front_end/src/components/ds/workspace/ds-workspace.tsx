@@ -70,7 +70,7 @@ import {
   type Precondition,
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
-import { channelWord, endingOf, factsFromEntry, standingOf } from "@/lib/ds/status";
+import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtDay, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
@@ -468,8 +468,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   }, [viewing, view]);
 
   const fin = useMemo(() => (entry ? deriveFinancials(entry, { paymentStatus: paymentStatusQuery.data }) : null), [entry, paymentStatusQuery.data]);
-  const name = entry ? guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null) : null;
-  usePageTitle(entry ? (name !== "Guest" ? name : entry.id) : null);
+  const guestNamed = entry ? guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null) : null;
+  // Until the guest staying is named (Wrap up, 2026-10-12) the booking goes by its caller.
+  const name = entry ? (guestNamed !== "Guest" ? guestNamed : rowNameOf({ guestProfile: null, inquiry: entry.inquiry ?? null })) : null;
+  const nameIsGuest = guestNamed !== null && guestNamed !== "Guest";
+  usePageTitle(entry ? (name ?? entry.id) : null);
 
   /**
    * The other stays of this trip (2026-10-06, operator: "the user has to constantly switch between
@@ -986,7 +989,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               <Icon name="chev" /> Back to Bookings
             </a>
             <div className="who">
-              <h2 className={name === "Guest" ? "name-i" : undefined}>{name === "Guest" ? "to come from the agent" : name}</h2>
+              <h2 className={nameIsGuest ? undefined : "name-i"}>{name}</h2>
               <StandingChip standing={standing} />
               {entry.guestProfile?.vipTier ? (
                 <Chip tone="accent" tier>

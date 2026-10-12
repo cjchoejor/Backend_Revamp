@@ -6,7 +6,7 @@
  */
 import type { DeskListRow } from "@/lib/api/desk";
 import { fmtDateTime, fmtDay, instantYmd, span } from "./format";
-import { bookerOfRow, guestNameOf } from "./status";
+import { bookerOfRow, guestNameOf, rowNameOf, rowNamed } from "./status";
 import { stepNoOfStage, type StepNo } from "./steps";
 
 export type Band = "overdue" | "soon" | "waiting";
@@ -37,12 +37,12 @@ const DAY = 24 * HOUR;
 
 function base(r: DeskListRow): Pick<AttentionItem, "entryId" | "name" | "named" | "meta" | "step" | "sourceWord"> {
   const booker = bookerOfRow(r);
-  const name = guestNameOf(r.guestProfile);
+  const name = rowNameOf(r);
   const sourceWord = booker?.kind === "agent" || booker?.kind === "company" ? booker.name : booker?.kind === "ota" ? "OTA" : booker?.kind === "walk-in" ? "Walk-in" : "Direct";
   return {
     entryId: r.id,
     name,
-    named: name !== "to come from the agent",
+    named: rowNamed(r),
     meta: [r.id, booker && booker.kind !== "direct" ? booker.name : null].filter(Boolean).join(" · "),
     step: stepNoOfStage(r.currentStage),
     sourceWord,

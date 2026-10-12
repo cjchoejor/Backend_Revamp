@@ -3418,6 +3418,18 @@
   & .rst .rst-nightcount.done {
     color: var(--ok);
   }
+  /* What the night comes to for the rooms picked (2026-10-12) — the server's figure, under the
+     tally it prices. */
+  & .rst .rst-nightprice {
+    display: block;
+    margin-top: 2px;
+    font-size: 12.5px;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
 
   & .gatebar {
     flex: 0 0 auto;

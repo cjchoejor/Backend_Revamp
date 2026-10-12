@@ -251,6 +251,20 @@
 .ds .pickbill .pb-ladder .pb-grand td { border-top: 2px solid var(--ink); font-weight: 800; font-size: var(--t-sm); }
 .ds .pickbill .pb-caption { margin-top: var(--s2); }
 .ds .pickbill-line .money { font-size: var(--t-sm); }
+/* Each room type's total, taxes included (2026-10-12). */
+.ds .pb-types { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 var(--s2); }
+.ds .pb-type { display: inline-flex; align-items: baseline; gap: 8px; padding: 4px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
+.ds .pb-type-name { font-weight: 700; }
+.ds .pb-type-n { font-size: var(--t-meta); color: var(--ink-2); }
+.ds .pb-type .money { font-variant-numeric: tabular-nums; }
+/* The stay's total above the room table — the band's largest thing (UIappeal). */
+.ds .pickband { display: grid; gap: 8px; margin: 0 0 var(--s3); padding: var(--s3) var(--s4); border: 2px solid var(--ink); border-radius: var(--r-card); background: var(--surface-2); transition: opacity .15s; }
+.ds .pickband.loading { opacity: .65; }
+.ds .pickband-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.ds .pickband-label { font-size: var(--t-sm); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.ds .pickband-total { font-size: 28px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ds .pickband-sub { font-size: var(--t-meta); color: var(--ink-2); }
+.ds .pickband .pb-types { margin: 0; }
 .ds .pickbill-line.loading { opacity: .65; }
 
 /* The side panel's to-do: what this step still needs, in the order it is done. */
