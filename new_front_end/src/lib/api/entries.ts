@@ -1172,6 +1172,16 @@ export type NegotiationAmendmentOutcome = {
   amendmentId: string | null;
   partyChanged: boolean;
   roomsChanged: boolean;
+  /** The stay's dates moved (2026-10-12) — `priorDates` / `newDates` are "YYYY-MM-DD". */
+  datesChanged: boolean;
+  priorDates: { checkInDate: string | null; checkOutDate: string | null };
+  newDates: { checkInDate: string | null; checkOutDate: string | null };
+  /** The booking's own hold time the new dates made impossible, cleared back to the house window. */
+  holdTimeCleared: string | null;
+  /** Requests dated inside the old stay and outside the new one — named, not withdrawn. */
+  requestsOutsideStay: Array<{ id: string; kind: string; what: string; forDate: string }>;
+  /** The guest's other live booking over the new nights, as the desk names it. */
+  guestOverlap: string | null;
   priorRoomIds: string[];
   newRoomIds: string[];
   quotationsInvalidated: Array<{ id: string; referenceNumber: string; priorState: string }>;
@@ -1212,6 +1222,8 @@ export async function amendNegotiationConfiguration(
   session: Session,
   entryId: string,
   body: {
+    /** New dates need `rooms` picked from a search for exactly these dates. */
+    dates?: { checkInDate: string; checkOutDate: string };
     party?: {
       adultCount?: number;
       childCount?: number;

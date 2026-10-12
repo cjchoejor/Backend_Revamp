@@ -186,6 +186,9 @@
 .ds .cfg-change section + section:not(.desk-root *) { border-top: 1px solid var(--line); padding-top: var(--s3); }
 /* A refusal of the party just typed — the same loud treatment the negotiation table uses. */
 .ds .cfg-stop:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 600; }
+/* A stay being moved (2026-10-12) — the old dates and the new, said where the dates are typed. */
+.ds .cfg-move:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--warning-line); border-radius: var(--r-control); background: var(--warning-soft); font-size: var(--t-sm); }
+.ds .cfg-move b:not(.desk-root *) { color: var(--warning); }
 
 /* A configuration change waiting for the FOM (2026-09-30) — it has to catch the eye of the
    person who can decide it, so it reads as a standing notice rather than another quiet row. */

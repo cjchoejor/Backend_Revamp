@@ -218,7 +218,7 @@ export function S2Negotiation({
   const beds = useBedPlan(entry.id);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   /**
-   * "Change configuration" (2026-09-30) — the rooms and the party, changed here rather than by
+   * "Change configuration" (2026-09-30; dates since 2026-10-12) — the stay, the rooms and the party, changed here rather than by
    * re-entering to Inquiry. It takes over this card while it is open: the composition table
    * prices a plan, and editing the plan underneath it would be two tables for one booking.
    */
@@ -680,8 +680,8 @@ export function S2Negotiation({
                   Change configuration…
                 </Button>
                 <Help label="About changing the configuration">
-                  <p>Add or drop rooms, or change the adults, the children and their ages.</p>
-                  <p>The dates stay as they are — to change them, re-enter to Inquiry.</p>
+                  <p>Move the dates, add or drop rooms, or change the adults, the children and their ages.</p>
+                  <p>Any quotation priced on the old configuration is retired, and the change is kept in the history.</p>
                 </Help>
               </>
             ) : null}

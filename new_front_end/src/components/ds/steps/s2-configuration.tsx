@@ -1,23 +1,24 @@
 "use client";
 
 /**
- * "Change configuration" — the rooms and the party, changed at Negotiation (2026-09-30,
- * operator ruling). Before this, dropping two rooms and two guests after the quote was priced
- * meant a re-entry to Inquiry, which reads to the desk like starting the enquiry again.
+ * "Change configuration" — the dates, the rooms and the party, changed at Negotiation
+ * (2026-09-30, operator ruling; the dates since 2026-10-12). Before this, dropping two rooms and
+ * two guests after the quote was priced meant a re-entry to Inquiry, which reads to the desk like
+ * starting the enquiry again.
  *
  * The screen runs in the order the operator described it: edit the stay, ask the house, then
  * tick and untick the rooms already chosen.
  *
- *   1. The stay — adults, children and their ages, the rooms asked for. EDITABLE (operator:
- *      "this shouldn't be read only, the user can edit the adults, number of room, children
- *      and ages here and then click ask the house").
- *   2. Ask the house — the same search the Inquiry step runs, over the SAME dates.
+ *   1. The stay — check-in, nights and check-out, adults, children and their ages, the rooms
+ *      asked for. EDITABLE (operator: "this shouldn't be read only, the user can edit the
+ *      adults, number of room, children and ages here and then click ask the house"; and
+ *      2026-10-12: "make it so that the dates can be changed as well ... do it here, but it
+ *      should be well audited").
+ *   2. Ask the house — the same search the Inquiry step runs, over the dates in step 1. A search
+ *      for other dates no longer counts once the dates are edited: it is asked again.
  *   3. The rooms — the same table, already ticked with what the booking holds today, so the
- *      change is a tick or an untick rather than a fresh pick.
- *
- * DATES ARE NOT HERE, deliberately. A date change moves availability, the quote's validity,
- * the no-show cut-off and the hold window at once, so it stays on the re-entry to Inquiry
- * (operator: "if dates needs to be changed then going back to s1 is mandatory").
+ *      change is a tick or an untick rather than a fresh pick. On new dates, a held room that is
+ *      not free on the new nights is unticked and named.
  *
  * Everything is sent as ONE governed act — `POST /entries/:id/negotiation-amendment` — so the
  * backend can own the consequences the desk must not invent: retiring the quotations this
@@ -40,6 +41,7 @@ import {
   withdrawNegotiationAmendment,
 } from "@/lib/api/entries";
 import { getAllowedRoomCounts } from "@/lib/api/child-policy";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listRooms } from "@/lib/api/rooms";
 import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
@@ -117,6 +119,23 @@ export function ChangeConfiguration({
   const { session } = useSession();
 
   /* ---- 1. the stay, as the operator may now retype it -------------------------- */
+  const hotelDay = useHotelDay();
+  const oldIn = entry.checkInDate?.slice(0, 10) ?? "";
+  const oldOut = entry.checkOutDate?.slice(0, 10) ?? "";
+  const [checkIn, setCheckIn] = useState(oldIn);
+  const [nights, setNights] = useState(String(enumerateNights(entry.checkInDate, entry.checkOutDate).length || 1));
+  const nightsN = Math.max(1, Number(nights || "1"));
+  /** The check-out follows the check-in and the nights — the same rule as the Inquiry step. */
+  const checkOut = useMemo(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(checkIn)) return "";
+    const d = new Date(`${checkIn}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return "";
+    d.setUTCDate(d.getUTCDate() + nightsN);
+    return d.toISOString().slice(0, 10);
+  }, [checkIn, nightsN]);
+  const datesMoved = !!checkIn && !!checkOut && (checkIn !== oldIn || checkOut !== oldOut);
+  /** The hotel's today only — never the machine's clock; unknown means not judged yet. */
+  const startsBeforeToday = !!hotelDay && !!checkIn && checkIn < hotelDay.today;
   const [adults, setAdults] = useState(String(entry.adultCount ?? entry.guestCount ?? 1));
   const [children, setChildren] = useState(String(entry.childCount ?? 0));
   const [ages, setAges] = useState<string[]>(() => (entry.childAges ?? []).map(String));
@@ -150,22 +169,40 @@ export function ChangeConfiguration({
   const envMax = env?.allowedRoomCounts?.max ?? null;
 
   /* ---- 2. the house's answer ---------------------------------------------------- */
-  const [result, setResult] = useState<AvailabilityQueryResponse | null>(null);
+  const [answer, setAnswer] = useState<{ data: AvailabilityQueryResponse; dates: string } | null>(null);
+  const datesKey = `${checkIn}|${checkOut}`;
+  /** An answer counts only for the dates it was asked about — edit them and it is asked again. */
+  const result = answer && answer.dates === datesKey ? answer.data : null;
+  const answerOutdated = !!answer && answer.dates !== datesKey;
   const ask = useMutation({
     mutationFn: async () => {
-      const ci = entry.checkInDate?.slice(0, 10);
-      const co = entry.checkOutDate?.slice(0, 10);
-      if (!ci || !co) throw new Error("This booking has no dates");
-      return queryAvailabilityByEntry(session!, entry.id, {
-        checkInDate: ci,
-        checkOutDate: co,
+      if (!checkIn || !checkOut) throw new Error("Give the check-in and the nights first");
+      const data = await queryAvailabilityByEntry(session!, entry.id, {
+        checkInDate: checkIn,
+        checkOutDate: checkOut,
         guestCount: adultCount + childCount,
         useType: entry.useType ?? undefined,
       });
+      return { data, dates: `${checkIn}|${checkOut}` };
     },
-    onSuccess: (data) => {
-      setResult(data);
+    onSuccess: (a) => {
+      setAnswer(a);
       toast.success("The house has answered — tick or untick the rooms below");
+      /**
+       * On new dates, a carried room that is not free on every new night is unticked — and named,
+       * never silently (2026-10-12). Done here, where the answer lands, rather than in an effect:
+       * a toast raised from an effect never reached the screen.
+       */
+      const pd = Array.isArray(a.data.results?.perDate) ? a.data.results.perDate : null;
+      if (!datesMoved || !pd?.length) return;
+      const freeEveryNight = (id: string) => pd.every((d) => d.availableRoomIds.includes(id) || d.deficientRoomIds.includes(id));
+      const gone = sel.base.filter((id) => !freeEveryNight(id));
+      if (gone.length === 0) return;
+      sel.setBase(sel.base.filter(freeEveryNight));
+      toast.warning(
+        `${gone.length === 1 ? "Room" : "Rooms"} ${gone.map(roomNo).join(", ")} ${gone.length === 1 ? "is" : "are"} not free on the new nights — unticked. Pick ${gone.length === 1 ? "another" : "others"} below.`,
+        { duration: 9000 },
+      );
     },
     onError: (e) => toastRefusal(e, "The house could not be asked"),
   });
@@ -200,10 +237,7 @@ export function ChangeConfiguration({
     [available, deficient, unavailable, extBeds, bedOf],
   );
 
-  const stayNights = useMemo(
-    () => enumerateNights(entry.checkInDate, entry.checkOutDate),
-    [entry.checkInDate, entry.checkOutDate],
-  );
+  const stayNights = useMemo(() => enumerateNights(checkIn, checkOut), [checkIn, checkOut]);
   const displayNights = useMemo(() => (perDate?.length ? perDate.map((p) => p.date) : stayNights), [perDate, stayNights]);
 
   /* ---- 3. the rooms, seeded from what the booking holds TODAY -------------------- */
@@ -232,6 +266,20 @@ export function ChangeConfiguration({
   }, [roomCount]);
 
   const roomNo = (id: string) => catalog.find((r) => r.id === id)?.roomNumber ?? id.slice(0, 6);
+
+  /**
+   * New dates, new nights (2026-10-12). A night the stay no longer has can hold no pick, so its
+   * row is dropped; the rooms held on EVERY night carry over to the new nights as the first
+   * guess, and the house's answer then says which of them are still free.
+   */
+  const nightsKey = stayNights.join(",");
+  useEffect(() => {
+    const keep = new Set(stayNights);
+    if (Object.keys(sel.overrides).some((n) => !keep.has(n))) {
+      sel.setOverrides((prev) => Object.fromEntries(Object.entries(prev).filter(([n]) => keep.has(n))));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nightsKey]);
   const picked = sel.allPicked;
   const dropped = priorRoomIds.filter((id) => !picked.includes(id));
   const added = picked.filter((id) => !priorRoomIds.includes(id));
@@ -251,6 +299,8 @@ export function ChangeConfiguration({
   const countMoved = roomCount !== priorRoomIds.length;
   const pickComplete = picked.length === roomCount;
   const needsRepick = countMoved && (!configId || !pickComplete);
+  /** New dates are only saved with rooms picked for every new night, from a search for them. */
+  const needsNightPick = datesMoved && (!configId || !sel.ready);
 
   const overCapacity = !!env && env.exceedsHotelCapacity;
   const roomsOutOfRange = !!env && envMin != null && envMax != null && (roomCount < envMin || roomCount > envMax);
@@ -261,6 +311,7 @@ export function ChangeConfiguration({
         reason: reason.trim(),
         expectedVersion: entry.version,
       };
+      if (datesMoved) body.dates = { checkInDate: checkIn, checkOutDate: checkOut };
       if (partyMoved) {
         body.party = {
           adultCount,
@@ -269,7 +320,7 @@ export function ChangeConfiguration({
           numberOfRooms: roomCount,
         };
       }
-      if (roomsMoved && configId) {
+      if ((roomsMoved || datesMoved) && configId) {
         const p = sel.payload();
         body.rooms = {
           configurationId: configId,
@@ -288,12 +339,26 @@ export function ChangeConfiguration({
         return;
       }
       toast.success(`The configuration is changed — ${o.summary}`);
+      if (o.holdTimeCleared) {
+        toast.info("The hold time set for this booking ran past the new arrival day — it is back to the house window.");
+      }
+      if (o.requestsOutsideStay.length > 0) {
+        toast.warning(
+          `${plural(o.requestsOutsideStay.length, "guest request")} now ${o.requestsOutsideStay.length === 1 ? "falls" : "fall"} outside the stay — check ${o.requestsOutsideStay.length === 1 ? "it" : "them"} under Guest requests.`,
+          { description: o.requestsOutsideStay.map((r) => `${r.kind} · ${r.forDate}`).join(" · "), duration: 9000 },
+        );
+      }
+      if (o.guestOverlap) {
+        toast.warning(`This guest also holds ${o.guestOverlap} over the new nights — the FOM confirms both at Reserve.`, { duration: 9000 });
+      }
       if (o.quotationsInvalidated.length > 0) {
         toast.info(
           `${plural(o.quotationsInvalidated.length, "quotation")} retired — price it again before moving to Set up.`,
         );
       }
-      if (o.hold?.action === "REPLACED") toast.info("The provisional block moved to the new rooms, keeping its deadline.");
+      if (o.hold?.action === "REPLACED") {
+        toast.info(`The provisional block moved to the new ${o.datesChanged ? "nights" : "rooms"}, keeping its deadline.`);
+      }
       if (o.hold?.action === "RELEASED") toast.warning(o.hold.note);
       try {
         localStorage.removeItem(`desk:rst-sel:${entry.id}:amend`);
@@ -313,13 +378,16 @@ export function ChangeConfiguration({
   const liveQuote = (entry.quotations ?? []).some((q) => q.state === "SENT" || q.state === "ACCEPTED");
   const needsApproval = liveQuote && !atLeast(session?.actorLevel, "L2");
 
-  const nothingMoved = !partyMoved && !roomsMoved;
+  const nothingMoved = !partyMoved && !roomsMoved && !datesMoved;
   const blocked =
     !reason.trim() ||
     nothingMoved ||
+    !checkIn ||
+    startsBeforeToday ||
     overCapacity ||
     roomsOutOfRange ||
     needsRepick ||
+    needsNightPick ||
     !agesReady ||
     adultCount < 1 ||
     (roomsMoved && !configId) ||
@@ -329,13 +397,13 @@ export function ChangeConfiguration({
     <div className="cfg-change">
       <div className="cfg-head">
         <div>
-          <b>Change the rooms and the party</b>
+          <b>Change the dates, the rooms and the party</b>
           <Help label="About changing the configuration">
             <p>
-              Change the party, ask the house, then tick the rooms. The rooms this booking holds today come back ticked, so a change is a tick
+              Change the stay, ask the house, then tick the rooms. The rooms this booking holds today come back ticked, so a change is a tick
               or an untick.
             </p>
-            <p>The dates stay as they are — {fmtRange(entry.checkInDate, entry.checkOutDate)}. To change them, re-enter to Inquiry.</p>
+            <p>New dates need the house asked again for them, and the rooms picked for every new night.</p>
           </Help>
         </div>
         <Button kind="quiet" compact onClick={onClose}>
@@ -346,6 +414,43 @@ export function ChangeConfiguration({
       {/* 1 ---------------------------------------------------------------- the stay */}
       <section>
         <b className="cfg-n">1 · The stay</b>
+        <div className="form3" style={{ marginTop: 8 }}>
+          <div className="field">
+            <label>Check-in</label>
+            <input
+              className="input"
+              type="date"
+              value={checkIn}
+              min={hotelDay?.today}
+              onChange={(e) => setCheckIn(e.target.value)}
+            />
+            {startsBeforeToday ? (
+              <span className="hint stop-ink" role="alert">
+                the stay can start today or later
+              </span>
+            ) : null}
+          </div>
+          <Count label="Nights" value={nights} onChange={setNights} min={1} max={90} />
+          <div className="field">
+            <label>Check-out</label>
+            <input
+              className="input"
+              type="date"
+              value={checkOut}
+              min={checkIn || undefined}
+              onChange={(e) => {
+                const n = enumerateNights(checkIn, e.target.value).length;
+                if (n >= 1) setNights(String(n));
+              }}
+            />
+          </div>
+        </div>
+        {datesMoved ? (
+          <p className="cfg-move" role="status">
+            Moving the stay from <b>{fmtRange(oldIn, oldOut)}</b> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
+            <b>{fmtRange(checkIn, checkOut)}</b> ({plural(nightsN, "night")}).
+          </p>
+        ) : null}
         <div className="form2" style={{ marginTop: 8 }}>
           <Count label="Adults" value={adults} onChange={setAdults} min={1} />
           <Count
@@ -420,7 +525,15 @@ export function ChangeConfiguration({
           <Button kind="secondary" compact onClick={() => ask.mutate()} state={ask.isPending ? "inert" : "default"}>
             {result ? "Ask again" : "Ask the house"}
           </Button>
-          {result ? <span className="sm">{plural(available.length, "room")} free over these nights</span> : null}
+          {result ? (
+            <span className="sm">
+              {plural(available.length, "room")} free over {fmtRange(checkIn, checkOut)}
+            </span>
+          ) : answerOutdated ? (
+            <span className="warn-ink sm" style={{ fontWeight: 600 }}>
+              The dates changed — ask the house again for {fmtRange(checkIn, checkOut)}.
+            </span>
+          ) : null}
         </div>
       </section>
 
@@ -429,7 +542,8 @@ export function ChangeConfiguration({
         <b className="cfg-n">3 · The rooms</b>
         {!result ? (
           <p className="sm" style={{ marginTop: 6 }}>
-            Ask the house first. Holding today: {priorRoomIds.length ? priorRoomIds.map(roomNo).join(", ") : "none"}.
+            Ask the house {answerOutdated ? "for the new dates" : "first"}. Holding today:{" "}
+            {priorRoomIds.length ? priorRoomIds.map(roomNo).join(", ") : "none"}.
           </p>
         ) : (
           <>
@@ -488,7 +602,13 @@ export function ChangeConfiguration({
             reason={
               nothingMoved
                 ? "Nothing has changed yet"
-                : needsRepick
+                : startsBeforeToday
+                  ? "The stay can start today or later"
+                  : needsNightPick
+                    ? !configId
+                      ? "The dates changed — ask the house for them, then pick the rooms"
+                      : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
+                    : needsRepick
                   ? !configId
                     ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
                     : `Pick ${plural(roomCount, "room")} below — ${picked.length} ${picked.length === 1 ? "is" : "are"} ticked`
@@ -507,8 +627,9 @@ export function ChangeConfiguration({
             <p>The reason goes on the booking&rsquo;s record with your name.</p>
             <p>
               Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves to
-              the new rooms and keeps its deadline.
+              the new rooms and nights and keeps its deadline.
             </p>
+            <p>A date change is kept on its own line in the booking&rsquo;s history: the old dates, the new ones, who moved them and why.</p>
             <p>When the guest is already holding a quotation, the change goes to the FOM, and nothing changes until they approve it.</p>
           </Help>
         </div>
@@ -570,7 +691,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
   return (
     <div className="cfg-wait" role="status">
       <div className="cfg-wait-h">
-        <b>A change to the rooms and the party is waiting</b>
+        <b>A configuration change is waiting</b>
         <span className="sm">raised {fmtDateTime(waiting.requestedAt)}</span>
         <Help label="About this waiting change">
           <p>The guest is holding a quotation, so the change is the FOM&rsquo;s call. Nothing on the booking has changed yet.</p>

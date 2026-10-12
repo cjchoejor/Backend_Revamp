@@ -8,7 +8,7 @@
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { STEP_NAMES } from "./steps";
 import { translateMessage } from "./words";
-import { money as fmtMoney } from "./format";
+import { fmtRange, money as fmtMoney } from "./format";
 
 const WORDS: Record<string, string> = {
   "ENTRY.CREATED": "Booking recorded",
@@ -36,6 +36,13 @@ const WORDS: Record<string, string> = {
   "COMMITTED_HOLD.CONFIRMED": "Block confirmed on reserving",
   "COMMITTED_HOLD.EXPIRY_SET": "Hold time set for this booking",
   "COMMITTED_HOLD.EXPIRY_CLEARED": "Hold time back to the house window",
+  "ENTRY.STAY_DATES_CHANGED": "Stay dates changed",
+  "ENTRY.NEGOTIATION_CONFIGURATION_AMENDED": "Configuration changed",
+  "ENTRY.NEGOTIATION_AMENDMENT_REQUESTED": "Configuration change sent to the FOM",
+  "ENTRY.NEGOTIATION_AMENDMENT_APPROVED": "Configuration change approved",
+  "ENTRY.NEGOTIATION_AMENDMENT_REJECTED": "Configuration change turned down",
+  "ENTRY.NEGOTIATION_AMENDMENT_WITHDRAWN": "Configuration change taken back",
+  "QUOTATION.RETIRED_BY_CONFIGURATION_CHANGE": "Quotation retired by a configuration change",
   "RESERVATION.CONFIRMED": "Reserved",
   "RESERVATION.CONFIRMATION_VOUCHER_RESENT": "Confirmation voucher sent again",
   "RESERVATION_CONFIRMATION_EMAIL.SENT": "Confirmation voucher emailed",
@@ -205,6 +212,21 @@ export function traceDetail(ev: TraceEvent): string | null {
   const p = (ev.payload ?? {}) as Record<string, unknown>;
   const bits: string[] = [];
   const str = (k: string) => (typeof p[k] === "string" && (p[k] as string).trim() ? (p[k] as string).trim() : null);
+  // A stay that moved says from what to what (2026-10-12).
+  if (ev.eventType === "ENTRY.STAY_DATES_CHANGED") {
+    const span = (v: unknown) => {
+      const o = (v ?? {}) as { checkInDate?: string | null; checkOutDate?: string | null; nights?: number | null };
+      return o.checkInDate && o.checkOutDate ? `${fmtRange(o.checkInDate, o.checkOutDate)}${typeof o.nights === "number" ? ` (${o.nights} night${o.nights === 1 ? "" : "s"})` : ""}` : null;
+    };
+    const from = span(p.from);
+    const to = span(p.to);
+    if (from && to) bits.push(`from ${from} to ${to}`);
+  }
+  // A configuration change carries its own one-line summary.
+  if (ev.eventType.startsWith("ENTRY.NEGOTIATION_")) {
+    const summary = typeof p.summary === "string" ? p.summary.trim() : "";
+    if (summary) bits.push(summary);
+  }
   const amount = money(p.amount) ?? money(p.requiredAmount);
   if (amount) bits.push(amount);
   if (typeof p.penalty === "number") bits.push(`charge ${money(p.penalty)}`);
