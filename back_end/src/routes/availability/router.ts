@@ -11,6 +11,7 @@ import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
 import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
+import { buildRoomChart } from "../../services/domain/room-chart-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -54,6 +55,24 @@ availabilityRouter.post("/rooms/:id/bed-type", requireActorLevel("L1"), async (r
       },
     );
     res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * The house chart — every room, night by night (2026-10-12). Read-only, L1: who holds each room on
+ * each night of the window and how firmly (in house · reserved · held · provisional · checked
+ * out · parked), the out-of-order nights, and the per-night figures ("House booked 3/28"). Built
+ * from the same claim helpers the S1 search reads, so the chart and the search agree.
+ * `?from=YYYY-MM-DD` (default: the hotel's today) and `?nights=` (default 14, at most 62).
+ */
+availabilityRouter.get("/rooms/chart", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const from = typeof req.query.from === "string" && req.query.from ? req.query.from : undefined;
+    const nights = typeof req.query.nights === "string" && req.query.nights ? Number(req.query.nights) : undefined;
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await buildRoomChart(prisma, { from, nights: Number.isFinite(nights) ? nights : undefined }));
   } catch (e) {
     next(e);
   }
