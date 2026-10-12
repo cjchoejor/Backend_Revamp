@@ -42,8 +42,12 @@ const KIND_CLASS: Record<ChartBarKind, string> = {
 };
 const BED_LETTER: Record<string, string> = { KING: "K", TWIN: "T", QUEEN: "Q", SINGLE: "S" };
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WINDOWS = [14, 21, 28];
+const WINDOWS = [7, 14, 21, 28];
+/** The longest window the backend draws (`CHART_MAX_NIGHTS`). */
+const MAX_NIGHTS = 62;
 
+const isYmd = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+const nightsBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 const shiftDay = (ymd: string, days: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 const weekdayOf = (ymd: string) => WEEKDAY[new Date(`${ymd}T00:00:00Z`).getUTCDay()];
 
@@ -108,6 +112,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     placeholderData: (prev) => prev,
   });
   const chart = q.data;
+  /** A range longer than the chart draws — said, not silently cut. */
+  const [rangeNote, setRangeNote] = useState<string | null>(null);
 
   const bookingOf = useMemo(() => new Map((chart?.bookings ?? []).map((b) => [b.entryId, b])), [chart]);
   const barsByRoom = useMemo(() => {
@@ -149,20 +155,58 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           <Button kind="quiet" compact onClick={() => setFrom(shiftDay(chart.from, 7))}>
             7 nights →
           </Button>
-          <select className="input rchart-len" value={nightsAsked} onChange={(e) => setNightsAsked(Number(e.target.value))} aria-label="How many nights">
-            {WINDOWS.map((n) => (
+          {/* The range (2026-10-12, operator: "keep the 7 nights up and down, but also a date
+              range"). From is the first night shown, To the last; the week buttons and the
+              lengths move or stretch the same window. */}
+          <label className="rchart-date">
+            <span>From</span>
+            <input
+              className="input"
+              type="date"
+              value={chart.from}
+              onChange={(e) => {
+                if (!isYmd(e.target.value)) return;
+                setRangeNote(null);
+                setFrom(e.target.value);
+              }}
+            />
+          </label>
+          <label className="rchart-date">
+            <span>To</span>
+            <input
+              className="input"
+              type="date"
+              value={lastNight}
+              min={chart.from}
+              max={shiftDay(chart.from, MAX_NIGHTS - 1)}
+              onChange={(e) => {
+                if (!isYmd(e.target.value)) return;
+                const n = nightsBetween(chart.from, e.target.value) + 1;
+                if (n < 1) return;
+                setRangeNote(n > MAX_NIGHTS ? `At most ${MAX_NIGHTS} nights at a time — showing the first ${MAX_NIGHTS}.` : null);
+                setNightsAsked(Math.min(MAX_NIGHTS, n));
+              }}
+            />
+          </label>
+          <select className="input rchart-len" value={nightsAsked} onChange={(e) => { setRangeNote(null); setNightsAsked(Number(e.target.value)); }} aria-label="How many nights">
+            {(WINDOWS.includes(nightsAsked) ? WINDOWS : [...WINDOWS, nightsAsked].sort((a, b) => a - b)).map((n) => (
               <option key={n} value={n}>
                 {n} nights
               </option>
             ))}
           </select>
-          <b className="rchart-span">{fmtRange(chart.from, lastNight)}</b>
+          <b className="rchart-span">{plural(chart.nights.length, "night")}</b>
           <Help label="About the house chart">
             <p>Every room, night by night: who holds it and how firmly. Point at a bar for the booking; click it to open the booking.</p>
             <p>For seeing, not choosing — rooms are chosen inside a booking. A room drawn free here is one the room search offers.</p>
             <p>Click a room number to report a fault or review one.</p>
           </Help>
         </div>
+        {rangeNote ? (
+          <p className="warn-ink sm" role="status" style={{ margin: 0, fontWeight: 600 }}>
+            {rangeNote}
+          </p>
+        ) : null}
         <Legend />
       </div>
 

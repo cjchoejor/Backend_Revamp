@@ -473,11 +473,17 @@
   --rs-out-bg: #ebe7e1; --rs-ooo-a: #f1eeea; --rs-ooo-b: #e0dad1; --rs-ooo-tx: #5b554e;
   --rs-bad: #b4473b;
   margin-top: var(--s3);
+  /* A grid item grows to its content unless told otherwise — without this a 28-night table
+     widened the whole page instead of scrolling inside its own box (2026-10-12). */
+  min-width: 0;
+  max-width: 100%;
 }
 .ds .rchart-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .ds .rchart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ds .rchart-nav select.rchart-len:not(.desk-root *) { width: 130px; flex: 0 0 auto; height: var(--control-h-compact); padding: 0 8px; }
-.ds .rchart-span { font-size: var(--t-lead); margin-left: 6px; }
+.ds .rchart-span { font-size: var(--t-base); color: var(--ink-2); margin-left: 2px; }
+.ds .rchart-date { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); color: var(--ink-2); }
+.ds .rchart-date input.input:not(.desk-root *) { width: 150px; height: var(--control-h-compact); padding: 0 8px; }
 .ds .rchart-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
 /* fixed layout: every night the same width, the room column and the total column their own */
 .ds .rchart .tape { border-collapse: separate; border-spacing: 0; font-size: 13px; width: 100%; table-layout: fixed; }
