@@ -94,7 +94,6 @@ Also for Stage 1 (2026-10-10), outside the desk router: `POST /api/entries/:id/a
 | Receivables by account and statements of account | Billing | BE-31, BE-48 |
 | Hotel-wide boards: handoffs, disputes, the message inbox | second row | HW-02 |
 | Editing a guest record, with its change trail | Guest record | BE-32 |
-| Rooms sold per night ahead | Rooms | — |
 | Custodian names: every inquiry — new ones too — gets `staff-frontdesk-1` from the ownership rules, and no staff record has that id (staff ids are `STF-…`), so the custodian shows "—" everywhere | workspace header, preview, lists | config (`ownership.assignmentRules`) |
 | A walk-in checked in in one governed act | the walk-in screen (not built) | BE-16 |
 | An agent's record with its change trail, statements and outstanding by account | agent record, accounts (not built) | BE-31, BE-32, BE-48 |
