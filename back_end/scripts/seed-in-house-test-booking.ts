@@ -24,6 +24,7 @@
  */
 import { PrismaClient, Prisma } from "@prisma/client";
 import { hotelTodayUtc } from "../src/lib/stay-dates.js";
+import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../src/lib/room-flag-repair.js";
 
 const prisma = new PrismaClient();
 const argv = process.argv.slice(2);
@@ -53,7 +54,13 @@ async function clean() {
   const ids = entries.map((e) => e.id);
   const folios = await prisma.folio.findMany({ where: { entryId: { in: ids } }, select: { id: true } });
   const folioIds = folios.map((f) => f.id);
-  const occupied = await prisma.roomAssignment.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } });
+  // Every room the fixture touched — its own rows, and every room a room change or a release
+  // moved its flag on (2026-10-12: freeing only the rows' rooms left 202 "needs cleaning" and 203
+  // "occupied" behind after a room change, with nobody in either).
+  const touched = new Set([
+    ...(await prisma.roomAssignment.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } })).map((r) => r.roomId),
+    ...(await prisma.roomClaimStateEvent.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } })).map((r) => r.roomId),
+  ]);
   console.log(`removing ${ids.length} test entries and their rows`);
   if (!COMMIT) return;
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
@@ -96,10 +103,10 @@ async function clean() {
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
   await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });
-  for (const r of occupied) {
-    await prisma.room.update({ where: { id: r.roomId }, data: { currentClaimState: "FREE" } });
-  }
-  console.log(`clean complete (${occupied.length} room(s) back to FREE)`);
+  // Each touched room's flag back to what the remaining bookings say (`room-flag-repair`).
+  const { today, plan } = await planRoomFlagRepairs(prisma, { roomIds: [...touched] });
+  await applyRoomFlagRepairs(prisma, plan, today);
+  console.log(`clean complete (${plan.map((p) => `${p.roomNumber} ${p.from}→${p.to}`).join(", ") || "no room flag to correct"})`);
 }
 
 async function main() {

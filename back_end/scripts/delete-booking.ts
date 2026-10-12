@@ -34,6 +34,8 @@
  */
 import { readFileSync } from "node:fs";
 import pg from "pg";
+import { PrismaClient } from "@prisma/client";
+import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../src/lib/room-flag-repair.js";
 
 const ARGV = process.argv.slice(2);
 const COMMIT = ARGV.includes("--commit");
@@ -257,6 +259,7 @@ async function main() {
 
     if (!COMMIT) {
       console.log(`\nDry run — nothing deleted. Re-run with --commit to apply.`);
+      console.log(`(after the delete, the flag of each room left alone is set to what the bookings still holding it say)`);
       return;
     }
 
@@ -294,6 +297,22 @@ async function main() {
         `${deletedInquiries} inquir${deletedInquiries === 1 ? "y" : "ies"}, ${removed} dependent rows; ` +
         `${jobs} queued job(s) cancelled; ${toFree.length} room(s) freed.`,
     );
+
+    // The rooms left alone above because another booking still claims them (2026-10-12): this
+    // booking's own OCCUPIED or "needs cleaning" flag stayed on them — and its claim-event history
+    // was just erased with it — so 202 read "needs cleaning" and 203 "occupied" with nobody in
+    // either. Put each back to what the bookings still holding it say (`room-flag-repair`).
+    const leftAlone = claimed.map((r) => r.id as string).filter((id) => !toFree.includes(id));
+    if (leftAlone.length) {
+      const db = new PrismaClient({ datasources: { db: { url: connectionString() } } });
+      try {
+        const { today, plan } = await planRoomFlagRepairs(db, { roomIds: leftAlone });
+        await applyRoomFlagRepairs(db, plan, today);
+        for (const p of plan) console.log(`   ${p.roomNumber}  ${p.from} -> ${p.to}  (${p.why})`);
+      } finally {
+        await db.$disconnect();
+      }
+    }
   } catch (err) {
     await c.query("ROLLBACK").catch(() => {});
     throw err;
