@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { EntryStatus, HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
-import { firstRoomId, readOptionSelected } from "../../lib/option-selected-reader.js";
+import { firstRoomId, readOptionSelected, sealAsPerNight } from "../../lib/option-selected-reader.js";
 
 /**
  * Enumerate every room a `CommittedHold` is holding. Reads the (Phase-D) `perNightBreakdown`
@@ -161,14 +161,15 @@ export async function placeCommittedHold(
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
 
-  // Extract perNight breakdown from the sealed AvailabilityConfiguration, if it's a
-  // per-night seal. Legacy single-room and whole-stay seals return null (no breakdown to
-  // preserve). Store on the hold so downstream services can reconstruct the intent.
+  // The sealed selection, night by night, stored on the hold so downstream services can
+  // reconstruct the intent. A whole-stay or single-room seal is spelled out over the stay too
+  // (2026-10-12): stored as nothing, the hold counted only its anchor room, and between the
+  // freeze and pre-arrival the reservation claimed only that one room as well.
   const sealedConfig = entry.availabilityConfigs[0];
   const opt = (sealedConfig?.optionSelected ?? null) as
     | { perNight?: Array<{ date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> }> }
     | null;
-  const perNightBreakdown = opt && Array.isArray(opt.perNight) ? opt.perNight : null;
+  const perNightBreakdown = sealAsPerNight(opt, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate });
 
   enforceCancellationDisclosurePresent({ hasCancellationDisclosure: !!entry.cancellationDisclosure });
 
