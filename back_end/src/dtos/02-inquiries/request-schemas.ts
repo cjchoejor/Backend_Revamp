@@ -1,9 +1,21 @@
 import { z } from "zod";
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 
+/** Who called (2026-10-12). The service decides what is required; the shape is all here. */
+export const callerRequestSchema = z.object({
+  title: z.string().trim().max(20).nullable().optional(),
+  firstName: z.string().trim().max(80).nullable().optional(),
+  lastName: z.string().trim().max(80).nullable().optional(),
+  phone: z.string().trim().max(40).nullable().optional(),
+  email: z.string().trim().max(200).nullable().optional(),
+  onWhatsApp: z.boolean().nullable().optional(),
+});
+
 export const createInquiryRequestSchema = z
   .object({
-    guestProfileId: z.string().min(1),
+    /** The guest staying, when already known; usually named later, at Wrap up. */
+    guestProfileId: z.string().min(1).nullable().optional(),
+    caller: callerRequestSchema.nullable().optional(),
     /** One of the five channels custodian assignment knows. Optional when `cameInAs` is sent — it follows from it. */
     sourceChannel: z.string().min(1).optional(),
     /** How the guest came in (2026-09-18): WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE. */

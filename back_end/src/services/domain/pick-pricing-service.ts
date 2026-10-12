@@ -62,6 +62,11 @@ export type PickPricing = {
     rateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
     packageName: string | null;
     net: Money | null;
+    /** The type's share of the stay's service charge and GST, and its total incl. taxes. The
+     *  shares are allocated from the stay's own figures so the types add up to it exactly. */
+    serviceCharge: Money | null;
+    gst: Money | null;
+    total: Money | null;
   }>;
   byRoom: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; dates: string[] }>;
   totals: { roomNights: number; net: Money; serviceCharge: Money; gst: Money; total: Money };
@@ -227,9 +232,39 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
         rateSource: tr?.source ?? null,
         packageName: tr?.packageName ?? null,
         net: tr?.rate == null ? null : out(dec(tr.rate).times(t.nights)),
+        serviceCharge: null as Money | null,
+        gst: null as Money | null,
+        total: null as Money | null,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Each type's share of the stay's taxes (2026-10-12, operator: "show the total for each type of
+  // room"). Computed on the type's own net and rounded, then the last priced type takes the
+  // remainder — so the types add up to the stay's SC, GST and total to the cent, whatever the
+  // rounding did night by night.
+  {
+    const priced = byType.filter((t) => t.net != null);
+    let scLeft = round2(staySc);
+    let gstLeft = round2(stayGst);
+    priced.forEach((t, i) => {
+      const net = dec(t.net!);
+      let tSc: Prisma.Decimal;
+      let tGst: Prisma.Decimal;
+      if (i === priced.length - 1) {
+        tSc = scLeft;
+        tGst = gstLeft;
+      } else {
+        tSc = round2(net.times(sc));
+        tGst = round2(net.plus(tSc).times(gst));
+        scLeft = scLeft.minus(tSc);
+        gstLeft = gstLeft.minus(tGst);
+      }
+      t.serviceCharge = out(tSc);
+      t.gst = out(tGst);
+      t.total = out(net.plus(tSc).plus(tGst));
+    });
+  }
 
   const byRoom: PickPricing["byRoom"] = [...roomDates.entries()]
     .map(([roomId, dates]) => {

@@ -33,6 +33,8 @@ import {
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
+import { setEntryGuest, updateEntryCaller } from "../../services/domain/inquiry-caller-service.js";
+import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
@@ -76,6 +78,40 @@ export const entriesRouter = Router();
  * made up as right now, and whether a choice takes effect immediately (from Arrival, once the
  * room is assigned) or is only recorded for later.
  */
+/**
+ * The caller and the guest staying (2026-10-12). L1 — the desk on the phone. The caller's details
+ * can be filled in or corrected while the booking is live; the guest staying is named at Inquiry.
+ */
+entriesRouter.post("/:id/caller", requireActorLevel("L1"), validateBody(callerRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await updateEntryCaller(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+const setGuestSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional() }),
+  z.object({ mode: z.literal("EXISTING"), guestProfileId: z.string().min(1) }),
+  z.object({
+    mode: z.literal("NEW"),
+    title: z.string().trim().max(20).nullable().optional(),
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().min(1).max(80),
+    nationality: z.string().trim().max(80).nullable().optional(),
+    phone: z.string().trim().max(40).nullable().optional(),
+    email: z.string().trim().max(200).nullable().optional(),
+  }),
+]);
+
+entriesRouter.post("/:id/guest", requireActorLevel("L1"), validateBody(setGuestSchema), async (req, res, next) => {
+  try {
+    res.json(await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
 entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.json(await buildEntryBedPlan(prisma, req.params.id));

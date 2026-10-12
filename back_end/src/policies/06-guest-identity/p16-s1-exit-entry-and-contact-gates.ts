@@ -5,7 +5,11 @@ import { StageGateBlockedError } from "../../lib/errors.js";
  */
 export function enforceGuestProfileLinkedForS1Exit(input: { guestProfileId: string | null | undefined }) {
   if (input.guestProfileId) return;
-  throw new StageGateBlockedError("guestProfileId is required", "MISSING_GUEST_PROFILE");
+  // Since 2026-10-12 an inquiry starts with the caller and names the guest staying at Wrap up.
+  throw new StageGateBlockedError(
+    "Name the guest who is staying before Negotiation — the caller, or someone else, at Wrap up",
+    "MISSING_GUEST_PROFILE",
+  );
 }
 
 export function enforceUseTypePresentForS1Exit(input: { useType: string | null | undefined }) {
@@ -41,11 +45,20 @@ export function enforceGuestProfilePrimaryContactForS1Exit(input: {
   email: string | null | undefined;
   phone: string | null | undefined;
   contactPersonPhone?: string | null | undefined;
+  /** The caller's own phone or email (2026-10-12) — whoever rang can be rung back. */
+  callerPhone?: string | null | undefined;
+  callerEmail?: string | null | undefined;
 }) {
-  const hasAnyContact = !!(input.email?.trim?.() || input.phone?.trim?.() || input.contactPersonPhone?.trim?.());
+  const hasAnyContact = !!(
+    input.email?.trim?.() ||
+    input.phone?.trim?.() ||
+    input.contactPersonPhone?.trim?.() ||
+    input.callerPhone?.trim?.() ||
+    input.callerEmail?.trim?.()
+  );
   if (hasAnyContact) return;
   throw new StageGateBlockedError(
-    "A way to reach someone is needed before Negotiation — the guest's phone or email, or the phone of whoever is arriving",
+    "A way to reach someone is needed before Negotiation — the caller's or the guest's phone or email, or the phone of whoever is arriving",
     "MISSING_PRIMARY_CONTACT",
   );
 }

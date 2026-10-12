@@ -944,7 +944,20 @@ model VIPArrivalNotificationEvent {
 model Inquiry {
   id                         String    @id @default(uuid())
   referenceNumber            String    @unique
-  guestProfileId             String
+  /// The guest who is STAYING. Optional since 2026-10-12: an enquiry starts with the CALLER
+  /// (below), who may be an agent, an assistant or the guest; the guest staying is named at
+  /// Wrap up, and a booking cannot leave Inquiry without one (Policy 16).
+  guestProfileId             String?
+  /// Who called (2026-10-12, operator, after the journey mockup). Kept on the enquiry, not on a
+  /// guest record: an agency's person or a VIP's assistant is not a guest of the hotel. A phone or
+  /// an email is needed to start (not on an OTA booking); "on WhatsApp?" is asked with a phone;
+  /// the name can wait for Wrap up.
+  callerTitle                String?
+  callerFirstName            String?
+  callerLastName             String?
+  callerPhone                String?
+  callerEmail                String?
+  callerOnWhatsApp           Boolean?
   agentProfileId             String?
   sourceChannel              String    @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
@@ -977,7 +990,7 @@ model Inquiry {
 
   entries          Entry[]
   duplicateFlags   DuplicateDetectionFlag[]
-  guestProfile     GuestProfile             @relation(fields: [guestProfileId], references: [id])
+  guestProfile     GuestProfile?            @relation(fields: [guestProfileId], references: [id])
   agentProfile     AgentProfile?            @relation(fields: [agentProfileId], references: [id])
   travelAgent      TravelAgent?             @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
   corporateAccount CorporateAccount?        @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
