@@ -1,6 +1,7 @@
 import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
 import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as auditService from "../infrastructure/audit-service.js";
+import { hotelLocalTimeOn } from "../../lib/stay-dates.js";
 
 /**
  * Notes on a booking, and to-dos (2026-10-12, operator, after the boss's journey mockup — the
@@ -81,7 +82,11 @@ export type AddBookingNoteInput = {
   kind: "NOTE" | "TODO";
   text: string;
   assignee?: NoteAssignee | null;
+  /** An instant ("within the hour") … */
   dueAt?: string | null;
+  /** … or the hotel's wall clock ("today 18:00"), never the desk machine's zone. */
+  dueDate?: string | null;
+  dueTime?: string | null;
 };
 
 export async function addBookingNote(prisma: PrismaClient, actor: Actor, entryId: string, input: AddBookingNoteInput) {
@@ -89,10 +94,16 @@ export async function addBookingNote(prisma: PrismaClient, actor: Actor, entryId
   const text = input.text.trim();
   if (!text) throw new ValidationError("Write the note first");
   if (input.kind === "TODO" && !input.assignee) throw new ValidationError("Say who the to-do is for");
-  if (input.kind === "NOTE" && (input.assignee || input.dueAt)) {
+  if (input.kind === "NOTE" && (input.assignee || input.dueAt || input.dueDate)) {
     throw new ValidationError("A note has no owner or time — tick To do to give it one");
   }
-  const dueAt = input.dueAt ? new Date(input.dueAt) : null;
+  if (input.dueAt && input.dueDate) throw new ValidationError("Give the time one way — an instant, or a day and time");
+  if (!!input.dueDate !== !!input.dueTime) throw new ValidationError("A day needs its time, and a time its day");
+  const dueAt = input.dueAt
+    ? new Date(input.dueAt)
+    : input.dueDate && input.dueTime
+      ? hotelLocalTimeOn(new Date(`${input.dueDate}T00:00:00.000Z`), input.dueTime)
+      : null;
   if (dueAt && Number.isNaN(dueAt.getTime())) throw new ValidationError("That time could not be read");
   const now = new Date();
   return prisma.$transaction(async (tx) => {

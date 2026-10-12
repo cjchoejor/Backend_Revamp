@@ -41,6 +41,8 @@ const addNoteSchema = z.object({
   text: z.string().trim().min(1).max(2000),
   assignee: z.enum(NOTE_ASSIGNEES).nullable().optional(),
   dueAt: z.string().datetime({ offset: true }).nullable().optional(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  dueTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
 });
 
 bookingNotesRouter.post("/entries/:id/notes", requireActorLevel("L1"), validateBody(addNoteSchema), async (req, res, next) => {
