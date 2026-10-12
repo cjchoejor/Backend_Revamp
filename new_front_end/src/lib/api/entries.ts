@@ -915,6 +915,8 @@ export type RoomChangeCandidates = {
 
 export type RoomChangeOutcome = {
   entryId: string;
+  /** Papers the walk made and held for the desk to send or not (2026-10-12). */
+  heldDocuments?: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }>;
   originStage: string;
   newSegmentNumber: number;
   fromRoom: { roomId: string; roomNumber: string; roomTypeName: string | null };

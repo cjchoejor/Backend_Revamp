@@ -37,6 +37,23 @@ const WORDS: Record<string, string> = {
   "COMMITTED_HOLD.EXPIRY_SET": "Hold time set for this booking",
   "COMMITTED_HOLD.EXPIRY_CLEARED": "Hold time back to the house window",
   "ENTRY.STAY_DATES_CHANGED": "Stay dates changed",
+  // Room moves from the house chart, and the papers a walk holds for the desk (2026-10-12).
+  "ROOM_MOVE.STARTED": "Room move started",
+  "ROOM_MOVE.LEG_COMPLETED": "Moved to the new room",
+  "ROOM_MOVE.LEG_BLOCKED": "Room move stopped part-way",
+  "ROOM_MOVE.LEG_REFUSED": "Room move refused",
+  "ROOM_MOVE.LEG_RETRIED": "Room move tried again",
+  "ROOM_MOVE.WALKED_BACK": "Room move walked back",
+  "ROOM_MOVE.COMPLETED": "Room move done",
+  "ROOM_MOVE.PARTIAL": "Room move part-done",
+  "ROOM_MOVE.REVERTED": "Room move undone — nothing changed",
+  "ROOM_MOVE.FAILED": "Room move refused — nothing changed",
+  "ROOM_MOVE.RESOLVED": "Room move closed",
+  "DOCUMENT.HELD": "Paper held for the desk to send or not",
+  "DOCUMENT.SENT": "Held paper sent",
+  "DOCUMENT.NOT_SENT": "Held paper not sent",
+  "ADVANCE_PAYMENT.REQUIREMENT_CARRIED": "Advance asked carried to the new pass",
+  "ADVANCE_PAYMENT.PLAN_CARRIED": "Payment plan carried to the new pass",
   "ENTRY.NEGOTIATION_CONFIGURATION_AMENDED": "Configuration changed",
   "ENTRY.NEGOTIATION_AMENDMENT_REQUESTED": "Configuration change sent to the FOM",
   "ENTRY.NEGOTIATION_AMENDMENT_APPROVED": "Configuration change approved",
@@ -222,6 +239,25 @@ export function traceDetail(ev: TraceEvent): string | null {
     const to = span(p.to);
     if (from && to) bits.push(`from ${from} to ${to}`);
   }
+  // A room move names the move, the partner and why a leg did not run (2026-10-12).
+  if (ev.eventType.startsWith("ROOM_MOVE.")) {
+    const moveId = str("moveId");
+    if (moveId) bits.push(moveId);
+    const partner = str("partnerEntryId");
+    if (partner) bits.push(`switched with ${partner}`);
+    // (the move's own reason is added below, with every other act's)
+    const why = str("why") ?? str("because") ?? str("note");
+    if (why) bits.push(why);
+  }
+  // A held paper says which paper and how it went.
+  if (ev.eventType.startsWith("DOCUMENT.")) {
+    const kind = str("kind");
+    if (kind) bits.push(kind === "PROFORMA" ? "proforma" : "confirmation voucher");
+    const channel = str("channel");
+    if (channel) bits.push(channel === "EMAIL" ? "by email" : "on WhatsApp");
+    const to = str("sentTo");
+    if (to) bits.push(to);
+  }
   // A configuration change carries its own one-line summary.
   if (ev.eventType.startsWith("ENTRY.NEGOTIATION_")) {
     const summary = typeof p.summary === "string" ? p.summary.trim() : "";
@@ -247,7 +283,12 @@ export function traceDetail(ev: TraceEvent): string | null {
   }
   const said = str("verbatimNote");
   if (said) bits.push(`“${said}”`);
-  const reason = str("reason") ?? str("decisionReason");
+  // A walk files its reason with the kind of walk in front ("ROOM_MOVE: …") — the act's own words
+  // already say which walk it was.
+  const reason = (str("reason") ?? str("decisionReason"))?.replace(
+    /^(ROOM_MOVE|ROOM_CHANGE|STAY_EXTENSION|PARTY_SEATING_REPAIR|BOOKING_REPRICE|ROOM_SETUP_CHANGE): /,
+    "",
+  ) ?? null;
   if (reason && !/^[A-Z_]+$/.test(reason)) bits.push(reason);
   else if (reason) bits.push(readableCode(reason) ?? reason);
   const note = str("note");

@@ -1974,6 +1974,8 @@ export function useRefreshEntry(entryId: string) {
       ["folio-documents", entryId],
       ["journey-summary", entryId],
       ["closure-readiness", entryId],
+      ["held-documents", entryId],
+      ["room-chart"],
       ...extra,
     ];
     for (const k of keys) void qc.invalidateQueries({ queryKey: k as unknown[] });

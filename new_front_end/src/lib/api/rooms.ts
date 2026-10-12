@@ -52,7 +52,7 @@ export async function releaseRoomBlock(session: Session, roomId: string, body: {
  * by the backend from the same claim rules the room search reads, so a room drawn free here is a
  * room the search offers. Read-only.
  */
-export type ChartBarKind = "OVERSTAY" | "IN_HOUSE" | "CHECKED_OUT" | "RESERVED" | "HELD" | "EXTENSION_HELD" | "PROVISIONAL";
+export type ChartBarKind = "OVERSTAY" | "IN_HOUSE" | "CHECKED_OUT" | "RESERVED" | "HELD" | "MOVING" | "EXTENSION_HELD" | "PROVISIONAL";
 
 export type RoomChartBar = {
   roomId: string;
@@ -65,6 +65,8 @@ export type RoomChartBar = {
   parked: boolean;
   paymentPending: boolean;
   holdExpiresAt: string | null;
+  /** The room move holding it, for MOVING (2026-10-12). */
+  moveId: string | null;
 };
 
 export type RoomChartBooking = {

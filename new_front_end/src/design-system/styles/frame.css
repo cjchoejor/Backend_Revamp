@@ -631,3 +631,73 @@
 .ds .chart-from span { color: var(--ink-2); }
 .ds .chart-from.warn { color: var(--warning); background: var(--warning-soft); border-color: var(--warning); font-weight: 600; }
 .ds .card .chart-from { margin-top: 0; }
+
+/* ── Dialogs over full-screen layers (2026-10-12) ─────────────────────────────────────────────
+   A dialog opened from a full-screen layer (the house chart's, an expanded table's) sat beneath it:
+   open dialogs now stand above both layers (60, 80) and below the chart's hover cards (90). */
+.ds .scrim.open:not(.desk-root *) { z-index: 85; }
+
+/* ── Switch rooms on the house chart (2026-10-12) ─────────────────────────────────────────── */
+.ds .rchart .seg.k-move .bar, .ds .rchart .sw.k-move { background: var(--accent-soft); color: var(--accent-ink); outline: 2px dashed var(--accent); outline-offset: -2px; font-weight: 700; }
+.ds .e-k-move { --hc-edge: var(--accent); --hc-name: var(--accent-ink); }
+.ds .rchart-hc .hc-head.k-move { background: var(--accent-soft); color: var(--accent-ink); border-bottom: 2px dashed var(--accent); }
+.ds .rchart .seg.marked .bar { outline: 3px solid var(--accent); outline-offset: -3px; box-shadow: 0 0 0 3px var(--accent-line); position: relative; z-index: 3; }
+.ds .rchart td.cell.free.moveto { cursor: copy; }
+.ds .rchart td.cell.free.moveto:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.ds .rchart-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-radius: 8px; background: var(--accent-soft); border: 2px solid var(--accent); color: var(--accent-ink); font-size: 13.5px; }
+.ds .rchart-switch b { font-size: 14.5px; font-weight: 800; }
+.ds .rchart-switch span { color: var(--ink); }
+
+/* The move dialog — both bookings side by side, every figure the server's. */
+.ds .rmv { display: grid; gap: 12px; }
+.ds .rmv-auth { margin: 0; padding: 7px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+.ds .rmv-auth.ok { color: var(--success); background: var(--success-soft); }
+.ds .rmv-auth.stop { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); font-weight: 700; }
+.ds .rmv-legs { display: grid; gap: 12px; }
+.ds .rmv-legs.two { grid-template-columns: 1fr 1fr; }
+@media (max-width: 760px) { .ds .rmv-legs.two { grid-template-columns: 1fr; } }
+.ds .rmv-leg { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px; display: grid; gap: 7px; background: var(--surface); min-width: 0; }
+.ds .rmv-leg.refused { border: 2px solid var(--danger); background: var(--danger-soft); }
+.ds .rmv-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.ds .rmv-who b { font-size: 15px; }
+.ds .rmv-who .chip-step { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--ink-2); }
+.ds .rmv-rooms { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ds .rmv-room { font-weight: 800; font-size: 15px; padding: 2px 8px; border-radius: 6px; background: var(--surface-3); }
+.ds .rmv-room.to { background: var(--accent-soft); color: var(--accent-ink); outline: 1.5px solid var(--accent-line); }
+.ds .rmv-arrow { font-weight: 800; color: var(--ink-3); }
+.ds .rmv-type { font-size: 12px; color: var(--warning); font-weight: 700; }
+.ds .rmv-price b { font-size: 14px; }
+.ds .rmv-pricemode { display: grid; gap: 6px; padding: 8px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); }
+.ds .rmv-pricemode label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.ds .rmv-pricemode label.on { font-weight: 700; }
+.ds .rmv-refusals { margin: 0; padding-left: 18px; color: var(--danger); font-weight: 700; font-size: 13px; }
+.ds .rmv-path { margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--ink-2); }
+.ds .rmv-follow { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--warning); font-weight: 600; }
+.ds .rmv-result { display: grid; gap: 12px; }
+.ds .rmv-status { margin: 0; padding: 8px 12px; border-radius: 8px; font-weight: 800; font-size: 15px; }
+.ds .rmv-status.ok { color: var(--success); background: var(--success-soft); border: 1px solid var(--success); }
+.ds .rmv-status.warn { color: var(--warning); background: var(--warning-soft); border: 1px solid var(--warning); }
+.ds .rmv-status.stop { color: var(--danger); background: var(--danger-soft); border: 2px solid var(--danger); }
+.ds .rmv-outcome { margin: 0; font-weight: 700; font-size: 13.5px; }
+.ds .rmv-outcome.ok { color: var(--success); }
+.ds .rmv-outcome.warn { color: var(--warning); }
+.ds .rmv-outcome.stop { color: var(--danger); }
+.ds .rmv-resolve { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ds .rmv-resolve .field { flex: 1 1 320px; }
+
+/* ── Papers a walk held for the desk — send or not (2026-10-12) ───────────────────────────── */
+.ds .heldp { border: 2px solid var(--warning); background: var(--warning-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 10px; margin: 0 0 12px; }
+.ds .heldp-head { display: flex; align-items: center; gap: 8px; }
+.ds .heldp-head b { color: var(--warning); font-size: 14.5px; font-weight: 800; }
+.ds .heldp-row { background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; display: grid; gap: 8px; }
+.ds .heldp-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.ds .heldp-what b { font-size: 14px; }
+.ds .heldp-choices { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+.ds .heldp-choices label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.ds .heldp-choices label.on { font-weight: 700; color: var(--accent-ink); }
+.ds .heldp-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ds .heldp-fields .field { flex: 1 1 220px; margin: 0; }
+
+/* A room move still running or part-done, on each of its bookings. */
+.ds .rmv-card { border: 2px solid var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; margin: 0 0 12px; }
+.ds .rmv-card-head b { color: var(--danger); font-size: 14.5px; font-weight: 800; }

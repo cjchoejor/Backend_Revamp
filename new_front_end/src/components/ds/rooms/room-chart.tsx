@@ -31,11 +31,18 @@
  *     a night — and opens after a second's rest, so moving across the table shows nothing;
  *   - a free night is white whatever its day: today is drawn as a thin column edge and the
  *     weekend in the header's weekday, never as a fill that reads like something is there.
+ *
+ * Switch rooms (2026-10-12, operator: "switch rooms between two reservations from this chart —
+ * different stages, rooms and dates — through every procedure, with the papers and the choice to
+ * send them"): **Switch rooms** marks a booking, then a second booking swaps their rooms or a free
+ * night on another room moves it there. The dialog shows what the server says the move would do
+ * and runs it (room-move-dialog.tsx); a move still running or part-done is drawn as MOVING.
  */
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
@@ -44,6 +51,8 @@ import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBar, typ
 import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
 import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
+import type { RoomMoveLegInput } from "@/lib/api/room-moves";
+import { RoomMoveDialog } from "./room-move-dialog";
 
 const KIND_WORD: Record<ChartBarKind, string> = {
   OVERSTAY: "Due out · still in",
@@ -51,6 +60,7 @@ const KIND_WORD: Record<ChartBarKind, string> = {
   CHECKED_OUT: "Checked out",
   RESERVED: "Reserved",
   HELD: "Held · not confirmed",
+  MOVING: "Moving in",
   EXTENSION_HELD: "Extension · held",
   PROVISIONAL: "Provisional block",
 };
@@ -60,6 +70,7 @@ const KIND_CLASS: Record<ChartBarKind, string> = {
   CHECKED_OUT: "k-out",
   RESERVED: "k-res",
   HELD: "k-held",
+  MOVING: "k-move",
   EXTENSION_HELD: "k-held",
   PROVISIONAL: "k-prov",
 };
@@ -179,6 +190,24 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
   const pickRef = useRef<HTMLDivElement | null>(null);
+  /** Switch rooms: a booking is marked, then a second booking (a swap) or a free night (a move). */
+  const [switching, setSwitching] = useState(false);
+  const [marked, setMarked] = useState<{ entryId: string; roomId: string; roomNumber: string; name: string } | null>(null);
+  const [moveLegs, setMoveLegs] = useState<RoomMoveLegInput[] | null>(null);
+  const stopSwitching = () => {
+    setSwitching(false);
+    setMarked(null);
+  };
+
+  // Escape leaves Switch rooms (the dialog, when open, takes Escape for itself).
+  useEffect(() => {
+    if (!switching || moveLegs) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") stopSwitching();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [switching, moveLegs]);
 
   const bookingOf = useMemo(() => new Map((chart?.bookings ?? []).map((b) => [b.entryId, b])), [chart]);
   const typeOf = useMemo(() => new Map((chart?.roomTypes ?? []).map((t) => [t.id, t])), [chart]);
@@ -211,7 +240,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !pickRef.current) setFull(false);
+      // Escape closes what is on top first: the start box, Switch rooms, the move dialog.
+      if (e.key === "Escape" && !pickRef.current && !switching && !moveLegs) setFull(false);
     };
     // The page reserves a scrollbar gutter on <html> (`scrollbar-gutter: stable`), which a fixed
     // layer cannot cover — released while full screen is on, so the chart reaches the window's edge.
@@ -227,7 +257,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       html.style.scrollbarGutter = prev.gutter;
       document.removeEventListener("keydown", onKey);
     };
-  }, [full]);
+  }, [full, switching, moveLegs]);
   useEffect(
     () => () => {
       if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
@@ -262,6 +292,35 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     setPick({ room, night, freeRun: run, reachesEnd, rect });
   };
   const pickMax = pick ? (pick.reachesEnd ? Math.max(pick.freeRun, START_MAX_NIGHTS) : pick.freeRun) : 1;
+  /** Switch rooms: the first booking clicked is marked; a second one is swapped with it. */
+  const switchWithBar = (bar: RoomChartBar, room: ChartRoom, b?: RoomChartBooking) => {
+    leave();
+    if (!marked) {
+      setMarked({ entryId: bar.entryId, roomId: room.id, roomNumber: room.roomNumber, name: nameOf(b) });
+      return;
+    }
+    if (marked.entryId === bar.entryId && marked.roomId === room.id) {
+      setMarked(null);
+      return;
+    }
+    if (marked.entryId === bar.entryId) {
+      toast.error("That is the same booking — click another booking to switch with, or a free night to move it");
+      return;
+    }
+    setMoveLegs([
+      { entryId: marked.entryId, fromRoomId: marked.roomId, toRoomId: room.id },
+      { entryId: bar.entryId, fromRoomId: room.id, toRoomId: marked.roomId },
+    ]);
+  };
+  /** Switch rooms: a free night on another room moves the marked booking there. */
+  const moveToRoom = (room: ChartRoom) => {
+    if (!marked) {
+      toast("Click the booking to move first");
+      return;
+    }
+    if (room.id === marked.roomId) return;
+    setMoveLegs([{ entryId: marked.entryId, fromRoomId: marked.roomId, toRoomId: room.id }]);
+  };
   const startInquiry = () => {
     if (!pick) return;
     const p = new URLSearchParams({ checkIn: pick.night, nights: String(pickNights), room: pick.room.roomNumber });
@@ -331,6 +390,18 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             ))}
           </select>
           <b className="rchart-span">{plural(chart.nights.length, "night")}</b>
+          <Button
+            kind={switching ? "primary" : "quiet"}
+            compact
+            aria-pressed={switching}
+            onClick={() => {
+              setPick(null);
+              if (switching) stopSwitching();
+              else setSwitching(true);
+            }}
+          >
+            {switching ? "Stop switching" : "Switch rooms"}
+          </Button>
           <Button kind="quiet" compact onClick={() => setFull((f) => !f)} aria-pressed={full}>
             {full ? "Exit full screen" : "Full screen"}
           </Button>
@@ -338,12 +409,24 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <p>Every room, night by night: who holds it and how firmly. Rest the pointer on a booking for a second to see it; click it to open the booking.</p>
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
+            <p>Switch rooms: click a booking, then another booking to swap their rooms, or a free night on another room to move it there. Each booking walks every step it needs; you see what it will do before it runs.</p>
           </Help>
         </div>
         {rangeNote ? (
           <p className="warn-ink sm" role="status" style={{ margin: 0, fontWeight: 600 }}>
             {rangeNote}
           </p>
+        ) : null}
+        {switching ? (
+          <div className="rchart-switch" role="status">
+            <b>{marked ? `Moving ${marked.name} out of Room ${marked.roomNumber}` : "Switch rooms — click the booking whose room should change"}</b>
+            {marked ? <span>Now click another booking to swap rooms with it, or a free night on another room to move it there.</span> : null}
+            {marked ? (
+              <Button kind="quiet" compact onClick={() => setMarked(null)}>
+                Pick another booking
+              </Button>
+            ) : null}
+          </div>
         ) : null}
         <Legend />
       </div>
@@ -424,10 +507,19 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                           return (
                             <td
                               key={k}
-                              className={["cell free", s.night === chart.today ? "tday" : "", past ? "past" : "pick"].filter(Boolean).join(" ")}
-                              aria-label={past ? undefined : `Room ${room.roomNumber} free on ${longDay(s.night)} — click to start an inquiry`}
+                              className={["cell free", s.night === chart.today ? "tday" : "", past ? "past" : "pick", switching && marked && room.id !== marked.roomId ? "moveto" : ""].filter(Boolean).join(" ")}
+                              aria-label={
+                                switching
+                                  ? marked && room.id !== marked.roomId
+                                    ? `Move ${marked.name} to Room ${room.roomNumber}`
+                                    : undefined
+                                  : past
+                                    ? undefined
+                                    : `Room ${room.roomNumber} free on ${longDay(s.night)} — click to start an inquiry`
+                              }
                               onClick={(e) => {
-                                if (!past) openPick(room, s.night, s.index, rectOf(e), segs);
+                                if (switching) moveToRoom(room);
+                                else if (!past) openPick(room, s.night, s.index, rectOf(e), segs);
                               }}
                             />
                           );
@@ -462,7 +554,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                           <td
                             key={k}
                             colSpan={s.span}
-                            className={`seg ${KIND_CLASS[s.bar.kind]}${s.bar.parked ? " parked" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}`}
+                            className={`seg ${KIND_CLASS[s.bar.kind]}${s.bar.parked ? " parked" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${switching && marked?.entryId === s.bar.entryId && marked.roomId === room.id ? " marked" : ""}`}
                           >
                             <button
                               type="button"
@@ -471,7 +563,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                               onMouseLeave={leave}
                               onFocus={(e) => point({ t: "bar", bar: s.bar, room, rect: rectOf(e) })}
                               onBlur={leave}
-                              onClick={() => router.push(`/bookings/${s.bar.entryId}`)}
+                              onClick={() => (switching ? switchWithBar(s.bar, room, b) : router.push(`/bookings/${s.bar.entryId}`))}
                             >
                               {s.bar.parked ? <span className="pk">Parked</span> : null}
                               {nameOf(b)}
@@ -492,7 +584,15 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         </table>
       </div>
 
-      {hover && !pick ? (
+      <RoomMoveDialog
+        legs={moveLegs}
+        onClose={() => {
+          setMoveLegs(null);
+          stopSwitching();
+        }}
+      />
+
+      {hover && !pick && !moveLegs ? (
         <Floating>
           <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} />
         </Floating>
@@ -603,9 +703,10 @@ function HoverCard({
             {b ? fact("Step", <span className="hc-step">{STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span>) : null}
             {fact("Booking", b ? `${b.entryId} · ${b.inquiryId}` : bar.entryId)}
             {bar.holdExpiresAt ? fact("Held until", fmtDateTime(bar.holdExpiresAt)) : null}
+            {bar.moveId ? fact("Room move", bar.moveId) : null}
           </div>
         </div>
-        <div className="hc-foot">Click to open the booking</div>
+        <div className="hc-foot">{bar.kind === "MOVING" ? "Being moved into this room — open the booking to see the move" : "Click to open the booking"}</div>
       </div>
     );
   }
@@ -656,6 +757,7 @@ function Legend() {
     ["free", "Free"],
     ["k-prov", "Provisional block"],
     ["k-held", "Held · not confirmed"],
+    ["k-move", "Moving in"],
     ["k-res", "Reserved"],
     ["k-res paypend", "Reserved · advance short"],
     ["k-in", "In house"],

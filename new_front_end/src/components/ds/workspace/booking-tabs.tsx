@@ -45,6 +45,7 @@ import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
+import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import type { EntryDetail } from "@/types/api";
 
@@ -1172,6 +1173,7 @@ export function DocumentsView({
         Documents <span className="need">every paper, every version, and what the guest said back</span>
       </h3>
       <div className="steps-canvas">
+        <HeldPapersCard entryId={entry.id} tz={tz} />
         {quotes + invoices.length + vouchers + sent.length === 0 && !folioLive ? (
           <EmptyState title="No papers yet">A quotation is the first — it is generated at Negotiation.</EmptyState>
         ) : (

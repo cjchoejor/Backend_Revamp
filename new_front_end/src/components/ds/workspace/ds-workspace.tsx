@@ -81,6 +81,8 @@ import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inli
 import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
 import type { EntryDetail } from "@/types/api";
 import { CaseCards } from "@/components/ds/steps/case-cards";
+import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
+import { ActiveRoomMoves } from "@/components/ds/rooms/room-move-dialog";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
 import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type BookingTab } from "@/components/ds/workspace/booking-tabs";
@@ -1289,6 +1291,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   </div>
                 ) : null}
                 <div hidden={view !== "step"}>
+                {/* Papers a walk re-issued and held — whichever walk ran, the send-or-not question is here. */}
+                {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
+                {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} /> : null}
                 <CaseCards
                     entry={entry}
                     step={viewing}
