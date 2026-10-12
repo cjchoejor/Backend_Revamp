@@ -661,7 +661,8 @@ export function s8Readiness(entry: EntryDetail): Precondition[] {
       (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
     );
   return [
-    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING", card: "settle" },
+    // A written-off folio owes nothing and leaves Check-out too (Policy 33, 2026-10-12).
+    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" || folio?.state === "WRITTEN_OFF", card: "settle" },
     {
       card: "departure",
       label: "Keys returned",
