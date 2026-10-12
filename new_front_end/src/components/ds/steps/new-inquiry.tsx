@@ -41,7 +41,7 @@ import {
 import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
-import { callerNameOf } from "@/lib/ds/status";
+import { updateEntryCaller, updateEntrySource } from "@/lib/api/inquiries";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
 import { Choice, FlowTodo, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
@@ -90,6 +90,10 @@ type InquiryScalars = {
   callerLastName?: string | null;
   callerPhone?: string | null;
   callerEmail?: string | null;
+  callerOnWhatsApp?: boolean | null;
+  travelAgentId?: string | null;
+  corporateAccountId?: string | null;
+  ratePackageId?: string | null;
   notes?: string | null;
   sourceChannel?: string | null;
   cameInAs?: string | null;
@@ -97,8 +101,8 @@ type InquiryScalars = {
   corporateCoordinator?: string | null;
 };
 type InquiryRecord = {
-  travelAgent?: { displayName?: string | null } | null;
-  corporateAccount?: { displayName?: string | null } | null;
+  travelAgent?: (Partial<LookupPartyMatch> & { displayName?: string | null }) | null;
+  corporateAccount?: (Partial<LookupPartyMatch> & { displayName?: string | null }) | null;
 };
 type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
 
@@ -182,6 +186,10 @@ export function NewInquiryCanvas() {
   // The intake is changed only while the booking is an active inquiry (the server refuses later).
   const editable = !!editEntry && editEntry.currentStage === "S1" && editEntry.status === "ACTIVE";
   const editInited = useRef(false);
+  // The package and the party recorded on the inquiry, restored once their lists have loaded.
+  const recordedPkg = useRef<string | null>(null);
+  const partyRestored = useRef(false);
+  const skipInherit = useRef(false);
   useEffect(() => {
     if (!isEdit || !editEntry || editInited.current) return;
     editInited.current = true;
@@ -199,6 +207,22 @@ export function NewInquiryCanvas() {
     if (ci && co) setNights(String(Math.max(1, diffNightsIso(ci, co))));
     setArrivingName(editContact.contactPersonName ?? "");
     setArrivingPhone(editContact.contactPersonPhone ?? "");
+    // The caller, as recorded — or, on an inquiry from before callers were kept, its guest.
+    const legacy = !(editInq?.callerPhone || editInq?.callerEmail || editInq?.callerFirstName || editInq?.callerLastName);
+    const phone = (legacy ? editGuest?.phone : editInq?.callerPhone) ?? "";
+    if (phone) {
+      const sp = splitStoredPhone(phone);
+      setPhoneCode(sp.code);
+      setPhoneNumber(sp.number);
+    }
+    setEmail((legacy ? editGuest?.email : editInq?.callerEmail) ?? "");
+    setCallerTitle(editInq?.callerTitle ?? "");
+    setFirstName((legacy ? editGuest?.firstName : editInq?.callerFirstName) ?? "");
+    setLastName((legacy ? editGuest?.lastName : editInq?.callerLastName) ?? "");
+    setOnWhatsApp(editInq?.callerOnWhatsApp ?? null);
+    setCorpRef(editInq?.corporateClientRef ?? "");
+    setCorpCoordinator(editInq?.corporateCoordinator ?? "");
+    recordedPkg.current = editInq?.ratePackageId ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEdit, editEntry]);
 
@@ -218,7 +242,7 @@ export function NewInquiryCanvas() {
   }, [channelKey]);
 
   const pickChannel = (k: ChannelKey) => {
-    if (isEdit || k === channelKey) return;
+    if ((isEdit && !editable) || k === channelKey) return;
     setChannelKey(k);
     focusNext.current = "who";
   };
@@ -228,6 +252,16 @@ export function NewInquiryCanvas() {
     setParty(null);
     setPartyContact(null);
   }, [partyKind]);
+  // Editing: the agency or company on record, put back once its kind is chosen (after the clear
+  // above has run for that kind), without re-inheriting the company's reference over the recorded one.
+  useEffect(() => {
+    if (!isEdit || partyRestored.current || !partyKind || !editRec) return;
+    const rec = (partyKind === "TRAVEL_AGENT" ? editRec.travelAgent : editRec.corporateAccount) as LookupPartyMatch | null | undefined;
+    partyRestored.current = true;
+    if (!rec?.id) return;
+    skipInherit.current = true;
+    setParty(rec);
+  }, [isEdit, partyKind, editRec]);
 
   // A new party brings its own contact: the first person on file, else the party's own details.
   useEffect(() => {
@@ -237,12 +271,16 @@ export function NewInquiryCanvas() {
 
   // The company context is cleared when the channel no longer needs it…
   useEffect(() => {
-    if (isEdit || needsCorp) return;
+    if (needsCorp) return;
     setCorpRef("");
     setCorpCoordinator("");
-  }, [needsCorp, isEdit]);
+  }, [needsCorp]);
   // …and inherited from the picked company's contract references and coordinators (spec §2.6.2).
   useEffect(() => {
+    if (skipInherit.current) {
+      skipInherit.current = false;
+      return;
+    }
     if (partyKind !== "CORPORATE" || !party) return;
     const refs = party.contractRefs ?? [];
     const coords = party.coordinators ?? [];
@@ -252,8 +290,8 @@ export function NewInquiryCanvas() {
   }, [party?.id]);
   // For a company the contact person IS the coordinator — named once, not twice.
   useEffect(() => {
-    if (needsCorp && partyContact) setCorpCoordinator(partyContact.name);
-  }, [needsCorp, partyContact]);
+    if (needsCorp && partyContact && !isEdit) setCorpCoordinator(partyContact.name);
+  }, [needsCorp, partyContact, isEdit]);
 
   const packagesQuery = useQuery({
     queryKey: ["lookup-rate-packages", partyKind, party?.id],
@@ -264,12 +302,19 @@ export function NewInquiryCanvas() {
   const packages = packagesQuery.data?.items ?? null;
   // Preselect the party's default so the choice shown is the one pricing would make anyway.
   useEffect(() => {
-    // Nothing is carried over from another party's list while this one loads.
-    if (!party?.id || !packages || packages.length === 0) {
+    // Nothing is carried over from another party's list; while this one loads, wait.
+    if (!party?.id) {
       setRatePackageId(null);
       return;
     }
-    setRatePackageId((cur) => (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
+    if (!packages) return;
+    if (packages.length === 0) {
+      setRatePackageId(null);
+      return;
+    }
+    const recorded = recordedPkg.current && packages.some((p) => p.id === recordedPkg.current) ? recordedPkg.current : null;
+    recordedPkg.current = null;
+    setRatePackageId((cur) => recorded ?? (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
   }, [party?.id, packages]);
   const chosenPackage = packages?.find((p) => p.id === ratePackageId) ?? null;
 
@@ -472,7 +517,7 @@ export function NewInquiryCanvas() {
   // and "on WhatsApp?" answered whenever there is a phone.
   const callerReachable = !!fullPhone || !!email.trim() || isOta;
   const whatsAppAnswered = !fullPhone || onWhatsApp !== null;
-  const guestOk = isEdit || (callerReachable && whatsAppAnswered && !emailBad);
+  const guestOk = callerReachable && whatsAppAnswered && !emailBad;
 
   usePageTitle(
     isEdit ? (editGuest ? guestFullName({ firstName: editGuest.firstName ?? "", lastName: editGuest.lastName ?? "" }) : null) : typedGuestName || null,
@@ -513,6 +558,10 @@ export function NewInquiryCanvas() {
   if (isEdit) {
     if (!editEntry) saveBlockers.push("the booking is still opening");
     else if (!editable) saveBlockers.push("the booking has moved past Inquiry");
+    if (!callerReachable) saveBlockers.push("the caller's phone or email");
+    else if (!whatsAppAnswered) saveBlockers.push("whether the caller's number is on WhatsApp");
+    if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
+    if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
   } else {
     if (!channel) saveBlockers.push("how they came in");
     // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
@@ -568,6 +617,47 @@ export function NewInquiryCanvas() {
           contactPersonPhone: phoneChanged ? arrivingPhone.trim() : undefined,
           expectedVersion: editEntry.version,
         });
+        // Who is asking (2026-10-12): changed only when it moved — the backend re-checks the party
+        // and package, and refuses once another stay on the enquiry has moved on.
+        const recTa = editInq?.travelAgentId ?? null;
+        const recCo = editInq?.corporateAccountId ?? null;
+        const nowTa = partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null;
+        const nowCo = partyKind === "CORPORATE" ? (party?.id ?? null) : null;
+        const prevKey = cameInAsOf(editInq?.sourceChannel, editInq?.notes, editEntry.useType, editInq?.cameInAs);
+        const sourceMoved =
+          channelKey !== prevKey ||
+          nowTa !== recTa ||
+          nowCo !== recCo ||
+          (party?.id ? ratePackageId : null) !== (editInq?.ratePackageId ?? null) ||
+          (needsCorp && (corpRef.trim() !== (editInq?.corporateClientRef ?? "") || corpCoordinator.trim() !== (editInq?.corporateCoordinator ?? "")));
+        if (sourceMoved && channel) {
+          await updateEntrySource(session, editEntry.id, {
+            cameInAs: channel.cameInAs,
+            sourceChannel: channel.channel,
+            travelAgentId: nowTa,
+            corporateAccountId: nowCo,
+            ratePackageId: party?.id ? ratePackageId : null,
+            corporateClientRef: needsCorp ? corpRef.trim() : null,
+            corporateCoordinator: needsCorp ? corpCoordinator.trim() : null,
+          });
+        }
+        const callerNow = {
+          title: callerTitle || null,
+          firstName: firstName.trim() || null,
+          lastName: lastName.trim() || null,
+          phone: fullPhone || null,
+          email: email.trim() || null,
+          onWhatsApp: fullPhone ? onWhatsApp : null,
+        };
+        const callerWas = {
+          title: editInq?.callerTitle ?? null,
+          firstName: editInq?.callerFirstName ?? null,
+          lastName: editInq?.callerLastName ?? null,
+          phone: editInq?.callerPhone ?? null,
+          email: editInq?.callerEmail ?? null,
+          onWhatsApp: editInq?.callerOnWhatsApp ?? null,
+        };
+        if (JSON.stringify(callerNow) !== JSON.stringify(callerWas)) await updateEntryCaller(session, editEntry.id, callerNow);
       } else {
         if (!channel) throw new Error("Say how they came in first");
         // The guest staying is named at Wrap up (2026-10-12) — unless the caller's number found a
@@ -742,7 +832,7 @@ export function NewInquiryCanvas() {
                     <b>{guestFullName({ firstName: editGuest.firstName ?? "", lastName: editGuest.lastName ?? "" })}</b>
                   </span>
                 ) : null}
-                <span className="meta">the stay, the kind of stay and who is arriving can change · the guest and how they came in stay as recorded</span>
+                <span className="meta">the caller, who is asking, the stay and who is arriving can change — the guest staying is named at Wrap up</span>
               </>
             ) : (
               <span className="meta">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</span>
@@ -805,12 +895,7 @@ export function NewInquiryCanvas() {
                   flow="caller"
                   title="The caller"
                   summary={
-                    isEdit ? (
-                      <>
-                        <b>{callerNameOf(editInq) ?? "name to come"}</b>
-                        {[editInq?.callerPhone, editInq?.callerEmail].filter(Boolean).map((x) => ` · ${x}`).join("")}
-                      </>
-                    ) : (
+                    (
                       <>
                         <b>{[callerTitle, firstName.trim(), lastName.trim()].filter(Boolean).join(" ") || "name to come"}</b>
                         {fullPhone ? <> · {fullPhone}{onWhatsApp === true ? " · on WhatsApp" : onWhatsApp === false ? " · not on WhatsApp" : ""}</> : null}
@@ -821,23 +906,7 @@ export function NewInquiryCanvas() {
                     )
                   }
                 >
-                  {isEdit ? (
-                    <div className="form2">
-                      <div className="field">
-                        <label>Phone</label>
-                        <input className="input" readOnly value={editInq?.callerPhone ?? editGuest?.phone ?? ""} placeholder="none given" />
-                      </div>
-                      <div className="field">
-                        <label>Email</label>
-                        <input className="input" readOnly value={editInq?.callerEmail ?? editGuest?.email ?? ""} placeholder="none given" />
-                      </div>
-                      <div className="field">
-                        <label>Name</label>
-                        <input className="input" readOnly value={callerNameOf(editInq) ?? ""} placeholder="to come — asked at Wrap up" />
-                      </div>
-                      <span className="wide meta">The caller is changed on the booking itself, under The caller and Wrap up.</span>
-                    </div>
-                  ) : (
+                  {(
                     <div className="form2">
                       <label className="wide sm ink-2" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <input
@@ -944,38 +1013,15 @@ export function NewInquiryCanvas() {
                   <div className="form2">
                     <div className="wide field">
                       <label>Came in as</label>
-                      <Choice options={CHANNEL_OPTIONS} value={channelKey} disabled={isEdit} onChange={pickChannel} />
+                      <Choice options={CHANNEL_OPTIONS} value={channelKey} disabled={isEdit && !editable} onChange={pickChannel} />
                       <span className={`hint${!isEdit && !channelKey ? " warn-ink" : ""}`}>
-                        {isEdit
-                          ? "set when the inquiry was recorded"
-                          : channelKey
+                        {channelKey
                             ? "it decides what the rest of this form asks for"
                             : "pick one — it decides what the rest of this form asks for"}
                       </span>
                     </div>
 
-                    {isEdit ? (
-                      editPartyName || editInq?.corporateClientRef ? (
-                        <>
-                          <div className="field">
-                            <label>{channelKey === "CORPORATE" ? "Company" : "Travel agent"}</label>
-                            <input className="input" readOnly value={editPartyName ?? ""} placeholder="none on file" />
-                          </div>
-                          {channelKey === "CORPORATE" ? (
-                            <>
-                              <div className="field">
-                                <label>Their PO or authorisation</label>
-                                <input className="input" readOnly value={editInq?.corporateClientRef ?? ""} placeholder="none given" />
-                              </div>
-                              <div className="field">
-                                <label>Their coordinator</label>
-                                <input className="input" readOnly value={editInq?.corporateCoordinator ?? ""} placeholder="none given" />
-                              </div>
-                            </>
-                          ) : null}
-                        </>
-                      ) : null
-                    ) : partyKind ? (
+                    {partyKind ? (
                       <>
                         <PartySearch kind={partyKind} party={party} setParty={setParty} />
                         {party ? (
@@ -989,7 +1035,7 @@ export function NewInquiryCanvas() {
                         the page, in Rate and notes, long after the agency was picked). An agency
                         like Bhutan INC carries Season · Off season · Premium, and the rate differs
                         between them, so the choice is made where the eye already is. */}
-                    {!isEdit ? (
+                    {true ? (
                       <>
                       <div className="field">
                         <label>Rate package</label>
@@ -1047,7 +1093,7 @@ export function NewInquiryCanvas() {
                       </>
                     ) : null}
 
-                    {!isEdit && needsCorp ? (
+                    {needsCorp ? (
                       <>
                         <div className="field">
                           <label>Their PO or authorisation</label>

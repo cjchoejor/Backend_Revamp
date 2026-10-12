@@ -19,6 +19,23 @@ export type CallerDetails = {
   onWhatsApp?: boolean | null;
 };
 
+/** Change who is asking at Inquiry — channel, agency or company, package, a company's reference. */
+export function updateEntrySource(
+  session: Session,
+  entryId: string,
+  body: {
+    cameInAs?: string | null;
+    sourceChannel?: string | null;
+    travelAgentId?: string | null;
+    corporateAccountId?: string | null;
+    ratePackageId?: string | null;
+    corporateClientRef?: string | null;
+    corporateCoordinator?: string | null;
+  },
+) {
+  return apiRequest<unknown>(`/api/entries/${entryId}/source`, { method: "POST", session, body });
+}
+
 /** Fill in or correct the caller (2026-10-12). Fields left out keep what is on record. */
 export function updateEntryCaller(session: Session, entryId: string, body: CallerDetails) {
   return apiRequest<{ caller: CallerDetails }>(`/api/entries/${entryId}/caller`, { method: "POST", session, body });
