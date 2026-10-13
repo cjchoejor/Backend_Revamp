@@ -9,6 +9,7 @@ import type { TraceEvent } from "@/lib/trace/humanize";
 import { STEP_NAMES } from "./steps";
 import { translateMessage } from "./words";
 import { fmtRange, money as fmtMoney } from "./format";
+import type { HistoryNames } from "./history-walks";
 
 const WORDS: Record<string, string> = {
   "ENTRY.CREATED": "Booking recorded",
@@ -51,6 +52,8 @@ const WORDS: Record<string, string> = {
   "ROOM_MOVE.RESOLVED": "Room move closed",
   "DOCUMENT.HELD": "Paper held for the desk to send or not",
   "COMMUNICATION.REPLY_NO_LONGER_AWAITED": "No answer needed any more — the paper was replaced",
+  "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE": "Rooms let go for the room change",
+  "ROOM.BED_TYPE_RESET_TO_USUAL": "Room's beds back to its usual setup",
   "RESERVATION.CONFIRMATION_VOUCHER_REMADE": "Confirmation voucher made again",
   "DOCUMENT.SENT": "Held paper sent",
   "DOCUMENT.NOT_SENT": "Held paper not sent",
@@ -183,6 +186,8 @@ export function traceWords(ev: TraceEvent): string {
 
 type RoomChangedPayload = {
   kind?: "ROOM" | "SETUP" | "EXTENSION";
+  /** Several rooms moved in one walk, or a head pieced together from an older walk's lines. */
+  moves?: Array<{ from: string; to: string }> | null;
   fromRoom?: { roomNumber?: string | null } | null;
   toRooms?: Array<{ roomNumber?: string | null; nights?: string[] | null }> | null;
   keptNights?: string[] | null;
@@ -202,6 +207,7 @@ function roomChangeWords(p: RoomChangedPayload): string {
   const tos = (p.toRooms ?? []).map((r) => r.roomNumber).filter((n): n is string => !!n);
   if (p.kind === "EXTENSION") return "Stay extended";
   if (p.kind === "SETUP") return from ? `Room ${from} set up differently` : "Room set up differently";
+  if (p.moves?.length) return `${p.moves.length > 1 ? "Rooms" : "Room"} changed — ${p.moves.map((m) => `${m.from} → ${m.to}`).join(" · ")}`;
   if (from && tos.length) return `Room changed — ${from} → ${tos.join(", ")}`;
   return "Room changed";
 }
@@ -287,10 +293,28 @@ function readableCode(v: unknown): string | null {
  * The second line of an act — the readable part of what the record carries: the reason, the
  * guest's own words, the amount, who it went to. Ids, checksums and storage keys never show.
  */
-export function traceDetail(ev: TraceEvent): string | null {
+export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): string | null {
   const p = (ev.payload ?? {}) as Record<string, unknown>;
   const bits: string[] = [];
   const str = (k: string) => (typeof p[k] === "string" && (p[k] as string).trim() ? (p[k] as string).trim() : null);
+  // Older lines name rooms and reservations by id; History passes the names to read them by.
+  const roomNo = (id: unknown) => (typeof id === "string" ? names?.roomNo?.(id) ?? null : null);
+  const voucherNo = (id: unknown) => (typeof id === "string" ? names?.voucherNo?.(id) ?? null : null);
+  // The steps of a room change name what they made or let go (2026-10-13).
+  if (ev.eventType === "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE" && Array.isArray(p.releasedRoomIds)) {
+    const nos = (p.releasedRoomIds as unknown[]).map(roomNo).filter((x): x is string => !!x);
+    if (nos.length) bits.push(`${nos.length > 1 ? "rooms" : "room"} ${nos.join(", ")}`);
+  }
+  if (ev.eventType === "COMMITTED_HOLD.PLACED" || ev.eventType === "COMMITTED_HOLD.CONFIRMED") {
+    const no = roomNo(p.roomId);
+    if (no) bits.push(`room ${no}`);
+  }
+  if (ev.eventType.startsWith("QUOTATION.") && str("quotationId")) bits.push(str("quotationId")!);
+  if (ev.eventType === "RESERVATION_CONFIRMED") {
+    const res = str("reservationId");
+    if (res) bits.push(`${res}${voucherNo(res) ? ` · voucher ${voucherNo(res)}` : ""}`);
+    if (p.reconfirmation === true) bits.push("confirmed again");
+  }
   if (ev.eventType === "ENTRY.ROOM_CHANGED") bits.push(...roomChangeDetail(p as RoomChangedPayload));
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).
   if (ev.eventType === "COMMUNICATION.REPLY_NO_LONGER_AWAITED") {
@@ -324,14 +348,15 @@ export function traceDetail(ev: TraceEvent): string | null {
   if (ev.eventType.startsWith("ROOM_MOVE.")) {
     const moveId = str("moveId");
     if (moveId) bits.push(moveId);
-    const fromNo = str("fromRoomNumber");
-    const toNo = str("toRoomNumber");
+    const fromNo = str("fromRoomNumber") ?? roomNo(p.fromRoomId);
+    const toNo = str("toRoomNumber") ?? roomNo(p.toRoomId);
     if (fromNo && toNo) bits.push(`Room ${fromNo} → ${toNo}`);
     // The move's outcome lines list every room that moved.
     if (Array.isArray(p.legs)) {
-      const moves = (p.legs as Array<{ fromRoomNumber?: string | null; toRoomNumber?: string | null; entryId?: string }>)
-        .filter((l) => l.fromRoomNumber && l.toRoomNumber)
-        .map((l) => `${l.fromRoomNumber} → ${l.toRoomNumber}${l.entryId && l.entryId !== ev.entryId ? ` (${l.entryId})` : ""}`);
+      const moves = (p.legs as Array<{ fromRoomNumber?: string | null; toRoomNumber?: string | null; fromRoomId?: string; toRoomId?: string; entryId?: string }>)
+        .map((l) => ({ ...l, from: l.fromRoomNumber ?? roomNo(l.fromRoomId), to: l.toRoomNumber ?? roomNo(l.toRoomId) }))
+        .filter((l) => l.from && l.to)
+        .map((l) => `${l.from} → ${l.to}${l.entryId && l.entryId !== ev.entryId ? ` (${l.entryId})` : ""}`);
       if (moves.length) bits.push(`rooms ${moves.join(", ")}`);
     }
     const partner = str("partnerEntryId");
@@ -343,7 +368,9 @@ export function traceDetail(ev: TraceEvent): string | null {
   // A held paper says which paper and how it went.
   if (ev.eventType.startsWith("DOCUMENT.")) {
     const kind = str("kind");
-    if (kind) bits.push(kind === "PROFORMA" ? "proforma" : "confirmation voucher");
+    const doc = str("documentId");
+    const number = kind === "CONFIRMATION_VOUCHER" ? voucherNo(doc) ?? doc : doc;
+    if (kind) bits.push(`${kind === "PROFORMA" ? "proforma" : "confirmation voucher"}${number ? ` ${number}` : ""}`);
     const channel = str("channel");
     if (channel) bits.push(channel === "EMAIL" ? "by email" : "on WhatsApp");
     const to = str("sentTo");

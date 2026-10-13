@@ -20,6 +20,8 @@ import type { TraceEvent } from "@/lib/trace/humanize";
 import { fmtInstantDate, fmtTime, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceDetail, traceWords } from "@/lib/ds/trace-words";
+import { groupWalks, type HistoryItem, type HistoryNames } from "@/lib/ds/history-walks";
+import { useRoomsList } from "@/hooks/use-desk-data";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
 import type { EntryDetail } from "@/types/api";
 
@@ -59,6 +61,49 @@ function chapterOf(ev: TraceEvent): number {
   return code && /^S[1-9]$/.test(code) ? stepNoOfStage(code) : 0;
 }
 
+const itemAt = (it: HistoryItem) => (it.kind === "event" ? it.ev : it.at);
+
+/** One act: its time, its words with the readable part of what it carried, and who did it. */
+function ActLine({
+  ev,
+  at,
+  tz,
+  names,
+  strong,
+  withSeconds,
+}: {
+  ev: TraceEvent;
+  /** The line it stands for in time and authorship, when that is another (a walk's head). */
+  at?: TraceEvent;
+  tz: string;
+  names: HistoryNames;
+  strong?: boolean;
+  /** A walk's steps are seconds apart; the seconds keep their order readable. */
+  withSeconds?: boolean;
+}) {
+  const when = at ?? ev;
+  const detail = traceDetail(ev, names);
+  const time = withSeconds
+    ? new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true }).format(new Date(when.timestamp))
+    : fmtTime(when.timestamp, tz);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "0 10px", padding: "5px 0", alignItems: "baseline" }}>
+      <span className="meta">{time}</span>
+      <span>
+        <span style={strong ? { fontWeight: 700 } : undefined}>{traceWords(ev)}</span>
+        {detail ? (
+          <span className="meta" style={{ display: "block" }}>
+            {detail}
+          </span>
+        ) : null}
+      </span>
+      <span className="meta" style={{ textAlign: "right" }}>
+        {whoDid(when)}
+      </span>
+    </div>
+  );
+}
+
 export function HistoryView({
   entry,
   tz,
@@ -80,13 +125,34 @@ export function HistoryView({
   const [lens, setLens] = useState<Lens>(isLens(initialLens) ? initialLens : "all");
   const [showPasses, setShowPasses] = useState(false);
 
+  // Rooms and vouchers are named by number, also on lines written before they carried one.
+  const rooms = useRoomsList().data?.items;
+  const names = useMemo<HistoryNames>(() => {
+    const roomById = new Map((rooms ?? []).map((r) => [r.id, r.roomNumber]));
+    const voucherById = new Map((entry.reservations ?? []).map((r) => [r.id, r.confirmationVoucherNumber]));
+    return {
+      roomNo: (id) => (id ? roomById.get(id) ?? null : null),
+      voucherNo: (id) => (id ? voucherById.get(id) ?? null : null),
+    };
+  }, [rooms, entry.reservations]);
+
   const all = useMemo(() => (trace.data?.items ?? []).filter((e) => !isHousekeeping(e.eventType)), [trace.data]);
-  const shown = useMemo(() => all.filter((e) => inLens(e, lens)), [all, lens]);
+  // A room change is one line with its steps under it, not a dozen lines over four chapters.
+  const items = useMemo(() => groupWalks(all, names), [all, names]);
+  const shown = useMemo(
+    () => items.filter((it) => (it.kind === "event" ? inLens(it.ev, lens) : inLens(it.head, lens) || it.steps.some((e) => inLens(e, lens)))),
+    [items, lens],
+  );
+  const shownActs = shown.reduce((n, it) => n + (it.kind === "event" ? 1 : it.steps.length + (it.headIsAct ? 1 : 0)), 0);
   const chapters = useMemo(() => {
-    const m = new Map<number, TraceEvent[]>();
-    for (const ev of shown) m.set(chapterOf(ev), [...(m.get(chapterOf(ev)) ?? []), ev]);
-    return [...m.entries()].sort((a, b) => (b[1][0]?.timestamp ?? "").localeCompare(a[1][0]?.timestamp ?? ""));
+    const m = new Map<number, HistoryItem[]>();
+    for (const it of shown) {
+      const n = chapterOf(itemAt(it));
+      m.set(n, [...(m.get(n) ?? []), it]);
+    }
+    return [...m.entries()].sort((a, b) => (itemAt(b[1][0]!).timestamp ?? "").localeCompare(itemAt(a[1][0]!).timestamp ?? ""));
   }, [shown]);
+  const [openWalk, setOpenWalk] = useState<Record<string, boolean>>({});
   const current = stepNoOfStage(entry.currentStage);
   const [open, setOpen] = useState<Record<number, boolean>>({});
   const isOpen = (n: number, i: number) => open[n] ?? (n === current || (i === 0 && !chapters.some(([k]) => k === current)));
@@ -110,7 +176,7 @@ export function HistoryView({
               ))}
             </div>
             <span className="meta">
-              {shown.length} of {plural(all.length, "act")} · newest first · nothing here is ever edited
+              {shownActs} of {plural(all.length, "act")} · newest first · nothing here is ever edited
             </span>
           </div>
           {trace.isLoading ? (
@@ -119,14 +185,15 @@ export function HistoryView({
             <EmptyState title={lens === "all" ? "Nothing recorded yet" : "Nothing of this kind yet"} />
           ) : (
             chapters.map(([n, evs], i) => {
-              const people = [...new Set(evs.map(whoDid).filter((w) => w !== "system" && w !== "night audit"))];
-              const first = evs[evs.length - 1];
-              const last = evs[0];
+              const people = [...new Set(evs.map((it) => whoDid(itemAt(it))).filter((w) => w !== "system" && w !== "night audit"))];
+              const first = itemAt(evs[evs.length - 1]!);
+              const last = itemAt(evs[0]!);
               const openNow = isOpen(n, i);
-              const days = new Map<string, TraceEvent[]>();
-              for (const ev of evs) {
-                const d = fmtInstantDate(ev.timestamp, tz);
-                days.set(d, [...(days.get(d) ?? []), ev]);
+              const acts = evs.reduce((k, it) => k + (it.kind === "event" ? 1 : it.steps.length + (it.headIsAct ? 1 : 0)), 0);
+              const days = new Map<string, HistoryItem[]>();
+              for (const it of evs) {
+                const d = fmtInstantDate(itemAt(it).timestamp, tz);
+                days.set(d, [...(days.get(d) ?? []), it]);
               }
               return (
                 <div key={n} style={{ borderTop: "1px solid var(--line)" }}>
@@ -140,7 +207,7 @@ export function HistoryView({
                       <b style={{ fontSize: "var(--t-lead)" }}>{n ? STEP_NAMES[n - 1] : "Around the booking"}</b>
                       <span className="meta">
                         {" "}
-                        · {plural(evs.length, "act")} · {fmtInstantDate(first.timestamp, tz)}
+                        · {plural(acts, "act")} · {fmtInstantDate(first.timestamp, tz)}
                         {fmtInstantDate(first.timestamp, tz) !== fmtInstantDate(last.timestamp, tz) ? ` → ${fmtInstantDate(last.timestamp, tz)}` : ""}
                         {people.length ? ` · ${people.join(", ")}` : ""}
                       </span>
@@ -156,25 +223,35 @@ export function HistoryView({
                           <div className="sm" style={{ fontWeight: 700, color: "var(--ink-2)", margin: "8px 0 4px" }}>
                             {day}
                           </div>
-                          {list.map((ev) => {
-                            const detail = traceDetail(ev);
-                            return (
-                              <div key={ev.id} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "0 10px", padding: "5px 0", alignItems: "baseline" }}>
-                                <span className="meta">{fmtTime(ev.timestamp, tz)}</span>
-                                <span>
-                                  <span>{traceWords(ev)}</span>
-                                  {detail ? (
-                                    <span className="meta" style={{ display: "block" }}>
-                                      {detail}
+                          {list.map((it) =>
+                            it.kind === "event" ? (
+                              <ActLine key={it.ev.id} ev={it.ev} tz={tz} names={names} />
+                            ) : (
+                              <div key={it.head.id} className="hist-walk">
+                                <ActLine ev={it.head} at={it.at} tz={tz} names={names} strong />
+                                <div style={{ paddingLeft: 82 }}>
+                                  <button
+                                    type="button"
+                                    className="hist-walk-toggle"
+                                    aria-expanded={!!openWalk[it.head.id]}
+                                    onClick={() => setOpenWalk((o) => ({ ...o, [it.head.id]: !o[it.head.id] }))}
+                                  >
+                                    <span style={{ display: "inline-flex", transform: openWalk[it.head.id] ? "rotate(90deg)" : undefined, transition: "transform .15s" }}>
+                                      <Icon name="chev" />
                                     </span>
+                                    What happened with it · {plural(it.steps.length, "step")}
+                                  </button>
+                                  {openWalk[it.head.id] ? (
+                                    <div className="hist-walk-steps">
+                                      {it.steps.map((ev) => (
+                                        <ActLine key={ev.id} ev={ev} tz={tz} names={names} withSeconds />
+                                      ))}
+                                    </div>
                                   ) : null}
-                                </span>
-                                <span className="meta" style={{ textAlign: "right" }}>
-                                  {whoDid(ev)}
-                                </span>
+                                </div>
                               </div>
-                            );
-                          })}
+                            ),
+                          )}
                         </div>
                       ))}
                     </div>

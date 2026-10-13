@@ -728,3 +728,29 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* A room move still running or part-done, on each of its bookings. */
 .ds .rmv-card { border: 2px solid var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; margin: 0 0 12px; }
 .ds .rmv-card-head b { color: var(--danger); font-size: 14.5px; font-weight: 800; }
+
+/* History: a room change is one line with its steps under it (2026-10-13). */
+.ds .hist-walk:not(.desk-root *) {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 var(--r-control) var(--r-control) 0;
+  padding: 2px 8px 6px 7px;
+  margin: 4px 0;
+}
+.ds .hist-walk-toggle:not(.desk-root *) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: var(--t-sm);
+}
+.ds .hist-walk-steps:not(.desk-root *) {
+  border-left: 1px solid var(--accent-line);
+  margin: 4px 0 2px -74px;
+  padding-left: 8px;
+}
