@@ -535,7 +535,13 @@ function HoldCard({
   const { session } = useSession();
   const { past } = useStepMode();
   const raw = entry.committedHold ?? null;
-  const hold = raw && raw.state !== "RELEASED" && raw.state !== "EXPIRED" ? raw : null;
+  // Holds are confirmed at Reserve, so at Set up a CONFIRMED hold is an earlier pass's, carried
+  // through a re-entry that kept it (2026-10-13 — Complaint resolution from Check-in). Its rooms
+  // stand on that pass's reservation, but Reserve wants a hold placed in THIS pass, and the card
+  // had shown it as the current hold with Release (refused) — no way to place one. Looking back at
+  // Set up from a later step, a confirmed hold is this pass's and reads as held.
+  const carried = !past && raw?.state === "CONFIRMED" ? raw : null;
+  const hold = raw && !carried && raw.state !== "RELEASED" && raw.state !== "EXPIRED" ? raw : null;
   const [placeOpen, setPlaceOpen] = useState(false);
   const [why, setWhy] = useState(defaultWhy);
   const [releaseOpen, setReleaseOpen] = useState(false);
@@ -664,8 +670,15 @@ function HoldCard({
         </>
       ) : (
         <>
+          {carried ? (
+            <p className="warn-ink" style={{ margin: "0 0 6px", fontWeight: 700 }} role="status">
+              {rooms} {roomIds.length > 1 ? "are" : "is"} still kept for this booking by the reservation from an earlier pass. This pass needs its own hold before Reserve — place it again.
+            </p>
+          ) : null}
           <span className="meta">
-            {raw
+            {carried
+              ? `The earlier hold was placed ${fmtStamp(carried.placedAt, tz)}.`
+              : raw
               ? `The last hold ${raw.state === "EXPIRED" ? "ran out" : "was released"} — place it again before Reserve.`
               : `Not placed yet. Recording an advance payment — even part of it — holds ${count === 1 ? "the room" : `all ${count} rooms`} automatically; place it by hand when the rooms should be pinned before any money arrives.`}
           </span>
