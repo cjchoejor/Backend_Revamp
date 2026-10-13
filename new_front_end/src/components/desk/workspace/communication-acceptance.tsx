@@ -124,8 +124,9 @@ export function CommunicationAcceptanceBlock({
   // capture form (typable fields included) must not appear until dispatch. Mirrors the p52
   // backend rule, which refuses acknowledgements on non-dispatched communications anyway.
   const items = (commsQuery.data?.items ?? []).filter((c) => !sinceIso || (c.createdAt ?? "") >= sinceIso);
+  // Only the paper in force (2026-10-13): a replaced paper awaits no answer.
   const comm: EntryCommunication | undefined = items.find(
-    (c) => c.commType === commType && c.sendStatus === "DISPATCHED",
+    (c) => c.commType === commType && c.sendStatus === "DISPATCHED" && c.inForce !== false,
   );
 
   const ackM = useMutation({

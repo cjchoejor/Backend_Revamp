@@ -1163,9 +1163,10 @@ export function DocumentsView({
   const invoices = entry.folio?.invoices ?? [];
   const proformas = invoices.filter((i) => i.invoiceType === "PROFORMA").length;
   const bills = invoices.filter((i) => i.invoiceType !== "PROFORMA").length;
-  const vouchers = (entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
+  const vouchers = Math.max(entry.reservations?.length ?? 0, entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
   const sent = communications.filter((c) => c.direction !== "INBOUND");
-  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && c.acknowledgementStatus !== "RECEIVED").length;
+  // A replaced paper awaits no answer — only the one in force does (2026-10-13).
+  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && c.acknowledgementStatus !== "RECEIVED" && !c.superseded && !c.held).length;
   const count = (n: number) => (n ? <span className="n">{n}</span> : null);
   return (
     <>
@@ -1225,6 +1226,22 @@ export function DocumentsView({
   );
 }
 
+/** The number printed on the paper a communication carried — a voucher by its VOU number. */
+function paperNumber(entry: EntryDetail, id: unknown): string | null {
+  if (typeof id !== "string" || !id) return null;
+  const res = (entry.reservations ?? []).find((r) => r.id === id);
+  if (res) return res.confirmationVoucherNumber ?? id;
+  if (entry.reservation?.id === id) return entry.reservation.confirmationVoucherNumber ?? id;
+  return id;
+}
+
+function paperIdOf(c: EntryCommunication): unknown {
+  // A pre-arrival message is not a paper with a number of its own.
+  if (c.commType === "PRE_ARRIVAL_REMINDER") return null;
+  const p = c.payload ?? {};
+  return p.quotationId ?? p.invoiceId ?? p.reservationId ?? null;
+}
+
 /** Each paper sent, with the guest's answer, and the two things the desk does next. */
 function SentPapers({
   entry,
@@ -1282,17 +1299,40 @@ function SentPapers({
           {papers.map((c) => {
             const answered = c.acknowledgementStatus === "RECEIVED";
             const sent = c.sendStatus === "DISPATCHED";
+            const replaced = !answered && !!c.superseded;
+            const number = paperNumber(entry, paperIdOf(c));
+            const replacedBy = paperNumber(entry, c.replacedBy);
             return (
               <tr key={c.id}>
                 <td>
                   <b>{PAPER_NAME[c.commType] ?? c.commType}</b>
+                  {number ? <span className="mono sm"> {number}</span> : null}
                   <span className="meta"> · {c.channel?.toLowerCase() ?? "email"}</span>
                 </td>
                 <td>{fmtStamp(c.createdAt, tz)}</td>
-                <td>{answered ? <Chip tone="success">answered</Chip> : sent ? <Chip tone="warning">{c.isOverdue ? "no answer — chase it" : "awaiting"}</Chip> : <Chip tone="quiet">not sent</Chip>}</td>
+                <td>
+                  {answered ? (
+                    <Chip tone="success">answered</Chip>
+                  ) : replaced ? (
+                    <span title={replacedBy ? `Replaced by ${replacedBy}` : undefined}>
+                      <Chip tone="quiet">replaced — no answer needed</Chip>
+                      {replacedBy ? (
+                        <span className="meta">
+                          {c.commType === "PRE_ARRIVAL_REMINDER" ? ` · the booking was confirmed again (${replacedBy})` : ` · by ${replacedBy}`}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : c.held ? (
+                    <Chip tone="quiet">held — not sent yet</Chip>
+                  ) : sent ? (
+                    <Chip tone="warning">{c.isOverdue ? "no answer — chase it" : "awaiting"}</Chip>
+                  ) : (
+                    <Chip tone="quiet">not sent</Chip>
+                  )}
+                </td>
                 <td>
                   <span className="row-acts" style={{ justifyContent: "flex-end" }}>
-                    {!answered && sent && c.canAcknowledge && !sealed ? (
+                    {!answered && !replaced && sent && c.canAcknowledge && !sealed ? (
                       <Button
                         kind="quiet"
                         compact
@@ -1305,7 +1345,7 @@ function SentPapers({
                         Record their answer
                       </Button>
                     ) : null}
-                    {!answered && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
+                    {!answered && !replaced && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
                       <Button kind="quiet" compact state={resend.isPending ? "working" : "default"} onClick={() => sendAgain(c)}>
                         Send again
                       </Button>

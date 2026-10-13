@@ -50,6 +50,8 @@ const WORDS: Record<string, string> = {
   "ROOM_MOVE.FAILED": "Room move refused — nothing changed",
   "ROOM_MOVE.RESOLVED": "Room move closed",
   "DOCUMENT.HELD": "Paper held for the desk to send or not",
+  "COMMUNICATION.REPLY_NO_LONGER_AWAITED": "No answer needed any more — the paper was replaced",
+  "RESERVATION.CONFIRMATION_VOUCHER_REMADE": "Confirmation voucher made again",
   "DOCUMENT.SENT": "Held paper sent",
   "DOCUMENT.NOT_SENT": "Held paper not sent",
   "ADVANCE_PAYMENT.REQUIREMENT_CARRIED": "Advance asked carried to the new pass",
@@ -160,6 +162,8 @@ function readable(code: string): string {
 }
 
 export function traceWords(ev: TraceEvent): string {
+  // A room change says which room became which (2026-10-13, operator: "changed room 201 to 302").
+  if (ev.eventType === "ENTRY.ROOM_CHANGED") return roomChangeWords((ev.payload ?? {}) as RoomChangedPayload);
   const known = WORDS[ev.eventType];
   if (known) return known;
   const p = (ev.payload ?? {}) as Record<string, unknown>;
@@ -176,6 +180,64 @@ export function traceWords(ev: TraceEvent): string {
   line = line.replace(/\b(l[1-4])\b/gi, (m) => LEVEL_WORD[m.toUpperCase()] ?? m);
   return line;
 }
+
+type RoomChangedPayload = {
+  kind?: "ROOM" | "SETUP" | "EXTENSION";
+  fromRoom?: { roomNumber?: string | null } | null;
+  toRooms?: Array<{ roomNumber?: string | null; nights?: string[] | null }> | null;
+  keptNights?: string[] | null;
+  newSegmentNumber?: number | null;
+  quotationId?: string | null;
+  voucherNumber?: string | null;
+  heldPapers?: Array<{ kind?: string; number?: string | null }> | null;
+  pricing?: { priorTotal?: number | null; newTotal?: number | null; delta?: number | null } | null;
+  reachedStage?: string | null;
+  returnedToOrigin?: boolean | null;
+  blocked?: { message?: string | null } | null;
+  moveId?: string | null;
+};
+
+function roomChangeWords(p: RoomChangedPayload): string {
+  const from = p.fromRoom?.roomNumber ?? null;
+  const tos = (p.toRooms ?? []).map((r) => r.roomNumber).filter((n): n is string => !!n);
+  if (p.kind === "EXTENSION") return "Stay extended";
+  if (p.kind === "SETUP") return from ? `Room ${from} set up differently` : "Room set up differently";
+  if (from && tos.length) return `Room changed — ${from} → ${tos.join(", ")}`;
+  return "Room changed";
+}
+
+/** What the room change brought with it: the nights, the new pass, the papers, the price, where it ended. */
+function roomChangeDetail(p: RoomChangedPayload): string[] {
+  const bits: string[] = [];
+  const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
+  const tos = p.toRooms ?? [];
+  if (tos.length > 1 || (p.keptNights?.length ?? 0) > 0) {
+    for (const r of tos) if (r.roomNumber) bits.push(`Room ${r.roomNumber} for ${nightsWord(r.nights?.length ?? 0)}`);
+    if (p.keptNights?.length && p.fromRoom?.roomNumber) bits.push(`kept Room ${p.fromRoom.roomNumber} for ${nightsWord(p.keptNights.length)}`);
+  }
+  if (p.moveId) bits.push(p.moveId);
+  if (typeof p.newSegmentNumber === "number") bits.push(`pass ${p.newSegmentNumber}`);
+  if (p.quotationId) bits.push(`re-priced on ${p.quotationId}`);
+  if (p.voucherNumber) bits.push(`new voucher ${p.voucherNumber}`);
+  const held = (p.heldPapers ?? []).map((h) => h.number).filter((n): n is string => !!n);
+  if (held.length) bits.push(`held for the desk to send: ${held.join(", ")}`);
+  const prior = money(p.pricing?.priorTotal);
+  const next = money(p.pricing?.newTotal);
+  if (prior && next) bits.push(p.pricing?.delta ? `price ${prior} → ${next}` : `price unchanged at ${next}`);
+  const at = p.reachedStage ? /^S([1-9])$/.exec(p.reachedStage) : null;
+  if (p.blocked?.message) bits.push(`stopped${at ? ` at ${STEP_NAMES[Number(at[1]) - 1]}` : ""}: ${p.blocked.message}`);
+  else if (at) bits.push(`${p.returnedToOrigin ? "back at" : "now at"} ${STEP_NAMES[Number(at[1]) - 1]}`);
+  return bits;
+}
+
+const PAPER_WORD: Record<string, string> = {
+  QUOTATION: "quotation",
+  PROFORMA_INVOICE: "proforma",
+  CONFIRMATION_VOUCHER: "confirmation voucher",
+  PRE_ARRIVAL_REMINDER: "pre-arrival reminder",
+  INTERIM_INVOICE: "interim bill",
+  FINAL_INVOICE: "tax invoice",
+};
 
 /** System bookkeeping that says nothing to the desk — kept in History, left out of "Recent". */
 const HOUSEKEEPING = [
@@ -229,6 +291,25 @@ export function traceDetail(ev: TraceEvent): string | null {
   const p = (ev.payload ?? {}) as Record<string, unknown>;
   const bits: string[] = [];
   const str = (k: string) => (typeof p[k] === "string" && (p[k] as string).trim() ? (p[k] as string).trim() : null);
+  if (ev.eventType === "ENTRY.ROOM_CHANGED") bits.push(...roomChangeDetail(p as RoomChangedPayload));
+  // A reply no longer awaited names the paper and what replaced it (2026-10-13).
+  if (ev.eventType === "COMMUNICATION.REPLY_NO_LONGER_AWAITED") {
+    const commType = str("commType") ?? "";
+    const what = PAPER_WORD[commType] ?? "paper";
+    // A pre-arrival message has no number of its own; a voucher is named by its VOU number.
+    const paper = commType === "PRE_ARRIVAL_REMINDER" ? null : str("paperNumber") ?? str("paperId");
+    const by = str("replacedByNumber") ?? str("replacedBy");
+    bits.push(
+      commType === "PRE_ARRIVAL_REMINDER"
+        ? `${what} — the booking was confirmed again${by ? ` (${by})` : ""}`
+        : `${what}${paper ? ` ${paper}` : ""}${by ? ` replaced by ${by}` : ""}`,
+    );
+  }
+  if (ev.eventType === "RESERVATION.CONFIRMATION_VOUCHER_REMADE") {
+    const no = str("voucherNumber");
+    if (no) bits.push(no);
+    if (p.emailedWithThatFile === true) bits.push("the guest had been emailed the earlier voucher's file");
+  }
   // A stay that moved says from what to what (2026-10-12).
   if (ev.eventType === "ENTRY.STAY_DATES_CHANGED") {
     const span = (v: unknown) => {
@@ -243,6 +324,16 @@ export function traceDetail(ev: TraceEvent): string | null {
   if (ev.eventType.startsWith("ROOM_MOVE.")) {
     const moveId = str("moveId");
     if (moveId) bits.push(moveId);
+    const fromNo = str("fromRoomNumber");
+    const toNo = str("toRoomNumber");
+    if (fromNo && toNo) bits.push(`Room ${fromNo} → ${toNo}`);
+    // The move's outcome lines list every room that moved.
+    if (Array.isArray(p.legs)) {
+      const moves = (p.legs as Array<{ fromRoomNumber?: string | null; toRoomNumber?: string | null; entryId?: string }>)
+        .filter((l) => l.fromRoomNumber && l.toRoomNumber)
+        .map((l) => `${l.fromRoomNumber} → ${l.toRoomNumber}${l.entryId && l.entryId !== ev.entryId ? ` (${l.entryId})` : ""}`);
+      if (moves.length) bits.push(`rooms ${moves.join(", ")}`);
+    }
     const partner = str("partnerEntryId");
     if (partner) bits.push(`switched with ${partner}`);
     // (the move's own reason is added below, with every other act's)

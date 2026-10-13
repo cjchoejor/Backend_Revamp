@@ -180,6 +180,7 @@ export function S3SetUp({
         c.commType === "PROFORMA_INVOICE" &&
         c.direction === "OUTBOUND" &&
         c.sendStatus === "DISPATCHED" &&
+        c.inForce !== false &&
         (!passStart || (c.createdAt ?? "") >= passStart),
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];

@@ -6,7 +6,7 @@ import { useSession } from "@/hooks/use-session";
 import {
   fetchFolioDocumentPreviewHtml,
   fetchInvoicePreviewHtml,
-  fetchPdfObjectUrl,
+  fetchPdfBlob,
   fetchQuotationPreviewHtml,
   type FolioDocumentKind,
 } from "@/lib/api/documents";
@@ -111,24 +111,26 @@ function DocumentPreviewFrame({
 function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
   const { session } = useSession();
   const query = useQuery({
-    queryKey: ["pdf-inline", path] as const,
-    queryFn: () => fetchPdfObjectUrl(session!, path),
+    queryKey: ["pdf-blob", path] as const,
+    queryFn: () => fetchPdfBlob(session!, path),
     enabled: !!session,
     // The artifact is write-once — it can never change.
     staleTime: Infinity,
   });
-  // Revoke the object URL when the frame unmounts (or the URL is replaced).
+  // A fresh address for each time the frame is shown, freed when it goes. The file stays cached;
+  // caching the address instead handed a revoked one to the next opening — the broken-file icon.
+  const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    const url = query.data;
-    return () => {
-      if (url) URL.revokeObjectURL(url);
-    };
+    if (!query.data) return;
+    const u = URL.createObjectURL(query.data);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
   }, [query.data]);
 
-  if (query.isLoading) {
+  if (query.isLoading || (query.data && !url)) {
     return <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "6px 0" }}>Loading the sent document…</p>;
   }
-  if (query.isError || !query.data) {
+  if (query.isError || !query.data || !url) {
     return (
       <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "6px 0" }}>
         {query.error instanceof Error ? query.error.message : "Could not load the document."}
@@ -138,7 +140,7 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
   return (
     <iframe
       title={title}
-      src={query.data}
+      src={url}
       style={{
         width: "min(100%, 470px)",
         display: "block",

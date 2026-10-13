@@ -183,6 +183,8 @@ export type CommForReadiness = {
   direction: string | null;
   sendStatus: string | null;
   acknowledgementStatus: string | null;
+  /** The paper it carried is the one in force (2026-10-13). */
+  inForce?: boolean;
   /** ISO creation instant — used to scope the check to the current segment's window. */
   createdAt?: string | null;
 };
@@ -284,6 +286,7 @@ export function s3Readiness(
                 c.commType === "PROFORMA_INVOICE" &&
                 c.direction === "OUTBOUND" &&
                 c.sendStatus === "DISPATCHED" &&
+                c.inForce !== false &&
                 (!segStartIso || (c.createdAt ?? "") >= segStartIso),
             )?.acknowledgementStatus === "RECEIVED",
         },

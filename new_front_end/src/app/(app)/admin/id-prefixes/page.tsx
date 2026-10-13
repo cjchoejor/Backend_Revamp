@@ -28,6 +28,16 @@ const ENTITY_LABEL: Record<string, string> = {
   ROOM_ASSIGNMENT: "Room assignment",
   ROOM_INSPECTION: "Room inspection",
   WORK_ORDER: "Work order",
+  EARLY_DEPARTURE: "Early departure",
+  ROOM_MOVE: "Room move",
+  VOUCHER: "Confirmation voucher",
+  TRAVEL_AGENT: "Travel agent",
+  CORPORATE_ACCOUNT: "Corporate account",
+  RATE_CARD: "Rate card",
+  STAFF_USER: "Staff user",
+  ROLE: "Role",
+  DEPARTMENT: "Department",
+  SESSION: "Session",
 };
 
 function PrefixRow({

@@ -66,6 +66,13 @@ export type EntryCommunication = {
   createdBy: string;
   canAcknowledge: boolean;
   isOverdue: boolean;
+  /** The paper was replaced by a newer one — no reply is awaited for it (2026-10-13). */
+  superseded?: boolean;
+  /** The paper it carried is the one in force — what the "answer recorded" gates read. */
+  inForce?: boolean;
+  /** A voucher a walk made that the desk has not yet sent or not — it has not reached the guest. */
+  held?: boolean;
+  replacedBy?: string | null;
 };
 
 export async function listEntryCommunications(session: Session, entryId: string) {

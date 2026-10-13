@@ -124,6 +124,8 @@ export type HeldDocument = {
   entryId: string;
   kind: "CONFIRMATION_VOUCHER" | "PROFORMA";
   documentId: string;
+  /** The number printed on the paper — VOU-… for a voucher, INV-… for a bill. */
+  documentNumber?: string;
   reason: string;
   roomMoveLegId: string | null;
   heldAt: string;

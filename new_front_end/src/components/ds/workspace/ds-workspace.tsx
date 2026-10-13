@@ -29,7 +29,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { useDeskBookings } from "@/hooks/use-desk-data";
+import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
 import {
   getBillingSummary,
   getEntry,
@@ -72,7 +72,7 @@ import {
   s8Readiness,
   type Precondition,
 } from "@/lib/desk/workspace";
-import { arrivalNightRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
+import { arrivalNightRoomIds, heldRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtDay, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
@@ -126,6 +126,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     queryKey: ["entry", entryId],
     queryFn: () => getEntry(session!, entryId),
     enabled: !!session && !sessionLoading,
+    // A booking is often worked from two screens: re-read it on return and every half minute, so a
+    // change made on the other screen (a room move, a new quotation) shows here too (2026-10-13).
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
   });
   const entry = entryQuery.data ?? null;
   // Another screen moved this booking on (client.ts raises the event on a stale refusal): re-read it.
@@ -138,6 +142,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   // The list row carries what the entry payload does not: the custodian's name, the booker's name.
   const listRow = useDeskBookings().data?.items.find((r) => r.id === entryId) ?? null;
+  // The room registry, to name the rooms a booking holds before Arrival assigns them.
+  const roomList = useRoomsList().data?.items;
 
   const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
@@ -656,6 +662,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       c.commType === "CONFIRMATION_VOUCHER" &&
       c.direction === "OUTBOUND" &&
       c.sendStatus === "DISPATCHED" &&
+      c.inForce !== false &&
       c.acknowledgementStatus === "RECEIVED" &&
       (!segStart || (c.createdAt ?? "") >= segStart),
   );
@@ -1015,6 +1022,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   ).sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }),
   );
+  // Before Arrival assigns them, the rooms the booking holds are named from its newest pick — a
+  // room move re-seals it, so the header follows the move (2026-10-13).
+  const heldRoomNumbers = roomNumbers.length
+    ? []
+    : heldRoomIds(entry)
+        .map((id) => roomList?.find((r) => r.id === id)?.roomNumber)
+        .filter((x): x is string => !!x)
+        .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   const cur = billing?.currency ?? fin.currency;
   const totalKind =
     billing?.headline.kind === "BILLED_SO_FAR"
@@ -1080,7 +1095,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               </span>
               <span>
                 Rooms <b>{roomNumbers.length || entry.numberOfRooms || "—"}</b>
-                {roomNumbers.length ? ` · ${roomNumbers.join(", ")}` : " · not yet assigned"}
+                {roomNumbers.length ? ` · ${roomNumbers.join(", ")}` : heldRoomNumbers.length ? ` · ${heldRoomNumbers.join(", ")} · held` : " · not yet assigned"}
               </span>
               <span>
                 {channelWord(entry.inquiry?.sourceChannel)}

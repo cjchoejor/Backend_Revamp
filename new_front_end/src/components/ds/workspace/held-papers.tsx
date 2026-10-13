@@ -47,8 +47,8 @@ export function useHeldDocuments(entryId: string | null | undefined) {
 
 function paperOf(h: HeldDocument): PaperRef {
   return h.kind === "PROFORMA"
-    ? { kind: "invoice", id: h.documentId, label: `Proforma invoice ${h.documentId}` }
-    : { kind: "voucher", reservationId: h.documentId, label: `Confirmation voucher ${h.documentId}` };
+    ? { kind: "invoice", id: h.documentId, label: `Proforma invoice ${h.documentNumber ?? h.documentId}` }
+    : { kind: "voucher", reservationId: h.documentId, label: `Confirmation voucher ${h.documentNumber ?? h.documentId}` };
 }
 
 type Choice = "EMAIL" | "WHATSAPP" | "NONE";
@@ -86,7 +86,7 @@ function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView:
     <div className="heldp-row">
       <div className="heldp-what">
         <b>{KIND_WORD[h.kind]}</b>
-        <span className="mono sm">{h.documentId}</span>
+        <span className="mono sm">{h.documentNumber ?? h.documentId}</span>
         <span className="sm muted">
           {REASON_WORD[h.reason] ?? "held"} · {fmtDateTime(h.heldAt, tz)}
         </span>

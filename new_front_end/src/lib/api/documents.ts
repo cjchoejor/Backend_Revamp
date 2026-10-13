@@ -87,6 +87,14 @@ export async function fetchInvoicePreviewHtml(session: Session, invoiceId: strin
  * URL lifecycle (revoke on unmount).
  */
 export async function fetchPdfObjectUrl(session: Session, path: string): Promise<string> {
+  return URL.createObjectURL(await fetchPdfBlob(session, path));
+}
+
+/**
+ * The stored file itself. Cache THIS, not an object URL: an object URL dies when it is revoked,
+ * and a cached one handed to a reopened drawer drew the broken-file icon (2026-10-13).
+ */
+export async function fetchPdfBlob(session: Session, path: string): Promise<Blob> {
   const res = await fetch(path, { headers: authHeaders(session), credentials: "same-origin" });
   if (!res.ok) {
     let message = `Could not load the document (HTTP ${res.status})`;
@@ -98,7 +106,7 @@ export async function fetchPdfObjectUrl(session: Session, path: string): Promise
     }
     throw new Error(message);
   }
-  return URL.createObjectURL(await res.blob());
+  return res.blob();
 }
 
 async function fetchPreviewHtml(session: Session, path: string, label: string): Promise<string> {

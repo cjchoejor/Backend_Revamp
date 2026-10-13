@@ -1456,9 +1456,23 @@ export function PapersCard({
           ? [["Bills", bills]]
           : [];
 
+  /**
+   * Every confirmation is a voucher of its own, with its own VOU number (2026-10-13): a room move,
+   * a re-entry or an extension re-confirms the booking and makes a new one. Newest first; the
+   * current reservation's is the one in force.
+   */
+  const vouchers = useMemo(() => {
+    const list =
+      entry.reservations && entry.reservations.length
+        ? entry.reservations.map((r) => ({ id: r.id, confirmedAt: r.confirmedAt, number: r.confirmationVoucherNumber }))
+        : entry.reservation?.id
+          ? [{ id: entry.reservation.id, confirmedAt: entry.reservation.confirmedAt, number: entry.reservation.confirmationVoucherNumber ?? null }]
+          : [];
+    return [...list].sort((a, b) => (b.confirmedAt ?? "").localeCompare(a.confirmedAt ?? ""));
+  }, [entry.reservations, entry.reservation]);
+
   const others = useMemo<PaperRef[]>(() => {
     const out: PaperRef[] = [];
-    if (entry.reservation?.id) out.push({ kind: "voucher", reservationId: entry.reservation.id, label: "Confirmation voucher" });
     for (const d of withFolioDocs ? folioDocs.data?.documents ?? [] : []) {
       if (!d.available || d.kind === "tax-invoice") continue;
       out.push({ kind: "folio", entryId: entry.id, doc: d.kind, label: d.title, refreshKey: `${entry.updatedAt}` });
@@ -1468,7 +1482,15 @@ export function PapersCard({
   }, [entry, folioDocs.data, withFolioDocs]);
 
   const othersShown = show === "all" || show === "others" ? others : [];
-  if (quotesShown.length === 0 && invoiceGroups.every(([, list]) => list.length === 0) && othersShown.length === 0) return null;
+  const vouchersShown = show === "all" || show === "others" ? vouchers : [];
+  if (
+    quotesShown.length === 0 &&
+    invoiceGroups.every(([, list]) => list.length === 0) &&
+    othersShown.length === 0 &&
+    vouchersShown.length === 0
+  ) {
+    return null;
+  }
 
   const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
   const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
@@ -1539,6 +1561,31 @@ export function PapersCard({
         </div>
         ) : null,
       )}
+
+      {vouchersShown.length ? (
+        <div className="papergrp">
+          {show === "all" ? <div className="h">Confirmation vouchers</div> : null}
+          {vouchersShown.map((v) => {
+            const inForce = v.id === entry.reservation?.id;
+            const label = `Confirmation voucher ${v.number ?? v.id}`;
+            return (
+              <div className="paperrow" key={v.id}>
+                <span className="nm">
+                  <b>{v.number ?? v.id}</b>
+                  <span className="v"> · {v.id}</span>
+                </span>
+                <Chip tone={inForce ? "success" : "quiet"}>{inForce ? "in force" : "replaced"}</Chip>
+                <span className="when">{v.confirmedAt ? `confirmed ${fmtStamp(v.confirmedAt)}` : ""}</span>
+                <span className="acts">
+                  <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "voucher", reservationId: v.id, label })}>
+                    Preview
+                  </Button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       {othersShown.length ? (
         <div className="papergrp">
@@ -1853,7 +1900,8 @@ export function useCommunications(entryId: string) {
 /** The newest dispatched paper of one kind within the current pass. */
 export function latestDispatched(items: EntryCommunication[] | undefined, type: EntryCommunicationType, sinceIso?: string | null) {
   return (items ?? [])
-    .filter((c) => c.commType === type && c.sendStatus === "DISPATCHED" && (!sinceIso || c.createdAt >= sinceIso))
+    // Only the paper in force (2026-10-13): a replaced paper's answer is never asked for.
+    .filter((c) => c.commType === type && c.sendStatus === "DISPATCHED" && c.inForce !== false && (!sinceIso || c.createdAt >= sinceIso))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 

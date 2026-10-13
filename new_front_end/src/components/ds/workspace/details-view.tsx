@@ -17,6 +17,8 @@ import { channelWord } from "@/lib/ds/status";
 import { fmtRange, nightsOf, plural } from "@/lib/ds/format";
 import { guestName } from "@/lib/desk/model";
 import { reservedThisPass } from "@/lib/desk/workspace";
+import { heldRoomIds } from "@/lib/desk/party-rooms";
+import { useRoomsList } from "@/hooks/use-desk-data";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import type { EntryDetail } from "@/types/api";
@@ -49,6 +51,14 @@ export function DetailsView({
 
   const co = entry.actualCheckOutDate ?? entry.checkOutDate;
   const nights = nightsOf(entry.checkInDate, co);
+  // Before Arrival assigns them, the rooms the booking holds are named from its newest pick.
+  const roomList = useRoomsList().data?.items;
+  const held = (entry.roomAssignments ?? []).length
+    ? []
+    : heldRoomIds(entry)
+        .map((id) => roomList?.find((r) => r.id === id))
+        .filter((r): r is NonNullable<typeof r> => !!r)
+        .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true }));
   const rooms = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
     a.localeCompare(b, "en", { numeric: true }),
   );
@@ -122,7 +132,11 @@ export function DetailsView({
           <Facts wide>
             <Fact k="Dates">{`${fmtRange(entry.checkInDate, co)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
             <Fact k="Rooms" meta={beds ? `asked for ${beds}` : undefined}>
-              {rooms.length ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}` : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
+              {rooms.length
+                ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`
+                : held.length
+                  ? `${held.length} · ${held.map((r) => r.roomNumber).join(", ")} · held for the guest, assigned at Arrival`
+                  : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
             </Fact>
             <Fact k="Guests">{party}</Fact>
           </Facts>

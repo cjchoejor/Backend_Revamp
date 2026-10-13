@@ -369,6 +369,8 @@ export type CommittedHoldSummary = {
 export type ReservationSummary = {
   id: string;
   entryId: string;
+  /** The voucher's own number, VOU-YYYYMMDD-NNNN (2026-10-13). */
+  confirmationVoucherNumber?: string | null;
   /** The pass this reservation froze — one per pass. */
   segmentId?: string | null;
   frozenRate: string | number;
@@ -579,6 +581,14 @@ export type EntryDetail = EntryListItem & {
   holdExpiryOverrideSetBy?: string | null;
   holdExpiryOverrideSetAt?: string | null;
   reservation?: ReservationSummary | null;
+  /** Every confirmation's voucher, newest first — each re-confirmation is a new voucher (2026-10-13). */
+  reservations?: Array<{
+    id: string;
+    segmentId: string | null;
+    confirmedAt: string;
+    confirmationVoucherNumber: string | null;
+    confirmationVoucherStorageKey: string | null;
+  }>;
   folio?: FolioDetail | null;
   cancellationDisclosure?: CancellationDisclosureSummary | null;
   committedHold?: CommittedHoldSummary | null;
