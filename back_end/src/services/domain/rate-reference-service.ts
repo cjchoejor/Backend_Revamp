@@ -73,6 +73,11 @@ export async function buildEntryRateReference(
      * alone would never resolve. Added to the sealed rooms, never instead of them.
      */
     planRoomIds?: string[];
+    /**
+     * The stay to price for, when it is not the booking's own (2026-10-13, a date move's preview):
+     * a season on the new nights changes the published rate.
+     */
+    stay?: { checkIn: Date; checkOut: Date };
   },
 ): Promise<EntryRateReference> {
   const entry = await prisma.entry.findUnique({
@@ -99,9 +104,10 @@ export async function buildEntryRateReference(
       : null;
 
   const stay =
-    entry.checkInDate && entry.checkOutDate
+    opts?.stay ??
+    (entry.checkInDate && entry.checkOutDate
       ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }
-      : undefined;
+      : undefined);
   const nights = stay
     ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
     : null;

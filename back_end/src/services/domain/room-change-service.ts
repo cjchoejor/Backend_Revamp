@@ -30,6 +30,7 @@ import {
   enforceCommittedHoldRoomPhysicallyUsable,
 } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
 import {
+  enforceDateMoveAuthority,
   enforceRepriceAuthorityForStage,
   enforceRoomChangeAuthorityForStage,
 } from "../../policies/23-room-change/p58-room-change-mode-trigger.js";
@@ -242,6 +243,29 @@ export type StayExtensionWalkInput = {
   extraNights: Array<{ date: string; roomId: string }>;
 };
 
+/**
+ * A date move (2026-10-13, operator: "we can switch the rooms for the same date — can it also
+ * switch to different dates"; rulings the same day: Negotiation to Arrival, keep the agreed price,
+ * shift the whole stay, FOM from Set up on). The whole stay moves earlier or later by whole days,
+ * keeping its number of nights and its room pattern; the room dragged may land in another room on
+ * the way. Reached from the house chart through date-move-service, never the room-change HTTP body.
+ */
+export type DateShiftWalkInput = {
+  /** The new first night. */
+  newCheckInDate: Date;
+  /** KEEP = the guest keeps the rates they agreed; NEW_DATES = priced at the new nights' rates. */
+  priceMode: "KEEP" | "NEW_DATES";
+  /** The guest's agreement, typed by the desk, when the stay is priced at the new dates. */
+  guestAgreedNote?: string | null;
+};
+
+const DAY_MS_SHIFT = 86_400_000;
+/** "YYYY-MM-DD" moved by whole days. */
+export function shiftIsoDate(iso: string, days: number): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
+  return new Date(d.getTime() + days * DAY_MS_SHIFT).toISOString().slice(0, 10);
+}
+
 function extraNightsPicture(extraNights: Array<{ date: string; roomId: string }>): Array<{ date: string; roomIds: string[] }> {
   const byDate = new Map<string, string[]>();
   for (const n of extraNights) {
@@ -257,7 +281,7 @@ async function loadRoomChangeContext(
   prisma: PrismaClient,
   entryId: string,
   fromRoomId: string,
-  opts?: { extension?: StayExtensionWalkInput | null },
+  opts?: { extension?: StayExtensionWalkInput | null; dateShift?: DateShiftWalkInput | null },
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -295,13 +319,39 @@ async function loadRoomChangeContext(
   // dates are the stay then. From Reserve on, the reservation is this pass's, as before.
   const reservationOfPass =
     entry.reservation && entry.reservation.segmentId === entry.segments[0]?.id ? entry.reservation : null;
-  const checkIn = reservationOfPass?.frozenCheckInDate ?? entry.checkInDate;
+  const priorCheckIn = reservationOfPass?.frozenCheckInDate ?? entry.checkInDate;
   const currentCheckOut = reservationOfPass?.frozenCheckOutDate ?? entry.checkOutDate;
+  // A date move (2026-10-13): the whole stay moves by whole days, before the arrival — the guest
+  // is not in yet, so nothing slept is in the way. In house, the stay changes length only, through
+  // Extend the stay or Leaving early.
+  const dateShift = opts?.dateShift ?? null;
+  let shiftDays = 0;
+  if (dateShift) {
+    if (opts?.extension) throw new ValidationError("A stay is either extended or moved to other dates — not both at once");
+    if (!([Stage.S3, Stage.S4, Stage.S5] as Stage[]).includes(stage)) {
+      throw new ValidationError(
+        stage === Stage.S6 || stage === Stage.S7
+          ? "The guest is checking in or in house — the stay changes length through Extend the stay or Leaving early, not by moving its dates"
+          : `A booking's dates move from Set up, Reserve or Arrival — this booking is at ${stage}`,
+      );
+    }
+    if (!priorCheckIn || !currentCheckOut) throw new ValidationError("This booking has no stay dates to move");
+    shiftDays = Math.round((dateShift.newCheckInDate.getTime() - priorCheckIn.getTime()) / DAY_MS_SHIFT);
+    if (shiftDays === 0) throw new ValidationError("The new check-in is the day the booking already starts — nothing moves");
+    if (dateShift.newCheckInDate.getTime() < hotelTodayUtc().getTime()) {
+      throw new ValidationError("The new check-in is before today at the hotel");
+    }
+  }
+  const checkIn = dateShift && priorCheckIn ? new Date(priorCheckIn.getTime() + shiftDays * DAY_MS_SHIFT) : priorCheckIn;
   // Extension mode (2026-08-21): the stay runs to the NEW checkout; the extra nights are in
   // the plan from the start, so every downstream step (sealed config, silent quote, hold,
   // re-freeze) sees the extended stay as the booking's basis.
   const extension = opts?.extension ?? null;
-  const checkOut = extension ? extension.newCheckOutDate : currentCheckOut;
+  const checkOut = extension
+    ? extension.newCheckOutDate
+    : dateShift && currentCheckOut
+      ? new Date(currentCheckOut.getTime() + shiftDays * DAY_MS_SHIFT)
+      : currentCheckOut;
   if (!checkIn || !checkOut) throw new ValidationError("This booking has no stay dates — a room change cannot be validated");
   if (extension && (!currentCheckOut || extension.priorCheckOutDate.getTime() !== currentCheckOut.getTime())) {
     throw new ValidationError("The extension was requested against a different checkout date than the booking holds now — request it again");
@@ -319,9 +369,11 @@ async function loadRoomChangeContext(
   const basePicture = currentPerNightPicture({
     sealedOption: sealedConfig?.optionSelected ?? null,
     fallbackRoomIds,
-    nightsIso: extension ? isoNightsBetween(checkIn, currentCheckOut!) : nightsIso,
+    nightsIso: extension ? isoNightsBetween(checkIn, currentCheckOut!) : dateShift ? isoNightsBetween(priorCheckIn!, currentCheckOut!) : nightsIso,
   });
-  const picture = extension ? [...basePicture, ...extraNightsPicture(extension.extraNights)] : basePicture;
+  // A date move carries the room pattern night for night onto the new nights.
+  const shiftedPicture = dateShift ? basePicture.map((n) => ({ date: shiftIsoDate(n.date, shiftDays), roomIds: [...n.roomIds] })) : basePicture;
+  const picture = extension ? [...basePicture, ...extraNightsPicture(extension.extraNights)] : shiftedPicture;
   /** Rooms of the plan BEFORE the extension's extra nights (= every room on a per-night change). */
   const currentPlanRoomIds = new Set(basePicture.flatMap((n) => n.roomIds));
 
@@ -347,7 +399,11 @@ async function loadRoomChangeContext(
   const fromRoom = await prisma.room.findUnique({ where: { id: fromRoomId }, include: { roomType: true } });
   if (!fromRoom) throw new NotFoundError("Room");
 
-  return { entry, stage, checkIn, checkOut, currentCheckOut, nightsIso, sealedConfig, picture, currentPlanRoomIds, claimedRoomIds, substitutionNights, today, todayIso, fromRoom, extension };
+  return {
+    entry, stage, checkIn, checkOut, currentCheckOut, nightsIso, sealedConfig, picture, currentPlanRoomIds, claimedRoomIds,
+    substitutionNights, today, todayIso, fromRoom, extension, dateShift, shiftDays,
+    priorCheckIn: priorCheckIn!, priorCheckOut: currentCheckOut!,
+  };
 }
 
 /** Rooms the hold currently covers (perNightBreakdown + primary roomId), tolerant of null. */
@@ -789,6 +845,18 @@ export type RoomChangeOutcome = {
    * there is nothing to seat).
    */
   seating: { repaired: boolean; lines: string[]; actions: SeatingRepairAction[]; unresolved: string[] } | null;
+  /** Set when the walk moved the stay to other dates (2026-10-13). */
+  dateShift?: {
+    priorCheckInDate: string;
+    priorCheckOutDate: string;
+    newCheckInDate: string;
+    newCheckOutDate: string;
+    shiftDays: number;
+    nights: number;
+    priceMode: "KEEP" | "NEW_DATES";
+    /** Set when the booking was at Arrival and the new arrival is beyond the arrival window. */
+    arrivalOpensOn: string | null;
+  } | null;
   /** Set when the walk was a stay extension (2026-08-21). */
   extension: { requestId: string; priorCheckOutDate: string; newCheckOutDate: string; extraNights: Array<{ date: string; roomId: string }> } | null;
   walk: {
@@ -920,6 +988,8 @@ async function changeRoomToNewSegmentInner(
      * through `commitStayExtension` once the interim payment is in.
      */
     extension?: StayExtensionWalkInput | null;
+    /** Move the whole stay to other dates (2026-10-13) — see `DateShiftWalkInput`. */
+    dateShift?: DateShiftWalkInput | null;
     /** Validate everything and return the plan, writing nothing (a room move's preview). */
     dryRun?: boolean;
     /** Set when the walk is one leg of a room move from the house chart (2026-10-12). */
@@ -939,7 +1009,17 @@ async function changeRoomToNewSegmentInner(
   }
   const isExtension = !!input.extension;
   if (isExtension && hasPerNightForm) throw new ValidationError("An extension names its rooms per night on the request itself");
-  const setupOnly = !isExtension && !hasSingle && !hasPerNightForm;
+  const isDateShift = !!input.dateShift;
+  if (isDateShift) {
+    if (hasPerNightForm) throw new ValidationError("A date move takes one room for the room moved (toRoomId), not a per-night plan");
+    const touchesSetup =
+      hasSetup || (input.roomSetups?.length ?? 0) > 0 || (input.roomCompositions?.length ?? 0) > 0 || input.requestedDiscount !== undefined || input.repairSeating;
+    if (touchesSetup) throw new ValidationError("A date move carries the booking's setup as it is — change the setup on the booking afterwards");
+    if (input.dateShift!.priceMode === "NEW_DATES" && !input.dateShift!.guestAgreedNote?.trim()) {
+      throw new ValidationError("Pricing the stay at the new dates needs the guest's agreement — type what they said");
+    }
+  }
+  const setupOnly = !isExtension && !isDateShift && !hasSingle && !hasPerNightForm;
   // A full re-price basis counts as "something to do" on its own — it IS the change.
   const hasReprice = Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0;
   const hasDiscountEdit = input.requestedDiscount !== undefined;
@@ -977,7 +1057,10 @@ async function changeRoomToNewSegmentInner(
     throw new ValidationError("A discount change is sent with the composition table it was negotiated on (roomCompositions)");
   }
 
-  const ctx = await loadRoomChangeContext(prisma, input.entryId, input.fromRoomId, { extension: input.extension ?? null });
+  const ctx = await loadRoomChangeContext(prisma, input.entryId, input.fromRoomId, {
+    extension: input.extension ?? null,
+    dateShift: input.dateShift ?? null,
+  });
   const { entry, stage } = ctx;
   if (isExtension && stage !== Stage.S7) throw new ValidationError("A stay is extended in-house (S7)");
 
@@ -986,6 +1069,10 @@ async function changeRoomToNewSegmentInner(
   if (isExtension) {
     // The extra nights go to the from-room (extension in place) or to the one replacement room
     // (a move on the old checkout day); the other rooms of the plan continue by construction.
+    const target = hasSingle ? input.toRoomId!.trim() : input.fromRoomId;
+    for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
+  } else if (isDateShift) {
+    // The stay moves; the room moved keeps its place in the pattern, or lands in another room.
     const target = hasSingle ? input.toRoomId!.trim() : input.fromRoomId;
     for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
   } else if (setupOnly) {
@@ -1009,7 +1096,7 @@ async function changeRoomToNewSegmentInner(
   // Distinct NEW rooms (the from-room may appear per-night: those nights the guest KEEPS).
   const distinctTargets = Array.from(new Set(targetsByNight.values())).filter((id) => id !== input.fromRoomId);
   const keptFromNights = [...targetsByNight.entries()].filter(([, id]) => id === input.fromRoomId).map(([d]) => d).sort();
-  if (!setupOnly && !isExtension && distinctTargets.length === 0) {
+  if (!setupOnly && !isExtension && !isDateShift && distinctTargets.length === 0) {
     throw new ValidationError("Every night keeps the current room — nothing changes");
   }
   if (!setupOnly && !isExtension && stage === Stage.S7 && (distinctTargets.length > 1 || keptFromNights.length > 0)) {
@@ -1024,7 +1111,7 @@ async function changeRoomToNewSegmentInner(
   const targetById = new Map(targetRooms.map((r) => [r.id, r]));
   // A setup-only change's "target" is the from-room itself — the setup validation below reads
   // the room's type (max extra beds) and bed stock off this map.
-  if (setupOnly || isExtension) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
+  if (setupOnly || isExtension || isDateShift) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
   for (const id of distinctTargets) {
     const room = targetById.get(id);
     if (!room) throw new NotFoundError("Room");
@@ -1064,10 +1151,15 @@ async function changeRoomToNewSegmentInner(
   // Setup-only (and an extension in place): the "to" room IS the from-room — everything
   // single-valued downstream (the S7 assignment split, traces, the hold anchor, the outcome)
   // points at the room being re-set-up / extended.
-  const toRoomId = setupOnly || (isExtension && !primaryEntry) ? input.fromRoomId : primaryEntry![0];
+  const toRoomId = setupOnly || ((isExtension || isDateShift) && !primaryEntry) ? input.fromRoomId : primaryEntry![0];
   const toRoom = targetById.get(toRoomId)!;
   /** "201" on a simple swap; "201 + 305" on a per-night split — for notes and traces. */
-  const targetsLabel = isExtension
+  const datesLabel = isDateShift
+    ? `${ctx.priorCheckIn.toISOString().slice(0, 10)} → ${ctx.priorCheckOut.toISOString().slice(0, 10)} moved to ${ctx.checkIn.toISOString().slice(0, 10)} → ${ctx.checkOut.toISOString().slice(0, 10)}`
+    : null;
+  const targetsLabel = isDateShift
+    ? `${distinctTargets.length ? `${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ")}, ` : ""}${datesLabel}`
+    : isExtension
     ? `${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ") || ctx.fromRoom.roomNumber} (extension to ${ctx.checkOut.toISOString().slice(0, 10)})`
     : setupOnly
     ? `${ctx.fromRoom.roomNumber} (${repairSeating ? "guest seating" : hasReprice ? "re-price" : "setup change"})`
@@ -1079,6 +1171,7 @@ async function changeRoomToNewSegmentInner(
   // as a same-type change.
   const sameType = distinctTargets.every((id) => targetById.get(id)!.roomTypeId === ctx.fromRoom.roomTypeId);
   enforceRoomChangeAuthorityForStage({ currentStage: String(stage), actorLevel: actor.actorLevel, sameType });
+  if (isDateShift) enforceDateMoveAuthority({ actorLevel: actor.actorLevel });
 
   // ── Availability, validated the way S1 validates it (recall-plus-revalidate doctrine) ──────
   // Each NEW room is checked over ITS OWN nights only — a room taking one night of three must
@@ -1140,6 +1233,42 @@ async function changeRoomToNewSegmentInner(
       }
     }
   }
+  // A date move: every room of the plan must be free on ITS new nights (the room moved into another
+  // room was checked above). The booking's own claims are excluded, so overlapping its old nights
+  // is no conflict — it lets those go as it takes the new ones.
+  if (isDateShift) {
+    const byRoom = new Map<string, string[]>();
+    for (const n of ctx.picture) {
+      for (const id of n.roomIds) {
+        const rid = id === input.fromRoomId && targetsByNight.has(n.date) ? targetsByNight.get(n.date)! : id;
+        if (nightsByTarget.has(rid)) continue;
+        byRoom.set(rid, [...(byRoom.get(rid) ?? []), n.date]);
+      }
+    }
+    for (const [roomId, nights] of byRoom) {
+      const room = await prisma.room.findUnique({ where: { id: roomId }, include: { roomType: true } });
+      if (!room) throw new NotFoundError("Room");
+      for (const range of foldIsoNightsToRanges([...new Set(nights)].sort())) {
+        enforceCommittedHoldRoomPhysicallyUsable({
+          roomNumber: room.roomNumber,
+          isBlocked: room.isBlocked,
+          blockedReason: room.blockedReason,
+          isUnderMaintenance: room.isUnderMaintenance,
+          maintenanceDeadline: room.maintenanceDeadline,
+          checkIn: range.startDate,
+          checkOut: range.endDate,
+        });
+        const conflicts = await findRoomBookingConflicts(prisma, {
+          roomIds: [roomId],
+          checkIn: range.startDate,
+          checkOut: range.endDate,
+          excludeEntryId: input.entryId,
+          tolerate: input.moveContext?.tolerate,
+        });
+        enforceNoOverlappingBookingForCommittedHold({ conflicts: conflicts.map((c) => ({ ...c, roomNumber: room.roomNumber })) });
+      }
+    }
+  }
   // The guest moves NOW at S6/S7 into the room covering the first night; a room that only
   // starts on a later night needs to be ready by that night, not this minute.
   if (!isExtension && (stage === Stage.S6 || stage === Stage.S7)) {
@@ -1185,7 +1314,14 @@ async function changeRoomToNewSegmentInner(
   // Discount / currency / approval stamps ride with the CURRENT segment's terms when it has any;
   // a prior segment's terms are only the basis when the current one carries nothing at all.
   const priorTerms = basisIsCurrent ? basis.terms : (operativeTerms ?? frozenTerms ?? basis.terms);
-  const priorCompositions = basis.compositions;
+  // A date move carries every per-night meal exception onto the night it moved to.
+  const priorCompositions =
+    isDateShift && basis.compositions
+      ? basis.compositions.map((c) => ({
+          ...c,
+          nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: shiftIsoDate(String(o.date).slice(0, 10), ctx.shiftDays) })),
+        }))
+      : basis.compositions;
   const frozenTotal = (() => {
     const t = (frozenTerms?.compositionTotals ?? null) as { total?: unknown } | null;
     return typeof t?.total === "number" && Number.isFinite(t.total) ? t.total : null;
@@ -1260,7 +1396,9 @@ async function changeRoomToNewSegmentInner(
   // room → room, and a 205 → 205 link would print a spurious "Changed" on the Initially cell.
   // The sealed config's searchCriteria carries a `setupChange` note instead.
   const roomChangeMarker =
-    setupOnly || (isExtension && distinctTargets.length === 0) ? null : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
+    setupOnly || ((isExtension || isDateShift) && distinctTargets.length === 0)
+      ? null
+      : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
   // Extension marker (2026-08-21): the sealed config says the stay was extended — and from where.
   const extensionMarker = input.extension
     ? {
@@ -1300,6 +1438,10 @@ async function changeRoomToNewSegmentInner(
   );
   if (roomChangeMarker) successorOf.set(input.fromRoomId, distinctTargets);
   const seatingActions: SeatingRepairAction[] = [];
+  // Room numbers for the messages written before the seating block reads them.
+  const seatingRoomNumbersEarly = new Map(
+    (await prisma.room.findMany({ where: { id: { in: [...ctx.claimedRoomIds] } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber]),
+  );
 
   // ── The carried compositions, with the one room substituted ────────────────────────────────
   let newCompositions: RoomCompositionServiceInput[] | undefined;
@@ -1317,8 +1459,9 @@ async function changeRoomToNewSegmentInner(
         const crossType = room != null && room.roomTypeId !== ctx.fromRoom.roomTypeId;
         newCompositions.push({ ...src, roomId, nightMealOverrides: [], ...(crossType ? { negotiatedRoomRate: undefined } : {}) });
       }
-    } else if (setupOnly) {
-      // Nothing moves — every row carries; the setup block below rewrites the one row.
+    } else if (setupOnly || (isDateShift && distinctTargets.length === 0)) {
+      // Nothing moves room — every row carries (a date move's rows already carry their exceptions
+      // on the new nights); the setup block below rewrites the one row on a setup change.
       newCompositions = priorCompositions.map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
     } else if (stage === Stage.S7 && movingComposition) {
       // In-house split: the old room keeps its row (it now prices only its slept nights via the
@@ -1376,6 +1519,31 @@ async function changeRoomToNewSegmentInner(
     const repointed = repointStrayRows(newCompositions, substitutedDistinct, successorOf);
     newCompositions = repointed.rows;
     seatingActions.push(...repointed.actions);
+
+    // A date move keeps the price the guest agreed (operator ruling 2026-10-13): each room keeps
+    // the rate it was PRICED at, carried as its negotiated rate, so a season on the new nights
+    // does not move it. A room the moved room lands in takes the rate the moved room was priced
+    // at. "Price at the new dates" leaves the rates to resolve for the new nights.
+    if (isDateShift && input.dateShift!.priceMode === "KEEP") {
+      const perRoom = ((priorTerms?.compositionTotals ?? null) as { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } | null)?.perRoom ?? [];
+      const pricedAt = (roomId: string) => {
+        const v = perRoom.find((r) => r.roomId === roomId)?.roomRate;
+        return typeof v === "number" && Number.isFinite(v) && v > 0 ? Number(v.toFixed(2)) : null;
+      };
+      newCompositions = newCompositions.map((c) => {
+        const landedHere = distinctTargets.includes(c.roomId);
+        if (!landedHere && c.negotiatedRoomRate != null) return c;
+        const source = landedHere ? input.fromRoomId : c.roomId;
+        const rate = pricedAt(source) ?? (landedHere ? movingComposition?.negotiatedRoomRate ?? null : null);
+        if (rate == null) {
+          const no = landedHere ? ctx.fromRoom.roomNumber : (seatingRoomNumbersEarly.get(c.roomId) ?? c.roomId.slice(0, 6));
+          throw new ValidationError(
+            `Keeping the price needs the rate Room ${no} was priced at, and this booking has none recorded — choose "price at the new dates"`,
+          );
+        }
+        return { ...c, negotiatedRoomRate: rate };
+      });
+    }
   }
 
   // ── Seating: everyone has a room, no room is empty (2026-08-21, operator ruling) ───────────
@@ -1796,9 +1964,9 @@ async function changeRoomToNewSegmentInner(
       return n.roomIds.map((roomId) => ({ roomId, startDate, endDate }));
     }),
   });
-  // An extension moves the checkout, so the re-freeze asks again whether the guest holds another
-  // booking over the new nights (Policy 13) — asked here instead, before anything changes.
-  if (isExtension) {
+  // An extension or a date move changes the nights, so the re-freeze asks again whether the guest
+  // holds another booking over them (Policy 13) — asked here instead, before anything changes.
+  if (isExtension || isDateShift) {
     await enforceMultiBookingAcknowledgedForNewDates(prisma, {
       entryId: input.entryId,
       guestProfileId: (entry as { guestProfileId?: string | null }).guestProfileId ?? null,
@@ -1806,6 +1974,20 @@ async function changeRoomToNewSegmentInner(
       checkOutDate: ctx.checkOut,
     });
   }
+
+  const dateShiftOutcome = (arrivalOpensOn: string | null): RoomChangeOutcome["dateShift"] =>
+    isDateShift
+      ? {
+          priorCheckInDate: ctx.priorCheckIn.toISOString().slice(0, 10),
+          priorCheckOutDate: ctx.priorCheckOut.toISOString().slice(0, 10),
+          newCheckInDate: ctx.checkIn.toISOString().slice(0, 10),
+          newCheckOutDate: ctx.checkOut.toISOString().slice(0, 10),
+          shiftDays: ctx.shiftDays,
+          nights: ctx.nightsIso.length,
+          priceMode: input.dateShift!.priceMode,
+          arrivalOpensOn,
+        }
+      : null;
 
   // ── Dry run (a room move's preview, 2026-10-12): everything above validated, nothing written ──
   if (input.dryRun) {
@@ -1831,6 +2013,7 @@ async function changeRoomToNewSegmentInner(
       appliedBedTypes: [],
       seating: seatingOutcome,
       extension: null,
+      dateShift: dateShiftOutcome(null),
       pricing: { priorTotal, newTotal: null, delta: null, currency: (priorTerms?.currency as string | undefined) ?? null },
       quotationId: null,
       walk: { returnedToOrigin: false, reachedStage: String(stage), blocked: null },
@@ -1854,6 +2037,8 @@ async function changeRoomToNewSegmentInner(
     ? `ROOM_MOVE: ${reason}${move.moveId ? ` (${move.moveId}${move.partnerLabel ? `, with ${move.partnerLabel}` : ""})` : ""}`
     : isExtension
     ? `STAY_EXTENSION: ${reason}`
+    : isDateShift
+    ? `DATE_MOVE: ${reason} (${datesLabel})`
     : repairSeating
     ? `PARTY_SEATING_REPAIR: ${reason}`
     : hasReprice
@@ -2034,9 +2219,29 @@ async function changeRoomToNewSegmentInner(
     await backflowRoomChangeToS2(prisma, input.entryId, actor, {
       reason: reasonForTrace,
       fromStage: stage,
-      cancelTimerCodes: ["NO_SHOW_CUTOFF_W5", "ROOM_READINESS_SLA_W23", "PRE_ARRIVAL_COUNTDOWN_W4"],
+      // A date move also stops the nightly reminders of the old nights; Arrival registers the new ones.
+      cancelTimerCodes: [
+        "NO_SHOW_CUTOFF_W5",
+        "ROOM_READINESS_SLA_W23",
+        "PRE_ARRIVAL_COUNTDOWN_W4",
+        ...(isDateShift ? ["NIGHT_AUDIT_STAY_NIGHT_W37"] : []),
+      ],
       hooks: async (tx) => {
         if (stage === Stage.S3) await supersedePendingInvoicesTx(tx, input.entryId, actor.actorId);
+        if (isDateShift) {
+          // The stay's dates move — the silent quote, the hold and the re-freeze read them from
+          // the entry. The booking's own hold time cannot run past the new arrival day.
+          const override = (entry as { holdExpiresAtOverride?: Date | null }).holdExpiresAtOverride ?? null;
+          const arrivalDayEnd = new Date(ctx.checkIn.getTime() + DAY_MS_SHIFT);
+          await tx.entry.update({
+            where: { id: input.entryId },
+            data: {
+              checkInDate: ctx.checkIn,
+              checkOutDate: ctx.checkOut,
+              ...(override && override.getTime() > arrivalDayEnd.getTime() ? { holdExpiresAtOverride: null } : {}),
+            },
+          });
+        }
         // Pre-occupancy: release the hold + every claim flag; the new segment re-places its own
         // hold on the substituted selection (2026-08-02 ruling — a new segment places its own
         // commitments).
@@ -2087,7 +2292,9 @@ async function changeRoomToNewSegmentInner(
   // Papers the walk generates and holds for the desk (2026-10-12) — filled as they are made; the
   // array rides on every outcome, a stopped walk's included.
   const heldDocuments: RoomChangeOutcome["heldDocuments"] = [];
-  const heldReason: HeldDocumentReason = move
+  const heldReason: HeldDocumentReason = isDateShift
+    ? "DATE_MOVE"
+    : move
     ? "ROOM_MOVE"
     : isExtension
       ? "STAY_EXTENSION"
@@ -2146,6 +2353,7 @@ async function changeRoomToNewSegmentInner(
           extraNights: input.extension.extraNights.map((n) => ({ date: String(n.date).slice(0, 10), roomId: n.roomId })),
         }
       : null,
+    dateShift: dateShiftOutcome(null),
     heldDocuments,
   };
 
@@ -2186,9 +2394,21 @@ async function changeRoomToNewSegmentInner(
         segmentId: newSegment.id,
         searchCriteria: {
           ...priorCriteria,
-          checkInDate: priorCriteria.checkInDate ?? stayCheckIn.toISOString(),
-          checkOutDate: priorCriteria.checkOutDate ?? stayCheckOut.toISOString(),
-          ...(isExtension
+          checkInDate: isDateShift ? stayCheckIn.toISOString() : priorCriteria.checkInDate ?? stayCheckIn.toISOString(),
+          checkOutDate: isDateShift ? stayCheckOut.toISOString() : priorCriteria.checkOutDate ?? stayCheckOut.toISOString(),
+          ...(isDateShift
+            ? {
+                dateShift: {
+                  priorCheckInDate: ctx.priorCheckIn.toISOString().slice(0, 10),
+                  priorCheckOutDate: ctx.priorCheckOut.toISOString().slice(0, 10),
+                  shiftDays: ctx.shiftDays,
+                  priceMode: input.dateShift!.priceMode,
+                  reason,
+                },
+                ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}),
+              }
+            : {}),
+          ...(isDateShift ? {} : isExtension
             ? { stayExtension: { requestId: input.extension!.requestId, newCheckOutDate: ctx.checkOut.toISOString(), reason }, ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}) }
             : setupOnly
               ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason, ...(repairSeating ? { seatingRepair: true } : {}) } }
@@ -2208,7 +2428,9 @@ async function changeRoomToNewSegmentInner(
   // ── 3. Silent quotation — the new segment's priced basis; nothing goes to the guest ────────
   try {
     const draft: QuotationDraftInput = {
-      notes: isExtension
+      notes: isDateShift
+        ? `Stay moved: ${targetsLabel} (${reason})`
+        : isExtension
         ? `Stay extended to ${ctx.checkOut.toISOString().slice(0, 10)} (${reason})`
         : repairSeating
         ? `Guest seating restored (${reason})`
@@ -2484,12 +2706,12 @@ async function changeRoomToNewSegmentInner(
       version: await freshVersion(),
       // A kept price leaves the value unchanged too (2026-10-12), so the authority that confirmed
       // it carries exactly as on a same-type change.
-      carryHighValueAuthority: sameType || keptRoomRate != null,
+      carryHighValueAuthority: isDateShift ? input.dateShift!.priceMode === "KEEP" : sameType || keptRoomRate != null,
       // No paper goes to the guest unless the desk chooses (2026-10-12): the voucher is made and
       // held, and the desk answers it afterwards.
       holdGuestEmail: true,
       // Same dates, same question already answered — only an extension re-asks it (asked above).
-      carryMultiBookingAcknowledgement: !isExtension,
+      carryMultiBookingAcknowledgement: !isExtension && !isDateShift,
       // The advance was settled at the first freeze (money or the FOM's credit); the walk does
       // not reopen it — the hold re-placement above skips the same gate for the same reason.
       carryAdvanceCondition: true,
@@ -2550,7 +2772,13 @@ async function changeRoomToNewSegmentInner(
     if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED" && priorAnswered) {
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
-        verbatimNote: move
+        verbatimNote: isDateShift
+          ? `The stay moved to other dates (${datesLabel}${distinctTargets.length ? `, Room ${ctx.fromRoom.roomNumber} → ${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ")}` : ""}): ${reason}. ${
+              input.dateShift!.priceMode === "NEW_DATES"
+                ? `Priced at the new dates. The guest agreed: ${input.dateShift!.guestAgreedNote ?? "(no note)"}`
+                : "The guest keeps the price agreed. The move itself is the guest's answer to the re-issued voucher."
+            }`
+          : move
           ? move.priceMode === "NEW_TYPE" && !sameType
             ? `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}, re-priced at the new room type. The guest agreed: ${move.guestAgreedNote ?? "(no note)"}`
             : `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}. ${reason}. The stay's terms are unchanged apart from the room, so the guest's answer to the earlier voucher stands.`
@@ -2568,6 +2796,23 @@ async function changeRoomToNewSegmentInner(
   }
 
   // ── 7. Back to the origin stage ─────────────────────────────────────────────────────────────
+  // A date move from Arrival to a day beyond the arrival window stays at Reserve: Arrival opens on
+  // its own (the countdown the re-reservation armed), and opening it now would start the arrival
+  // checks weeks early.
+  if (isDateShift && stage === Stage.S5) {
+    const windowDays = Number(await requireActiveConfigValue<number>(prisma, "preArrival.windowDays").catch(() => 1)) || 1;
+    const opensAt = new Date(ctx.checkIn.getTime() - windowDays * DAY_MS_SHIFT);
+    if (opensAt.getTime() > Date.now()) {
+      const entryNow = await prisma.entry.findUniqueOrThrow({ where: { id: input.entryId }, select: { currentStage: true } });
+      return {
+        ...outcomeBase,
+        dateShift: dateShiftOutcome(opensAt.toISOString().slice(0, 10)),
+        pricing: { priorTotal, newTotal, delta: priorTotal != null && newTotal != null ? Number((newTotal - priorTotal).toFixed(2)) : null, currency },
+        quotationId,
+        walk: { returnedToOrigin: false, reachedStage: String(entryNow.currentStage), blocked: null },
+      };
+    }
+  }
   if (stage === Stage.S5 || stage === Stage.S6) {
     try {
       const engine = await getTimerEngine();
@@ -2858,7 +3103,7 @@ async function traceRoomChangeSummary(
       await prisma.reservation.findMany({ where: { id: { in: heldReservationIds } }, select: { id: true, confirmationVoucherNumber: true } })
     ).map((r) => [r.id, r.confirmationVoucherNumber]),
   );
-  const kind = out.extension ? "EXTENSION" : out.setupOnly ? "SETUP" : "ROOM";
+  const kind = out.dateShift ? "DATES" : out.extension ? "EXTENSION" : out.setupOnly ? "SETUP" : "ROOM";
   await prisma.traceEvent.create({
     data: {
       eventType: "ENTRY.ROOM_CHANGED",
@@ -2892,6 +3137,7 @@ async function traceRoomChangeSummary(
         })),
         pricing: out.pricing,
         extension: out.extension,
+        dates: out.dateShift ?? null,
         reachedStage: out.walk.reachedStage,
         returnedToOrigin: out.walk.returnedToOrigin,
         blocked: out.walk.blocked,
@@ -2899,4 +3145,33 @@ async function traceRoomChangeSummary(
       createdBy: actor.actorId,
     },
   });
+  // A date move also says, in the words History already has for it, that the stay's dates moved.
+  if (out.dateShift) {
+    const d = out.dateShift;
+    const nights = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "ENTRY.STAY_DATES_CHANGED",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel as never,
+        entityType: "Entry",
+        entityId: out.entryId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId: out.entryId,
+        payload: {
+          from: { checkInDate: d.priorCheckInDate, checkOutDate: d.priorCheckOutDate, nights: nights(d.priorCheckInDate, d.priorCheckOutDate) },
+          to: { checkInDate: d.newCheckInDate, checkOutDate: d.newCheckOutDate, nights: d.nights },
+          shiftDays: d.shiftDays,
+          priceMode: d.priceMode,
+          reason: (input as { reason?: string }).reason ?? null,
+          via: "DATE_MOVE",
+          arrivalOpensOn: d.arrivalOpensOn,
+        } as never,
+        createdBy: actor.actorId,
+      },
+    });
+  }
 }

@@ -12,6 +12,7 @@ import {
   retryRoomMoveLeg,
 } from "../../services/domain/room-move-service.js";
 import { decideHeldDocument, listHeldDocuments } from "../../services/domain/held-document-service.js";
+import { executeDateMove, previewDateMove } from "../../services/domain/date-move-service.js";
 
 /**
  * Room moves from the house chart, and the papers every room-change walk holds for the desk
@@ -57,6 +58,46 @@ roomMovesRouter.post(
   async (req, res, next) => {
     try {
       res.status(201).json(await executeRoomMove(prisma, actorOf(req), req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Moving a booking to other dates from the house chart (2026-10-13). L1 on the route; the service
+ * decides — the FOM from Set up on, Negotiation's own rule before.
+ */
+const dateMoveSchema = z.object({
+  entryId: z.string().trim().min(1).max(64),
+  fromRoomId: z.string().trim().min(1).max(64),
+  toRoomId: z.string().trim().min(1).max(64).nullable().optional(),
+  newCheckInDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "newCheckInDate must be YYYY-MM-DD"),
+  priceMode: z.enum(["KEEP", "NEW_DATES"]).optional(),
+  guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
+});
+
+roomMovesRouter.post(
+  "/date-moves/preview",
+  requireActorLevel("L1"),
+  validateBody(dateMoveSchema.extend({ reason: z.string().trim().max(1000).nullable().optional() })),
+  async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await previewDateMove(prisma, actorOf(req), req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+roomMovesRouter.post(
+  "/date-moves",
+  requireActorLevel("L1"),
+  validateBody(dateMoveSchema.extend({ reason: z.string().trim().min(1).max(1000) })),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await executeDateMove(prisma, actorOf(req), req.body));
     } catch (e) {
       next(e);
     }

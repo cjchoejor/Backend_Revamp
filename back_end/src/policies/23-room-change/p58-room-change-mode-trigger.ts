@@ -35,6 +35,21 @@ export function enforceRoomChangeAuthorityForStage(input: {
 }
 
 /**
+ * Authority for moving a booking to other dates (2026-10-13, operator ruling: "FOM from Set up
+ * on"). The stay itself moves — the hotel commits the rooms on other nights and re-issues the
+ * guest's papers — so from Set up on it is the FOM's (L2+), like a two-booking switch. At
+ * Negotiation the change of configuration keeps its own rule (desk while nothing has been sent,
+ * the FOM's approval after); this gate is the walk's, which runs from Set up.
+ */
+export function enforceDateMoveAuthority(input: { actorLevel: "L1" | "L2" | "L3" | "L4" }) {
+  if ((RANK[input.actorLevel] ?? 0) >= 2) return;
+  throw new PolicyGateBlockedError(
+    "AUTH_REQUIRED_L2",
+    `Moving a booking to other dates needs the FOM (L2+) from Set up on — the acting user is ${input.actorLevel}.`,
+  );
+}
+
+/**
  * Authority for a POST-FREEZE RE-PRICE (2026-08-19) — the S2 negotiation table brought to
  * S5–S7, where the operator edits the confirmed booking's compositions and discount in place.
  *

@@ -11,7 +11,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
  * Kept in lib with no service imports so the walk can record a hold without an import cycle.
  */
 
-export type HeldDocumentReason = "ROOM_CHANGE" | "STAY_EXTENSION" | "SETUP_CHANGE" | "SEATING_REPAIR" | "REPRICE" | "ROOM_MOVE";
+export type HeldDocumentReason = "ROOM_CHANGE" | "STAY_EXTENSION" | "SETUP_CHANGE" | "SEATING_REPAIR" | "REPRICE" | "ROOM_MOVE" | "DATE_MOVE";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 

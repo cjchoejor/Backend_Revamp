@@ -215,7 +215,10 @@ export async function buildQuotationPreview(
 
   // Same resolution the rate-reference strip shows and the draft uses: agent/corporate card
   // where one exists, else the standard rate plan, per ROOM TYPE.
-  const reference = await buildEntryRateReference(prisma, entryId, { planRoomIds: opts?.planRoomIds });
+  const reference = await buildEntryRateReference(prisma, entryId, {
+    planRoomIds: opts?.planRoomIds,
+    ...(opts?.stayOverride ? { stay: { checkIn: opts.stayOverride.checkIn, checkOut: opts.stayOverride.checkOut } } : {}),
+  });
   // Age-band meal shares, so a previewed child meal costs what the quote will charge.
   const childPolicy = await loadChildPolicyBundle(prisma);
 
