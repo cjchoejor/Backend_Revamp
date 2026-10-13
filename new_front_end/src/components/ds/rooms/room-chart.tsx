@@ -149,7 +149,7 @@ const ownRoomWhy = (no: string) => `Room ${no} is already part of this booking �
  * the whole stay shifts; one booking at a time). The server re-checks all of it and more — this only
  * says, while dragging, what would certainly be refused.
  */
-function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined, ownRoom?: OwnRoom): string | null {
+function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined): string | null {
   if (new Set(drag.items.map((s) => s.entryId)).size > 1) return "Move one booking's dates at a time";
   if (drag.items.length > 1 && drag.over && drag.over !== drag.grabbed.roomId) return "Move the dates first, then the rooms";
   if (!booking) return null;
@@ -165,9 +165,7 @@ function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined, ownRoom?
     case "S9":
       return "The guest has left or is leaving — the stay does not move";
   }
-  if (!booking.checkInDate) return "This booking has no dates to move";
-  const own = drag.over && drag.over !== drag.grabbed.roomId ? ownRoom?.(drag.grabbed.entryId, drag.over) : null;
-  return own ? ownRoomWhy(own) : null;
+  return booking.checkInDate ? null : "This booking has no dates to move";
 }
 /** The server takes at most 8 picked rooms in one move. */
 const MAX_PICK = 8;
@@ -241,7 +239,7 @@ function landingBoxes(
   type Move = { entryId: string; from: string; to: string; swapped: boolean };
   let moves: Move[];
   if (shift !== 0) {
-    if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId), ownRoom)) return [];
+    if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId))) return [];
     const target = d.over ?? d.grabbed.roomId;
     moves = rows
       .filter((rid) => (barsByRoom.get(rid) ?? []).some((b) => b.entryId === d.grabbed.entryId && MOVABLE.has(b.kind)))
@@ -682,7 +680,13 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     let edgeTimer: number | null = null;
     const update = () => {
       const shift = Math.round((last.x - sx + (wrap.scrollLeft - startScrollLeft)) / nightW);
-      current = { items, grabbed: sel, over: rowAt(last.x, last.y), x: last.x, y: last.y, shift };
+      // The booking's own rows are home (2026-10-13, operator: "it says that error but works when I
+      // move the cursor differently"): a sideways drag over any of them moves the dates and leaves
+      // the rooms as they are, and a drag up or down over them moves nothing — the same as resting
+      // on the row it started from. Only a row outside the booking changes the room.
+      const raw = rowAt(last.x, last.y);
+      const over = raw && raw !== sel.roomId && ownRoom(sel.entryId, raw) ? sel.roomId : raw;
+      current = { items, grabbed: sel, over, x: last.x, y: last.y, shift };
       setDrag(current);
     };
     // Over the chart's own sticky header, or within 48px of its bottom, the chart keeps scrolling
@@ -723,7 +727,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         // Dragged sideways: the whole stay moves to other dates (and the room grabbed may land in
         // another row on the way). The dialog asks the server what that would do.
         const booking = bookingOf.get(done.grabbed.entryId);
-        const why = dateMoveWhy(done, booking, ownRoom);
+        const why = dateMoveWhy(done, booking);
         if (why) {
           toast.error(why);
           return;
@@ -773,7 +777,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   // A sideways drag is a date move: its own plan and its own label.
   const dateDrag = drag && drag.shift !== 0 ? drag : null;
   const dateBooking = dateDrag ? bookingOf.get(dateDrag.grabbed.entryId) : undefined;
-  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking, ownRoom) : null;
+  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) : null;
   const dateSpan =
     dateDrag && dateBooking?.checkInDate && dateBooking.checkOutDate
       ? { from: ymdShift(dateBooking.checkInDate, dateDrag.shift), to: ymdShift(dateBooking.checkOutDate, dateDrag.shift) }
@@ -1157,7 +1161,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                 <span>
                   Moving {drag.items.length > 1 ? plural(drag.items.length, "room") : `Room ${drag.grabbed.roomNumber}`} · {drag.grabbed.name}
                 </span>
-                <span className="sub">Drop it on another room</span>
+                <span className="sub">
+                  {rows.filter((rid) => ownRoom(drag.grabbed.entryId, rid)).length > 1 ? "Drop it on a room outside this booking" : "Drop it on another room"}
+                </span>
               </>
             )}
           </div>
