@@ -736,6 +736,15 @@ export async function backflowComplaintToS2(
     actor,
     reason: `COMPLAINT_RESOLUTION: ${input.reason.trim()}`,
     modeKey: "COMPLAINT_RESOLUTION",
+    // The step clocks of where the booking was stop with it, as every other way back stops them
+    // (2026-10-13: a booking sent back from Check-in kept three "Night audit" clocks ticking at
+    // Set up). From Reserve, the countdown to Arrival; from Arrival or Check-in, the no-show
+    // cut-off and the per-night reminders — the guest is not in yet, and they start again when the
+    // booking next reaches Arrival. From Stay or Check-out the guest's nights are real and stand.
+    cancelTimerCodes: [
+      ...(entry.currentStage === Stage.S4 ? ["PRE_ARRIVAL_COUNTDOWN_W4"] : []),
+      ...(entry.currentStage === Stage.S5 || entry.currentStage === Stage.S6 ? ["NO_SHOW_CUTOFF_W5", "NIGHT_AUDIT_STAY_NIGHT_W37"] : []),
+    ],
     hooks: async () => {
       // Complaint resolution is a commercial-adjustment path. Folio continues; downstream code
       // (quotation service under COMPLAINT_RESOLUTION mode) writes the goodwill adjustment.
