@@ -667,6 +667,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .tape tr.drop-to > th.rc { box-shadow: inset 5px 0 0 var(--accent), inset 0 3px 0 var(--accent), inset 0 -3px 0 var(--accent) !important; }
 .ds .rchart .tape tr.drop-bad > th, .ds .rchart .tape tr.drop-bad > td { background-color: var(--danger-soft) !important; box-shadow: inset 0 3px 0 var(--danger), inset 0 -3px 0 var(--danger) !important; }
 .ds .rchart.is-dragging .tape td.cell.pick:hover::after { content: none; }
+.ds .rchart.is-dragging .tape td.cell.pick:hover { background: none; box-shadow: none; }
 /* Where the dragged bars would land (2026-10-13, operator: "visually show the selected rooms move
    like greyed ghost of it"): a grey copy of each bar on its new row and nights, measured off the
    table's cells and cut at the chart's visible box, solid so the bar beneath does not read through it. Pointer events pass through, so the row

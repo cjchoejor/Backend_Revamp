@@ -132,14 +132,24 @@ type Drag = { items: Sel[]; grabbed: Sel; over: string | null; x: number; y: num
 const DAY_MS = 86_400_000;
 const ymdShift = (ymd: string, days: number) =>
   new Date(Date.parse(`${ymd.slice(0, 10)}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
-const daysFrom = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00.000Z`) - Date.parse(`${a}T00:00:00.000Z`)) / DAY_MS);
+/**
+ * The room number when the booking already holds this room on the chart, else null. A drop onto
+ * one of the booking's own rooms is refused by the server ("already part of this booking"), so the
+ * chart says so while the bar is still in the hand.
+ */
+type OwnRoom = (entryId: string, roomId: string) => string | null;
+const ownRoomOf =
+  (barsByRoom: Map<string, RoomChartBar[]>, roomNo: (id: string) => string): OwnRoom =>
+  (entryId, roomId) =>
+    (barsByRoom.get(roomId) ?? []).some((b) => b.entryId === entryId && MOVABLE.has(b.kind)) ? roomNo(roomId) : null;
+const ownRoomWhy = (no: string) => `Room ${no} is already part of this booking — drop it on a room outside it`;
 
 /**
  * Whether a booking can be dragged to other dates (2026-10-13 rulings: any booking before check-in;
  * the whole stay shifts; one booking at a time). The server re-checks all of it and more — this only
  * says, while dragging, what would certainly be refused.
  */
-function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined): string | null {
+function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined, ownRoom?: OwnRoom): string | null {
   if (new Set(drag.items.map((s) => s.entryId)).size > 1) return "Move one booking's dates at a time";
   if (drag.items.length > 1 && drag.over && drag.over !== drag.grabbed.roomId) return "Move the dates first, then the rooms";
   if (!booking) return null;
@@ -154,9 +164,10 @@ function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined): string 
     case "S8":
     case "S9":
       return "The guest has left or is leaving — the stay does not move";
-    default:
-      return booking.checkInDate ? null : "This booking has no dates to move";
   }
+  if (!booking.checkInDate) return "This booking has no dates to move";
+  const own = drag.over && drag.over !== drag.grabbed.roomId ? ownRoom?.(drag.grabbed.entryId, drag.over) : null;
+  return own ? ownRoomWhy(own) : null;
 }
 /** The server takes at most 8 picked rooms in one move. */
 const MAX_PICK = 8;
@@ -174,6 +185,7 @@ function planDrop(
   grabbed: Sel,
   onRoomId: string,
   rows: string[],
+  ownRoom?: OwnRoom,
 ): { ok: true; legs: RoomMoveLegInput[]; to: string[] } | { ok: false; why: string | null } {
   const at = rows.indexOf(onRoomId);
   const from = rows.indexOf(grabbed.roomId);
@@ -184,6 +196,8 @@ function planDrop(
     const i = rows.indexOf(it.roomId) + shift;
     if (i < 0) return { ok: false, why: `Room ${it.roomNumber} would land above the first room — drop lower` };
     if (i >= rows.length) return { ok: false, why: `Room ${it.roomNumber} would land below the last room — drop higher` };
+    const own = ownRoom?.(it.entryId, rows[i]);
+    if (own) return { ok: false, why: ownRoomWhy(own) };
     legs.push({ entryId: it.entryId, fromRoomId: it.roomId, toRoomId: rows[i] });
   }
   return { ok: true, legs, to: legs.map((l) => l.toRoomId) };
@@ -221,19 +235,20 @@ function landingBoxes(
 ): LandBox[] {
   const { wrap, chart, bookingOf, barsByRoom, rows } = ctx;
   const shift = d.shift;
+  const ownRoom = ownRoomOf(barsByRoom, (id) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?");
   // What lands where: a sideways drag moves the whole stay (every room the booking holds, the
   // grabbed one onto the row under the pointer); a drag down or up moves the picked rooms.
   type Move = { entryId: string; from: string; to: string; swapped: boolean };
   let moves: Move[];
   if (shift !== 0) {
-    if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId))) return [];
+    if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId), ownRoom)) return [];
     const target = d.over ?? d.grabbed.roomId;
     moves = rows
       .filter((rid) => (barsByRoom.get(rid) ?? []).some((b) => b.entryId === d.grabbed.entryId && MOVABLE.has(b.kind)))
       .map((rid) => ({ entryId: d.grabbed.entryId, from: rid, to: rid === d.grabbed.roomId ? target : rid, swapped: false }));
   } else {
     if (!d.over) return [];
-    const plan = planDrop(d.items, d.grabbed, d.over, rows);
+    const plan = planDrop(d.items, d.grabbed, d.over, rows, ownRoom);
     if (!plan.ok) return [];
     moves = plan.legs.map((l) => ({ entryId: l.entryId, from: l.fromRoomId, to: l.toRoomId, swapped: false }));
     // Whoever holds a room being taken over those nights is swapped into the room left behind —
@@ -500,17 +515,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     [],
   );
 
-  // The grey copies of the dragged bars, re-measured on every move and whenever the chart scrolls
-  // under the pointer.
+  // The grey copies of the dragged bars, re-measured whenever the drag changes — and the drag
+  // changes on every move and every scroll under the pointer.
   const [lands, setLands] = useState<LandBox[]>([]);
-  const [scrollTick, setScrollTick] = useState(0);
-  const dragging = !!drag;
-  useEffect(() => {
-    if (!dragging) return;
-    const onScroll = () => setScrollTick((t) => t + 1);
-    window.addEventListener("scroll", onScroll, true);
-    return () => window.removeEventListener("scroll", onScroll, true);
-  }, [dragging]);
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
     if (!drag || !chart || !wrap) {
@@ -518,7 +525,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       return;
     }
     setLands(landingBoxes(drag, { wrap, chart, bookingOf, barsByRoom, rows }));
-  }, [drag, chart, bookingOf, barsByRoom, rows, scrollTick]);
+  }, [drag, chart, bookingOf, barsByRoom, rows]);
 
   if (q.error && !chart) return <LoadFailed what="the house chart" onRetry={() => void q.refetch()} />;
   if (!chart) return <LoadingBlock />;
@@ -549,6 +556,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   };
   const pickMax = pick ? (pick.reachesEnd ? Math.max(pick.freeRun, START_MAX_NIGHTS) : pick.freeRun) : 1;
   const roomNoOf = (id: string) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?";
+  const ownRoom = ownRoomOf(barsByRoom, roomNoOf);
   const selKeys = new Set(selected.map(selKey));
   const byRow = (list: Sel[]) => [...list].sort((x, y) => rows.indexOf(x.roomId) - rows.indexOf(y.roomId));
   /** Add picks, never past the server's limit — said, not silently cut. */
@@ -585,7 +593,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   /** The picked rooms, the top one landing on this room and the rest keeping their spacing. */
   const moveSelectionTo = (roomId: string) => {
     const items = byRow(selected);
-    const plan = planDrop(items, items[0], roomId, rows);
+    const plan = planDrop(items, items[0], roomId, rows, ownRoom);
     if (!plan.ok) {
       if (plan.why) toast.error(plan.why);
       return;
@@ -635,26 +643,73 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
    */
   const beginPress = (e: React.PointerEvent, sel: Sel) => {
     if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.pointerType === "touch") return;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
     const sx = e.clientX;
     const sy = e.clientY;
+    const startScrollLeft = wrap.scrollLeft;
     const items = selKeys.has(selKey(sel)) ? byRow(selected) : [sel];
-    const scroller = scrollerOf(wrapRef.current);
-    // The night under the pointer, read off the header's columns — a bar spans several nights, so
-    // the cell under the pointer cannot say which one.
-    const nightAt = (x: number): string | null => {
-      for (const th of Array.from(wrapRef.current?.querySelectorAll<HTMLElement>("th[data-night]") ?? [])) {
-        const r = th.getBoundingClientRect();
-        if (x >= r.left && x < r.right) return th.dataset.night ?? null;
+    const scroller = scrollerOf(wrap);
+    // One night's width, off the header. The dates move by the pointer's sideways travel in nights,
+    // rounded — so a drag up or down that wobbles a little stays a room move, and the dates move
+    // only once the pointer has gone half a night across (2026-10-13, operator: "sometimes the rooms
+    // show, sometimes they don't").
+    const nightW = wrap.querySelector<HTMLElement>("thead th[data-night]")?.getBoundingClientRect().width || 70;
+    // The room under the pointer, by its height alone: over a room-type band, a border, or the
+    // sticky header, the nearest room in sight stays the target instead of the target dropping out.
+    const rowAt = (x: number, y: number): string | null => {
+      const box = wrap.getBoundingClientRect();
+      if (x < box.left - 40 || x > box.right + 40) return null;
+      const top = Math.max(box.top, wrap.querySelector("thead")?.getBoundingClientRect().bottom ?? box.top);
+      const bottom = Math.min(box.top + wrap.clientTop + wrap.clientHeight, window.innerHeight);
+      const yy = Math.min(Math.max(y, top + 1), bottom - 1);
+      let best: string | null = null;
+      let bestGap = Infinity;
+      for (const tr of Array.from(wrap.querySelectorAll<HTMLElement>("tbody tr[data-room-id]"))) {
+        const r = tr.getBoundingClientRect();
+        if (r.bottom <= top || r.top >= bottom) continue;
+        if (yy >= r.top && yy < r.bottom) return tr.dataset.roomId ?? null;
+        const gap = Math.min(Math.abs(yy - r.top), Math.abs(yy - r.bottom));
+        if (gap < bestGap) {
+          bestGap = gap;
+          best = tr.dataset.roomId ?? null;
+        }
       }
-      return null;
+      return best;
     };
-    const startNight = nightAt(sx);
     let current: Drag | null = null;
+    let last = { x: sx, y: sy };
+    let edgeTimer: number | null = null;
+    const update = () => {
+      const shift = Math.round((last.x - sx + (wrap.scrollLeft - startScrollLeft)) / nightW);
+      current = { items, grabbed: sel, over: rowAt(last.x, last.y), x: last.x, y: last.y, shift };
+      setDrag(current);
+    };
+    // Over the chart's own sticky header, or within 48px of its bottom, the chart keeps scrolling
+    // while the pointer rests there — so a drop can reach any room, across room types.
+    const edgeStep = (): number => {
+      if (!scroller) return 0;
+      const box = scroller === document.scrollingElement ? { top: 0, bottom: window.innerHeight } : (scroller as Element).getBoundingClientRect();
+      const head = wrap.querySelector("thead")?.getBoundingClientRect().bottom ?? box.top;
+      if (last.y < Math.max(head, box.top + 48)) return -10;
+      if (last.y > Math.min(box.bottom, window.innerHeight) - 48) return 10;
+      return 0;
+    };
+    const onEdge = () => {
+      const step = edgeStep();
+      if (step && scroller) scroller.scrollBy(0, step);
+    };
+    // A scroll under a resting pointer changes the room under it — and the grey copies' places.
+    const onScroll = () => {
+      if (current) update();
+    };
     const end = (drop: boolean) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("scroll", onScroll, true);
+      if (edgeTimer !== null) window.clearInterval(edgeTimer);
       document.body.classList.remove("rchart-dragging");
       const done = current;
       setDrag(null);
@@ -668,7 +723,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         // Dragged sideways: the whole stay moves to other dates (and the room grabbed may land in
         // another row on the way). The dialog asks the server what that would do.
         const booking = bookingOf.get(done.grabbed.entryId);
-        const why = dateMoveWhy(done, booking);
+        const why = dateMoveWhy(done, booking, ownRoom);
         if (why) {
           toast.error(why);
           return;
@@ -683,7 +738,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         });
         return;
       }
-      const plan = planDrop(done.items, done.grabbed, done.over, rows);
+      const plan = planDrop(done.items, done.grabbed, done.over, rows, ownRoom);
       if (!plan.ok) {
         if (plan.why) toast.error(plan.why);
         return;
@@ -691,25 +746,16 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       setMoveLegs(plan.legs);
     };
     const onMove = (ev: PointerEvent) => {
+      last = { x: ev.clientX, y: ev.clientY };
       if (!current && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
       if (!current) {
         leave();
         setPick(null);
         document.body.classList.add("rchart-dragging");
+        window.addEventListener("scroll", onScroll, true);
+        edgeTimer = window.setInterval(onEdge, 30);
       }
-      const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
-      const row = under?.closest<HTMLElement>("tr[data-room-id]");
-      const nightNow = nightAt(ev.clientX);
-      const shift = startNight && nightNow ? daysFrom(startNight, nightNow) : current?.shift ?? 0;
-      current = { items, grabbed: sel, over: row?.dataset.roomId ?? null, x: ev.clientX, y: ev.clientY, shift };
-      setDrag(current);
-      // Over the chart's own sticky header, or near the bottom edge, the chart scrolls — so a drop
-      // can reach any room.
-      if (scroller) {
-        const box = scroller === document.scrollingElement ? { top: 0, bottom: window.innerHeight } : scroller.getBoundingClientRect();
-        if (under?.closest(".rchart thead") || ev.clientY < box.top + 48) scroller.scrollBy(0, -18);
-        else if (ev.clientY > box.bottom - 48) scroller.scrollBy(0, 18);
-      }
+      update();
     };
     const onUp = () => end(true);
     const onCancel = () => end(false);
@@ -727,12 +773,12 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   // A sideways drag is a date move: its own plan and its own label.
   const dateDrag = drag && drag.shift !== 0 ? drag : null;
   const dateBooking = dateDrag ? bookingOf.get(dateDrag.grabbed.entryId) : undefined;
-  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) : null;
+  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking, ownRoom) : null;
   const dateSpan =
     dateDrag && dateBooking?.checkInDate && dateBooking.checkOutDate
       ? { from: ymdShift(dateBooking.checkInDate, dateDrag.shift), to: ymdShift(dateBooking.checkOutDate, dateDrag.shift) }
       : null;
-  const dropPlan = drag?.over && !dateDrag ? planDrop(drag.items, drag.grabbed, drag.over, rows) : null;
+  const dropPlan = drag?.over && !dateDrag ? planDrop(drag.items, drag.grabbed, drag.over, rows, ownRoom) : null;
   const dropTo = new Set(dateDrag ? (dateWhy ? [] : [dateDrag.over ?? dateDrag.grabbed.roomId]) : dropPlan?.ok ? dropPlan.to : []);
   const dragged = new Set(drag ? drag.items.map(selKey) : []);
   const pickedWords = (() => {
