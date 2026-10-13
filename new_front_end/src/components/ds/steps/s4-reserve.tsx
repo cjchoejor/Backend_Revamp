@@ -51,7 +51,9 @@ import {
   words,
   type FactState,
   type PaperRef,
+  type StepPane,
 } from "./kit";
+import { RoomsTableCard } from "./rooms-table";
 import { BookingOtherWays } from "./s4-other-ways";
 import { PreArrivalTasksCard, RESERVE_PREP_TASKS } from "./s5-pre-arrival-tasks";
 
@@ -149,6 +151,9 @@ function operativeQuote(entry: EntryDetail): QuotationSummary | null {
 
 /* ------------------------------------------------------------------ the step */
 
+/** Reserve's own tab (2026-10-13) — the same rooms table as Set up and the steps after it. */
+export const S4_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
+
 export function S4Reserve({
   entry,
   past,
@@ -156,9 +161,11 @@ export function S4Reserve({
   goToStep,
   reserve,
   onOpenItems,
+  pane,
 }: {
   entry: EntryDetail;
   past: boolean;
+  pane?: string | null;
   onPark?: () => void;
   goToStep: (n: number) => void;
   reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
@@ -167,8 +174,11 @@ export function S4Reserve({
   onOpenItems?: (items: string[]) => void;
 }) {
   const confirmed = reservedThisPass(entry);
+  // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
+  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   return (
     <StepCanvas past={past}>
+      <div className="pane" hidden={at(null)}>
       {confirmed ? (
         <>
           <WhatReserveDecided entry={entry} />
@@ -198,6 +208,15 @@ export function S4Reserve({
         </>
       )}
       <BookingOtherWays entry={entry} onPark={onPark} />
+      </div>
+
+      <div className="pane" hidden={at("rooms")}>
+        <RoomsTableCard
+          entry={entry}
+          title="The rooms"
+          lead="Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again, the booking walks back through Negotiation, is reserved again with a new voucher held for you, and the price follows."
+        />
+      </div>
     </StepCanvas>
   );
 }

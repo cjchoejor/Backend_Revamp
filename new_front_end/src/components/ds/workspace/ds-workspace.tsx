@@ -91,8 +91,8 @@ import { useStayPrice } from "@/lib/ds/stay-price";
 import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
-import { S3SetUp } from "@/components/ds/steps/s3-setup";
-import { S4Reserve } from "@/components/ds/steps/s4-reserve";
+import { S3SetUp, S3_PANES } from "@/components/ds/steps/s3-setup";
+import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
@@ -760,7 +760,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
   // Check-in gained a Rooms tab of its own (2026-10-06) — the rooms moved out of the Room card.
   const panes: StepPane[] =
-    viewingPast || sealed ? [] : step.key === "stay" ? S7_PANES : step.key === "checkin" ? S6_PANES : [];
+    viewingPast || sealed
+      ? []
+      : step.key === "stay"
+        ? S7_PANES
+        : step.key === "checkin"
+          ? S6_PANES
+          : step.key === "setup"
+            ? S3_PANES
+            : step.key === "confirm"
+              ? S4_PANES
+              : [];
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
 
   const gotoStep = (n: number) => {
@@ -912,7 +922,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           />
         );
       case "setup":
-        return <S3SetUp entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+        return <S3SetUp entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} goToStep={viewingPast ? NOOP : stableSetSelected} pane={pane} />;
       case "confirm":
         return (
           <S4Reserve
@@ -922,6 +932,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             goToStep={gotoStep}
             reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
             onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
+            pane={pane}
           />
         );
       case "arrival":

@@ -754,3 +754,15 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
   margin: 4px 0 2px -74px;
   padding-left: 8px;
 }
+
+/* House chart: a bar dragged sideways lights the nights the stay would move to (2026-10-13). */
+.ds .rchart .tape thead th.drop-night {
+  background: var(--accent) !important;
+  color: #fff !important;
+  box-shadow: inset 0 -3px 0 var(--accent-ink) !important;
+}
+.ds .rchart .tape thead th.drop-night .wd,
+.ds .rchart .tape thead th.drop-night .dn,
+.ds .rchart .tape thead th.drop-night .mo {
+  color: #fff !important;
+}

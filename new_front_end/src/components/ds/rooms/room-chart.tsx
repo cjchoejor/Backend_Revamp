@@ -60,6 +60,8 @@ import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 import { RoomMoveDialog } from "./room-move-dialog";
+import { DateMoveDialog } from "./date-move-dialog";
+import type { DateMoveInput } from "@/lib/api/room-moves";
 
 const KIND_WORD: Record<ChartBarKind, string> = {
   OVERSTAY: "Due out · still in",
@@ -121,8 +123,41 @@ type Pick = { room: ChartRoom; night: string; freeRun: number; reachesEnd: boole
 /** A booking's claim on one room, picked on the chart (Ctrl / Shift click) or grabbed by a drag. */
 type Sel = { entryId: string; roomId: string; roomNumber: string; name: string };
 const selKey = (s: { entryId: string; roomId: string }) => `${s.entryId}|${s.roomId}`;
-/** A drag under way: what moves, the room grabbed, the row under the pointer. */
-type Drag = { items: Sel[]; grabbed: Sel; over: string | null; x: number; y: number };
+/**
+ * A drag under way: what moves, the room grabbed, the row under the pointer — and, since
+ * 2026-10-13, how many nights sideways it has been dragged (a date move when not 0).
+ */
+type Drag = { items: Sel[]; grabbed: Sel; over: string | null; x: number; y: number; shift: number };
+
+const DAY_MS = 86_400_000;
+const ymdShift = (ymd: string, days: number) =>
+  new Date(Date.parse(`${ymd.slice(0, 10)}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
+const daysFrom = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00.000Z`) - Date.parse(`${a}T00:00:00.000Z`)) / DAY_MS);
+
+/**
+ * Whether a booking can be dragged to other dates (2026-10-13 rulings: any booking before check-in;
+ * the whole stay shifts; one booking at a time). The server re-checks all of it and more — this only
+ * says, while dragging, what would certainly be refused.
+ */
+function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined): string | null {
+  if (new Set(drag.items.map((s) => s.entryId)).size > 1) return "Move one booking's dates at a time";
+  if (drag.items.length > 1 && drag.over && drag.over !== drag.grabbed.roomId) return "Move the dates first, then the rooms";
+  if (!booking) return null;
+  if (booking.status === "PARKED") return "This booking is parked — resume it first";
+  if (booking.status !== "ACTIVE") return "This booking has ended — its dates are a record now";
+  switch (booking.stage) {
+    case "S1":
+      return "At Inquiry the dates are changed on the booking's Inquiry step";
+    case "S6":
+    case "S7":
+      return "In house — the stay changes through Extend the stay or Leaving early";
+    case "S8":
+    case "S9":
+      return "The guest has left or is leaving — the stay does not move";
+    default:
+      return booking.checkInDate ? null : "This booking has no dates to move";
+  }
+}
 /** The server takes at most 8 picked rooms in one move. */
 const MAX_PICK = 8;
 /** Bars that can be picked up — the server refuses the rest with its reason (a provisional block,
@@ -252,6 +287,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const dragEnded = useRef(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [moveLegs, setMoveLegs] = useState<RoomMoveLegInput[] | null>(null);
+  /** A bar dragged sideways: the booking's stay moving to other dates (2026-10-13). */
+  const [dateMove, setDateMove] = useState<(DateMoveInput & { label: string }) | null>(null);
   const stopSwitching = () => {
     setSwitching(false);
     setSelected([]);
@@ -306,7 +343,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     if (!full) return;
     const onKey = (e: KeyboardEvent) => {
       // Escape closes what is on top first: the start box, Switch rooms, the move dialog.
-      if (e.key === "Escape" && !pickRef.current && !switching && !picking && !moveLegs) setFull(false);
+      if (e.key === "Escape" && !pickRef.current && !switching && !picking && !moveLegs && !dateMove) setFull(false);
     };
     // The page reserves a scrollbar gutter on <html> (`scrollbar-gutter: stable`), which a fixed
     // layer cannot cover — released while full screen is on, so the chart reaches the window's edge.
@@ -322,7 +359,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       html.style.scrollbarGutter = prev.gutter;
       document.removeEventListener("keydown", onKey);
     };
-  }, [full, switching, picking, moveLegs]);
+  }, [full, switching, picking, moveLegs, dateMove]);
   useEffect(
     () => () => {
       if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
@@ -449,6 +486,16 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const sy = e.clientY;
     const items = selKeys.has(selKey(sel)) ? byRow(selected) : [sel];
     const scroller = scrollerOf(wrapRef.current);
+    // The night under the pointer, read off the header's columns — a bar spans several nights, so
+    // the cell under the pointer cannot say which one.
+    const nightAt = (x: number): string | null => {
+      for (const th of Array.from(wrapRef.current?.querySelectorAll<HTMLElement>("th[data-night]") ?? [])) {
+        const r = th.getBoundingClientRect();
+        if (x >= r.left && x < r.right) return th.dataset.night ?? null;
+      }
+      return null;
+    };
+    const startNight = nightAt(sx);
     let current: Drag | null = null;
     const end = (drop: boolean) => {
       window.removeEventListener("pointermove", onMove);
@@ -464,6 +511,25 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         dragEnded.current = false;
       }, 0);
       if (!drop || !done.over) return;
+      if (done.shift !== 0) {
+        // Dragged sideways: the whole stay moves to other dates (and the room grabbed may land in
+        // another row on the way). The dialog asks the server what that would do.
+        const booking = bookingOf.get(done.grabbed.entryId);
+        const why = dateMoveWhy(done, booking);
+        if (why) {
+          toast.error(why);
+          return;
+        }
+        if (!booking?.checkInDate) return;
+        setDateMove({
+          entryId: done.grabbed.entryId,
+          fromRoomId: done.grabbed.roomId,
+          toRoomId: done.over !== done.grabbed.roomId ? done.over : null,
+          newCheckInDate: ymdShift(booking.checkInDate, done.shift),
+          label: done.grabbed.name,
+        });
+        return;
+      }
       const plan = planDrop(done.items, done.grabbed, done.over, rows);
       if (!plan.ok) {
         if (plan.why) toast.error(plan.why);
@@ -480,7 +546,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       }
       const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
       const row = under?.closest<HTMLElement>("tr[data-room-id]");
-      current = { items, grabbed: sel, over: row?.dataset.roomId ?? null, x: ev.clientX, y: ev.clientY };
+      const nightNow = nightAt(ev.clientX);
+      const shift = startNight && nightNow ? daysFrom(startNight, nightNow) : current?.shift ?? 0;
+      current = { items, grabbed: sel, over: row?.dataset.roomId ?? null, x: ev.clientX, y: ev.clientY, shift };
       setDrag(current);
       // Over the chart's own sticky header, or near the bottom edge, the chart scrolls — so a drop
       // can reach any room.
@@ -503,8 +571,16 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     window.addEventListener("pointercancel", onCancel);
     window.addEventListener("keydown", onKey, true);
   };
-  const dropPlan = drag?.over ? planDrop(drag.items, drag.grabbed, drag.over, rows) : null;
-  const dropTo = new Set(dropPlan?.ok ? dropPlan.to : []);
+  // A sideways drag is a date move: its own plan and its own label.
+  const dateDrag = drag && drag.shift !== 0 ? drag : null;
+  const dateBooking = dateDrag ? bookingOf.get(dateDrag.grabbed.entryId) : undefined;
+  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) : null;
+  const dateSpan =
+    dateDrag && dateBooking?.checkInDate && dateBooking.checkOutDate
+      ? { from: ymdShift(dateBooking.checkInDate, dateDrag.shift), to: ymdShift(dateBooking.checkOutDate, dateDrag.shift) }
+      : null;
+  const dropPlan = drag?.over && !dateDrag ? planDrop(drag.items, drag.grabbed, drag.over, rows) : null;
+  const dropTo = new Set(dateDrag ? (dateWhy ? [] : [dateDrag.over ?? dateDrag.grabbed.roomId]) : dropPlan?.ok ? dropPlan.to : []);
   const dragged = new Set(drag ? drag.items.map(selKey) : []);
   const pickedWords = (() => {
     const by = new Map<string, Sel[]>();
@@ -600,6 +676,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
             <p>Move rooms: drag a booking onto another room. Ctrl-click (Cmd on a Mac) picks more rooms, Shift-click picks a booking&apos;s rooms in between; drag one of them and they all move, the one you hold landing where you drop it and the rest keeping their spacing.</p>
+            <p>Move dates: drag a booking sideways — the whole stay moves earlier or later, keeping its nights (before check-in only). Drag it down or up at the same time to change the room too.</p>
             <p>A booking already in a room you drop on swaps into the room left behind. Switch rooms does the same by clicking: pick a booking, then click another booking or a free night.</p>
             <p>Each room walks every step its booking needs; you see what each will do before anything runs.</p>
           </Help>
@@ -647,7 +724,18 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                 return (
                   <th
                     key={d}
-                    className={[d === chart.today ? "today" : "", d < chart.today ? "past" : "", weekend(d) ? "we" : "", d.slice(8, 10) === "01" && i > 0 ? "m1" : ""].filter(Boolean).join(" ") || undefined}
+                    data-night={d}
+                    className={
+                      [
+                        d === chart.today ? "today" : "",
+                        d < chart.today ? "past" : "",
+                        weekend(d) ? "we" : "",
+                        d.slice(8, 10) === "01" && i > 0 ? "m1" : "",
+                        dateSpan && !dateWhy && d >= dateSpan.from && d < dateSpan.to ? "drop-night" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
                   >
                     <span className="wd">{d === chart.today ? "Today" : WEEKDAY[dayOfWeek(d)]}</span>
                     <b className="dn">{Number(d.slice(8, 10))}</b>
@@ -704,7 +792,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                         "rrow",
                         ri === t.roomIds.length - 1 ? "last" : "",
                         dropTo.has(rid) ? "drop-to" : "",
-                        drag?.over === rid && dropPlan && !dropPlan.ok && dropPlan.why ? "drop-bad" : "",
+                        drag?.over === rid && ((dropPlan && !dropPlan.ok && dropPlan.why) || dateWhy) ? "drop-bad" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
@@ -826,8 +914,23 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
 
       {drag ? (
         <Floating>
-          <div className={`rchart-ghost${dropPlan && !dropPlan.ok && dropPlan.why ? " bad" : ""}`} style={{ left: drag.x + 16, top: drag.y + 16 }} role="status">
-            {dropPlan?.ok ? (
+          <div className={`rchart-ghost${(dropPlan && !dropPlan.ok && dropPlan.why) || dateWhy ? " bad" : ""}`} style={{ left: drag.x + 16, top: drag.y + 16 }} role="status">
+            {dateDrag ? (
+              dateWhy ? (
+                <span>{dateWhy}</span>
+              ) : (
+                <>
+                  <span>
+                    {dateDrag.grabbed.name} · <b>{dateSpan ? fmtRange(dateSpan.from, dateSpan.to) : ""}</b>
+                  </span>
+                  <span className="sub">
+                    {Math.abs(dateDrag.shift)} {Math.abs(dateDrag.shift) === 1 ? "day" : "days"} {dateDrag.shift > 0 ? "later" : "earlier"}
+                    {dateDrag.over && dateDrag.over !== dateDrag.grabbed.roomId ? ` · Room ${dateDrag.grabbed.roomNumber} → ${roomNoOf(dateDrag.over)}` : ""}
+                  </span>
+                  <span className="sub">Let go to see what moving the dates would do</span>
+                </>
+              )
+            ) : dropPlan?.ok ? (
               <>
                 {dropPlan.legs.slice(0, 5).map((l) => (
                   <span key={selKey({ entryId: l.entryId, roomId: l.fromRoomId })}>
@@ -851,7 +954,15 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         </Floating>
       ) : null}
 
-      {hover && !pick && !moveLegs ? (
+      <DateMoveDialog
+        move={dateMove}
+        onClose={() => {
+          setDateMove(null);
+          stopSwitching();
+        }}
+      />
+
+      {hover && !pick && !moveLegs && !dateMove ? (
         <Floating>
           <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} />
         </Floating>

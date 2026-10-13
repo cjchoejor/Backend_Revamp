@@ -149,3 +149,69 @@ export async function decideHeldDocument(
 ) {
   return apiRequest<HeldDocument>(`/api/held-documents/${heldDocumentId}/decide`, { method: "POST", session, body });
 }
+
+/* ── Moving a booking to other dates from the house chart (2026-10-13) ───────────────────── */
+
+export type DateMoveInput = {
+  entryId: string;
+  /** The room whose bar was dragged. */
+  fromRoomId: string;
+  /** Where that room lands, when the drag also changed its row. */
+  toRoomId?: string | null;
+  /** The new first night, "YYYY-MM-DD" — the stay keeps its number of nights. */
+  newCheckInDate: string;
+  priceMode?: "KEEP" | "NEW_DATES";
+  guestAgreedNote?: string | null;
+};
+
+export type DateMovePreview = {
+  ok: boolean;
+  entryId: string;
+  bookingLabel: string;
+  guestName: string | null;
+  stage: string;
+  stageWord: string;
+  route: "NEGOTIATION" | "WALK";
+  from: { checkInDate: string; checkOutDate: string; nights: number };
+  to: { checkInDate: string; checkOutDate: string; nights: number };
+  shiftDays: number;
+  rooms: Array<{ roomId: string; roomNumber: string; toRoomNumber: string | null; nightsLabel: string }>;
+  authority: { needed: "L1" | "L2"; actorLevel: string; ok: boolean; waitsForApproval: boolean; why: string };
+  price: { before: number | null; after: number | null; delta: number | null; currency: string | null; note: string | null };
+  path: string[];
+  papers: string[];
+  notes: string[];
+  refusals: string[];
+};
+
+export type DateMoveResult =
+  | {
+      route: "WALK";
+      entryId: string;
+      outcome: {
+        newSegmentNumber: number;
+        pricing: { priorTotal: number | null; newTotal: number | null; delta: number | null; currency: string | null };
+        walk: { returnedToOrigin: boolean; reachedStage: string; blocked: { atStep: string; code: string | null; message: string } | null };
+        dateShift: { newCheckInDate: string; newCheckOutDate: string; arrivalOpensOn: string | null } | null;
+        heldDocuments: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }>;
+      };
+    }
+  | {
+      route: "NEGOTIATION";
+      entryId: string;
+      outcome: {
+        applied: boolean;
+        requestId?: string;
+        datesChanged: boolean;
+        newDates: { checkInDate: string | null; checkOutDate: string | null };
+        quotationsInvalidated: Array<{ id: string; referenceNumber: string }>;
+      };
+    };
+
+export async function previewDateMove(session: Session, body: DateMoveInput & { reason?: string | null }) {
+  return apiRequest<DateMovePreview>(`/api/date-moves/preview`, { method: "POST", session, body });
+}
+
+export async function executeDateMove(session: Session, body: DateMoveInput & { reason: string }) {
+  return apiRequest<DateMoveResult>(`/api/date-moves`, { method: "POST", session, body });
+}

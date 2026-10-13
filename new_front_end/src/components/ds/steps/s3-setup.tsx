@@ -64,7 +64,9 @@ import {
   useStepMode,
   words,
   type PaperRef,
+  type StepPane,
 } from "./kit";
+import { RoomsTableCard } from "./rooms-table";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
@@ -105,17 +107,30 @@ type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: st
 
 /* ------------------------------------------------------------------ the step */
 
+/**
+ * Set up's own tab (2026-10-13, operator: "in stage 3 and 4 can you add the rooms tab we have in s5
+ * s6 s7"): the same rooms table, with the same governed change behind a click on a room.
+ */
+export const S3_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
+
+const ROOMS_LEAD =
+  "Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again, the booking walks back through Negotiation and the price follows.";
+
 export function S3SetUp({
   entry,
   past,
   onPark,
   goToStep,
+  pane,
 }: {
   entry: EntryDetail;
   past: boolean;
   onPark?: () => void;
   goToStep: (n: number) => void;
+  pane?: string | null;
 }) {
+  // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
+  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const router = useRouter();
   const refresh = useRefreshEntry(entry.id);
@@ -227,6 +242,7 @@ export function S3SetUp({
 
   return (
     <StepCanvas past={past}>
+      <div className="pane" hidden={at(null)}>
       <PartiesCard entry={entry} inq={inq} partyName={partyName} model={savedModel ?? model} modelSaved={!!savedModel} status={status} />
 
       <BillingModelCard
@@ -357,6 +373,11 @@ export function S3SetUp({
         placeholder={reentry === "S2" ? "agent asked for a better rate" : "guest moved the dates by a day"}
         onConfirm={(r) => reentry && reentryM.mutate({ to: reentry, reason: r })}
       />
+      </div>
+
+      <div className="pane" hidden={at("rooms")}>
+        <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} />
+      </div>
     </StepCanvas>
   );
 }
