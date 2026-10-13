@@ -156,11 +156,16 @@ export type DateMoveInput = {
   entryId: string;
   /** The room whose bar was dragged. */
   fromRoomId: string;
-  /** Where that room lands, when the drag also changed its row. */
+  /** Where that room lands, when the drag also changed its row (one room). */
   toRoomId?: string | null;
+  /** Every room that changes row, old → new — the booking moves as a block (2026-10-13). */
+  roomMap?: Record<string, string> | null;
   /** The new first night, "YYYY-MM-DD" — the stay keeps its number of nights. */
   newCheckInDate: string;
+  /** The price choice for a room not named in `priceModes`. */
   priceMode?: "KEEP" | "NEW_DATES";
+  /** The price choice per room, keyed by the room as it is now. */
+  priceModes?: Record<string, "KEEP" | "NEW_DATES"> | null;
   guestAgreedNote?: string | null;
 };
 
@@ -175,7 +180,18 @@ export type DateMovePreview = {
   from: { checkInDate: string; checkOutDate: string; nights: number };
   to: { checkInDate: string; checkOutDate: string; nights: number };
   shiftDays: number;
-  rooms: Array<{ roomId: string; roomNumber: string; toRoomNumber: string | null; nightsLabel: string }>;
+  rooms: Array<{
+    roomId: string;
+    roomNumber: string;
+    toRoomId: string | null;
+    toRoomNumber: string | null;
+    nightsLabel: string;
+    sameType: boolean;
+    priceMode: "KEEP" | "NEW_DATES";
+    /** This room's total on the new nights, tax included, before any booking discount — for each choice. */
+    keepTotal: number | null;
+    newDatesTotal: number | null;
+  }>;
   authority: { needed: "L1" | "L2"; actorLevel: string; ok: boolean; waitsForApproval: boolean; why: string };
   price: { before: number | null; after: number | null; delta: number | null; currency: string | null; note: string | null };
   path: string[];

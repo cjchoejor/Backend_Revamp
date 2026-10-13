@@ -185,7 +185,16 @@ export function traceWords(ev: TraceEvent): string {
 }
 
 type RoomChangedPayload = {
-  kind?: "ROOM" | "SETUP" | "EXTENSION";
+  kind?: "ROOM" | "SETUP" | "EXTENSION" | "DATES";
+  /** A date move (2026-10-13): the stay before and after, the rooms that changed row, the price choice per room. */
+  dates?: {
+    priorCheckInDate?: string | null;
+    priorCheckOutDate?: string | null;
+    newCheckInDate?: string | null;
+    newCheckOutDate?: string | null;
+    rooms?: Array<{ fromRoomNumber?: string | null; toRoomNumber?: string | null }> | null;
+    priceModes?: Record<string, string> | null;
+  } | null;
   /** Several rooms moved in one walk, or a head pieced together from an older walk's lines. */
   moves?: Array<{ from: string; to: string }> | null;
   fromRoom?: { roomNumber?: string | null } | null;
@@ -206,6 +215,10 @@ function roomChangeWords(p: RoomChangedPayload): string {
   const from = p.fromRoom?.roomNumber ?? null;
   const tos = (p.toRooms ?? []).map((r) => r.roomNumber).filter((n): n is string => !!n);
   if (p.kind === "EXTENSION") return "Stay extended";
+  if (p.kind === "DATES") {
+    const d = p.dates ?? null;
+    return d?.newCheckInDate && d.newCheckOutDate ? `Stay moved to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay moved to other dates";
+  }
   if (p.kind === "SETUP") return from ? `Room ${from} set up differently` : "Room set up differently";
   if (p.moves?.length) return `${p.moves.length > 1 ? "Rooms" : "Room"} changed — ${p.moves.map((m) => `${m.from} → ${m.to}`).join(" · ")}`;
   if (from && tos.length) return `Room changed — ${from} → ${tos.join(", ")}`;
@@ -217,7 +230,15 @@ function roomChangeDetail(p: RoomChangedPayload): string[] {
   const bits: string[] = [];
   const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
   const tos = p.toRooms ?? [];
-  if (tos.length > 1 || (p.keptNights?.length ?? 0) > 0) {
+  if (p.kind === "DATES") {
+    // A date move: where the stay was, the rooms that moved with it, the rooms priced afresh.
+    const d = p.dates ?? null;
+    if (d?.priorCheckInDate && d.priorCheckOutDate) bits.push(`from ${fmtRange(d.priorCheckInDate, d.priorCheckOutDate)}`);
+    const moved = (d?.rooms ?? []).filter((r) => r.fromRoomNumber && r.toRoomNumber);
+    if (moved.length) bits.push(`rooms ${moved.map((r) => `${r.fromRoomNumber} → ${r.toRoomNumber}`).join(" · ")}`);
+    const fresh = Object.entries(d?.priceModes ?? {}).filter(([, m]) => m === "NEW_DATES").map(([no]) => no);
+    if (fresh.length) bits.push(`priced at the new dates: Room ${fresh.join(", ")}`);
+  } else if (tos.length > 1 || (p.keptNights?.length ?? 0) > 0) {
     for (const r of tos) if (r.roomNumber) bits.push(`Room ${r.roomNumber} for ${nightsWord(r.nights?.length ?? 0)}`);
     if (p.keptNights?.length && p.fromRoom?.roomNumber) bits.push(`kept Room ${p.fromRoom.roomNumber} for ${nightsWord(p.keptNights.length)}`);
   }
@@ -343,6 +364,12 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const from = span(p.from);
     const to = span(p.to);
     if (from && to) bits.push(`from ${from} to ${to}`);
+    // The rooms that changed row with it — the block (2026-10-13).
+    const moved = Array.isArray(p.rooms) ? (p.rooms as Array<{ fromRoomNumber?: string; toRoomNumber?: string }>) : [];
+    if (moved.length) bits.push(`rooms ${moved.map((r) => `${r.fromRoomNumber ?? "?"} → ${r.toRoomNumber ?? "?"}`).join(" · ")}`);
+    const modes = (p.priceModes ?? null) as Record<string, string> | null;
+    const atNewDates = modes ? Object.entries(modes).filter(([, m]) => m === "NEW_DATES").map(([no]) => no) : [];
+    if (atNewDates.length) bits.push(`priced at the new dates: Room ${atNewDates.join(", ")}`);
   }
   // A room move names the move, the partner and why a leg did not run (2026-10-12).
   if (ev.eventType.startsWith("ROOM_MOVE.")) {

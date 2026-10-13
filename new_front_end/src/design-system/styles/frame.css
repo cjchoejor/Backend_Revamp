@@ -679,6 +679,30 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart-land.swap { background: color-mix(in srgb, var(--ink) 11%, var(--surface)); }
 .ds .rchart-land.cut-l { border-left-style: solid; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .ds .rchart-land.cut-r { border-right-style: solid; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* The date move's rooms (2026-10-13, operator: "ask if I want to keep the price same or different
+   for each room"): one line per room — where it goes, its new nights — and its price choice, each
+   choice with what it costs. */
+.ds .dmv-rooms { display: grid; gap: 6px; margin: 4px 0; }
+.ds .dmv-room { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.ds .dmv-room .where { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13.5px; min-width: 0; }
+.ds .dmv-room .where b { font-weight: 800; }
+.ds .dmv-room .where .nights { font-size: 12.5px; color: var(--ink-3); }
+.ds .dmv-room .where .other { font-size: 11px; font-weight: 700; color: var(--accent-ink); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; }
+.ds .dmv-choice { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.ds .dmv-choice button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; padding: 4px 11px; font-size: 11.5px; font-weight: 600; color: var(--ink-3); text-align: left; min-width: 104px; }
+.ds .dmv-choice button + button { border-left: 1px solid var(--line-2); }
+.ds .dmv-choice button b { font-size: 13.5px; font-weight: 800; color: var(--ink-2); }
+.ds .dmv-choice button.on { background: var(--accent-soft); color: var(--accent-ink); box-shadow: inset 0 0 0 2px var(--accent); }
+.ds .dmv-choice button.on b { color: var(--accent-ink); }
+.ds .dmv-choice button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ds .dmv-choice button[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
+.ds .dmv-what { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.ds .dmv-help ol { margin: 4px 0 6px 18px; padding: 0; display: grid; gap: 2px; }
+.ds .dmv-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 14px; }
+.ds .dmv-total b { font-weight: 800; }
+@media (max-width: 560px) {
+  .ds .dmv-room { grid-template-columns: 1fr; }
+}
 .ds .rchart-ghost { position: fixed; z-index: 95; pointer-events: none; display: grid; gap: 2px; max-width: 340px; padding: 8px 11px; border-radius: 9px; background: var(--surface); color: var(--ink); border: 2px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .22); font-size: 13.5px; font-weight: 700; }
 .ds .rchart-ghost b { color: var(--accent-ink); font-weight: 800; }
 .ds .rchart-ghost .sub { font-size: 12px; font-weight: 600; color: var(--ink-3); }

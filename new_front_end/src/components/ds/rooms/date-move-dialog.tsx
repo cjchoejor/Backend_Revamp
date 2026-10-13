@@ -6,25 +6,30 @@
  *
  * A bar dragged sideways opens this dialog. It asks the server what the move would do
  * (`POST /date-moves/preview` — nothing written): the dates before and after, each room on its new
- * nights, the price before and after, the steps the booking walks, the papers it produces, and
- * anything that refuses it. Then it runs the move (`POST /date-moves`) and says where the booking
- * ended, with the new paper to send or not. Every figure and every refusal is the server's.
+ * nights, what each price choice costs per room, and anything that refuses it. Then it runs the move
+ * (`POST /date-moves`) and says where the booking ended, with the new paper to send or not. Every
+ * figure and every refusal is the server's.
  *
- * Rulings the same day: before check-in only; the guest keeps the price agreed unless the stay is
- * priced at the new dates with the guest's agreement typed in; the whole stay shifts; the FOM from
- * Set up on (at Negotiation the change of configuration's own rule).
+ * Rulings the same day: before check-in only; the whole stay shifts, and the booking's rooms move as
+ * a block (the grabbed room lands on the row dropped on, the others keep their spacing); the price
+ * choice is per room — kept, or priced at the new dates with the guest's agreement typed in; the
+ * FOM from Set up on (at Negotiation the change of configuration's own rule). What happens and why
+ * sits behind the "?" — only what needs reading stays on screen.
  */
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
+import { Help } from "@/components/ds/help";
 import { DsDialog, toastRefusal } from "@/components/ds/steps/kit";
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { useSession } from "@/hooks/use-session";
 import { executeDateMove, previewDateMove, type DateMoveInput, type DateMovePreview, type DateMoveResult } from "@/lib/api/room-moves";
 import { fmtDate, fmtRange, money } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
+
+type PriceMode = "KEEP" | "NEW_DATES";
 
 const stepWord = (stage: string | null | undefined) => (stage ? STEP_NAMES[stepNoOfStage(stage as never) - 1] ?? stage : "—");
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -77,23 +82,75 @@ function ResultView({ result, tz }: { result: DateMoveResult; tz?: string }) {
   );
 }
 
+/** One room's line: where it goes, its new nights, and its price choice with what each costs. */
+function RoomLine({
+  room,
+  currency,
+  walk,
+  mode,
+  onMode,
+}: {
+  room: DateMovePreview["rooms"][number];
+  currency: string;
+  walk: boolean;
+  mode: PriceMode;
+  onMode: (m: PriceMode) => void;
+}) {
+  const same = room.keepTotal != null && room.newDatesTotal != null && room.keepTotal === room.newDatesTotal;
+  return (
+    <div className="dmv-room">
+      <div className="where">
+        <b>
+          Room {room.roomNumber}
+          {room.toRoomNumber ? ` → ${room.toRoomNumber}` : ""}
+        </b>
+        <span className="nights">{room.nightsLabel}</span>
+        {room.toRoomNumber && !room.sameType ? <span className="other">another room type</span> : null}
+        {walk && same ? <span className="nights">· the same either way</span> : null}
+      </div>
+      {walk ? (
+        <div className="dmv-choice" role="radiogroup" aria-label={`Price for Room ${room.roomNumber}`}>
+          <button type="button" role="radio" aria-checked={mode === "KEEP"} className={mode === "KEEP" ? "on" : undefined} onClick={() => onMode("KEEP")}>
+            Keep the price
+            <b>{room.keepTotal != null ? money(room.keepTotal, currency) : "—"}</b>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === "NEW_DATES"}
+            className={mode === "NEW_DATES" ? "on" : undefined}
+            onClick={() => onMode("NEW_DATES")}
+          >
+            At the new dates
+            <b>{room.newDatesTotal != null ? money(room.newDatesTotal, currency) : "—"}</b>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & { label: string }) | null; onClose: () => void; tz?: string }) {
   const { session } = useSession();
   const qc = useQueryClient();
-  const [priceMode, setPriceMode] = useState<"KEEP" | "NEW_DATES">("KEEP");
+  /** The price choice per room, by the room as it is now; a room not named keeps its price. */
+  const [modes, setModes] = useState<Record<string, PriceMode>>({});
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<DateMovePreview | null>(null);
   const [result, setResult] = useState<DateMoveResult | null>(null);
 
+  const anyNewDates = Object.values(modes).includes("NEW_DATES");
   const body = move
     ? {
         entryId: move.entryId,
         fromRoomId: move.fromRoomId,
         toRoomId: move.toRoomId ?? null,
+        roomMap: move.roomMap ?? null,
         newCheckInDate: move.newCheckInDate,
-        priceMode,
-        guestAgreedNote: priceMode === "NEW_DATES" ? note.trim() || null : null,
+        priceMode: "KEEP" as const,
+        priceModes: modes,
+        guestAgreedNote: anyNewDates ? note.trim() || null : null,
       }
     : null;
   const previewMut = useMutation({
@@ -101,15 +158,15 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
     onSuccess: setPreview,
     onError: (e) => toastRefusal(e, "The move could not be checked"),
   });
+  const modesKey = JSON.stringify(modes);
   useEffect(() => {
     if (!move || !session || result) return;
-    setPreview(null);
     previewMut.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [move, session, priceMode]);
+  }, [move, session, modesKey]);
   useEffect(() => {
     if (move) return;
-    setPriceMode("KEEP");
+    setModes({});
     setNote("");
     setReason("");
     setPreview(null);
@@ -139,12 +196,14 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
       ? `${preview.authority.why} — you are signed in as ${preview.authority.actorLevel === "L1" ? "the front desk" : preview.authority.actorLevel}`
       : preview.refusals.length > 0
         ? "Something above refuses the move"
-        : walk && priceMode === "NEW_DATES" && !note.trim()
+        : walk && anyNewDates && !note.trim()
           ? "Type what the guest agreed to"
           : !reason.trim()
             ? "Say why the dates are moving"
             : null;
   const p = preview?.price;
+  const currency = p?.currency ?? "BTN";
+  const setMode = (roomId: string, m: PriceMode) => setModes((cur) => ({ ...cur, [roomId]: m }));
 
   return (
     <DsDialog
@@ -174,13 +233,12 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
         <ResultView result={result} tz={tz} />
       ) : (
         <div className="rmv">
-          {preview ? (
-            <p className={`rmv-auth ${preview.authority.ok ? "ok" : "stop"}`} role={preview.authority.ok ? undefined : "alert"}>
-              {preview.authority.ok ? preview.authority.why : `${preview.authority.why} — you are signed in as ${preview.authority.actorLevel === "L1" ? "the front desk" : preview.authority.actorLevel}`}
+          {!preview ? <p className="sm muted">Checking the move with the house…</p> : null}
+          {preview && !preview.authority.ok ? (
+            <p className="rmv-auth stop" role="alert">
+              {preview.authority.why} — you are signed in as {preview.authority.actorLevel === "L1" ? "the front desk" : preview.authority.actorLevel}
             </p>
-          ) : (
-            <p className="sm muted">Checking the move with the house…</p>
-          )}
+          ) : null}
           {preview && preview.refusals.length > 0 ? (
             <ul className="rmv-refusals rmv-moveref" role="alert">
               {preview.refusals.map((r) => (
@@ -194,6 +252,28 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
                 <b>{preview.guestName ?? preview.entryId}</b>
                 <span className="mono sm">{preview.entryId}</span>
                 <span className="chip-step">{preview.stageWord}</span>
+                <span className="dmv-what">
+                  What happens
+                  <Help label="What happens when the dates move">
+                    <div className="dmv-help">
+                      {preview.authority.ok ? <p>{preview.authority.why}.</p> : null}
+                      <ol>
+                        {preview.path.map((x) => (
+                          <li key={x}>{x}</li>
+                        ))}
+                      </ol>
+                      {preview.papers.length ? <p>Papers: {preview.papers.join(" · ")}</p> : null}
+                      {walk ? (
+                        <p>
+                          Each room can keep the price agreed, or be priced at the rates for the new nights — that needs the guest&apos;s agreement, typed in. The
+                          figures per room include tax, before any booking discount.
+                        </p>
+                      ) : p?.note ? (
+                        <p>{p.note}</p>
+                      ) : null}
+                    </div>
+                  </Help>
+                </span>
               </div>
               <div className="rmv-rooms">
                 <span className="rmv-room">{fmtRange(preview.from.checkInDate, preview.from.checkOutDate)}</span>
@@ -204,68 +284,39 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
                 </span>
               </div>
               {preview.rooms.length ? (
-                <div className="sm">
-                  Rooms on the new nights:{" "}
-                  {preview.rooms.map((r, i) => (
-                    <span key={r.roomId}>
-                      {i ? " · " : ""}
-                      <b>Room {r.roomNumber}</b> {r.nightsLabel}
-                    </span>
+                <div className="dmv-rooms">
+                  {preview.rooms.map((r) => (
+                    <RoomLine key={r.roomId} room={r} currency={currency} walk={walk} mode={modes[r.roomId] ?? "KEEP"} onMode={(m) => setMode(r.roomId, m)} />
                   ))}
                 </div>
               ) : null}
-              {p ? (
-                <div className="sm">
-                  Price:{" "}
-                  {p.after == null ? (
-                    <span className="sm muted">{p.note ?? "The new quotation states the price"}</span>
-                  ) : (
-                    <span className="rmv-price">
-                      <b>{money(p.before, p.currency ?? "BTN")}</b>
-                      <span className="muted"> → </span>
-                      <b className={p.delta === 0 ? "ok-ink" : "warn-ink"}>{money(p.after, p.currency ?? "BTN")}</b>
-                      {p.delta ? <span className={p.delta > 0 ? "warn-ink" : "ok-ink"}> ({p.delta > 0 ? "+" : "−"}{money(Math.abs(p.delta), p.currency ?? "BTN")})</span> : null}
-                      {p.note ? <span className="sm muted"> · {p.note}</span> : null}
+              {walk && anyNewDates ? (
+                <label className="field">
+                  <span>What the guest agreed to</span>
+                  <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. agreed on the phone to the rate for those nights" />
+                </label>
+              ) : null}
+              {p && p.after != null ? (
+                <div className="dmv-total">
+                  Price <b>{money(p.before, currency)}</b>
+                  <span className="muted">→</span>
+                  <b className={p.delta === 0 ? "ok-ink" : "warn-ink"}>{money(p.after, currency)}</b>
+                  {p.delta ? (
+                    <span className={p.delta > 0 ? "warn-ink" : "ok-ink"}>
+                      ({p.delta > 0 ? "+" : "−"}
+                      {money(Math.abs(p.delta), currency)})
                     </span>
-                  )}
-                </div>
-              ) : null}
-              {walk ? (
-                <div className="rmv-pricemode" role="radiogroup" aria-label="How the stay is priced">
-                  <label className={priceMode === "KEEP" ? "on" : undefined}>
-                    <input type="radio" checked={priceMode === "KEEP"} onChange={() => setPriceMode("KEEP")} /> Keep the price agreed
-                  </label>
-                  <label className={priceMode === "NEW_DATES" ? "on" : undefined}>
-                    <input type="radio" checked={priceMode === "NEW_DATES"} onChange={() => setPriceMode("NEW_DATES")} /> Price at the new dates
-                  </label>
-                  {priceMode === "NEW_DATES" ? (
-                    <label className="field">
-                      <span>What the guest agreed to</span>
-                      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. agreed on the phone to the rate for those nights" />
-                    </label>
                   ) : null}
                 </div>
+              ) : walk && p?.note ? (
+                <div className="sm warn-ink">{p.note}</div>
               ) : null}
-              {preview.refusals.length === 0 ? (
-                <>
-                  <ol className="rmv-path">
-                    {preview.path.map((x) => (
-                      <li key={x}>{x}</li>
-                    ))}
-                  </ol>
-                  {preview.papers.length ? (
-                    <div className="sm">
-                      <b>Papers:</b> {preview.papers.join(" · ")}
-                    </div>
-                  ) : null}
-                  {preview.notes.length ? (
-                    <ul className="rmv-follow">
-                      {preview.notes.map((n) => (
-                        <li key={n}>{n}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </>
+              {preview.refusals.length === 0 && preview.notes.length ? (
+                <ul className="rmv-follow">
+                  {preview.notes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
               ) : null}
             </div>
           ) : null}
@@ -273,7 +324,11 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
             <span>Why the dates are moving</span>
             <textarea className="input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. the guest's flight moved to Thursday" />
           </label>
-          {blockedBy && preview && preview.authority.ok ? <p className="stop-ink sm" style={{ margin: 0, fontWeight: 700 }}>{blockedBy}</p> : null}
+          {blockedBy && preview && preview.authority.ok ? (
+            <p className="stop-ink sm" style={{ margin: 0, fontWeight: 700 }}>
+              {blockedBy}
+            </p>
+          ) : null}
         </div>
       )}
     </DsDialog>

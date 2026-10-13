@@ -71,8 +71,12 @@ export function Help({ children, label = "What is this?" }: { children: ReactNod
 
   useEffect(() => {
     if (!open) return;
+    // Caught first and kept (2026-10-13): Escape closes the open box only — a dialog or full
+    // screen behind it must not close with it.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.stopPropagation();
+        e.preventDefault();
         setOpen(false);
         btn.current?.focus();
       }
@@ -82,12 +86,12 @@ export function Help({ children, label = "What is this?" }: { children: ReactNod
       if (btn.current?.contains(t) || pop.current?.contains(t)) return;
       setOpen(false);
     };
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       document.removeEventListener("mousedown", onDown);
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);

@@ -167,6 +167,36 @@ function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined): string 
   }
   return booking.checkInDate ? null : "This booking has no dates to move";
 }
+/**
+ * A date drag moves the booking as a block (2026-10-13, operator: "they should have gone together"):
+ * every room it holds on the chart shifts by the rows the grabbed room moved, keeping the spacing —
+ * rows counted down the chart as drawn, across room types. An empty map: no room changes row.
+ */
+function dateBlock(
+  d: Drag,
+  rows: string[],
+  ownRows: string[],
+  roomNo: (id: string) => string,
+): { map: Map<string, string>; why: string | null } {
+  const map = new Map<string, string>();
+  const from = rows.indexOf(d.grabbed.roomId);
+  const at = rows.indexOf(d.over ?? d.grabbed.roomId);
+  if (from < 0 || at < 0 || at === from) return { map, why: null };
+  const step = at - from;
+  for (const rid of ownRows) {
+    const i = rows.indexOf(rid) + step;
+    if (i < 0) return { map: new Map(), why: `Room ${roomNo(rid)} would land above the first room — drop lower` };
+    if (i >= rows.length) return { map: new Map(), why: `Room ${roomNo(rid)} would land below the last room — drop higher` };
+    map.set(rid, rows[i]);
+  }
+  return { map, why: null };
+}
+/** "204 → 306 · 205 → 307 · and 2 more" */
+function blockWords(map: Map<string, string>, roomNo: (id: string) => string, max = 3): string {
+  const pairs = [...map].map(([f, t]) => `${roomNo(f)} → ${roomNo(t)}`);
+  return pairs.length > max ? `${pairs.slice(0, max).join(" · ")} · and ${pairs.length - max} more` : pairs.join(" · ");
+}
+
 /** The server takes at most 8 picked rooms in one move. */
 const MAX_PICK = 8;
 /** Bars that can be picked up — the server refuses the rest with its reason (a provisional block,
@@ -240,10 +270,10 @@ function landingBoxes(
   let moves: Move[];
   if (shift !== 0) {
     if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId))) return [];
-    const target = d.over ?? d.grabbed.roomId;
-    moves = rows
-      .filter((rid) => (barsByRoom.get(rid) ?? []).some((b) => b.entryId === d.grabbed.entryId && MOVABLE.has(b.kind)))
-      .map((rid) => ({ entryId: d.grabbed.entryId, from: rid, to: rid === d.grabbed.roomId ? target : rid, swapped: false }));
+    const ownRows = rows.filter((rid) => ownRoom(d.grabbed.entryId, rid) != null);
+    const block = dateBlock(d, rows, ownRows, (id) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?");
+    if (block.why) return [];
+    moves = ownRows.map((rid) => ({ entryId: d.grabbed.entryId, from: rid, to: block.map.get(rid) ?? rid, swapped: false }));
   } else {
     if (!d.over) return [];
     const plan = planDrop(d.items, d.grabbed, d.over, rows, ownRoom);
@@ -555,6 +585,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const pickMax = pick ? (pick.reachesEnd ? Math.max(pick.freeRun, START_MAX_NIGHTS) : pick.freeRun) : 1;
   const roomNoOf = (id: string) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?";
   const ownRoom = ownRoomOf(barsByRoom, roomNoOf);
+  /** The rows a booking holds on the chart, top to bottom. */
+  const ownRowsOf = (entryId: string) => rows.filter((rid) => ownRoom(entryId, rid) != null);
   const selKeys = new Set(selected.map(selKey));
   const byRow = (list: Sel[]) => [...list].sort((x, y) => rows.indexOf(x.roomId) - rows.indexOf(y.roomId));
   /** Add picks, never past the server's limit — said, not silently cut. */
@@ -727,7 +759,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         // Dragged sideways: the whole stay moves to other dates (and the room grabbed may land in
         // another row on the way). The dialog asks the server what that would do.
         const booking = bookingOf.get(done.grabbed.entryId);
-        const why = dateMoveWhy(done, booking);
+        const block = dateBlock(done, rows, ownRowsOf(done.grabbed.entryId), roomNoOf);
+        const why = dateMoveWhy(done, booking) ?? block.why;
         if (why) {
           toast.error(why);
           return;
@@ -736,7 +769,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         setDateMove({
           entryId: done.grabbed.entryId,
           fromRoomId: done.grabbed.roomId,
-          toRoomId: done.over !== done.grabbed.roomId ? done.over : null,
+          roomMap: Object.fromEntries(block.map),
           newCheckInDate: ymdShift(booking.checkInDate, done.shift),
           label: done.grabbed.name,
         });
@@ -777,13 +810,24 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   // A sideways drag is a date move: its own plan and its own label.
   const dateDrag = drag && drag.shift !== 0 ? drag : null;
   const dateBooking = dateDrag ? bookingOf.get(dateDrag.grabbed.entryId) : undefined;
-  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) : null;
+  const dateBlockNow = dateDrag ? dateBlock(dateDrag, rows, ownRowsOf(dateDrag.grabbed.entryId), roomNoOf) : null;
+  const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) ?? dateBlockNow?.why ?? null : null;
   const dateSpan =
     dateDrag && dateBooking?.checkInDate && dateBooking.checkOutDate
       ? { from: ymdShift(dateBooking.checkInDate, dateDrag.shift), to: ymdShift(dateBooking.checkOutDate, dateDrag.shift) }
       : null;
   const dropPlan = drag?.over && !dateDrag ? planDrop(drag.items, drag.grabbed, drag.over, rows, ownRoom) : null;
-  const dropTo = new Set(dateDrag ? (dateWhy ? [] : [dateDrag.over ?? dateDrag.grabbed.roomId]) : dropPlan?.ok ? dropPlan.to : []);
+  const dropTo = new Set(
+    dateDrag
+      ? dateWhy
+        ? []
+        : dateBlockNow?.map.size
+          ? [...dateBlockNow.map.values()]
+          : [dateDrag.grabbed.roomId]
+      : dropPlan?.ok
+        ? dropPlan.to
+        : [],
+  );
   const dragged = new Set(drag ? drag.items.map(selKey) : []);
   const pickedWords = (() => {
     const by = new Map<string, Sel[]>();
@@ -1139,7 +1183,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                   </span>
                   <span className="sub">
                     {Math.abs(dateDrag.shift)} {Math.abs(dateDrag.shift) === 1 ? "day" : "days"} {dateDrag.shift > 0 ? "later" : "earlier"}
-                    {dateDrag.over && dateDrag.over !== dateDrag.grabbed.roomId ? ` · Room ${dateDrag.grabbed.roomNumber} → ${roomNoOf(dateDrag.over)}` : ""}
+                    {dateBlockNow?.map.size ? ` · ${blockWords(dateBlockNow.map, roomNoOf)}` : ""}
                   </span>
                   <span className="sub">Let go to see what moving the dates would do</span>
                 </>
