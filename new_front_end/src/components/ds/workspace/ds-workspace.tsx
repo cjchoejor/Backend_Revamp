@@ -1588,11 +1588,22 @@ function SidePanel({
     }
     return timerLabel(t);
   };
-  const running = timers
+  const sorted = timers
     .filter((t) => t.status === "SCHEDULED")
     .map((t) => ({ t, label: labelOf(t) }))
     .filter((x): x is { t: (typeof timers)[number]; label: string } => !!x.label)
-    .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt))
+    .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt));
+  // One reminder per night of the stay: only the next is worth a row (2026-10-13, operator: "why
+  // is the night audit timer showing for all the days, instead of just the upcoming date").
+  const nightClocks = sorted.filter((x) => x.t.timerCode === "NIGHT_AUDIT_STAY_NIGHT_W37");
+  const laterNights = nightClocks.length - 1;
+  const running = sorted
+    .filter((x) => x.t.timerCode !== "NIGHT_AUDIT_STAY_NIGHT_W37" || x === nightClocks[0])
+    .map((x) =>
+      x === nightClocks[0] && laterNights > 0
+        ? { ...x, label: `${x.label} · then ${laterNights} more ${laterNights === 1 ? "night" : "nights"}` }
+        : x,
+    )
     .slice(0, 8);
   const dwell = entry.stageDwellRecords?.[0];
   return (
