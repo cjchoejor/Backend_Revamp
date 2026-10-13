@@ -257,6 +257,15 @@ export type DateShiftWalkInput = {
   priceMode: "KEEP" | "NEW_DATES";
   /** The guest's agreement, typed by the desk, when the stay is priced at the new dates. */
   guestAgreedNote?: string | null;
+  /**
+   * Every room that changes row, old → new (2026-10-13 ruling: a booking dragged to other dates
+   * moves as a block — the grabbed room lands on the row dropped on and the others keep their
+   * spacing). A room not named keeps its place. A target may be another of the booking's own rooms
+   * when that room moves on too.
+   */
+  roomMap?: Record<string, string> | null;
+  /** A price choice per room, keyed by the room it is now; a room not named takes `priceMode`. */
+  priceModes?: Record<string, "KEEP" | "NEW_DATES"> | null;
 };
 
 const DAY_MS_SHIFT = 86_400_000;
@@ -698,8 +707,25 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
   for (const id of initialRoomIds) originOf.set(id, id);
   const chain: Array<{ fromRoomId: string; toRoomId: string; at: Date; reason: string | null }> = [];
   for (const cfg of configs) {
-    const marker = (cfg.optionSelected as { roomChange?: { fromRoomId?: unknown; toRoomId?: unknown; toRoomIds?: unknown } } | null)
+    const marker = (cfg.optionSelected as { roomChange?: { fromRoomId?: unknown; toRoomId?: unknown; toRoomIds?: unknown; pairs?: unknown } } | null)
       ?.roomChange;
+    // A date move's block (2026-10-13) names every pair; they moved at once, so each room's origin
+    // is read off the chain as it stood before this change.
+    const pairs = Array.isArray(marker?.pairs)
+      ? (marker!.pairs as Array<{ fromRoomId?: unknown; toRoomId?: unknown }>).filter(
+          (p): p is { fromRoomId: string; toRoomId: string } => typeof p?.fromRoomId === "string" && typeof p?.toRoomId === "string" && p.fromRoomId !== p.toRoomId,
+        )
+      : [];
+    if (pairs.length > 0) {
+      const criteriaP = cfg.searchCriteria as { roomChange?: { reason?: unknown } } | null;
+      const reasonP = typeof criteriaP?.roomChange?.reason === "string" ? criteriaP.roomChange.reason : null;
+      const before = new Map(originOf);
+      for (const p of pairs) {
+        chain.push({ fromRoomId: p.fromRoomId, toRoomId: p.toRoomId, at: cfg.sealedAt ?? cfg.createdAt, reason: reasonP });
+        originOf.set(p.toRoomId, before.get(p.fromRoomId) ?? p.fromRoomId);
+      }
+      continue;
+    }
     const fromRoomId = typeof marker?.fromRoomId === "string" ? marker.fromRoomId : null;
     const toRoomId = typeof marker?.toRoomId === "string" ? marker.toRoomId : null;
     // A per-night change can substitute one room with SEVERAL (2026-08-14) — `toRoomIds`
@@ -854,6 +880,10 @@ export type RoomChangeOutcome = {
     shiftDays: number;
     nights: number;
     priceMode: "KEEP" | "NEW_DATES";
+    /** The price choice per room, by the room's number before the move. */
+    priceModes: Record<string, "KEEP" | "NEW_DATES">;
+    /** Every room that changed row: "204" → "306". */
+    rooms: Array<{ fromRoomNumber: string; toRoomNumber: string }>;
     /** Set when the booking was at Arrival and the new arrival is beyond the arrival window. */
     arrivalOpensOn: string | null;
   } | null;
@@ -1012,10 +1042,14 @@ async function changeRoomToNewSegmentInner(
   const isDateShift = !!input.dateShift;
   if (isDateShift) {
     if (hasPerNightForm) throw new ValidationError("A date move takes one room for the room moved (toRoomId), not a per-night plan");
+    if (hasSingle && Object.keys(input.dateShift!.roomMap ?? {}).length > 0) {
+      throw new ValidationError("A date move names its rooms as one room (toRoomId) or as a map of every room that changes row — not both");
+    }
     const touchesSetup =
       hasSetup || (input.roomSetups?.length ?? 0) > 0 || (input.roomCompositions?.length ?? 0) > 0 || input.requestedDiscount !== undefined || input.repairSeating;
     if (touchesSetup) throw new ValidationError("A date move carries the booking's setup as it is — change the setup on the booking afterwards");
-    if (input.dateShift!.priceMode === "NEW_DATES" && !input.dateShift!.guestAgreedNote?.trim()) {
+    const modesAsked = [input.dateShift!.priceMode, ...Object.values(input.dateShift!.priceModes ?? {})];
+    if (modesAsked.includes("NEW_DATES") && !input.dateShift!.guestAgreedNote?.trim()) {
       throw new ValidationError("Pricing the stay at the new dates needs the guest's agreement — type what they said");
     }
   }
@@ -1064,6 +1098,25 @@ async function changeRoomToNewSegmentInner(
   const { entry, stage } = ctx;
   if (isExtension && stage !== Stage.S7) throw new ValidationError("A stay is extended in-house (S7)");
 
+  // A date move's rooms: every room that changes row, old → new. One room's move (toRoomId) is
+  // the map of one; the block (2026-10-13) names every room of the booking.
+  const dateRoomMap = new Map<string, string>();
+  if (isDateShift) {
+    const asked = input.dateShift!.roomMap ?? (hasSingle ? { [input.fromRoomId]: input.toRoomId!.trim() } : {});
+    for (const [from, to] of Object.entries(asked)) {
+      const f = from.trim();
+      const t = String(to ?? "").trim();
+      if (!f || !t || f === t) continue;
+      if (!ctx.claimedRoomIds.has(f)) throw new ValidationError("A room in the move is not part of this booking's room plan");
+      dateRoomMap.set(f, t);
+    }
+    const targets = [...dateRoomMap.values()];
+    if (new Set(targets).size !== targets.length) {
+      throw new ValidationError("Two of the booking's rooms would land in the same room — drop them where each has its own room");
+    }
+  }
+  const mapRoom = (id: string) => dateRoomMap.get(id) ?? id;
+
   // ── The night → room map the change asks for ───────────────────────────────────────────────
   const targetsByNight = new Map<string, string>();
   if (isExtension) {
@@ -1073,7 +1126,7 @@ async function changeRoomToNewSegmentInner(
     for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
   } else if (isDateShift) {
     // The stay moves; the room moved keeps its place in the pattern, or lands in another room.
-    const target = hasSingle ? input.toRoomId!.trim() : input.fromRoomId;
+    const target = mapRoom(input.fromRoomId);
     for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
   } else if (setupOnly) {
     // The guest keeps the room on every night — nothing moves, only the setup re-prices.
@@ -1112,6 +1165,29 @@ async function changeRoomToNewSegmentInner(
   // A setup-only change's "target" is the from-room itself — the setup validation below reads
   // the room's type (max extra beds) and bed stock off this map.
   if (setupOnly || isExtension || isDateShift) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
+  // A date move's block: every room landing somewhere new, and the plan's own rooms (their types
+  // decide what each row carries).
+  const planRoomById = new Map<string, (typeof targetRooms)[number]>();
+  if (isDateShift) {
+    const wanted = Array.from(new Set([...ctx.claimedRoomIds, ...dateRoomMap.values()])).filter((id) => !targetById.has(id) || ctx.claimedRoomIds.has(id));
+    for (const r of await prisma.room.findMany({ where: { id: { in: wanted } }, include: { roomType: true } })) {
+      if (ctx.claimedRoomIds.has(r.id)) planRoomById.set(r.id, r);
+      if (!targetById.has(r.id)) targetById.set(r.id, r);
+    }
+    planRoomById.set(ctx.fromRoom.id, ctx.fromRoom);
+    for (const t of new Set(dateRoomMap.values())) {
+      const room = targetById.get(t);
+      if (!room) throw new NotFoundError("Room");
+      if (room.isShadowInventory) throw new ValidationError(`Room ${room.roomNumber} is shadow inventory and cannot be booked`);
+      // A room of this booking may be landed in only when it moves on itself.
+      if (ctx.claimedRoomIds.has(t) && !dateRoomMap.has(t)) {
+        throw new ValidationError(`Room ${room.roomNumber} is already part of this booking — pick rooms outside the current plan`);
+      }
+    }
+  }
+  const roomNoOfPlan = (id: string) => planRoomById.get(id)?.roomNumber ?? targetById.get(id)?.roomNumber ?? "?";
+  /** "204 → 306 · 205 → 307" — a date move's block, for notes and traces. */
+  const datePairsLabel = [...dateRoomMap].map(([f, t]) => `${roomNoOfPlan(f)} → ${roomNoOfPlan(t)}`).join(" · ");
   for (const id of distinctTargets) {
     const room = targetById.get(id);
     if (!room) throw new NotFoundError("Room");
@@ -1130,6 +1206,8 @@ async function changeRoomToNewSegmentInner(
     // Extension mode: the new room sits in the picture by construction (its extra nights) — the
     // question is whether it was part of the plan BEFORE the extension.
     if (!(isExtension ? ctx.currentPlanRoomIds : ctx.claimedRoomIds).has(id)) continue;
+    // A date move's block may land a room in another of its own rooms that moves on too.
+    if (isDateShift && dateRoomMap.has(id)) continue;
     const room = targetById.get(id)!;
     // At S7 a moved-out room keeps its slept-night claim (the split end-dates its assignment,
     // it never leaves the plan), so "already part of this booking" would be misleading — name
@@ -1158,7 +1236,7 @@ async function changeRoomToNewSegmentInner(
     ? `${ctx.priorCheckIn.toISOString().slice(0, 10)} → ${ctx.priorCheckOut.toISOString().slice(0, 10)} moved to ${ctx.checkIn.toISOString().slice(0, 10)} → ${ctx.checkOut.toISOString().slice(0, 10)}`
     : null;
   const targetsLabel = isDateShift
-    ? `${distinctTargets.length ? `${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ")}, ` : ""}${datesLabel}`
+    ? `${dateRoomMap.size ? `${datePairsLabel}, ` : ""}${datesLabel}`
     : isExtension
     ? `${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ") || ctx.fromRoom.roomNumber} (extension to ${ctx.checkOut.toISOString().slice(0, 10)})`
     : setupOnly
@@ -1169,7 +1247,9 @@ async function changeRoomToNewSegmentInner(
   // swap is desk logistics (L1+); a cross-type move is an upgrade/downgrade that re-prices
   // the stay, so it needs FOM+ (L2+). Per-night: EVERY new room must be same-type to count
   // as a same-type change.
-  const sameType = distinctTargets.every((id) => targetById.get(id)!.roomTypeId === ctx.fromRoom.roomTypeId);
+  const sameType = isDateShift
+    ? [...dateRoomMap].every(([f, t]) => targetById.get(t)?.roomTypeId === planRoomById.get(f)?.roomTypeId)
+    : distinctTargets.every((id) => targetById.get(id)!.roomTypeId === ctx.fromRoom.roomTypeId);
   enforceRoomChangeAuthorityForStage({ currentStage: String(stage), actorLevel: actor.actorLevel, sameType });
   if (isDateShift) enforceDateMoveAuthority({ actorLevel: actor.actorLevel });
 
@@ -1240,7 +1320,7 @@ async function changeRoomToNewSegmentInner(
     const byRoom = new Map<string, string[]>();
     for (const n of ctx.picture) {
       for (const id of n.roomIds) {
-        const rid = id === input.fromRoomId && targetsByNight.has(n.date) ? targetsByNight.get(n.date)! : id;
+        const rid = mapRoom(id);
         if (nightsByTarget.has(rid)) continue;
         byRoom.set(rid, [...(byRoom.get(rid) ?? []), n.date]);
       }
@@ -1365,11 +1445,26 @@ async function changeRoomToNewSegmentInner(
       );
     }
   }
+  // A date move's block: every other room that changes row must hold its own guests too.
+  for (const [f, t] of dateRoomMap) {
+    if (f === input.fromRoomId) continue;
+    const comp = priorCompositions?.find((c) => c.roomId === f) ?? null;
+    const chargeable = comp?.adultCount ?? comp?.occupantCount ?? null;
+    const room = targetById.get(t);
+    const maxCapacity = (room?.roomType as { maxCapacity?: number } | null)?.maxCapacity ?? null;
+    if (chargeable != null && maxCapacity != null && chargeable > maxCapacity) {
+      throw new ValidationError(
+        `Room ${room?.roomNumber ?? "?"} (${room?.roomType?.name ?? "its type"}) sleeps at most ${maxCapacity} chargeable guests — the ${chargeable} in Room ${roomNoOfPlan(f)} do not fit`,
+      );
+    }
+  }
 
   // ── The substituted room plan ───────────────────────────────────────────────────────────────
   const substitutedPicture = ctx.picture.map((n) => ({
     date: n.date,
-    roomIds: n.roomIds.map((id) => (id === input.fromRoomId && targetsByNight.has(n.date) ? targetsByNight.get(n.date)! : id)),
+    roomIds: n.roomIds.map((id) =>
+      isDateShift ? mapRoom(id) : id === input.fromRoomId && targetsByNight.has(n.date) ? targetsByNight.get(n.date)! : id,
+    ),
   }));
   const substitutedDistinct = Array.from(new Set(substitutedPicture.flatMap((n) => n.roomIds)));
   const priorSel = readOptionSelected(ctx.sealedConfig?.optionSelected ?? null);
@@ -1395,10 +1490,19 @@ async function changeRoomToNewSegmentInner(
   // A setup-only change writes NO roomChange marker — the plan-history chain folds markers
   // room → room, and a 205 → 205 link would print a spurious "Changed" on the Initially cell.
   // The sealed config's searchCriteria carries a `setupChange` note instead.
+  // A date move's block writes every pair (`pairs`) — the readers fold each room to the room it
+  // became; `toRoomId` / `toRoomIds` stay for the grabbed room, as before.
   const roomChangeMarker =
-    setupOnly || ((isExtension || isDateShift) && distinctTargets.length === 0)
+    setupOnly || (isExtension && distinctTargets.length === 0) || (isDateShift && dateRoomMap.size === 0)
       ? null
-      : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
+      : isDateShift
+        ? {
+            fromRoomId: input.fromRoomId,
+            toRoomId: mapRoom(input.fromRoomId),
+            toRoomIds: Array.from(new Set(dateRoomMap.values())),
+            pairs: [...dateRoomMap].map(([fromRoomId, toRoomId]) => ({ fromRoomId, toRoomId })),
+          }
+        : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
   // Extension marker (2026-08-21): the sealed config says the stay was extended — and from where.
   const extensionMarker = input.extension
     ? {
@@ -1436,7 +1540,10 @@ async function changeRoomToNewSegmentInner(
       select: { optionSelected: true },
     }),
   );
-  if (roomChangeMarker) successorOf.set(input.fromRoomId, distinctTargets);
+  if (roomChangeMarker) {
+    if (isDateShift) for (const [f, t] of dateRoomMap) successorOf.set(f, [t]);
+    else successorOf.set(input.fromRoomId, distinctTargets);
+  }
   const seatingActions: SeatingRepairAction[] = [];
   // Room numbers for the messages written before the seating block reads them.
   const seatingRoomNumbersEarly = new Map(
@@ -1459,9 +1566,19 @@ async function changeRoomToNewSegmentInner(
         const crossType = room != null && room.roomTypeId !== ctx.fromRoom.roomTypeId;
         newCompositions.push({ ...src, roomId, nightMealOverrides: [], ...(crossType ? { negotiatedRoomRate: undefined } : {}) });
       }
-    } else if (setupOnly || (isDateShift && distinctTargets.length === 0)) {
-      // Nothing moves room — every row carries (a date move's rows already carry their exceptions
-      // on the new nights); the setup block below rewrites the one row on a setup change.
+    } else if (isDateShift) {
+      // A date move: every row carries onto its room's new nights (its exceptions already moved
+      // with them), and a room that changes row takes its row with it — the block, 2026-10-13. A
+      // negotiated rate was negotiated for the old room's type: a row landing on another type drops
+      // it here, and the price choice below decides what it is priced at.
+      newCompositions = priorCompositions.map((c) => {
+        const to = mapRoom(c.roomId);
+        const crossType = to !== c.roomId && targetById.get(to)?.roomTypeId !== planRoomById.get(c.roomId)?.roomTypeId;
+        return { ...c, roomId: to, nightMealOverrides: [...(c.nightMealOverrides ?? [])], ...(crossType ? { negotiatedRoomRate: undefined } : {}) };
+      });
+    } else if (setupOnly) {
+      // Nothing moves room — every row carries; the setup block below rewrites the one row on a
+      // setup change.
       newCompositions = priorCompositions.map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
     } else if (stage === Stage.S7 && movingComposition) {
       // In-house split: the old room keeps its row (it now prices only its slept nights via the
@@ -1524,21 +1641,26 @@ async function changeRoomToNewSegmentInner(
     // the rate it was PRICED at, carried as its negotiated rate, so a season on the new nights
     // does not move it. A room the moved room lands in takes the rate the moved room was priced
     // at. "Price at the new dates" leaves the rates to resolve for the new nights.
-    if (isDateShift && input.dateShift!.priceMode === "KEEP") {
+    // The choice is per room since the same day (operator: "ask if I want to keep the price same
+    // or different for each room"): `priceModes`, keyed by the room as it is now.
+    if (isDateShift) {
       const perRoom = ((priorTerms?.compositionTotals ?? null) as { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } | null)?.perRoom ?? [];
       const pricedAt = (roomId: string) => {
         const v = perRoom.find((r) => r.roomId === roomId)?.roomRate;
         return typeof v === "number" && Number.isFinite(v) && v > 0 ? Number(v.toFixed(2)) : null;
       };
+      const sourceOf = new Map([...dateRoomMap].map(([f, t]) => [t, f]));
+      const modeOf = (roomId: string) => input.dateShift!.priceModes?.[roomId] ?? input.dateShift!.priceMode;
       newCompositions = newCompositions.map((c) => {
-        const landedHere = distinctTargets.includes(c.roomId);
+        const source = sourceOf.get(c.roomId) ?? c.roomId;
+        if (modeOf(source) !== "KEEP") return c;
+        const landedHere = source !== c.roomId;
         if (!landedHere && c.negotiatedRoomRate != null) return c;
-        const source = landedHere ? input.fromRoomId : c.roomId;
-        const rate = pricedAt(source) ?? (landedHere ? movingComposition?.negotiatedRoomRate ?? null : null);
+        const rate = pricedAt(source) ?? (landedHere ? priorCompositions?.find((p) => p.roomId === source)?.negotiatedRoomRate ?? null : null);
         if (rate == null) {
-          const no = landedHere ? ctx.fromRoom.roomNumber : (seatingRoomNumbersEarly.get(c.roomId) ?? c.roomId.slice(0, 6));
+          const no = roomNoOfPlan(source) !== "?" ? roomNoOfPlan(source) : (seatingRoomNumbersEarly.get(source) ?? source.slice(0, 6));
           throw new ValidationError(
-            `Keeping the price needs the rate Room ${no} was priced at, and this booking has none recorded — choose "price at the new dates"`,
+            `Keeping the price needs the rate Room ${no} was priced at, and this booking has none recorded — choose "price at the new dates" for it`,
           );
         }
         return { ...c, negotiatedRoomRate: rate };
@@ -1985,6 +2107,10 @@ async function changeRoomToNewSegmentInner(
           shiftDays: ctx.shiftDays,
           nights: ctx.nightsIso.length,
           priceMode: input.dateShift!.priceMode,
+          priceModes: Object.fromEntries(
+            [...ctx.claimedRoomIds].map((id) => [roomNoOfPlan(id), input.dateShift!.priceModes?.[id] ?? input.dateShift!.priceMode]),
+          ),
+          rooms: [...dateRoomMap].map(([f, t]) => ({ fromRoomNumber: roomNoOfPlan(f), toRoomNumber: roomNoOfPlan(t) })),
           arrivalOpensOn,
         }
       : null;
@@ -2308,19 +2434,27 @@ async function changeRoomToNewSegmentInner(
 
   // The bed the booking planned for the room it is leaving follows it to the new room, when that
   // room can be made up that way (best-effort; the plan's own default covers a room it can't).
-  if (!setupOnly && !isExtension && distinctTargets.length > 0) {
+  if (!setupOnly && !isExtension && (distinctTargets.length > 0 || dateRoomMap.size > 0)) {
     try {
       const plan = ((entry as { bedPlan?: unknown }).bedPlan ?? null) as Record<string, string> | null;
-      const planned = plan?.[input.fromRoomId];
-      if (planned) {
-        const next = { ...(plan ?? {}) };
-        for (const id of distinctTargets) {
-          const room = targetById.get(id)!;
-          const allowed = effectiveAllowedBedTypes(room.allowedBedTypes, room.roomType?.allowedBedTypes);
-          if (allowed.includes(planned as RoomBedType)) next[id] = planned;
+      // A date move's block carries each room's planned bed to the room it lands in, all at once
+      // (read off the plan as it was, so a room landing in another of the block's rooms takes the
+      // right one).
+      const pairs: Array<[string, string]> = isDateShift ? [...dateRoomMap] : distinctTargets.map((id) => [input.fromRoomId, id]);
+      const next = { ...(plan ?? {}) };
+      let changed = false;
+      for (const [from, to] of pairs) {
+        const planned = plan?.[from];
+        if (!planned) continue;
+        const room = targetById.get(to);
+        if (!room) continue;
+        const allowed = effectiveAllowedBedTypes(room.allowedBedTypes, room.roomType?.allowedBedTypes);
+        if (allowed.includes(planned as RoomBedType)) {
+          next[to] = planned;
+          changed = true;
         }
-        await prisma.entry.update({ where: { id: input.entryId }, data: { bedPlan: next as Prisma.InputJsonValue } });
       }
+      if (changed) await prisma.entry.update({ where: { id: input.entryId }, data: { bedPlan: next as Prisma.InputJsonValue } });
     } catch {
       /* the bed plan re-derives from the ask for any room it does not name */
     }
@@ -2403,6 +2537,7 @@ async function changeRoomToNewSegmentInner(
                   priorCheckOutDate: ctx.priorCheckOut.toISOString().slice(0, 10),
                   shiftDays: ctx.shiftDays,
                   priceMode: input.dateShift!.priceMode,
+                  priceModes: input.dateShift!.priceModes ?? null,
                   reason,
                 },
                 ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}),
@@ -2773,9 +2908,9 @@ async function changeRoomToNewSegmentInner(
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
         verbatimNote: isDateShift
-          ? `The stay moved to other dates (${datesLabel}${distinctTargets.length ? `, Room ${ctx.fromRoom.roomNumber} → ${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ")}` : ""}): ${reason}. ${
-              input.dateShift!.priceMode === "NEW_DATES"
-                ? `Priced at the new dates. The guest agreed: ${input.dateShift!.guestAgreedNote ?? "(no note)"}`
+          ? `The stay moved to other dates (${datesLabel}${dateRoomMap.size ? `, rooms ${datePairsLabel}` : ""}): ${reason}. ${
+              [input.dateShift!.priceMode, ...Object.values(input.dateShift!.priceModes ?? {})].includes("NEW_DATES")
+                ? `Priced at the new dates where chosen. The guest agreed: ${input.dateShift!.guestAgreedNote ?? "(no note)"}`
                 : "The guest keeps the price agreed. The move itself is the guest's answer to the re-issued voucher."
             }`
           : move
@@ -3166,6 +3301,8 @@ async function traceRoomChangeSummary(
           to: { checkInDate: d.newCheckInDate, checkOutDate: d.newCheckOutDate, nights: d.nights },
           shiftDays: d.shiftDays,
           priceMode: d.priceMode,
+          priceModes: d.priceModes,
+          rooms: d.rooms,
           reason: (input as { reason?: string }).reason ?? null,
           via: "DATE_MOVE",
           arrivalOpensOn: d.arrivalOpensOn,

@@ -72,8 +72,12 @@ const dateMoveSchema = z.object({
   entryId: z.string().trim().min(1).max(64),
   fromRoomId: z.string().trim().min(1).max(64),
   toRoomId: z.string().trim().min(1).max(64).nullable().optional(),
+  // The block (2026-10-13): every room that changes row, old → new.
+  roomMap: z.record(z.string().trim().min(1).max(64), z.string().trim().min(1).max(64)).nullable().optional(),
   newCheckInDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "newCheckInDate must be YYYY-MM-DD"),
   priceMode: z.enum(["KEEP", "NEW_DATES"]).optional(),
+  // The price choice per room, keyed by the room as it is now.
+  priceModes: z.record(z.string().trim().min(1).max(64), z.enum(["KEEP", "NEW_DATES"])).nullable().optional(),
   guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
 });
 

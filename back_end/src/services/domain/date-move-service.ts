@@ -38,6 +38,11 @@ import { amendNegotiationConfiguration, type NegotiationAmendmentOutcome } from 
  *
  * The preview writes nothing: every room is checked on its new nights the way the hold will check
  * it, and the figures are the server's.
+ *
+ * The same day (operator: "they should have gone together"; "ask if I want to keep the price same or
+ * different for each room"): the booking moves as a BLOCK — `roomMap` names every room that changes
+ * row — and the price choice is per room (`priceModes`). The preview prices each room both ways, so
+ * the desk can see what each choice costs before choosing.
  */
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
@@ -61,14 +66,29 @@ export type DateMoveRequest = {
   entryId: string;
   /** The room whose bar was dragged. */
   fromRoomId: string;
-  /** Where that room lands, when the drag also changed its row. */
+  /** Where that room lands, when the drag also changed its row (one room — `roomMap` says more). */
   toRoomId?: string | null;
+  /** Every room that changes row, old → new: the block. */
+  roomMap?: Record<string, string> | null;
   /** The new first night, "YYYY-MM-DD". */
   newCheckInDate: string;
+  /** The price choice for a room not named in `priceModes`. */
   priceMode?: "KEEP" | "NEW_DATES";
+  /** The price choice per room, keyed by the room as it is now. */
+  priceModes?: Record<string, "KEEP" | "NEW_DATES"> | null;
   guestAgreedNote?: string | null;
   reason?: string | null;
 };
+
+type PriceMode = "KEEP" | "NEW_DATES";
+
+/** The rooms that change row — `roomMap`, or the one room of `toRoomId`. */
+function roomMapOf(input: DateMoveRequest): Map<string, string> {
+  const m = new Map<string, string>();
+  const asked = input.roomMap && Object.keys(input.roomMap).length > 0 ? input.roomMap : input.toRoomId ? { [input.fromRoomId]: input.toRoomId } : {};
+  for (const [f, t] of Object.entries(asked)) if (f && t && f !== t) m.set(f, t);
+  return m;
+}
 
 export type DateMovePreview = {
   ok: boolean;
@@ -81,7 +101,19 @@ export type DateMovePreview = {
   from: { checkInDate: string; checkOutDate: string; nights: number };
   to: { checkInDate: string; checkOutDate: string; nights: number };
   shiftDays: number;
-  rooms: Array<{ roomId: string; roomNumber: string; toRoomNumber: string | null; nightsLabel: string }>;
+  /** One line per room of the booking: where it goes, its new nights, and what each price choice costs. */
+  rooms: Array<{
+    roomId: string;
+    roomNumber: string;
+    toRoomId: string | null;
+    toRoomNumber: string | null;
+    nightsLabel: string;
+    sameType: boolean;
+    priceMode: PriceMode;
+    /** This room's total on the new nights, tax included, before any booking discount — for each choice. */
+    keepTotal: number | null;
+    newDatesTotal: number | null;
+  }>;
   authority: { needed: "L1" | "L2"; actorLevel: string; ok: boolean; waitsForApproval: boolean; why: string };
   price: { before: number | null; after: number | null; delta: number | null; currency: string | null; note: string | null };
   path: string[];
@@ -152,13 +184,12 @@ function stageRefusal(entry: { currentStage: Stage; status: string }): string | 
   }
 }
 
-/** Negotiation: the sealed pick, night by night, moved to the new nights with the dragged room swapped in. */
+/** The sealed pick, night by night, moved to the new nights with the block's rooms swapped in. */
 function negotiationPicture(
   sealedOption: unknown,
   priorNights: string[],
   shiftDays: number,
-  fromRoomId: string,
-  toRoomId: string | null,
+  roomMap: Map<string, string>,
 ): Array<{ date: string; roomIds: string[] }> {
   const sel = readOptionSelected(sealedOption ?? null);
   const base =
@@ -167,7 +198,7 @@ function negotiationPicture(
       : priorNights.map((date) => ({ date, roomIds: [...sel.distinctRoomIds] }));
   return base.map((n) => ({
     date: shiftIsoDate(n.date, shiftDays),
-    roomIds: n.roomIds.map((id) => (id === fromRoomId && toRoomId ? toRoomId : id)),
+    roomIds: n.roomIds.map((id) => roomMap.get(id) ?? id),
   }));
 }
 
@@ -195,11 +226,37 @@ export async function previewDateMove(prisma: PrismaClient, actor: Actor, input:
   if (newIn.getTime() < hotelTodayUtc().getTime()) refusals.push("The new check-in is before today at the hotel");
 
   const route: DateMovePreview["route"] = entry.currentStage === Stage.S2 ? "NEGOTIATION" : "WALK";
-  const toRoomId = input.toRoomId && input.toRoomId !== input.fromRoomId ? input.toRoomId : null;
-  const roomIdsOfNote = [input.fromRoomId, ...(toRoomId ? [toRoomId] : [])];
-  const roomNumbers = new Map(
-    (await prisma.room.findMany({ where: { id: { in: roomIdsOfNote } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber]),
-  );
+  const roomMap = roomMapOf(input);
+  const sealedForRooms = entry.availabilityConfigs[0] ?? null;
+  // The booking's rooms as they are, from its sealed pick (the old pattern, unshifted).
+  const oldPattern = sealedForRooms ? negotiationPicture(sealedForRooms.optionSelected, nightsBetween(priorIn, priorOut), 0, new Map()) : [];
+  const sourceRoomIds = Array.from(new Set([...oldPattern.flatMap((n) => n.roomIds), input.fromRoomId, ...roomMap.keys()]));
+  const roomRows = await prisma.room.findMany({
+    where: { id: { in: Array.from(new Set([...sourceRoomIds, ...roomMap.values()])) } },
+    select: { id: true, roomNumber: true, roomTypeId: true },
+  });
+  const roomById = new Map(roomRows.map((r) => [r.id, r]));
+  const roomNumbers = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
+  const modeOf = (roomId: string): PriceMode => input.priceModes?.[roomId] ?? input.priceMode ?? "KEEP";
+  const newPattern = negotiationPicture(sealedForRooms?.optionSelected ?? null, nightsBetween(priorIn, priorOut), shiftDays, roomMap);
+  const newNightsOf = new Map<string, string[]>();
+  for (const n of newPattern) for (const id of n.roomIds) newNightsOf.set(id, [...(newNightsOf.get(id) ?? []), n.date]);
+  const roomLine = (src: string, totals?: { keep?: Map<string, number>; fresh?: Map<string, number> }): DateMovePreview["rooms"][number] => {
+    const to = roomMap.get(src) ?? null;
+    const landing = to ?? src;
+    return {
+      roomId: src,
+      roomNumber: roomNumbers.get(src) ?? "?",
+      toRoomId: to,
+      toRoomNumber: to ? roomNumbers.get(to) ?? "?" : null,
+      nightsLabel: nightsLabel(newNightsOf.get(landing) ?? []),
+      sameType: !to || roomById.get(to)?.roomTypeId === roomById.get(src)?.roomTypeId,
+      priceMode: modeOf(src),
+      keepTotal: totals?.keep?.get(landing) ?? null,
+      newDatesTotal: totals?.fresh?.get(landing) ?? null,
+    };
+  };
+  const byNumber = (a: { roomNumber: string }, b: { roomNumber: string }) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true });
 
   // Requests asked for a day the new stay no longer covers — named, never withdrawn on the desk's behalf.
   const newInIso = iso(newIn);
@@ -219,13 +276,11 @@ export async function previewDateMove(prisma: PrismaClient, actor: Actor, input:
   if (route === "NEGOTIATION") {
     const sealed = entry.availabilityConfigs[0] ?? null;
     if (!sealed) refusals.push("No rooms are picked for this booking yet — pick them at Negotiation first");
-    const picture = sealed
-      ? negotiationPicture(sealed.optionSelected, nightsBetween(priorIn, priorOut), shiftDays, input.fromRoomId, toRoomId)
-      : [];
+    const picture = sealed ? newPattern : [];
     const byRoom = new Map<string, string[]>();
     for (const n of picture) for (const id of n.roomIds) byRoom.set(id, [...(byRoom.get(id) ?? []), n.date]);
-    const roomRows = await prisma.room.findMany({ where: { id: { in: [...byRoom.keys()] } } });
-    for (const room of roomRows) {
+    const newRoomRows = await prisma.room.findMany({ where: { id: { in: [...byRoom.keys()] } } });
+    for (const room of newRoomRows) {
       const roomNights = byRoom.get(room.id) ?? [];
       for (const range of foldIsoNightsToRanges([...new Set(roomNights)].sort())) {
         try {
@@ -249,15 +304,12 @@ export async function previewDateMove(prisma: PrismaClient, actor: Actor, input:
           refusals.push(errorMessage(e));
         }
       }
-      rooms.push({
-        roomId: room.id,
-        roomNumber: room.roomNumber,
-        toRoomNumber: null,
-        nightsLabel: nightsLabel(roomNights),
-      });
     }
-    rooms = rooms.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true }));
-    if (toRoomId) notes.push(`Room ${roomNumbers.get(input.fromRoomId) ?? ""} is replaced by Room ${roomNumbers.get(toRoomId) ?? ""} on the new nights`);
+    // A room of this booking may be landed in only when it moves on itself.
+    for (const t of new Set(roomMap.values())) {
+      if (sourceRoomIds.includes(t) && !roomMap.has(t)) refusals.push(`Room ${roomNumbers.get(t) ?? "?"} is already part of this booking — pick rooms outside the current plan`);
+    }
+    rooms = sourceRoomIds.map((src) => roomLine(src)).sort(byNumber);
     const segmentId = entry.segments[0]?.id ?? null;
     const sent = entry.quotations.some((q) => q.segmentId === segmentId && (q.state === "SENT" || q.state === "ACCEPTED"));
     const isFom = (RANK[actor.actorLevel] ?? 0) >= 2;
@@ -294,55 +346,80 @@ export async function previewDateMove(prisma: PrismaClient, actor: Actor, input:
       waitsForApproval: false,
       why: isFom ? "From Set up on a date move is the FOM's — you can make it" : "From Set up on, moving a booking's dates needs the FOM",
     };
+    rooms = sourceRoomIds.map((src) => roomLine(src)).sort(byNumber);
     if (!stepRefusal && shiftDays !== 0) {
-      try {
-        // The preview runs with the FOM's hand so the figures show to the desk too; the authority
-        // line above says who may actually move it.
-        const dryActor: Actor = isFom ? actor : { ...actor, actorLevel: "L2" };
-        const dry = await changeRoomToNewSegment(prisma, dryActor, {
-          entryId: entry.id,
-          fromRoomId: input.fromRoomId,
-          ...(toRoomId ? { toRoomId } : {}),
-          reason: input.reason?.trim() || "Preview",
-          dateShift: {
-            newCheckInDate: newIn,
-            priceMode: input.priceMode ?? "KEEP",
-            guestAgreedNote: input.guestAgreedNote ?? (input.priceMode === "NEW_DATES" ? "(preview)" : null),
-          },
-          dryRun: true,
-        });
-        const plan = dry.plan;
-        const byRoom = new Map<string, number>(Object.entries(plan?.perRoomNightCounts ?? {}));
-        const planRooms = await prisma.room.findMany({ where: { id: { in: [...byRoom.keys()] } }, select: { id: true, roomNumber: true } });
-        // Each room's new nights: the old pattern, moved.
-        const sealed = entry.availabilityConfigs[0] ?? null;
-        const picture = negotiationPicture(sealed?.optionSelected ?? null, nightsBetween(priorIn, priorOut), shiftDays, input.fromRoomId, toRoomId);
-        const nightsOf = new Map<string, string[]>();
-        for (const n of picture) for (const id of n.roomIds) nightsOf.set(id, [...(nightsOf.get(id) ?? []), n.date]);
-        rooms = planRooms
-          .map((r) => ({ roomId: r.id, roomNumber: r.roomNumber, toRoomNumber: null, nightsLabel: nightsLabel(nightsOf.get(r.id) ?? []) }))
-          .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true }));
-        price = { before: dry.pricing.priorTotal, after: null, delta: null, currency: dry.pricing.currency, note: null };
+      // The preview runs with the FOM's hand so the figures show to the desk too; the authority
+      // line above says who may actually move it. It runs the walk twice — every room kept, and
+      // every room priced at the new dates — so each room's line can say what each choice costs;
+      // the total is the rooms as chosen.
+      const dryActor: Actor = isFom ? actor : { ...actor, actorLevel: "L2" };
+      const runDry = async (mode: PriceMode) => {
+        try {
+          const out = await changeRoomToNewSegment(prisma, dryActor, {
+            entryId: entry.id,
+            fromRoomId: input.fromRoomId,
+            reason: input.reason?.trim() || "Preview",
+            dateShift: {
+              newCheckInDate: newIn,
+              priceMode: mode,
+              roomMap: Object.fromEntries(roomMap),
+              guestAgreedNote: mode === "NEW_DATES" ? input.guestAgreedNote?.trim() || "(preview)" : null,
+            },
+            dryRun: true,
+          });
+          return { ok: true as const, out };
+        } catch (e) {
+          return { ok: false as const, error: errorMessage(e) };
+        }
+      };
+      const keep = await runDry("KEEP");
+      const fresh = await runDry("NEW_DATES");
+      const asksKeep = sourceRoomIds.some((id) => modeOf(id) === "KEEP");
+      const asksNew = sourceRoomIds.some((id) => modeOf(id) === "NEW_DATES");
+      if (!keep.ok && !fresh.ok) refusals.push(keep.error);
+      else if (!keep.ok && asksKeep) refusals.push(keep.error);
+      else if (!fresh.ok && asksNew) refusals.push(fresh.error);
+      const base = keep.ok ? keep.out : fresh.ok ? fresh.out : null;
+      if (base) {
+        const plan = base.plan;
+        const counts = new Map<string, number>(Object.entries(plan?.perRoomNightCounts ?? {}));
+        price = { before: base.pricing.priorTotal, after: null, delta: null, currency: base.pricing.currency, note: null };
         if (plan?.compositions) {
-          try {
-            const preview = await buildQuotationPreview(
+          const previewOf = (comps: unknown) =>
+            buildQuotationPreview(
               prisma,
               entry.id,
               {
-                roomCompositions: plan.compositions as never,
+                roomCompositions: comps as never,
                 discount: plan.discount ? { percent: plan.discount.discountPercent ?? null, amount: plan.discount.discountAmount ?? null } : null,
               },
               {
                 planRoomIds: plan.planRoomIds,
-                stayOverride: { checkIn: new Date(plan.checkIn), checkOut: new Date(plan.checkOut), perRoomNightCounts: byRoom },
+                stayOverride: { checkIn: new Date(plan.checkIn), checkOut: new Date(plan.checkOut), perRoomNightCounts: counts },
               },
             );
+          try {
+            const keepComps = keep.ok ? ((keep.out.plan?.compositions ?? []) as Array<{ roomId: string }>) : [];
+            const freshComps = fresh.ok ? ((fresh.out.plan?.compositions ?? []) as Array<{ roomId: string }>) : [];
+            const totalsOf = async (comps: Array<{ roomId: string }>) =>
+              comps.length ? new Map((await previewOf(comps)).rooms.map((r) => [r.roomId, r.total])) : undefined;
+            const keepTotals = await totalsOf(keepComps);
+            const freshTotals = await totalsOf(freshComps);
+            rooms = sourceRoomIds.map((src) => roomLine(src, { keep: keepTotals, fresh: freshTotals })).sort(byNumber);
+            // The rooms as chosen: each row from the run of its own choice.
+            const sourceOfLanding = new Map([...roomMap].map(([f, t]) => [t, f]));
+            const chosen = (keepComps.length ? keepComps : freshComps).map((row) => {
+              const src = sourceOfLanding.get(row.roomId) ?? row.roomId;
+              const pool = modeOf(src) === "KEEP" ? keepComps : freshComps;
+              return pool.find((r) => r.roomId === row.roomId) ?? row;
+            });
+            const mixed = await previewOf(chosen);
             price = {
-              before: dry.pricing.priorTotal,
-              after: preview.payable,
-              delta: dry.pricing.priorTotal != null ? Number((preview.payable - dry.pricing.priorTotal).toFixed(2)) : null,
-              currency: preview.currency ?? dry.pricing.currency,
-              note: (input.priceMode ?? "KEEP") === "KEEP" ? "The guest keeps the rates they agreed" : "Priced at the rates for the new nights",
+              before: base.pricing.priorTotal,
+              after: mixed.payable,
+              delta: base.pricing.priorTotal != null ? Number((mixed.payable - base.pricing.priorTotal).toFixed(2)) : null,
+              currency: mixed.currency ?? base.pricing.currency,
+              note: null,
             };
           } catch (e) {
             price.note = `The price could not be worked out ahead: ${errorMessage(e)} — the new quotation states it`;
@@ -350,8 +427,6 @@ export async function previewDateMove(prisma: PrismaClient, actor: Actor, input:
         } else {
           price.note = "Priced the way the booking is priced today (a flat rate) — the new quotation states the figure";
         }
-      } catch (e) {
-        refusals.push(errorMessage(e));
       }
     }
     path.push("Back to Negotiation — a new pass opens, the old one is kept as it was");
@@ -411,7 +486,7 @@ export async function executeDateMove(
   if (refusal) throw new ValidationError(refusal);
   const newIn = new Date(`${input.newCheckInDate.slice(0, 10)}T00:00:00.000Z`);
   if (Number.isNaN(newIn.getTime())) throw new ValidationError("newCheckInDate must be a date (YYYY-MM-DD)");
-  const toRoomId = input.toRoomId && input.toRoomId !== input.fromRoomId ? input.toRoomId : null;
+  const roomMap = roomMapOf(input);
 
   if (entry.currentStage === Stage.S2) {
     const priorIn = entry.checkInDate;
@@ -422,7 +497,7 @@ export async function executeDateMove(
     const newOut = new Date(priorOut.getTime() + shiftDays * DAY);
     const sealed = entry.availabilityConfigs[0] ?? null;
     if (!sealed) throw new ValidationError("No rooms are picked for this booking yet — pick them at Negotiation first");
-    const picture = negotiationPicture(sealed.optionSelected, nightsBetween(priorIn, priorOut), shiftDays, input.fromRoomId, toRoomId);
+    const picture = negotiationPicture(sealed.optionSelected, nightsBetween(priorIn, priorOut), shiftDays, roomMap);
     // The house is asked for exactly the new stay — the change of configuration accepts rooms only
     // from a search for the dates it moves to.
     const search = (await queryAvailability(prisma, entry.id, actor.actorId, actor.actorLevel, {
@@ -442,11 +517,12 @@ export async function executeDateMove(
   const outcome = await changeRoomToNewSegment(prisma, actor, {
     entryId: entry.id,
     fromRoomId: input.fromRoomId,
-    ...(toRoomId ? { toRoomId } : {}),
     reason,
     dateShift: {
       newCheckInDate: newIn,
       priceMode: input.priceMode ?? "KEEP",
+      priceModes: input.priceModes ?? null,
+      roomMap: Object.fromEntries(roomMap),
       guestAgreedNote: input.guestAgreedNote ?? null,
     },
   });

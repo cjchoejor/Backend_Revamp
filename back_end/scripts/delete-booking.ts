@@ -208,7 +208,20 @@ async function main() {
          FROM rooms r WHERE r.id IN (
            SELECT "roomId" FROM room_assignments WHERE "entryId" = ANY($1::text[])
            UNION SELECT "roomId" FROM committed_holds WHERE "entryId" = ANY($1::text[]) AND "roomId" IS NOT NULL
-           UNION SELECT "roomId" FROM speculative_holds WHERE "entryId" = ANY($1::text[]) AND "roomId" IS NOT NULL)
+           UNION SELECT "roomId" FROM speculative_holds WHERE "entryId" = ANY($1::text[]) AND "roomId" IS NOT NULL
+           -- Every room a hold covers, not only its primary: a multi-room booking at Reserve has no
+           -- assignments yet, and its other rooms live only in the hold's night-by-night picture
+           -- (2026-10-13 — a three-room test booking left 301 and 306 reading CONFIRMED).
+           UNION SELECT COALESCE(rid->>'roomId', rid #>> '{}')
+                   FROM committed_holds h,
+                        jsonb_array_elements(CASE WHEN jsonb_typeof(h."perNightBreakdown"::jsonb) = 'array' THEN h."perNightBreakdown"::jsonb ELSE '[]'::jsonb END) AS night,
+                        jsonb_array_elements(COALESCE(night->'roomIds', '[]'::jsonb)) AS rid
+                  WHERE h."entryId" = ANY($1::text[])
+           UNION SELECT COALESCE(rid->>'roomId', rid #>> '{}')
+                   FROM speculative_holds h,
+                        jsonb_array_elements(CASE WHEN jsonb_typeof(h."perNightBreakdown"::jsonb) = 'array' THEN h."perNightBreakdown"::jsonb ELSE '[]'::jsonb END) AS night,
+                        jsonb_array_elements(COALESCE(night->'roomIds', '[]'::jsonb)) AS rid
+                  WHERE h."entryId" = ANY($1::text[]))
          ORDER BY r."roomNumber"`,
       [ENTRY_IDS],
     );
