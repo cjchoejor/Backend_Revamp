@@ -785,10 +785,10 @@ export async function setCommittedHoldExpiry(
   const now = new Date();
   const house = await resolveHouseHoldWindow(prisma);
   const houseWindowMinutes = Math.round(house.seconds / 60);
-  const liveHold =
-    entry.committedHold && entry.committedHold.state !== HoldState.RELEASED && entry.committedHold.state !== HoldState.EXPIRED
-      ? entry.committedHold
-      : null;
+  // Only a hold still running on its clock is moved. A CONFIRMED hold at Set up was confirmed at
+  // Reserve in an earlier pass — its clock stopped there, and the rooms stand on that pass's
+  // reservation until this pass places its own hold (2026-10-13).
+  const liveHold = entry.committedHold && entry.committedHold.state === HoldState.PLACED ? entry.committedHold : null;
 
   let target: Date | null = null;
   if (!input.clear) {
@@ -1014,7 +1014,13 @@ export async function releaseCommittedHoldByAuthority(
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    select: { id: true, inquiryId: true, currentStage: true, reservations: { select: { id: true }, take: 1 } },
+    select: {
+      id: true,
+      inquiryId: true,
+      currentStage: true,
+      reservations: { select: { id: true, segmentId: true }, take: 1 },
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+    },
   });
   if (!entry) throw new NotFoundError("Entry");
 
@@ -1024,9 +1030,14 @@ export async function releaseCommittedHoldByAuthority(
     throw new ValidationError("That hold is already released");
   }
   if (entry.reservations.length > 0) {
+    // Back at Set up after a re-entry, the reservation is an earlier pass's and still binds the
+    // rooms until this pass reserves again — say so, rather than "this booking is confirmed".
+    const earlierPass = entry.reservations[0]!.segmentId !== entry.segments[0]?.id;
     throw new PolicyGateBlockedError(
       "HOLD_UNDER_CONFIRMED_RESERVATION",
-      "This booking is confirmed — its rooms are bound to the reservation. Cancel the booking or run a room change instead of releasing the hold.",
+      earlierPass
+        ? "The rooms are still bound to the reservation from an earlier pass, so releasing the hold would not free them. To give the rooms up, go back to Inquiry and search again, or cancel the booking."
+        : "This booking is confirmed — its rooms are bound to the reservation. Cancel the booking or run a room change instead of releasing the hold.",
     );
   }
 

@@ -141,6 +141,11 @@ export async function buildCompetingClaims(prisma: PrismaClient, entryId: string
     where: {
       id: { not: entryId, notIn: [...hardByEntry.keys()] },
       status: "ACTIVE",
+      // Paper counts only while a booking is still being worked: Inquiry, Negotiation, Set up.
+      // From Reserve on, its rooms stand on its hold or reservation (the hard claims above) or on
+      // nothing — a no-show at Closed kept its old proforma and read as working these rooms
+      // (2026-10-13).
+      currentStage: { in: ["S1", "S2", "S3"] },
       checkInDate: { lt: entry.checkOutDate },
       checkOutDate: { gt: entry.checkInDate },
     },
