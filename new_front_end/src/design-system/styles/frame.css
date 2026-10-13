@@ -667,6 +667,17 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .tape tr.drop-to > th.rc { box-shadow: inset 5px 0 0 var(--accent), inset 0 3px 0 var(--accent), inset 0 -3px 0 var(--accent) !important; }
 .ds .rchart .tape tr.drop-bad > th, .ds .rchart .tape tr.drop-bad > td { background-color: var(--danger-soft) !important; box-shadow: inset 0 3px 0 var(--danger), inset 0 -3px 0 var(--danger) !important; }
 .ds .rchart.is-dragging .tape td.cell.pick:hover::after { content: none; }
+/* Where the dragged bars would land (2026-10-13, operator: "visually show the selected rooms move
+   like greyed ghost of it"): a grey copy of each bar on its new row and nights, measured off the
+   table's cells and cut at the chart's visible box, solid so the bar beneath does not read through it. Pointer events pass through, so the row
+   under it still answers the drop. A booking swapped into the room left behind is drawn the same,
+   with a lighter fill. */
+.ds .rchart-land { position: fixed; z-index: 94; pointer-events: none; display: flex; align-items: center; gap: 0; padding: 0 8px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 22%, var(--surface)); border: 2px dashed color-mix(in srgb, var(--ink) 62%, var(--surface)); color: var(--ink); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 4px 14px rgba(0, 0, 0, .16); }
+.ds .rchart-land b { flex: 0 0 auto; max-width: 100%; font-weight: 800; overflow: hidden; text-overflow: ellipsis; }
+.ds .rchart-land span { flex: 1 1 auto; min-width: 0; margin-left: .35em; font-weight: 600; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.ds .rchart-land.swap { background: color-mix(in srgb, var(--ink) 11%, var(--surface)); }
+.ds .rchart-land.cut-l { border-left-style: solid; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.ds .rchart-land.cut-r { border-right-style: solid; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .ds .rchart-ghost { position: fixed; z-index: 95; pointer-events: none; display: grid; gap: 2px; max-width: 340px; padding: 8px 11px; border-radius: 9px; background: var(--surface); color: var(--ink); border: 2px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .22); font-size: 13.5px; font-weight: 700; }
 .ds .rchart-ghost b { color: var(--accent-ink); font-weight: 800; }
 .ds .rchart-ghost .sub { font-size: 12px; font-weight: 600; color: var(--ink-3); }

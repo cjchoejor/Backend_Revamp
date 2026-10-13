@@ -47,7 +47,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -187,6 +187,139 @@ function planDrop(
     legs.push({ entryId: it.entryId, fromRoomId: it.roomId, toRoomId: rows[i] });
   }
   return { ok: true, legs, to: legs.map((l) => l.toRoomId) };
+}
+
+/**
+ * Where a dragged bar would land, drawn as a grey copy over the chart (2026-10-13, operator: "when
+ * I move can it visually show the selected rooms move like greyed ghost of it"). One box per bar:
+ * on its new row and, for a sideways drag, its new nights. Measured off the table's own cells, so
+ * the copy sits exactly where the move would put it; cut at the chart's visible box.
+ */
+type LandBox = {
+  key: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  name: string;
+  note: string;
+  cutL: boolean;
+  cutR: boolean;
+  /** A booking that would be swapped into the room left behind — the server adds that leg. */
+  swapped: boolean;
+};
+
+function landingBoxes(
+  d: Drag,
+  ctx: {
+    wrap: HTMLElement;
+    chart: RoomChart;
+    bookingOf: Map<string, RoomChartBooking>;
+    barsByRoom: Map<string, RoomChartBar[]>;
+    rows: string[];
+  },
+): LandBox[] {
+  const { wrap, chart, bookingOf, barsByRoom, rows } = ctx;
+  const shift = d.shift;
+  // What lands where: a sideways drag moves the whole stay (every room the booking holds, the
+  // grabbed one onto the row under the pointer); a drag down or up moves the picked rooms.
+  type Move = { entryId: string; from: string; to: string; swapped: boolean };
+  let moves: Move[];
+  if (shift !== 0) {
+    if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId))) return [];
+    const target = d.over ?? d.grabbed.roomId;
+    moves = rows
+      .filter((rid) => (barsByRoom.get(rid) ?? []).some((b) => b.entryId === d.grabbed.entryId && MOVABLE.has(b.kind)))
+      .map((rid) => ({ entryId: d.grabbed.entryId, from: rid, to: rid === d.grabbed.roomId ? target : rid, swapped: false }));
+  } else {
+    if (!d.over) return [];
+    const plan = planDrop(d.items, d.grabbed, d.over, rows);
+    if (!plan.ok) return [];
+    moves = plan.legs.map((l) => ({ entryId: l.entryId, from: l.fromRoomId, to: l.toRoomId, swapped: false }));
+    // Whoever holds a room being taken over those nights is swapped into the room left behind —
+    // the same rule the server applies when it adds the swap legs.
+    const moving = new Set(moves.map((m) => `${m.entryId}|${m.from}`));
+    const partners: Move[] = [];
+    for (const m of moves) {
+      const own = (barsByRoom.get(m.from) ?? []).filter((b) => b.entryId === m.entryId && MOVABLE.has(b.kind));
+      for (const other of barsByRoom.get(m.to) ?? []) {
+        if (other.entryId === m.entryId || !MOVABLE.has(other.kind) || moving.has(`${other.entryId}|${m.to}`)) continue;
+        if (!own.some((b) => b.from < other.to && other.from < b.to)) continue;
+        if (partners.some((p) => p.entryId === other.entryId && p.from === m.to)) continue;
+        partners.push({ entryId: other.entryId, from: m.to, to: m.from, swapped: true });
+      }
+    }
+    moves = [...moves, ...partners];
+  }
+
+  const nightRect = new Map(
+    Array.from(wrap.querySelectorAll<HTMLElement>("thead th[data-night]")).map((th) => [th.dataset.night ?? "", th.getBoundingClientRect()]),
+  );
+  const box = wrap.getBoundingClientRect();
+  const clipL = Math.max(box.left, wrap.querySelector("thead th.rc")?.getBoundingClientRect().right ?? box.left);
+  const clipR = box.left + wrap.clientLeft + wrap.clientWidth;
+  const clipT = Math.max(box.top, wrap.querySelector("thead")?.getBoundingClientRect().bottom ?? box.top);
+  const clipB = Math.min(box.top + wrap.clientTop + wrap.clientHeight, window.innerHeight);
+  const lastNight = chart.nights[chart.nights.length - 1];
+  const roomNo = (id: string) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?";
+
+  const out: LandBox[] = [];
+  for (const m of moves) {
+    const row = wrap.querySelector<HTMLElement>(`tr[data-room-id="${m.to}"]`);
+    if (!row) continue;
+    const rr = row.getBoundingClientRect();
+    const booking = bookingOf.get(m.entryId);
+    const ci = booking?.checkInDate?.slice(0, 10) ?? null;
+    const co = booking?.checkOutDate?.slice(0, 10) ?? null;
+    for (const b of (barsByRoom.get(m.from) ?? []).filter((x) => x.entryId === m.entryId && MOVABLE.has(x.kind))) {
+      // A bar stops at the chart's edges; the stay itself runs on past them.
+      const realFrom = b.from === chart.from && ci && ci < chart.from ? ci : b.from;
+      const realTo = b.to === chart.to && co && co > chart.to ? co : b.to;
+      const nf = shiftDay(realFrom, shift);
+      const nt = shiftDay(realTo, shift);
+      const first = nf < chart.from ? chart.from : nf;
+      const lastIn = shiftDay(nt, -1);
+      const last = lastIn > lastNight ? lastNight : lastIn;
+      if (first > last) continue;
+      const a = nightRect.get(first);
+      const z = nightRect.get(last);
+      if (!a || !z) continue;
+      let left = a.left + 2;
+      let right = z.right - 2;
+      let cutL = nf < chart.from;
+      let cutR = nt > chart.to;
+      if (left < clipL) {
+        left = clipL;
+        cutL = true;
+      }
+      if (right > clipR) {
+        right = clipR;
+        cutR = true;
+      }
+      const top = Math.max(rr.top + 3, clipT);
+      const bottom = Math.min(rr.bottom - 3, clipB);
+      if (right - left < 6 || bottom - top < 6) continue;
+      const roomChanged = m.to !== m.from;
+      const note = m.swapped
+        ? `swapped into Room ${roomNo(m.to)}`
+        : shift !== 0
+          ? `${fmtRange(nf, nt)}${roomChanged ? ` · Room ${roomNo(m.to)}` : ""}`
+          : `Room ${roomNo(m.to)}`;
+      out.push({
+        key: `${m.entryId}|${m.from}|${b.from}`,
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
+        name: booking ? rowNameOf(booking) : "Booking",
+        note,
+        cutL,
+        cutR,
+        swapped: m.swapped,
+      });
+    }
+  }
+  return out;
 }
 
 /** The box that scrolls the chart up and down: the full-screen table, else the page. */
@@ -366,6 +499,26 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     },
     [],
   );
+
+  // The grey copies of the dragged bars, re-measured on every move and whenever the chart scrolls
+  // under the pointer.
+  const [lands, setLands] = useState<LandBox[]>([]);
+  const [scrollTick, setScrollTick] = useState(0);
+  const dragging = !!drag;
+  useEffect(() => {
+    if (!dragging) return;
+    const onScroll = () => setScrollTick((t) => t + 1);
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [dragging]);
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    if (!drag || !chart || !wrap) {
+      setLands((l) => (l.length ? [] : l));
+      return;
+    }
+    setLands(landingBoxes(drag, { wrap, chart, bookingOf, barsByRoom, rows }));
+  }, [drag, chart, bookingOf, barsByRoom, rows, scrollTick]);
 
   if (q.error && !chart) return <LoadFailed what="the house chart" onRetry={() => void q.refetch()} />;
   if (!chart) return <LoadingBlock />;
@@ -914,6 +1067,17 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
 
       {drag ? (
         <Floating>
+          {lands.map((l) => (
+            <div
+              key={l.key}
+              className={`rchart-land${l.cutL ? " cut-l" : ""}${l.cutR ? " cut-r" : ""}${l.swapped ? " swap" : ""}`}
+              style={{ left: l.left, top: l.top, width: l.width, height: l.height }}
+              aria-hidden
+            >
+              <b>{l.name}</b>
+              <span>· {l.note}</span>
+            </div>
+          ))}
           <div className={`rchart-ghost${(dropPlan && !dropPlan.ok && dropPlan.why) || dateWhy ? " bad" : ""}`} style={{ left: drag.x + 16, top: drag.y + 16 }} role="status">
             {dateDrag ? (
               dateWhy ? (
