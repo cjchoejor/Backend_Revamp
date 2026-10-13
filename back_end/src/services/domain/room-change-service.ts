@@ -857,7 +857,7 @@ export type RoomChangeAdjustments = {
   mealPlanApCount?: number;
 };
 
-export async function changeRoomToNewSegment(
+async function changeRoomToNewSegmentInner(
   prisma: PrismaClient,
   actor: Actor,
   input: {
@@ -2822,4 +2822,81 @@ export async function changeRoomToNewSegment(
 export async function roomChangeNights(prisma: PrismaClient, entryId: string, fromRoomId: string): Promise<string[]> {
   const ctx = await loadRoomChangeContext(prisma, entryId, fromRoomId);
   return ctx.substitutionNights;
+}
+
+/**
+ * The governed room-change walk, then ONE line for History that says what happened (2026-10-13,
+ * operator: "in the entry's history it doesn't give proper info on what has happened, like changed
+ * room 201 to 302 with time and the things that happened along with it"). `ENTRY.ROOM_CHANGED`
+ * carries the rooms by number with their nights, the reason, the new pass, the quotation it
+ * re-priced on, the reservation and its voucher number, the papers held for the desk, the price
+ * before and after, and where the walk ended — for a change from the booking, a room move from the
+ * chart, a setup change, a seating repair or a stay extension alike. A dry run writes nothing.
+ */
+export async function changeRoomToNewSegment(
+  ...args: Parameters<typeof changeRoomToNewSegmentInner>
+): ReturnType<typeof changeRoomToNewSegmentInner> {
+  const out = await changeRoomToNewSegmentInner(...args);
+  if (!out.dryRun) await traceRoomChangeSummary(args[0], args[1], args[2], out).catch(() => {});
+  return out;
+}
+
+async function traceRoomChangeSummary(
+  prisma: PrismaClient,
+  actor: Actor,
+  input: Parameters<typeof changeRoomToNewSegmentInner>[2],
+  out: RoomChangeOutcome,
+) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: out.entryId },
+    select: { inquiryId: true, currentStage: true, currentReservationId: true, reservation: { select: { id: true, confirmationVoucherNumber: true } } },
+  });
+  if (!entry) return;
+  const heldReservationIds = out.heldDocuments.filter((h) => h.kind === "CONFIRMATION_VOUCHER").map((h) => h.documentId);
+  const vouchers = new Map(
+    (
+      await prisma.reservation.findMany({ where: { id: { in: heldReservationIds } }, select: { id: true, confirmationVoucherNumber: true } })
+    ).map((r) => [r.id, r.confirmationVoucherNumber]),
+  );
+  const kind = out.extension ? "EXTENSION" : out.setupOnly ? "SETUP" : "ROOM";
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "ENTRY.ROOM_CHANGED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel as never,
+      entityType: "Entry",
+      entityId: out.entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: entry.currentStage,
+      inquiryId: entry.inquiryId,
+      entryId: out.entryId,
+      payload: {
+        kind,
+        reason: (input as { reason?: string }).reason ?? null,
+        moveId: (input as { moveContext?: { moveId?: string | null } }).moveContext?.moveId ?? null,
+        originStage: out.originStage,
+        fromRoom: { roomNumber: out.fromRoom.roomNumber, roomTypeName: out.fromRoom.roomTypeName },
+        toRooms: out.toRooms.map((r) => ({ roomNumber: r.roomNumber, roomTypeName: r.roomTypeName, nights: r.nights })),
+        keptNights: out.keptNights,
+        sameType: out.sameType,
+        repriced: out.repriced,
+        newSegmentNumber: out.newSegmentNumber,
+        quotationId: out.quotationId,
+        reservationId: entry.reservation?.id ?? null,
+        voucherNumber: entry.reservation?.confirmationVoucherNumber ?? null,
+        heldPapers: out.heldDocuments.map((h) => ({
+          kind: h.kind,
+          documentId: h.documentId,
+          number: h.kind === "CONFIRMATION_VOUCHER" ? vouchers.get(h.documentId) ?? h.documentId : h.documentId,
+        })),
+        pricing: out.pricing,
+        extension: out.extension,
+        reachedStage: out.walk.reachedStage,
+        returnedToOrigin: out.walk.returnedToOrigin,
+        blocked: out.walk.blocked,
+      } as never,
+      createdBy: actor.actorId,
+    },
+  });
 }

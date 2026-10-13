@@ -12,6 +12,7 @@ import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { maxZeroSub, pctOf, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { hotelCalendarYmd, hotelDayEndUtc } from "../../lib/stay-dates.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -477,7 +478,7 @@ export async function carryAdvancePinsAcrossNewPass(
   return { requirementCarried: carryRequirement, planCarried: carryPlan, requiredAmount: requiredAmount ? Number(requiredAmount.toFixed(2)) : null };
 }
 
-export async function setAdvanceRequirement(
+async function setAdvanceRequirementInner(
   prisma: PrismaClient,
   input: { entryId: string; folioId: string; mode: "AMOUNT" | "PERCENT" | "CLEAR"; amount?: number; percent?: number },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
@@ -844,7 +845,7 @@ export async function autoCompletePaymentReconciliationTaskTx(
  * extension to pass S5/S6, exactly as before. CLEAR wipes the plan (guest changed their mind).
  * Segment-scoped by `setAt` — a re-entry starts with no plan.
  */
-export async function setAdvancePaymentPlan(
+async function setAdvancePaymentPlanInner(
   prisma: PrismaClient,
   input: {
     entryId: string;
@@ -1266,3 +1267,24 @@ export async function markAdvancePaymentReconciled(
   });
 }
 
+/**
+ * setAdvanceRequirement, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function setAdvanceRequirement(...args: Parameters<typeof setAdvanceRequirementInner>): ReturnType<typeof setAdvanceRequirementInner> {
+  const out = await setAdvanceRequirementInner(...args);
+  const entryId = args[1].entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
+}
+
+/**
+ * setAdvancePaymentPlan, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function setAdvancePaymentPlan(...args: Parameters<typeof setAdvancePaymentPlanInner>): ReturnType<typeof setAdvancePaymentPlanInner> {
+  const out = await setAdvancePaymentPlanInner(...args);
+  const entryId = args[1].entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
+}

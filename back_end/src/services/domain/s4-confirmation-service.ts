@@ -36,6 +36,7 @@ import { renderReservationConfirmationEmail } from "../infrastructure/stage-emai
 import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
+import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -55,7 +56,7 @@ function getNightlyRate(terms: any): number {
   return 0;
 }
 
-export async function confirmReservation(
+async function confirmReservationInner(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
@@ -190,16 +191,11 @@ export async function confirmReservation(
     orderBy: { segmentNumber: "desc" },
     select: { startedAt: true },
   });
-  const latestProformaComm = await prisma.communicationRecord.findFirst({
-    where: {
-      entryId,
-      commType: CommunicationType.PROFORMA_INVOICE,
-      direction: "OUTBOUND",
-      sendStatus: "DISPATCHED",
-      ...(currentSegmentForComms?.startedAt ? { createdAt: { gte: currentSegmentForComms.startedAt } } : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    select: { acknowledgementStatus: true },
+  // The proforma in force — a replaced one's answer is never demanded (2026-10-13).
+  const latestProformaComm = await latestDispatchedInForce(prisma, {
+    entryId,
+    commType: CommunicationType.PROFORMA_INVOICE,
+    since: currentSegmentForComms?.startedAt ?? null,
   });
   enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation({
     latestDispatchedProformaComm: latestProformaComm,
@@ -313,7 +309,13 @@ export async function confirmReservation(
       frozenCommercialTerms: (accepted.commercialTerms ?? null) as any,
     };
     const res = await tx.reservation.create({
-      data: { id: reservationId, entryId, ...reservationData },
+      data: {
+        id: reservationId,
+        entryId,
+        ...reservationData,
+        // The voucher's own number — each confirmation is a new voucher (2026-10-13).
+        confirmationVoucherNumber: await allocateReadableId(tx, "VOUCHER", now),
+      },
     });
     // Point the entry at the newly-confirmed reservation; prior reservations remain read-only history.
     await tx.entry.update({
@@ -374,7 +376,7 @@ export async function confirmReservation(
       voucherRef: voucher.storageReference,
       templateKey: voucher.templateKey,
       ...(input?.holdGuestEmail
-        ? { contentSummary: "Confirmation voucher re-issued — held for the desk to send or not" }
+        ? { contentSummary: "Confirmation voucher re-issued — held for the desk to send or not", holdReplyWindow: true }
         : {}),
     });
 
@@ -579,7 +581,7 @@ export async function confirmReservation(
  * are cancelled so exactly one countdown is live), the same confirmation email body with the
  * voucher PDF attached, and the RESERVATION_CONFIRMATION_EMAIL trace family.
  */
-export async function resendConfirmationVoucher(
+async function resendConfirmationVoucherInner(
   prisma: PrismaClient,
   reservationId: string,
   actorId: string,
@@ -667,6 +669,16 @@ export async function resendConfirmationVoucher(
           data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "VOUCHER_RESENT" },
         });
       }
+      // The answer is awaited on the newest send only (2026-10-13): an earlier send of this same
+      // voucher still waiting stops waiting.
+      await tx.communicationRecord.updateMany({
+        where: {
+          id: { in: priorComms.map((c) => c.id) },
+          acknowledgementStatus: "PENDING",
+          payload: { path: ["reservationId"], equals: reservation.id },
+        },
+        data: { acknowledgementStatus: "SUPERSEDED" },
+      });
     }
 
     const created = await dispatchConfirmationVoucherTx(tx, {
@@ -739,3 +751,24 @@ export async function resendConfirmationVoucher(
   return { communicationRecordId: comm.id, dispatchedTo: recipient };
 }
 
+/**
+ * confirmReservation, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function confirmReservation(...args: Parameters<typeof confirmReservationInner>): ReturnType<typeof confirmReservationInner> {
+  const out = await confirmReservationInner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}
+
+/**
+ * resendConfirmationVoucher, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function resendConfirmationVoucher(...args: Parameters<typeof resendConfirmationVoucherInner>): ReturnType<typeof resendConfirmationVoucherInner> {
+  const out = await resendConfirmationVoucherInner(...args);
+  const entryId = (await args[0].reservation.findUnique({ where: { id: args[1] }, select: { entryId: true } }))?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}

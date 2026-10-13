@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { CommunicationType } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
+import { findReplacedPapers } from "../../lib/reply-waits.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import {
@@ -68,6 +69,11 @@ export async function recordCommunicationAcknowledgement(
 ) {
   const comm = await prisma.communicationRecord.findUnique({ where: { id: communicationRecordId } });
   if (!comm) throw new NotFoundError("CommunicationRecord");
+  // A paper replaced since it was sent awaits no reply, even before the write sites have marked it.
+  if (comm.entryId && comm.acknowledgementStatus === "PENDING") {
+    const replaced = await findReplacedPapers(prisma, comm.entryId, [comm]);
+    if (replaced.length) enforceAcknowledgementNotAlreadyReceived({ acknowledgementStatus: "SUPERSEDED" });
+  }
 
   enforceCommunicationIsAcknowledgeable({ commType: comm.commType, direction: comm.direction });
   enforceCommunicationDispatchedForAcknowledgement({ sendStatus: comm.sendStatus });
@@ -170,17 +176,44 @@ export async function listEntryCommunications(prisma: PrismaClient, entryId: str
     },
   });
 
+  // A paper replaced since it was sent awaits no reply — read here too, so the desk is right even
+  // before a write site has marked it (2026-10-13).
+  const replaced = new Map((await findReplacedPapers(prisma, entryId, rows)).map((x) => [x.communicationId, x]));
+  // A voucher a walk made and the desk has not yet sent or not: nothing has reached the guest.
+  const heldPapers = new Set(
+    (
+      await prisma.heldDocument.findMany({
+        where: { entryId, kind: "CONFIRMATION_VOUCHER", decision: null },
+        select: { documentId: true },
+      })
+    ).map((h) => h.documentId),
+  );
   return {
     entryId,
-    items: rows.map((r) => ({
-      ...r,
-      // Pre-computed so every frontend renders the same states rather than each re-deriving them.
-      canAcknowledge:
-        r.direction === "OUTBOUND" && r.sendStatus === "DISPATCHED" && r.acknowledgementStatus !== "RECEIVED",
-      isOverdue:
-        r.acknowledgementStatus !== "RECEIVED" &&
-        !!r.acknowledgementTimeoutAt &&
-        r.acknowledgementTimeoutAt.getTime() < Date.now(),
-    })),
+    items: rows.map((r) => {
+      // No answer is awaited for it: replaced while still waiting. An answer already on record
+      // stays "answered" — it is history.
+      const superseded = r.acknowledgementStatus === "SUPERSEDED" || (replaced.has(r.id) && r.acknowledgementStatus === "PENDING");
+      return {
+        ...r,
+        acknowledgementStatus: superseded ? "SUPERSEDED" : r.acknowledgementStatus,
+        superseded,
+        // The paper it carried is the one in force — the paper the "answer recorded" gates read.
+        inForce: !superseded && !replaced.has(r.id),
+        held:
+          r.commType === "CONFIRMATION_VOUCHER" &&
+          r.acknowledgementStatus === "PENDING" &&
+          heldPapers.has(String((r.payload as { reservationId?: string } | null)?.reservationId ?? "")),
+        replacedBy: replaced.get(r.id)?.replacedBy ?? null,
+        // Pre-computed so every frontend renders the same states rather than each re-deriving them.
+        canAcknowledge:
+          !superseded && r.direction === "OUTBOUND" && r.sendStatus === "DISPATCHED" && r.acknowledgementStatus !== "RECEIVED",
+        isOverdue:
+          !superseded &&
+          r.acknowledgementStatus !== "RECEIVED" &&
+          !!r.acknowledgementTimeoutAt &&
+          r.acknowledgementTimeoutAt.getTime() < Date.now(),
+      };
+    }),
   };
 }

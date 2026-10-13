@@ -17,6 +17,8 @@
  */
 import { type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
+import { labelRoomNights, roomNightsForEntry } from "../../lib/room-nights-for-entry.js";
 import {
   buildStorageKey,
   documentExists,
@@ -59,6 +61,12 @@ export async function generateOrLoadConfirmationVoucherPdf(
   prisma: PrismaClient,
   reservationId: string,
   actorId: string,
+  /**
+   * A deliberate re-make (the repair script): the file is rendered fresh and saved under the next
+   * free name (`VOU-…-r2`, `-r3`) — stored files are write-once, so an earlier render stays on
+   * disk as it was, and is never adopted in place of the new one.
+   */
+  opts?: { remake?: boolean },
 ): Promise<ConfirmationVoucherArtifact> {
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
@@ -79,6 +87,13 @@ export async function generateOrLoadConfirmationVoucherPdf(
   });
   if (!reservation) throw new NotFoundError("Reservation");
 
+  // Every voucher has its own number; one made without (an importer, a script) gets it now.
+  let voucherNumber = reservation.confirmationVoucherNumber;
+  if (!voucherNumber) {
+    voucherNumber = await allocateReadableId(prisma, "VOUCHER", reservation.confirmedAt);
+    await prisma.reservation.update({ where: { id: reservation.id }, data: { confirmationVoucherNumber: voucherNumber } });
+  }
+
   // Idempotency
   if (reservation.confirmationVoucherStorageKey && reservation.confirmationVoucherChecksum) {
     const bytes = await readDocument(reservation.confirmationVoucherStorageKey);
@@ -87,7 +102,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
       storageKey: reservation.confirmationVoucherStorageKey,
       checksum: reservation.confirmationVoucherChecksum,
       bytes,
-      filename: `${bookingReference}-confirmation-voucher.pdf`,
+      filename: `${voucherNumber}-confirmation-voucher.pdf`,
     };
   }
 
@@ -158,8 +173,59 @@ export async function generateOrLoadConfirmationVoucherPdf(
       });
     }
   }
-  // Defensive: if no assignments at all, emit one blank row per night so the voucher still
-  // has something in the booking table (matches legacy behaviour for empty bookings).
+  // No rooms assigned yet — the normal case at Reserve, since rooms are assigned at Arrival: the
+  // voucher names the rooms the reservation itself confirmed (its frozen compositions), each over
+  // the nights the sealed pick holds it for (2026-10-13 — every voucher issued at Reserve read
+  // "Room · plan: None").
+  if (bookingRows.length === 0) {
+    const comps = ((reservation.frozenCommercialTerms as { roomCompositions?: unknown } | null)?.roomCompositions ?? []) as Array<{
+      roomId?: string;
+      adultCount?: number | null;
+      cnb6To10Count?: number | null;
+      cnbUnder6Count?: number | null;
+      mealPlanCpCount?: number | null;
+      mealPlanMaplCount?: number | null;
+      mealPlanMapdCount?: number | null;
+      mealPlanApCount?: number | null;
+      mealPlanOthersCount?: number | null;
+      extraBedCount?: number | null;
+    }>;
+    if (Array.isArray(comps) && comps.length) {
+      const roomIds = comps.map((c) => c.roomId).filter((x): x is string => !!x);
+      const roomNo = new Map(
+        (await prisma.room.findMany({ where: { id: { in: roomIds } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber]),
+      );
+      const heldNights = await roomNightsForEntry(prisma, entry.id, { segmentId: reservation.segmentId, asOf: reservation.confirmedAt });
+      const stayNights = Array.from({ length: nights }, (_, i) => new Date(checkIn.getTime() + i * 86_400_000).toISOString().slice(0, 10));
+      for (const c of comps) {
+        if (!c.roomId) continue;
+        const asRow = {
+          occupantCount: null,
+          adultCount: c.adultCount ?? null,
+          cnb6To10Count: c.cnb6To10Count ?? 0,
+          cnbUnder6Count: c.cnbUnder6Count ?? 0,
+          mealPlanCpCount: c.mealPlanCpCount ?? 0,
+          mealPlanMaplCount: c.mealPlanMaplCount ?? 0,
+          mealPlanMapdCount: c.mealPlanMapdCount ?? 0,
+          mealPlanApCount: c.mealPlanApCount ?? 0,
+          mealPlanOthersCount: c.mealPlanOthersCount ?? 0,
+          extraBedCount: c.extraBedCount ?? 0,
+        } as unknown as (typeof entry.roomAssignments)[number];
+        for (const night of heldNights.get(c.roomId) ?? stayNights) {
+          bookingRows.push({
+            date: new Date(`${night}T00:00:00.000Z`),
+            roomNo: roomNo.get(c.roomId) ?? "",
+            occupants: describeOccupants(asRow),
+            mealPlan: describeMealPlan(asRow),
+            extraBeds: describeExtraBeds(asRow),
+          });
+        }
+      }
+      bookingRows.sort((a, b) => a.date.getTime() - b.date.getTime() || a.roomNo.localeCompare(b.roomNo, "en", { numeric: true }));
+    }
+  }
+  // Defensive: nothing at all to describe — one blank row per night so the voucher still has
+  // something in the booking table (matches legacy behaviour for empty bookings).
   if (bookingRows.length === 0) {
     for (let i = 0; i < nights; i++) {
       bookingRows.push({
@@ -175,10 +241,18 @@ export async function generateOrLoadConfirmationVoucherPdf(
   const now = new Date();
   // A3 Confirmation Voucher, house format (docs/bills). Re check-in / re check-out are real rows
   // in the new template and simply omitted for a single-block stay.
+  // Each room once (the rows are one per room per night), and the plan only when the rooms share it.
+  // When the rooms are not all held for the same nights (a stay that moves rooms), each room says
+  // its nights — "302 · 13–15 Oct" — as the quotation's Nights column does.
+  const roomsOnce = [...new Set(bookingRows.map((r) => r.roomNo).filter(Boolean))].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  const nightsOf = new Map(roomsOnce.map((no) => [no, bookingRows.filter((r) => r.roomNo === no).map((r) => r.date.toISOString().slice(0, 10))]));
+  const nightsVary = new Set([...nightsOf.values()].map((n) => [...new Set(n)].sort().join(","))).size > 1;
+  const roomWords = roomsOnce.map((no) => (nightsVary ? `${no} · ${labelRoomNights(nightsOf.get(no) ?? [])}` : no));
+  const plans = [...new Set(bookingRows.map((r) => r.mealPlan).filter(Boolean))];
   const roomsSummary = bookingRows.length
     ? [
-        bookingRows.map((r) => r.roomNo).filter(Boolean).join(", ") || null,
-        bookingRows.find((r) => r.mealPlan)?.mealPlan ?? null,
+        roomsOnce.length ? `${roomsOnce.length === 1 ? "Room" : "Rooms"} ${roomWords.join(", ")}` : null,
+        plans.length === 1 ? plans[0] : plans.length > 1 ? "meal plans per room" : null,
         `${nights} night${nights === 1 ? "" : "s"} total`,
       ]
         .filter(Boolean)
@@ -187,7 +261,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
 
   const html = renderLegphelConfirmationVoucherHtml({
     masthead: mastheadFromHotelProfile(hotel),
-    voucherNo: reservation.id,
+    voucherNo: voucherNumber,
     bookingRef: entry.inquiryId,
     date: formatDocDateLocal(reservation.confirmedAt ?? now),
     guest: guestFullName,
@@ -209,16 +283,22 @@ export async function generateOrLoadConfirmationVoucherPdf(
   });
 
   let bytes = await renderHtmlToPdf(html, { fitToPage: true });
-  const storageKey = buildStorageKey(
-    "confirmation-voucher",
-    `${entry.inquiryId}-v${1}`, // Reservation has no versionNumber; increment via reservation.confirmedAt-tied version later.
-    now,
-  );
+  // Named by the voucher's own number (2026-10-13). It was `<enquiry>-v1`, the same for every
+  // voucher of a booking and of every stay on its enquiry — so the first file was found and
+  // adopted below by every later one, and a re-confirmed booking's voucher (a room move, a
+  // re-entry, a return stay) carried the first voucher's rooms and dates.
+  let storageKey = buildStorageKey("confirmation-voucher", voucherNumber, now);
+  if (opts?.remake) {
+    for (let n = 2; await documentExists(storageKey); n++) {
+      storageKey = buildStorageKey("confirmation-voucher", `${voucherNumber}-r${n}`, now);
+    }
+  }
   // Orphan adoption (2026-08-07): before the immutability carve-out in db.ts, every voucher
   // render wrote its PDF to storage and THEN failed on the reservation.update — leaving a
   // write-once file with no DB pointer. The key is deterministic, so a retry would collide.
   // The reservation is immutable, so the orphan was rendered from the same data: adopt it as
-  // the artifact rather than failing on the write-once guard.
+  // the artifact rather than failing on the write-once guard. The key is this voucher's own,
+  // so the file found is this voucher's.
   if (await documentExists(storageKey)) {
     bytes = await readDocument(storageKey);
   } else {
@@ -237,6 +317,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
         confirmationVoucherRenderedBy: actorId,
         confirmationVoucherInputSnapshot: {
           documentTitle: "CONFIRMATION VOUCHER",
+          voucherNumber,
           bookingReference: entry.inquiryId,
           guestName: guestFullName,
           contactPersonName,
@@ -274,6 +355,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
         entryId: entry.id,
         payload: {
           reservationId: reservation.id,
+          voucherNumber,
           bookingReference: entry.inquiryId,
           storageKey,
           checksum,
@@ -288,6 +370,6 @@ export async function generateOrLoadConfirmationVoucherPdf(
     storageKey,
     checksum,
     bytes,
-    filename: `${entry.inquiryId}-confirmation-voucher.pdf`,
+    filename: `${voucherNumber}-confirmation-voucher.pdf`,
   };
 }

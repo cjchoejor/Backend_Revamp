@@ -1778,6 +1778,10 @@ model Reservation {
   confirmedAt             DateTime
   confirmedBy             String
   confirmationVoucherSent Boolean   @default(false)
+  /// The voucher's own number, VOU-YYYYMMDD-NNNN (2026-10-13). Each confirmation — a re-entry's,
+  /// a room move's, a return stay's — is a new voucher with its own number, and its stored file is
+  /// named by it. (Files were named by the enquiry, so every later voucher reused the first one's.)
+  confirmationVoucherNumber String? @unique
   sealedAt                DateTime?
   createdAt               DateTime  @default(now())
 

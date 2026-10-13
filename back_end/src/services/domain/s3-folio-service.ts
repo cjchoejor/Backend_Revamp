@@ -26,6 +26,7 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { latestDispatchedInForce } from "../../lib/reply-waits.js";
 
 /**
  * SIG-S3 §6.3 — `FolioService.getOrCreate` slice: single provisional folio per entry; trace on create vs continuation.
@@ -165,16 +166,11 @@ export async function recordPayment(
         orderBy: { segmentNumber: "desc" },
         select: { startedAt: true },
       });
-      const latestProformaComm = await tx.communicationRecord.findFirst({
-        where: {
-          entryId: input.entryId,
-          commType: "PROFORMA_INVOICE",
-          direction: "OUTBOUND",
-          sendStatus: "DISPATCHED",
-          ...(currentSegForComms?.startedAt ? { createdAt: { gte: currentSegForComms.startedAt } } : {}),
-        },
-        orderBy: { createdAt: "desc" },
-        select: { acknowledgementStatus: true },
+      // The proforma in force — a replaced one's answer is never demanded (2026-10-13).
+      const latestProformaComm = await latestDispatchedInForce(tx, {
+        entryId: input.entryId,
+        commType: "PROFORMA_INVOICE",
+        since: currentSegForComms?.startedAt ?? null,
       });
       enforceProformaGuestAnswerRecordedBeforeAdvancePayment({ latestDispatchedProformaComm: latestProformaComm });
     }

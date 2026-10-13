@@ -46,6 +46,7 @@ import { shouldCreateCommissionDueRecord } from "../../policies/28-commission-pr
 import { computeGuestDataRetentionDueAt } from "../../policies/07-guest-data-governance/p18-guest-data-retention.js";
 import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -187,7 +188,7 @@ export async function resolveInvoiceRecipient(
   return guestTo ? { to: guestTo, greetName, skipReason: null } : { to: null, greetName, skipReason: "GUEST_HAS_NO_EMAIL" };
 }
 
-export async function dispatchInvoice(
+async function dispatchInvoiceInner(
   prisma: PrismaClient,
   invoiceId: string,
   actorId: string,
@@ -645,15 +646,10 @@ export async function recordInvoicePaymentEvent(
     // be RECORDED before its payment is logged. Bookings whose invoice was dispatched
     // before the loop existed have no FINAL_INVOICE communication and pass — a gate can't
     // demand an answer to a question that was never opened.
-    const latestFinalComm = await prisma.communicationRecord.findFirst({
-      where: {
-        entryId: invoice.entryId,
-        commType: "FINAL_INVOICE" as any,
-        direction: "OUTBOUND",
-        sendStatus: "DISPATCHED",
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    // The final invoice in force — a replaced one's answer is never demanded (2026-10-13).
+    const latestFinalComm = invoice.entryId
+      ? await latestDispatchedInForce(prisma, { entryId: invoice.entryId, commType: "FINAL_INVOICE" as never })
+      : null;
     if (latestFinalComm && latestFinalComm.acknowledgementStatus !== "RECEIVED") {
       throw new ValidationError(
         "Record the guest's answer to the final invoice before logging its payment",
@@ -1555,3 +1551,13 @@ async function sendPostStayChargeNoticeBestEffort(
   }
 }
 
+/**
+ * dispatchInvoice, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function dispatchInvoice(...args: Parameters<typeof dispatchInvoiceInner>): ReturnType<typeof dispatchInvoiceInner> {
+  const out = await dispatchInvoiceInner(...args);
+  const entryId = (await args[0].invoice.findUnique({ where: { id: args[1] }, select: { folio: { select: { entryId: true } } } }))?.folio?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}

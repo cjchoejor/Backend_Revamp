@@ -41,6 +41,9 @@ const _ext = _base.$extends({
           "confirmationVoucherRenderedAt",
           "confirmationVoucherRenderedBy",
           "confirmationVoucherInputSnapshot",
+          // The voucher's own number (2026-10-13): issued at confirmation; given here only to a
+          // reservation made without one (an importer or a script), on its first render.
+          "confirmationVoucherNumber",
         ]);
         const keys = Object.keys((args.data ?? {}) as Record<string, unknown>);
         if (keys.length > 0 && keys.every((k) => VOUCHER_RENDER_FIELDS.has(k))) {

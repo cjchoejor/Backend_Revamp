@@ -65,6 +65,7 @@ import { selectOption } from "./s1-availability-service.js";
 import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { describeGuestOverlap, findOverlappingBookingOfSameGuest } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { releaseSpeculativeHold, placeSpeculativeHold } from "./s2-hold-service.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 /** A person at a terminal — `ActorLevel` also carries SYSTEM, which never takes this act. */
 export type NegotiationAmendmentActor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
@@ -233,7 +234,7 @@ async function checkNewDates(
   return { checkIn, checkOut };
 }
 
-export async function amendNegotiationConfiguration(
+async function amendNegotiationConfigurationInner(
   prisma: PrismaClient,
   entryId: string,
   actor: NegotiationAmendmentActor,
@@ -1012,4 +1013,15 @@ export async function withdrawNegotiationAmendmentRequest(
     createdBy: actor.actorId,
   });
   return { state: updated.state };
+}
+
+/**
+ * amendNegotiationConfiguration, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function amendNegotiationConfiguration(...args: Parameters<typeof amendNegotiationConfigurationInner>): ReturnType<typeof amendNegotiationConfigurationInner> {
+  const out = await amendNegotiationConfigurationInner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
 }

@@ -54,6 +54,7 @@ import {
 } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
 import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-pdf.js";
 import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -1103,7 +1104,7 @@ async function armDraftValidityTimerTx(
   });
 }
 
-export async function createQuotation(
+async function createQuotationInner(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
@@ -1493,7 +1494,7 @@ function diffQuotationTerms(
  * The new DRAFT then goes through the normal send flow — fresh QUO-… reference number, fresh
  * PDF render, fresh email + acknowledgement window.
  */
-export async function supersedeQuotationWithNewDraft(
+async function supersedeQuotationWithNewDraftInner(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
@@ -1973,7 +1974,7 @@ export async function expireQuotation(
   return { skipped: false, quotationId } as const;
 }
 
-export async function sendQuotation(
+async function sendQuotationInner(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
@@ -2404,3 +2405,35 @@ export async function resolveAckOpenLoop(
   return { ok: true, quotationId };
 }
 
+/**
+ * createQuotation, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function createQuotation(...args: Parameters<typeof createQuotationInner>): ReturnType<typeof createQuotationInner> {
+  const out = await createQuotationInner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}
+
+/**
+ * supersedeQuotationWithNewDraft, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function supersedeQuotationWithNewDraft(...args: Parameters<typeof supersedeQuotationWithNewDraftInner>): ReturnType<typeof supersedeQuotationWithNewDraftInner> {
+  const out = await supersedeQuotationWithNewDraftInner(...args);
+  const entryId = (await args[0].quotation.findUnique({ where: { id: args[1] }, select: { entryId: true } }))?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}
+
+/**
+ * sendQuotation, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function sendQuotation(...args: Parameters<typeof sendQuotationInner>): ReturnType<typeof sendQuotationInner> {
+  const out = await sendQuotationInner(...args);
+  const entryId = (await args[0].quotation.findUnique({ where: { id: args[1] }, select: { entryId: true } }))?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}

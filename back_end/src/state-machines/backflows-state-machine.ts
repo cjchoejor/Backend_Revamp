@@ -28,6 +28,7 @@ import { requireActiveMode, isTransitionAllowedByMode } from "../lib/mode-regist
 import { evaluateAutoFulfilment, type EntryFacts } from "../lib/mode-auto-fulfilment.js";
 import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
+import { retireSupersededReplyWaitsBestEffort } from "../lib/reply-waits.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
 import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pdf-service.js";
@@ -148,7 +149,7 @@ async function runBackflow(
   const now = new Date();
   const nextSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     // 1. Compute consequences (writes REENTRY.CONSEQUENCES_COMPUTED trace).
     await computeReEntryConsequences(tx, {
       entryId: entry.id,
@@ -279,6 +280,10 @@ async function runBackflow(
     }
     return updated;
   });
+  // The sealed pass's papers are replaced by whatever the new pass makes: stop waiting for their
+  // replies (2026-10-13).
+  await retireSupersededReplyWaitsBestEffort(prisma, entry.id, input.actor.actorId);
+  return result;
 }
 
 /**

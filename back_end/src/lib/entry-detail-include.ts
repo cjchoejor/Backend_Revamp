@@ -3,6 +3,12 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 /** Shared include for entry workspace GET / activation responses. */
 export const entryDetailInclude = {
   reservation: true,
+  // Every confirmation's voucher, newest first — each re-confirmation is a new voucher with its own
+  // number, and Documents lists them all (2026-10-13).
+  reservations: {
+    orderBy: { confirmedAt: "desc" as const },
+    select: { id: true, segmentId: true, confirmedAt: true, confirmationVoucherNumber: true, confirmationVoucherStorageKey: true },
+  },
   folio: {
     include: {
       lines: { orderBy: { postedAt: "desc" as const }, take: 100 },

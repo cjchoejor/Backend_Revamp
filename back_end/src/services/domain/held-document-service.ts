@@ -1,6 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { resendConfirmationVoucher } from "./s4-confirmation-service.js";
+import { armVoucherReplyWindow } from "./communication-service.js";
+import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { dispatchInvoice, resolveInvoiceRecipient } from "./s9-service.js";
 
 /**
@@ -26,6 +28,8 @@ export type HeldDocumentView = {
   entryId: string;
   kind: "CONFIRMATION_VOUCHER" | "PROFORMA";
   documentId: string;
+  /** The number printed on the paper — the voucher's VOU-… (2026-10-13), the bill's INV-…. */
+  documentNumber: string;
   reason: string;
   roomMoveLegId: string | null;
   heldAt: string;
@@ -66,12 +70,13 @@ function view(row: {
   note: string | null;
   decidedAt: Date | null;
   decidedBy: string | null;
-}, defaultRecipient: HeldDocumentView["defaultRecipient"]): HeldDocumentView {
+}, defaultRecipient: HeldDocumentView["defaultRecipient"], documentNumber?: string | null): HeldDocumentView {
   return {
     id: row.id,
     entryId: row.entryId,
     kind: row.kind as HeldDocumentView["kind"],
     documentId: row.documentId,
+    documentNumber: documentNumber || row.documentId,
     reason: row.reason,
     roomMoveLegId: row.roomMoveLegId,
     heldAt: row.heldAt.toISOString(),
@@ -88,9 +93,20 @@ function view(row: {
 /** The booking's held papers, newest first — the undecided ones are what the desk still has to answer. */
 export async function listHeldDocuments(prisma: PrismaClient, entryId: string): Promise<HeldDocumentView[]> {
   const rows = await prisma.heldDocument.findMany({ where: { entryId }, orderBy: { heldAt: "desc" } });
+  const voucherNos = await voucherNumbersFor(prisma, rows);
   const out: HeldDocumentView[] = [];
-  for (const r of rows) out.push(view(r, r.decision == null ? await defaultRecipientFor(prisma, r) : { to: null, whose: null }));
+  for (const r of rows) {
+    out.push(view(r, r.decision == null ? await defaultRecipientFor(prisma, r) : { to: null, whose: null }, voucherNos.get(r.documentId)));
+  }
   return out;
+}
+
+/** A voucher row names its reservation; the paper carries the voucher's own number. */
+async function voucherNumbersFor(prisma: PrismaClient, rows: { kind: string; documentId: string }[]): Promise<Map<string, string>> {
+  const ids = rows.filter((r) => r.kind === "CONFIRMATION_VOUCHER").map((r) => r.documentId);
+  if (!ids.length) return new Map();
+  const res = await prisma.reservation.findMany({ where: { id: { in: ids } }, select: { id: true, confirmationVoucherNumber: true } });
+  return new Map(res.filter((r) => r.confirmationVoucherNumber).map((r) => [r.id, r.confirmationVoucherNumber!]));
 }
 
 export async function decideHeldDocument(
@@ -128,6 +144,14 @@ export async function decideHeldDocument(
       throw new ValidationError("A bill is sent by email — WhatsApp is not recorded for a bill. Send it by email, or don't send it.");
     }
     sentTo = input.sentTo?.trim() || null;
+    // It has gone out now, so the guest's answer is awaited from now (a held voucher's clock
+    // does not run while it waits for the desk).
+    const windows = await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(() => null);
+    await armVoucherReplyWindow(prisma, {
+      reservationId: row.documentId,
+      actorId: actor.actorId,
+      voucherAckSeconds: Number((windows as Record<string, number> | null)?.voucher ?? 172800),
+    });
   }
 
   const decision = input.action === "EMAIL" ? "SENT_EMAIL" : input.action === "WHATSAPP" ? "SENT_WHATSAPP" : "NOT_SENT";
@@ -160,5 +184,5 @@ export async function decideHeldDocument(
       },
     })
     .catch(() => {});
-  return view(updated, { to: null, whose: null });
+  return view(updated, { to: null, whose: null }, (await voucherNumbersFor(prisma, [updated])).get(updated.documentId));
 }

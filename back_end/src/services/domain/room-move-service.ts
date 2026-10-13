@@ -721,6 +721,12 @@ async function trace(
     .catch(() => {});
 }
 
+/** Room numbers by id — the history says "201 → 302", never an id. */
+async function roomNumbers(prisma: PrismaClient, ids: string[]): Promise<Map<string, string>> {
+  const rows = await prisma.room.findMany({ where: { id: { in: [...new Set(ids)] } }, select: { id: true, roomNumber: true } });
+  return new Map(rows.map((r) => [r.id, r.roomNumber]));
+}
+
 async function appendNote(prisma: PrismaClient, moveId: string, note: Record<string, unknown>) {
   const m = await prisma.roomMove.findUniqueOrThrow({ where: { id: moveId }, select: { notes: true } });
   const notes = Array.isArray(m.notes) ? (m.notes as unknown[]) : [];
@@ -795,6 +801,7 @@ async function runLeg(
     data: { status, outcome: outcome as Prisma.InputJsonValue, finishedAt: new Date() },
   });
   const blocked = (outcome.walk as { blocked?: { message?: string } | null } | undefined)?.blocked ?? null;
+  const nos = await roomNumbers(prisma, [leg.fromRoomId, leg.toRoomId]);
   await trace(
     prisma,
     actor,
@@ -806,6 +813,8 @@ async function runLeg(
       legId,
       fromRoomId: leg.fromRoomId,
       toRoomId: leg.toRoomId,
+      fromRoomNumber: nos.get(leg.fromRoomId) ?? null,
+      toRoomNumber: nos.get(leg.toRoomId) ?? null,
       partnerEntryId: partner?.entryId ?? null,
       compensates: opts.compensates ?? null,
       reachedStage: (outcome.walk as { reachedStage?: string } | undefined)?.reachedStage ?? null,
@@ -856,10 +865,19 @@ async function settleMoveStatus(prisma: PrismaClient, actor: Actor, moveId: stri
   else status = "PARTIAL";
   const done = status !== "PARTIAL";
   await prisma.roomMove.update({ where: { id: moveId }, data: { status, completedAt: done ? new Date() : null } });
+  const nos = await roomNumbers(prisma, m.legs.flatMap((l) => [l.fromRoomId, l.toRoomId]));
   for (const entryId of [...new Set(m.legs.map((l) => l.entryId))]) {
     await trace(prisma, actor, `ROOM_MOVE.${status}`, entryId, null, {
       moveId,
-      legs: m.legs.map((l) => ({ legId: l.id, entryId: l.entryId, fromRoomId: l.fromRoomId, toRoomId: l.toRoomId, status: l.status })),
+      legs: m.legs.map((l) => ({
+        legId: l.id,
+        entryId: l.entryId,
+        fromRoomId: l.fromRoomId,
+        toRoomId: l.toRoomId,
+        fromRoomNumber: nos.get(l.fromRoomId) ?? null,
+        toRoomNumber: nos.get(l.toRoomId) ?? null,
+        status: l.status,
+      })),
     });
   }
   await repairMoveRooms(prisma, m.legs.flatMap((l) => [l.fromRoomId, l.toRoomId]));
@@ -978,6 +996,7 @@ export async function executeRoomMove(
     return id;
   });
   const legs = await prisma.roomMoveLeg.findMany({ where: { moveId }, orderBy: { order: "asc" } });
+  const startNos = await roomNumbers(prisma, legs.flatMap((l) => [l.fromRoomId, l.toRoomId]));
   for (const l of legs) {
     const partner = legs.find((p) => p.entryId !== l.entryId && p.fromRoomId === l.toRoomId) ?? legs.find((p) => p.entryId !== l.entryId) ?? null;
     await trace(prisma, actor, "ROOM_MOVE.STARTED", l.entryId, String(l.originStage), {
@@ -986,6 +1005,8 @@ export async function executeRoomMove(
       kind: preview.kind,
       fromRoomId: l.fromRoomId,
       toRoomId: l.toRoomId,
+      fromRoomNumber: startNos.get(l.fromRoomId) ?? null,
+      toRoomNumber: startNos.get(l.toRoomId) ?? null,
       partnerEntryId: partner?.entryId ?? null,
       legs: legs.length,
       reason,
