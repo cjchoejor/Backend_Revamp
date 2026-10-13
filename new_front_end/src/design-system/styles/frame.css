@@ -14,6 +14,16 @@
 .ds .panel-row:hover { background: var(--surface-2); text-decoration: none; }
 .ds .shell { min-height: 100vh; }
 
+/* Pages use the screen they are on (2026-10-13, operator: two monitors, and the wider one showed
+   the page stopping short with an empty strip on the right). The prototype capped every list page
+   at 1600px and the booking's middle column at 1280px, both pinned to the left, so a 1920px
+   window kept ~300px blank and a booking left a gap before its side panel. Tables and the house
+   chart are what these pages are for, and they read better wider; lines of prose keep their own
+   caps where they have them (`.actrow .cap`, `.way-form`). Same selectors as components.css, so
+   this sheet, loaded after it, wins. */
+.ds .page:not(.desk-root *) { max-width: none; }
+.ds .canvas:not(.desk-root *) { max-width: none; }
+
 /* a page that is a list: the title line with its one primary button */
 .ds .page-title { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); flex-wrap: wrap; }
 .ds .page-title h2 { font-family: var(--font-head); }
