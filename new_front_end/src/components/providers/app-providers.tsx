@@ -6,6 +6,7 @@ import { useState, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { SessionProvider } from "./session-provider";
 import { DialogProvider } from "./dialog-provider";
+import { PendingButtons } from "@/components/pending-buttons";
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -35,6 +36,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         <SessionProvider>
           <DialogProvider>
             {children}
+            <PendingButtons />
             <Toaster richColors position="top-right" closeButton />
           </DialogProvider>
         </SessionProvider>

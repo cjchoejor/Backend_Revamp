@@ -136,3 +136,39 @@ html {
      modal/dialog locks body scroll. Covers admin + login (which scroll <body>). */
   scrollbar-gutter: stable;
 }
+
+/* A button waiting on the server (2026-10-14, operator: "show a loading icon"): PendingButtons marks
+   the button pressed while its request runs. A ring before the label, the label kept; no second press. */
+[data-pending] {
+  cursor: progress !important;
+  pointer-events: none;
+}
+[data-pending]::before {
+  content: "";
+  display: inline-block;
+  flex: none;
+  justify-self: start;
+  box-sizing: border-box;
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.5em;
+  vertical-align: -0.14em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: desk-pending-spin 0.7s linear infinite;
+}
+/* A button that already draws its own spinner (the design system's "working" state) keeps just that one. */
+[data-pending]:has(> .spin)::before {
+  content: none;
+}
+@keyframes desk-pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pending]::before {
+    animation-duration: 2.4s;
+  }
+}
