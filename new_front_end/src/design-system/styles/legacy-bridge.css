@@ -129,6 +129,13 @@
 .ds .desk-root .btn-ghost:hover:not(:disabled) { background: #F9F5EE; border-color: #706A61; }
 .ds .desk-root .btn:disabled,
 .ds .desk-root .btn[disabled] { background: #EEE6D8; color: #A39C92; border-color: #EEE6D8; opacity: 1; cursor: not-allowed; }
+/* A pressed button waiting on the server keeps the colours it was pressed in (2026-10-14): these old
+   tools disable the button while their request runs, which painted it the pale "unavailable" grey and
+   drew the waiting ring (PendingButtons' [data-pending]) pale on pale. */
+.ds .desk-root .btn[data-pending]:disabled { cursor: progress; }
+.ds .desk-root .btn.btn-primary[data-pending]:disabled { background: #1E1C19; color: #FFFFFF; border-color: #1E1C19; }
+.ds .desk-root .btn.btn-ghost[data-pending]:disabled { background: #FFFFFF; color: #1E1C19; border-color: #C2B49E; }
+.ds .desk-root .btn.rct-save-btn.dirty[data-pending]:disabled { background: var(--stop, #B3261E); border-color: var(--stop, #B3261E); color: #fff; }
 .ds .desk-root .btn svg { width: 16px; height: 16px; }
 
 /* tags read as chips */

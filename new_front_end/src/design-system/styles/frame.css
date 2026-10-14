@@ -187,6 +187,19 @@
 .ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface); border-color: var(--line-2); color: var(--ink); font-weight: 500; }
 .ds .btn-quiet:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-3); border-color: var(--ink-3); }
 .ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); font-weight: 400; }
+/* A button at work keeps its own colours (2026-10-14, operator: "I don't see it here" on the voucher's
+   Sending…). The generated sheet styles a working button like an unavailable one — pale grey, light ink —
+   and the primary spinner was drawn white, so the spin vanished into the grey and only the words were left.
+   Busy is not unavailable: the button stays as it was pressed, and the spinner draws in its own ink.
+   The same holds for a pressed button a step turns inert while its request runs ([data-pending], set by
+   PendingButtons) — the ring before its label would otherwise be drawn pale on pale. */
+.ds .btn:is(.working, [data-pending]):not(.desk-root *) { cursor: progress; }
+.ds .btn.btn-primary:is(.working, [data-pending]):not(.desk-root *) { background: var(--ink); color: #fff; border-color: var(--ink); }
+.ds .btn.btn-secondary:is(.working, [data-pending]):not(.desk-root *) { background: var(--surface); color: var(--ink); border-color: var(--line-2); }
+.ds .btn.btn-danger:is(.working, [data-pending]):not(.desk-root *) { background: var(--surface); color: var(--danger); border-color: var(--danger-line); }
+.ds .btn.btn-danger.solid:is(.working, [data-pending]):not(.desk-root *) { background: var(--danger); color: #fff; border-color: var(--danger); }
+.ds .btn.btn-quiet[data-pending]:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface); border-color: var(--line-2); color: var(--ink); font-weight: 500; }
+.ds .btn.working .spin:not(.desk-root *) { border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 /* "Change configuration" (2026-09-30) — the rooms and the party, changed at Negotiation. It
    takes over its card, so it reads as a short numbered form rather than a second panel. */
 .ds .cfg-change:not(.desk-root *) { display: grid; gap: var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-card); padding: var(--s4); background: var(--surface-2); }
