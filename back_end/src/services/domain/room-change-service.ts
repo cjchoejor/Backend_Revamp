@@ -266,6 +266,15 @@ export type DateShiftWalkInput = {
   roomMap?: Record<string, string> | null;
   /** A price choice per room, keyed by the room it is now; a room not named takes `priceMode`. */
   priceModes?: Record<string, "KEEP" | "NEW_DATES"> | null;
+  /**
+   * The stay SHORTENED to these nights, at their own dates (2026-10-14, operator: "move the room 206
+   * for date 22 to another date ... there is a gap ... the system should make all of it a different
+   * entry"). Internal only — reached through night-move-service when a night of a one-room booking
+   * leaves for other dates: the booking keeps the earliest stay left and the rest becomes bookings of
+   * their own. The nights must be one run inside the stay and fewer than all of it; nothing shifts
+   * (`newCheckInDate` is the run's first night), the rooms stay, the rates stay.
+   */
+  keepNights?: string[] | null;
 };
 
 /**
@@ -350,6 +359,10 @@ async function loadRoomChangeContext(
   // Extend the stay or Leaving early.
   const dateShift = opts?.dateShift ?? null;
   let shiftDays = 0;
+  // A shortened stay (2026-10-14): one run of the booking's own nights, nothing shifted.
+  const keep = dateShift?.keepNights?.length
+    ? Array.from(new Set(dateShift.keepNights.map((d) => String(d).slice(0, 10)))).sort()
+    : null;
   if (dateShift) {
     if (opts?.extension) throw new ValidationError("A stay is either extended or moved to other dates — not both at once");
     if (!([Stage.S3, Stage.S4, Stage.S5] as Stage[]).includes(stage)) {
@@ -360,20 +373,34 @@ async function loadRoomChangeContext(
       );
     }
     if (!priorCheckIn || !currentCheckOut) throw new ValidationError("This booking has no stay dates to move");
-    shiftDays = Math.round((dateShift.newCheckInDate.getTime() - priorCheckIn.getTime()) / DAY_MS_SHIFT);
-    if (shiftDays === 0) throw new ValidationError("The new check-in is the day the booking already starts — nothing moves");
-    if (dateShift.newCheckInDate.getTime() < hotelTodayUtc().getTime()) {
+    if (keep) {
+      const stay = isoNightsBetween(priorCheckIn, currentCheckOut);
+      if (keep.some((d) => !stay.includes(d))) throw new ValidationError("The nights to keep are not all nights of this stay");
+      if (foldIsoNightsToRanges(keep).length !== 1) throw new ValidationError("The nights a booking keeps must follow one another");
+      if (keep.length >= stay.length) throw new ValidationError("Every night stays on the booking — nothing leaves");
+    } else {
+      shiftDays = Math.round((dateShift.newCheckInDate.getTime() - priorCheckIn.getTime()) / DAY_MS_SHIFT);
+      if (shiftDays === 0) throw new ValidationError("The new check-in is the day the booking already starts — nothing moves");
+    }
+    const firstNight = keep ? new Date(`${keep[0]}T00:00:00.000Z`) : dateShift.newCheckInDate;
+    if (firstNight.getTime() < hotelTodayUtc().getTime()) {
       throw new ValidationError("The new check-in is before today at the hotel");
     }
   }
-  const checkIn = dateShift && priorCheckIn ? new Date(priorCheckIn.getTime() + shiftDays * DAY_MS_SHIFT) : priorCheckIn;
+  const checkIn = keep
+    ? new Date(`${keep[0]}T00:00:00.000Z`)
+    : dateShift && priorCheckIn
+      ? new Date(priorCheckIn.getTime() + shiftDays * DAY_MS_SHIFT)
+      : priorCheckIn;
   // Extension mode (2026-08-21): the stay runs to the NEW checkout; the extra nights are in
   // the plan from the start, so every downstream step (sealed config, silent quote, hold,
   // re-freeze) sees the extended stay as the booking's basis.
   const extension = opts?.extension ?? null;
   const checkOut = extension
     ? extension.newCheckOutDate
-    : dateShift && currentCheckOut
+    : keep
+      ? new Date(Date.parse(`${keep[keep.length - 1]}T00:00:00.000Z`) + DAY_MS_SHIFT)
+      : dateShift && currentCheckOut
       ? new Date(currentCheckOut.getTime() + shiftDays * DAY_MS_SHIFT)
       : currentCheckOut;
   if (!checkIn || !checkOut) throw new ValidationError("This booking has no stay dates — a room change cannot be validated");
@@ -396,7 +423,12 @@ async function loadRoomChangeContext(
     nightsIso: extension ? isoNightsBetween(checkIn, currentCheckOut!) : dateShift ? isoNightsBetween(priorCheckIn!, currentCheckOut!) : nightsIso,
   });
   // A date move carries the room pattern night for night onto the new nights.
-  const shiftedPicture = dateShift ? basePicture.map((n) => ({ date: shiftIsoDate(n.date, shiftDays), roomIds: [...n.roomIds] })) : basePicture;
+  // A shortened stay keeps its own nights, as they are.
+  const shiftedPicture = keep
+    ? basePicture.filter((n) => keep.includes(n.date))
+    : dateShift
+      ? basePicture.map((n) => ({ date: shiftIsoDate(n.date, shiftDays), roomIds: [...n.roomIds] }))
+      : basePicture;
   const picture = extension ? [...basePicture, ...extraNightsPicture(extension.extraNights)] : shiftedPicture;
   /** Rooms of the plan BEFORE the extension's extra nights (= every room on a per-night change). */
   const currentPlanRoomIds = new Set(basePicture.flatMap((n) => n.roomIds));
@@ -425,7 +457,7 @@ async function loadRoomChangeContext(
 
   return {
     entry, stage, checkIn, checkOut, currentCheckOut, nightsIso, sealedConfig, picture, currentPlanRoomIds, claimedRoomIds,
-    substitutionNights, today, todayIso, fromRoom, extension, dateShift, shiftDays,
+    substitutionNights, today, todayIso, fromRoom, extension, dateShift, shiftDays, trimmed: !!keep,
     priorCheckIn: priorCheckIn!, priorCheckOut: currentCheckOut!,
   };
 }
@@ -901,6 +933,8 @@ export type RoomChangeOutcome = {
     rooms: Array<{ fromRoomNumber: string; toRoomNumber: string }>;
     /** Set when the booking was at Arrival and the new arrival is beyond the arrival window. */
     arrivalOpensOn: string | null;
+    /** The stay was shortened to its own nights (a night moved out), not moved. */
+    trimmed?: boolean;
   } | null;
   /** Set when rooms split off to a booking of their own (2026-10-14). */
   splitOff?: { roomIds: string[]; roomNumbers: string[]; party: SplitOffWalkInput["party"]; toLabel: string } | null;
@@ -1283,7 +1317,7 @@ async function changeRoomToNewSegmentInner(
   const toRoom = targetById.get(toRoomId)!;
   /** "201" on a simple swap; "201 + 305" on a per-night split — for notes and traces. */
   const datesLabel = isDateShift
-    ? `${ctx.priorCheckIn.toISOString().slice(0, 10)} → ${ctx.priorCheckOut.toISOString().slice(0, 10)} moved to ${ctx.checkIn.toISOString().slice(0, 10)} → ${ctx.checkOut.toISOString().slice(0, 10)}`
+    ? `${ctx.priorCheckIn.toISOString().slice(0, 10)} → ${ctx.priorCheckOut.toISOString().slice(0, 10)} ${ctx.trimmed ? "shortened" : "moved"} to ${ctx.checkIn.toISOString().slice(0, 10)} → ${ctx.checkOut.toISOString().slice(0, 10)}`
     : null;
   const targetsLabel = isSplitOff
     ? `${splitRoomNumbers.join(" + ")} split off ${input.splitOff!.toLabel}`
@@ -1446,12 +1480,16 @@ async function changeRoomToNewSegmentInner(
   // Discount / currency / approval stamps ride with the CURRENT segment's terms when it has any;
   // a prior segment's terms are only the basis when the current one carries nothing at all.
   const priorTerms = basisIsCurrent ? basis.terms : (operativeTerms ?? frozenTerms ?? basis.terms);
-  // A date move carries every per-night meal exception onto the night it moved to.
+  // A date move carries every per-night meal exception onto the night it moved to — and a
+  // shortened stay keeps only the exceptions of the nights it still has.
+  const stayNightSet = new Set(ctx.nightsIso);
   const priorCompositions =
     isDateShift && basis.compositions
       ? basis.compositions.map((c) => ({
           ...c,
-          nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: shiftIsoDate(String(o.date).slice(0, 10), ctx.shiftDays) })),
+          nightMealOverrides: (c.nightMealOverrides ?? [])
+            .map((o) => ({ ...o, date: shiftIsoDate(String(o.date).slice(0, 10), ctx.shiftDays) }))
+            .filter((o) => stayNightSet.has(String(o.date).slice(0, 10))),
         }))
       : basis.compositions;
   const frozenTotal = (() => {
@@ -2172,6 +2210,7 @@ async function changeRoomToNewSegmentInner(
           ),
           rooms: [...dateRoomMap].map(([f, t]) => ({ fromRoomNumber: roomNoOfPlan(f), toRoomNumber: roomNoOfPlan(t) })),
           arrivalOpensOn,
+          trimmed: ctx.trimmed,
         }
       : null;
 
@@ -2999,7 +3038,9 @@ async function changeRoomToNewSegmentInner(
         verbatimNote: isSplitOff
           ? `Room ${targetsLabel} at the guest's request: ${reason}. The rest of the stay is unchanged, so the guest's answer to the earlier voucher stands.`
           : isDateShift
-          ? `The stay moved to other dates (${datesLabel}${dateRoomMap.size ? `, rooms ${datePairsLabel}` : ""}): ${reason}. ${
+          ? ctx.trimmed
+            ? `The stay was shortened (${datesLabel}) — the other nights went to bookings of their own at the guest's request: ${reason}. The guest keeps the price agreed for the nights kept.`
+            : `The stay moved to other dates (${datesLabel}${dateRoomMap.size ? `, rooms ${datePairsLabel}` : ""}): ${reason}. ${
               [input.dateShift!.priceMode, ...Object.values(input.dateShift!.priceModes ?? {})].includes("NEW_DATES")
                 ? `Priced at the new dates where chosen. The guest agreed: ${input.dateShift!.guestAgreedNote ?? "(no note)"}`
                 : "The guest keeps the price agreed. The move itself is the guest's answer to the re-issued voucher."
@@ -3396,7 +3437,8 @@ async function traceRoomChangeSummary(
           priceModes: d.priceModes,
           rooms: d.rooms,
           reason: (input as { reason?: string }).reason ?? null,
-          via: "DATE_MOVE",
+          via: d.trimmed ? "NIGHT_MOVE" : "DATE_MOVE",
+          trimmed: d.trimmed === true,
           arrivalOpensOn: d.arrivalOpensOn,
         } as never,
         createdBy: actor.actorId,

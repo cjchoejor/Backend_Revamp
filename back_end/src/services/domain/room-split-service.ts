@@ -72,13 +72,13 @@ import { effectiveAllowedBedTypes, type RoomBedType } from "./room-bed-type-serv
  * the rooms (`seatPartyRooms`) — never a guess at counts.
  */
 
-type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
-type PriceMode = "KEEP" | "NEW_DATES";
+export type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
+export type PriceMode = "KEEP" | "NEW_DATES";
 export type SplitTarget = "SAME_ENQUIRY" | "NEW_ENQUIRY";
-const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
-const DAY = 86_400_000;
+export const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
+export const DAY = 86_400_000;
 
-const STAGE_WORD: Record<string, string> = {
+export const STAGE_WORD: Record<string, string> = {
   S1: "Inquiry",
   S2: "Negotiation",
   S3: "Set up",
@@ -109,7 +109,7 @@ export type RoomSplitRequest = {
   reason?: string | null;
 };
 
-type Party = { adultCount: number; childCount: number; childAges: number[]; guestCount: number };
+export type Party = { adultCount: number; childCount: number; childAges: number[]; guestCount: number };
 
 export type RoomSplitPreview = {
   ok: boolean;
@@ -178,30 +178,30 @@ export type RoomSplitResult = {
   createFailed: string | null;
 };
 
-const iso = (d: Date) => d.toISOString().slice(0, 10);
-const fmtDay = (d: string) => new Date(`${d}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
-function nightsLabel(nights: string[]): string {
+export const iso = (d: Date) => d.toISOString().slice(0, 10);
+export const fmtDay = (d: string) => new Date(`${d}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+export function nightsLabel(nights: string[]): string {
   return foldIsoNightsToRanges([...new Set(nights)].sort())
     .map((r) => `${fmtDay(iso(r.startDate))} – ${fmtDay(iso(r.endDate))}`)
     .join(" · ");
 }
-function nightsBetween(a: Date, b: Date): string[] {
+export function nightsBetween(a: Date, b: Date): string[] {
   const out: string[] = [];
   for (let t = a.getTime(); t < b.getTime(); t += DAY) out.push(new Date(t).toISOString().slice(0, 10));
   return out;
 }
-function errorMessage(e: unknown): string {
+export function errorMessage(e: unknown): string {
   if (e instanceof AppError) return e.body.message;
   return e instanceof Error ? e.message : String(e);
 }
-function partyWords(p: { adultCount: number; childAges: number[] }): string {
+export function partyWords(p: { adultCount: number; childAges: number[] }): string {
   const parts: string[] = [];
   if (p.adultCount > 0) parts.push(`${p.adultCount} adult${p.adultCount === 1 ? "" : "s"}`);
   if (p.childAges.length > 0) parts.push(`${p.childAges.length} child${p.childAges.length === 1 ? "" : "ren"} (${p.childAges.join(", ")})`);
   return parts.join(" · ") || "nobody";
 }
 
-async function loadSource(prisma: PrismaClient, entryId: string) {
+export async function loadSource(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
@@ -225,9 +225,9 @@ async function loadSource(prisma: PrismaClient, entryId: string) {
   if (!entry) throw new NotFoundError("Entry");
   return entry;
 }
-type Source = Awaited<ReturnType<typeof loadSource>>;
+export type Source = Awaited<ReturnType<typeof loadSource>>;
 
-function stageRefusal(entry: { currentStage: Stage; status: string }): string | null {
+export function stageRefusal(entry: { currentStage: Stage; status: string }): string | null {
   if (entry.status === "PARKED") return "This booking is parked — resume it first";
   if (entry.status !== "ACTIVE") return "This booking has ended — its rooms are a record now";
   switch (entry.currentStage) {
@@ -676,230 +676,215 @@ export async function previewRoomSplit(prisma: PrismaClient, actor: Actor, input
   };
 }
 
-export async function executeRoomSplit(
+/**
+ * A booking of its own made from part of another — the rooms a split takes, or one stay a night
+ * move leaves (2026-10-14). Everything the new booking needs to be made, priced and walked.
+ */
+export type Piece = {
+  /** The new booking's nights, each with its rooms. */
+  picture: NightPicture;
+  checkIn: string;
+  checkOut: string;
+  /** Who sleeps in it. */
+  party: Party;
+  /** Its rooms' rows, on their new rooms and nights, priced as chosen. */
+  compositions: RoomCompositionServiceInput[];
+  rooms: Array<{ fromRoomId: string; fromRoomNumber: string; roomId: string; roomNumber: string; priceMode: PriceMode }>;
+  /** "Room 206" — for the notes, the traces and the quotation. */
+  words: string;
+  /** Every room keeps the price agreed (the confirmation's high-value authority carries). */
+  allKept: boolean;
+  guestAgreedNote: string | null;
+};
+
+export type PieceOutcome = NonNullable<RoomSplitResult["created"]>;
+
+/** A new enquiry for the guest — the same caller, channel, agency, company and rate package. */
+export async function createSplitInquiry(
   prisma: PrismaClient,
   actor: Actor,
-  input: RoomSplitRequest & { reason: string; target: SplitTarget },
-): Promise<RoomSplitResult> {
-  const reason = input.reason?.trim();
-  if (!reason) throw new ValidationError("A reason is required to split rooms off to other dates");
-  const target: SplitTarget = input.target === "NEW_ENQUIRY" ? "NEW_ENQUIRY" : "SAME_ENQUIRY";
-  const plan = await planSplit(prisma, actor, input);
-  if (plan.refusals.length) throw new ValidationError(plan.refusals[0]);
-  if (!plan.authority.ok) throw new ValidationError(plan.authority.why);
-  if ([...plan.roomMap.keys()].some((f) => plan.modeOf(f) === "NEW_DATES") && !input.guestAgreedNote?.trim()) {
-    throw new ValidationError("Pricing a room at the new dates needs the guest's agreement — type what they said");
-  }
-  const isFom = (RANK[actor.actorLevel] ?? 0) >= 2;
-  const sameGuestOverNights = !!plan.overlap || plan.guestOverlaps.length > 0;
-  if (target === "NEW_ENQUIRY" && sameGuestOverNights && !isFom) {
-    throw new ValidationError("A second enquiry for the same guest over nights they already hold needs the FOM to say it is on purpose");
-  }
-  const overlapWords = [
-    ...(plan.overlap ? [`${plan.entry.id} itself`] : []),
-    ...plan.guestOverlaps.map((o) => o.words),
-  ].join(", ");
-  const { entry, stage, roomMap, no } = plan;
-  const movedNumbers = [...roomMap.keys()].map(no).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  const movedWords = `Room${movedNumbers.length === 1 ? "" : "s"} ${movedNumbers.join(" + ")}`;
+  entry: Source,
+  opts: { proposedCheckIn: string; proposedCheckOut: string; duplicateReason: string | null },
+): Promise<string> {
+  const inq = entry.inquiry;
+  const made = await createInquiry(prisma, actor.actorId, actor.actorLevel, {
+    guestProfileId: entry.guestProfileId ?? null,
+    // The caller carries when they can be reached; an older enquiry with none falls back to the
+    // guest on file, as it always has.
+    caller:
+      inq.callerPhone || inq.callerEmail
+        ? {
+            title: inq.callerTitle ?? null,
+            firstName: inq.callerFirstName ?? null,
+            lastName: inq.callerLastName ?? null,
+            phone: inq.callerPhone ?? null,
+            email: inq.callerEmail ?? null,
+            onWhatsApp: inq.callerOnWhatsApp ?? null,
+          }
+        : null,
+    sourceChannel: inq.sourceChannel ?? undefined,
+    cameInAs: inq.cameInAs ?? undefined,
+    notes: inq.notes ?? undefined,
+    travelAgentId: inq.travelAgentId ?? null,
+    corporateAccountId: inq.corporateAccountId ?? null,
+    ratePackageId: inq.ratePackageId ?? null,
+    proposedCheckIn: opts.proposedCheckIn,
+    proposedCheckOut: opts.proposedCheckOut,
+    ...(opts.duplicateReason ? { duplicateResolution: { resolution: "ACKNOWLEDGE" as const, reason: opts.duplicateReason } } : {}),
+  });
+  return made.id;
+}
 
-  // ── 1. The new booking exists first (it holds nothing yet), so the rooms' guests always have one ──
-  let created: { id: string; inquiryId: string } | null = null;
-  let createFailed: string | null = null;
-  try {
-    let inquiryId = entry.inquiryId;
-    if (target === "NEW_ENQUIRY") {
-      const inq = entry.inquiry;
-      const madeInquiry = await createInquiry(prisma, actor.actorId, actor.actorLevel, {
-        guestProfileId: entry.guestProfileId ?? null,
-        // The caller carries when they can be reached; an older enquiry with none falls back to the
-        // guest on file, as it always has.
-        caller:
-          inq.callerPhone || inq.callerEmail
-            ? {
-                title: inq.callerTitle ?? null,
-                firstName: inq.callerFirstName ?? null,
-                lastName: inq.callerLastName ?? null,
-                phone: inq.callerPhone ?? null,
-                email: inq.callerEmail ?? null,
-                onWhatsApp: inq.callerOnWhatsApp ?? null,
-              }
-            : null,
-        sourceChannel: inq.sourceChannel ?? undefined,
-        cameInAs: inq.cameInAs ?? undefined,
-        notes: inq.notes ?? undefined,
-        travelAgentId: inq.travelAgentId ?? null,
-        corporateAccountId: inq.corporateAccountId ?? null,
-        ratePackageId: inq.ratePackageId ?? null,
-        proposedCheckIn: plan.newCheckIn,
-        proposedCheckOut: plan.newCheckOut,
-        ...(sameGuestOverNights
-          ? {
-              duplicateResolution: {
-                resolution: "ACKNOWLEDGE" as const,
-                reason: `Split off ${entry.id} (${movedWords}) to other dates — the guest also holds ${overlapWords} over those nights, on purpose: ${reason}`,
-              },
-            }
-          : {}),
-      });
-      inquiryId = madeInquiry.id;
-    }
-    const made = await createEntry(prisma, actor.actorId, actor.actorLevel, {
-      inquiryId,
-      guestProfileId: entry.guestProfileId ?? undefined,
-      useType: entry.useType,
-      checkInDate: plan.newCheckIn,
-      checkOutDate: plan.newCheckOut,
-      adultCount: plan.leaving.adultCount,
-      childCount: plan.leaving.childCount,
-      childAges: plan.leaving.childAges,
-      guestCount: plan.leaving.guestCount,
-      numberOfRooms: roomMap.size,
-      otaSource: entry.otaSource ?? undefined,
-      contactPersonName: entry.contactPersonName ?? undefined,
-      contactPersonPhone: entry.contactPersonPhone ?? undefined,
-      contactPersonEmail: entry.contactPersonEmail ?? undefined,
-    });
-    created = { id: made.id, inquiryId };
-  } catch (e) {
-    createFailed = errorMessage(e);
-  }
-  if (!created) {
-    // Nothing has changed on the original — say why and stop.
-    throw new ValidationError(`The new booking could not be made: ${createFailed}`);
-  }
+/** The piece's booking, under the enquiry named — it holds nothing yet. */
+export async function createPieceEntry(prisma: PrismaClient, actor: Actor, entry: Source, inquiryId: string, piece: Piece): Promise<string> {
+  const made = await createEntry(prisma, actor.actorId, actor.actorLevel, {
+    inquiryId,
+    guestProfileId: entry.guestProfileId ?? undefined,
+    useType: entry.useType,
+    checkInDate: piece.checkIn,
+    checkOutDate: piece.checkOut,
+    adultCount: piece.party.adultCount,
+    childCount: piece.party.childCount,
+    childAges: piece.party.childAges,
+    guestCount: piece.party.guestCount,
+    numberOfRooms: new Set(piece.rooms.map((r) => r.roomId)).size,
+    otaSource: entry.otaSource ?? undefined,
+    contactPersonName: entry.contactPersonName ?? undefined,
+    contactPersonPhone: entry.contactPersonPhone ?? undefined,
+    contactPersonEmail: entry.contactPersonEmail ?? undefined,
+  });
+  return made.id;
+}
 
-  // What the rooms carry, for the desk to fill each later step with.
+/**
+ * What the piece carries, for the desk to fill each later step with (`Entry.carryOver`), its bed
+ * plan, the link to the booking it came from — and, when the guest holds other nights over these
+ * and the FOM made it, the Policy 13 acknowledgement, so whichever step reaches Reserve finds it.
+ */
+export async function stampPiece(
+  prisma: PrismaClient,
+  actor: Actor,
+  args: {
+    newId: string;
+    inquiryId: string;
+    entry: Source;
+    target: SplitTarget;
+    reason: string;
+    piece: Piece;
+    carriedDiscount: { discountPercent: number; discountBasis: string } | null;
+    roomById: Map<string, { allowedBedTypes: string[]; roomType: { allowedBedTypes: string[] } | null }>;
+    /** "ENT-… (21 Oct – 24 Oct)" when the guest holds other nights over these and the FOM acts. */
+    acknowledge: string | null;
+    via: "ROOM_SPLIT" | "NIGHT_MOVE";
+  },
+): Promise<void> {
+  const { newId, entry, piece } = args;
   const bedPlan = ((entry as { bedPlan?: unknown }).bedPlan ?? null) as Record<string, string> | null;
   const carriedBeds: Record<string, string> = {};
-  for (const [f, t] of roomMap) {
-    const planned = bedPlan?.[f];
-    const room = plan.roomById.get(t);
-    if (planned && room && effectiveAllowedBedTypes(room.allowedBedTypes, room.roomType?.allowedBedTypes).includes(planned as RoomBedType)) carriedBeds[t] = planned;
+  for (const r of piece.rooms) {
+    const planned = bedPlan?.[r.fromRoomId];
+    const room = args.roomById.get(r.roomId);
+    if (planned && room && effectiveAllowedBedTypes(room.allowedBedTypes as never, room.roomType?.allowedBedTypes as never).includes(planned as RoomBedType)) {
+      carriedBeds[r.roomId] = planned;
+    }
   }
-  const chosenComps = plan.compsFor(null);
   const carryOver = {
     fromEntryId: entry.id,
     fromInquiryId: entry.inquiryId,
     at: new Date().toISOString(),
     by: actor.actorId,
-    reason,
-    target,
-    rooms: [...roomMap].map(([f, t]) => ({ fromRoomId: f, fromRoomNumber: no(f), roomId: t, roomNumber: no(t), priceMode: plan.modeOf(f) })),
-    compositions: chosenComps,
-    discount: plan.carriedDiscount,
+    reason: args.reason,
+    target: args.target,
+    rooms: piece.rooms.map((r) => ({ fromRoomId: r.fromRoomId, fromRoomNumber: r.fromRoomNumber, roomId: r.roomId, roomNumber: r.roomNumber, priceMode: r.priceMode })),
+    compositions: piece.compositions,
+    discount: args.carriedDiscount,
     billingModel: entry.folio?.billingModel ?? null,
     cancellation: entry.cancellationDisclosure
       ? { noShowTreatmentStatement: entry.cancellationDisclosure.noShowTreatmentStatement, disclosedTerms: entry.cancellationDisclosure.disclosedTerms }
       : null,
-    guestAgreedNote: input.guestAgreedNote?.trim() || null,
+    guestAgreedNote: piece.guestAgreedNote,
   };
-  // The same guest over nights they already hold: the FOM's split is the acknowledgement Policy 13
-  // asks for at Reserve (2026-10-14, found on the desk — a room split off to a new enquiry was asked
-  // again when the desk reserved it by hand). Written now, on the new booking, so whichever step
-  // reaches Reserve — the walk, or the desk later — finds it. A front desk's split (Negotiation, nothing
-  // sent) leaves it to the FOM at Reserve.
-  if (sameGuestOverNights && isFom) {
+  if (args.acknowledge) {
     await prisma.traceEvent.create({
       data: {
         eventType: "MULTI_BOOKING.ACKNOWLEDGED",
         actorId: actor.actorId,
         actorLevel: actor.actorLevel,
         entityType: "Entry",
-        entityId: created.id,
+        entityId: newId,
         operation: "ACK",
         timestamp: new Date(),
         stageContext: Stage.S1,
-        inquiryId: created.inquiryId,
-        entryId: created.id,
+        inquiryId: args.inquiryId,
+        entryId: newId,
         payload: {
-          entryId: created.id,
-          note: `Split off ${entry.id} by the FOM — the guest also holds ${overlapWords} over these nights, on purpose: ${reason}`,
-          via: "ROOM_SPLIT",
+          entryId: newId,
+          note: `Split off ${entry.id} by the FOM — the guest also holds ${args.acknowledge} over these nights, on purpose: ${args.reason}`,
+          via: args.via,
         },
         createdBy: actor.actorId,
       },
     });
   }
   await prisma.entry.update({
-    where: { id: created.id },
+    where: { id: newId },
     data: {
       splitFromEntryId: entry.id,
       carryOver: carryOver as Prisma.InputJsonValue,
       ...(Object.keys(carriedBeds).length ? { bedPlan: carriedBeds as Prisma.InputJsonValue } : {}),
     },
   });
+}
 
-  // ── 2. The rooms leave the original ──────────────────────────────────────────────────────────
-  const toLabel = target === "SAME_ENQUIRY" ? `to ${created.id} on the same enquiry` : `to ${created.id} on a new enquiry (${created.inquiryId})`;
-  let walk: RoomChangeOutcome | null = null;
-  let amendment: NegotiationAmendmentOutcome | null = null;
-  let route: "NEGOTIATION" | "WALK" = "WALK";
-  // The original refusing before anything moved leaves the new booking with no reason to exist —
-  // it is closed with the refusal as its reason (a record, not a deletion), and the refusal stands.
-  const abandon = async (e: unknown): Promise<never> => {
-    const message = errorMessage(e);
-    const when = new Date();
+/**
+ * Bookings made for a change the original then refused have no reason to exist — each is closed
+ * with the refusal as its reason (a record, not a deletion), its clocks stopped.
+ */
+export async function abandonPieces(prisma: PrismaClient, actor: Actor, ids: string[], message: string): Promise<void> {
+  const when = new Date();
+  for (const id of ids) {
     await prisma.entry
       .update({
-        where: { id: created!.id },
+        where: { id },
         data: { status: "CANCELLED", closedAs: "CANCELLED", closedReason: `The split did not happen: ${message}`, closedAt: when, closedBy: actor.actorId },
       })
       .catch(() => {});
     await prisma.timerRecord
       .updateMany({
-        where: { entryId: created!.id, status: "SCHEDULED" },
+        where: { entryId: id, status: "SCHEDULED" },
         data: { status: "CANCELLED", cancelledAt: when, cancelledBy: actor.actorId, cancelledReason: "ROOM_SPLIT_REFUSED" },
       })
       .catch(() => {});
-    throw e;
-  };
-  if (stage === Stage.S2) {
-    route = "NEGOTIATION";
-    try {
-    const search = (await queryAvailability(prisma, entry.id, actor.actorId, actor.actorLevel, {
-      checkInDate: iso(plan.priorIn),
-      checkOutDate: iso(plan.priorOut),
-      guestCount: plan.stays.guestCount || undefined,
-    })) as { configuration: { id: string } };
-    amendment = await amendNegotiationConfiguration(prisma, entry.id, actor, {
-      party: {
-        adultCount: plan.stays.adultCount,
-        childCount: plan.stays.childCount,
-        childAges: plan.stays.childAges,
-        numberOfRooms: plan.staying.length,
-      },
-      rooms: { configurationId: search.configuration.id, perNight: stayingPicture(plan) },
-      reason: `${movedWords} split off ${toLabel}: ${reason}`,
-      expectedVersion: entry.version,
-    });
-    } catch (e) {
-      await abandon(e);
-    }
-    if (amendment && !amendment.applied) {
-      await abandon(new ValidationError("The change to the original waits for the FOM's approval — split the rooms off once it is applied"));
-    }
-  } else {
-    try {
-      walk = await changeRoomToNewSegment(prisma, actor, {
-        entryId: entry.id,
-        fromRoomId: plan.staying[0],
-        reason,
-        splitOff: { roomIds: [...roomMap.keys()], party: plan.stays, toLabel },
-      });
-    } catch (e) {
-      // Refused before its re-entry — the original is untouched.
-      await abandon(e);
-    }
   }
+}
 
-  // ── 3. The new booking: its rooms picked for its nights, then walked to the original's step ────
-  const createdNotes: string[] = [];
-  const heldDocuments: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }> = [];
+/**
+ * The piece's rooms picked for its nights, then — under the same enquiry — walked to the step the
+ * original is at: priced with what the rooms carried, Set up with the original's payer and
+ * cancellation terms, held, reserved with its own voucher held for the desk, and at Arrival when its
+ * window is open. A step that refuses stops the walk and is named. A new enquiry stops at Inquiry.
+ */
+export async function walkPiece(
+  prisma: PrismaClient,
+  actor: Actor,
+  args: {
+    entry: Source;
+    stage: Stage;
+    target: SplitTarget;
+    newId: string;
+    inquiryId: string;
+    piece: Piece;
+    carriedDiscount: { discountPercent: number; discountBasis: string } | null;
+    priorTerms: Record<string, unknown> | null;
+    reason: string;
+  },
+): Promise<PieceOutcome> {
+  const { entry, stage, target, newId, piece, reason } = args;
+  const notes: string[] = [];
+  const heldDocuments: PieceOutcome["heldDocuments"] = [];
   let quotationId: string | null = null;
   let blocked: { atStep: string; message: string } | null = null;
-  const aimedAt = target === "NEW_ENQUIRY" ? "S1" : String(stage) === "S5" ? "S5" : String(stage);
-  const newId = created.id;
+  const aimedAt = target === "NEW_ENQUIRY" ? "S1" : String(stage);
   const version = async () => (await prisma.entry.findUniqueOrThrow({ where: { id: newId }, select: { version: true } })).version;
   const step = async (atStep: string, fn: () => Promise<unknown>): Promise<boolean> => {
     if (blocked) return false;
@@ -911,27 +896,29 @@ export async function executeRoomSplit(
       return false;
     }
   };
-  const anchor = [...plan.newNightsByRoom.entries()].sort((a, b) => b[1].length - a[1].length)[0]?.[0] ?? [...roomMap.values()][0];
+  const nightsOf = new Map<string, number>();
+  for (const n of piece.picture) for (const id of n.roomIds) nightsOf.set(id, (nightsOf.get(id) ?? 0) + 1);
+  const anchor = [...nightsOf.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? piece.rooms[0]?.roomId;
 
   await step("PICK_ROOMS", async () => {
     const search = (await queryAvailability(prisma, newId, actor.actorId, actor.actorLevel, {
-      checkInDate: plan.newCheckIn,
-      checkOutDate: plan.newCheckOut,
-      guestCount: plan.leaving.guestCount || undefined,
+      checkInDate: piece.checkIn,
+      checkOutDate: piece.checkOut,
+      guestCount: piece.party.guestCount || undefined,
     })) as { configuration: { id: string } };
-    await selectOption(prisma, search.configuration.id, actor.actorId, { perNight: plan.newPicture.map((n) => ({ date: n.date, roomIds: n.roomIds })) });
+    await selectOption(prisma, search.configuration.id, actor.actorId, { perNight: piece.picture.map((n) => ({ date: n.date, roomIds: n.roomIds })) });
   });
 
   if (target === "SAME_ENQUIRY") {
     await step("INQUIRY_TO_NEGOTIATION", async () => progressS1ToS2(prisma, newId, actor.actorId, await version()));
     // Priced with what the rooms carried — the discount under the authority that approved it.
     await step("QUOTATION", async () => {
-      const approved = ((plan.priorTerms?.discountAuthority as { approvedLevel?: string } | undefined)?.approvedLevel ?? null) as Actor["actorLevel"] | null;
-      const level = plan.carriedDiscount && approved && (RANK[approved] ?? 0) > (RANK[actor.actorLevel] ?? 0) ? approved : actor.actorLevel;
+      const approved = ((args.priorTerms?.discountAuthority as { approvedLevel?: string } | undefined)?.approvedLevel ?? null) as Actor["actorLevel"] | null;
+      const level = args.carriedDiscount && approved && (RANK[approved] ?? 0) > (RANK[actor.actorLevel] ?? 0) ? approved : actor.actorLevel;
       const q = await createQuotation(prisma, newId, actor.actorId, {
-        notes: `${movedWords} split off ${entry.id} to ${fmtDay(plan.newCheckIn)} – ${fmtDay(plan.newCheckOut)} (${reason})`,
-        roomCompositions: chosenComps,
-        ...(plan.carriedDiscount ? { requestedDiscount: plan.carriedDiscount } : {}),
+        notes: `${piece.words} split off ${entry.id} to ${fmtDay(piece.checkIn)} – ${fmtDay(piece.checkOut)} (${reason})`,
+        roomCompositions: piece.compositions,
+        ...(args.carriedDiscount ? { requestedDiscount: args.carriedDiscount } : {}),
         actorLevel: level,
       });
       quotationId = q.id;
@@ -941,7 +928,7 @@ export async function executeRoomSplit(
       // committed hold takes the marker over at Set up.
       await step("PROVISIONAL_BLOCK", async () => {
         await placeSpeculativeHold(prisma, newId, actor, { roomId: anchor, commercialBasis: `Split off ${entry.id}: ${reason}` }).catch((e) => {
-          createdNotes.push(`The rooms were not marked on the way: ${errorMessage(e)}`);
+          notes.push(`The rooms were not marked on the way: ${errorMessage(e)}`);
         });
       });
       await step("NEGOTIATION_TO_SET_UP", async () => progressS2ToS3(prisma, newId, actor.actorId, await version()));
@@ -981,11 +968,10 @@ export async function executeRoomSplit(
       }
       if (stage === Stage.S4 || stage === Stage.S5) {
         await step("RESERVE", async () => {
-          const allKept = [...roomMap.keys()].every((f) => plan.modeOf(f) === "KEEP");
           const reserved = await confirmReservation(prisma, newId, actor.actorId, {
             version: await version(),
             holdGuestEmail: true,
-            carryHighValueAuthority: allKept,
+            carryHighValueAuthority: piece.allKept,
           });
           const held = await recordHeldDocument(prisma, {
             entryId: newId,
@@ -1010,13 +996,13 @@ export async function executeRoomSplit(
           if (voucher && voucher.acknowledgementStatus !== "RECEIVED") {
             await recordCommunicationAcknowledgement(prisma, voucher.id, actor, {
               method: "VERBAL",
-              verbatimNote: `${movedWords} split off ${entry.id} to these dates at the guest's request: ${reason}.`,
+              verbatimNote: `${piece.words} split off ${entry.id} to these dates at the guest's request: ${reason}.`,
             });
           }
           const windowDays = Number(await requireActiveConfigValue<number>(prisma, "preArrival.windowDays").catch(() => 1)) || 1;
-          const opensAt = new Date(Date.parse(`${plan.newCheckIn}T00:00:00.000Z`) - windowDays * DAY);
+          const opensAt = new Date(Date.parse(`${piece.checkIn}T00:00:00.000Z`) - windowDays * DAY);
           if (opensAt.getTime() > Date.now()) {
-            createdNotes.push(`It waits at Reserve — Arrival opens on ${fmtDay(iso(opensAt))}`);
+            notes.push(`It waits at Reserve — Arrival opens on ${fmtDay(iso(opensAt))}`);
             return;
           }
           const engine = await getTimerEngine();
@@ -1027,11 +1013,163 @@ export async function executeRoomSplit(
     }
   }
 
+  const after = await prisma.entry.findUniqueOrThrow({ where: { id: newId }, select: { currentStage: true } });
+  return {
+    entryId: newId,
+    inquiryId: args.inquiryId,
+    newInquiry: target === "NEW_ENQUIRY",
+    reachedStage: String(after.currentStage),
+    aimedAt,
+    blocked,
+    heldDocuments,
+    quotationId,
+    checkInDate: piece.checkIn,
+    checkOutDate: piece.checkOut,
+    notes,
+  };
+}
+
+export async function executeRoomSplit(
+  prisma: PrismaClient,
+  actor: Actor,
+  input: RoomSplitRequest & { reason: string; target: SplitTarget },
+): Promise<RoomSplitResult> {
+  const reason = input.reason?.trim();
+  if (!reason) throw new ValidationError("A reason is required to split rooms off to other dates");
+  const target: SplitTarget = input.target === "NEW_ENQUIRY" ? "NEW_ENQUIRY" : "SAME_ENQUIRY";
+  const plan = await planSplit(prisma, actor, input);
+  if (plan.refusals.length) throw new ValidationError(plan.refusals[0]);
+  if (!plan.authority.ok) throw new ValidationError(plan.authority.why);
+  if ([...plan.roomMap.keys()].some((f) => plan.modeOf(f) === "NEW_DATES") && !input.guestAgreedNote?.trim()) {
+    throw new ValidationError("Pricing a room at the new dates needs the guest's agreement — type what they said");
+  }
+  const isFom = (RANK[actor.actorLevel] ?? 0) >= 2;
+  const sameGuestOverNights = !!plan.overlap || plan.guestOverlaps.length > 0;
+  if (target === "NEW_ENQUIRY" && sameGuestOverNights && !isFom) {
+    throw new ValidationError("A second enquiry for the same guest over nights they already hold needs the FOM to say it is on purpose");
+  }
+  const overlapWords = [
+    ...(plan.overlap ? [`${plan.entry.id} itself`] : []),
+    ...plan.guestOverlaps.map((o) => o.words),
+  ].join(", ");
+  const { entry, stage, roomMap, no } = plan;
+  const movedNumbers = [...roomMap.keys()].map(no).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  const movedWords = `Room${movedNumbers.length === 1 ? "" : "s"} ${movedNumbers.join(" + ")}`;
+  const piece: Piece = {
+    picture: plan.newPicture,
+    checkIn: plan.newCheckIn,
+    checkOut: plan.newCheckOut,
+    party: plan.leaving,
+    compositions: plan.compsFor(null),
+    rooms: [...roomMap].map(([f, t]) => ({ fromRoomId: f, fromRoomNumber: no(f), roomId: t, roomNumber: no(t), priceMode: plan.modeOf(f) })),
+    words: movedWords,
+    allKept: [...roomMap.keys()].every((f) => plan.modeOf(f) === "KEEP"),
+    guestAgreedNote: input.guestAgreedNote?.trim() || null,
+  };
+
+  // ── 1. The new booking exists first (it holds nothing yet), so the rooms' guests always have one ──
+  let created: { id: string; inquiryId: string } | null = null;
+  try {
+    const inquiryId =
+      target === "NEW_ENQUIRY"
+        ? await createSplitInquiry(prisma, actor, entry, {
+            proposedCheckIn: plan.newCheckIn,
+            proposedCheckOut: plan.newCheckOut,
+            duplicateReason: sameGuestOverNights
+              ? `Split off ${entry.id} (${movedWords}) to other dates — the guest also holds ${overlapWords} over those nights, on purpose: ${reason}`
+              : null,
+          })
+        : entry.inquiryId;
+    created = { id: await createPieceEntry(prisma, actor, entry, inquiryId, piece), inquiryId };
+  } catch (e) {
+    // Nothing has changed on the original — say why and stop.
+    throw new ValidationError(`The new booking could not be made: ${errorMessage(e)}`);
+  }
+  // The same guest over nights they already hold: the FOM's split is the acknowledgement Policy 13
+  // asks for at Reserve (2026-10-14, found on the desk — a room split off to a new enquiry was asked
+  // again when the desk reserved it by hand). A front desk's split (Negotiation, nothing sent)
+  // leaves it to the FOM at Reserve.
+  await stampPiece(prisma, actor, {
+    newId: created.id,
+    inquiryId: created.inquiryId,
+    entry,
+    target,
+    reason,
+    piece,
+    carriedDiscount: plan.carriedDiscount,
+    roomById: plan.roomById as never,
+    acknowledge: sameGuestOverNights && isFom ? overlapWords : null,
+    via: "ROOM_SPLIT",
+  });
+
+  // ── 2. The rooms leave the original ──────────────────────────────────────────────────────────
+  const toLabel = target === "SAME_ENQUIRY" ? `to ${created.id} on the same enquiry` : `to ${created.id} on a new enquiry (${created.inquiryId})`;
+  let walk: RoomChangeOutcome | null = null;
+  let amendment: NegotiationAmendmentOutcome | null = null;
+  let route: "NEGOTIATION" | "WALK" = "WALK";
+  // The original refusing before anything moved leaves the new booking with no reason to exist —
+  // it is closed with the refusal as its reason (a record, not a deletion), and the refusal stands.
+  const abandon = async (e: unknown): Promise<never> => {
+    await abandonPieces(prisma, actor, [created!.id], errorMessage(e));
+    throw e;
+  };
+  if (stage === Stage.S2) {
+    route = "NEGOTIATION";
+    try {
+      const search = (await queryAvailability(prisma, entry.id, actor.actorId, actor.actorLevel, {
+        checkInDate: iso(plan.priorIn),
+        checkOutDate: iso(plan.priorOut),
+        guestCount: plan.stays.guestCount || undefined,
+      })) as { configuration: { id: string } };
+      amendment = await amendNegotiationConfiguration(prisma, entry.id, actor, {
+        party: {
+          adultCount: plan.stays.adultCount,
+          childCount: plan.stays.childCount,
+          childAges: plan.stays.childAges,
+          numberOfRooms: plan.staying.length,
+        },
+        rooms: { configurationId: search.configuration.id, perNight: stayingPicture(plan) },
+        reason: `${movedWords} split off ${toLabel}: ${reason}`,
+        expectedVersion: entry.version,
+      });
+    } catch (e) {
+      await abandon(e);
+    }
+    if (amendment && !amendment.applied) {
+      await abandon(new ValidationError("The change to the original waits for the FOM's approval — split the rooms off once it is applied"));
+    }
+  } else {
+    try {
+      walk = await changeRoomToNewSegment(prisma, actor, {
+        entryId: entry.id,
+        fromRoomId: plan.staying[0],
+        reason,
+        splitOff: { roomIds: [...roomMap.keys()], party: plan.stays, toLabel },
+      });
+    } catch (e) {
+      // Refused before its re-entry — the original is untouched.
+      await abandon(e);
+    }
+  }
+
+  // ── 3. The new booking: its rooms picked for its nights, then walked to the original's step ────
+  const made = await walkPiece(prisma, actor, {
+    entry,
+    stage,
+    target,
+    newId: created.id,
+    inquiryId: created.inquiryId,
+    piece,
+    carriedDiscount: plan.carriedDiscount,
+    priorTerms: plan.priorTerms,
+    reason,
+  });
+
   // ── 4. Both bookings say what happened ───────────────────────────────────────────────────────
   const now = new Date();
   const payloadCommon = {
     fromEntryId: entry.id,
-    toEntryId: newId,
+    toEntryId: created.id,
     target,
     newInquiryId: target === "NEW_ENQUIRY" ? created.inquiryId : null,
     rooms: [...roomMap].map(([f, t]) => ({ fromRoomNumber: no(f), toRoomNumber: no(t) })),
@@ -1063,36 +1201,23 @@ export async function executeRoomSplit(
           actorId: actor.actorId,
           actorLevel: actor.actorLevel,
           entityType: "Entry",
-          entityId: newId,
+          entityId: created.id,
           operation: "CREATE",
           timestamp: now,
           stageContext: Stage.S1,
           inquiryId: created.inquiryId,
-          entryId: newId,
-          payload: { ...payloadCommon, aimedAt, blocked } as Prisma.InputJsonValue,
+          entryId: created.id,
+          payload: { ...payloadCommon, aimedAt: made.aimedAt, blocked: made.blocked } as Prisma.InputJsonValue,
           createdBy: actor.actorId,
         },
       ],
     })
     .catch(() => {});
 
-  const after = await prisma.entry.findUniqueOrThrow({ where: { id: newId }, select: { currentStage: true } });
   return {
     target,
     source: { entryId: entry.id, route, walk, amendment },
-    created: {
-      entryId: newId,
-      inquiryId: created.inquiryId,
-      newInquiry: target === "NEW_ENQUIRY",
-      reachedStage: String(after.currentStage),
-      aimedAt,
-      blocked,
-      heldDocuments,
-      quotationId,
-      checkInDate: plan.newCheckIn,
-      checkOutDate: plan.newCheckOut,
-      notes: createdNotes,
-    },
+    created: made,
     createFailed: null,
   };
 }

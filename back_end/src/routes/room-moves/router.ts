@@ -14,6 +14,7 @@ import {
 import { decideHeldDocument, listHeldDocuments } from "../../services/domain/held-document-service.js";
 import { executeDateMove, previewDateMove } from "../../services/domain/date-move-service.js";
 import { executeRoomSplit, previewRoomSplit } from "../../services/domain/room-split-service.js";
+import { executeNightMove, previewNightMove } from "../../services/domain/night-move-service.js";
 
 /**
  * Room moves from the house chart, and the papers every room-change walk holds for the desk
@@ -147,6 +148,47 @@ roomMovesRouter.post(
   async (req, res, next) => {
     try {
       res.status(201).json(await executeRoomSplit(prisma, actorOf(req), req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// A night (or a run of nights) of one room moved on the house chart (2026-10-14): to another room on
+// the same dates (a room change for those nights), or to other dates — the stays cut apart, each new
+// one a booking of its own on the same enquiry or a new one.
+const nightMoveSchema = z.object({
+  entryId: z.string().trim().min(1).max(64),
+  fromRoomId: z.string().trim().min(1).max(64),
+  nights: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "nights are YYYY-MM-DD")).min(1).max(60),
+  toRoomId: z.string().trim().min(1).max(64).nullable().optional(),
+  newFirstNight: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "newFirstNight must be YYYY-MM-DD"),
+  priceMode: z.enum(["KEEP", "NEW_DATES", "NEW_TYPE"]).optional(),
+  guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
+  target: z.enum(["SAME_ENQUIRY", "NEW_ENQUIRY"]).optional(),
+});
+
+roomMovesRouter.post(
+  "/date-moves/nights/preview",
+  requireActorLevel("L1"),
+  validateBody(nightMoveSchema.extend({ reason: z.string().trim().max(1000).nullable().optional() })),
+  async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await previewNightMove(prisma, actorOf(req), req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+roomMovesRouter.post(
+  "/date-moves/nights",
+  requireActorLevel("L1"),
+  validateBody(nightMoveSchema.extend({ reason: z.string().trim().min(1).max(1000) })),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await executeNightMove(prisma, actorOf(req), req.body));
     } catch (e) {
       next(e);
     }
