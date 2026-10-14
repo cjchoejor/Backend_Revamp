@@ -794,6 +794,33 @@ export async function executeRoomSplit(
       : null,
     guestAgreedNote: input.guestAgreedNote?.trim() || null,
   };
+  // The same guest over nights they already hold: the FOM's split is the acknowledgement Policy 13
+  // asks for at Reserve (2026-10-14, found on the desk — a room split off to a new enquiry was asked
+  // again when the desk reserved it by hand). Written now, on the new booking, so whichever step
+  // reaches Reserve — the walk, or the desk later — finds it. A front desk's split (Negotiation, nothing
+  // sent) leaves it to the FOM at Reserve.
+  if (sameGuestOverNights && isFom) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "MULTI_BOOKING.ACKNOWLEDGED",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel,
+        entityType: "Entry",
+        entityId: created.id,
+        operation: "ACK",
+        timestamp: new Date(),
+        stageContext: Stage.S1,
+        inquiryId: created.inquiryId,
+        entryId: created.id,
+        payload: {
+          entryId: created.id,
+          note: `Split off ${entry.id} by the FOM — the guest also holds ${overlapWords} over these nights, on purpose: ${reason}`,
+          via: "ROOM_SPLIT",
+        },
+        createdBy: actor.actorId,
+      },
+    });
+  }
   await prisma.entry.update({
     where: { id: created.id },
     data: {
@@ -954,26 +981,6 @@ export async function executeRoomSplit(
       }
       if (stage === Stage.S4 || stage === Stage.S5) {
         await step("RESERVE", async () => {
-          // The same guest holds the original over shared nights — the FOM splitting it is the
-          // acknowledgement Policy 13 asks for.
-          if (sameGuestOverNights) {
-            await prisma.traceEvent.create({
-              data: {
-                eventType: "MULTI_BOOKING.ACKNOWLEDGED",
-                actorId: actor.actorId,
-                actorLevel: actor.actorLevel,
-                entityType: "Entry",
-                entityId: newId,
-                operation: "ACK",
-                timestamp: new Date(),
-                stageContext: Stage.S4,
-                inquiryId: created!.inquiryId,
-                entryId: newId,
-                payload: { entryId: newId, note: `Split off ${entry.id} by the FOM — the guest also holds ${overlapWords} over these nights, on purpose: ${reason}` },
-                createdBy: actor.actorId,
-              },
-            });
-          }
           const allKept = [...roomMap.keys()].every((f) => plan.modeOf(f) === "KEEP");
           const reserved = await confirmReservation(prisma, newId, actor.actorId, {
             version: await version(),
