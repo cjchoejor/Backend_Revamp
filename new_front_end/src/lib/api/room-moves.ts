@@ -329,3 +329,68 @@ export async function previewRoomSplit(session: Session, body: RoomSplitInput & 
 export async function executeRoomSplit(session: Session, body: RoomSplitInput & { reason: string; target: SplitTarget }) {
   return apiRequest<RoomSplitResult>(`/api/date-moves/split`, { method: "POST", session, body });
 }
+
+/**
+ * One night (or a run of nights) of a room moved on the house chart (2026-10-14): to another room on
+ * the same dates — a room change for those nights — or to other dates, where the stays are cut
+ * apart and each new one is a booking of its own, on the same enquiry or one new enquiry.
+ */
+export type NightMoveInput = {
+  entryId: string;
+  fromRoomId: string;
+  /** The nights that move, as they are now. */
+  nights: string[];
+  toRoomId?: string | null;
+  /** The first moved night's new date — the same night when only the room changes. */
+  newFirstNight: string;
+  priceMode?: "KEEP" | "NEW_DATES" | "NEW_TYPE";
+  guestAgreedNote?: string | null;
+  target?: SplitTarget;
+};
+
+export type NightMovePreview = {
+  ok: boolean;
+  mode: "ROOM_CHANGE" | "SPLIT";
+  entryId: string;
+  bookingLabel: string;
+  guestName: string | null;
+  inquiryId: string;
+  stage: string;
+  stageWord: string;
+  from: { roomId: string; roomNumber: string; nightsLabel: string; nights: number };
+  to: { roomId: string; roomNumber: string; nightsLabel: string; checkInDate: string; checkOutDate: string; nights: number; sameType: boolean };
+  shiftDays: number;
+  original: { words: string; guests: string; priceBefore: number | null; priceAfter: number | null; note: string | null };
+  pieces: Array<{
+    kind: "MOVED" | "LEFT";
+    roomNumber: string;
+    checkInDate: string;
+    checkOutDate: string;
+    nights: number;
+    nightsLabel: string;
+    guests: string;
+    total: number | null;
+  }>;
+  price: { currency: string | null; choice: { kind: "DATES" | "TYPE"; keep: number | null; other: number | null } | null };
+  authority: { needed: "L1" | "L2"; actorLevel: string; ok: boolean; why: string };
+  targets: Record<SplitTarget, { path: string[]; papers: string[]; refusals: string[] }> | null;
+  path: string[];
+  notes: string[];
+  refusals: string[];
+};
+
+export type NightMoveResult = {
+  mode: "ROOM_CHANGE" | "SPLIT";
+  target: SplitTarget | null;
+  source: RoomSplitResult["source"];
+  created: Array<NonNullable<RoomSplitResult["created"]> & { kind: "MOVED" | "LEFT"; roomNumber: string }>;
+  newInquiryId: string | null;
+};
+
+export async function previewNightMove(session: Session, body: NightMoveInput & { reason?: string | null }) {
+  return apiRequest<NightMovePreview>(`/api/date-moves/nights/preview`, { method: "POST", session, body });
+}
+
+export async function executeNightMove(session: Session, body: NightMoveInput & { reason: string }) {
+  return apiRequest<NightMoveResult>(`/api/date-moves/nights`, { method: "POST", session, body });
+}

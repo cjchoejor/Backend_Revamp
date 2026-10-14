@@ -40,6 +40,7 @@ const WORDS: Record<string, string> = {
   "ENTRY.STAY_DATES_CHANGED": "Stay dates changed",
   // Rooms split off to other dates, as a booking of their own (2026-10-14).
   "ENTRY.ROOMS_SPLIT_OFF": "Rooms split off to a booking of their own",
+  "ENTRY.NIGHTS_SPLIT_OFF": "A night moved — the stay cut apart into bookings of their own",
   "ENTRY.CREATED_FROM_SPLIT": "Made from rooms split off another booking",
   // Room moves from the house chart, and the papers a walk holds for the desk (2026-10-12).
   "ROOM_MOVE.STARTED": "Room move started",
@@ -199,6 +200,8 @@ type RoomChangedPayload = {
     newCheckOutDate?: string | null;
     rooms?: Array<{ fromRoomNumber?: string | null; toRoomNumber?: string | null }> | null;
     priceModes?: Record<string, string> | null;
+    /** The stay was shortened to its own nights — a night moved out (2026-10-14). */
+    trimmed?: boolean | null;
   } | null;
   /** Several rooms moved in one walk, or a head pieced together from an older walk's lines. */
   moves?: Array<{ from: string; to: string }> | null;
@@ -226,6 +229,7 @@ function roomChangeWords(p: RoomChangedPayload): string {
   }
   if (p.kind === "DATES") {
     const d = p.dates ?? null;
+    if (d?.trimmed) return d.newCheckInDate && d.newCheckOutDate ? `Stay shortened to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay shortened";
     return d?.newCheckInDate && d.newCheckOutDate ? `Stay moved to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay moved to other dates";
   }
   if (p.kind === "SETUP") return from ? `Room ${from} set up differently` : "Room set up differently";
@@ -383,8 +387,35 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const modes = (p.priceModes ?? null) as Record<string, string> | null;
     const atNewDates = modes ? Object.entries(modes).filter(([, m]) => m === "NEW_DATES").map(([n]) => n) : [];
     if (atNewDates.length) bits.push(`priced at the new dates: Room ${atNewDates.join(", ")}`);
+    if (p.nightMove === true) bits.push(p.kind === "MOVED" ? "the night moved" : "left at its own dates");
     const blocked = (p.blocked ?? null) as { message?: string } | null;
     if (blocked?.message) bits.push(`stopped: ${blocked.message}`);
+  }
+  // A night moved off the stay (2026-10-14): which nights went where, what the booking kept, the
+  // bookings made for every other stay.
+  if (ev.eventType === "ENTRY.NIGHTS_SPLIT_OFF") {
+    const room = (p.room ?? null) as { roomNumber?: string; toRoomNumber?: string } | null;
+    const nights = (p.nights ?? null) as { label?: string } | null;
+    if (room?.roomNumber && nights?.label) {
+      bits.push(`Room ${room.roomNumber}${room.toRoomNumber && room.toRoomNumber !== room.roomNumber ? ` → ${room.toRoomNumber}` : ""} · ${nights.label}`);
+    }
+    const kept = (p.kept ?? null) as { roomNumber?: string; nights?: string[] } | null;
+    if (kept?.nights?.length) {
+      const last = kept.nights[kept.nights.length - 1];
+      const end = new Date(Date.parse(`${last}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+      bits.push(`kept Room ${kept.roomNumber ?? "?"} for ${fmtRange(kept.nights[0], end)}`);
+    } else if (p.roomLeft === true && room?.roomNumber) {
+      bits.push(`Room ${room.roomNumber} left this booking with its guests`);
+    }
+    const pieces = Array.isArray(p.pieces) ? (p.pieces as Array<{ entryId?: string; checkInDate?: string; checkOutDate?: string }>) : [];
+    if (pieces.length) {
+      bits.push(
+        `${pieces.length === 1 ? "a booking" : `${pieces.length} bookings`} of their own: ${pieces
+          .map((x) => `${x.entryId ?? "?"}${x.checkInDate && x.checkOutDate ? ` (${fmtRange(x.checkInDate, x.checkOutDate)})` : ""}`)
+          .join(", ")}${p.target === "NEW_ENQUIRY" && typeof p.newInquiryId === "string" ? ` on a new enquiry, ${p.newInquiryId}` : ""}`,
+      );
+    }
+    if (p.priceMode === "NEW_DATES") bits.push("the night priced at the new dates");
   }
   // A stay that moved says from what to what (2026-10-12).
   if (ev.eventType === "ENTRY.STAY_DATES_CHANGED") {
