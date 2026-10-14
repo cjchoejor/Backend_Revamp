@@ -203,7 +203,15 @@ export function S2Negotiation({
   // storage was cleared — it opened with the party auto-distributed and NO meals, and "Generate
   // the quote again" would have re-priced the stay without the meals the guest was quoted.
   // After a re-entry it starts from the last terms in force. Read once, at the table's mount.
-  const seedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? undefined, [entry.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A booking split off another (2026-10-14) and never priced starts from what its rooms carried —
+  // their guests, meals, extra beds and the rates they kept.
+  const seedCompositions = useMemo(
+    () =>
+      operativeRoomCompositions(entry) ??
+      ((entry.carryOver?.compositions?.length ? entry.carryOver.compositions : null) as ReturnType<typeof operativeRoomCompositions>) ??
+      undefined,
+    [entry.id], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   /**
    * What the QUOTATION is priced on right now — re-read on every refresh, unlike the seed above,
    * which is deliberately read once so a save does not yank the operator's grid out from under
@@ -280,8 +288,13 @@ export function S2Negotiation({
       setDiscountValue(String(recordedDiscount.value));
       setDiscountUnit(recordedDiscount.unit);
       setDiscountBasis(recordedDiscount.basis);
+    } else if (!id && entry.carryOver?.discount?.discountPercent) {
+      // Not priced yet, split off a booking that had a percentage off: it carries.
+      setDiscountValue(String(entry.carryOver.discount.discountPercent));
+      setDiscountUnit("percent");
+      setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
     }
-  }, [working, accepted, recordedDiscount]);
+  }, [working, accepted, recordedDiscount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** A blank or zero figure is "no discount"; clearing a recorded one must be said as `null`. */
   /**

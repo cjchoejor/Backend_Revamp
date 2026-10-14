@@ -173,7 +173,9 @@ export function S3SetUp({
         ? "a group bills to one master bill"
         : null;
   const savedModel = folio?.billingModel ?? null;
-  const [model, setModel] = useState<string>(savedModel ?? defaultModel);
+  // Split off another booking (2026-10-14): its payer carries until the desk chooses otherwise.
+  const carriedModel = entry.carryOver?.billingModel ?? null;
+  const [model, setModel] = useState<string>(savedModel ?? carriedModel ?? defaultModel);
   useEffect(() => {
     if (savedModel) setModel(savedModel);
   }, [savedModel]);
@@ -252,7 +254,13 @@ export function S3SetUp({
         model={model}
         setModel={setModel}
         savedModel={savedModel}
-        preselectedWhy={!savedModel && preselectedWhy && model === defaultModel ? preselectedWhy : null}
+        preselectedWhy={
+          !savedModel && carriedModel && model === carriedModel
+            ? `it carries from ${entry.carryOver!.fromEntryId}, the booking these rooms came from`
+            : !savedModel && preselectedWhy && model === defaultModel
+              ? preselectedWhy
+              : null
+        }
         onChanged={changed}
       />
 
@@ -886,7 +894,8 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
   const { past } = useStepMode();
   const d = entry.cancellationDisclosure ?? null;
   const [open, setOpen] = useState(false);
-  const [statement, setStatement] = useState(DEFAULT_NO_SHOW);
+  // The terms the rooms were booked on carry from the booking they were split off (2026-10-14).
+  const [statement, setStatement] = useState(entry.carryOver?.cancellation?.noShowTreatmentStatement || DEFAULT_NO_SHOW);
   const record = useMutation({
     mutationFn: () =>
       recordCancellationDisclosure(session!, entry.id, {

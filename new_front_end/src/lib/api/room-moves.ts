@@ -231,3 +231,101 @@ export async function previewDateMove(session: Session, body: DateMoveInput & { 
 export async function executeDateMove(session: Session, body: DateMoveInput & { reason: string }) {
   return apiRequest<DateMoveResult>(`/api/date-moves`, { method: "POST", session, body });
 }
+
+/**
+ * Splitting rooms off a booking to other dates (2026-10-14): the rooms leave with their guests, as a
+ * booking of their own under the same enquiry (walked to the original's step) or a new enquiry
+ * (started at Inquiry, filled in).
+ */
+export type SplitTarget = "SAME_ENQUIRY" | "NEW_ENQUIRY";
+
+export type RoomSplitInput = {
+  entryId: string;
+  fromRoomId: string;
+  /** Every room that splits off, old → new (the same room when it keeps its row). */
+  roomMap: Record<string, string>;
+  /** The booking's check-in moved by the drag — every room splitting off moves by the same days. */
+  newCheckInDate: string;
+  priceMode?: "KEEP" | "NEW_DATES";
+  priceModes?: Record<string, "KEEP" | "NEW_DATES"> | null;
+  guestAgreedNote?: string | null;
+  target?: SplitTarget;
+};
+
+export type RoomSplitPreview = {
+  ok: boolean;
+  entryId: string;
+  bookingLabel: string;
+  guestName: string | null;
+  inquiryId: string;
+  stage: string;
+  stageWord: string;
+  from: { checkInDate: string; checkOutDate: string; nights: number };
+  to: { checkInDate: string; checkOutDate: string; nights: number };
+  shiftDays: number;
+  moving: Array<{
+    roomId: string;
+    roomNumber: string;
+    toRoomId: string;
+    toRoomNumber: string;
+    nightsLabel: string;
+    sameType: boolean;
+    guests: string;
+    priceMode: "KEEP" | "NEW_DATES";
+    keepTotal: number | null;
+    newDatesTotal: number | null;
+  }>;
+  staying: Array<{ roomId: string; roomNumber: string; guests: string }>;
+  party: { moving: string; staying: string };
+  overlap: { nights: number; words: string } | null;
+  authority: { needed: "L1" | "L2"; actorLevel: string; ok: boolean; why: string };
+  price: {
+    currency: string | null;
+    originalBefore: number | null;
+    originalAfter: number | null;
+    originalNote: string | null;
+    newBooking: number | null;
+    newBookingNote: string | null;
+  };
+  targets: Record<SplitTarget, { path: string[]; papers: string[]; refusals: string[] }>;
+  notes: string[];
+  refusals: string[];
+};
+
+type HeldRef = { id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string };
+
+export type RoomSplitResult = {
+  target: SplitTarget;
+  source: {
+    entryId: string;
+    route: "NEGOTIATION" | "WALK";
+    walk: {
+      walk: { returnedToOrigin: boolean; reachedStage: string; blocked: { atStep: string; code: string | null; message: string } | null };
+      pricing: { priorTotal: number | null; newTotal: number | null; delta: number | null; currency: string | null };
+      heldDocuments: HeldRef[];
+    } | null;
+    amendment: { applied: boolean; quotationsInvalidated: Array<{ id: string; referenceNumber: string }> } | null;
+  };
+  created: {
+    entryId: string;
+    inquiryId: string;
+    newInquiry: boolean;
+    reachedStage: string;
+    aimedAt: string;
+    blocked: { atStep: string; message: string } | null;
+    heldDocuments: HeldRef[];
+    quotationId: string | null;
+    checkInDate: string;
+    checkOutDate: string;
+    notes: string[];
+  } | null;
+  createFailed: string | null;
+};
+
+export async function previewRoomSplit(session: Session, body: RoomSplitInput & { reason?: string | null }) {
+  return apiRequest<RoomSplitPreview>(`/api/date-moves/split/preview`, { method: "POST", session, body });
+}
+
+export async function executeRoomSplit(session: Session, body: RoomSplitInput & { reason: string; target: SplitTarget }) {
+  return apiRequest<RoomSplitResult>(`/api/date-moves/split`, { method: "POST", session, body });
+}

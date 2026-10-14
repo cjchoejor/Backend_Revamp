@@ -61,6 +61,7 @@ import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 import { RoomMoveDialog } from "./room-move-dialog";
 import { DateMoveDialog } from "./date-move-dialog";
+import { SplitMoveDialog, type SplitMove } from "./split-move-dialog";
 import type { DateMoveInput } from "@/lib/api/room-moves";
 
 const KIND_WORD: Record<ChartBarKind, string> = {
@@ -151,7 +152,6 @@ const ownRoomWhy = (no: string) => `Room ${no} is already part of this booking �
  */
 function dateMoveWhy(drag: Drag, booking: RoomChartBooking | undefined): string | null {
   if (new Set(drag.items.map((s) => s.entryId)).size > 1) return "Move one booking's dates at a time";
-  if (drag.items.length > 1 && drag.over && drag.over !== drag.grabbed.roomId) return "Move the dates first, then the rooms";
   if (!booking) return null;
   if (booking.status === "PARKED") return "This booking is parked — resume it first";
   if (booking.status !== "ACTIVE") return "This booking has ended — its dates are a record now";
@@ -191,6 +191,21 @@ function dateBlock(
   }
   return { map, why: null };
 }
+/**
+ * The rooms a date drag takes (2026-10-14, operator: "move one singular room to another date range
+ * without selecting the other rooms with it"): the room grabbed, or the rooms picked with it (Ctrl /
+ * Shift). All of them moves the whole booking; fewer splits them off to a booking of their own.
+ */
+function dateMovingRows(d: Drag, ownRows: string[]): string[] {
+  const picked = new Set(d.items.filter((s) => s.entryId === d.grabbed.entryId).map((s) => s.roomId));
+  picked.add(d.grabbed.roomId);
+  const rows = ownRows.filter((r) => picked.has(r));
+  return rows.length ? rows : [d.grabbed.roomId];
+}
+/** "Room 205" · "Rooms 205 + 206" */
+const roomsWords = (ids: string[], roomNo: (id: string) => string) =>
+  ids.length === 1 ? `Room ${roomNo(ids[0])}` : `Rooms ${ids.map(roomNo).join(" + ")}`;
+
 /** "204 → 306 · 205 → 307 · and 2 more" */
 function blockWords(map: Map<string, string>, roomNo: (id: string) => string, max = 3): string {
   const pairs = [...map].map(([f, t]) => `${roomNo(f)} → ${roomNo(t)}`);
@@ -271,9 +286,10 @@ function landingBoxes(
   if (shift !== 0) {
     if (dateMoveWhy(d, bookingOf.get(d.grabbed.entryId))) return [];
     const ownRows = rows.filter((rid) => ownRoom(d.grabbed.entryId, rid) != null);
-    const block = dateBlock(d, rows, ownRows, (id) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?");
+    const moving = dateMovingRows(d, ownRows);
+    const block = dateBlock(d, rows, moving, (id) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?");
     if (block.why) return [];
-    moves = ownRows.map((rid) => ({ entryId: d.grabbed.entryId, from: rid, to: block.map.get(rid) ?? rid, swapped: false }));
+    moves = moving.map((rid) => ({ entryId: d.grabbed.entryId, from: rid, to: block.map.get(rid) ?? rid, swapped: false }));
   } else {
     if (!d.over) return [];
     const plan = planDrop(d.items, d.grabbed, d.over, rows, ownRoom);
@@ -465,6 +481,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const [moveLegs, setMoveLegs] = useState<RoomMoveLegInput[] | null>(null);
   /** A bar dragged sideways: the booking's stay moving to other dates (2026-10-13). */
   const [dateMove, setDateMove] = useState<(DateMoveInput & { label: string }) | null>(null);
+  /** Some of a booking's rooms dragged to other dates — a booking of their own (2026-10-14). */
+  const [splitMove, setSplitMove] = useState<SplitMove | null>(null);
   const stopSwitching = () => {
     setSwitching(false);
     setSelected([]);
@@ -519,7 +537,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     if (!full) return;
     const onKey = (e: KeyboardEvent) => {
       // Escape closes what is on top first: the start box, Switch rooms, the move dialog.
-      if (e.key === "Escape" && !pickRef.current && !switching && !picking && !moveLegs && !dateMove) setFull(false);
+      if (e.key === "Escape" && !pickRef.current && !switching && !picking && !moveLegs && !dateMove && !splitMove) setFull(false);
     };
     // The page reserves a scrollbar gutter on <html> (`scrollbar-gutter: stable`), which a fixed
     // layer cannot cover — released while full screen is on, so the chart reaches the window's edge.
@@ -535,7 +553,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       html.style.scrollbarGutter = prev.gutter;
       document.removeEventListener("keydown", onKey);
     };
-  }, [full, switching, picking, moveLegs, dateMove]);
+  }, [full, switching, picking, moveLegs, dateMove, splitMove]);
   useEffect(
     () => () => {
       if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
@@ -759,13 +777,27 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         // Dragged sideways: the whole stay moves to other dates (and the room grabbed may land in
         // another row on the way). The dialog asks the server what that would do.
         const booking = bookingOf.get(done.grabbed.entryId);
-        const block = dateBlock(done, rows, ownRowsOf(done.grabbed.entryId), roomNoOf);
+        const ownRows = ownRowsOf(done.grabbed.entryId);
+        const moving = dateMovingRows(done, ownRows);
+        const block = dateBlock(done, rows, moving, roomNoOf);
         const why = dateMoveWhy(done, booking) ?? block.why;
         if (why) {
           toast.error(why);
           return;
         }
         if (!booking?.checkInDate) return;
+        // Some of the booking's rooms: they leave as a booking of their own — the dialog asks where.
+        if (moving.length < ownRows.length) {
+          setSplitMove({
+            entryId: done.grabbed.entryId,
+            fromRoomId: done.grabbed.roomId,
+            roomMap: Object.fromEntries(moving.map((r) => [r, block.map.get(r) ?? r])),
+            newCheckInDate: ymdShift(booking.checkInDate, done.shift),
+            label: done.grabbed.name,
+            roomWords: roomsWords(moving, roomNoOf),
+          });
+          return;
+        }
         setDateMove({
           entryId: done.grabbed.entryId,
           fromRoomId: done.grabbed.roomId,
@@ -810,7 +842,11 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   // A sideways drag is a date move: its own plan and its own label.
   const dateDrag = drag && drag.shift !== 0 ? drag : null;
   const dateBooking = dateDrag ? bookingOf.get(dateDrag.grabbed.entryId) : undefined;
-  const dateBlockNow = dateDrag ? dateBlock(dateDrag, rows, ownRowsOf(dateDrag.grabbed.entryId), roomNoOf) : null;
+  const dateOwnRows = dateDrag ? ownRowsOf(dateDrag.grabbed.entryId) : [];
+  const dateMovingNow = dateDrag ? dateMovingRows(dateDrag, dateOwnRows) : [];
+  /** Some, not all, of the booking's rooms — they would leave as a booking of their own. */
+  const dateSplitNow = !!dateDrag && dateMovingNow.length < dateOwnRows.length;
+  const dateBlockNow = dateDrag ? dateBlock(dateDrag, rows, dateMovingNow, roomNoOf) : null;
   const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) ?? dateBlockNow?.why ?? null : null;
   const dateSpan =
     dateDrag && dateBooking?.checkInDate && dateBooking.checkOutDate
@@ -923,7 +959,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
             <p>Move rooms: drag a booking onto another room. Ctrl-click (Cmd on a Mac) picks more rooms, Shift-click picks a booking&apos;s rooms in between; drag one of them and they all move, the one you hold landing where you drop it and the rest keeping their spacing.</p>
-            <p>Move dates: drag a booking sideways — the whole stay moves earlier or later, keeping its nights (before check-in only). Drag it down or up at the same time to change the room too.</p>
+            <p>Move dates: drag a booking sideways — the room you hold moves earlier or later, keeping its nights (before check-in only). Pick its other rooms first (Ctrl or Shift) to take them along; all of them moves the whole booking. A room moved alone becomes a booking of its own — on the same enquiry, or a new enquiry. Drag it down or up at the same time to change the room too.</p>
             <p>A booking already in a room you drop on swaps into the room left behind. Switch rooms does the same by clicking: pick a booking, then click another booking or a free night.</p>
             <p>Each room walks every step its booking needs; you see what each will do before anything runs.</p>
           </Help>
@@ -1185,7 +1221,12 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                     {Math.abs(dateDrag.shift)} {Math.abs(dateDrag.shift) === 1 ? "day" : "days"} {dateDrag.shift > 0 ? "later" : "earlier"}
                     {dateBlockNow?.map.size ? ` · ${blockWords(dateBlockNow.map, roomNoOf)}` : ""}
                   </span>
-                  <span className="sub">Let go to see what moving the dates would do</span>
+                  {dateSplitNow ? (
+                    <span className="sub">
+                      <b>{roomsWords(dateMovingNow, roomNoOf)}</b> alone — {dateMovingNow.length === 1 ? "it leaves" : "they leave"} as a booking of {dateMovingNow.length === 1 ? "its" : "their"} own
+                    </span>
+                  ) : null}
+                  <span className="sub">{dateSplitNow ? "Let go to choose: a new booking on this enquiry, or a new enquiry" : "Let go to see what moving the dates would do"}</span>
                 </>
               )
             ) : dropPlan?.ok ? (
@@ -1221,8 +1262,15 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           stopSwitching();
         }}
       />
+      <SplitMoveDialog
+        move={splitMove}
+        onClose={() => {
+          setSplitMove(null);
+          stopSwitching();
+        }}
+      />
 
-      {hover && !pick && !moveLegs && !dateMove ? (
+      {hover && !pick && !moveLegs && !dateMove && !splitMove ? (
         <Floating>
           <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} />
         </Floating>

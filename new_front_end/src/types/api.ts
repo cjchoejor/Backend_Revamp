@@ -568,7 +568,29 @@ export type NoShowDeterminationSummary = {
   createdAt: string;
 };
 
+/**
+ * What a booking split off another carried (2026-10-14): read by each step to fill itself in as the
+ * booking reaches it — never enforced; every step still asks and checks as for any booking.
+ */
+export type EntryCarryOver = {
+  fromEntryId: string;
+  fromInquiryId: string;
+  at: string;
+  reason: string;
+  target: "SAME_ENQUIRY" | "NEW_ENQUIRY";
+  rooms: Array<{ fromRoomId: string; fromRoomNumber: string; roomId: string; roomNumber: string; priceMode: "KEEP" | "NEW_DATES" }>;
+  /** The rooms' rows, on their new rooms — the Negotiation table's starting point. */
+  compositions: unknown[];
+  discount: { discountPercent?: number; discountBasis?: string } | null;
+  billingModel: string | null;
+  cancellation: { noShowTreatmentStatement: string; disclosedTerms?: unknown } | null;
+  guestAgreedNote?: string | null;
+};
+
 export type EntryDetail = EntryListItem & {
+  /** The booking these rooms were split off (2026-10-14) — a soft link. */
+  splitFromEntryId?: string | null;
+  carryOver?: EntryCarryOver | null;
   /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
   contactPersonName?: string | null;
   contactPersonPhone?: string | null;

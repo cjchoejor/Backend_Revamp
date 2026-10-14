@@ -149,6 +149,16 @@ export function DetailsView({
           <Facts wide>
             <Fact k="Enquiry">{entry.inquiry?.id}</Fact>
             <Fact k="Booking">{entry.id}</Fact>
+            {entry.splitFromEntryId ? (
+              <Fact k="Split off">
+                <Link className="mono" href={`/bookings/${entry.splitFromEntryId}`}>
+                  {entry.splitFromEntryId}
+                </Link>
+                {entry.carryOver?.rooms?.length
+                  ? ` · ${entry.carryOver.rooms.map((r) => (r.roomNumber === r.fromRoomNumber ? `Room ${r.roomNumber}` : `Room ${r.fromRoomNumber} → ${r.roomNumber}`)).join(", ")}`
+                  : ""}
+              </Fact>
+            ) : null}
             <Fact k="Reservation">{res?.id}</Fact>
             <Fact k="Their reference">{inq.corporateClientRef}</Fact>
             {(entry.segmentNumber ?? 1) > 1 ? <Fact k="Pass">{entry.segmentNumber}</Fact> : null}
