@@ -268,6 +268,21 @@ export type DateShiftWalkInput = {
   priceModes?: Record<string, "KEEP" | "NEW_DATES"> | null;
 };
 
+/**
+ * Rooms split off to a booking of their own (2026-10-14, operator: "move one room to another date
+ * range ... as a different entry under the same inquiry, or a new inquiry"). Internal only —
+ * reached through room-split-service, never the room-change HTTP body. The rooms leave the plan on
+ * every night, their composition rows and their guests leave with them (`party` is what STAYS),
+ * and the booking walks the governed journey back to its step on what is left.
+ */
+export type SplitOffWalkInput = {
+  roomIds: string[];
+  /** The party that stays on this booking. */
+  party: { adultCount: number; childCount: number; childAges: number[]; guestCount: number };
+  /** Where the rooms went — "to ENT-… on the same enquiry", "to a new enquiry" — for the notes. */
+  toLabel: string;
+};
+
 const DAY_MS_SHIFT = 86_400_000;
 /** "YYYY-MM-DD" moved by whole days. */
 export function shiftIsoDate(iso: string, days: number): string {
@@ -887,6 +902,8 @@ export type RoomChangeOutcome = {
     /** Set when the booking was at Arrival and the new arrival is beyond the arrival window. */
     arrivalOpensOn: string | null;
   } | null;
+  /** Set when rooms split off to a booking of their own (2026-10-14). */
+  splitOff?: { roomIds: string[]; roomNumbers: string[]; party: SplitOffWalkInput["party"]; toLabel: string } | null;
   /** Set when the walk was a stay extension (2026-08-21). */
   extension: { requestId: string; priorCheckOutDate: string; newCheckOutDate: string; extraNights: Array<{ date: string; roomId: string }> } | null;
   walk: {
@@ -1020,6 +1037,8 @@ async function changeRoomToNewSegmentInner(
     extension?: StayExtensionWalkInput | null;
     /** Move the whole stay to other dates (2026-10-13) — see `DateShiftWalkInput`. */
     dateShift?: DateShiftWalkInput | null;
+    /** Rooms split off to a booking of their own (2026-10-14) — see `SplitOffWalkInput`. */
+    splitOff?: SplitOffWalkInput | null;
     /** Validate everything and return the plan, writing nothing (a room move's preview). */
     dryRun?: boolean;
     /** Set when the walk is one leg of a room move from the house chart (2026-10-12). */
@@ -1053,7 +1072,17 @@ async function changeRoomToNewSegmentInner(
       throw new ValidationError("Pricing the stay at the new dates needs the guest's agreement — type what they said");
     }
   }
-  const setupOnly = !isExtension && !isDateShift && !hasSingle && !hasPerNightForm;
+  const isSplitOff = !!input.splitOff;
+  if (isSplitOff) {
+    if (hasSingle || hasPerNightForm || isExtension || isDateShift) {
+      throw new ValidationError("Splitting rooms off stands alone — no room move, extension or date move rides with it");
+    }
+    const touchesSetup =
+      hasSetup || (input.roomSetups?.length ?? 0) > 0 || (input.roomCompositions?.length ?? 0) > 0 || input.requestedDiscount !== undefined || input.repairSeating;
+    if (touchesSetup) throw new ValidationError("Splitting rooms off carries the rest of the booking as it is — change its setup afterwards");
+    if (!input.splitOff!.roomIds.length) throw new ValidationError("Name the rooms that split off");
+  }
+  const setupOnly = !isExtension && !isDateShift && !isSplitOff && !hasSingle && !hasPerNightForm;
   // A full re-price basis counts as "something to do" on its own — it IS the change.
   const hasReprice = Array.isArray(input.roomCompositions) && input.roomCompositions.length > 0;
   const hasDiscountEdit = input.requestedDiscount !== undefined;
@@ -1117,6 +1146,26 @@ async function changeRoomToNewSegmentInner(
   }
   const mapRoom = (id: string) => dateRoomMap.get(id) ?? id;
 
+  // Rooms split off to their own booking (2026-10-14): they leave every night of the plan, and the
+  // walk is anchored on a room that stays.
+  const splitSet = new Set<string>(isSplitOff ? input.splitOff!.roomIds : []);
+  let splitRoomNumbers: string[] = [];
+  if (isSplitOff) {
+    if (!([Stage.S3, Stage.S4, Stage.S5] as Stage[]).includes(stage)) {
+      throw new ValidationError(`Rooms split off to their own booking from Set up, Reserve or Arrival — this booking is at ${stage}`);
+    }
+    for (const id of splitSet) {
+      if (!ctx.claimedRoomIds.has(id)) throw new ValidationError("A room to split off is not part of this booking's room plan");
+    }
+    if (splitSet.has(input.fromRoomId)) throw new ValidationError("The walk is anchored on a room that stays — name one of the booking's other rooms");
+    if (ctx.picture.some((n) => n.roomIds.length > 0 && n.roomIds.every((id) => splitSet.has(id)))) {
+      throw new ValidationError("Every room of a night would leave — move the whole booking to the other dates instead");
+    }
+    splitRoomNumbers = (await prisma.room.findMany({ where: { id: { in: [...splitSet] } }, select: { roomNumber: true } }))
+      .map((r) => r.roomNumber)
+      .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  }
+
   // ── The night → room map the change asks for ───────────────────────────────────────────────
   const targetsByNight = new Map<string, string>();
   if (isExtension) {
@@ -1128,8 +1177,9 @@ async function changeRoomToNewSegmentInner(
     // The stay moves; the room moved keeps its place in the pattern, or lands in another room.
     const target = mapRoom(input.fromRoomId);
     for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
-  } else if (setupOnly) {
-    // The guest keeps the room on every night — nothing moves, only the setup re-prices.
+  } else if (setupOnly || isSplitOff) {
+    // The guest keeps the room on every night — nothing moves, only the setup re-prices (or, on a
+    // split, the rooms that leave are taken out of the plan below).
     for (const d of ctx.substitutionNights) targetsByNight.set(d, input.fromRoomId);
   } else if (hasSingle) {
     for (const d of ctx.substitutionNights) targetsByNight.set(d, input.toRoomId!.trim());
@@ -1149,7 +1199,7 @@ async function changeRoomToNewSegmentInner(
   // Distinct NEW rooms (the from-room may appear per-night: those nights the guest KEEPS).
   const distinctTargets = Array.from(new Set(targetsByNight.values())).filter((id) => id !== input.fromRoomId);
   const keptFromNights = [...targetsByNight.entries()].filter(([, id]) => id === input.fromRoomId).map(([d]) => d).sort();
-  if (!setupOnly && !isExtension && !isDateShift && distinctTargets.length === 0) {
+  if (!setupOnly && !isExtension && !isDateShift && !isSplitOff && distinctTargets.length === 0) {
     throw new ValidationError("Every night keeps the current room — nothing changes");
   }
   if (!setupOnly && !isExtension && stage === Stage.S7 && (distinctTargets.length > 1 || keptFromNights.length > 0)) {
@@ -1164,7 +1214,7 @@ async function changeRoomToNewSegmentInner(
   const targetById = new Map(targetRooms.map((r) => [r.id, r]));
   // A setup-only change's "target" is the from-room itself — the setup validation below reads
   // the room's type (max extra beds) and bed stock off this map.
-  if (setupOnly || isExtension || isDateShift) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
+  if (setupOnly || isExtension || isDateShift || isSplitOff) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
   // A date move's block: every room landing somewhere new, and the plan's own rooms (their types
   // decide what each row carries).
   const planRoomById = new Map<string, (typeof targetRooms)[number]>();
@@ -1229,13 +1279,15 @@ async function changeRoomToNewSegmentInner(
   // Setup-only (and an extension in place): the "to" room IS the from-room — everything
   // single-valued downstream (the S7 assignment split, traces, the hold anchor, the outcome)
   // points at the room being re-set-up / extended.
-  const toRoomId = setupOnly || ((isExtension || isDateShift) && !primaryEntry) ? input.fromRoomId : primaryEntry![0];
+  const toRoomId = setupOnly || isSplitOff || ((isExtension || isDateShift) && !primaryEntry) ? input.fromRoomId : primaryEntry![0];
   const toRoom = targetById.get(toRoomId)!;
   /** "201" on a simple swap; "201 + 305" on a per-night split — for notes and traces. */
   const datesLabel = isDateShift
     ? `${ctx.priorCheckIn.toISOString().slice(0, 10)} → ${ctx.priorCheckOut.toISOString().slice(0, 10)} moved to ${ctx.checkIn.toISOString().slice(0, 10)} → ${ctx.checkOut.toISOString().slice(0, 10)}`
     : null;
-  const targetsLabel = isDateShift
+  const targetsLabel = isSplitOff
+    ? `${splitRoomNumbers.join(" + ")} split off ${input.splitOff!.toLabel}`
+    : isDateShift
     ? `${dateRoomMap.size ? `${datePairsLabel}, ` : ""}${datesLabel}`
     : isExtension
     ? `${distinctTargets.map((id) => targetById.get(id)!.roomNumber).join(" + ") || ctx.fromRoom.roomNumber} (extension to ${ctx.checkOut.toISOString().slice(0, 10)})`
@@ -1462,9 +1514,11 @@ async function changeRoomToNewSegmentInner(
   // ── The substituted room plan ───────────────────────────────────────────────────────────────
   const substitutedPicture = ctx.picture.map((n) => ({
     date: n.date,
-    roomIds: n.roomIds.map((id) =>
-      isDateShift ? mapRoom(id) : id === input.fromRoomId && targetsByNight.has(n.date) ? targetsByNight.get(n.date)! : id,
-    ),
+    roomIds: isSplitOff
+      ? n.roomIds.filter((id) => !splitSet.has(id))
+      : n.roomIds.map((id) =>
+          isDateShift ? mapRoom(id) : id === input.fromRoomId && targetsByNight.has(n.date) ? targetsByNight.get(n.date)! : id,
+        ),
   }));
   const substitutedDistinct = Array.from(new Set(substitutedPicture.flatMap((n) => n.roomIds)));
   const priorSel = readOptionSelected(ctx.sealedConfig?.optionSelected ?? null);
@@ -1473,7 +1527,7 @@ async function changeRoomToNewSegmentInner(
   // pre-occupancy single swaps keep the original shape family so downstream displays don't
   // change form.
   // A setup-only change moves nothing, so the plan keeps whatever shape it already had.
-  const emitPerNight = setupOnly
+  const emitPerNight = setupOnly || isSplitOff
     ? !!priorSel.perNight
     : stage === Stage.S7 || !!priorSel.perNight || distinctTargets.length > 1 || keptFromNights.length > 0;
   const deficientById = new Map<string, boolean>();
@@ -1493,7 +1547,7 @@ async function changeRoomToNewSegmentInner(
   // A date move's block writes every pair (`pairs`) — the readers fold each room to the room it
   // became; `toRoomId` / `toRoomIds` stay for the grabbed room, as before.
   const roomChangeMarker =
-    setupOnly || (isExtension && distinctTargets.length === 0) || (isDateShift && dateRoomMap.size === 0)
+    setupOnly || isSplitOff || (isExtension && distinctTargets.length === 0) || (isDateShift && dateRoomMap.size === 0)
       ? null
       : isDateShift
         ? {
@@ -1576,6 +1630,11 @@ async function changeRoomToNewSegmentInner(
         const crossType = to !== c.roomId && targetById.get(to)?.roomTypeId !== planRoomById.get(c.roomId)?.roomTypeId;
         return { ...c, roomId: to, nightMealOverrides: [...(c.nightMealOverrides ?? [])], ...(crossType ? { negotiatedRoomRate: undefined } : {}) };
       });
+    } else if (isSplitOff) {
+      // The rooms that split off take their rows with them — every other row carries as it is.
+      newCompositions = priorCompositions
+        .filter((c) => !splitSet.has(c.roomId))
+        .map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
     } else if (setupOnly) {
       // Nothing moves room — every row carries; the setup block below rewrites the one row on a
       // setup change.
@@ -1676,7 +1735,8 @@ async function changeRoomToNewSegmentInner(
   // covers) and says exactly what it did; the outcome and a trace carry that, so a silent
   // "the occupants vanished" can no longer happen.
   const childBundle = await loadChildPolicyBundle(prisma).catch(() => null);
-  const partySlots = derivePartySlots(entry, {
+  // A split seats only the party that stays — the rooms' own guests leave with them.
+  const partySlots = derivePartySlots(isSplitOff ? { ...entry, ...input.splitOff!.party } : entry, {
     youngChildMaxAge: childBundle?.ageBands.youngChildMaxAge ?? 5,
     childMaxAge: childBundle?.ageBands.childMaxAge ?? 10,
   });
@@ -2140,6 +2200,7 @@ async function changeRoomToNewSegmentInner(
       seating: seatingOutcome,
       extension: null,
       dateShift: dateShiftOutcome(null),
+      splitOff: isSplitOff ? { roomIds: [...splitSet], roomNumbers: splitRoomNumbers, party: input.splitOff!.party, toLabel: input.splitOff!.toLabel } : null,
       pricing: { priorTotal, newTotal: null, delta: null, currency: (priorTerms?.currency as string | undefined) ?? null },
       quotationId: null,
       walk: { returnedToOrigin: false, reachedStage: String(stage), blocked: null },
@@ -2159,7 +2220,9 @@ async function changeRoomToNewSegmentInner(
 
   // ── 1. The governed re-entry (new segment at S2) with origin-specific side effects ─────────
   const move = input.moveContext ?? null;
-  const reasonForTrace = move
+  const reasonForTrace = isSplitOff
+    ? `ROOM_SPLIT: ${reason} (${targetsLabel})`
+    : move
     ? `ROOM_MOVE: ${reason}${move.moveId ? ` (${move.moveId}${move.partnerLabel ? `, with ${move.partnerLabel}` : ""})` : ""}`
     : isExtension
     ? `STAY_EXTENSION: ${reason}`
@@ -2354,6 +2417,25 @@ async function changeRoomToNewSegmentInner(
       ],
       hooks: async (tx) => {
         if (stage === Stage.S3) await supersedePendingInvoicesTx(tx, input.entryId, actor.actorId);
+        if (isSplitOff) {
+          // The rooms and their guests leave the booking (2026-10-14): the party and the room count
+          // the booking keeps, and the bed plan without the rooms that left (they take theirs along).
+          const party = input.splitOff!.party;
+          const plan = ((entry as { bedPlan?: unknown }).bedPlan ?? null) as Record<string, string> | null;
+          await tx.entry.update({
+            where: { id: input.entryId },
+            data: {
+              adultCount: party.adultCount,
+              childCount: party.childCount,
+              childAges: party.childAges,
+              guestCount: party.guestCount,
+              numberOfRooms: substitutedDistinct.length,
+              ...(plan
+                ? { bedPlan: Object.fromEntries(Object.entries(plan).filter(([id]) => !splitSet.has(id))) as Prisma.InputJsonValue }
+                : {}),
+            },
+          });
+        }
         if (isDateShift) {
           // The stay's dates move — the silent quote, the hold and the re-freeze read them from
           // the entry. The booking's own hold time cannot run past the new arrival day.
@@ -2418,7 +2500,9 @@ async function changeRoomToNewSegmentInner(
   // Papers the walk generates and holds for the desk (2026-10-12) — filled as they are made; the
   // array rides on every outcome, a stopped walk's included.
   const heldDocuments: RoomChangeOutcome["heldDocuments"] = [];
-  const heldReason: HeldDocumentReason = isDateShift
+  const heldReason: HeldDocumentReason = isSplitOff
+    ? "ROOM_SPLIT"
+    : isDateShift
     ? "DATE_MOVE"
     : move
     ? "ROOM_MOVE"
@@ -2488,6 +2572,7 @@ async function changeRoomToNewSegmentInner(
         }
       : null,
     dateShift: dateShiftOutcome(null),
+    splitOff: isSplitOff ? { roomIds: [...splitSet], roomNumbers: splitRoomNumbers, party: input.splitOff!.party, toLabel: input.splitOff!.toLabel } : null,
     heldDocuments,
   };
 
@@ -2545,6 +2630,8 @@ async function changeRoomToNewSegmentInner(
             : {}),
           ...(isDateShift ? {} : isExtension
             ? { stayExtension: { requestId: input.extension!.requestId, newCheckOutDate: ctx.checkOut.toISOString(), reason }, ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}) }
+            : isSplitOff
+              ? { splitOff: { roomIds: [...splitSet], to: input.splitOff!.toLabel, reason } }
             : setupOnly
               ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason, ...(repairSeating ? { seatingRepair: true } : {}) } }
               : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason, ...(move?.moveId ? { moveId: move.moveId } : {}) } }),
@@ -2563,7 +2650,9 @@ async function changeRoomToNewSegmentInner(
   // ── 3. Silent quotation — the new segment's priced basis; nothing goes to the guest ────────
   try {
     const draft: QuotationDraftInput = {
-      notes: isDateShift
+      notes: isSplitOff
+        ? `Room ${targetsLabel} (${reason})`
+        : isDateShift
         ? `Stay moved: ${targetsLabel} (${reason})`
         : isExtension
         ? `Stay extended to ${ctx.checkOut.toISOString().slice(0, 10)} (${reason})`
@@ -2907,7 +2996,9 @@ async function changeRoomToNewSegmentInner(
     if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED" && priorAnswered) {
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
-        verbatimNote: isDateShift
+        verbatimNote: isSplitOff
+          ? `Room ${targetsLabel} at the guest's request: ${reason}. The rest of the stay is unchanged, so the guest's answer to the earlier voucher stands.`
+          : isDateShift
           ? `The stay moved to other dates (${datesLabel}${dateRoomMap.size ? `, rooms ${datePairsLabel}` : ""}): ${reason}. ${
               [input.dateShift!.priceMode, ...Object.values(input.dateShift!.priceModes ?? {})].includes("NEW_DATES")
                 ? `Priced at the new dates where chosen. The guest agreed: ${input.dateShift!.guestAgreedNote ?? "(no note)"}`
@@ -3238,7 +3329,7 @@ async function traceRoomChangeSummary(
       await prisma.reservation.findMany({ where: { id: { in: heldReservationIds } }, select: { id: true, confirmationVoucherNumber: true } })
     ).map((r) => [r.id, r.confirmationVoucherNumber]),
   );
-  const kind = out.dateShift ? "DATES" : out.extension ? "EXTENSION" : out.setupOnly ? "SETUP" : "ROOM";
+  const kind = out.splitOff ? "SPLIT" : out.dateShift ? "DATES" : out.extension ? "EXTENSION" : out.setupOnly ? "SETUP" : "ROOM";
   await prisma.traceEvent.create({
     data: {
       eventType: "ENTRY.ROOM_CHANGED",
@@ -3273,6 +3364,7 @@ async function traceRoomChangeSummary(
         pricing: out.pricing,
         extension: out.extension,
         dates: out.dateShift ?? null,
+        split: out.splitOff ?? null,
         reachedStage: out.walk.reachedStage,
         returnedToOrigin: out.walk.returnedToOrigin,
         blocked: out.walk.blocked,

@@ -1155,6 +1155,16 @@ model Entry {
   apartmentDurationNights Int?
   apartmentRateTierCode   String?
 
+  /// A booking split off another (2026-10-14, operator: "move one room to other dates ... as a
+  /// different entry under the same inquiry, or a new inquiry"): the booking its rooms came from.
+  /// A soft link (no foreign key), like `invoice_lines.folioLineId` — either booking can be
+  /// removed on its own.
+  splitFromEntryId String?
+  /// What the booking it came from had, carried for the desk to fill each step with as the new
+  /// booking reaches it (the rooms' guests, setup and price terms, the payer, the bed plan). Read,
+  /// never enforced — every step still asks and checks as it would for any booking.
+  carryOver        Json?
+
   inquiry                      Inquiry                       @relation(fields: [inquiryId], references: [id])
   guestProfile                 GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
   segments                     Segment[]
@@ -1203,6 +1213,7 @@ model Entry {
 
   @@index([inquiryId])
   @@index([currentStage, status])
+  @@index([splitFromEntryId])
   @@map("entries")
 }
 

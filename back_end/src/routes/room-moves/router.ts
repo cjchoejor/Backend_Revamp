@@ -13,6 +13,7 @@ import {
 } from "../../services/domain/room-move-service.js";
 import { decideHeldDocument, listHeldDocuments } from "../../services/domain/held-document-service.js";
 import { executeDateMove, previewDateMove } from "../../services/domain/date-move-service.js";
+import { executeRoomSplit, previewRoomSplit } from "../../services/domain/room-split-service.js";
 
 /**
  * Room moves from the house chart, and the papers every room-change walk holds for the desk
@@ -102,6 +103,50 @@ roomMovesRouter.post(
   async (req, res, next) => {
     try {
       res.status(201).json(await executeDateMove(prisma, actorOf(req), req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * Splitting rooms off a booking to other dates (2026-10-14): the rooms leave with their guests,
+ * as a booking of their own under the same enquiry (walked to the original's step) or a new
+ * enquiry (started at Inquiry, filled in). L1 on the route; the service decides who may — the FOM
+ * from Set up on, and at Negotiation once a quotation went out.
+ */
+const roomSplitSchema = z.object({
+  entryId: z.string().trim().min(1).max(64),
+  fromRoomId: z.string().trim().min(1).max(64),
+  roomMap: z.record(z.string().trim().min(1).max(64), z.string().trim().min(1).max(64)),
+  newCheckInDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "newCheckInDate must be YYYY-MM-DD"),
+  priceMode: z.enum(["KEEP", "NEW_DATES"]).optional(),
+  priceModes: z.record(z.string().trim().min(1).max(64), z.enum(["KEEP", "NEW_DATES"])).nullable().optional(),
+  guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
+  target: z.enum(["SAME_ENQUIRY", "NEW_ENQUIRY"]).optional(),
+});
+
+roomMovesRouter.post(
+  "/date-moves/split/preview",
+  requireActorLevel("L1"),
+  validateBody(roomSplitSchema.extend({ reason: z.string().trim().max(1000).nullable().optional() })),
+  async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await previewRoomSplit(prisma, actorOf(req), req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+roomMovesRouter.post(
+  "/date-moves/split",
+  requireActorLevel("L1"),
+  validateBody(roomSplitSchema.extend({ reason: z.string().trim().min(1).max(1000), target: z.enum(["SAME_ENQUIRY", "NEW_ENQUIRY"]) })),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await executeRoomSplit(prisma, actorOf(req), req.body));
     } catch (e) {
       next(e);
     }
