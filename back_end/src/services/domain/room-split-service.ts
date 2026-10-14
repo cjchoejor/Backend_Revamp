@@ -474,7 +474,33 @@ async function planSplit(prisma: PrismaClient, actor: Actor, input: RoomSplitReq
       }
     : null;
 
+  // The guest's OTHER live bookings over the new nights, on any enquiry (2026-10-14, found on the
+  // desk: a room split off to a new enquiry was refused at creation because the guest already held
+  // an earlier split-off room on those nights). Policy 12 asks this of a new enquiry and Policy 13 of
+  // a reservation — both answered here by the split itself, which names them and is the deliberate act.
+  const guestOverlaps: Array<{ entryId: string; words: string }> = [];
+  if (entry.guestProfileId && newNights.length) {
+    const others = await prisma.entry.findMany({
+      where: {
+        id: { not: entry.id },
+        status: { in: ["ACTIVE", "PARKED"] },
+        OR: [{ guestProfileId: entry.guestProfileId }, { inquiry: { guestProfileId: entry.guestProfileId } }],
+        checkInDate: { lt: new Date(`${newCheckOut}T00:00:00.000Z`) },
+        checkOutDate: { gt: new Date(`${newCheckIn}T00:00:00.000Z`) },
+      },
+      select: { id: true, checkInDate: true, checkOutDate: true },
+      orderBy: { checkInDate: "asc" },
+    });
+    for (const o of others) {
+      guestOverlaps.push({
+        entryId: o.id,
+        words: `${o.id} (${o.checkInDate && o.checkOutDate ? `${fmtDay(iso(o.checkInDate))} – ${fmtDay(iso(o.checkOutDate))}` : "its dates"})`,
+      });
+    }
+  }
+
   return {
+    guestOverlaps,
     entry, stage, guest, refusals, notes, priorIn, priorOut, shiftDays, picture, planRooms, staying, roomMap, roomById, no,
     newPicture, newCheckIn, newCheckOut, newNightsByRoom, leaving, stays, guestsOfRoom, rows, basis, compsFor, modeOf,
     carriedDiscount, priorTerms, authority, overlap, segmentId,
@@ -611,10 +637,16 @@ export async function previewRoomSplit(prisma: PrismaClient, actor: Actor, input
     papers: stage === Stage.S2 ? [] : [stage === Stage.S3 ? "This booking's new proforma — held for you" : "This booking's new voucher — held for you"],
     refusals: [],
   };
-  if (plan.overlap && (RANK[actor.actorLevel] ?? 0) < 2) {
-    newEnquiry.refusals.push("A second enquiry for the same guest over the same nights needs the FOM to say it is on purpose");
+  const sameGuestOverNights = !!plan.overlap || plan.guestOverlaps.length > 0;
+  if (sameGuestOverNights && (RANK[actor.actorLevel] ?? 0) < 2) {
+    newEnquiry.refusals.push("A second enquiry for the same guest over nights they already hold needs the FOM to say it is on purpose");
   }
   if (plan.overlap) notes.push(`${plan.overlap.words}. The FOM's split records that it is on purpose.`);
+  if (plan.guestOverlaps.length) {
+    notes.push(
+      `The guest also holds ${plan.guestOverlaps.map((o) => o.words).join(", ")} over these nights — the split records the second booking as on purpose.`,
+    );
+  }
 
   const ok = refusals.length === 0 && plan.authority.ok;
   return {
@@ -659,9 +691,14 @@ export async function executeRoomSplit(
     throw new ValidationError("Pricing a room at the new dates needs the guest's agreement — type what they said");
   }
   const isFom = (RANK[actor.actorLevel] ?? 0) >= 2;
-  if (target === "NEW_ENQUIRY" && plan.overlap && !isFom) {
-    throw new ValidationError("A second enquiry for the same guest over the same nights needs the FOM to say it is on purpose");
+  const sameGuestOverNights = !!plan.overlap || plan.guestOverlaps.length > 0;
+  if (target === "NEW_ENQUIRY" && sameGuestOverNights && !isFom) {
+    throw new ValidationError("A second enquiry for the same guest over nights they already hold needs the FOM to say it is on purpose");
   }
+  const overlapWords = [
+    ...(plan.overlap ? [`${plan.entry.id} itself`] : []),
+    ...plan.guestOverlaps.map((o) => o.words),
+  ].join(", ");
   const { entry, stage, roomMap, no } = plan;
   const movedNumbers = [...roomMap.keys()].map(no).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   const movedWords = `Room${movedNumbers.length === 1 ? "" : "s"} ${movedNumbers.join(" + ")}`;
@@ -696,8 +733,13 @@ export async function executeRoomSplit(
         ratePackageId: inq.ratePackageId ?? null,
         proposedCheckIn: plan.newCheckIn,
         proposedCheckOut: plan.newCheckOut,
-        ...(plan.overlap
-          ? { duplicateResolution: { resolution: "ACKNOWLEDGE" as const, reason: `Split off ${entry.id} (${movedWords}) to other dates: ${reason}` } }
+        ...(sameGuestOverNights
+          ? {
+              duplicateResolution: {
+                resolution: "ACKNOWLEDGE" as const,
+                reason: `Split off ${entry.id} (${movedWords}) to other dates — the guest also holds ${overlapWords} over those nights, on purpose: ${reason}`,
+              },
+            }
           : {}),
       });
       inquiryId = madeInquiry.id;
@@ -914,7 +956,7 @@ export async function executeRoomSplit(
         await step("RESERVE", async () => {
           // The same guest holds the original over shared nights — the FOM splitting it is the
           // acknowledgement Policy 13 asks for.
-          if (plan.overlap) {
+          if (sameGuestOverNights) {
             await prisma.traceEvent.create({
               data: {
                 eventType: "MULTI_BOOKING.ACKNOWLEDGED",
@@ -927,7 +969,7 @@ export async function executeRoomSplit(
                 stageContext: Stage.S4,
                 inquiryId: created!.inquiryId,
                 entryId: newId,
-                payload: { entryId: newId, note: `Split off ${entry.id} by the FOM — the guest keeps both bookings on purpose: ${reason}` },
+                payload: { entryId: newId, note: `Split off ${entry.id} by the FOM — the guest also holds ${overlapWords} over these nights, on purpose: ${reason}` },
                 createdBy: actor.actorId,
               },
             });
