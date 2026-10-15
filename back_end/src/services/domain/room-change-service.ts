@@ -787,7 +787,8 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
     const reason = typeof criteria?.roomChange?.reason === "string" ? criteria.roomChange.reason : null;
     for (const target of targets) {
       chain.push({ fromRoomId, toRoomId: target, at: cfg.sealedAt ?? cfg.createdAt, reason });
-      originOf.set(target, originOf.get(fromRoomId) ?? fromRoomId);
+      // A room already in the plan that takes nights back (2026-10-15) keeps its own origin.
+      if (!originOf.has(target)) originOf.set(target, originOf.get(fromRoomId) ?? fromRoomId);
     }
   }
 
@@ -1286,12 +1287,24 @@ async function changeRoomToNewSegmentInner(
   }
   for (const nights of nightsByTarget.values()) nights.sort();
 
+  /**
+   * Rooms of the booking the nights go back into (2026-10-15, operator: "305 on the 23rd was in 206
+   * on the 23rd, but I can't move it back to 206"): a room the booking holds on OTHER nights, free on
+   * the nights it takes, before the guest is in. Its guest record takes the moved nights (below).
+   */
+  const mergeTargets = new Set<string>();
   for (const id of distinctTargets) {
     // Extension mode: the new room sits in the picture by construction (its extra nights) — the
     // question is whether it was part of the plan BEFORE the extension.
     if (!(isExtension ? ctx.currentPlanRoomIds : ctx.claimedRoomIds).has(id)) continue;
     // A date move's block may land a room in another of its own rooms that moves on too.
     if (isDateShift && dateRoomMap.has(id)) continue;
+    const heldNights = ctx.picture.filter((n) => n.roomIds.includes(id)).map((n) => n.date);
+    const takes = nightsByTarget.get(id) ?? [];
+    if (!isExtension && !isDateShift && !isSplitOff && !setupOnly && stage !== Stage.S7 && takes.length > 0 && takes.every((d) => !heldNights.includes(d))) {
+      mergeTargets.add(id);
+      continue;
+    }
     const room = targetById.get(id)!;
     // At S7 a moved-out room keeps its slept-night claim (the split end-dates its assignment,
     // it never leaves the plan), so "already part of this booking" would be misleading — name
@@ -1707,19 +1720,58 @@ async function changeRoomToNewSegmentInner(
         ...(keptFromNights.length > 0 ? [{ roomId: input.fromRoomId, nights: keptFromNights }] : []),
         ...[...nightsByTarget.entries()].map(([roomId, nights]) => ({ roomId, nights })),
       ];
-      const spawned = carryRooms.map(({ roomId, nights }) => {
+      const rest = priorCompositions.filter((c) => c.roomId !== input.fromRoomId).map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
+      const spawned: RoomCompositionServiceInput[] = [];
+      for (const { roomId, nights } of carryRooms) {
+        const into = mergeTargets.has(roomId) ? rest.find((c) => c.roomId === roomId) : undefined;
+        if (into) {
+          // A room of the booking takes these nights back (2026-10-15). One record per room: the
+          // nights join its record, which must hold the same guests — one party moving between
+          // rooms. Where the moving room's meals or extra beds differ, those nights say so.
+          const n = (v: number | undefined | null) => v ?? 0;
+          const sameGuests =
+            n(into.occupantCount) === n(movingComposition.occupantCount) &&
+            n(into.adultCount) === n(movingComposition.adultCount) &&
+            n(into.cnb6To10Count) === n(movingComposition.cnb6To10Count) &&
+            n(into.cnbUnder6Count) === n(movingComposition.cnbUnder6Count);
+          if (!sameGuests) {
+            const no = (id: string) => targetById.get(id)?.roomNumber ?? seatingRoomNumbersEarly.get(id) ?? "?";
+            throw new ValidationError(
+              `Room ${no(roomId)} holds other guests on this booking than Room ${ctx.fromRoom.roomNumber} — move the night into a free room, or set the guests at Negotiation`,
+            );
+          }
+          const setupOf = (c: { mealPlanCpCount?: number; mealPlanMaplCount?: number; mealPlanMapdCount?: number; mealPlanApCount?: number; mealPlanOthersCount?: number; othersBreakfastPax?: number; othersLunchPax?: number; othersDinnerPax?: number; extraBedCount?: number }) => ({
+            mealPlanCpCount: n(c.mealPlanCpCount),
+            mealPlanMaplCount: n(c.mealPlanMaplCount),
+            mealPlanMapdCount: n(c.mealPlanMapdCount),
+            mealPlanApCount: n(c.mealPlanApCount),
+            mealPlanOthersCount: n(c.mealPlanOthersCount),
+            othersBreakfastPax: n(c.othersBreakfastPax),
+            othersLunchPax: n(c.othersLunchPax),
+            othersDinnerPax: n(c.othersDinnerPax),
+            extraBedCount: n(c.extraBedCount),
+          });
+          const usual = JSON.stringify(setupOf(into));
+          for (const d of nights) {
+            const own = (movingComposition.nightMealOverrides ?? []).find((o) => String(o.date).slice(0, 10) === d);
+            const night = setupOf(own ? { ...movingComposition, ...own } : movingComposition);
+            if (JSON.stringify(night) === usual) continue;
+            into.nightMealOverrides = [...(into.nightMealOverrides ?? []).filter((o) => String(o.date).slice(0, 10) !== d), { date: d, ...night }];
+          }
+          continue;
+        }
         const room = targetById.get(roomId);
         const crossType = roomId !== input.fromRoomId && room != null && room.roomTypeId !== ctx.fromRoom.roomTypeId;
-        return {
+        spawned.push({
           ...movingComposition,
           roomId,
           nightMealOverrides: (movingComposition.nightMealOverrides ?? []).filter((o) =>
             nights.includes(String(o.date).slice(0, 10)),
           ),
           ...(crossType ? { negotiatedRoomRate: keptRoomRate ?? undefined } : {}),
-        };
-      });
-      newCompositions = [...priorCompositions.filter((c) => c.roomId !== input.fromRoomId).map((c) => ({ ...c })), ...spawned];
+        });
+      }
+      newCompositions = [...rest, ...spawned];
     } else {
       newCompositions = priorCompositions.map((c) => ({ ...c }));
     }
