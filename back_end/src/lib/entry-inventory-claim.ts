@@ -269,9 +269,13 @@ export function roomsClaimedByReservedEntry(entry: ReservedEntryRooms | null | u
  * `stay.checkOut` must already be the entry's EFFECTIVE claim end (`reservedClaimEndDate`),
  * and every span is clamped to it — a row can never out-live the booking that owns it.
  *
- * The no-assignments fallback is deliberately UNCHANGED: between the S4 freeze and pre-arrival
- * there are no rows, and the committed hold answers whole-stay exactly as it did before. That
- * window keeps its old behaviour to the letter.
+ * Between the S4 freeze and pre-arrival there are no rows, and the committed hold is the record.
+ * Since 2026-10-15 its night-by-night snapshot answers per room, the way `committedHoldSpans`
+ * answers for a hold that is not yet reserved — but only when it describes THIS stay: every
+ * booked night present with its rooms, nothing before the check-in (`perNightClaimForStay`).
+ * Found on the chart: a booking moved to 206 · 206 · 305 drew 206 AND 305 on all three nights,
+ * and the search refused both rooms on the nights the booking had given up. A snapshot that
+ * does not cover the stay, and any room the snapshot does not name, still claims the whole stay.
  */
 export function reservedEntrySpans(
   entry: ReservedEntryRooms | null | undefined,
@@ -289,15 +293,57 @@ export function reservedEntrySpans(
       return { roomId: a.roomId, startDate: start, endDate: end };
     });
   }
-  // No rows yet — the committed hold is the only record of what was committed. Whole stay,
-  // exactly as before; narrowing this window is a separate question with its own risks.
+  // No rows yet — the committed hold is the only record of what was committed.
   const hold = entry?.committedHold;
   if (!hold) return [];
-  return roomsClaimedByReservedEntry(entry).map((roomId) => ({
-    roomId,
-    startDate: stay.checkIn,
-    endDate: stay.checkOut,
-  }));
+  const byRoom = perNightClaimForStay(hold.perNightBreakdown, stay);
+  const named = byRoom ? new Set(roomIdsFromPerNight(hold.perNightBreakdown)) : null;
+  const out: ClaimSpan[] = [];
+  for (const roomId of roomsClaimedByReservedEntry(entry)) {
+    const nights = byRoom?.get(roomId);
+    if (nights && nights.length > 0) {
+      for (const r of foldIsoNightsToRanges(nights)) out.push({ roomId, ...r });
+      continue;
+    }
+    // Named by the snapshot, but only on nights after the claim end — it claims nothing.
+    if (named?.has(roomId)) continue;
+    // Not described night by night — the whole stay, the blunt rule.
+    out.push({ roomId, startDate: stay.checkIn, endDate: stay.checkOut });
+  }
+  return out;
+}
+
+/**
+ * A hold's night-by-night snapshot read as room → its nights, but only when it describes the
+ * stay given: every night from the check-in up to (not including) the claim end has rooms, and
+ * no night falls before the check-in. Nights from the claim end on are dropped — an early
+ * departure ends every room with it. Anything else returns null and the caller claims the whole
+ * stay: over-blocking costs a sale, under-blocking sells one room to two guests.
+ */
+function perNightClaimForStay(
+  breakdown: Prisma.JsonValue | null | undefined,
+  stay: { checkIn: Date; checkOut: Date },
+): Map<string, string[]> | null {
+  const nights = perNightMap(breakdown);
+  if (nights.size === 0) return null;
+  const startIso = stay.checkIn.toISOString().slice(0, 10);
+  const endIso = stay.checkOut.toISOString().slice(0, 10);
+  if (!(startIso < endIso)) return null;
+  for (const date of nights.keys()) if (date < startIso) return null;
+  const byRoom = new Map<string, string[]>();
+  const cursor = new Date(`${startIso}T00:00:00.000Z`);
+  for (let iso = startIso; iso < endIso; ) {
+    const rooms = nights.get(iso);
+    if (!rooms || rooms.length === 0) return null;
+    for (const roomId of rooms) {
+      const list = byRoom.get(roomId) ?? [];
+      list.push(iso);
+      byRoom.set(roomId, list);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    iso = cursor.toISOString().slice(0, 10);
+  }
+  return byRoom;
 }
 
 /**
