@@ -13,6 +13,10 @@
  *     and any stay left at its own dates), the price choice for the moved night, and where the new
  *     bookings go (the same enquiry, or one new enquiry).
  * Every figure and every refusal is the server's; the steps sit behind the "?".
+ *
+ * Several of the booking's rooms move together since 2026-10-15 (Alt+Ctrl on the chart): each room
+ * keeps its own run of nights, the result says each room's walk, and stays that leave on the same
+ * dates are one booking holding all their rooms.
  */
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -34,17 +38,38 @@ import {
 import { fmtRange, money } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
-export type NightMove = NightMoveInput & { label: string; roomNumber: string; toRoomNumber: string };
+/** What the chart hands over: every room's nights that move, the one dragged first. */
+export type NightMove = {
+  entryId: string;
+  label: string;
+  /** The dragged room's first moved night's new date. */
+  newFirstNight: string;
+  picks: Array<{ fromRoomId: string; nights: string[]; toRoomId: string; roomNumber: string; toRoomNumber: string }>;
+};
+/** "Room 205" · "Rooms 205 + 206" — from numbers as the server joins them ("205 + 206"). */
+const roomLabel = (numbers: string) => `${numbers.includes("+") ? "Rooms" : "Room"} ${numbers}`;
 
 const stepWord = (stage: string | null | undefined) => (stage ? STEP_NAMES[stepNoOfStage(stage as never) - 1] ?? stage : "—");
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const blockedWords = (b: { atStep: string; message: string }) => `${b.atStep.toLowerCase().replace(/_/g, " ")} — ${b.message}`;
 
-function ResultView({ result, tz }: { result: NightMoveResult; tz?: string }) {
+function ResultView({ result, tz, manyRooms }: { result: NightMoveResult; tz?: string; manyRooms: boolean }) {
   const s = result.source;
   const sourceBlocked = s.walk?.walk.blocked ?? null;
   return (
     <div className="rmv-result">
+      {result.walks.length > 1 ? (
+        <ul className="nmv-walks">
+          {result.walks.map((w) => (
+            <li key={w.fromRoomNumber} className={w.error ? "stop" : w.walk?.walk.blocked ? "warn" : "ok"}>
+              <b>
+                Room {w.fromRoomNumber} → {w.toRoomNumber}
+              </b>{" "}
+              · {w.nightsLabel} — {w.error ? w.error : w.walk?.walk.blocked ? `stopped at ${blockedWords(w.walk.walk.blocked)}` : "moved"}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="spl-part">
         <p className={`rmv-status ${sourceBlocked ? "stop" : s.amendment && !s.amendment.applied ? "warn" : "ok"}`} role="status">
           {s.route === "NEGOTIATION"
@@ -63,14 +88,16 @@ function ResultView({ result, tz }: { result: NightMoveResult; tz?: string }) {
       {result.created.map((c) => (
         <div className="spl-part" key={c.entryId}>
           <p className={`rmv-status ${c.blocked ? "warn" : "ok"}`} role="status">
-            <b>Room {c.roomNumber} · {fmtRange(c.checkInDate, c.checkOutDate)}</b>
+            <b>
+              {roomLabel(c.roomNumber)} · {fmtRange(c.checkInDate, c.checkOutDate)}
+            </b>
             {" — "}
             {c.newInquiry
               ? `its booking ${c.entryId} on the new enquiry ${c.inquiryId} starts at Inquiry, filled in.`
               : c.blocked
                 ? `${c.entryId} stopped at ${stepWord(c.reachedStage)}: ${blockedWords(c.blocked)}. Finish it on the booking.`
                 : `${c.entryId} is at ${stepWord(c.reachedStage)}.`}
-            <span className="muted"> {c.kind === "MOVED" ? "· the night moved" : "· left at its own dates"}</span>
+            <span className="muted"> {c.kind === "MOVED" ? (manyRooms ? "· the nights moved" : "· the night moved") : "· left at its own dates"}</span>
           </p>
           {c.notes.length ? (
             <ul className="rmv-follow">
@@ -100,18 +127,23 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
   const [result, setResult] = useState<NightMoveResult | null>(null);
 
   const split = preview?.mode === "SPLIT";
+  const g = move?.picks[0] ?? null;
+  /** Several rooms' nights (2026-10-15). */
+  const manyRooms = (move?.picks.length ?? 0) > 1;
+  const sameDates = !!move && !!g && move.newFirstNight === g.nights[0];
 
-  const body = move
-    ? {
-        entryId: move.entryId,
-        fromRoomId: move.fromRoomId,
-        nights: move.nights,
-        toRoomId: move.toRoomId ?? null,
-        newFirstNight: move.newFirstNight,
-        priceMode: other ? (move.newFirstNight === move.nights[0] ? ("NEW_TYPE" as const) : ("NEW_DATES" as const)) : ("KEEP" as const),
-        guestAgreedNote: other ? note.trim() || null : null,
-      }
-    : null;
+  const body: NightMoveInput | null =
+    move && g
+      ? {
+          entryId: move.entryId,
+          ...(manyRooms
+            ? { picks: move.picks.map((p) => ({ fromRoomId: p.fromRoomId, nights: p.nights, toRoomId: p.toRoomId })) }
+            : { fromRoomId: g.fromRoomId, nights: g.nights, toRoomId: g.toRoomId }),
+          newFirstNight: move.newFirstNight,
+          priceMode: other ? (sameDates ? "NEW_TYPE" : "NEW_DATES") : "KEEP",
+          guestAgreedNote: other ? note.trim() || null : null,
+        }
+      : null;
   const previewMut = useMutation({
     mutationFn: () => previewNightMove(session!, { ...body!, reason: reason.trim() || null }),
     onSuccess: setPreview,
@@ -140,12 +172,17 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
       for (const id of [r.source.entryId, ...r.created.map((c) => c.entryId)]) {
         for (const k of [["entry", id], ["held-documents", id], ["entry-trace", id], ["billing-summary", id]]) void qc.invalidateQueries({ queryKey: k });
       }
-      const stopped = r.source.walk?.walk.blocked || r.created.some((c) => c.blocked);
+      const stopped = r.source.walk?.walk.blocked || r.created.some((c) => c.blocked) || r.walks.some((w) => w.error);
+      const movedRooms = r.walks.filter((w) => w.walk && !w.error).length;
       toast[stopped ? "warning" : "success"](
         r.mode === "ROOM_CHANGE"
-          ? stopped
-            ? "The room change stopped part-way"
-            : `Room ${move!.toRoomNumber} for ${move!.nights.length === 1 ? "that night" : "those nights"}`
+          ? manyRooms
+            ? stopped
+              ? `${movedRooms} of ${r.walks.length} rooms moved — the result says which`
+              : `${r.walks.length} rooms moved for their nights`
+            : stopped
+              ? "The room change stopped part-way"
+              : `Room ${g!.toRoomNumber} for ${g!.nights.length === 1 ? "that night" : "those nights"}`
           : r.newInquiryId
             ? `A new enquiry, ${r.newInquiryId}, holds ${plural(r.created.length, "new booking")}`
             : stopped
@@ -156,7 +193,7 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
     onError: (e) => toastRefusal(e, "The night could not be moved"),
   });
 
-  if (!move) return null;
+  if (!move || !g) return null;
   const busy = previewMut.isPending || run.isPending;
   const targetRefusals = preview?.targets && target ? preview.targets[target].refusals : [];
   const blockedBy = !preview
@@ -176,8 +213,10 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                 : null;
   const currency = preview?.price.currency ?? "BTN";
   const choice = preview?.price.choice ?? null;
-  const nightsWord = move.nights.length === 1 ? "night" : "nights";
+  const nightsWord = !manyRooms && g.nights.length === 1 ? "night" : "nights";
   const many = (preview?.pieces.length ?? 0) > 1;
+  const fromRooms = move.picks.map((p) => p.roomNumber).join(" + ");
+  const toRooms = move.picks.map((p) => p.toRoomNumber).join(" + ");
 
   return (
     <DsDialog
@@ -187,10 +226,16 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
       busy={busy}
       title={
         result
-          ? "The night moved"
-          : split || move.newFirstNight !== move.nights[0]
-            ? `Move Room ${move.roomNumber}'s ${nightsWord} to other dates`
-            : `Room ${move.roomNumber} → ${move.toRoomNumber} for ${move.nights.length === 1 ? "one night" : plural(move.nights.length, "night")}`
+          ? manyRooms
+            ? "The nights moved"
+            : "The night moved"
+          : split || !sameDates
+            ? manyRooms
+              ? `Move the nights of Rooms ${fromRooms} to other dates`
+              : `Move Room ${g.roomNumber}'s ${nightsWord} to other dates`
+            : manyRooms
+              ? `Rooms ${fromRooms} → ${toRooms} for their nights`
+              : `Room ${g.roomNumber} → ${g.toRoomNumber} for ${g.nights.length === 1 ? "one night" : plural(g.nights.length, "night")}`
       }
       footer={
         result ? (
@@ -218,7 +263,7 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
       }
     >
       {result ? (
-        <ResultView result={result} tz={tz} />
+        <ResultView result={result} tz={tz} manyRooms={manyRooms} />
       ) : (
         <div className="rmv">
           {!preview ? <p className="sm muted">Checking the move with the house…</p> : null}
@@ -268,6 +313,12 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                             A night moved to other dates leaves a gap in the stay, so the stay is cut apart: this booking keeps the earliest stay left at its own dates, and every
                             other stay becomes a booking of its own. On a booking with other rooms, the room leaves it with its guests.
                           </p>
+                          {manyRooms ? (
+                            <p>
+                              Several rooms: stays that leave on the same dates are one booking holding all their rooms. When every room of the booking moves, the nights must
+                              be the same on each, and the booking keeps its earliest stay with all its rooms.
+                            </p>
+                          ) : null}
                         </>
                       ) : (
                         <ol>
@@ -281,20 +332,25 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                   </Help>
                 </span>
               </div>
-              <div className="rmv-rooms">
-                <span className="rmv-room">
-                  Room {preview.from.roomNumber} · {preview.from.nightsLabel}
-                </span>
-                <span className="rmv-arrow">→</span>
-                <span className="rmv-room to">
-                  Room {preview.to.roomNumber} · {preview.to.nightsLabel}
-                </span>
-                <span className="rmv-type">
-                  {plural(preview.to.nights, "night")}
-                  {preview.shiftDays !== 0 ? ` · ${plural(Math.abs(preview.shiftDays), "day")} ${preview.shiftDays > 0 ? "later" : "earlier"}` : " · the same dates"}
-                  {!preview.to.sameType ? " · another room type" : ""}
-                </span>
-              </div>
+              {(preview.moves?.length
+                ? preview.moves
+                : [{ fromRoomNumber: preview.from.roomNumber, fromLabel: preview.from.nightsLabel, toRoomNumber: preview.to.roomNumber, toLabel: preview.to.nightsLabel, nights: preview.to.nights, sameType: preview.to.sameType }]
+              ).map((m) => (
+                <div className="rmv-rooms" key={m.fromRoomNumber}>
+                  <span className="rmv-room">
+                    Room {m.fromRoomNumber} · {m.fromLabel}
+                  </span>
+                  <span className="rmv-arrow">→</span>
+                  <span className="rmv-room to">
+                    Room {m.toRoomNumber} · {m.toLabel}
+                  </span>
+                  <span className="rmv-type">
+                    {plural(m.nights, "night")}
+                    {preview.shiftDays !== 0 ? ` · ${plural(Math.abs(preview.shiftDays), "day")} ${preview.shiftDays > 0 ? "later" : "earlier"}` : " · the same dates"}
+                    {!m.sameType ? " · another room type" : ""}
+                  </span>
+                </div>
+              ))}
               {split ? (
                 <div className="nmv-pieces">
                   <div className="nmv-keeps">
@@ -304,12 +360,12 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                   </div>
                   <div className="nmv-k">{preview.pieces.length === 1 ? "A booking of its own" : `${preview.pieces.length} bookings of their own`}</div>
                   {preview.pieces.map((p) => (
-                    <div className={`nmv-piece${p.kind === "MOVED" ? " moved" : ""}`} key={`${p.kind}${p.checkInDate}`}>
+                    <div className={`nmv-piece${p.kind === "MOVED" ? " moved" : ""}`} key={`${p.kind}${p.checkInDate}${p.roomNumber}`}>
                       <b>
-                        Room {p.roomNumber} · {fmtRange(p.checkInDate, p.checkOutDate)}
+                        {roomLabel(p.roomNumber)} · {fmtRange(p.checkInDate, p.checkOutDate)}
                       </b>
                       <span className="muted">
-                        {plural(p.nights, "night")} · {p.guests} · {p.kind === "MOVED" ? "the night moved" : "left at its own dates"}
+                        {plural(p.nights, "night")} · {p.guests} · {p.kind === "MOVED" ? (manyRooms ? "the nights moved" : "the night moved") : "left at its own dates"}
                       </span>
                       {p.total != null ? <span className="nmv-total">{money(p.total, currency)}</span> : null}
                     </div>
@@ -375,7 +431,9 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
             </div>
           ) : null}
           <label className="field">
-            <span>Why the {nightsWord} {move.nights.length === 1 ? "is" : "are"} moving</span>
+            <span>
+              Why the {nightsWord} {nightsWord === "night" ? "is" : "are"} moving
+            </span>
             <textarea className="input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. the guest is away that night and comes back after" />
           </label>
           {blockedBy && preview && preview.authority.ok ? (

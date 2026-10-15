@@ -335,13 +335,18 @@ export async function executeRoomSplit(session: Session, body: RoomSplitInput & 
  * the same dates — a room change for those nights — or to other dates, where the stays are cut
  * apart and each new one is a booking of its own, on the same enquiry or one new enquiry.
  */
+/** One room's nights in a move of several (2026-10-15). */
+export type NightMovePickInput = { fromRoomId: string; nights: string[]; toRoomId?: string | null };
+
 export type NightMoveInput = {
   entryId: string;
-  fromRoomId: string;
-  /** The nights that move, as they are now. */
-  nights: string[];
+  /** One room: the room, the nights that move as they are now, where they land. */
+  fromRoomId?: string;
+  nights?: string[];
   toRoomId?: string | null;
-  /** The first moved night's new date — the same night when only the room changes. */
+  /** Several of the booking's rooms together (2026-10-15) — the room dragged first. */
+  picks?: NightMovePickInput[];
+  /** The dragged room's first moved night's new date — the same night when only rooms change. */
   newFirstNight: string;
   priceMode?: "KEEP" | "NEW_DATES" | "NEW_TYPE";
   guestAgreedNote?: string | null;
@@ -359,11 +364,24 @@ export type NightMovePreview = {
   stageWord: string;
   from: { roomId: string; roomNumber: string; nightsLabel: string; nights: number };
   to: { roomId: string; roomNumber: string; nightsLabel: string; checkInDate: string; checkOutDate: string; nights: number; sameType: boolean };
+  /** Every room's nights that move, the dragged room first. */
+  moves: Array<{
+    fromRoomId: string;
+    fromRoomNumber: string;
+    fromLabel: string;
+    toRoomId: string;
+    toRoomNumber: string;
+    toLabel: string;
+    nights: number;
+    sameType: boolean;
+  }>;
   shiftDays: number;
   original: { words: string; guests: string; priceBefore: number | null; priceAfter: number | null; note: string | null };
   pieces: Array<{
     kind: "MOVED" | "LEFT";
+    /** "205" · "205 + 305" */
     roomNumber: string;
+    roomNumbers: string[];
     checkInDate: string;
     checkOutDate: string;
     nights: number;
@@ -383,6 +401,8 @@ export type NightMoveResult = {
   mode: "ROOM_CHANGE" | "SPLIT";
   target: SplitTarget | null;
   source: RoomSplitResult["source"];
+  /** The same dates in other rooms, several rooms: one walk each, in turn — a refused one stops the rest. */
+  walks: Array<{ fromRoomNumber: string; toRoomNumber: string; nightsLabel: string; walk: RoomSplitResult["source"]["walk"]; error: string | null }>;
   created: Array<NonNullable<RoomSplitResult["created"]> & { kind: "MOVED" | "LEFT"; roomNumber: string }>;
   newInquiryId: string | null;
 };

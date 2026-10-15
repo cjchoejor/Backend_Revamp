@@ -396,16 +396,23 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
   if (ev.eventType === "ENTRY.NIGHTS_SPLIT_OFF") {
     const room = (p.room ?? null) as { roomNumber?: string; toRoomNumber?: string } | null;
     const nights = (p.nights ?? null) as { label?: string } | null;
-    if (room?.roomNumber && nights?.label) {
+    // Several rooms' nights moved together (2026-10-15): each room, its nights and where they went.
+    const moves = Array.isArray(p.moves) ? (p.moves as Array<{ roomNumber?: string; toRoomNumber?: string; label?: string }>) : [];
+    if (moves.length > 1) {
+      for (const m of moves) bits.push(`Room ${m.roomNumber ?? "?"}${m.toRoomNumber && m.toRoomNumber !== m.roomNumber ? ` → ${m.toRoomNumber}` : ""} · ${m.label ?? ""}`);
+    } else if (room?.roomNumber && nights?.label) {
       bits.push(`Room ${room.roomNumber}${room.toRoomNumber && room.toRoomNumber !== room.roomNumber ? ` → ${room.toRoomNumber}` : ""} · ${nights.label}`);
     }
     const kept = (p.kept ?? null) as { roomNumber?: string; nights?: string[] } | null;
+    const roomsLeft = Array.isArray(p.roomsLeft) ? (p.roomsLeft as string[]) : [];
     if (kept?.nights?.length) {
       const last = kept.nights[kept.nights.length - 1];
       const end = new Date(Date.parse(`${last}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-      bits.push(`kept Room ${kept.roomNumber ?? "?"} for ${fmtRange(kept.nights[0], end)}`);
+      bits.push(`kept ${String(kept.roomNumber ?? "?").includes("+") ? "Rooms" : "Room"} ${kept.roomNumber ?? "?"} for ${fmtRange(kept.nights[0], end)}`);
+    } else if (roomsLeft.length > 1) {
+      bits.push(`Rooms ${roomsLeft.join(" + ")} left this booking with their guests`);
     } else if (p.roomLeft === true && room?.roomNumber) {
-      bits.push(`Room ${room.roomNumber} left this booking with its guests`);
+      bits.push(`Room ${roomsLeft[0] ?? room.roomNumber} left this booking with its guests`);
     }
     const pieces = Array.isArray(p.pieces) ? (p.pieces as Array<{ entryId?: string; checkInDate?: string; checkOutDate?: string }>) : [];
     if (pieces.length) {
